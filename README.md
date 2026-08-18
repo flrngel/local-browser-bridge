@@ -23,7 +23,7 @@
 ```mermaid
 flowchart LR
   A["M365 Copilot Cowork<br/>local Edge browser"] -->|"opens localhost UI"| B["Local control surface<br/>127.0.0.1:17373"]
-  B --> C["Loopback Node server<br/>HTTP + SSE + command relay"]
+  B --> C["Standalone Rust binary<br/>embedded UI + HTTP/SSE/WebSocket"]
   D["Target Chrome/Edge extension<br/>Manifest V3"] -->|"outbound token-auth WebSocket"| C
   C -->|"browser commands"| D
   D --> E["Browser tabs<br/>existing login/session"]
@@ -35,11 +35,25 @@ flowchart LR
 
 ## 설치와 실행
 
-요구사항은 Node.js 20+와 Chrome 116+ 또는 호환 Edge입니다.
+실행 파일을 사용하는 최종 사용자에게 Node.js나 Rust는 필요하지 않습니다. Chrome 116+ 또는 호환 Edge만 있으면 됩니다.
+
+### Windows 실행 파일
+
+배포 산출물의 `local-browser-bridge-vX.Y.Z-windows-x86_64.exe`를 실행합니다.
+
+```powershell
+.\local-browser-bridge-v0.3.0-windows-x86_64.exe
+```
+
+서버는 UI를 실행 파일 안에 내장하고 있어 별도의 웹 파일이나 런타임을 설치하지 않습니다. Windows에서 생성 token은 기본적으로 `%USERPROFILE%\.local-browser-bridge\token`에 보관됩니다.
+
+### 소스에서 빌드
+
+개발자 빌드에는 Rust 1.85+가 필요합니다.
 
 ```bash
-npm install
-npm start
+cargo build --release
+./target/release/local-browser-bridge
 ```
 
 서버는 다음 정보를 출력합니다.
@@ -53,7 +67,7 @@ Extension token: <random token>
 
 1. Chrome에서 `chrome://extensions`를 엽니다. Edge라면 `edge://extensions`를 엽니다.
 2. Developer mode를 켜고 **Load unpacked**를 선택합니다.
-3. 이 저장소의 `extension/` 폴더를 선택합니다.
+3. 배포된 extension ZIP을 푼 폴더 또는 이 저장소의 `extension/` 폴더를 선택합니다.
 4. 확장 팝업을 열고 서버가 출력한 token과 포트 `17373`을 저장합니다.
 5. 확장 팝업에서 **Full Access mode**가 켜졌는지 확인합니다. 기본값은 ON입니다. `file://` 페이지까지 조작하려면 확장 상세 화면에서 **Allow access to file URLs**도 켭니다.
 
@@ -73,11 +87,11 @@ Full Access mode에서는 민감한 액션도 즉시 실행됩니다. 확장 팝
 실제 확장을 설치하기 전에 UI와 통신만 확인할 수 있습니다. 터미널 두 개를 사용합니다.
 
 ```bash
-LBB_TOKEN=demo-token npm start
+LBB_TOKEN=demo-token cargo run --release
 ```
 
 ```bash
-LBB_TOKEN=demo-token npm run mock
+LBB_TOKEN=demo-token cargo run --release --bin mock-extension
 ```
 
 `http://127.0.0.1:17373`을 열고 **Observe target**을 누르면 mock tab과 element refs가 표시됩니다. `/demo`에는 실제 확장 동작을 확인할 안전한 로컬 폼도 포함되어 있습니다.
@@ -108,10 +122,22 @@ curl http://127.0.0.1:17373/api/v1/command \
 ## 검증
 
 ```bash
-npm run verify
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo test --locked --all-targets
 ```
 
 검증 범위는 syntax, version alignment, Full Access/Safe mode URL 경계, URL redaction, risky-action 분류, command validation, CSRF/Origin 방어, WebSocket Origin 방어, command relay, screenshot 저장을 포함합니다.
+
+## 배포 규칙
+
+이 저장소에서 사용자가 `deploy` 또는 `배포`라고 요청하면 다음 산출물을 `dist/`에 생성하고 검증합니다.
+
+- Node.js 없이 실행되는 Windows x86_64 `.exe`
+- 같은 버전의 Chromium extension ZIP
+- 두 파일의 `SHA256SUMS.txt`
+
+Windows에서는 `scripts/deploy.sh`를 바로 사용할 수 있고, macOS/Linux에서는 `cargo-xwin` 또는 MinGW cross-compiler가 필요합니다. `.github/workflows/deploy.yml`도 동일한 Windows 산출물을 생성합니다. 배포가 끝나면 산출물 경로를 사용자에게 직접 제공합니다.
 
 ## 제한사항
 
@@ -122,5 +148,6 @@ npm run verify
 - 클릭은 가능하면 Chrome DevTools Protocol의 trusted input을 사용하고 즉시 detach합니다. DevTools가 이미 해당 탭에 붙어 있으면 synthetic click으로 fallback하며 결과에 `trusted: false`가 표시됩니다.
 - Full Access는 비밀번호·카드·OTP를 입력할 수 있고 page JavaScript를 실행할 수 있습니다. 이 기능을 켠 상태에서는 이 브리지를 로그인된 브라우저의 원격 제어 권한과 동일하게 취급하십시오.
 - unpacked extension은 개발/개인 설치용입니다. 조직 배포에는 서명, 정책 검토, privacy disclosure가 별도로 필요합니다.
+- 현재 Windows 실행 파일은 코드 서명이 자동 적용되지 않으므로 SmartScreen 경고가 표시될 수 있습니다.
 
 보안 모델과 위협 경계는 [SECURITY.md](SECURITY.md)를 확인하세요.

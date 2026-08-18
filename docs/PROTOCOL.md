@@ -16,7 +16,7 @@ Extension hello:
 ```json
 {
   "type": "hello",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "browser": "Google Chrome",
   "mode": "full-access",
   "capabilities": ["tabs.list", "page.observe"]

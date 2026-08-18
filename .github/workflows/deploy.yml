@@ -1,0 +1,50 @@
+name: Build Windows release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  windows-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test Rust server
+        shell: pwsh
+        run: |
+          cargo test --locked --all-targets
+          cargo build --locked --release
+      - name: Package verified artifacts
+        shell: pwsh
+        run: |
+          $cargo = Get-Content Cargo.toml -Raw
+          $version = [regex]::Match($cargo, '(?m)^version = "([^"]+)"').Groups[1].Value
+          $manifest = Get-Content extension/manifest.json -Raw | ConvertFrom-Json
+          if ($manifest.version -ne $version) { throw "Server and extension versions do not match" }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $exe = "dist/local-browser-bridge-v$version-windows-x86_64.exe"
+          $zip = "dist/local-browser-bridge-extension-v$version.zip"
+          Copy-Item target/release/local-browser-bridge.exe $exe
+          & $exe --version
+          Compress-Archive -Path extension/* -DestinationPath $zip -Force
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $zip))
+          try {
+            if (-not ($archive.Entries | Where-Object FullName -eq 'manifest.json')) { throw "Extension archive is missing manifest.json" }
+          } finally {
+            $archive.Dispose()
+          }
+          @($exe, $zip) | ForEach-Object {
+            $hash = (Get-FileHash $_ -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $([System.IO.Path]::GetFileName($_))"
+          } | Set-Content dist/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: local-browser-bridge-windows
+          path: dist/*
+          if-no-files-found: error

@@ -43,7 +43,7 @@ WebArena는 realistic multi-step web task가 단순 synthetic task보다 훨씬 
 
 ## 공개 구현과 커뮤니티 신호
 
-공개 browser bridge 구현과 커뮤니티 사례에서 반복되는 dominant pattern은 `local server + MV3 extension + outbound WebSocket + loopback bind + token auth`였습니다. 실제 로그인 profile을 보존하면서 open debug port와 native host 설치를 피하는 장점이 있습니다. 이 프로젝트는 그 전송 형태를 채택하되 MCP client 대신 browser-only agent가 조작할 localhost UI를 추가했습니다.
+공개 browser bridge 구현과 커뮤니티 사례에서 반복되는 dominant pattern은 `local server + MV3 extension + outbound WebSocket + loopback bind + token auth`였습니다. 실제 로그인 profile을 보존하면서 open debug port와 native host 설치를 피하는 장점이 있습니다. 이 프로젝트는 그 전송 형태를 채택하되 MCP client 대신 browser-only agent가 조작할 localhost UI를 추가했습니다. 0.3.0부터 서버는 UI까지 내장한 Rust 단일 바이너리로 배포되어 Node.js가 없는 Windows에서도 실행됩니다.
 
 - [vitalysim/browser-bridge](https://github.com/vitalysim/browser-bridge) — MIT, local server + MV3 + outbound WebSocket
 - [koltyakov/browser-bridge](https://github.com/koltyakov/browser-bridge) — 명시적으로 enable한 browser scope와 structured browser access
