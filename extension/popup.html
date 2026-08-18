@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Local Browser Bridge</title>
+    <link rel="stylesheet" href="popup.css">
+    <script src="popup.js" type="module"></script>
+  </head>
+  <body>
+    <header>
+      <p class="eyebrow">LOCAL BROWSER BRIDGE</p>
+      <h1>Connection &amp; permissions</h1>
+      <p id="status" class="status" role="status">Loading…</p>
+    </header>
+
+    <section>
+      <div class="row between">
+        <label for="enabled">Bridge control</label>
+        <input id="enabled" type="checkbox">
+      </div>
+    </section>
+
+    <section>
+      <h2>Local server</h2>
+      <form id="connection-form">
+        <label for="port">Port</label>
+        <input id="port" type="number" min="1" max="65535" required>
+        <label for="token">Extension token</label>
+        <input id="token" type="password" placeholder="Leave blank to keep the saved token" autocomplete="off">
+        <button type="submit">Save and connect</button>
+      </form>
+    </section>
+
+    <section id="approval-section" hidden>
+      <h2>Human approval required</h2>
+      <p id="approval-detail" class="warning"></p>
+      <div class="row">
+        <button id="approve" class="approve" type="button">Approve once</button>
+        <button id="reject" class="reject" type="button">Reject</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Allowed sites</h2>
+      <p id="current-site" class="muted">Current site: unavailable</p>
+      <button id="allow-current" type="button">Allow current site</button>
+      <form id="host-form">
+        <label for="host">Add hostname</label>
+        <div class="row">
+          <input id="host" placeholder="example.com or *.example.com" autocomplete="off">
+          <button type="submit">Add</button>
+        </div>
+      </form>
+      <ul id="hosts"></ul>
+    </section>
+
+    <p class="footnote">Passwords, payment fields, and one-time codes are always manual. Sensitive clicks require this popup.</p>
+    <p id="message" class="message" role="alert" hidden></p>
+  </body>
+</html>

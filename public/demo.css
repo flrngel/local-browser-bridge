@@ -1,0 +1,21 @@
+body {
+  max-width: 720px;
+  margin: 60px auto;
+  padding: 24px;
+  font: 18px system-ui, sans-serif;
+  color: #102016;
+  background: #eff8f1;
+}
+
+form {
+  display: grid;
+  gap: 12px;
+  padding: 24px;
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 12px 40px #b9cbbd;
+}
+
+input, select, button { padding: 12px; font: inherit; }
+button { background: #174c2d; color: white; border: 0; border-radius: 8px; }
+#result { min-height: 28px; font-weight: 700; }

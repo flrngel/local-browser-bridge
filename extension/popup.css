@@ -1,0 +1,25 @@
+:root { color-scheme: dark; font: 14px system-ui, sans-serif; color: #eff6f1; background: #0d110f; }
+* { box-sizing: border-box; }
+body { width: 360px; margin: 0; padding: 18px; }
+header { padding-bottom: 12px; }
+h1 { margin: 3px 0 8px; font-size: 19px; }
+h2 { margin: 0 0 10px; font-size: 14px; }
+.eyebrow { color: #b8f55d; letter-spacing: .12em; font: 700 10px ui-monospace, monospace; margin: 0; }
+.status, .muted, .footnote { color: #9aaba0; }
+.status { margin: 0; }
+section { border-top: 1px solid #2d3832; padding: 14px 0; }
+form { display: grid; gap: 7px; }
+label { color: #c9d5cd; font-size: 12px; font-weight: 700; }
+input { min-width: 0; width: 100%; background: #151b17; border: 1px solid #3b483f; border-radius: 7px; color: inherit; padding: 9px; }
+button { border: 0; border-radius: 7px; background: #b8f55d; color: #152007; font-weight: 750; padding: 9px 11px; cursor: pointer; }
+button.reject, li button { background: #2b342f; color: #f1f5f2; }
+button.approve { background: #ffd479; color: #291d03; }
+.row { display: flex; gap: 8px; align-items: center; }
+.between { justify-content: space-between; }
+#enabled { width: 20px; height: 20px; }
+#host-form { margin-top: 10px; }
+#hosts { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 6px; }
+#hosts li { display: flex; justify-content: space-between; align-items: center; gap: 8px; background: #151b17; border-radius: 7px; padding: 7px 8px; font: 12px ui-monospace, monospace; }
+.warning { color: #ffe09a; line-height: 1.45; }
+.footnote { border-top: 1px solid #2d3832; padding-top: 12px; font-size: 11px; line-height: 1.45; }
+.message { position: sticky; bottom: 0; padding: 9px; background: #3a1d18; border: 1px solid #d46d5f; border-radius: 7px; }

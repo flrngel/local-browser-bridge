@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Local Browser Bridge</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/app.js" type="module"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">LOCAL CONTROL SURFACE</p>
+        <h1>Browser Bridge</h1>
+      </div>
+      <div class="connection" id="connection" role="status" aria-live="polite">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="connection-text">Checking extension…</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="guide panel" aria-labelledby="guide-title">
+        <div>
+          <p class="eyebrow">FOR BROWSER AGENTS</p>
+          <h2 id="guide-title">Operate the target browser through this page</h2>
+        </div>
+        <ol>
+          <li>Select a target tab, then choose <strong>Observe target</strong>.</li>
+          <li>Read the screenshot, page text, and numbered element list together.</li>
+          <li>Use a listed element ref for Click, Fill, or Select. Observe again to verify.</li>
+          <li>If an action needs approval, stop and ask the human to approve it in the extension popup.</li>
+        </ol>
+        <p class="boundary"><strong>Boundary:</strong> this works only when your browser tool runs on this computer and can open loopback URLs. A cloud-hosted browser cannot reach this machine's localhost.</p>
+      </section>
+
+      <section class="workspace-grid">
+        <aside class="sidebar">
+          <section class="panel" aria-labelledby="tabs-title">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">TARGET</p>
+                <h2 id="tabs-title">Browser tabs</h2>
+              </div>
+              <button id="refresh-tabs" type="button" class="button ghost">Refresh tabs</button>
+            </div>
+            <div id="tabs" class="tabs-list" aria-live="polite"></div>
+            <button id="new-tab" type="button" class="button secondary full">Create blank tab</button>
+          </section>
+
+          <section class="panel" aria-labelledby="navigate-title">
+            <p class="eyebrow">NAVIGATION</p>
+            <h2 id="navigate-title">Open a page</h2>
+            <form id="navigate-form">
+              <label for="navigate-url">URL</label>
+              <input id="navigate-url" name="url" type="url" required placeholder="https://example.com/" autocomplete="off">
+              <button class="button primary full" type="submit">Navigate target</button>
+            </form>
+            <div class="button-row" aria-label="Page navigation controls">
+              <button type="button" class="button ghost page-command" data-method="page.back">Back</button>
+              <button type="button" class="button ghost page-command" data-method="page.forward">Forward</button>
+              <button type="button" class="button ghost page-command" data-method="page.reload">Reload</button>
+            </div>
+          </section>
+
+          <section class="panel" aria-labelledby="action-title">
+            <p class="eyebrow">ACTION</p>
+            <h2 id="action-title">Use an element ref</h2>
+            <p id="selected-element" class="selected-element">No element selected.</p>
+            <form id="click-form">
+              <label for="click-ref">Element ref</label>
+              <input id="click-ref" name="ref" required placeholder="e1" autocomplete="off">
+              <button class="button primary full" type="submit">Click element</button>
+            </form>
+            <form id="fill-form">
+              <label for="fill-ref">Field ref</label>
+              <input id="fill-ref" name="ref" required placeholder="e2" autocomplete="off">
+              <label for="fill-text">Text to enter</label>
+              <textarea id="fill-text" name="text" required rows="3" placeholder="Text"></textarea>
+              <button class="button secondary full" type="submit">Fill field</button>
+            </form>
+            <form id="select-form">
+              <label for="select-ref">Select ref</label>
+              <input id="select-ref" name="ref" required placeholder="e3" autocomplete="off">
+              <label for="select-value">Option value</label>
+              <input id="select-value" name="value" required placeholder="value" autocomplete="off">
+              <button class="button secondary full" type="submit">Choose option</button>
+            </form>
+          </section>
+
+          <section class="panel" aria-labelledby="viewport-title">
+            <p class="eyebrow">VIEWPORT</p>
+            <h2 id="viewport-title">Scroll and keys</h2>
+            <div class="button-grid">
+              <button type="button" class="button ghost scroll-command" data-y="-700">Scroll up</button>
+              <button type="button" class="button ghost scroll-command" data-y="700">Scroll down</button>
+              <button type="button" class="button ghost key-command" data-key="Tab">Press Tab</button>
+              <button type="button" class="button ghost key-command" data-key="Enter">Press Enter</button>
+              <button type="button" class="button ghost key-command" data-key="Escape">Press Escape</button>
+              <button type="button" class="button ghost key-command" data-key="Backspace">Backspace</button>
+            </div>
+          </section>
+        </aside>
+
+        <div class="stage">
+          <section class="panel observe-panel" aria-labelledby="observe-title">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">OBSERVATION</p>
+                <h2 id="observe-title">Current target</h2>
+              </div>
+              <button id="observe" type="button" class="button primary">Observe target</button>
+            </div>
+            <p id="target-meta" class="target-meta">No observation yet.</p>
+            <div class="screenshot-shell">
+              <img id="screenshot" alt="Current target browser tab screenshot" hidden>
+              <div id="screenshot-empty" class="empty-state">Select and observe a tab to capture its current viewport.</div>
+            </div>
+          </section>
+
+          <section class="panel" aria-labelledby="elements-title">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">STRUCTURED VIEW</p>
+                <h2 id="elements-title">Interactive elements</h2>
+              </div>
+              <span id="element-count" class="count">0 elements</span>
+            </div>
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Ref</th>
+                    <th scope="col">Role / name</th>
+                    <th scope="col">State</th>
+                    <th scope="col">Use</th>
+                  </tr>
+                </thead>
+                <tbody id="elements"></tbody>
+              </table>
+            </div>
+            <div id="elements-empty" class="empty-state">No element snapshot yet.</div>
+          </section>
+
+          <section class="panel" aria-labelledby="text-title">
+            <p class="eyebrow">PAGE TEXT</p>
+            <h2 id="text-title">Rendered text</h2>
+            <p id="selected-text" class="selected-text" hidden></p>
+            <pre id="page-text" tabindex="0">No page text captured.</pre>
+          </section>
+
+          <section class="panel" aria-labelledby="activity-title">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">AUDIT</p>
+                <h2 id="activity-title">Recent activity</h2>
+              </div>
+              <span id="revision" class="count">revision 0</span>
+            </div>
+            <ol id="activity" class="activity-list"></ol>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" role="status" aria-live="assertive" class="toast" hidden></div>
+  </body>
+</html>

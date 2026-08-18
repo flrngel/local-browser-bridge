@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Bridge Demo Target</title>
+    <link rel="stylesheet" href="/demo.css">
+    <script src="/demo.js" type="module"></script>
+  </head>
+  <body>
+    <h1>Browser Bridge demo target</h1>
+    <p>This page is a safe local target for checking observation, fill, select, click, and screenshot behavior.</p>
+    <form id="demo-form">
+      <label for="name">Display name</label>
+      <input id="name" name="name" placeholder="Ada" autocomplete="off">
+      <label for="color">Favorite color</label>
+      <select id="color" name="color">
+        <option value="green">Green</option>
+        <option value="blue">Blue</option>
+        <option value="orange">Orange</option>
+      </select>
+      <button type="submit">Show greeting</button>
+      <output id="result" aria-live="polite"></output>
+    </form>
+  </body>
+</html>

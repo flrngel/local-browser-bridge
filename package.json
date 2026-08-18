@@ -1,0 +1,22 @@
+{
+  "name": "local-browser-bridge",
+  "version": "0.1.0",
+  "description": "A localhost control surface that lets browser-only agents operate a user-approved Chrome session.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/cli.js",
+    "dev": "node --watch src/cli.js",
+    "mock": "node scripts/mock-extension.js",
+    "check": "node --check src/cli.js && node --check src/server.js && node --check src/hub.js && node --check public/app.js && node --check public/demo.js && node --check extension/background.js && node --check extension/content.js && node --check extension/popup.js && node --check scripts/mock-extension.js",
+    "test": "node --test",
+    "verify": "npm run check && npm test"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "license": "MIT"
+}
