@@ -30,8 +30,16 @@ test("blocks unsupported, unapproved, and bridge-self URLs", () => {
   assert.equal(isUrlAllowed("http://127.0.0.1:3000", ["127.0.0.1"], 17_373).allowed, true);
 });
 
+test("Full Access bypasses the host allowlist and permits file pages but never the bridge itself", () => {
+  assert.equal(isUrlAllowed("https://other.example/path", ["safe.example"], 17_373, true).allowed, true);
+  assert.equal(isUrlAllowed("file:///tmp/a", [], 17_373, true).allowed, true);
+  assert.equal(isUrlAllowed("chrome://settings/", ["*"], 17_373, true).allowed, false);
+  assert.equal(isUrlAllowed("http://127.0.0.1:17373", ["*"], 17_373, true).allowed, false);
+});
+
 test("redacts query strings and fragments from displayed URLs", () => {
   assert.equal(safeUrlForDisplay("https://example.com/path?token=secret#section"), "https://example.com/path");
+  assert.equal(safeUrlForDisplay("file:///tmp/private.html?token=secret#section"), "file:///tmp/private.html");
 });
 
 test("flags risky clicks and sensitive fields", () => {

@@ -1,9 +1,10 @@
 const byId = (id) => document.getElementById(id);
 const ui = {
-  status: byId("status"), enabled: byId("enabled"), connectionForm: byId("connection-form"), port: byId("port"),
+  status: byId("status"), enabled: byId("enabled"), fullAccess: byId("full-access"), modeStatus: byId("mode-status"),
+  connectionForm: byId("connection-form"), port: byId("port"),
   token: byId("token"), approvalSection: byId("approval-section"), approvalDetail: byId("approval-detail"),
   approve: byId("approve"), reject: byId("reject"), currentSite: byId("current-site"), allowCurrent: byId("allow-current"),
-  hostForm: byId("host-form"), host: byId("host"), hosts: byId("hosts"), message: byId("message"),
+  hostForm: byId("host-form"), host: byId("host"), hosts: byId("hosts"), allowedSitesSection: byId("allowed-sites-section"), message: byId("message"),
 };
 let state = null;
 
@@ -24,6 +25,12 @@ function render(next) {
   state = next;
   ui.status.textContent = `${next.connectionStatus}: ${next.connectionDetail}`;
   ui.enabled.checked = next.enabled;
+  ui.fullAccess.checked = next.fullAccess;
+  ui.modeStatus.textContent = next.fullAccess
+    ? "ON — safety interlocks are bypassed. The allowlist below is ignored."
+    : "OFF — allowlist, sensitive-field blocks, and one-time approvals are enforced.";
+  ui.modeStatus.classList.toggle("active", next.fullAccess);
+  ui.allowedSitesSection.classList.toggle("inactive", next.fullAccess);
   ui.port.value = next.port;
   ui.token.placeholder = next.tokenConfigured ? "Saved — leave blank to keep it" : "Paste the server token";
   ui.currentSite.textContent = `Current site: ${next.currentHost || "unavailable"}${next.currentHostAllowed ? " (allowed)" : ""}`;
@@ -57,6 +64,7 @@ ui.connectionForm.addEventListener("submit", (event) => {
   ui.token.value = "";
 });
 ui.enabled.addEventListener("change", () => void update("toggleEnabled", { enabled: ui.enabled.checked }));
+ui.fullAccess.addEventListener("change", () => void update("toggleFullAccess", { fullAccess: ui.fullAccess.checked }));
 ui.allowCurrent.addEventListener("click", () => void update("allowCurrent"));
 ui.hostForm.addEventListener("submit", (event) => {
   event.preventDefault();

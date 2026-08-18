@@ -17,7 +17,7 @@ const bridge = createBridgeServer({ port, token });
 
 await bridge.listen();
 
-console.log(`Local Browser Bridge 0.1.0`);
+console.log(`Local Browser Bridge 0.2.0`);
 console.log(`Control surface: http://127.0.0.1:${port}`);
 console.log(`Extension token: ${token}`);
 console.log(process.env.LBB_TOKEN ? "Token source: LBB_TOKEN" : `Token file: ${tokenPath}`);

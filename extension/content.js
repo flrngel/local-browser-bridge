@@ -153,7 +153,7 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
       case "fill": {
         const element = resolve(message.ref, message.generation);
         const description = describe(element, message.ref);
-        if (description.sensitive) throw new Error("SENSITIVE_FIELD: enter this value manually");
+        if (description.sensitive && !message.allowSensitive) throw new Error("SENSITIVE_FIELD: enter this value manually");
         element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
         element.focus({ preventScroll: true });
         setNativeValue(element, String(message.text ?? ""));

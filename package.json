@@ -1,7 +1,7 @@
 {
   "name": "local-browser-bridge",
-  "version": "0.1.0",
-  "description": "A localhost control surface that lets browser-only agents operate a user-approved Chrome session.",
+  "version": "0.2.0",
+  "description": "A localhost control surface that lets browser-only agents operate a real Chromium session.",
   "type": "module",
   "private": true,
   "engines": {

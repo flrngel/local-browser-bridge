@@ -21,6 +21,17 @@
       </div>
     </section>
 
+    <section class="danger-zone">
+      <div class="row between">
+        <div>
+          <h2>Full Access mode</h2>
+          <p class="danger-copy">All sites, sensitive fields, risky clicks, tab closing, arbitrary JavaScript, coordinates, and unrestricted key input.</p>
+        </div>
+        <input id="full-access" type="checkbox" aria-label="Full Access mode">
+      </div>
+      <p id="mode-status" class="mode-status"></p>
+    </section>
+
     <section>
       <h2>Local server</h2>
       <form id="connection-form">
@@ -41,7 +52,7 @@
       </div>
     </section>
 
-    <section>
+    <section id="allowed-sites-section">
       <h2>Allowed sites</h2>
       <p id="current-site" class="muted">Current site: unavailable</p>
       <button id="allow-current" type="button">Allow current site</button>
@@ -55,7 +66,7 @@
       <ul id="hosts"></ul>
     </section>
 
-    <p class="footnote">Passwords, payment fields, and one-time codes are always manual. Sensitive clicks require this popup.</p>
+    <p class="footnote">The loopback-only server, extension token, and block on controlling the bridge page itself remain active in both modes.</p>
     <p id="message" class="message" role="alert" hidden></p>
   </body>
 </html>

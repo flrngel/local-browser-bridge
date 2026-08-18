@@ -30,7 +30,7 @@
           <li>Select a target tab, then choose <strong>Observe target</strong>.</li>
           <li>Read the screenshot, page text, and numbered element list together.</li>
           <li>Use a listed element ref for Click, Fill, or Select. Observe again to verify.</li>
-          <li>If an action needs approval, stop and ask the human to approve it in the extension popup.</li>
+          <li>Full Access runs actions immediately. Safe mode can still require one-time approval in the extension popup.</li>
         </ol>
         <p class="boundary"><strong>Boundary:</strong> this works only when your browser tool runs on this computer and can open loopback URLs. A cloud-hosted browser cannot reach this machine's localhost.</p>
       </section>
@@ -100,6 +100,35 @@
               <button type="button" class="button ghost key-command" data-key="Escape">Press Escape</button>
               <button type="button" class="button ghost key-command" data-key="Backspace">Backspace</button>
             </div>
+          </section>
+
+          <section class="panel power-panel" aria-labelledby="power-title">
+            <p class="eyebrow">FULL ACCESS</p>
+            <h2 id="power-title">Direct browser control</h2>
+            <p class="power-warning">These commands bypass element refs and page safety checks.</p>
+            <form id="coordinates-form">
+              <div class="coordinate-grid">
+                <label>X <input id="coordinate-x" type="number" min="0" required placeholder="420"></label>
+                <label>Y <input id="coordinate-y" type="number" min="0" required placeholder="300"></label>
+              </div>
+              <button class="button secondary full" type="submit">Click coordinates</button>
+            </form>
+            <form id="type-text-form">
+              <label for="type-text">Type into focused control</label>
+              <textarea id="type-text" rows="3" required placeholder="Any text"></textarea>
+              <button class="button secondary full" type="submit">Type text</button>
+            </form>
+            <form id="custom-key-form">
+              <label for="custom-key">Key or chord</label>
+              <input id="custom-key" required placeholder="Meta+A or Control+L" autocomplete="off">
+              <button class="button ghost full" type="submit">Press key</button>
+            </form>
+            <form id="evaluate-form">
+              <label for="expression">JavaScript expression</label>
+              <textarea id="expression" rows="5" required spellcheck="false">document.title</textarea>
+              <button class="button danger full" type="submit">Run JavaScript</button>
+            </form>
+            <pre id="evaluation-result" class="evaluation-result" hidden></pre>
           </section>
         </aside>
 

@@ -23,7 +23,8 @@ function connectFakeExtension(baseUrl, token) {
     headers: { Origin: "chrome-extension://test-extension" },
   });
   socket.on("open", () => socket.send(JSON.stringify({
-    type: "hello", version: "0.1.0-test", browser: "Test Chrome", capabilities: ["tabs.list", "page.observe"],
+    type: "hello", version: "0.2.0-test", browser: "Test Chrome", mode: "full-access",
+    capabilities: ["tabs.list", "page.observe", "page.evaluate", "page.clickAt", "page.typeText"],
   })));
   socket.on("message", (raw) => {
     const message = JSON.parse(raw.toString());
@@ -42,6 +43,12 @@ function connectFakeExtension(baseUrl, token) {
           elements: [{ ref: "e1", role: "button", name: "Continue", disabled: false, inViewport: true }],
         },
       };
+    } else if (message.method === "page.evaluate") {
+      result = { type: "string", value: "Eval works" };
+    } else if (message.method === "page.clickAt") {
+      result = { clicked: true, x: message.params.x, y: message.params.y };
+    } else if (message.method === "page.typeText") {
+      result = { typed: true, length: message.params.text.length };
     } else {
       result = { ok: true };
     }
@@ -76,6 +83,7 @@ test("relays commands, stores observations, and serves screenshots", async (t) =
   const socket = connectFakeExtension(baseUrl, token);
   t.after(async () => { socket.close(); await bridge.close(); });
   await waitFor(() => bridge.state.connected && bridge.state.tabs.length === 1);
+  assert.equal(bridge.state.extension.mode, "full-access");
 
   const session = await uiSession(baseUrl);
   const response = await fetch(`${baseUrl}/api/action`, {
@@ -93,6 +101,33 @@ test("relays commands, stores observations, and serves screenshots", async (t) =
   assert.equal(screenshot.status, 200);
   assert.equal(screenshot.headers.get("content-type"), "image/png");
   assert.equal((await screenshot.arrayBuffer()).byteLength > 10, true);
+});
+
+test("relays Full Access commands through the authenticated API", async (t) => {
+  const token = createToken();
+  const bridge = createBridgeServer({ port: 0, token, callTimeoutMs: 1_000 });
+  const address = await bridge.listen();
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const socket = connectFakeExtension(baseUrl, token);
+  t.after(async () => { socket.close(); await bridge.close(); });
+  await waitFor(() => bridge.state.connected && bridge.state.tabs.length === 1);
+
+  const response = await fetch(`${baseUrl}/api/v1/command`, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ method: "page.evaluate", params: { tabId: 7, expression: "document.title" } }),
+  });
+  const payload = await response.json();
+  assert.equal(response.status, 200);
+  assert.deepEqual(payload.result, { type: "string", value: "Eval works" });
+
+  const invalid = await fetch(`${baseUrl}/api/v1/command`, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ method: "page.clickAt", params: { tabId: 7, x: 10, y: -1 } }),
+  });
+  assert.equal(invalid.status, 400);
+  assert.equal((await invalid.json()).error.code, "BAD_REQUEST");
 });
 
 test("rejects cross-origin UI commands and unauthenticated API commands", async (t) => {

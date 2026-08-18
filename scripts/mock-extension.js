@@ -37,11 +37,11 @@ function observation() {
 
 function handle(method, params) {
   switch (method) {
-    case "status": return { connected: true, mock: true };
+    case "status": return { connected: true, mock: true, fullAccess: true };
     case "tabs.list": return { activeTabId: 101, tabs: [{ id: 101, title: "Mock target tab", url: "http://127.0.0.1:9000/demo", active: true }] };
     case "tabs.activate": return { tabId: params.tabId, active: true };
     case "tabs.new": return { tabId: 102 };
-    case "tabs.close": return { status: "approval_required", approvalId: "mock-approval", risk: "close a browser tab", label: "Mock target tab" };
+    case "tabs.close": return { closed: true, tabId: params.tabId };
     case "page.observe": return observation();
     case "page.fill": displayName = String(params.text ?? ""); return { filled: true };
     case "page.select": selectedColor = String(params.value ?? ""); return { selected: selectedColor };
@@ -50,6 +50,9 @@ function handle(method, params) {
     case "page.back": case "page.forward": case "page.reload": return { ok: true };
     case "page.key": return { pressed: params.key };
     case "page.scroll": return { x: params.deltaX, y: params.deltaY };
+    case "page.clickAt": return { clicked: true, trusted: true, x: params.x, y: params.y, button: params.button, clickCount: params.clickCount };
+    case "page.typeText": return { typed: true, length: String(params.text ?? "").length };
+    case "page.evaluate": return { type: "string", value: `mock:${params.expression}` };
     default: throw new Error(`Unsupported mock command: ${method}`);
   }
 }
@@ -57,9 +60,10 @@ function handle(method, params) {
 socket.on("open", () => {
   socket.send(JSON.stringify({
     type: "hello",
-    version: "0.1.0-mock",
+    version: "0.2.0-mock",
     browser: "Mock Chromium",
-    capabilities: ["tabs.list", "page.observe", "page.click", "page.fill", "page.select"],
+    mode: "full-access",
+    capabilities: ["tabs.list", "page.observe", "page.click", "page.fill", "page.select", "page.clickAt", "page.typeText", "page.evaluate"],
   }));
   console.log(`Mock extension connected to ws://127.0.0.1:${port}/bridge`);
 });

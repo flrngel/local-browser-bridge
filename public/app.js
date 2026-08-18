@@ -4,6 +4,8 @@ const ui = Object.fromEntries(
     "observe", "target-meta", "screenshot", "screenshot-empty", "click-form", "click-ref", "fill-form",
     "fill-ref", "fill-text", "select-form", "select-ref", "select-value", "selected-element", "elements",
     "elements-empty", "element-count", "selected-text", "page-text", "activity", "revision", "toast",
+    "coordinates-form", "coordinate-x", "coordinate-y", "type-text-form", "type-text", "custom-key-form", "custom-key",
+    "evaluate-form", "expression", "evaluation-result",
   ].map((id) => [id, document.getElementById(id)]),
 );
 
@@ -73,7 +75,8 @@ function renderConnection(state) {
     ui["connection-text"].textContent = "Extension offline — open its popup to connect";
     return;
   }
-  const detail = state.extension ? `${state.extension.browser} · extension ${state.extension.version}` : "handshake pending";
+  const mode = state.extension?.mode === "full-access" ? "FULL ACCESS" : "SAFE MODE";
+  const detail = state.extension ? `${state.extension.browser} · extension ${state.extension.version} · ${mode}` : "handshake pending";
   ui["connection-text"].textContent = `Connected · ${detail}`;
 }
 
@@ -210,9 +213,11 @@ async function runAction(method, params = {}) {
     } else {
       showToast(`${method} completed`);
     }
+    return payload.result;
   } catch (error) {
     showToast(`${error.code ? `${error.code}: ` : ""}${error.message}`, "error");
     await loadState();
+    return null;
   } finally {
     setBusy(false);
   }
@@ -254,6 +259,25 @@ for (const button of document.querySelectorAll(".scroll-command")) {
 for (const button of document.querySelectorAll(".key-command")) {
   button.addEventListener("click", () => runAction("page.key", { key: button.dataset.key }));
 }
+ui["coordinates-form"].addEventListener("submit", (event) => {
+  event.preventDefault();
+  runAction("page.clickAt", { x: Number(ui["coordinate-x"].value), y: Number(ui["coordinate-y"].value), button: "left", clickCount: 1 });
+});
+ui["type-text-form"].addEventListener("submit", (event) => {
+  event.preventDefault();
+  runAction("page.typeText", { text: ui["type-text"].value });
+});
+ui["custom-key-form"].addEventListener("submit", (event) => {
+  event.preventDefault();
+  runAction("page.key", { key: ui["custom-key"].value.trim() });
+});
+ui["evaluate-form"].addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const result = await runAction("page.evaluate", { expression: ui.expression.value });
+  if (!result) return;
+  ui["evaluation-result"].textContent = JSON.stringify(result, null, 2);
+  ui["evaluation-result"].hidden = false;
+});
 
 async function boot() {
   const session = await request("/api/session");

@@ -26,6 +26,9 @@ const ACTION_METHODS = new Set([
   "page.select",
   "page.key",
   "page.scroll",
+  "page.clickAt",
+  "page.typeText",
+  "page.evaluate",
 ]);
 
 const STATIC_FILES = new Map([
@@ -89,6 +92,12 @@ function asString(value, name, maxLength = 2_048) {
   return value;
 }
 
+function asFiniteNumber(value, name, { min = -Infinity, max = Infinity } = {}) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < min || number > max) throw badRequest(`${name} must be a number between ${min} and ${max}`);
+  return number;
+}
+
 function badRequest(message) {
   return Object.assign(new Error(message), { statusCode: 400, code: "BAD_REQUEST" });
 }
@@ -139,7 +148,7 @@ function sanitizeParams(method, input, targetTabId) {
         value: asString(source.value, "value", 1_000),
       };
     case "page.key":
-      return { ...withTab(), key: asString(source.key, "key", 40) };
+      return { ...withTab(), key: asString(source.key, "key", 80) };
     case "page.scroll": {
       const deltaX = Number(source.deltaX ?? 0);
       const deltaY = Number(source.deltaY ?? 0);
@@ -150,6 +159,23 @@ function sanitizeParams(method, input, targetTabId) {
         deltaY: Math.max(-5_000, Math.min(5_000, Math.trunc(deltaY))),
       };
     }
+    case "page.clickAt": {
+      const button = source.button === undefined ? "left" : asString(source.button, "button", 8);
+      if (!["left", "middle", "right"].includes(button)) throw badRequest("button must be left, middle, or right");
+      const clickCount = source.clickCount === undefined ? 1 : asInteger(source.clickCount, "clickCount");
+      if (clickCount < 1 || clickCount > 3) throw badRequest("clickCount must be between 1 and 3");
+      return {
+        ...withTab(),
+        x: asFiniteNumber(source.x, "x", { min: 0, max: 100_000 }),
+        y: asFiniteNumber(source.y, "y", { min: 0, max: 100_000 }),
+        button,
+        clickCount,
+      };
+    }
+    case "page.typeText":
+      return { ...withTab(), text: asString(source.text, "text", 100_000) };
+    case "page.evaluate":
+      return { ...withTab(), expression: asString(source.expression, "expression", 100_000) };
     default:
       throw badRequest("Unsupported action");
   }
@@ -393,6 +419,9 @@ export function createBridgeServer({
         "page.select": 200,
         "page.key": 250,
         "page.scroll": 150,
+        "page.clickAt": 350,
+        "page.typeText": 100,
+        "page.evaluate": 150,
       }[method];
       if (observationDelay !== undefined && Number.isInteger(state.targetTabId)) {
         await delay(observationDelay);
@@ -420,7 +449,7 @@ export function createBridgeServer({
     const url = new URL(request.url ?? "/", `http://${request.headers.host}`);
 
     if (request.method === "GET" && url.pathname === "/health") {
-      writeJson(response, 200, { ok: true, extensionConnected: hub.connected, version: "0.1.0" });
+      writeJson(response, 200, { ok: true, extensionConnected: hub.connected, version: "0.2.0" });
       return;
     }
 
@@ -519,6 +548,7 @@ export function createBridgeServer({
     state.extension = {
       version: hello.version,
       browser: hello.browser,
+      mode: hello.mode,
       capabilities: hello.capabilities,
       connectedAt: hello.connectedAt,
     };

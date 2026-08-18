@@ -13,6 +13,7 @@ const DEFAULTS = {
   token: "",
   port: DEFAULT_PORT,
   enabled: true,
+  fullAccess: true,
   allowedHosts: ["localhost", "127.0.0.1"],
   connectionStatus: "not-configured",
   connectionDetail: "Paste the token printed by the local server.",
@@ -23,6 +24,7 @@ const PING_INTERVAL_MS = 20_000;
 const COMMANDS = new Set([
   "status", "tabs.list", "tabs.activate", "tabs.new", "tabs.close", "page.observe", "page.navigate",
   "page.back", "page.forward", "page.reload", "page.click", "page.fill", "page.select", "page.key", "page.scroll",
+  "page.clickAt", "page.typeText", "page.evaluate",
 ]);
 
 let socket = null;
@@ -101,6 +103,7 @@ async function connect() {
       type: "hello",
       version: VERSION,
       browser: navigator.userAgent.includes("Edg/") ? "Microsoft Edge" : "Google Chrome",
+      mode: config.fullAccess ? "full-access" : "safe",
       capabilities: [...COMMANDS],
     });
     if (pingTimer) clearInterval(pingTimer);
@@ -141,7 +144,7 @@ async function getTab(tabId) {
 
 async function assertAllowedTab(tab) {
   const config = await settings();
-  const verdict = isUrlAllowed(tab.url ?? "", config.allowedHosts, config.port);
+  const verdict = isUrlAllowed(tab.url ?? "", config.allowedHosts, config.port, config.fullAccess);
   if (!verdict.allowed) throw new Error(`SITE_BLOCKED: ${verdict.reason}`);
   return verdict;
 }
@@ -207,19 +210,83 @@ async function trustedClick(tabId, description, fallback) {
   }
 }
 
+async function trustedClickAt(tabId, x, y, button = "left", clickCount = 1) {
+  return withDebugger(tabId, async () => {
+    await debuggerCommand(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+    await debuggerCommand(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button, clickCount });
+    await debuggerCommand(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button, clickCount });
+    return { clicked: true, trusted: true, x, y, button, clickCount };
+  });
+}
+
 const KEY_CODES = {
   Tab: 9, Enter: 13, Escape: 27, Backspace: 8, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40,
-  PageUp: 33, PageDown: 34, End: 35, Home: 36,
+  PageUp: 33, PageDown: 34, End: 35, Home: 36, Space: 32, Delete: 46, Insert: 45,
 };
 
-async function trustedKey(tabId, key) {
-  if (!allowedKey(key)) throw new Error("BAD_KEY: key is not allowlisted");
-  const code = key.startsWith("Arrow") ? key : key;
-  const keyCode = KEY_CODES[key];
+function parseKeyChord(chord) {
+  const parts = String(chord).split("+").map((part) => part.trim()).filter(Boolean);
+  if (!parts.length || parts.length > 5) throw new Error("BAD_KEY: enter a key or chord such as Enter, Meta+A, or Control+L");
+  const key = parts.pop();
+  let modifiers = 0;
+  for (const modifier of parts) {
+    if (/^(alt|option)$/i.test(modifier)) modifiers |= 1;
+    else if (/^(control|ctrl)$/i.test(modifier)) modifiers |= 2;
+    else if (/^(meta|command|cmd)$/i.test(modifier)) modifiers |= 4;
+    else if (/^shift$/i.test(modifier)) modifiers |= 8;
+    else throw new Error(`BAD_KEY: unsupported modifier ${modifier}`);
+  }
+  const normalizedKey = key === " " ? "Space" : key;
+  const isLetter = /^[a-z]$/i.test(normalizedKey);
+  const isDigit = /^\d$/.test(normalizedKey);
+  const isFunction = /^F(?:[1-9]|1[0-2])$/.test(normalizedKey);
+  const isNamed = Object.hasOwn(KEY_CODES, normalizedKey) || ["ContextMenu", "CapsLock", "PrintScreen", "Pause"].includes(normalizedKey);
+  if (!isLetter && !isDigit && !isFunction && !isNamed && normalizedKey.length !== 1) {
+    throw new Error(`BAD_KEY: unsupported key ${normalizedKey}`);
+  }
+  const keyCode = KEY_CODES[normalizedKey]
+    ?? (isLetter ? normalizedKey.toUpperCase().charCodeAt(0) : isDigit ? normalizedKey.charCodeAt(0) : isFunction ? 111 + Number(normalizedKey.slice(1)) : normalizedKey.charCodeAt(0));
+  const code = isLetter ? `Key${normalizedKey.toUpperCase()}` : isDigit ? `Digit${normalizedKey}` : normalizedKey;
+  return { key: normalizedKey === "Space" ? " " : normalizedKey, code, keyCode, modifiers };
+}
+
+async function trustedKey(tabId, chord, fullAccess) {
+  if (!fullAccess && !allowedKey(chord)) throw new Error("BAD_KEY: key is not allowlisted in Safe mode");
+  const { key, code, keyCode, modifiers } = parseKeyChord(chord);
   return withDebugger(tabId, async () => {
-    await debuggerCommand(tabId, "Input.dispatchKeyEvent", { type: "rawKeyDown", key, code, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode });
-    await debuggerCommand(tabId, "Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode });
-    return { pressed: key };
+    const params = { key, code, modifiers, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode };
+    await debuggerCommand(tabId, "Input.dispatchKeyEvent", { type: "rawKeyDown", ...params });
+    await debuggerCommand(tabId, "Input.dispatchKeyEvent", { type: "keyUp", ...params });
+    return { pressed: chord };
+  });
+}
+
+async function insertText(tabId, value) {
+  return withDebugger(tabId, async () => {
+    await debuggerCommand(tabId, "Input.insertText", { text: value });
+    return { typed: true, length: value.length };
+  });
+}
+
+async function evaluateJavaScript(tabId, expression) {
+  return withDebugger(tabId, async () => {
+    const response = await debuggerCommand(tabId, "Runtime.evaluate", {
+      expression,
+      awaitPromise: true,
+      returnByValue: true,
+      userGesture: true,
+      timeout: 12_000,
+    });
+    if (response.exceptionDetails) {
+      const detail = response.exceptionDetails.exception?.description || response.exceptionDetails.text || "JavaScript evaluation failed";
+      throw new Error(`EVALUATION_FAILED: ${detail}`);
+    }
+    return {
+      type: response.result?.type ?? "undefined",
+      value: Object.hasOwn(response.result ?? {}, "value")
+        ? response.result.value
+        : (response.result?.unserializableValue ?? response.result?.description),
+    };
   });
 }
 
@@ -239,12 +306,12 @@ async function dispatch(method, params, approved) {
   switch (method) {
     case "status": {
       const config = await settings();
-      return { connected: socket?.readyState === WebSocket.OPEN, enabled: config.enabled, allowedHosts: config.allowedHosts };
+      return { connected: socket?.readyState === WebSocket.OPEN, enabled: config.enabled, fullAccess: config.fullAccess, allowedHosts: config.allowedHosts };
     }
     case "tabs.list": {
       const config = await settings();
       const tabs = await chrome.tabs.query({});
-      const allowedTabs = tabs.filter((tab) => isUrlAllowed(tab.url ?? "", config.allowedHosts, config.port).allowed);
+      const allowedTabs = tabs.filter((tab) => isUrlAllowed(tab.url ?? "", config.allowedHosts, config.port, config.fullAccess).allowed);
       const active = allowedTabs.find((tab) => tab.active && tab.lastFocusedWindow) ?? allowedTabs.find((tab) => tab.active);
       return {
         activeTabId: active?.id ?? null,
@@ -270,7 +337,8 @@ async function dispatch(method, params, approved) {
     case "tabs.close": {
       const tab = await getTab(params.tabId);
       await assertAllowedTab(tab);
-      if (!approved) return queueApproval(method, params, tab.id, { name: tab.title || "Untitled tab", role: "tab" }, "close a browser tab");
+      const config = await settings();
+      if (!config.fullAccess && !approved) return queueApproval(method, params, tab.id, { name: tab.title || "Untitled tab", role: "tab" }, "close a browser tab");
       await chrome.tabs.remove(tab.id);
       return { closed: true, tabId: params.tabId };
     }
@@ -279,7 +347,7 @@ async function dispatch(method, params, approved) {
       const config = await settings();
       let destination;
       try { destination = new URL(String(params.url)); } catch { throw new Error("BAD_URL: enter a complete HTTP or HTTPS URL"); }
-      const verdict = isUrlAllowed(destination.href, config.allowedHosts, config.port);
+      const verdict = isUrlAllowed(destination.href, config.allowedHosts, config.port, config.fullAccess);
       if (!verdict.allowed) throw new Error(`SITE_BLOCKED: ${verdict.reason}`);
       await chrome.tabs.update(tab.id, { url: verdict.url, active: true });
       return { tabId: tab.id, url: safeUrlForDisplay(verdict.url) };
@@ -307,15 +375,19 @@ async function dispatch(method, params, approved) {
       const description = await contentRequest(tab.id, { method: "prepareClick", ref: params.ref, generation: params.generation });
       if (description.disabled) throw new Error("ELEMENT_DISABLED: target cannot be clicked");
       const risk = classifyRisk(description);
-      if (risk && !approved) return queueApproval(method, params, tab.id, description, risk);
+      const config = await settings();
+      if (!config.fullAccess && risk && !approved) return queueApproval(method, params, tab.id, description, risk);
       return trustedClick(tab.id, description, () => contentRequest(tab.id, { method: "clickFallback", ref: params.ref, generation: params.generation }));
     }
     case "page.fill": {
       const tab = await getTab(params.tabId);
       await assertAllowedTab(tab);
       const description = await contentRequest(tab.id, { method: "describe", ref: params.ref, generation: params.generation });
-      if (isSensitiveField(description) || description.sensitive) throw new Error("SENSITIVE_FIELD: enter passwords, payment data, and one-time codes manually");
-      return contentRequest(tab.id, { method: "fill", ref: params.ref, generation: params.generation, text: String(params.text ?? "") });
+      const config = await settings();
+      if (!config.fullAccess && (isSensitiveField(description) || description.sensitive)) throw new Error("SENSITIVE_FIELD: enter passwords, payment data, and one-time codes manually");
+      return contentRequest(tab.id, {
+        method: "fill", ref: params.ref, generation: params.generation, text: String(params.text ?? ""), allowSensitive: config.fullAccess,
+      });
     }
     case "page.select": {
       const tab = await getTab(params.tabId);
@@ -323,11 +395,31 @@ async function dispatch(method, params, approved) {
       return contentRequest(tab.id, { method: "select", ref: params.ref, generation: params.generation, value: String(params.value ?? "") });
     }
     case "page.key": {
-      const tab = await getTab(params.tabId); await assertAllowedTab(tab); return trustedKey(tab.id, String(params.key));
+      const tab = await getTab(params.tabId); await assertAllowedTab(tab);
+      const config = await settings();
+      return trustedKey(tab.id, String(params.key), config.fullAccess);
     }
     case "page.scroll": {
       const tab = await getTab(params.tabId); await assertAllowedTab(tab);
       return contentRequest(tab.id, { method: "scroll", deltaX: Number(params.deltaX) || 0, deltaY: Number(params.deltaY) || 0 });
+    }
+    case "page.clickAt": {
+      const tab = await getTab(params.tabId); await assertAllowedTab(tab);
+      const config = await settings();
+      if (!config.fullAccess) throw new Error("FULL_ACCESS_REQUIRED: enable Full Access in the extension popup");
+      return trustedClickAt(tab.id, Number(params.x), Number(params.y), String(params.button ?? "left"), Number(params.clickCount) || 1);
+    }
+    case "page.typeText": {
+      const tab = await getTab(params.tabId); await assertAllowedTab(tab);
+      const config = await settings();
+      if (!config.fullAccess) throw new Error("FULL_ACCESS_REQUIRED: enable Full Access in the extension popup");
+      return insertText(tab.id, String(params.text ?? ""));
+    }
+    case "page.evaluate": {
+      const tab = await getTab(params.tabId); await assertAllowedTab(tab);
+      const config = await settings();
+      if (!config.fullAccess) throw new Error("FULL_ACCESS_REQUIRED: enable Full Access in the extension popup");
+      return evaluateJavaScript(tab.id, String(params.expression ?? ""));
     }
     default:
       throw new Error("UNKNOWN_COMMAND");
@@ -343,13 +435,14 @@ async function popupState() {
   if (!pending && config.pendingApproval) await chrome.storage.local.set({ pendingApproval: null });
   return {
     enabled: config.enabled,
+    fullAccess: config.fullAccess,
     port: config.port,
     tokenConfigured: Boolean(config.token),
     connectionStatus: config.connectionStatus,
     connectionDetail: config.connectionDetail,
     allowedHosts: config.allowedHosts,
     currentHost,
-    currentHostAllowed: currentHost ? isUrlAllowed(`https://${currentHost}/`, config.allowedHosts, config.port).allowed : false,
+    currentHostAllowed: currentHost ? isUrlAllowed(`https://${currentHost}/`, config.allowedHosts, config.port, config.fullAccess).allowed : false,
     pendingApproval: pending ? { id: pending.id, label: pending.label, risk: pending.risk, expiresAt: pending.expiresAt } : null,
   };
 }
@@ -371,6 +464,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       case "toggleEnabled":
         await chrome.storage.local.set({ enabled: Boolean(message.enabled) });
+        clearSocket();
+        await connect();
+        return popupState();
+      case "toggleFullAccess":
+        await chrome.storage.local.set({ fullAccess: Boolean(message.fullAccess), pendingApproval: null });
         clearSocket();
         await connect();
         return popupState();
@@ -428,6 +526,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 chrome.runtime.onInstalled.addListener(() => {
   void chrome.storage.local.get(DEFAULTS).then((stored) => chrome.storage.local.set({
     enabled: stored.enabled,
+    fullAccess: stored.fullAccess,
     port: stored.port,
     allowedHosts: stored.allowedHosts,
     connectionStatus: stored.connectionStatus,
@@ -441,7 +540,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "local-browser-bridge-reconnect" && socket?.readyState !== WebSocket.OPEN) void connect();
 });
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && (changes.token || changes.port || changes.enabled)) {
+  if (area === "local" && (changes.token || changes.port || changes.enabled || changes.fullAccess)) {
     clearSocket();
     void connect();
   }

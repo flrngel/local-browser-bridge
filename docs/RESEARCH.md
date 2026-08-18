@@ -22,7 +22,7 @@ Manifest V3 extension service worker는 Chrome 116부터 30초보다 짧은 WebS
 - [Chrome: Use WebSockets in service workers](https://developer.chrome.com/docs/extensions/how-to/web-platform/websockets)
 - [Chrome: Extension service worker lifecycle](https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/lifecycle)
 
-Chrome 보안 가이드는 최소 권한, 명시적 CSP, content script의 불신, 메시지/입력 검증, 민감한 Chrome API 작업을 service worker에 두는 것을 권고합니다. 구현은 DOM snapshot/ref 해석만 isolated content script에 두고, allowlist·WebSocket·tab/debugger 권한·approval을 service worker에서 처리합니다.
+Chrome 보안 가이드는 최소 권한, 명시적 CSP, content script의 불신, 메시지/입력 검증, 민감한 Chrome API 작업을 service worker에 두는 것을 권고합니다. 구현은 DOM snapshot/ref 해석만 isolated content script에 두고, mode policy·WebSocket·tab/debugger 권한을 service worker에서 처리합니다. 사용자가 요청한 Full Access는 이 권고보다 기능성을 우선하는 명시적 고위험 모드이며 Safe mode로 되돌릴 수 있습니다.
 
 - [Chrome: Stay secure](https://developer.chrome.com/docs/extensions/develop/security-privacy/stay-secure)
 - [Chrome: Protect user privacy](https://developer.chrome.com/docs/extensions/develop/security-privacy/user-privacy)
@@ -33,7 +33,7 @@ Chrome 보안 가이드는 최소 권한, 명시적 CSP, content script의 불�
 
 ## 연구 문헌
 
-WebArena는 realistic multi-step web task가 단순 synthetic task보다 훨씬 어렵고 초기 GPT-4 baseline의 end-to-end 성공률이 14.41%였음을 보였습니다. BrowserGym은 browser agent의 observation/action space를 명시적으로 분리하고 고수준 action primitive가 임의 코드보다 제어 가능하다는 방향을 정리합니다. 이에 따라 제어판은 자유 형식 JS 실행을 노출하지 않고 `observe → bounded action → observe`를 강제할 수 있는 작은 action vocabulary를 제공합니다.
+WebArena는 realistic multi-step web task가 단순 synthetic task보다 훨씬 어렵고 초기 GPT-4 baseline의 end-to-end 성공률이 14.41%였음을 보였습니다. BrowserGym은 browser agent의 observation/action space를 명시적으로 분리하고 고수준 action primitive가 임의 코드보다 제어 가능하다는 방향을 정리합니다. Safe mode는 작은 action vocabulary를 유지하고, Full Access는 사이트 호환성을 위해 좌표·자유 키·임의 JS escape hatch를 추가합니다.
 
 - [WebArena: A Realistic Web Environment for Building Autonomous Agents](https://arxiv.org/abs/2307.13854)
 - [The BrowserGym Ecosystem for Web Agent Research](https://arxiv.org/abs/2412.05467)
@@ -59,10 +59,10 @@ WebArena는 realistic multi-step web task가 단순 synthetic task보다 훨씬 
 | 탭 목록/전환/이동 | 예 | browser-only agent의 기본 action space |
 | 스크린샷 + DOM/텍스트 | 예 | 상호 보완 observation |
 | 선택 텍스트 | 예 | 좁은 context 전달 |
-| 사이트 allow/block | allowlist | default-deny control boundary |
-| 민감 동작 확인 | 확장 팝업 approval | agent 자신이 approval UI를 누르지 못하도록 분리 |
+| 사이트 allow/block | Full Access: 전체 / Safe: allowlist | 기능 우선 기본값과 되돌릴 수 있는 안전 모드 |
+| 민감 동작 확인 | Full Access: 즉시 / Safe: popup approval | 사용자가 선택하는 policy |
 | YouTube 자막 특화 | 아니요 | 일반 DOM text 범위를 넘어선 product-specific 기능 |
 | ChatGPT chat/sidebar 동기화 | 아니요 | 이 프로젝트는 model/chat provider 독립 bridge |
 | network/cookie/localStorage 추출 | 아니요 | 과도한 권한과 credential leakage 방지 |
-| 임의 JavaScript 실행 | 아니요 | prompt injection과 arbitrary execution surface 축소 |
+| 임의 JavaScript 실행 | Full Access에서 예 | 호환성 escape hatch; 고위험으로 명시 |
 | OS desktop app 제어 | 아니요 | 별도 native accessibility helper가 필요한 다른 trust boundary |

@@ -99,6 +99,7 @@ main { width: min(1680px, 100%); margin: 0 auto; padding: 26px clamp(16px, 3vw, 
 .button:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
 .button.primary { background: var(--accent); color: var(--accent-ink); font-weight: 800; }
 .button.secondary { background: var(--cyan); color: #071b19; font-weight: 750; }
+.button.danger { background: var(--danger); color: #260a05; font-weight: 800; }
 .button.ghost { background: #1b221e; color: var(--text); border-color: #36423b; }
 .button.full { width: 100%; }
 .button.compact { min-height: 32px; padding: 5px 9px; font-size: 0.78rem; }
@@ -119,6 +120,11 @@ input, textarea {
 }
 textarea { resize: vertical; }
 .selected-element { padding: 9px 11px; border: 1px dashed #3c4b42; border-radius: 9px; color: var(--muted); font-size: 0.8rem; margin-bottom: 0; }
+.power-panel { border-color: #6e3d34; }
+.power-warning { color: #ffb8aa; font-size: .78rem; line-height: 1.45; }
+.coordinate-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.coordinate-grid label { display: grid; gap: 6px; }
+.evaluation-result { color: #ffd2c8; border-color: #6e3d34; max-height: 220px; }
 
 .tabs-list { display: grid; gap: 8px; margin: 16px 0 12px; }
 .tab-card { border: 1px solid #303b35; border-radius: 10px; padding: 10px; background: #0e1210; }

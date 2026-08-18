@@ -79,6 +79,7 @@ export class ExtensionHub extends EventEmitter {
         this.lastHello = {
           version: String(message.version ?? "unknown"),
           browser: String(message.browser ?? "Chromium"),
+          mode: message.mode === "full-access" ? "full-access" : "safe",
           capabilities: Array.isArray(message.capabilities) ? message.capabilities.map(String) : [],
           connectedAt: new Date().toISOString(),
           origin,

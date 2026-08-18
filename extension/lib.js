@@ -1,4 +1,4 @@
-export const VERSION = "0.1.0";
+export const VERSION = "0.2.0";
 export const DEFAULT_PORT = 17_373;
 
 const RISK_PATTERNS = [
@@ -41,7 +41,7 @@ export function hostAllowed(hostname, allowedHosts) {
   });
 }
 
-export function isUrlAllowed(rawUrl, allowedHosts, bridgePort = DEFAULT_PORT) {
+export function isUrlAllowed(rawUrl, allowedHosts, bridgePort = DEFAULT_PORT, fullAccess = false) {
   if (rawUrl === "about:blank") return { allowed: true, url: rawUrl };
   let url;
   try {
@@ -49,13 +49,13 @@ export function isUrlAllowed(rawUrl, allowedHosts, bridgePort = DEFAULT_PORT) {
   } catch {
     return { allowed: false, reason: "Invalid URL" };
   }
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    return { allowed: false, reason: "Only HTTP and HTTPS pages are controllable" };
+  if (url.protocol !== "http:" && url.protocol !== "https:" && !(fullAccess && url.protocol === "file:")) {
+    return { allowed: false, reason: fullAccess ? "Browser-internal pages are not controllable" : "Only HTTP and HTTPS pages are controllable" };
   }
   if ((url.hostname === "127.0.0.1" || url.hostname === "localhost") && Number(url.port || (url.protocol === "https:" ? 443 : 80)) === Number(bridgePort)) {
     return { allowed: false, reason: "The bridge cannot control its own control surface" };
   }
-  if (!hostAllowed(url.hostname, allowedHosts)) {
+  if (!fullAccess && !hostAllowed(url.hostname, allowedHosts)) {
     return { allowed: false, reason: `${url.hostname} is not in the extension allowlist` };
   }
   return { allowed: true, url: url.href };
@@ -65,7 +65,7 @@ export function safeUrlForDisplay(rawUrl) {
   if (rawUrl === "about:blank") return rawUrl;
   try {
     const url = new URL(rawUrl);
-    return `${url.origin}${url.pathname}`;
+    return url.protocol === "file:" ? `file://${url.pathname}` : `${url.origin}${url.pathname}`;
   } catch {
     return "unavailable";
   }
