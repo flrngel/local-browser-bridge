@@ -47,7 +47,7 @@ async fn connect_fake_extension(base_url: &str, token: &str) -> JoinHandle<()> {
         writer
             .send(Message::Text(
                 json!({
-                    "type": "hello", "version": "0.3.0-test", "browser": "Test Chrome", "mode": "full-access",
+                    "type": "hello", "version": "0.4.0-test", "browser": "Test Chrome", "mode": "full-access",
                     "capabilities": ["tabs.list", "page.observe", "page.evaluate", "page.clickAt", "page.typeText"]
                 })
                 .to_string()

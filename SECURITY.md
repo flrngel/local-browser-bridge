@@ -2,7 +2,7 @@
 
 Local Browser Bridge gives an automated system access to pages in a real signed-in browser profile. Treat it like remote-control software even though every transport is local.
 
-Version 0.3.0 enables **Full Access mode by default**. This intentionally removes most action-level safety controls: the allowlist is ignored, sensitive fields can be filled, risky actions and tab closing execute without approval, arbitrary page JavaScript can run, and trusted coordinate/key input is available. Only run it for a local agent you trust. Turn Full Access off in the popup to restore Safe mode.
+Version 0.4.0 enables **Full Access mode by default**. This intentionally removes most action-level safety controls: the allowlist is ignored, sensitive fields can be filled, risky actions and tab closing execute without approval, arbitrary page JavaScript can run, and trusted coordinate/key input is available. Only run it for a local agent you trust. Turn Full Access off in the popup to restore Safe mode.
 
 ## Trust boundaries
 

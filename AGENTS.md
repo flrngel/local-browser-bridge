@@ -1,6 +1,7 @@
 # Local Browser Bridge project rules
 
 - The server must run as a compiled Rust binary and must not require Node.js at runtime.
+- All repository text, documentation, UI copy, logs, and user-facing output must be written in English only.
 - Keep the Rust package version and Chromium extension manifest version aligned. Bump both for every completed extension/package work item.
 - In this repository, the user command `deploy` means all of the following:
   1. Build a Windows x86_64 `.exe` that runs without Node.js.
