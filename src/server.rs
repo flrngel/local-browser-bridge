@@ -34,6 +34,7 @@ use uuid::Uuid;
 use crate::VERSION;
 use crate::hub::{ExtensionHub, HubError};
 use crate::token::{create_token, tokens_equal};
+use crate::update::{UpdateState, UpdateStatus, check_for_update};
 
 const MAX_BODY_BYTES: usize = 128 * 1024;
 const MAX_ACTIVITY: usize = 80;
@@ -41,7 +42,7 @@ const MAX_SCREENSHOT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_WS_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 const PUBLIC_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/public");
 
-const ACTION_METHODS: &[&str] = &[
+pub const ACTION_METHODS: &[&str] = &[
     "status",
     "tabs.list",
     "tabs.activate",
@@ -67,6 +68,7 @@ pub struct ServerConfig {
     pub port: u16,
     pub token: String,
     pub call_timeout: Duration,
+    pub check_for_updates: bool,
 }
 
 impl ServerConfig {
@@ -75,6 +77,7 @@ impl ServerConfig {
             port,
             token: token.into(),
             call_timeout: Duration::from_secs(15),
+            check_for_updates: true,
         }
     }
 }
@@ -88,8 +91,14 @@ pub struct BridgeServer {
 impl BridgeServer {
     pub async fn bind(config: ServerConfig) -> Result<Self, std::io::Error> {
         let listener = TcpListener::bind(("127.0.0.1", config.port)).await?;
-        let state = AppState::new(config.token, config.call_timeout);
+        let state = AppState::new(config.token, config.call_timeout, config.check_for_updates);
         let router = build_router(state.clone());
+        if config.check_for_updates {
+            let update_state = state.clone();
+            tokio::spawn(async move {
+                update_state.refresh_update().await;
+            });
+        }
         Ok(Self {
             listener,
             router,
@@ -121,19 +130,46 @@ struct AppState {
     sessions: Arc<Mutex<HashMap<String, Session>>>,
     events: broadcast::Sender<ServerEvent>,
     action_lock: Arc<tokio::sync::Mutex<()>>,
+    update_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl AppState {
-    fn new(token: String, call_timeout: Duration) -> Self {
+    fn new(token: String, call_timeout: Duration, check_for_updates: bool) -> Self {
         let (events, _) = broadcast::channel(256);
+        let mut data = StateData::default();
+        data.public.update = if check_for_updates {
+            UpdateStatus::checking()
+        } else {
+            UpdateStatus::disabled()
+        };
         Self {
             token: Arc::new(token),
             hub: ExtensionHub::new(call_timeout),
-            data: Arc::new(RwLock::new(StateData::default())),
+            data: Arc::new(RwLock::new(data)),
             sessions: Arc::new(Mutex::new(HashMap::new())),
             events,
             action_lock: Arc::new(tokio::sync::Mutex::new(())),
+            update_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
+    }
+
+    async fn refresh_update(&self) -> UpdateStatus {
+        let _guard = self.update_lock.lock().await;
+        {
+            self.data.write().await.public.update = UpdateStatus::checking();
+        }
+        self.bump("update").await;
+
+        let status = check_for_update().await;
+        let log_status = match &status.status {
+            UpdateState::Available => "warning",
+            UpdateState::Error => "warning",
+            _ => "ok",
+        };
+        self.log("update.check", log_status, &status.message).await;
+        self.data.write().await.public.update = status.clone();
+        self.bump("update").await;
+        status
     }
 
     async fn log(&self, method: &str, status: &str, message: impl Into<String>) {
@@ -265,6 +301,7 @@ struct PublicState {
     tabs: Vec<TabInfo>,
     observation: Option<Observation>,
     activity: VecDeque<Activity>,
+    update: UpdateStatus,
 }
 
 #[derive(Clone, Serialize)]
@@ -408,6 +445,7 @@ fn build_router(state: AppState) -> Router {
         .route("/api/screenshot", get(api_screenshot))
         .route("/api/events", get(api_events))
         .route("/api/action", post(api_action))
+        .route("/api/update/check", post(api_update_check))
         .route("/api/v1/command", post(api_command))
         .route("/bridge", get(websocket_upgrade))
         .fallback(get(static_asset))
@@ -538,6 +576,16 @@ async fn api_action(
         .await?;
     let public = state.public_state().await;
     Ok(Json(json!({ "ok": true, "result": result, "state": public })).into_response())
+}
+
+async fn api_update_check(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    state.assert_ui_mutation(&headers)?;
+    let update = state.refresh_update().await;
+    let public = state.public_state().await;
+    Ok(Json(json!({ "ok": true, "update": update, "state": public })).into_response())
 }
 
 async fn api_command(

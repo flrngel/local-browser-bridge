@@ -15,6 +15,7 @@ const PIXEL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAA
 async fn start_server(token: &str) -> (String, oneshot::Sender<()>, JoinHandle<()>) {
     let mut config = ServerConfig::new(0, token);
     config.call_timeout = Duration::from_secs(1);
+    config.check_for_updates = false;
     let server = BridgeServer::bind(config).await.unwrap();
     let address = server.local_addr().unwrap();
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -47,7 +48,7 @@ async fn connect_fake_extension(base_url: &str, token: &str) -> JoinHandle<()> {
         writer
             .send(Message::Text(
                 json!({
-                    "type": "hello", "version": "0.4.0-test", "browser": "Test Chrome", "mode": "full-access",
+                    "type": "hello", "version": "0.5.0-test", "browser": "Test Chrome", "mode": "full-access",
                     "capabilities": ["tabs.list", "page.observe", "page.evaluate", "page.clickAt", "page.typeText"]
                 })
                 .to_string()

@@ -4,9 +4,10 @@
 - All repository text, documentation, UI copy, logs, and user-facing output must be written in English only.
 - Keep the Rust package version and Chromium extension manifest version aligned. Bump both for every completed extension/package work item.
 - In this repository, the user command `deploy` means all of the following:
-  1. Build a Windows x86_64 `.exe` that runs without Node.js.
-  2. Package the Chromium extension directory as a versioned ZIP.
-  3. Generate checksums and place all release artifacts in `dist/`.
-  4. Verify the binary and archive contents.
-  5. Return clickable paths to the artifacts in the final response.
+  1. Commit and push the intended release with a Conventional Commits message.
+  2. Build a Windows x86_64 `.exe` and macOS universal binary that run without Node.js.
+  3. Package the Chromium extension as the same versioned ZIP.
+  4. Publish the binaries, extension ZIP, SHA-256 manifest, and GitHub provenance in an immutable public GitHub Release.
+  5. Download every published asset into `dist/` and verify checksums, file formats, architectures, archive contents, and attestations.
+  6. Return clickable local artifact paths and the public release link in the final response.
 - Commit completed work with a Conventional Commits message.

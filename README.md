@@ -20,6 +20,9 @@ This project does not copy any private OpenAI protocol. It independently impleme
 - Accessible agent-facing DOM, activity log, and live SSE state updates
 - Bearer-token REST command API and a Rust mock extension for testing
 - Standalone Rust binary with the entire control UI embedded; Node.js is not required
+- Same-version Windows x86_64, macOS universal, and Chromium extension release assets
+- Transparent GitHub-only update metadata check with no telemetry, download, or installation
+- SHA-256 manifests, pinned release actions, GitHub build attestations, and immutable releases
 
 ## Architecture
 
@@ -40,19 +43,28 @@ The agent browser must run on the same computer, as Microsoft local browser does
 
 End users do not need Node.js or Rust. They only need the compiled executable and Chrome 116+, Edge 116+, or a compatible Chromium browser.
 
-### Windows executable
+### Release download
 
-Run the versioned deployment artifact:
+Download the same release version for your platform plus the extension ZIP from [GitHub Releases](https://github.com/flrngel/local-browser-bridge/releases/latest). The full verification and first-run flow is in [docs/INSTALL.md](docs/INSTALL.md).
+
+Windows:
 
 ```powershell
-.\local-browser-bridge-v0.4.0-windows-x86_64.exe
+.\local-browser-bridge-v0.5.0-windows-x86_64.exe
 ```
 
-The executable embeds all UI assets, so no web files or runtime installation are required. On Windows, the generated token is stored at `%USERPROFILE%\.local-browser-bridge\token` by default.
+macOS Intel or Apple silicon:
+
+```bash
+tar -xzf local-browser-bridge-v0.5.0-macos-universal.tar.gz
+./local-browser-bridge
+```
+
+The binary embeds all UI assets, so no web files or runtime installation are required. On Windows, the generated token is stored at `%USERPROFILE%\.local-browser-bridge\token`; on macOS it is stored at `~/.local-browser-bridge/token`.
 
 ### Build from source
 
-Developer builds require Rust 1.85 or newer.
+Developer builds require Rust 1.88 or newer. End users still need no Rust toolchain.
 
 ```bash
 cargo build --release
@@ -70,7 +82,7 @@ Load the extension in the target browser:
 
 1. Open `chrome://extensions` in Chrome or `edge://extensions` in Edge.
 2. Enable **Developer mode** and select **Load unpacked**.
-3. Select the extracted extension ZIP directory or this repository's `extension/` directory.
+3. Select the extracted extension ZIP folder containing `manifest.json` or this repository's `extension/` directory.
 4. Open the extension popup and save the token printed by the server with port `17373`.
 5. Confirm that **Full Access mode** is enabled. It is ON by default.
 6. To control `file://` pages, also enable **Allow access to file URLs** in the extension details page.
@@ -107,6 +119,7 @@ Open `http://127.0.0.1:17373` and select **Observe target**. The mock tab and el
 | `LBB_PORT` | `17373` | Loopback HTTP/WebSocket port |
 | `LBB_TOKEN` | Generated automatically | Explicit bridge token |
 | `LBB_TOKEN_PATH` | `~/.local-browser-bridge/token` | Generated-token storage path |
+| `LBB_DISABLE_UPDATE_CHECK` | `false` | Disable the one-time GitHub release-metadata check |
 
 The server always binds to `127.0.0.1` and rejects non-loopback Host headers.
 
@@ -131,17 +144,19 @@ cargo clippy --all-targets -- -D warnings
 cargo test --locked --all-targets
 ```
 
-The test suite covers version alignment, token persistence, command validation, CSRF and Origin enforcement, WebSocket Origin enforcement, command relay, observation storage, screenshot serving, and Full Access command parameters.
+The test suite covers version alignment, exact extension permissions and package files, absence of remote extension code and updater APIs, server/extension command parity, token persistence, update metadata validation, command validation, CSRF and Origin enforcement, WebSocket Origin enforcement, command relay, observation storage, screenshot serving, and Full Access command parameters.
 
 ## Deployment contract
 
-In this repository, a user request to `deploy` means generating and verifying all of the following in `dist/`:
+In this repository, a user request to `deploy` means committing and pushing the intended version, publishing its immutable GitHub Release, then downloading and verifying all of the following in `dist/`:
 
 - A Node.js-free Windows x86_64 `.exe`
+- A Node.js-free macOS universal archive containing both `arm64` and `x86_64`
 - A matching-version Chromium extension ZIP
-- `SHA256SUMS.txt` for both artifacts
+- `SHA256SUMS.txt` for all three artifacts
+- GitHub build provenance and release integrity verification
 
-Run `scripts/deploy.sh` directly on Windows. On macOS or Linux, it requires `cargo-xwin` or a MinGW cross-compiler. `.github/workflows/deploy.yml` produces the same Windows artifacts. A completed deployment must return direct paths to every artifact.
+The canonical build is `.github/workflows/deploy.yml`, triggered by a matching `vVERSION` tag. `scripts/deploy.sh` provides the same local build on a macOS host with `cargo-xwin`. A completed deployment must return the public release link and direct local paths to every downloaded, reverified artifact.
 
 ## Limitations
 
@@ -152,6 +167,6 @@ Run `scripts/deploy.sh` directly on Windows. On macOS or Linux, it requires `car
 - Reference clicks use trusted Chrome DevTools Protocol input when possible and detach immediately. If DevTools is already attached, the extension falls back to a synthetic click and returns `trusted: false`.
 - Full Access can enter passwords, payment data, and OTPs and can execute page JavaScript. Treat it as remote-control authority over the signed-in browser profile.
 - Unpacked extensions are intended for development or personal installation. Organization-wide deployment requires signing, policy review, and privacy disclosures.
-- Windows artifacts are not automatically code-signed, so SmartScreen may display a warning.
+- Windows artifacts are not yet publisher-signed, and macOS artifacts are not yet Developer ID-signed or notarized. SmartScreen or Gatekeeper may warn. See [docs/INSTALL.md](docs/INSTALL.md) before overriding a per-app warning; never disable platform protection globally.
 
 See [SECURITY.md](SECURITY.md) for the security model and trust boundaries.

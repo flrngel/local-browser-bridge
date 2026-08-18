@@ -1,6 +1,6 @@
 # Research findings and design rationale
 
-Research date: 2026-08-17
+Research date: 2026-08-18
 
 ## Product research
 
@@ -50,6 +50,34 @@ Public browser-bridge implementations and community discussions repeatedly conve
 - [Community discussion: Browser Bridge](https://www.reddit.com/r/ClaudeAI/comments/1v5fz09/browser_bridge_an_mcp_server_that_drives_your/) — demand for real-session bridges, per-site controls, and risky-action confirmations
 
 No code was copied from those projects. This repository was implemented independently using public architecture patterns and official platform APIs.
+
+## Release and update evidence
+
+GitHub artifact attestations use Sigstore to provide verifiable build provenance, while immutable releases lock published assets and their tag against later replacement. Version 0.5.0 therefore builds each platform in GitHub Actions, attests each release asset, publishes checksums, and enables release immutability. The update checker reports metadata only and leaves download and installation to the user.
+
+- [GitHub: Artifact attestations](https://docs.github.com/en/actions/concepts/security/artifact-attestations)
+- [GitHub: Immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
+- [GitHub: Verify release integrity](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/verify-release-integrity)
+
+Microsoft documents that unsigned applications cannot inherit publisher reputation and can trigger SmartScreen on each version. Apple documents Developer ID signing and notarization as the normal outside-App-Store trust path. This release does not claim either identity without the required certificates; the install guide discloses the limitation and directs users to per-artifact verification without globally disabling OS protection.
+
+- [Microsoft: SmartScreen reputation for app developers](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation)
+- [Apple: Developer ID](https://developer.apple.com/support/developer-id/)
+- [Apple: Safely open apps on Mac](https://support.apple.com/en-nz/102445)
+
+Chrome recommends narrowly reviewed permissions and notes that Windows/macOS external extension installation and updates must use the Chrome Web Store. A Developer-mode unpacked ZIP therefore cannot honestly promise silent self-update. The extension has an exact permission/package contract test, contains no downloader or remote code, and relies on a visible matching-version notice in the local UI.
+
+- [Chrome: Declare permissions](https://developer.chrome.com/docs/extensions/develop/concepts/declare-permissions)
+- [Chrome: Manifest V3 and remote code](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)
+- [Chrome: Alternative installation methods](https://developer.chrome.com/docs/extensions/how-to/distribute/install-extensions)
+
+The Update Framework research shows why transport security alone is not a complete software-update design and emphasizes authenticated metadata, version freshness, and compromise resilience. This small project does not claim a full TUF implementation; it deliberately avoids automatic installation, validates semantic versions and fixed repository links, limits metadata size and redirects, and publishes independent checksums plus GitHub provenance.
+
+- [The Update Framework](https://theupdateframework.org/)
+- [Survivable Key Compromise in Software Update Systems](https://theupdateframework.io/papers/survivable-key-compromise-ccs2010.pdf)
+- [USENIX: Secure Software Updates: Not Really](https://www.usenix.org/conference/15th-usenix-security-symposium/secure-software-updates-not-really)
+
+Community discussions from independent Windows developers repeatedly describe unknown-publisher warnings as a major installation trust barrier. These reports informed the first-run disclosure and verification UX, while the technical security decisions above rely on the platform vendors and research literature.
 
 ## Scope decisions
 

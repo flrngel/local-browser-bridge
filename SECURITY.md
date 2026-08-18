@@ -2,7 +2,7 @@
 
 Local Browser Bridge gives an automated system access to pages in a real signed-in browser profile. Treat it like remote-control software even though every transport is local.
 
-Version 0.4.0 enables **Full Access mode by default**. This intentionally removes most action-level safety controls: the allowlist is ignored, sensitive fields can be filled, risky actions and tab closing execute without approval, arbitrary page JavaScript can run, and trusted coordinate/key input is available. Only run it for a local agent you trust. Turn Full Access off in the popup to restore Safe mode.
+Version 0.5.0 enables **Full Access mode by default**. This intentionally removes most action-level safety controls: the allowlist is ignored, sensitive fields can be filled, risky actions and tab closing execute without approval, arbitrary page JavaScript can run, and trusted coordinate/key input is available. Only run it for a local agent you trust. Turn Full Access off in the popup to restore Safe mode.
 
 ## Trust boundaries
 
@@ -13,6 +13,15 @@ Version 0.4.0 enables **Full Access mode by default**. This intentionally remove
 - Returned tab URLs strip query strings and fragments.
 - The bridge control page cannot be selected as a target, preventing recursive self-control.
 - The server and control UI are compiled into one Rust binary; no Node.js runtime or package installation is involved.
+- The extension contains no remote code, download API, cookie API, native messaging host, telemetry, or update endpoint.
+
+## Release and update trust
+
+- The server makes one bounded HTTPS request to the fixed GitHub Releases API at startup. It sends only a generic product/version `User-Agent`, accepts stable semantic versions and official repository release links, and does not download or install files.
+- `--no-update-check` or `LBB_DISABLE_UPDATE_CHECK=1` prevents that request. `--check-updates` performs the same metadata-only check and exits.
+- The extension never performs update checks. Unpacked extensions do not silently update on Windows or macOS; the control UI reports a server/extension mismatch so the user can replace both from one release.
+- Tagged release builds run on separate GitHub-hosted Windows and macOS workers. Every binary/archive and checksum manifest receives GitHub build provenance, and release immutability prevents later asset or tag replacement.
+- Version 0.5.0 artifacts are not yet Microsoft publisher-signed or Apple Developer ID-signed/notarized. Platform warnings are therefore expected for some downloads. Checksums and GitHub provenance detect release tampering but do not replace OS publisher signing or malware notarization.
 
 ## Modes and human approval
 

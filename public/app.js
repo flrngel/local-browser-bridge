@@ -6,6 +6,7 @@ const ui = Object.fromEntries(
     "elements-empty", "element-count", "selected-text", "page-text", "activity", "revision", "toast",
     "coordinates-form", "coordinate-x", "coordinate-y", "type-text-form", "type-text", "custom-key-form", "custom-key",
     "evaluate-form", "expression", "evaluation-result",
+    "release-panel", "current-version", "update-status", "update-detail", "check-update", "update-link",
   ].map((id) => [id, document.getElementById(id)]),
 );
 
@@ -76,8 +77,29 @@ function renderConnection(state) {
     return;
   }
   const mode = state.extension?.mode === "full-access" ? "FULL ACCESS" : "SAFE MODE";
-  const detail = state.extension ? `${state.extension.browser} · extension ${state.extension.version} · ${mode}` : "handshake pending";
+  const versionMismatch = state.extension && state.update?.currentVersion && state.extension.version !== state.update.currentVersion;
+  const versionLabel = versionMismatch ? `${state.extension.version} · VERSION MISMATCH` : state.extension?.version;
+  const detail = state.extension ? `${state.extension.browser} · extension ${versionLabel} · ${mode}` : "handshake pending";
   ui["connection-text"].textContent = `Connected · ${detail}`;
+}
+
+function renderUpdate(state) {
+  const update = state.update ?? {};
+  const labels = {
+    checking: "Checking official release metadata…",
+    up_to_date: "Up to date",
+    available: `Update available: ${update.latestVersion ?? "new version"}`,
+    error: "Update status unavailable",
+    disabled: "Automatic check disabled",
+  };
+  ui["current-version"].textContent = `version ${update.currentVersion ?? "unknown"}`;
+  ui["update-status"].textContent = labels[update.status] ?? "Update status unavailable";
+  ui["update-detail"].textContent = update.message
+    ? `${update.message} The checker never downloads or installs files and sends no telemetry.`
+    : "The checker contacts only GitHub release metadata. It never downloads or installs files and sends no telemetry.";
+  ui["release-panel"].className = `release-panel panel update-${update.status ?? "error"}`;
+  ui["check-update"].textContent = update.status === "checking" ? "Checking…" : "Check again";
+  ui["update-link"].href = update.releaseUrl || "https://github.com/flrngel/local-browser-bridge/releases";
 }
 
 function renderTabs(state) {
@@ -185,6 +207,7 @@ function renderActivity(state) {
 function render(state) {
   currentState = state;
   renderConnection(state);
+  renderUpdate(state);
   renderTabs(state);
   renderObservation(state);
   renderActivity(state);
@@ -223,7 +246,22 @@ async function runAction(method, params = {}) {
   }
 }
 
+async function checkForUpdate() {
+  if (busy) return;
+  setBusy(true);
+  try {
+    const payload = await request("/api/update/check", { method: "POST" });
+    render(payload.state);
+    showToast(payload.update.message, payload.update.status === "error" ? "error" : "normal");
+  } catch (error) {
+    showToast(error.message, "error");
+  } finally {
+    setBusy(false);
+  }
+}
+
 ui["refresh-tabs"].addEventListener("click", () => runAction("tabs.list"));
+ui["check-update"].addEventListener("click", () => void checkForUpdate());
 ui["new-tab"].addEventListener("click", () => runAction("tabs.new"));
 ui.observe.addEventListener("click", () => runAction("page.observe"));
 ui["navigate-form"].addEventListener("submit", (event) => {
@@ -291,7 +329,7 @@ async function boot() {
     lastRefresh = now;
     void loadState();
   });
-  for (const name of ["connection", "hello", "tabs", "observation", "approval", "warning", "error"]) {
+  for (const name of ["connection", "hello", "tabs", "observation", "approval", "warning", "error", "update"]) {
     events.addEventListener(name, () => {
       if (!busy) void loadState();
     });

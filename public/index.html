@@ -35,6 +35,19 @@
         <p class="boundary"><strong>Boundary:</strong> this works only when your browser tool runs on this computer and can open loopback URLs. A cloud-hosted browser cannot reach this machine's localhost.</p>
       </section>
 
+      <section id="release-panel" class="release-panel panel" aria-labelledby="release-title">
+        <div>
+          <p class="eyebrow">RELEASE INTEGRITY</p>
+          <h2 id="release-title">Server <span id="current-version">version …</span></h2>
+          <p id="update-status" class="update-status" role="status" aria-live="polite">Loading update status…</p>
+          <p id="update-detail" class="update-detail">The checker contacts only GitHub release metadata. It never downloads or installs files and sends no telemetry.</p>
+        </div>
+        <div class="release-actions">
+          <button id="check-update" type="button" class="button ghost">Check again</button>
+          <a id="update-link" class="button primary release-link" href="https://github.com/flrngel/local-browser-bridge/releases" target="_blank" rel="noopener noreferrer">View verified release</a>
+        </div>
+      </section>
+
       <section class="workspace-grid">
         <aside class="sidebar">
           <section class="panel" aria-labelledby="tabs-title">

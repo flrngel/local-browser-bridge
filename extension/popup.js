@@ -1,12 +1,15 @@
+import { VERSION } from "./lib.js";
+
 const byId = (id) => document.getElementById(id);
 const ui = {
-  status: byId("status"), enabled: byId("enabled"), fullAccess: byId("full-access"), modeStatus: byId("mode-status"),
+  version: byId("version"), status: byId("status"), enabled: byId("enabled"), fullAccess: byId("full-access"), modeStatus: byId("mode-status"),
   connectionForm: byId("connection-form"), port: byId("port"),
   token: byId("token"), approvalSection: byId("approval-section"), approvalDetail: byId("approval-detail"),
   approve: byId("approve"), reject: byId("reject"), currentSite: byId("current-site"), allowCurrent: byId("allow-current"),
   hostForm: byId("host-form"), host: byId("host"), hosts: byId("hosts"), allowedSitesSection: byId("allowed-sites-section"), message: byId("message"),
 };
 let state = null;
+ui.version.textContent = `Version ${VERSION}`;
 
 function call(action, extra = {}) {
   return chrome.runtime.sendMessage({ type: "LBB_POPUP", action, ...extra }).then((response) => {

@@ -1,7 +1,12 @@
-name: Build Windows release
+name: Build verified release
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing v-prefixed tag to publish
+        required: true
+        type: string
   push:
     tags:
       - "v*"
@@ -9,42 +14,200 @@ on:
 permissions:
   contents: read
 
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+
 jobs:
-  windows-release:
-    runs-on: windows-latest
+  verify:
+    name: Verify source and extension contract
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Build and test Rust server
-        shell: pwsh
-        run: |
-          cargo test --locked --all-targets
-          cargo build --locked --release
-      - name: Package verified artifacts
-        shell: pwsh
-        run: |
-          $cargo = Get-Content Cargo.toml -Raw
-          $version = [regex]::Match($cargo, '(?m)^version = "([^"]+)"').Groups[1].Value
-          $manifest = Get-Content extension/manifest.json -Raw | ConvertFrom-Json
-          if ($manifest.version -ne $version) { throw "Server and extension versions do not match" }
-          New-Item -ItemType Directory -Force dist | Out-Null
-          $exe = "dist/local-browser-bridge-v$version-windows-x86_64.exe"
-          $zip = "dist/local-browser-bridge-extension-v$version.zip"
-          Copy-Item target/release/local-browser-bridge.exe $exe
-          & $exe --version
-          Compress-Archive -Path extension/* -DestinationPath $zip -Force
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $archive = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $zip))
-          try {
-            if (-not ($archive.Entries | Where-Object FullName -eq 'manifest.json')) { throw "Extension archive is missing manifest.json" }
-          } finally {
-            $archive.Dispose()
-          }
-          @($exe, $zip) | ForEach-Object {
-            $hash = (Get-FileHash $_ -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $([System.IO.Path]::GetFileName($_))"
-          } | Set-Content dist/SHA256SUMS.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          name: local-browser-bridge-windows
-          path: dist/*
+          fetch-depth: 0
+      - name: Install the minimum supported Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
+          rustup default 1.88.0
+      - name: Validate release tag and aligned versions
+        shell: bash
+        run: |
+          version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
+          manifest_version="$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' extension/manifest.json | head -n 1)"
+          test "$version" = "$manifest_version"
+          test "$RELEASE_TAG" = "v$version"
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$GITHUB_SHA"
+      - name: Run formatting, lint, unit, integration, and extension tests
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked --all-targets
+      - name: Audit locked Rust dependencies
+        run: |
+          cargo install cargo-audit --locked --version 0.22.2
+          cargo audit
+
+  windows:
+    name: Build Windows x86_64
+    needs: verify
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the minimum supported Rust toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+      - name: Build and verify the standalone executable
+        shell: pwsh
+        run: |
+          cargo build --locked --release
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"$').Matches[0].Groups[1].Value
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $output = "dist/local-browser-bridge-v$version-windows-x86_64.exe"
+          Copy-Item target/release/local-browser-bridge.exe $output
+          $reported = & $output --version
+          if ($reported -ne "local-browser-bridge $version") { throw "Unexpected binary version: $reported" }
+          $bytes = [System.IO.File]::ReadAllBytes($output)
+          if ($bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) { throw "Executable does not have an MZ header" }
+      - name: Attest Windows build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.exe
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-x86_64
+          path: dist/*.exe
           if-no-files-found: error
+
+  macos:
+    name: Build macOS universal
+    needs: verify
+    runs-on: macos-14
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the minimum supported Rust toolchain and targets
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Build and verify the universal binary
+        shell: bash
+        run: |
+          version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
+          cargo build --locked --release --target aarch64-apple-darwin
+          cargo build --locked --release --target x86_64-apple-darwin
+          mkdir -p dist stage
+          lipo -create \
+            target/aarch64-apple-darwin/release/local-browser-bridge \
+            target/x86_64-apple-darwin/release/local-browser-bridge \
+            -output stage/local-browser-bridge
+          chmod 755 stage/local-browser-bridge
+          architectures="$(lipo -archs stage/local-browser-bridge)"
+          [[ "$architectures" == *"arm64"* && "$architectures" == *"x86_64"* ]]
+          reported="$(stage/local-browser-bridge --version)"
+          test "$reported" = "local-browser-bridge $version"
+          tar -czf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" -C stage local-browser-bridge
+          tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | grep -Fxq local-browser-bridge
+      - name: Attest macOS build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.tar.gz
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-universal
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  extension:
+    name: Package Chromium extension
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Package and verify the exact extension file set
+        run: bash scripts/package-extension.sh
+      - name: Attest extension build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.zip
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: chromium-extension
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [windows, macos, extension]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Generate and verify checksums
+        shell: bash
+        run: |
+          version="${RELEASE_TAG#v}"
+          assets=(
+            "local-browser-bridge-v${version}-windows-x86_64.exe"
+            "local-browser-bridge-v${version}-macos-universal.tar.gz"
+            "local-browser-bridge-extension-v${version}.zip"
+          )
+          for asset in "${assets[@]}"; do test -f "dist/$asset"; done
+          (cd dist && sha256sum "${assets[@]}" > SHA256SUMS.txt)
+          (cd dist && sha256sum --check SHA256SUMS.txt)
+          unzip -tq "dist/local-browser-bridge-extension-v${version}.zip"
+          tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | grep -Fxq local-browser-bridge
+      - name: Attest the checksum manifest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/SHA256SUMS.txt
+      - name: Publish immutable release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          version="${RELEASE_TAG#v}"
+          cat > release-notes.md <<EOF
+          Standalone Local Browser Bridge ${version} for Windows and macOS, plus the matching Chromium extension.
+
+          ## Install
+
+          1. Download the server archive for your operating system and the extension ZIP.
+          2. Verify both files against \`SHA256SUMS.txt\` or with \`gh attestation verify <file> -R flrngel/local-browser-bridge\`.
+          3. Run the server, extract the extension ZIP, and load that folder from \`chrome://extensions\` with Developer mode enabled.
+          4. Paste the token printed by the server into the extension popup. Keep the server and extension on this same version.
+
+          ## Trust notice
+
+          These binaries are built by public GitHub Actions and include GitHub artifact attestations. They do not auto-download or auto-install updates. This release is not yet signed with a Microsoft publisher certificate or Apple Developer ID and is not Apple-notarized, so SmartScreen or Gatekeeper may show an unfamiliar-developer warning. Do not weaken system security globally; verify the release and source first.
+          EOF
+          gh release create "$RELEASE_TAG" \
+            --draft \
+            --verify-tag \
+            --title "Local Browser Bridge ${version}" \
+            --notes-file release-notes.md
+          gh release upload "$RELEASE_TAG" dist/*
+          gh release edit "$RELEASE_TAG" --draft=false
+          gh release view "$RELEASE_TAG" --json url,tagName,isDraft,isPrerelease
