@@ -2,21 +2,22 @@
 
 Local Browser Bridge gives an automated system access to pages in a real signed-in browser profile. Treat it like remote-control software even though every transport is local.
 
-Version 0.8.0 enables browser **Full Access mode by default** and adds an optional native computer helper. Full Access intentionally removes most browser action-level safety controls. The computer helper executes its bounded native input commands immediately while it is running; browser Safe mode does not govern desktop applications. Only run either capability for a local agent you trust.
+Version 0.9.0 enables browser **Full Access mode by default** and includes an optional native computer helper. Full Access intentionally removes most browser action-level safety controls. The computer helper executes its bounded native input commands immediately while it is running; browser Safe mode does not govern desktop applications. Only run either capability for a local agent you trust.
 
 ## Trust boundaries
 
 - The HTTP/WebSocket server binds only to loopback and rejects non-loopback Host headers.
-- The extension authenticates with a random token stored outside the repository.
-- The server accepts the extension WebSocket only with that token and a `chrome-extension://` Origin.
-- The control UI exposes no CORS permission. State changes require a SameSite session cookie, a same-origin `Origin`, and an unpredictable CSRF header.
+- The extension authenticates with a canonical URL-safe encoding of 32 random bytes stored outside the repository. Empty, weak, malformed, permissive, or symlinked persisted token files are rotated atomically.
+- Connector WebSockets carry no bearer, query, or raw token. The extension and helper use a three-second, size-bounded mutual HMAC-SHA256 handshake that binds role, connector, a fresh client nonce, a fresh server nonce, and the server-created session ID. A connector verifies server proof before sending its own proof or reading browser/native state; the server attaches it to the active hub only after constant-time client-proof verification.
+- The extension additionally requires an exact Chrome-extension Origin, and the helper requires exact Origin `lbb-computer-helper://local`. Provisional unauthenticated sockets are concurrency-bounded and cannot replace an active connector.
+- The control URL places the master token only in a fragment, which the page removes immediately before exchanging it for an expiring random session capability kept in the dashboard's port-specific `sessionStorage`. No localhost cookie is used or exposed to unrelated services on other ports. State, event, browser screenshot, and computer screenshot reads require that session or a bearer token. State changes additionally require a same-origin `Origin` and an unpredictable CSRF header. No API exposes CORS permission.
 - Returned tab URLs strip query strings and fragments.
 - The bridge control page cannot be selected as a target, preventing recursive self-control.
 - The server and control UI are compiled into one Rust binary; no Node.js runtime or package installation is involved.
 - The extension contains no remote code, download API, cookie API, native messaging host, telemetry, or update endpoint.
-- The native computer helper is a separate, visibly connected process. It opens no listener and connects outbound to the server with the shared token and exact private Origin.
+- The native computer helper is a separate, visibly connected process. It opens no listener and connects outbound to the server with token-free mutual authentication and an exact private Origin.
 - The server intersects helper-advertised capabilities with a fixed allowlist. No shell, filesystem, process-launch, clipboard, downloader, or telemetry method is accepted or implemented.
-- Every native input action is bound to the last delivered exact-window frame. The helper rechecks `(pid, native window id)` ownership and geometry immediately before input and rejects stale frames.
+- Every native input action is bound to an exact-window frame. During an active 1–10 FPS share, the helper accepts a rendered frame for at most three seconds only while `(pid, native window id, geometry)` still exactly matches the current frame; all other stale frames fail closed.
 - The helper does not post global HID input, move the hardware cursor, leave the user's focused window changed, activate the target application, change the active desktop, or silently fall back to foreground control. It snapshots those invariants around every action and fails closed if they change.
 - Browser and native computer actions share one serialization lock so two local callers cannot intentionally interleave mutations through this server.
 
@@ -28,7 +29,7 @@ The random token authenticates local protocol clients; it is not a sandbox. Malw
 - `--no-update-check` or `LBB_DISABLE_UPDATE_CHECK=1` prevents that request. `--check-updates` performs the same metadata-only check and exits.
 - The extension never performs update checks. Unpacked extensions do not silently update on Windows or macOS; the control UI reports a server/extension mismatch so the user can replace both from one release.
 - Tagged release builds run on separate GitHub-hosted Windows and macOS workers. Every binary/archive and checksum manifest receives GitHub build provenance, and release immutability prevents later asset or tag replacement.
-- Version 0.8.0 artifacts are not yet Microsoft publisher-signed or Apple Developer ID-signed/notarized. The macOS helper app is ad-hoc signed so its bundle is structurally valid, not to claim a verified publisher identity. Platform warnings and permission re-prompts are therefore possible. Checksums and GitHub provenance detect release tampering but do not replace OS publisher signing or malware notarization.
+- Version 0.9.0 artifacts are not Microsoft publisher-signed or Apple Developer ID-signed/notarized. The macOS helper app is ad-hoc signed so its bundle is structurally valid, not to claim a verified publisher identity. Platform warnings and permission re-prompts are therefore possible. Checksums and GitHub provenance detect release tampering but do not replace OS publisher signing or malware notarization.
 
 ## Modes and human approval
 
@@ -41,9 +42,10 @@ Risk detection in Safe mode is a conservative text heuristic, not a complete pol
 - Password, payment-card, and one-time-code fields are rejected only in Safe mode.
 - The server never logs fill text.
 - Tab URLs returned to the server omit query strings and fragments.
-- Screenshot and page text remain in server memory and are not written to disk.
+- Screenshot and page text remain in server memory and are not written to disk. Their HTTP endpoints require an authenticated dashboard session or bearer token.
 - Browser content is treated as untrusted and inserted into the control UI with `textContent`, not HTML.
 - Native exact-window screenshots remain in server memory, are served only from loopback under the control page's same-origin policy, and are replaced on the next capture. They exclude unrelated windows and notifications, although the selected target can itself contain sensitive content.
+- Native accessibility password values are never read or writable through semantic control. They are marked `sensitive` and `valueRedacted`, and the server independently removes any value or `setValue` action supplied for such an element.
 
 Full Access can run arbitrary JavaScript in the target page's main world and act with that page's signed-in session. It cannot directly read HttpOnly cookie values, but page-origin requests can still use those cookies. Treat any token holder and any agent that can operate the localhost UI as trusted browser operators.
 
@@ -61,8 +63,9 @@ Native computer input is hybrid semantic/pixel control bound to one exact applic
 - `tabs`: list, activate, navigate, and capture allowed tabs.
 - `scripting` + HTTP(S)/file host permissions: inject the isolated observation/action content script. File access also requires the user-controlled Chrome extension setting.
 - `storage`: persist token, port, allowlist, and pending approval.
-- `alarms`: reconnect after Manifest V3 service-worker suspension.
-- `debugger`: dispatch trusted mouse/key input, insert text, and evaluate page JavaScript, then detach immediately.
+- `alarms`: reconnect transport, expire leases, and run heartbeat recovery after Manifest V3 service-worker suspension.
+- `tabGroups`: visibly group only tabs created by the bridge; grouping never grants authority.
+- `debugger`: hold one explicit controlled-tab lease so Chrome shows its native debugging warning, then dispatch trusted mouse/key input, insert text, or evaluate page JavaScript. Chrome Cancel, timeout, disconnect, Stop, expiry, target loss, or explicit release detaches and revokes authority.
 
 ## Reporting
 

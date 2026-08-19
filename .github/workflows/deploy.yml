@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing v-prefixed tag to publish
+        description: Existing annotated v-prefixed tag at the selected workflow ref
         required: true
         type: string
   push:
@@ -14,29 +14,46 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.repository }}-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
+
 env:
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+  SOURCE_REF: ${{ github.event_name == 'push' && github.sha || inputs.release_tag }}
 
 jobs:
   verify:
     name: Verify source and extension contract
     runs-on: ubuntu-latest
+    outputs:
+      source_sha: ${{ steps.release_source.outputs.source_sha }}
+      tag_sha: ${{ steps.release_source.outputs.tag_sha }}
+      version: ${{ steps.release_source.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.SOURCE_REF }}
           fetch-depth: 0
       - name: Install the minimum supported Rust toolchain
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
           rustup default 1.88.0
       - name: Validate release tag and aligned versions
+        id: release_source
         shell: bash
         run: |
-          version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
-          manifest_version="$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' extension/manifest.json | head -n 1)"
-          test "$version" = "$manifest_version"
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
+          test "$(git cat-file -t "$RELEASE_TAG")" = tag
+          version="$(bash scripts/audit-versions.sh "$RELEASE_TAG")"
           test "$RELEASE_TAG" = "v$version"
-          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$GITHUB_SHA"
+          source_sha="$(git rev-parse HEAD)"
+          test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$source_sha"
+          test "$GITHUB_SHA" = "$source_sha"
+          tag_sha="$(git rev-parse "$RELEASE_TAG")"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "tag_sha=$tag_sha" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Run formatting, lint, unit, integration, and extension tests
         run: |
           cargo fmt --all -- --check
@@ -57,26 +74,33 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.source_sha }}
       - name: Install the minimum supported Rust toolchain
         shell: pwsh
         run: |
           rustup toolchain install 1.88.0 --profile minimal
           rustup default 1.88.0
+          rustup target add x86_64-pc-windows-msvc
       - name: Build and verify the standalone executables
         shell: pwsh
         run: |
-          cargo build --locked --release --bins
+          cargo build --locked --release --bins --target x86_64-pc-windows-msvc
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"$').Matches[0].Groups[1].Value
+          if ($version -ne "${{ needs.verify.outputs.version }}") { throw "Source version changed after verification" }
           New-Item -ItemType Directory -Force dist | Out-Null
           $server = "dist/local-browser-bridge-v${version}-windows-x86_64.exe"
           $helper = "dist/local-computer-helper-v${version}-windows-x86_64.exe"
-          Copy-Item target/release/local-browser-bridge.exe $server
-          Copy-Item target/release/local-computer-helper.exe $helper
+          Copy-Item target/x86_64-pc-windows-msvc/release/local-browser-bridge.exe $server
+          Copy-Item target/x86_64-pc-windows-msvc/release/local-computer-helper.exe $helper
           if ((& $server --version) -ne "local-browser-bridge $version") { throw "Unexpected server version" }
           if ((& $helper --version) -ne "local-computer-helper $version") { throw "Unexpected helper version" }
           foreach ($output in @($server, $helper)) {
             $bytes = [System.IO.File]::ReadAllBytes($output)
             if ($bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) { throw "$output does not have an MZ header" }
+            $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
+            $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+            if ($machine -ne 0x8664) { throw "$output is not an x86_64 PE executable" }
           }
       - name: Attest Windows build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -98,6 +122,8 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.source_sha }}
       - name: Install the minimum supported Rust toolchain and targets
         run: |
           rustup toolchain install 1.88.0 --profile minimal
@@ -106,7 +132,7 @@ jobs:
       - name: Build and verify universal server and helper app
         shell: bash
         run: |
-          version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
+          version="$(bash scripts/audit-versions.sh "$RELEASE_TAG")"
           cargo build --locked --release --bins --target aarch64-apple-darwin
           cargo build --locked --release --bins --target x86_64-apple-darwin
           mkdir -p dist stage "stage/Local Computer Helper.app/Contents/MacOS"
@@ -126,9 +152,11 @@ jobs:
           done
           test "$(stage/local-browser-bridge --version)" = "local-browser-bridge $version"
           test "$("stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper" --version)" = "local-computer-helper $version"
+          codesign --force --sign - stage/local-browser-bridge
+          codesign --verify --strict stage/local-browser-bridge
           codesign --force --deep --sign - "stage/Local Computer Helper.app"
           codesign --verify --deep --strict "stage/Local Computer Helper.app"
-          tar -czf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" -C stage local-browser-bridge "Local Computer Helper.app"
+          COPYFILE_DISABLE=1 tar -czf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" -C stage local-browser-bridge "Local Computer Helper.app"
           tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | grep -Fxq local-browser-bridge
           tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | grep -Fxq "Local Computer Helper.app/Contents/MacOS/local-computer-helper"
       - name: Attest macOS build provenance
@@ -151,8 +179,13 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.source_sha }}
       - name: Package and verify the exact extension file set
-        run: bash scripts/package-extension.sh
+        shell: bash
+        run: |
+          bash scripts/audit-versions.sh "$RELEASE_TAG"
+          bash scripts/package-extension.sh
       - name: Attest extension build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -165,7 +198,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [windows, macos, extension]
+    needs: [verify, windows, macos, extension]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -174,6 +207,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.verify.outputs.source_sha }}
           fetch-depth: 0
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -191,34 +225,57 @@ jobs:
           )
           for asset in "${assets[@]}"; do test -f "dist/$asset"; done
           (cd dist && sha256sum "${assets[@]}" > SHA256SUMS.txt)
-          (cd dist && sha256sum --check SHA256SUMS.txt)
-          unzip -tq "dist/local-browser-bridge-extension-v${version}.zip"
-          tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | grep -Fxq local-browser-bridge
-          tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | grep -Fxq "Local Computer Helper.app/Contents/MacOS/local-computer-helper"
+          bash scripts/verify-release-assets.sh "$version" dist
       - name: Attest the checksum manifest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/SHA256SUMS.txt
+      - name: Verify every GitHub build attestation before publishing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          verify_attestation() {
+            local subject="$1"
+            for attempt in 1 2 3 4 5; do
+              if gh attestation verify "$subject" --repo "$GITHUB_REPOSITORY"; then
+                return 0
+              fi
+              sleep 2
+            done
+            return 1
+          }
+          for subject in dist/*; do
+            verify_attestation "$subject"
+          done
       - name: Publish immutable release assets
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           version="${RELEASE_TAG#v}"
+          test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$(git rev-parse HEAD)"
+          test "$(git rev-parse "$RELEASE_TAG")" = "${{ needs.verify.outputs.tag_sha }}"
+          remote_tag_sha="$(git ls-remote --refs origin "refs/tags/$RELEASE_TAG" | awk '{ print $1 }')"
+          test "$remote_tag_sha" = "${{ needs.verify.outputs.tag_sha }}"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "A release already exists for $RELEASE_TAG; refusing to overwrite immutable assets." >&2
+            exit 1
+          fi
           cat > release-notes.md <<EOF
           Standalone Local Browser Bridge ${version} for Windows and macOS, its separate native computer helper, and the matching Chromium extension.
 
           ## Install
 
           1. Download the server and computer-helper artifacts for your operating system plus the extension ZIP.
-          2. Verify every file against \`SHA256SUMS.txt\` or with \`gh attestation verify <file> -R flrngel/local-browser-bridge\`.
+          2. Verify every file against \`SHA256SUMS.txt\` or with \`gh attestation verify <file> -R $GITHUB_REPOSITORY\`.
           3. Run the server. Run the separate helper only when desktop control is wanted; macOS will request Screen Recording and Accessibility.
           4. Extract the extension ZIP, load it from \`chrome://extensions\` with Developer mode enabled, and paste the token printed by the server into its popup.
           5. Keep the server, helper, and extension on this same version.
 
           ## Trust notice
 
-          These binaries are built by public GitHub Actions and include GitHub artifact attestations. They do not auto-download or auto-install updates. This release is not yet signed with a Microsoft publisher certificate or Apple Developer ID and is not Apple-notarized, so SmartScreen or Gatekeeper may show an unfamiliar-developer warning. Do not weaken system security globally; verify the release and source first.
+          These binaries are built by public GitHub Actions and include GitHub artifact attestations. No release asset auto-installs itself. This release is not yet signed with a Microsoft publisher certificate or Apple Developer ID and is not Apple-notarized, so SmartScreen or Gatekeeper may show an unfamiliar-developer warning. Do not weaken system security globally; verify the release and source first.
           EOF
           gh release create "$RELEASE_TAG" \
             --draft \

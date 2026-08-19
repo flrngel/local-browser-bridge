@@ -9,8 +9,8 @@ use axum::body::{Body, Bytes};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, Request, State};
 use axum::http::header::{
-    AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_SECURITY_POLICY, CONTENT_TYPE, COOKIE,
-    HOST, ORIGIN, REFERRER_POLICY, SET_COOKIE, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
+    AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_SECURITY_POLICY, CONTENT_TYPE, HOST,
+    ORIGIN, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
 };
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
@@ -19,7 +19,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD};
 use futures_util::stream;
 use futures_util::{SinkExt as _, StreamExt as _};
 use include_dir::{Dir, include_dir};
@@ -27,15 +27,19 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 use tokio::net::TcpListener;
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore, broadcast};
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
-use crate::VERSION;
 use crate::computer::{COMPUTER_HELPER_ORIGIN, COMPUTER_METHODS};
 use crate::hub::{ExtensionHub, HubError};
-use crate::token::{create_token, tokens_equal};
+use crate::token::{create_token, token_is_valid, tokens_equal};
 use crate::update::{UpdateState, UpdateStatus, check_for_update};
+use crate::ws_auth::{
+    AUTH_TIMEOUT, BROWSER_CONNECTOR, COMPUTER_CONNECTOR, MAX_AUTH_MESSAGE_BYTES, MAX_AUTH_MESSAGES,
+    MAX_PROVISIONAL_CONNECTIONS, ServerChallenge,
+};
+use crate::{PROTOCOL_VERSION, VERSION};
 
 const MAX_BODY_BYTES: usize = 128 * 1024;
 const MAX_ACTIVITY: usize = 80;
@@ -45,6 +49,9 @@ const PUBLIC_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/public");
 
 pub const ACTION_METHODS: &[&str] = &[
     "status",
+    "browser.control.start",
+    "browser.control.status",
+    "browser.control.stop",
     "tabs.list",
     "tabs.activate",
     "tabs.new",
@@ -91,6 +98,12 @@ pub struct BridgeServer {
 
 impl BridgeServer {
     pub async fn bind(config: ServerConfig) -> Result<Self, std::io::Error> {
+        if !token_is_valid(&config.token) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Bridge token must be a canonical URL-safe encoding of 32 random bytes",
+            ));
+        }
         let listener = TcpListener::bind(("127.0.0.1", config.port)).await?;
         let state = AppState::new(config.token, config.call_timeout, config.check_for_updates);
         let router = build_router(state.clone());
@@ -134,6 +147,8 @@ struct AppState {
     events: broadcast::Sender<ServerEvent>,
     action_lock: Arc<tokio::sync::Mutex<()>>,
     update_lock: Arc<tokio::sync::Mutex<()>>,
+    browser_auth_slots: Arc<Semaphore>,
+    computer_auth_slots: Arc<Semaphore>,
 }
 
 impl AppState {
@@ -154,6 +169,8 @@ impl AppState {
             events,
             action_lock: Arc::new(tokio::sync::Mutex::new(())),
             update_lock: Arc::new(tokio::sync::Mutex::new(())),
+            browser_auth_slots: Arc::new(Semaphore::new(MAX_PROVISIONAL_CONNECTIONS)),
+            computer_auth_slots: Arc::new(Semaphore::new(MAX_PROVISIONAL_CONNECTIONS)),
         }
     }
 
@@ -200,17 +217,61 @@ impl AppState {
         });
     }
 
+    async fn log_for_connection(
+        &self,
+        hub: &ExtensionHub,
+        connection_id: Uuid,
+        method: &str,
+        status: &str,
+        message: impl Into<String>,
+    ) -> bool {
+        let mut data = self.data.write().await;
+        if !hub.is_current_ready(connection_id) {
+            return false;
+        }
+        data.public.activity.push_front(Activity {
+            id: Uuid::new_v4().simple().to_string()[..16].to_owned(),
+            at: now_iso(),
+            method: bounded(method, 80),
+            status: bounded(status, 30),
+            message: bounded(&message.into(), 1_000),
+        });
+        data.public.activity.truncate(MAX_ACTIVITY);
+        true
+    }
+
+    async fn bump_for_connection(
+        &self,
+        hub: &ExtensionHub,
+        connection_id: Uuid,
+        event: &str,
+    ) -> bool {
+        let revision = {
+            let mut data = self.data.write().await;
+            if !hub.is_current_ready(connection_id) {
+                return false;
+            }
+            data.public.revision = data.public.revision.saturating_add(1);
+            data.public.revision
+        };
+        let _ = self.events.send(ServerEvent {
+            name: event.to_owned(),
+            revision,
+        });
+        true
+    }
+
     async fn public_state(&self) -> Value {
         let data = self.data.read().await;
         let mut value = serde_json::to_value(&data.public).unwrap_or_else(|_| json!({}));
         if let Some(observation) = value.get_mut("observation").and_then(Value::as_object_mut) {
             observation.insert(
                 "screenshotUrl".to_owned(),
-                if data.screenshot.is_some() {
-                    Value::String(format!("/api/screenshot?revision={}", data.public.revision))
-                } else {
-                    Value::Null
-                },
+                data.screenshot
+                    .as_ref()
+                    .map(Screenshot::url)
+                    .map(Value::String)
+                    .unwrap_or(Value::Null),
             );
         }
         if let Some(observation) = value
@@ -219,29 +280,33 @@ impl AppState {
         {
             observation.insert(
                 "screenshotUrl".to_owned(),
-                if data.computer_screenshot.is_some() {
-                    Value::String(format!(
-                        "/api/computer/screenshot?revision={}",
-                        data.public.revision
-                    ))
-                } else {
-                    Value::Null
-                },
+                data.computer_screenshot
+                    .as_ref()
+                    .map(Screenshot::url)
+                    .map(Value::String)
+                    .unwrap_or(Value::Null),
             );
         }
         value
     }
 
-    fn ensure_session(&self, headers: &HeaderMap) -> (String, Option<String>) {
-        let cookie_id = parse_cookie(headers, "lbb_session");
+    fn ensure_session(&self, headers: &HeaderMap) -> Result<(String, String), ApiError> {
+        if let Some(id) = session_token(headers) {
+            let csrf = self.touch_session(id)?;
+            return Ok((csrf, id.to_owned()));
+        }
+
+        let supplied = bearer_token(headers);
+        if !tokens_equal(supplied, &self.token) {
+            return Err(ApiError::new(
+                StatusCode::UNAUTHORIZED,
+                "UNAUTHORIZED",
+                "Bridge token required to unlock the dashboard",
+            ));
+        }
+
         let now = OffsetDateTime::now_utc().unix_timestamp();
         let mut sessions = self.sessions.lock().unwrap();
-        if let Some(id) = cookie_id
-            && let Some(session) = sessions.get_mut(&id)
-        {
-            session.touched_at = now;
-            return (session.csrf.clone(), None);
-        }
 
         if sessions.len() >= 1_000 {
             let cutoff = now - 12 * 60 * 60;
@@ -267,22 +332,51 @@ impl AppState {
                 touched_at: now,
             },
         );
-        let cookie = format!("lbb_session={id}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200");
-        (csrf, Some(cookie))
+        Ok((csrf, id))
+    }
+
+    fn assert_ui_read(&self, headers: &HeaderMap) -> Result<(), ApiError> {
+        if tokens_equal(bearer_token(headers), &self.token) {
+            return Ok(());
+        }
+        let id = session_token(headers).ok_or_else(|| {
+            ApiError::new(
+                StatusCode::UNAUTHORIZED,
+                "UNAUTHORIZED",
+                "Dashboard session required",
+            )
+        })?;
+        self.touch_session(id).map(|_| ())
+    }
+
+    fn touch_session(&self, id: &str) -> Result<String, ApiError> {
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let mut sessions = self.sessions.lock().unwrap();
+        let session = sessions
+            .get_mut(id)
+            .filter(|session| session.touched_at >= now - 12 * 60 * 60)
+            .ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::UNAUTHORIZED,
+                    "UNAUTHORIZED",
+                    "Dashboard session expired",
+                )
+            })?;
+        session.touched_at = now;
+        Ok(session.csrf.clone())
     }
 
     fn assert_ui_mutation(&self, headers: &HeaderMap) -> Result<(), ApiError> {
-        let id = parse_cookie(headers, "lbb_session")
+        let id = session_token(headers)
             .ok_or_else(|| ApiError::forbidden("CSRF_REJECTED", "Invalid UI session"))?;
         let csrf = headers
             .get("x-csrf-token")
             .and_then(|value| value.to_str().ok())
             .unwrap_or("");
-        let sessions = self.sessions.lock().unwrap();
-        let session = sessions
-            .get(&id)
-            .ok_or_else(|| ApiError::forbidden("CSRF_REJECTED", "Invalid UI session"))?;
-        if !tokens_equal(csrf, &session.csrf) {
+        let expected_csrf = self
+            .touch_session(id)
+            .map_err(|_| ApiError::forbidden("CSRF_REJECTED", "Invalid UI session"))?;
+        if !tokens_equal(csrf, &expected_csrf) {
             return Err(ApiError::forbidden("CSRF_REJECTED", "Invalid UI session"));
         }
 
@@ -318,6 +412,7 @@ struct PublicState {
     revision: u64,
     connected: bool,
     extension: Option<ExtensionInfo>,
+    browser_control: Value,
     computer_connected: bool,
     computer: Option<ComputerInfo>,
     target_tab_id: Option<u64>,
@@ -332,6 +427,11 @@ struct PublicState {
 #[serde(rename_all = "camelCase")]
 struct ExtensionInfo {
     version: String,
+    protocol_version: u64,
+    session_id: String,
+    controller_id: String,
+    connection_id: String,
+    compatible: bool,
     browser: String,
     mode: String,
     capabilities: Vec<String>,
@@ -342,6 +442,8 @@ struct ExtensionInfo {
 #[serde(rename_all = "camelCase")]
 struct ComputerInfo {
     version: String,
+    protocol_version: u64,
+    session_id: String,
     compatible: bool,
     platform: String,
     architecture: String,
@@ -352,6 +454,7 @@ struct ComputerInfo {
     semantic_ready: bool,
     capabilities: Vec<String>,
     windows: Vec<ComputerWindow>,
+    share: Value,
     connected_at: String,
 }
 
@@ -388,12 +491,36 @@ struct ComputerObservation {
     screen_width: u64,
     screen_height: u64,
     scale_factor: f64,
+    transport_scale_x: f64,
+    transport_scale_y: f64,
     rotation: f64,
     semantic_mode: String,
     semantic_available: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     semantic_error: Option<String>,
+    pointer: ComputerPointer,
     elements: Vec<ComputerElement>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ComputerPointer {
+    id: String,
+    visible: bool,
+    window_id: Option<String>,
+    image_x: Option<f64>,
+    image_y: Option<f64>,
+    screen_x: Option<i64>,
+    screen_y: Option<i64>,
+    heading_degrees: f64,
+    action: String,
+    pressed: bool,
+    sequence: u64,
+    revision: u64,
+    buttons_mask: u8,
+    updated_at: String,
+    coordinate_space: String,
+    style: Value,
 }
 
 #[derive(Clone, Serialize)]
@@ -404,9 +531,14 @@ struct ComputerElement {
     role: String,
     name: String,
     value: Option<String>,
+    sensitive: bool,
+    value_redacted: bool,
     enabled: Option<bool>,
     actions: Vec<String>,
     bounds: Option<ComputerElementBounds>,
+    coordinate_space: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    screen_bounds: Option<ComputerElementBounds>,
 }
 
 #[derive(Clone, Serialize)]
@@ -481,6 +613,26 @@ struct Activity {
 struct Screenshot {
     bytes: Bytes,
     content_type: &'static str,
+    id: String,
+    binding: String,
+    route: &'static str,
+}
+
+impl Screenshot {
+    fn bind(&mut self, route: &'static str, kind: &str, identity: &str) {
+        self.route = route;
+        self.binding = format!("{kind}.{}", URL_SAFE_NO_PAD.encode(identity.as_bytes()));
+    }
+
+    fn url(&self) -> String {
+        format!("{}?id={}&binding={}", self.route, self.id, self.binding)
+    }
+
+    fn matches(&self, query: &HashMap<String, String>, route: &str) -> bool {
+        self.route == route
+            && query.get("id") == Some(&self.id)
+            && query.get("binding") == Some(&self.binding)
+    }
 }
 
 struct Session {
@@ -522,13 +674,36 @@ impl ApiError {
 impl From<HubError> for ApiError {
     fn from(error: HubError) -> Self {
         let status = match error.code.as_str() {
-            code if code.ends_with("_OFFLINE") || code.ends_with("_DISCONNECTED") => {
+            code if code.ends_with("_OFFLINE")
+                || code.ends_with("_DISCONNECTED")
+                || code.ends_with("_OVERLOADED") =>
+            {
                 StatusCode::SERVICE_UNAVAILABLE
             }
-            "COMMAND_TIMEOUT" => StatusCode::GATEWAY_TIMEOUT,
-            "COMPUTER_STALE_FRAME" => StatusCode::CONFLICT,
-            "COMPUTER_INVALID_REQUEST" => StatusCode::BAD_REQUEST,
-            "COMPUTER_PERMISSION_REQUIRED" => StatusCode::FORBIDDEN,
+            "COMMAND_TIMEOUT" | "COMMAND_OUTCOME_UNKNOWN" => StatusCode::GATEWAY_TIMEOUT,
+            "COMPUTER_STALE_FRAME"
+            | "COMPUTER_STALE_POINTER"
+            | "CONTROL_REQUIRED"
+            | "CONTROL_REVOKED"
+            | "STALE_CONTROL_SESSION"
+            | "STALE_CONTROL_TURN"
+            | "STALE_MOVE_SEQUENCE"
+            | "STALE_SNAPSHOT"
+            | "STALE_REF"
+            | "TARGET_CHANGED"
+            | "TARGET_MISSING"
+            | "TARGET_OCCLUDED" => StatusCode::CONFLICT,
+            "COMPUTER_INVALID_REQUEST"
+            | "BAD_TAB"
+            | "BAD_URL"
+            | "BAD_BUTTON"
+            | "BAD_CLICK_COUNT"
+            | "BAD_COORDINATES"
+            | "BAD_KEY" => StatusCode::BAD_REQUEST,
+            "COMPUTER_PERMISSION_REQUIRED"
+            | "SITE_BLOCKED"
+            | "FULL_ACCESS_REQUIRED"
+            | "SENSITIVE_FIELD" => StatusCode::FORBIDDEN,
             code if code.starts_with("COMPUTER_") || code.starts_with("EXTENSION_") => {
                 StatusCode::BAD_GATEWAY
             }
@@ -612,23 +787,33 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
 }
 
 async fn api_session(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let (csrf, cookie) = state.ensure_session(&headers);
-    with_cookie(
-        Json(json!({ "ok": true, "csrfToken": csrf })).into_response(),
-        cookie,
-    )
+    match state.ensure_session(&headers) {
+        Ok((csrf, session_token)) => Json(json!({
+            "ok": true,
+            "csrfToken": csrf,
+            "sessionToken": session_token,
+            "expiresAfterIdleSeconds": 43_200,
+        }))
+        .into_response(),
+        Err(error) => error.into_response(),
+    }
 }
 
-async fn api_state(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let (_, cookie) = state.ensure_session(&headers);
+async fn api_state(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    state.assert_ui_read(&headers)?;
     let public = state.public_state().await;
-    with_cookie(
-        Json(json!({ "ok": true, "state": public })).into_response(),
-        cookie,
-    )
+    Ok(Json(json!({ "ok": true, "state": public })).into_response())
 }
 
-async fn api_screenshot(State(state): State<AppState>) -> Result<Response, ApiError> {
+async fn api_screenshot(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Response, ApiError> {
+    state.assert_ui_read(&headers)?;
     let screenshot = state.data.read().await.screenshot.clone().ok_or_else(|| {
         ApiError::new(
             StatusCode::NOT_FOUND,
@@ -636,6 +821,13 @@ async fn api_screenshot(State(state): State<AppState>) -> Result<Response, ApiEr
             "No screenshot has been captured",
         )
     })?;
+    if !screenshot.matches(&query, "/api/screenshot") {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "STALE_SCREENSHOT",
+            "The requested browser screenshot is no longer the exact current observation",
+        ));
+    }
     let mut response = Response::new(Body::from(screenshot.bytes.clone()));
     response.headers_mut().insert(
         CONTENT_TYPE,
@@ -648,7 +840,12 @@ async fn api_screenshot(State(state): State<AppState>) -> Result<Response, ApiEr
     Ok(response)
 }
 
-async fn api_computer_screenshot(State(state): State<AppState>) -> Result<Response, ApiError> {
+async fn api_computer_screenshot(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Response, ApiError> {
+    state.assert_ui_read(&headers)?;
     let screenshot = state
         .data
         .read()
@@ -662,6 +859,13 @@ async fn api_computer_screenshot(State(state): State<AppState>) -> Result<Respon
                 "No computer screenshot has been captured",
             )
         })?;
+    if !screenshot.matches(&query, "/api/computer/screenshot") {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "STALE_SCREENSHOT",
+            "The requested computer screenshot is no longer the exact current frame",
+        ));
+    }
     let mut response = Response::new(Body::from(screenshot.bytes.clone()));
     response.headers_mut().insert(
         CONTENT_TYPE,
@@ -675,7 +879,9 @@ async fn api_computer_screenshot(State(state): State<AppState>) -> Result<Respon
 }
 
 async fn api_events(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let (_, cookie) = state.ensure_session(&headers);
+    if let Err(error) = state.assert_ui_read(&headers) {
+        return error.into_response();
+    }
     let revision = state.data.read().await.public.revision;
     let initial = stream::once(async move {
         Ok::<_, Infallible>(
@@ -694,14 +900,13 @@ async fn api_events(State(state): State<AppState>, headers: HeaderMap) -> Respon
             Err(_) => None,
         }
     });
-    let response = Sse::new(initial.chain(updates))
+    Sse::new(initial.chain(updates))
         .keep_alive(
             KeepAlive::new()
                 .interval(Duration::from_secs(15))
                 .text("heartbeat"),
         )
-        .into_response();
-    with_cookie(response, cookie)
+        .into_response()
 }
 
 async fn api_action(
@@ -737,11 +942,7 @@ async fn api_command(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    let supplied = headers
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .unwrap_or("");
+    let supplied = bearer_token(&headers);
     if !tokens_equal(supplied, &state.token) {
         return Err(ApiError::new(
             StatusCode::UNAUTHORIZED,
@@ -749,6 +950,8 @@ async fn api_command(
             "Bearer token required",
         ));
     }
+    assert_command_origin(&headers)?;
+    assert_json_content_type(&headers)?;
     let body = parse_json_body(&body)?;
     let method = required_string(body.get("method"), "method", 80)?;
     let result = state
@@ -761,6 +964,39 @@ async fn api_command(
     Ok(Json(json!({ "ok": true, "result": result, "state": public })).into_response())
 }
 
+fn assert_command_origin(headers: &HeaderMap) -> Result<(), ApiError> {
+    let Some(origin) = headers.get(ORIGIN).and_then(|value| value.to_str().ok()) else {
+        return Ok(());
+    };
+    let host = headers
+        .get(HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    if origin != format!("http://{host}") {
+        return Err(ApiError::forbidden(
+            "ORIGIN_REJECTED",
+            "Cross-origin command rejected",
+        ));
+    }
+    Ok(())
+}
+
+fn assert_json_content_type(headers: &HeaderMap) -> Result<(), ApiError> {
+    let content_type = headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    let media_type = content_type.split(';').next().unwrap_or("").trim();
+    if !media_type.eq_ignore_ascii_case("application/json") {
+        return Err(ApiError::new(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "UNSUPPORTED_MEDIA_TYPE",
+            "Commands require Content-Type: application/json",
+        ));
+    }
+    Ok(())
+}
+
 async fn websocket_upgrade(
     State(state): State<AppState>,
     Query(query): Query<HashMap<String, String>>,
@@ -771,24 +1007,52 @@ async fn websocket_upgrade(
         .get(ORIGIN)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
-    if !origin.starts_with("chrome-extension://") {
+    if !valid_extension_origin(origin) {
         return Err(ApiError::forbidden(
             "ORIGIN_REJECTED",
             "Extension Origin required",
         ));
     }
-    let supplied = query.get("token").map(String::as_str).unwrap_or("");
-    if !tokens_equal(supplied, &state.token) {
-        return Err(ApiError::new(
-            StatusCode::UNAUTHORIZED,
-            "UNAUTHORIZED",
-            "Invalid extension token",
-        ));
-    }
+    reject_legacy_websocket_credentials(&headers, &query)?;
+    let permit = state
+        .browser_auth_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "AUTH_BUSY",
+                "Too many provisional extension connections",
+            )
+        })?;
     Ok(ws
         .max_message_size(MAX_WS_MESSAGE_BYTES)
-        .on_upgrade(move |socket| handle_websocket(socket, state))
+        .on_upgrade(move |socket| handle_websocket(socket, state, permit))
         .into_response())
+}
+
+fn valid_extension_origin(origin: &str) -> bool {
+    let Some(extension_id) = origin.strip_prefix("chrome-extension://") else {
+        return false;
+    };
+    extension_id.len() == 32
+        && extension_id
+            .bytes()
+            .all(|byte| (b'a'..=b'p').contains(&byte))
+}
+
+fn reject_legacy_websocket_credentials(
+    headers: &HeaderMap,
+    query: &HashMap<String, String>,
+) -> Result<(), ApiError> {
+    if !query.is_empty() || headers.contains_key(AUTHORIZATION) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "LEGACY_WEBSOCKET_CREDENTIAL_REJECTED",
+            "WebSocket authentication must not use query or Authorization credentials",
+        ));
+    }
+    Ok(())
 }
 
 async fn computer_websocket_upgrade(
@@ -807,30 +1071,146 @@ async fn computer_websocket_upgrade(
             "Computer helper Origin required",
         ));
     }
-    let supplied = query.get("token").map(String::as_str).unwrap_or("");
-    if !tokens_equal(supplied, &state.token) {
-        return Err(ApiError::new(
-            StatusCode::UNAUTHORIZED,
-            "UNAUTHORIZED",
-            "Invalid computer helper token",
-        ));
-    }
+    reject_legacy_websocket_credentials(&headers, &query)?;
+    let permit = state
+        .computer_auth_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "AUTH_BUSY",
+                "Too many provisional computer helper connections",
+            )
+        })?;
     Ok(ws
         .max_message_size(MAX_WS_MESSAGE_BYTES)
-        .on_upgrade(move |socket| handle_computer_websocket(socket, state))
+        .on_upgrade(move |socket| handle_computer_websocket(socket, state, permit))
         .into_response())
 }
 
-async fn handle_websocket(socket: WebSocket, state: AppState) {
-    let (connection_id, mut outgoing) = state.hub.attach();
-    {
-        let mut data = state.data.write().await;
-        data.public.connected = true;
+fn session_envelope_valid(message: &Value, connection_id: Uuid) -> bool {
+    let expected_session = connection_id.to_string();
+    message.get("protocolVersion").and_then(Value::as_u64) == Some(PROTOCOL_VERSION)
+        && message.get("sessionId").and_then(Value::as_str) == Some(expected_session.as_str())
+}
+
+fn session_event_valid(message: &Value, connection_id: Uuid, last_sequence: &mut u64) -> bool {
+    if !session_envelope_valid(message, connection_id) {
+        return false;
     }
+    let Some(sequence) = message.get("eventSequence").and_then(Value::as_u64) else {
+        return false;
+    };
+    if sequence <= *last_sequence {
+        return false;
+    }
+    *last_sequence = sequence;
+    true
+}
+
+async fn authenticate_websocket(
+    socket: &mut WebSocket,
+    token: &str,
+    connector: &'static str,
+) -> Result<Uuid, &'static str> {
+    let deadline = tokio::time::Instant::now() + AUTH_TIMEOUT;
+    let mut challenge: Option<ServerChallenge> = None;
+
+    for _ in 0..MAX_AUTH_MESSAGES {
+        let message = tokio::time::timeout_at(deadline, socket.recv())
+            .await
+            .map_err(|_| "authentication response timed out")?
+            .ok_or("authentication peer closed")?
+            .map_err(|_| "authentication socket read failed")?;
+        match message {
+            Message::Text(text) => {
+                if text.len() > MAX_AUTH_MESSAGE_BYTES {
+                    return Err("authentication response was too large");
+                }
+                let response = serde_json::from_str::<Value>(text.as_str())
+                    .map_err(|_| "authentication response was not valid JSON")?;
+                if let Some(challenge) = challenge.as_ref() {
+                    challenge
+                        .verify_response(token, &response)
+                        .map_err(|_| "authentication response proof failed")?;
+                    return Ok(challenge.session_id());
+                }
+                let next_challenge =
+                    ServerChallenge::from_client_hello(token, connector, &response)
+                        .map_err(|_| "authentication hello was invalid")?;
+                let challenge_text = next_challenge.envelope().to_string();
+                tokio::time::timeout_at(
+                    deadline,
+                    socket.send(Message::Text(challenge_text.into())),
+                )
+                .await
+                .map_err(|_| "authentication challenge send timed out")?
+                .map_err(|_| "authentication challenge send failed")?;
+                challenge = Some(next_challenge);
+            }
+            Message::Ping(bytes) => {
+                tokio::time::timeout_at(deadline, socket.send(Message::Pong(bytes)))
+                    .await
+                    .map_err(|_| "authentication pong timed out")?
+                    .map_err(|_| "authentication pong failed")?;
+            }
+            Message::Pong(_) => {}
+            Message::Close(_) => return Err("authentication peer closed"),
+            Message::Binary(_) => return Err("binary authentication messages are forbidden"),
+        }
+    }
+    Err("authentication message limit exceeded")
+}
+
+async fn reject_provisional_socket(mut socket: WebSocket) {
+    let _ = socket.send(Message::Close(None)).await;
+}
+
+async fn handle_websocket(
+    mut socket: WebSocket,
+    state: AppState,
+    auth_permit: OwnedSemaphorePermit,
+) {
+    let connection_id =
+        match authenticate_websocket(&mut socket, &state.token, BROWSER_CONNECTOR).await {
+            Ok(connection_id) => connection_id,
+            Err(_) => {
+                reject_provisional_socket(socket).await;
+                return;
+            }
+        };
+    drop(auth_permit);
+    let (connection_id, mut outgoing) = {
+        let mut data = state.data.write().await;
+        let connection = state.hub.attach_with_id(connection_id);
+        data.public.connected = false;
+        data.public.extension = None;
+        data.public.browser_control = Value::Null;
+        data.public.tabs.clear();
+        data.public.target_tab_id = None;
+        data.public.observation = None;
+        data.screenshot = None;
+        connection
+    };
     state
-        .log("bridge", "ok", "Browser extension connected")
+        .log(
+            "bridge",
+            "info",
+            "Browser extension transport connected; awaiting handshake",
+        )
         .await;
     state.bump("connection").await;
+    let _ = state.hub.send_to(
+        connection_id,
+        json!({
+            "type": "welcome",
+            "protocolVersion": PROTOCOL_VERSION,
+            "sessionId": connection_id.to_string(),
+            "serverVersion": VERSION,
+            "connector": "browser-extension"
+        }),
+    );
 
     let (mut socket_sender, mut socket_receiver) = socket.split();
     let writer = tokio::spawn(async move {
@@ -842,6 +1222,8 @@ async fn handle_websocket(socket: WebSocket, state: AppState) {
         }
     });
 
+    let mut handshake_complete = false;
+    let mut last_event_sequence = 0_u64;
     while let Some(Ok(message)) = socket_receiver.next().await {
         match message {
             Message::Text(text) => {
@@ -849,19 +1231,56 @@ async fn handle_websocket(socket: WebSocket, state: AppState) {
                     continue;
                 };
                 match message.get("type").and_then(Value::as_str) {
-                    Some("ping") => {
-                        let _ = state.hub.send(json!({ "type": "pong" }));
+                    Some("ping")
+                        if handshake_complete
+                            && state.hub.is_current_ready(connection_id)
+                            && session_envelope_valid(&message, connection_id) =>
+                    {
+                        let _ = state.hub.send_to(
+                            connection_id,
+                            json!({
+                                "type": "pong",
+                                "protocolVersion": PROTOCOL_VERSION,
+                                "sessionId": connection_id.to_string()
+                            }),
+                        );
                     }
-                    Some("hello") => handle_hello(&state, &message).await,
-                    Some("event") => handle_extension_event(&state, &message).await,
-                    _ if message.get("id").and_then(Value::as_str).is_some() => {
-                        state.hub.resolve(&message)
+                    Some("hello") => {
+                        handshake_complete = handle_hello(&state, connection_id, &message).await;
+                    }
+                    Some("event")
+                        if handshake_complete
+                            && state.hub.is_current_ready(connection_id)
+                            && session_event_valid(
+                                &message,
+                                connection_id,
+                                &mut last_event_sequence,
+                            ) =>
+                    {
+                        handle_extension_event(&state, connection_id, &message).await
+                    }
+                    _ if handshake_complete
+                        && state.hub.is_current_ready(connection_id)
+                        && message.get("type").and_then(Value::as_str) == Some("result")
+                        && message.get("id").and_then(Value::as_str).is_some()
+                        && state.hub.resolve(connection_id, &message) =>
+                    {
+                        state
+                            .log(
+                                "bridge",
+                                "error",
+                                "Browser extension sent a mismatched result envelope; connection revoked",
+                            )
+                            .await;
+                        break;
                     }
                     _ => {}
                 }
             }
             Message::Ping(bytes) => {
-                let _ = state.hub.send_message(Message::Pong(bytes));
+                let _ = state
+                    .hub
+                    .send_message_to(connection_id, Message::Pong(bytes));
             }
             Message::Close(_) => break,
             _ => {}
@@ -869,16 +1288,21 @@ async fn handle_websocket(socket: WebSocket, state: AppState) {
     }
 
     writer.abort();
-    if state.hub.detach(connection_id) {
-        {
-            let mut data = state.data.write().await;
+    let detached = {
+        let mut data = state.data.write().await;
+        let detached = state.hub.detach(connection_id);
+        if detached {
             data.public.connected = false;
             data.public.extension = None;
+            data.public.browser_control = Value::Null;
             data.public.tabs.clear();
             data.public.target_tab_id = None;
             data.public.observation = None;
             data.screenshot = None;
         }
+        detached
+    };
+    if detached {
         state
             .log("bridge", "warning", "Browser extension disconnected")
             .await;
@@ -886,13 +1310,47 @@ async fn handle_websocket(socket: WebSocket, state: AppState) {
     }
 }
 
-async fn handle_computer_websocket(socket: WebSocket, state: AppState) {
-    let (connection_id, mut outgoing) = state.computer_hub.attach();
-    state.data.write().await.public.computer_connected = true;
+async fn handle_computer_websocket(
+    mut socket: WebSocket,
+    state: AppState,
+    auth_permit: OwnedSemaphorePermit,
+) {
+    let connection_id =
+        match authenticate_websocket(&mut socket, &state.token, COMPUTER_CONNECTOR).await {
+            Ok(connection_id) => connection_id,
+            Err(_) => {
+                reject_provisional_socket(socket).await;
+                return;
+            }
+        };
+    drop(auth_permit);
+    let (connection_id, mut outgoing) = {
+        let mut data = state.data.write().await;
+        let connection = state.computer_hub.attach_with_id(connection_id);
+        data.public.computer_connected = false;
+        data.public.computer = None;
+        data.public.computer_observation = None;
+        data.computer_screenshot = None;
+        connection
+    };
     state
-        .log("computer.bridge", "ok", "Computer helper connected")
+        .log(
+            "computer.bridge",
+            "info",
+            "Computer helper transport connected; awaiting handshake",
+        )
         .await;
     state.bump("computer-connection").await;
+    let _ = state.computer_hub.send_to(
+        connection_id,
+        json!({
+            "type": "welcome",
+            "protocolVersion": PROTOCOL_VERSION,
+            "sessionId": connection_id.to_string(),
+            "serverVersion": VERSION,
+            "connector": "computer-helper"
+        }),
+    );
 
     let (mut socket_sender, mut socket_receiver) = socket.split();
     let writer = tokio::spawn(async move {
@@ -904,6 +1362,8 @@ async fn handle_computer_websocket(socket: WebSocket, state: AppState) {
         }
     });
 
+    let mut handshake_complete = false;
+    let mut last_event_sequence = 0_u64;
     while let Some(Ok(message)) = socket_receiver.next().await {
         match message {
             Message::Text(text) => {
@@ -911,18 +1371,57 @@ async fn handle_computer_websocket(socket: WebSocket, state: AppState) {
                     continue;
                 };
                 match message.get("type").and_then(Value::as_str) {
-                    Some("ping") => {
-                        let _ = state.computer_hub.send(json!({ "type": "pong" }));
+                    Some("ping")
+                        if handshake_complete
+                            && state.computer_hub.is_current_ready(connection_id)
+                            && session_envelope_valid(&message, connection_id) =>
+                    {
+                        let _ = state.computer_hub.send_to(
+                            connection_id,
+                            json!({
+                                "type": "pong",
+                                "protocolVersion": PROTOCOL_VERSION,
+                                "sessionId": connection_id.to_string()
+                            }),
+                        );
                     }
-                    Some("hello") => handle_computer_hello(&state, &message).await,
-                    _ if message.get("id").and_then(Value::as_str).is_some() => {
-                        state.computer_hub.resolve(&message);
+                    Some("hello") => {
+                        handshake_complete =
+                            handle_computer_hello(&state, connection_id, &message).await;
+                    }
+                    Some("event")
+                        if handshake_complete
+                            && state.computer_hub.is_current_ready(connection_id)
+                            && session_event_valid(
+                                &message,
+                                connection_id,
+                                &mut last_event_sequence,
+                            ) =>
+                    {
+                        handle_computer_event(&state, connection_id, &message).await
+                    }
+                    _ if handshake_complete
+                        && state.computer_hub.is_current_ready(connection_id)
+                        && message.get("type").and_then(Value::as_str) == Some("result")
+                        && message.get("id").and_then(Value::as_str).is_some()
+                        && state.computer_hub.resolve(connection_id, &message) =>
+                    {
+                        state
+                            .log(
+                                "computer.bridge",
+                                "error",
+                                "Computer helper sent a mismatched result envelope; connection revoked",
+                            )
+                            .await;
+                        break;
                     }
                     _ => {}
                 }
             }
             Message::Ping(bytes) => {
-                let _ = state.computer_hub.send_message(Message::Pong(bytes));
+                let _ = state
+                    .computer_hub
+                    .send_message_to(connection_id, Message::Pong(bytes));
             }
             Message::Close(_) => break,
             _ => {}
@@ -930,14 +1429,18 @@ async fn handle_computer_websocket(socket: WebSocket, state: AppState) {
     }
 
     writer.abort();
-    if state.computer_hub.detach(connection_id) {
-        {
-            let mut data = state.data.write().await;
+    let detached = {
+        let mut data = state.data.write().await;
+        let detached = state.computer_hub.detach(connection_id);
+        if detached {
             data.public.computer_connected = false;
             data.public.computer = None;
             data.public.computer_observation = None;
             data.computer_screenshot = None;
         }
+        detached
+    };
+    if detached {
         state
             .log("computer.bridge", "warning", "Computer helper disconnected")
             .await;
@@ -945,7 +1448,10 @@ async fn handle_computer_websocket(socket: WebSocket, state: AppState) {
     }
 }
 
-async fn handle_computer_hello(state: &AppState, message: &Value) {
+async fn handle_computer_hello(state: &AppState, connection_id: Uuid, message: &Value) -> bool {
+    if !state.computer_hub.is_current(connection_id) {
+        return false;
+    }
     let version = bounded(
         message
             .get("version")
@@ -953,7 +1459,21 @@ async fn handle_computer_hello(state: &AppState, message: &Value) {
             .unwrap_or("unknown"),
         50,
     );
-    let compatible = version == VERSION;
+    let protocol_version = message
+        .get("protocolVersion")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let session_id = bounded(
+        message
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .unwrap_or(""),
+        80,
+    );
+    let envelope_compatible = version == VERSION
+        && protocol_version == PROTOCOL_VERSION
+        && session_id == connection_id.to_string();
+    let compatible = envelope_compatible && state.computer_hub.mark_ready(connection_id);
     let capabilities = message
         .get("capabilities")
         .and_then(Value::as_array)
@@ -972,6 +1492,8 @@ async fn handle_computer_hello(state: &AppState, message: &Value) {
         .collect();
     let computer = ComputerInfo {
         version: version.clone(),
+        protocol_version,
+        session_id: session_id.clone(),
         compatible,
         platform: bounded(
             message
@@ -1014,30 +1536,100 @@ async fn handle_computer_hello(state: &AppState, message: &Value) {
                 .unwrap_or(false),
         capabilities,
         windows: sanitize_computer_windows(message.get("windows")),
+        share: sanitize_share_status(message.get("share")),
         connected_at: now_iso(),
     };
-    state.data.write().await.public.computer = Some(computer);
+    {
+        let mut data = state.data.write().await;
+        if !state.computer_hub.is_current(connection_id) {
+            return false;
+        }
+        data.public.computer_connected = compatible;
+        data.public.computer = Some(computer);
+    }
     if !compatible {
         state
             .log(
                 "computer.bridge",
                 "warning",
-                format!("Helper version {version} does not match server {VERSION}"),
+                format!(
+                    "Helper handshake rejected (version {version}, protocol {protocol_version}, session match {})",
+                    session_id == connection_id.to_string()
+                ),
+            )
+            .await;
+    } else {
+        state
+            .log(
+                "computer.bridge",
+                "ok",
+                "Computer helper handshake complete",
             )
             .await;
     }
+    let _ = state.computer_hub.send_to(connection_id, json!({
+        "type": "helloAck",
+        "protocolVersion": PROTOCOL_VERSION,
+        "sessionId": connection_id.to_string(),
+        "ok": compatible,
+        "error": (!compatible).then(|| json!({
+            "code": "COMPUTER_PROTOCOL_MISMATCH",
+            "message": format!("Helper and server must both use package {VERSION} and protocol {PROTOCOL_VERSION}")
+        }))
+    }));
     state.bump("computer-hello").await;
+    compatible
 }
 
-async fn handle_hello(state: &AppState, message: &Value) {
+async fn handle_hello(state: &AppState, connection_id: Uuid, message: &Value) -> bool {
+    if !state.hub.is_current(connection_id) {
+        return false;
+    }
+    let version = bounded(
+        message
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown"),
+        50,
+    );
+    let protocol_version = message
+        .get("protocolVersion")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let session_id = bounded(
+        message
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .unwrap_or(""),
+        80,
+    );
+    let controller_id = bounded(
+        message
+            .get("controllerId")
+            .and_then(Value::as_str)
+            .unwrap_or(""),
+        100,
+    );
+    let client_connection_id = bounded(
+        message
+            .get("connectionId")
+            .and_then(Value::as_str)
+            .unwrap_or(""),
+        100,
+    );
+    let envelope_compatible = version == VERSION
+        && protocol_version == PROTOCOL_VERSION
+        && session_id == connection_id.to_string()
+        && !controller_id.is_empty()
+        && !client_connection_id.is_empty();
+    let compatible = envelope_compatible && state.hub.mark_ready(connection_id);
     let extension = ExtensionInfo {
-        version: bounded(
-            message
-                .get("version")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown"),
-            50,
-        ),
+        version: version.clone(),
+        protocol_version,
+        session_id: session_id.clone(),
+        controller_id,
+        connection_id: client_connection_id,
+        compatible,
         browser: bounded(
             message
                 .get("browser")
@@ -1057,33 +1649,226 @@ async fn handle_hello(state: &AppState, message: &Value) {
                 items
                     .iter()
                     .filter_map(Value::as_str)
-                    .take(100)
-                    .map(|item| bounded(item, 80))
-                    .collect()
+                    .filter(|item| ACTION_METHODS.contains(item))
+                    .take(ACTION_METHODS.len())
+                    .map(ToOwned::to_owned)
+                    .collect::<Vec<_>>()
             })
-            .unwrap_or_default(),
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|_| compatible)
+            .collect(),
         connected_at: now_iso(),
     };
-    state.data.write().await.public.extension = Some(extension);
+    {
+        let mut data = state.data.write().await;
+        if !state.hub.is_current(connection_id) {
+            return false;
+        }
+        data.public.connected = compatible;
+        data.public.extension = Some(extension);
+    }
+    let _ = state.hub.send_to(connection_id, json!({
+        "type": "helloAck",
+        "protocolVersion": PROTOCOL_VERSION,
+        "sessionId": connection_id.to_string(),
+        "ok": compatible,
+        "error": (!compatible).then(|| json!({
+            "code": "EXTENSION_PROTOCOL_MISMATCH",
+            "message": format!("Extension and server must both use package {VERSION} and protocol {PROTOCOL_VERSION}")
+        }))
+    }));
     state.bump("hello").await;
+
+    if !compatible {
+        state
+            .log(
+                "bridge",
+                "warning",
+                format!(
+                    "Extension handshake rejected (version {version}, protocol {protocol_version}, session match {})",
+                    session_id == connection_id.to_string()
+                ),
+            )
+            .await;
+        return false;
+    }
+    state
+        .log("bridge", "ok", "Browser extension handshake complete")
+        .await;
 
     let state = state.clone();
     tokio::spawn(async move {
         let _guard = state.action_lock.lock().await;
-        if let Err(error) = state.refresh_tabs().await {
+        if let Err(error) = state.refresh_tabs_for(Some(connection_id)).await {
             state.log("tabs.list", "warning", error.message).await;
             state.bump("warning").await;
         }
     });
+    true
 }
 
-async fn handle_extension_event(state: &AppState, message: &Value) {
+async fn handle_computer_event(state: &AppState, connection_id: Uuid, message: &Value) {
+    let name = message
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let data = message.get("data").unwrap_or(&Value::Null);
+    match name {
+        "computer.share.frame" => {
+            let mut screenshot = match decode_screenshot(data.get("screenshot")) {
+                Ok(Some(screenshot)) => screenshot,
+                Ok(None) => return,
+                Err(error) => {
+                    if state
+                        .log_for_connection(
+                            &state.computer_hub,
+                            connection_id,
+                            name,
+                            "warning",
+                            error.message,
+                        )
+                        .await
+                    {
+                        state
+                            .bump_for_connection(
+                                &state.computer_hub,
+                                connection_id,
+                                "computer-share-error",
+                            )
+                            .await;
+                    }
+                    return;
+                }
+            };
+            let observation = match sanitize_computer_observation(data.get("frame")) {
+                Ok(observation) => observation,
+                Err(error) => {
+                    if state
+                        .log_for_connection(
+                            &state.computer_hub,
+                            connection_id,
+                            name,
+                            "warning",
+                            error.message,
+                        )
+                        .await
+                    {
+                        state
+                            .bump_for_connection(
+                                &state.computer_hub,
+                                connection_id,
+                                "computer-share-error",
+                            )
+                            .await;
+                    }
+                    return;
+                }
+            };
+            screenshot.bind(
+                "/api/computer/screenshot",
+                "computer-frame",
+                &observation.frame_id,
+            );
+            {
+                let mut state_data = state.data.write().await;
+                if !state.computer_hub.is_current_ready(connection_id) {
+                    return;
+                }
+                if let Some(computer) = state_data.public.computer.as_mut()
+                    && let Some(frame) = data.get("frame")
+                {
+                    computer.share = sanitize_share_status(frame.get("share"));
+                }
+                state_data.public.computer_observation = Some(observation);
+                state_data.computer_screenshot = Some(screenshot);
+            }
+            state
+                .bump_for_connection(&state.computer_hub, connection_id, "computer-share-frame")
+                .await;
+        }
+        "computer.share.error" => {
+            let detail = bounded(
+                data.get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Computer share capture failed"),
+                500,
+            );
+            if state
+                .log_for_connection(&state.computer_hub, connection_id, name, "warning", detail)
+                .await
+            {
+                state
+                    .bump_for_connection(&state.computer_hub, connection_id, "computer-share-error")
+                    .await;
+            }
+        }
+        _ => {}
+    }
+}
+
+async fn handle_extension_event(state: &AppState, connection_id: Uuid, message: &Value) {
     let name = message
         .get("name")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
     let data = message.get("data").cloned().unwrap_or_else(|| json!({}));
     match name {
+        "browser.control.started" => {
+            {
+                let mut state_data = state.data.write().await;
+                if !state.hub.is_current_ready(connection_id) {
+                    return;
+                }
+                state_data.public.browser_control = sanitize_browser_control(&data);
+            }
+            if state
+                .log_for_connection(
+                    &state.hub,
+                    connection_id,
+                    "browser.control",
+                    "ok",
+                    "Browser control session started",
+                )
+                .await
+            {
+                state
+                    .bump_for_connection(&state.hub, connection_id, "browser-control")
+                    .await;
+            }
+        }
+        "browser.control.revoked" => {
+            {
+                let mut state_data = state.data.write().await;
+                if !state.hub.is_current_ready(connection_id) {
+                    return;
+                }
+                state_data.public.browser_control = json!({
+                    "active": false,
+                    "revocation": sanitize_control_revocation(&data)
+                });
+            }
+            let reason = bounded(
+                data.get("reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("control_revoked"),
+                100,
+            );
+            if state
+                .log_for_connection(
+                    &state.hub,
+                    connection_id,
+                    "browser.control",
+                    "warning",
+                    format!("Browser control revoked: {reason}"),
+                )
+                .await
+            {
+                state
+                    .bump_for_connection(&state.hub, connection_id, "browser-control")
+                    .await;
+            }
+        }
         "approval.resolved" => {
             let ok = data.get("ok").and_then(Value::as_bool) == Some(true);
             let detail = if ok {
@@ -1094,30 +1879,66 @@ async fn handle_extension_event(state: &AppState, message: &Value) {
                     .unwrap_or("Approval failed")
                     .to_owned()
             };
-            state
-                .log("approval", if ok { "ok" } else { "error" }, detail)
-                .await;
-            state.bump("approval").await;
+            if !state
+                .log_for_connection(
+                    &state.hub,
+                    connection_id,
+                    "approval",
+                    if ok { "ok" } else { "error" },
+                    detail,
+                )
+                .await
+            {
+                return;
+            }
+            if !state
+                .bump_for_connection(&state.hub, connection_id, "approval")
+                .await
+            {
+                return;
+            }
             if ok {
                 let state = state.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_millis(300)).await;
+                    if !state.hub.is_current_ready(connection_id) {
+                        return;
+                    }
                     let _guard = state.action_lock.lock().await;
-                    let _ = state.refresh_tabs().await;
+                    if !state.hub.is_current_ready(connection_id) {
+                        return;
+                    }
+                    let _ = state.refresh_tabs_for(Some(connection_id)).await;
+                    if !state.hub.is_current_ready(connection_id) {
+                        return;
+                    }
                     let target = state.data.read().await.public.target_tab_id;
                     if data.get("method").and_then(Value::as_str) != Some("tabs.close")
                         && let Some(tab_id) = target
                     {
-                        let _ = state.refresh_observation(tab_id).await;
+                        let _ = state
+                            .refresh_observation_for(tab_id, Some(connection_id))
+                            .await;
                     }
                 });
             }
         }
         "approval.rejected" => {
-            state
-                .log("approval", "warning", "Human rejected the pending action")
+            let logged = state
+                .log_for_connection(
+                    &state.hub,
+                    connection_id,
+                    "approval",
+                    "warning",
+                    "Human rejected the pending action",
+                )
                 .await;
-            state.bump("approval").await;
+            if !logged {
+                return;
+            }
+            state
+                .bump_for_connection(&state.hub, connection_id, "approval")
+                .await;
         }
         _ => {}
     }
@@ -1147,13 +1968,6 @@ async fn static_asset(request: Request) -> Result<Response, ApiError> {
     Ok(response)
 }
 
-fn with_cookie(mut response: Response, cookie: Option<String>) -> Response {
-    if let Some(cookie) = cookie.and_then(|value| HeaderValue::from_str(&value).ok()) {
-        response.headers_mut().insert(SET_COOKIE, cookie);
-    }
-    response
-}
-
 impl AppState {
     async fn perform_action(&self, method: &str, raw_params: Value) -> Result<Value, ApiError> {
         if COMPUTER_METHODS.contains(&method) {
@@ -1163,8 +1977,42 @@ impl AppState {
             return Err(ApiError::bad_request("Unsupported action"));
         }
         let _guard = self.action_lock.lock().await;
-        let target_tab_id = self.data.read().await.public.target_tab_id;
-        let params = sanitize_params(method, raw_params, target_tab_id)?;
+        let extension = self.data.read().await.public.extension.clone();
+        let Some(extension) = extension else {
+            return Err(ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "EXTENSION_HANDSHAKE_PENDING",
+                "Browser extension handshake is not complete",
+            ));
+        };
+        if !extension.compatible {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "EXTENSION_PROTOCOL_MISMATCH",
+                format!(
+                    "Extension {} protocol {} does not match server {VERSION} protocol {PROTOCOL_VERSION}",
+                    extension.version, extension.protocol_version
+                ),
+            ));
+        }
+        if !extension.capabilities.iter().any(|item| item == method) {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "EXTENSION_CAPABILITY_UNAVAILABLE",
+                format!("Browser extension did not advertise {method}"),
+            ));
+        }
+        let (target_tab_id, browser_control) = {
+            let data = self.data.read().await;
+            (
+                data.public.target_tab_id,
+                data.public.browser_control.clone(),
+            )
+        };
+        let mut params = sanitize_params(method, raw_params, target_tab_id)?;
+        if method.starts_with("page.") && method != "page.observe" {
+            bind_browser_control(&mut params, &browser_control);
+        }
 
         if method == "tabs.list" {
             return self.refresh_tabs().await;
@@ -1175,7 +2023,7 @@ impl AppState {
                 .await;
         }
 
-        let result = match self.hub.call(method, params.clone()).await {
+        let (connection_id, result) = match self.hub.call_scoped(method, params.clone()).await {
             Ok(result) => result,
             Err(error) => {
                 self.log(method, "error", &error.message).await;
@@ -1184,8 +2032,19 @@ impl AppState {
             }
         };
 
+        let returned_control = if method.starts_with("browser.control.") {
+            Some(sanitize_browser_control(&result))
+        } else {
+            result.get("control").map(sanitize_browser_control)
+        };
         {
             let mut data = self.data.write().await;
+            if !self.hub.is_current_ready(connection_id) {
+                return Ok(result);
+            }
+            if let Some(control) = returned_control.as_ref() {
+                data.public.browser_control = control.clone();
+            }
             if method == "tabs.activate" {
                 data.public.target_tab_id = params.get("tabId").and_then(Value::as_u64);
             } else if method == "tabs.new"
@@ -1194,19 +2053,32 @@ impl AppState {
                 data.public.target_tab_id = Some(tab_id);
             }
         }
+        if returned_control.is_some()
+            && !self
+                .bump_for_connection(&self.hub, connection_id, "browser-control")
+                .await
+        {
+            return Ok(result);
+        }
 
         if result.get("status").and_then(Value::as_str) == Some("approval_required") {
             let risk = result
                 .get("risk")
                 .and_then(Value::as_str)
                 .unwrap_or("Sensitive action");
-            self.log(
-                method,
-                "approval",
-                format!("{risk}; approve it in the extension popup"),
-            )
-            .await;
-            self.bump("approval").await;
+            if self
+                .log_for_connection(
+                    &self.hub,
+                    connection_id,
+                    method,
+                    "approval",
+                    format!("{risk}; approve it in the extension popup"),
+                )
+                .await
+            {
+                self.bump_for_connection(&self.hub, connection_id, "approval")
+                    .await;
+            }
             return Ok(result);
         }
 
@@ -1218,10 +2090,15 @@ impl AppState {
         } else {
             format!("{method} completed")
         };
-        self.log(method, "ok", log_message).await;
+        if !self
+            .log_for_connection(&self.hub, connection_id, method, "ok", log_message)
+            .await
+        {
+            return Ok(result);
+        }
 
         if method.starts_with("tabs.")
-            && let Err(error) = self.refresh_tabs().await
+            && let Err(error) = self.refresh_tabs_for(Some(connection_id)).await
         {
             self.log("tabs.list", "warning", &error.message).await;
             self.bump("warning").await;
@@ -1231,7 +2108,9 @@ impl AppState {
             tokio::time::sleep(delay).await;
             let target = self.data.read().await.public.target_tab_id;
             if let Some(tab_id) = target
-                && let Err(error) = self.refresh_observation(tab_id).await
+                && let Err(error) = self
+                    .refresh_observation_for(tab_id, Some(connection_id))
+                    .await
             {
                 self.log("page.observe", "warning", &error.message).await;
                 self.bump("warning").await;
@@ -1247,8 +2126,17 @@ impl AppState {
         raw_params: Value,
     ) -> Result<Value, ApiError> {
         let _guard = self.action_lock.lock().await;
-        let params = sanitize_computer_params(method, raw_params)?;
-        let computer = self.data.read().await.public.computer.clone();
+        let mut params = sanitize_computer_params(method, raw_params)?;
+        let (computer, pointer_revision) = {
+            let data = self.data.read().await;
+            (
+                data.public.computer.clone(),
+                data.public
+                    .computer_observation
+                    .as_ref()
+                    .map(|observation| observation.pointer.sequence),
+            )
+        };
         let Some(computer) = computer else {
             return Err(ApiError::new(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -1259,10 +2147,10 @@ impl AppState {
         if !computer.compatible {
             return Err(ApiError::new(
                 StatusCode::CONFLICT,
-                "COMPUTER_VERSION_MISMATCH",
+                "COMPUTER_PROTOCOL_MISMATCH",
                 format!(
-                    "Computer helper {} does not match server {VERSION}",
-                    computer.version
+                    "Computer helper {} protocol {} does not match server {VERSION} protocol {PROTOCOL_VERSION}",
+                    computer.version, computer.protocol_version
                 ),
             ));
         }
@@ -1283,18 +2171,33 @@ impl AppState {
                 )
                 .await;
         }
+        if params.get("frameId").is_some()
+            && params.get("expectedPointerRevision").is_none()
+            && let Some(pointer_revision) = pointer_revision
+            && let Some(output) = params.as_object_mut()
+        {
+            output.insert(
+                "expectedPointerRevision".to_owned(),
+                json!(pointer_revision),
+            );
+        }
 
-        let result = match self.computer_hub.call(method, params.clone()).await {
-            Ok(result) => result,
-            Err(error) => {
-                self.log(method, "error", &error.message).await;
-                self.bump("computer-error").await;
-                return Err(error.into());
-            }
-        };
+        let (connection_id, result) =
+            match self.computer_hub.call_scoped(method, params.clone()).await {
+                Ok(result) => result,
+                Err(error) => {
+                    self.log(method, "error", &error.message).await;
+                    self.bump("computer-error").await;
+                    return Err(error.into());
+                }
+            };
 
         if method == "computer.status" {
-            if let Some(computer) = self.data.write().await.public.computer.as_mut() {
+            let mut data = self.data.write().await;
+            if !self.computer_hub.is_current_ready(connection_id) {
+                return Ok(result);
+            }
+            if let Some(computer) = data.public.computer.as_mut() {
                 if let Some(input_ready) = result.get("inputReady").and_then(Value::as_bool) {
                     computer.input_ready = input_ready;
                 }
@@ -1316,14 +2219,69 @@ impl AppState {
                     100,
                 );
                 computer.windows = sanitize_computer_windows(result.get("windows"));
+                computer.share = sanitize_share_status(result.get("share"));
             }
-            self.log(method, "ok", "Computer helper status refreshed")
+            drop(data);
+            self.log_for_connection(
+                &self.computer_hub,
+                connection_id,
+                method,
+                "ok",
+                "Computer helper status refreshed",
+            )
+            .await;
+            self.bump_for_connection(&self.computer_hub, connection_id, "computer-status")
                 .await;
-            self.bump("computer-status").await;
             return Ok(result);
         }
 
-        self.log(method, "ok", format!("{method} completed")).await;
+        if method.starts_with("computer.share.") {
+            let mut data = self.data.write().await;
+            if !self.computer_hub.is_current_ready(connection_id) {
+                return Ok(result);
+            }
+            if let Some(computer) = data.public.computer.as_mut() {
+                computer.share = sanitize_share_status(Some(&result));
+            }
+            drop(data);
+            if !self
+                .log_for_connection(
+                    &self.computer_hub,
+                    connection_id,
+                    method,
+                    "ok",
+                    format!("{method} completed"),
+                )
+                .await
+            {
+                return Ok(result);
+            }
+            self.bump_for_connection(&self.computer_hub, connection_id, "computer-share")
+                .await;
+            if method == "computer.share.start" {
+                let window_id = result
+                    .get("windowId")
+                    .and_then(Value::as_str)
+                    .or_else(|| params.get("windowId").and_then(Value::as_str));
+                let _ = self
+                    .refresh_computer_observation_for(window_id, Some(connection_id))
+                    .await;
+            }
+            return Ok(result);
+        }
+
+        if !self
+            .log_for_connection(
+                &self.computer_hub,
+                connection_id,
+                method,
+                "ok",
+                format!("{method} completed"),
+            )
+            .await
+        {
+            return Ok(result);
+        }
         tokio::time::sleep(computer_observation_delay(method)).await;
         let window_id = self
             .data
@@ -1334,7 +2292,7 @@ impl AppState {
             .as_ref()
             .map(|observation| observation.window_id.clone());
         if let Err(error) = self
-            .refresh_computer_observation(window_id.as_deref())
+            .refresh_computer_observation_for(window_id.as_deref(), Some(connection_id))
             .await
         {
             self.log("computer.observe", "warning", error.message).await;
@@ -1347,15 +2305,30 @@ impl AppState {
         &self,
         window_id: Option<&str>,
     ) -> Result<Value, ApiError> {
+        self.refresh_computer_observation_for(window_id, None).await
+    }
+
+    async fn refresh_computer_observation_for(
+        &self,
+        window_id: Option<&str>,
+        expected_connection_id: Option<Uuid>,
+    ) -> Result<Value, ApiError> {
         let params = window_id
             .map(|window_id| json!({ "windowId": window_id }))
             .unwrap_or_else(|| json!({}));
-        let result = self
+        let (connection_id, result) = self
             .computer_hub
-            .call("computer.observe", params)
+            .call_scoped("computer.observe", params)
             .await
             .map_err(ApiError::from)?;
-        let screenshot = decode_screenshot(result.get("screenshot"))?.ok_or_else(|| {
+        if expected_connection_id.is_some_and(|expected| expected != connection_id) {
+            return Err(ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "COMPUTER_DISCONNECTED",
+                "Computer helper was replaced before the observation started",
+            ));
+        }
+        let mut screenshot = decode_screenshot(result.get("screenshot"))?.ok_or_else(|| {
             ApiError::new(
                 StatusCode::BAD_GATEWAY,
                 "COMPUTER_INVALID_OBSERVATION",
@@ -1363,30 +2336,62 @@ impl AppState {
             )
         })?;
         let observation = sanitize_computer_observation(result.get("frame"))?;
+        screenshot.bind(
+            "/api/computer/screenshot",
+            "computer-frame",
+            &observation.frame_id,
+        );
         {
             let mut data = self.data.write().await;
+            if !self.computer_hub.is_current_ready(connection_id) {
+                return Err(ApiError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "COMPUTER_DISCONNECTED",
+                    "Computer helper was replaced before the observation could be committed",
+                ));
+            }
             data.public.computer_observation = Some(observation.clone());
             data.computer_screenshot = Some(screenshot);
         }
-        self.log(
-            "computer.observe",
-            "ok",
-            format!(
-                "Observed {} — {} in background",
-                observation.app_name, observation.window_title
-            ),
-        )
-        .await;
-        self.bump("computer-observation").await;
+        if self
+            .log_for_connection(
+                &self.computer_hub,
+                connection_id,
+                "computer.observe",
+                "ok",
+                format!(
+                    "Observed {} — {} in background",
+                    observation.app_name, observation.window_title
+                ),
+            )
+            .await
+        {
+            self.bump_for_connection(&self.computer_hub, connection_id, "computer-observation")
+                .await;
+        }
         Ok(serde_json::to_value(observation).unwrap_or_else(|_| json!({})))
     }
 
     async fn refresh_tabs(&self) -> Result<Value, ApiError> {
-        let result = self
+        self.refresh_tabs_for(None).await
+    }
+
+    async fn refresh_tabs_for(
+        &self,
+        expected_connection_id: Option<Uuid>,
+    ) -> Result<Value, ApiError> {
+        let (connection_id, result) = self
             .hub
-            .call("tabs.list", json!({}))
+            .call_scoped("tabs.list", json!({}))
             .await
             .map_err(ApiError::from)?;
+        if expected_connection_id.is_some_and(|expected| expected != connection_id) {
+            return Err(ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "EXTENSION_DISCONNECTED",
+                "Browser extension was replaced before tabs could be refreshed",
+            ));
+        }
         let tabs = result
             .get("tabs")
             .and_then(Value::as_array)
@@ -1401,6 +2406,13 @@ impl AppState {
         let active_tab_id = result.get("activeTabId").and_then(Value::as_u64);
         {
             let mut data = self.data.write().await;
+            if !self.hub.is_current_ready(connection_id) {
+                return Err(ApiError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "EXTENSION_DISCONNECTED",
+                    "Browser extension was replaced before tabs could be committed",
+                ));
+            }
             data.public.tabs = tabs;
             let target_exists = data
                 .public
@@ -1414,17 +2426,34 @@ impl AppState {
                 data.screenshot = None;
             }
         }
-        self.bump("tabs").await;
+        self.bump_for_connection(&self.hub, connection_id, "tabs")
+            .await;
         Ok(result)
     }
 
     async fn refresh_observation(&self, tab_id: u64) -> Result<Value, ApiError> {
-        let result = self
+        self.refresh_observation_for(tab_id, None).await
+    }
+
+    async fn refresh_observation_for(
+        &self,
+        tab_id: u64,
+        expected_connection_id: Option<Uuid>,
+    ) -> Result<Value, ApiError> {
+        let (connection_id, result) = self
             .hub
-            .call("page.observe", json!({ "tabId": tab_id }))
+            .call_scoped("page.observe", json!({ "tabId": tab_id }))
             .await
             .map_err(ApiError::from)?;
-        let screenshot = decode_screenshot(result.get("screenshot"))?;
+        if expected_connection_id.is_some_and(|expected| expected != connection_id) {
+            return Err(ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "EXTENSION_DISCONNECTED",
+                "Browser extension was replaced before the observation started",
+            ));
+        }
+        let mut screenshot = decode_screenshot(result.get("screenshot"))?;
+        let browser_control = result.get("control").map(sanitize_browser_control);
         let snapshot = result.get("snapshot").and_then(Value::as_object);
         let observation = Observation {
             tab_id,
@@ -1484,15 +2513,42 @@ impl AppState {
                 })
                 .unwrap_or_default(),
         };
+        if let Some(screenshot) = screenshot.as_mut() {
+            screenshot.bind(
+                "/api/screenshot",
+                "browser-tab-generation",
+                &format!("{tab_id}:{}", observation.generation),
+            );
+        }
         {
             let mut data = self.data.write().await;
+            if !self.hub.is_current_ready(connection_id) {
+                return Err(ApiError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "EXTENSION_DISCONNECTED",
+                    "Browser extension was replaced before the observation could be committed",
+                ));
+            }
             data.public.target_tab_id = Some(tab_id);
             data.public.observation = Some(observation);
             data.screenshot = screenshot;
+            if let Some(control) = browser_control {
+                data.public.browser_control = control;
+            }
         }
-        self.log("page.observe", "ok", format!("Observed tab {tab_id}"))
-            .await;
-        self.bump("observation").await;
+        if self
+            .log_for_connection(
+                &self.hub,
+                connection_id,
+                "page.observe",
+                "ok",
+                format!("Observed tab {tab_id}"),
+            )
+            .await
+        {
+            self.bump_for_connection(&self.hub, connection_id, "observation")
+                .await;
+        }
         Ok(result)
     }
 }
@@ -1529,7 +2585,19 @@ fn sanitize_computer_params(method: &str, input: Value) -> Result<Value, ApiErro
         return Err(ApiError::bad_request("Unsupported computer action"));
     }
     match method {
-        "computer.status" => Ok(json!({})),
+        "computer.status" | "computer.share.status" | "computer.share.stop" => Ok(json!({})),
+        "computer.share.start" => {
+            let window_id = required_string(source.get("windowId"), "windowId", 100)?;
+            let fps = source
+                .get("fps")
+                .map(|value| as_u64(value, "fps"))
+                .transpose()?
+                .unwrap_or(4);
+            if !(1..=10).contains(&fps) {
+                return Err(ApiError::bad_request("fps must be between 1 and 10"));
+            }
+            Ok(json!({ "windowId": window_id, "fps": fps }))
+        }
         "computer.observe" => {
             let Some(window_id) = source.get("windowId").or_else(|| source.get("displayId")) else {
                 return Ok(json!({}));
@@ -1542,6 +2610,17 @@ fn sanitize_computer_params(method: &str, input: Value) -> Result<Value, ApiErro
             let mut output = computer_frame_params(&source)?;
             output.insert("x".to_owned(), json!(computer_coordinate(&source, "x")?));
             output.insert("y".to_owned(), json!(computer_coordinate(&source, "y")?));
+            if matches!(method, "computer.move" | "computer.click")
+                && let Some(duration) = source.get("durationMs")
+            {
+                let duration = as_u64(duration, "durationMs")?;
+                if !(50..=2_000).contains(&duration) {
+                    return Err(ApiError::bad_request(
+                        "durationMs must be between 50 and 2000",
+                    ));
+                }
+                output.insert("durationMs".to_owned(), json!(duration));
+            }
             if method == "computer.click" {
                 let button = optional_string(source.get("button"), "left", "button", 8)?;
                 if !["left", "middle", "right"].contains(&button.as_str()) {
@@ -1637,10 +2716,17 @@ fn sanitize_computer_params(method: &str, input: Value) -> Result<Value, ApiErro
 }
 
 fn computer_frame_params(source: &Map<String, Value>) -> Result<Map<String, Value>, ApiError> {
-    Ok(Map::from_iter([(
+    let mut output = Map::from_iter([(
         "frameId".to_owned(),
         Value::String(required_string(source.get("frameId"), "frameId", 100)?),
-    )]))
+    )]);
+    if let Some(value) = source.get("expectedPointerRevision") {
+        output.insert(
+            "expectedPointerRevision".to_owned(),
+            json!(as_u64(value, "expectedPointerRevision")?),
+        );
+    }
+    Ok(output)
 }
 
 fn computer_coordinate(source: &Map<String, Value>, name: &str) -> Result<f64, ApiError> {
@@ -1783,6 +2869,26 @@ fn sanitize_computer_observation(value: Option<&Value>) -> Result<ComputerObserv
         screen_width: bounded_u64("screenWidth", 100_000)?,
         screen_height: bounded_u64("screenHeight", 100_000)?,
         scale_factor: finite("scaleFactor", 0.1, 16.0)?,
+        transport_scale_x: frame
+            .get("transportScaleX")
+            .and_then(Value::as_f64)
+            .filter(|value| value.is_finite() && (0.1..=16.0).contains(value))
+            .unwrap_or_else(|| {
+                frame
+                    .get("scaleFactor")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(1.0)
+            }),
+        transport_scale_y: frame
+            .get("transportScaleY")
+            .and_then(Value::as_f64)
+            .filter(|value| value.is_finite() && (0.1..=16.0).contains(value))
+            .unwrap_or_else(|| {
+                frame
+                    .get("scaleFactor")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(1.0)
+            }),
         rotation: finite("rotation", 0.0, 359.0)?,
         semantic_mode: bounded(
             frame
@@ -1799,7 +2905,110 @@ fn sanitize_computer_observation(value: Option<&Value>) -> Result<ComputerObserv
             .get("semanticError")
             .and_then(Value::as_str)
             .map(|message| bounded(message, 500)),
+        pointer: sanitize_computer_pointer(frame.get("pointer"), &window_id)?,
         elements: sanitize_computer_elements(frame.get("elements")),
+    })
+}
+
+fn sanitize_computer_pointer(
+    value: Option<&Value>,
+    expected_window_id: &str,
+) -> Result<ComputerPointer, ApiError> {
+    let pointer = value.and_then(Value::as_object).ok_or_else(|| {
+        ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "COMPUTER_INVALID_OBSERVATION",
+            "Computer frame pointer metadata is missing",
+        )
+    })?;
+    let finite = |name: &str| {
+        pointer
+            .get(name)
+            .and_then(Value::as_f64)
+            .filter(|value| value.is_finite() && (-100_000.0..=100_000.0).contains(value))
+    };
+    let signed = |name: &str| {
+        pointer
+            .get(name)
+            .and_then(Value::as_i64)
+            .filter(|value| (-100_000..=100_000).contains(value))
+    };
+    let window_id = pointer
+        .get("windowId")
+        .and_then(Value::as_str)
+        .filter(|window_id| *window_id == expected_window_id)
+        .map(str::to_owned);
+    let visible = pointer
+        .get("visible")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let image_x = finite("imageX");
+    let image_y = finite("imageY");
+    if visible && (window_id.is_none() || image_x.is_none() || image_y.is_none()) {
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "COMPUTER_INVALID_OBSERVATION",
+            "Visible computer pointer metadata is incomplete or targets another window",
+        ));
+    }
+    let style = pointer
+        .get("style")
+        .and_then(Value::as_object)
+        .map(|style| {
+            json!({
+                "theme": bounded(style.get("theme").and_then(Value::as_str).unwrap_or("unknown"), 80),
+                "fill": bounded(style.get("fill").and_then(Value::as_str).unwrap_or("#26C6FF"), 16),
+                "outline": bounded(style.get("outline").and_then(Value::as_str).unwrap_or("#FFFFFF"), 16),
+                "logicalSize": style.get("logicalSize").and_then(Value::as_u64).unwrap_or(42).clamp(8, 128),
+                "hotspot": bounded(style.get("hotspot").and_then(Value::as_str).unwrap_or("tip"), 20),
+            })
+        })
+        .unwrap_or_else(|| json!({}));
+    Ok(ComputerPointer {
+        id: required_string(pointer.get("id"), "frame.pointer.id", 100)?,
+        visible,
+        window_id,
+        image_x,
+        image_y,
+        screen_x: signed("screenX"),
+        screen_y: signed("screenY"),
+        heading_degrees: finite("headingDegrees").unwrap_or(0.0),
+        action: bounded(
+            pointer
+                .get("action")
+                .and_then(Value::as_str)
+                .unwrap_or("idle"),
+            40,
+        ),
+        pressed: pointer
+            .get("pressed")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        sequence: pointer.get("sequence").and_then(Value::as_u64).unwrap_or(0),
+        revision: pointer
+            .get("revision")
+            .and_then(Value::as_u64)
+            .unwrap_or_else(|| pointer.get("sequence").and_then(Value::as_u64).unwrap_or(0)),
+        buttons_mask: pointer
+            .get("buttonsMask")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(31) as u8,
+        updated_at: bounded(
+            pointer
+                .get("updatedAt")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown"),
+            100,
+        ),
+        coordinate_space: bounded(
+            pointer
+                .get("coordinateSpace")
+                .and_then(Value::as_str)
+                .unwrap_or("image-pixels"),
+            40,
+        ),
+        style,
     })
 }
 
@@ -1818,7 +3027,7 @@ fn sanitize_computer_elements(value: Option<&Value>) -> Vec<ComputerElement> {
                     if reference.len() > 40 || role.len() > 120 || name.len() > 500 {
                         return None;
                     }
-                    let actions = item
+                    let actions: Vec<String> = item
                         .get("actions")
                         .and_then(Value::as_array)
                         .map(|actions| {
@@ -1831,8 +3040,37 @@ fn sanitize_computer_elements(value: Option<&Value>) -> Vec<ComputerElement> {
                                 .collect()
                         })
                         .unwrap_or_default();
+                    let sensitive = item
+                        .get("sensitive")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let value_redacted = sensitive
+                        || item
+                            .get("valueRedacted")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
+                    let actions = actions
+                        .into_iter()
+                        .filter(|action| !(value_redacted && action == "setValue"))
+                        .collect();
                     let bounds = item
                         .get("bounds")
+                        .and_then(Value::as_object)
+                        .and_then(|bounds| {
+                            let finite = |name: &str| {
+                                bounds.get(name)?.as_f64().filter(|value| {
+                                    value.is_finite() && (-100_000.0..=100_000.0).contains(value)
+                                })
+                            };
+                            Some(ComputerElementBounds {
+                                x: finite("x")?,
+                                y: finite("y")?,
+                                width: finite("width")?.clamp(0.0, 100_000.0),
+                                height: finite("height")?.clamp(0.0, 100_000.0),
+                            })
+                        });
+                    let screen_bounds = item
+                        .get("screenBounds")
                         .and_then(Value::as_object)
                         .and_then(|bounds| {
                             let finite = |name: &str| {
@@ -1851,18 +3089,59 @@ fn sanitize_computer_elements(value: Option<&Value>) -> Vec<ComputerElement> {
                         reference: reference.to_owned(),
                         role: role.to_owned(),
                         name: name.to_owned(),
-                        value: item
-                            .get("value")
-                            .and_then(Value::as_str)
-                            .map(|value| bounded(value, 2_000)),
+                        value: if value_redacted {
+                            None
+                        } else {
+                            item.get("value")
+                                .and_then(Value::as_str)
+                                .map(|value| bounded(value, 2_000))
+                        },
+                        sensitive,
+                        value_redacted,
                         enabled: item.get("enabled").and_then(Value::as_bool),
                         actions,
                         bounds,
+                        coordinate_space: bounded(
+                            item.get("coordinateSpace")
+                                .and_then(Value::as_str)
+                                .unwrap_or("image-pixels"),
+                            40,
+                        ),
+                        screen_bounds,
                     })
                 })
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn sanitize_share_status(value: Option<&Value>) -> Value {
+    let Some(share) = value.and_then(Value::as_object) else {
+        return json!({ "active": false });
+    };
+    let active = share
+        .get("active")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !active {
+        return json!({
+            "active": false,
+            "stopped": share.get("stopped").and_then(Value::as_bool).unwrap_or(false),
+            "reason": bounded(share.get("reason").and_then(Value::as_str).unwrap_or("inactive"), 40),
+        });
+    }
+    json!({
+        "active": true,
+        "id": bounded(share.get("id").and_then(Value::as_str).unwrap_or("unknown"), 100),
+        "windowId": bounded(share.get("windowId").and_then(Value::as_str).unwrap_or("unknown"), 100),
+        "fps": share.get("fps").and_then(Value::as_u64).unwrap_or(1).clamp(1, 10),
+        "sequence": share.get("sequence").and_then(Value::as_u64).unwrap_or(0),
+        "startedAt": bounded(share.get("startedAt").and_then(Value::as_str).unwrap_or("unknown"), 100),
+        "captureScope": "exact-window",
+        "cursorComposited": share.get("cursorComposited").and_then(Value::as_bool).unwrap_or(true),
+        "droppedFrames": share.get("droppedFrames").and_then(Value::as_u64).unwrap_or(0),
+        "backpressure": bounded(share.get("backpressure").and_then(Value::as_str).unwrap_or("producer-blocking"), 40),
+    })
 }
 
 fn sanitize_computer_windows(value: Option<&Value>) -> Vec<ComputerWindow> {
@@ -1929,8 +3208,33 @@ fn sanitize_params(
             .ok_or_else(|| ApiError::bad_request("Select a target tab first"))
     };
 
-    match method {
-        "status" | "tabs.list" | "tabs.new" => Ok(json!({})),
+    let mut sanitized = match method {
+        "status" | "browser.control.status" | "tabs.list" | "tabs.new" => Ok(json!({})),
+        "browser.control.start" => {
+            let mut output = object(with_tab()?);
+            let ttl_ms = source
+                .get("ttlMs")
+                .map(|value| as_u64(value, "ttlMs"))
+                .transpose()?
+                .unwrap_or(300_000);
+            if !(15_000..=900_000).contains(&ttl_ms) {
+                return Err(ApiError::bad_request(
+                    "ttlMs must be between 15000 and 900000",
+                ));
+            }
+            output.insert("ttlMs".to_owned(), json!(ttl_ms));
+            Ok(Value::Object(output))
+        }
+        "browser.control.stop" => {
+            let mut output = Map::new();
+            if let Some(session_id) = source.get("sessionId") {
+                output.insert(
+                    "sessionId".to_owned(),
+                    Value::String(required_string(Some(session_id), "sessionId", 100)?),
+                );
+            }
+            Ok(Value::Object(output))
+        }
         "tabs.activate" | "tabs.close" => Ok(json!({
             "tabId": as_u64(source.get("tabId").unwrap_or(&Value::Null), "tabId")?
         })),
@@ -1964,6 +3268,14 @@ fn sanitize_params(
         }
         "page.scroll" => {
             let mut output = object(with_tab()?);
+            output.insert(
+                "generation".to_owned(),
+                Value::String(required_string(
+                    source.get("generation"),
+                    "generation",
+                    100,
+                )?),
+            );
             output.insert(
                 "deltaX".to_owned(),
                 json!(
@@ -2050,6 +3362,59 @@ fn sanitize_params(
             Ok(Value::Object(output))
         }
         _ => Err(ApiError::bad_request("Unsupported action")),
+    }?;
+
+    if method.starts_with("page.") && method != "page.observe" {
+        let output = sanitized.as_object_mut().ok_or_else(|| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "INVALID_SANITIZER_STATE",
+                "Browser action sanitizer did not return an object",
+            )
+        })?;
+        if let Some(value) = source.get("controlSessionId") {
+            output.insert(
+                "controlSessionId".to_owned(),
+                Value::String(required_string(Some(value), "controlSessionId", 100)?),
+            );
+        }
+        for name in ["turn", "moveSequence"] {
+            if let Some(value) = source.get(name) {
+                let value = as_u64(value, name)?;
+                if value > 9_007_199_254_740_991 {
+                    return Err(ApiError::bad_request(format!(
+                        "{name} exceeds the JavaScript safe-integer range"
+                    )));
+                }
+                output.insert(name.to_owned(), json!(value));
+            }
+        }
+    }
+    Ok(sanitized)
+}
+
+fn bind_browser_control(params: &mut Value, control: &Value) {
+    if control.get("active").and_then(Value::as_bool) != Some(true) {
+        return;
+    }
+    let Some(output) = params.as_object_mut() else {
+        return;
+    };
+    if !output.contains_key("controlSessionId")
+        && let Some(session_id) = control.get("sessionId").and_then(Value::as_str)
+        && !session_id.is_empty()
+    {
+        output.insert(
+            "controlSessionId".to_owned(),
+            Value::String(session_id.to_owned()),
+        );
+    }
+    for name in ["turn", "moveSequence"] {
+        if !output.contains_key(name)
+            && let Some(value) = control.get(name).and_then(Value::as_u64)
+        {
+            output.insert(name.to_owned(), json!(value));
+        }
     }
 }
 
@@ -2141,6 +3506,74 @@ fn object(value: Value) -> Map<String, Value> {
     value.as_object().cloned().unwrap_or_default()
 }
 
+fn sanitize_browser_control(value: &Value) -> Value {
+    let human_paused = value
+        .get("humanPaused")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let human_pause = sanitize_human_control_pause(value.get("humanPause").unwrap_or(&Value::Null));
+    let revocation_pending = value
+        .get("revocationPending")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if value.get("active").and_then(Value::as_bool) != Some(true) {
+        return json!({
+            "active": false,
+            "humanPaused": human_paused,
+            "humanPause": human_pause,
+            "revocationPending": revocation_pending,
+            "revocation": sanitize_control_revocation(
+                value.get("revocation").unwrap_or(&Value::Null)
+            )
+        });
+    }
+    let cursor = value.get("cursor").unwrap_or(&Value::Null);
+    json!({
+        "active": true,
+        "humanPaused": human_paused,
+        "humanPause": human_pause,
+        "revocationPending": revocation_pending,
+        "sessionId": bounded(value.get("sessionId").and_then(Value::as_str).unwrap_or(""), 100),
+        "tabId": value.get("tabId").and_then(Value::as_u64),
+        "startedAt": value.get("startedAt").and_then(Value::as_u64),
+        "expiresAt": value.get("expiresAt").and_then(Value::as_u64),
+        "lastHeartbeatAt": value.get("lastHeartbeatAt").and_then(Value::as_u64),
+        "turn": value.get("turn").and_then(Value::as_u64).unwrap_or(0),
+        "moveSequence": value.get("moveSequence").and_then(Value::as_u64).unwrap_or(0),
+        "cursor": {
+            "x": cursor.get("x").and_then(Value::as_f64),
+            "y": cursor.get("y").and_then(Value::as_f64),
+            "visible": cursor.get("visible").and_then(Value::as_bool).unwrap_or(false),
+            "updatedAt": cursor.get("updatedAt").and_then(Value::as_u64)
+        }
+    })
+}
+
+fn sanitize_human_control_pause(value: &Value) -> Value {
+    if !value.is_object() {
+        return Value::Null;
+    }
+    json!({
+        "paused": value.get("paused").and_then(Value::as_bool).unwrap_or(true),
+        "reason": bounded(value.get("reason").and_then(Value::as_str).unwrap_or("released_by_user"), 100),
+        "at": value.get("at").and_then(Value::as_u64),
+        "tabId": value.get("tabId").and_then(Value::as_u64)
+    })
+}
+
+fn sanitize_control_revocation(value: &Value) -> Value {
+    if !value.is_object() {
+        return Value::Null;
+    }
+    json!({
+        "tabId": value.get("tabId").and_then(Value::as_u64),
+        "sessionId": bounded(value.get("sessionId").and_then(Value::as_str).unwrap_or(""), 100),
+        "reason": bounded(value.get("reason").and_then(Value::as_str).unwrap_or("unknown"), 100),
+        "at": value.get("at").and_then(Value::as_u64),
+        "requiresExplicitStart": value.get("requiresExplicitStart").and_then(Value::as_bool).unwrap_or(false)
+    })
+}
+
 fn sanitize_tab(value: &Value) -> Option<TabInfo> {
     Some(TabInfo {
         id: value.get("id")?.as_u64()?,
@@ -2224,6 +3657,9 @@ fn decode_screenshot(value: Option<&Value>) -> Result<Option<Screenshot>, ApiErr
     Ok(Some(Screenshot {
         bytes: Bytes::from(bytes),
         content_type,
+        id: Uuid::new_v4().simple().to_string(),
+        binding: String::new(),
+        route: "",
     }))
 }
 
@@ -2237,13 +3673,20 @@ fn now_iso() -> String {
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned())
 }
 
-fn parse_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
+fn bearer_token(headers: &HeaderMap) -> &str {
     headers
-        .get(COOKIE)
-        .and_then(|value| value.to_str().ok())?
-        .split(';')
-        .filter_map(|pair| pair.trim().split_once('='))
-        .find_map(|(key, value)| (key == name).then(|| value.to_owned()))
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .unwrap_or("")
+}
+
+fn session_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Session "))
+        .filter(|value| token_is_valid(value))
 }
 
 fn is_loopback_host(host: &str) -> bool {
@@ -2260,6 +3703,22 @@ fn is_loopback_host(host: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accepts_only_exact_chrome_extension_origins() {
+        assert!(valid_extension_origin(
+            "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+        ));
+        for invalid in [
+            "chrome-extension://",
+            "chrome-extension://abcdefghijklmnopabcdefghijklmnop/",
+            "chrome-extension://abcdefghijklmnopabcdefghijklmnox",
+            "chrome-extension://ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP",
+            "https://abcdefghijklmnopabcdefghijklmnop",
+        ] {
+            assert!(!valid_extension_origin(invalid), "accepted {invalid}");
+        }
+    }
 
     #[test]
     fn validates_full_access_action_parameters() {
@@ -2283,11 +3742,93 @@ mod tests {
     }
 
     #[test]
+    fn preserves_and_binds_browser_control_revisions() {
+        let mut params = sanitize_params(
+            "page.scroll",
+            json!({
+                "tabId": 7,
+                "generation": "g2",
+                "deltaY": 120,
+                "controlSessionId": "control-1",
+                "turn": 4,
+                "moveSequence": 9
+            }),
+            None,
+        )
+        .unwrap();
+        assert_eq!(params["generation"], "g2");
+        assert_eq!(params["controlSessionId"], "control-1");
+        assert_eq!(params["turn"], 4);
+        assert_eq!(params["moveSequence"], 9);
+
+        params.as_object_mut().unwrap().remove("moveSequence");
+        bind_browser_control(
+            &mut params,
+            &json!({
+                "active": true,
+                "sessionId": "control-1",
+                "turn": 4,
+                "moveSequence": 10
+            }),
+        );
+        assert_eq!(params["moveSequence"], 10);
+        assert_eq!(params["turn"], 4);
+    }
+
+    #[test]
+    fn accepts_only_monotonic_events_for_the_exact_transport_session() {
+        let connection_id = Uuid::new_v4();
+        let mut last = 0;
+        let first = json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "sessionId": connection_id.to_string(),
+            "eventSequence": 2
+        });
+        assert!(session_event_valid(&first, connection_id, &mut last));
+        assert_eq!(last, 2);
+        assert!(!session_event_valid(&first, connection_id, &mut last));
+        assert!(!session_event_valid(
+            &json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "sessionId": Uuid::new_v4().to_string(),
+                "eventSequence": 3
+            }),
+            connection_id,
+            &mut last,
+        ));
+        assert_eq!(last, 2);
+    }
+
+    #[test]
     fn enforces_loopback_host_boundary() {
         assert!(is_loopback_host("127.0.0.1:17373"));
         assert!(is_loopback_host("localhost:17373"));
         assert!(is_loopback_host("[::1]:17373"));
         assert!(!is_loopback_host("example.com:17373"));
+    }
+
+    #[test]
+    fn expired_dashboard_session_cannot_mutate_even_with_its_old_csrf_token() {
+        let state = AppState::new(create_token(), Duration::from_secs(1), false);
+        let session_id = create_token();
+        state.sessions.lock().unwrap().insert(
+            session_id.clone(),
+            Session {
+                csrf: create_token(),
+                touched_at: OffsetDateTime::now_utc().unix_timestamp() - 12 * 60 * 60 - 1,
+            },
+        );
+        let csrf = state.sessions.lock().unwrap()[&session_id].csrf.clone();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            format!("Session {session_id}").parse().unwrap(),
+        );
+        headers.insert("x-csrf-token", csrf.parse().unwrap());
+        headers.insert(HOST, "127.0.0.1:17373".parse().unwrap());
+        headers.insert(ORIGIN, "http://127.0.0.1:17373".parse().unwrap());
+        let error = state.assert_ui_mutation(&headers).unwrap_err();
+        assert_eq!(error.status, StatusCode::FORBIDDEN);
     }
 
     #[test]
@@ -2302,6 +3843,32 @@ mod tests {
     }
 
     #[test]
+    fn browser_control_sanitizer_preserves_human_pause_authority() {
+        let control = sanitize_browser_control(&json!({
+            "active": false,
+            "humanPaused": true,
+            "humanPause": {
+                "paused": true,
+                "reason": "canceled_by_user",
+                "at": 1_787_126_488_003_u64,
+                "tabId": 17_u64,
+                "sessionId": "must-not-be-published"
+            },
+            "revocationPending": true,
+            "revocation": {
+                "reason": "canceled_by_user",
+                "requiresExplicitStart": true
+            }
+        }));
+        assert_eq!(control["active"], false);
+        assert_eq!(control["humanPaused"], true);
+        assert_eq!(control["humanPause"]["reason"], "canceled_by_user");
+        assert_eq!(control["humanPause"]["tabId"], 17);
+        assert!(control["humanPause"].get("sessionId").is_none());
+        assert_eq!(control["revocationPending"], true);
+    }
+
+    #[test]
     fn preserves_exact_window_identity_through_computer_sanitizers() {
         let params = sanitize_computer_params(
             "computer.observe",
@@ -2310,6 +3877,22 @@ mod tests {
         .unwrap();
         assert_eq!(params, json!({ "windowId": "47782" }));
 
+        let pointer = json!({
+            "id": "cursor-1",
+            "visible": true,
+            "windowId": "47782",
+            "imageX": 604.5,
+            "imageY": 413.0,
+            "screenX": 540,
+            "screenY": 1014,
+            "headingDegrees": 45.0,
+            "action": "click",
+            "pressed": false,
+            "sequence": 3,
+            "updatedAt": "2026-08-18T00:00:01Z",
+            "coordinateSpace": "image-pixels",
+            "style": { "theme": "lbb.session-pointer.v1", "fill": "#26C6FF", "outline": "#FFFFFF", "logicalSize": 42, "hotspot": "tip" }
+        });
         let frame = json!({
             "id": "frame-1",
             "capturedAt": "2026-08-18T00:00:00Z",
@@ -2332,6 +3915,7 @@ mod tests {
             "rotation": 0.0,
             "semanticMode": "macos-accessibility",
             "semanticAvailable": true,
+            "pointer": pointer,
             "elements": [{
                 "ref": "a1",
                 "role": "AXButton",
@@ -2351,6 +3935,8 @@ mod tests {
         assert!(observation.semantic_available);
         assert_eq!(observation.elements.len(), 1);
         assert_eq!(observation.elements[0].reference, "a1");
+        assert!(observation.pointer.visible);
+        assert_eq!(observation.pointer.sequence, 3);
 
         let invoke = sanitize_computer_params(
             "computer.invoke",
@@ -2377,5 +3963,27 @@ mod tests {
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0].id, "47782");
         assert!(!windows[0].focused);
+    }
+
+    #[test]
+    fn computer_element_sanitizer_never_forwards_a_sensitive_value() {
+        let payload = json!([{
+            "ref": "secret-1",
+            "role": "AXTextField",
+            "name": "Password",
+            "value": "must-not-cross-the-server",
+            "sensitive": true,
+            "valueRedacted": false,
+            "actions": ["setValue", "press"],
+            "coordinateSpace": "screen-points"
+        }]);
+        let elements = sanitize_computer_elements(Some(&payload));
+        assert_eq!(elements.len(), 1);
+        let sensitive = &elements[0];
+        assert!(sensitive.sensitive);
+        assert!(sensitive.value_redacted);
+        assert!(sensitive.value.is_none());
+        assert!(!sensitive.actions.iter().any(|action| action == "setValue"));
+        assert!(sensitive.actions.iter().any(|action| action == "press"));
     }
 }

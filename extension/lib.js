@@ -1,4 +1,5 @@
-export const VERSION = "0.8.0";
+export const VERSION = "0.9.0";
+export const PROTOCOL_VERSION = 1;
 export const DEFAULT_PORT = 17_373;
 
 const RISK_PATTERNS = [
@@ -41,8 +42,12 @@ export function hostAllowed(hostname, allowedHosts) {
   });
 }
 
-export function isUrlAllowed(rawUrl, allowedHosts, bridgePort = DEFAULT_PORT, fullAccess = false) {
-  if (rawUrl === "about:blank") return { allowed: true, url: rawUrl };
+export function isUrlAllowed(rawUrl, allowedHosts, bridgePort = DEFAULT_PORT, fullAccess = false, trustedBlank = false) {
+  if (rawUrl === "about:blank") {
+    return fullAccess || trustedBlank
+      ? { allowed: true, url: rawUrl }
+      : { allowed: false, reason: "Untracked blank tabs are blocked in Safe mode" };
+  }
   let url;
   try {
     url = new URL(rawUrl);
@@ -81,8 +86,23 @@ export function classifyRisk({ name = "", text = "", role = "", type = "" } = {}
   return null;
 }
 
-export function isSensitiveField({ type = "", autocomplete = "", name = "" } = {}) {
-  return type === "password" || /password|one-time-code|cc-number|cc-csc|current-password|new-password/i.test(`${autocomplete} ${name}`);
+function normalizedFieldIdentifier(value) {
+  return String(value ?? "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+export function isSensitiveField({ type = "", autocomplete = "", name = "", fieldName = "" } = {}) {
+  if (String(type).toLowerCase() === "password") return true;
+  const autocompleteTokens = String(autocomplete).toLowerCase().split(/\s+/).filter(Boolean);
+  if (autocompleteTokens.some((token) => token === "current-password"
+    || token === "new-password"
+    || token === "one-time-code"
+    || token.startsWith("cc-"))) return true;
+  const identifier = normalizedFieldIdentifier(name || fieldName);
+  return /(?:^|-)(?:password|passwd|one-time-(?:code|password)|otp|passcode|verification-code|cc-(?:name|given-name|additional-name|family-name|number|exp|exp-month|exp-year|csc|type)|card-number|credit-card-number|payment-card-number|cardholder(?:-name)?|card-name|card-type|card-exp(?:iry|iration)?|card-exp-(?:month|year)|exp-(?:month|year)|cvv2?|cvc2?|card-security-code|security-code)(?:$|-)/.test(identifier);
 }
 
 export function allowedKey(key) {

@@ -7,6 +7,8 @@ const ui = {
   token: byId("token"), approvalSection: byId("approval-section"), approvalDetail: byId("approval-detail"),
   approve: byId("approve"), reject: byId("reject"), currentSite: byId("current-site"), allowCurrent: byId("allow-current"),
   hostForm: byId("host-form"), host: byId("host"), hosts: byId("hosts"), allowedSitesSection: byId("allowed-sites-section"), message: byId("message"),
+  controlSection: byId("control-section"), controlStatus: byId("control-status"), controlLive: byId("control-live"),
+  startControl: byId("start-control"), releaseControl: byId("release-control"),
 };
 let state = null;
 ui.version.textContent = `Version ${VERSION}`;
@@ -38,6 +40,24 @@ function render(next) {
   ui.token.placeholder = next.tokenConfigured ? "Saved — leave blank to keep it" : "Paste the server token";
   ui.currentSite.textContent = `Current site: ${next.currentHost || "unavailable"}${next.currentHostAllowed ? " (allowed)" : ""}`;
   ui.allowCurrent.disabled = !next.currentHost || next.currentHostAllowed;
+  const control = next.control ?? { active: false };
+  ui.controlSection.classList.toggle("active", control.active || control.revocationPending);
+  ui.controlLive.classList.toggle("active", control.active || control.revocationPending);
+  ui.controlStatus.textContent = control.humanPaused
+    ? control.pausePersistenceUncertain
+      ? "All remote browser control is paused. Pause persistence needs popup recovery before Resume can authorize it again."
+      : "All remote browser control is paused by you. Only Resume in this popup can authorize it again."
+    : control.revocationPending
+    ? `Release cleanup pending for tab ${control.cleanup?.tabId ?? "unknown"}. Chrome attachment verification will retry automatically.`
+    : control.active
+    ? `Attached to tab ${control.tabId} · turn ${control.turn} · move ${control.moveSequence}`
+    : control.revocation
+      ? `Released: ${String(control.revocation.reason).replaceAll("_", " ")}`
+      : "No browser control session is active.";
+  ui.startControl.textContent = control.humanPaused ? "Resume remote control" : "Start on this tab";
+  ui.startControl.disabled = !control.humanPaused
+    && (control.revocationPending || (control.active && control.tabId === next.currentTabId));
+  ui.releaseControl.disabled = !control.active && !control.revocationPending;
   ui.hosts.replaceChildren();
   for (const host of next.allowedHosts) {
     const item = document.createElement("li");
@@ -68,6 +88,10 @@ ui.connectionForm.addEventListener("submit", (event) => {
 });
 ui.enabled.addEventListener("change", () => void update("toggleEnabled", { enabled: ui.enabled.checked }));
 ui.fullAccess.addEventListener("change", () => void update("toggleFullAccess", { fullAccess: ui.fullAccess.checked }));
+ui.startControl.addEventListener("click", () => {
+  void update(state?.control?.humanPaused ? "resumeRemoteControl" : "startControlCurrent");
+});
+ui.releaseControl.addEventListener("click", () => void update("releaseControl"));
 ui.allowCurrent.addEventListener("click", () => void update("allowCurrent"));
 ui.hostForm.addEventListener("submit", (event) => {
   event.preventDefault();

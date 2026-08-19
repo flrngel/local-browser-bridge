@@ -1,3 +1,4 @@
+use std::ffi::c_void;
 use std::thread;
 use std::time::Duration;
 
@@ -5,10 +6,12 @@ use image::RgbaImage;
 use xcap::Window;
 
 use super::{
-    ComputerError, InvariantReport, SemanticTarget, TargetPoint, WindowDescriptor, uia_windows,
+    CommandCancellation, ComputerError, InvariantReport, SemanticTarget, TargetPoint,
+    WindowDescriptor, uia_windows,
 };
 
 type Hwnd = isize;
+type Hdesk = isize;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -42,8 +45,15 @@ unsafe extern "system" {
     fn GetAncestor(window: Hwnd, flags: u32) -> Hwnd;
     fn GetGUIThreadInfo(thread_id: u32, info: *mut GuiThreadInfo) -> i32;
     fn IsWindow(window: Hwnd) -> i32;
-    fn GetWindowLongPtrW(window: Hwnd, index: i32) -> isize;
-    fn SetWindowLongPtrW(window: Hwnd, index: i32, value: isize) -> isize;
+    fn OpenInputDesktop(flags: u32, inherit: i32, desired_access: u32) -> Hdesk;
+    fn GetUserObjectInformationW(
+        object: isize,
+        index: i32,
+        info: *mut c_void,
+        length: u32,
+        needed: *mut u32,
+    ) -> i32;
+    fn CloseDesktop(desktop: Hdesk) -> i32;
 }
 
 const WM_MOUSEMOVE: u32 = 0x0200;
@@ -61,12 +71,12 @@ const WM_CHAR: u32 = 0x0102;
 const MK_LBUTTON: usize = 0x0001;
 const MK_RBUTTON: usize = 0x0002;
 const MK_MBUTTON: usize = 0x0010;
-const GWL_EXSTYLE: i32 = -20;
-const WS_EX_NOACTIVATE: isize = 0x0800_0000;
 const CWP_SKIPINVISIBLE: u32 = 0x0001;
 const CWP_SKIPDISABLED: u32 = 0x0002;
 const CWP_SKIPTRANSPARENT: u32 = 0x0004;
 const GA_ROOT: u32 = 2;
+const DESKTOP_READOBJECTS: u32 = 0x0001;
+const UOI_NAME: i32 = 2;
 
 pub fn backend_name() -> &'static str {
     "background-window/uia+win32-messages+wgc"
@@ -89,24 +99,22 @@ pub fn invoke(
     target: &WindowDescriptor,
     semantic: &SemanticTarget,
     action: &str,
+    cancellation: &CommandCancellation,
 ) -> Result<serde_json::Value, ComputerError> {
-    let before = DesktopSnapshot::capture()?;
-    target_hwnd(target)?;
-    let effect = uia_windows::invoke(target, semantic, action)?;
-    before.compare(&DesktopSnapshot::capture()?).assert_held()?;
-    Ok(effect)
+    guarded_effect(target, cancellation, || {
+        uia_windows::invoke(target, semantic, action, cancellation)
+    })
 }
 
 pub fn set_value(
     target: &WindowDescriptor,
     semantic: &SemanticTarget,
     value: &str,
+    cancellation: &CommandCancellation,
 ) -> Result<serde_json::Value, ComputerError> {
-    let before = DesktopSnapshot::capture()?;
-    target_hwnd(target)?;
-    let effect = uia_windows::set_value(target, semantic, value)?;
-    before.compare(&DesktopSnapshot::capture()?).assert_held()?;
-    Ok(effect)
+    guarded_effect(target, cancellation, || {
+        uia_windows::set_value(target, semantic, value, cancellation)
+    })
 }
 
 pub fn limitations() -> Vec<&'static str> {
@@ -142,13 +150,31 @@ pub fn capture_window(target: &WindowDescriptor) -> Result<RgbaImage, ComputerEr
     exact_window(target)?.capture_image().map_err(capture_error)
 }
 
-pub fn move_pointer(
+pub fn move_pointer_path(
     target: &WindowDescriptor,
-    point: TargetPoint,
+    points: &[TargetPoint],
+    step_delay: Duration,
+    cancellation: &CommandCancellation,
 ) -> Result<InvariantReport, ComputerError> {
-    guarded(target, || {
-        let (recipient, local) = mouse_recipient(target, point)?;
-        post(recipient, WM_MOUSEMOVE, 0, point_lparam(local))
+    guarded(target, cancellation, || {
+        if points.is_empty() {
+            return Err(input_error("synthetic pointer trajectory is empty"));
+        }
+        for (index, point) in points.iter().copied().enumerate() {
+            let (recipient, local) = mouse_recipient(target, point)?;
+            post(
+                recipient,
+                WM_MOUSEMOVE,
+                0,
+                point_lparam(local),
+                cancellation,
+                "pointer path dispatch",
+            )?;
+            if index + 1 < points.len() {
+                thread::sleep(step_delay);
+            }
+        }
+        Ok(())
     })
 }
 
@@ -157,19 +183,41 @@ pub fn click(
     point: TargetPoint,
     button: &str,
     count: usize,
+    cancellation: &CommandCancellation,
 ) -> Result<InvariantReport, ComputerError> {
     let (down, up, state) = match button {
         "right" => (WM_RBUTTONDOWN, WM_RBUTTONUP, MK_RBUTTON),
         "middle" => (WM_MBUTTONDOWN, WM_MBUTTONUP, MK_MBUTTON),
         _ => (WM_LBUTTONDOWN, WM_LBUTTONUP, MK_LBUTTON),
     };
-    guarded(target, || {
+    guarded(target, cancellation, || {
         let (recipient, local) = mouse_recipient(target, point)?;
-        post(recipient, WM_MOUSEMOVE, 0, point_lparam(local))?;
+        post(
+            recipient,
+            WM_MOUSEMOVE,
+            0,
+            point_lparam(local),
+            cancellation,
+            "click pointer dispatch",
+        )?;
         for index in 0..count.max(1) {
-            post(recipient, down, state, point_lparam(local))?;
-            thread::sleep(Duration::from_millis(24));
-            post(recipient, up, 0, point_lparam(local))?;
+            held_message_sequence(
+                || {
+                    post(
+                        recipient,
+                        down,
+                        state,
+                        point_lparam(local),
+                        cancellation,
+                        "mouse button press",
+                    )
+                },
+                || {
+                    thread::sleep(Duration::from_millis(24));
+                    Ok(())
+                },
+                || post_release(recipient, up, 0, point_lparam(local)),
+            )?;
             if index + 1 < count {
                 thread::sleep(Duration::from_millis(70));
             }
@@ -183,35 +231,54 @@ pub fn drag(
     from: TargetPoint,
     to: TargetPoint,
     duration_ms: u64,
+    cancellation: &CommandCancellation,
 ) -> Result<InvariantReport, ComputerError> {
-    guarded(target, || {
+    guarded(target, cancellation, || {
         let (recipient, from_local) = mouse_recipient(target, from)?;
-        post(recipient, WM_MOUSEMOVE, 0, point_lparam(from_local))?;
         post(
             recipient,
-            WM_LBUTTONDOWN,
-            MK_LBUTTON,
+            WM_MOUSEMOVE,
+            0,
             point_lparam(from_local),
+            cancellation,
+            "drag approach dispatch",
         )?;
-        let steps = (duration_ms / 16).clamp(4, 120);
-        for step in 1..=steps {
-            let progress = step as f64 / steps as f64;
-            let screen = Point {
-                x: interpolate(from.screen_x, to.screen_x, progress),
-                y: interpolate(from.screen_y, to.screen_y, progress),
-            };
-            let local = screen_to_client(recipient, screen)?;
-            post(recipient, WM_MOUSEMOVE, MK_LBUTTON, point_lparam(local))?;
-            thread::sleep(Duration::from_millis((duration_ms / steps).max(1)));
-        }
-        let to_local = screen_to_client(
-            recipient,
-            Point {
-                x: to.screen_x,
-                y: to.screen_y,
+        let last_local = std::cell::Cell::new(from_local);
+        held_message_sequence(
+            || {
+                post(
+                    recipient,
+                    WM_LBUTTONDOWN,
+                    MK_LBUTTON,
+                    point_lparam(from_local),
+                    cancellation,
+                    "drag press",
+                )
             },
-        )?;
-        post(recipient, WM_LBUTTONUP, 0, point_lparam(to_local))
+            || {
+                let steps = (duration_ms / 16).clamp(4, 120);
+                for step in 1..=steps {
+                    let progress = step as f64 / steps as f64;
+                    let screen = Point {
+                        x: interpolate(from.screen_x, to.screen_x, progress),
+                        y: interpolate(from.screen_y, to.screen_y, progress),
+                    };
+                    let local = screen_to_client(recipient, screen)?;
+                    post(
+                        recipient,
+                        WM_MOUSEMOVE,
+                        MK_LBUTTON,
+                        point_lparam(local),
+                        cancellation,
+                        "drag path dispatch",
+                    )?;
+                    last_local.set(local);
+                    thread::sleep(Duration::from_millis((duration_ms / steps).max(1)));
+                }
+                Ok(())
+            },
+            || post_release(recipient, WM_LBUTTONUP, 0, point_lparam(last_local.get())),
+        )
     })
 }
 
@@ -220,8 +287,9 @@ pub fn scroll(
     point: TargetPoint,
     delta_x: i32,
     delta_y: i32,
+    cancellation: &CommandCancellation,
 ) -> Result<InvariantReport, ComputerError> {
-    guarded(target, || {
+    guarded(target, cancellation, || {
         let (recipient, _) = mouse_recipient(target, point)?;
         let screen = point_lparam(Point {
             x: point.screen_x,
@@ -233,6 +301,8 @@ pub fn scroll(
                 WM_MOUSEWHEEL,
                 wheel_wparam(delta_y.saturating_mul(120)),
                 screen,
+                cancellation,
+                "vertical scroll dispatch",
             )?;
         }
         if delta_x != 0 {
@@ -241,23 +311,40 @@ pub fn scroll(
                 WM_MOUSEHWHEEL,
                 wheel_wparam(delta_x.saturating_mul(120)),
                 screen,
+                cancellation,
+                "horizontal scroll dispatch",
             )?;
         }
         Ok(())
     })
 }
 
-pub fn type_text(target: &WindowDescriptor, text: &str) -> Result<InvariantReport, ComputerError> {
-    guarded(target, || {
+pub fn type_text(
+    target: &WindowDescriptor,
+    text: &str,
+    cancellation: &CommandCancellation,
+) -> Result<InvariantReport, ComputerError> {
+    guarded(target, cancellation, || {
         let recipient = keyboard_recipient(target)?;
         for unit in text.encode_utf16() {
-            post(recipient, WM_CHAR, unit as usize, 0)?;
+            post(
+                recipient,
+                WM_CHAR,
+                unit as usize,
+                0,
+                cancellation,
+                "text dispatch",
+            )?;
         }
         Ok(())
     })
 }
 
-pub fn key(target: &WindowDescriptor, chord: &str) -> Result<InvariantReport, ComputerError> {
+pub fn key(
+    target: &WindowDescriptor,
+    chord: &str,
+    cancellation: &CommandCancellation,
+) -> Result<InvariantReport, ComputerError> {
     let parts = chord.split('+').map(str::trim).collect::<Vec<_>>();
     let recipient = keyboard_recipient(target)?;
     let modifiers = parts[..parts.len().saturating_sub(1)]
@@ -270,17 +357,32 @@ pub fn key(target: &WindowDescriptor, chord: &str) -> Result<InvariantReport, Co
             "The Windows background backend does not map this key",
         )
     })?;
-    guarded(target, || {
+    guarded(target, cancellation, || {
+        let mut attempted_modifiers = Vec::with_capacity(modifiers.len());
         for modifier in &modifiers {
-            post(recipient, WM_KEYDOWN, *modifier, 0)?;
+            attempted_modifiers.push(*modifier);
+            if let Err(press_error) = post(
+                recipient,
+                WM_KEYDOWN,
+                *modifier,
+                0,
+                cancellation,
+                "modifier press",
+            ) {
+                return finish_with_cleanup(
+                    Err(press_error),
+                    release_keys(recipient, None, &attempted_modifiers),
+                );
+            }
         }
-        post(recipient, WM_KEYDOWN, key, 0)?;
+        if let Err(press_error) = post(recipient, WM_KEYDOWN, key, 0, cancellation, "key press") {
+            return finish_with_cleanup(
+                Err(press_error),
+                release_keys(recipient, Some(key), &attempted_modifiers),
+            );
+        }
         thread::sleep(Duration::from_millis(18));
-        post(recipient, WM_KEYUP, key, 1 << 31)?;
-        for modifier in modifiers.iter().rev() {
-            post(recipient, WM_KEYUP, *modifier, 1 << 31)?;
-        }
-        Ok(())
+        release_keys(recipient, Some(key), &attempted_modifiers)
     })
 }
 
@@ -321,14 +423,32 @@ fn exact_window(target: &WindowDescriptor) -> Result<Window, ComputerError> {
 
 fn guarded(
     target: &WindowDescriptor,
+    cancellation: &CommandCancellation,
     action: impl FnOnce() -> Result<(), ComputerError>,
 ) -> Result<InvariantReport, ComputerError> {
     let before = DesktopSnapshot::capture()?;
-    let hwnd = target_hwnd(target)?;
-    let _no_activate = NoActivateGuard::arm(hwnd);
-    action()?;
+    target_hwnd(target)?;
+    cancellation.check("Windows background dispatch")?;
+    let action_result = action();
     thread::sleep(Duration::from_millis(35));
-    Ok(before.compare(&DesktopSnapshot::capture()?))
+    let report = before.compare(&DesktopSnapshot::capture()?);
+    report.clone().assert_held()?;
+    action_result?;
+    Ok(report)
+}
+
+fn guarded_effect<T>(
+    target: &WindowDescriptor,
+    cancellation: &CommandCancellation,
+    action: impl FnOnce() -> Result<T, ComputerError>,
+) -> Result<T, ComputerError> {
+    let before = DesktopSnapshot::capture()?;
+    target_hwnd(target)?;
+    cancellation.check("UI Automation semantic resolution")?;
+    let action_result = action();
+    thread::sleep(Duration::from_millis(35));
+    before.compare(&DesktopSnapshot::capture()?).assert_held()?;
+    action_result
 }
 
 fn target_hwnd(target: &WindowDescriptor) -> Result<Hwnd, ComputerError> {
@@ -420,7 +540,24 @@ fn screen_to_client(window: Hwnd, mut point: Point) -> Result<Point, ComputerErr
     Ok(point)
 }
 
-fn post(window: Hwnd, message: u32, wparam: usize, lparam: isize) -> Result<(), ComputerError> {
+fn post(
+    window: Hwnd,
+    message: u32,
+    wparam: usize,
+    lparam: isize,
+    cancellation: &CommandCancellation,
+    boundary: &str,
+) -> Result<(), ComputerError> {
+    cancellation.begin_side_effect(boundary)?;
+    post_release(window, message, wparam, lparam)
+}
+
+fn post_release(
+    window: Hwnd,
+    message: u32,
+    wparam: usize,
+    lparam: isize,
+) -> Result<(), ComputerError> {
     if unsafe { PostMessageW(window, message, wparam, lparam) } == 0 {
         return Err(ComputerError::new(
             "COMPUTER_BACKGROUND_UNAVAILABLE",
@@ -428,6 +565,52 @@ fn post(window: Hwnd, message: u32, wparam: usize, lparam: isize) -> Result<(), 
         ));
     }
     Ok(())
+}
+
+fn held_message_sequence<T>(
+    press: impl FnOnce() -> Result<(), ComputerError>,
+    action: impl FnOnce() -> Result<T, ComputerError>,
+    release: impl FnOnce() -> Result<(), ComputerError>,
+) -> Result<T, ComputerError> {
+    let press_result = press();
+    if let Err(press_error) = press_result {
+        return finish_with_cleanup(Err(press_error), release());
+    }
+    finish_with_cleanup(action(), release())
+}
+
+fn release_keys(
+    recipient: Hwnd,
+    key: Option<usize>,
+    modifiers: &[usize],
+) -> Result<(), ComputerError> {
+    let mut first_error = None;
+    if let Some(key) = key
+        && let Err(error) = post_release(recipient, WM_KEYUP, key, 1 << 31)
+    {
+        first_error = Some(error);
+    }
+    for modifier in modifiers.iter().rev() {
+        if let Err(error) = post_release(recipient, WM_KEYUP, *modifier, 1 << 31)
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+fn finish_with_cleanup<T>(
+    result: Result<T, ComputerError>,
+    cleanup: Result<(), ComputerError>,
+) -> Result<T, ComputerError> {
+    match cleanup {
+        Ok(()) => result,
+        Err(cleanup_error) => Err(cleanup_error),
+    }
 }
 
 fn point_lparam(point: Point) -> isize {
@@ -477,60 +660,67 @@ fn virtual_key(value: &str) -> Option<usize> {
     })
 }
 
-struct NoActivateGuard {
-    hwnd: Hwnd,
-    applied: bool,
-}
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct InputDesktopIdentity(Vec<u16>);
 
-impl NoActivateGuard {
-    fn arm(hwnd: Hwnd) -> Self {
-        let previous = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
-        let applied = previous & WS_EX_NOACTIVATE == 0;
-        if applied {
-            unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, previous | WS_EX_NOACTIVATE) };
-        }
-        Self { hwnd, applied }
-    }
-}
-
-impl Drop for NoActivateGuard {
-    fn drop(&mut self) {
-        if self.applied {
-            let current = unsafe { GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) };
-            unsafe { SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, current & !WS_EX_NOACTIVATE) };
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct DesktopSnapshot {
     foreground: Hwnd,
     user_focus: Hwnd,
     cursor: Point,
+    input_desktop: InputDesktopIdentity,
 }
 
 impl DesktopSnapshot {
     fn capture() -> Result<Self, ComputerError> {
         let foreground = unsafe { GetForegroundWindow() };
-        let user_focus = if foreground == 0 {
-            0
-        } else {
-            let thread_id = unsafe { GetWindowThreadProcessId(foreground, std::ptr::null_mut()) };
-            let mut info = empty_gui_thread_info();
-            if unsafe { GetGUIThreadInfo(thread_id, &mut info) } != 0 {
-                info.hwnd_focus
-            } else {
-                0
-            }
-        };
+        if foreground == 0 {
+            return Err(input_error(
+                "GetForegroundWindow returned no readable window",
+            ));
+        }
+        let thread_id = unsafe { GetWindowThreadProcessId(foreground, std::ptr::null_mut()) };
+        if thread_id == 0 {
+            return Err(input_error(
+                "Could not resolve the foreground window thread",
+            ));
+        }
+        let mut info = empty_gui_thread_info();
+        if unsafe { GetGUIThreadInfo(thread_id, &mut info) } == 0 {
+            return Err(input_error(
+                "GetGUIThreadInfo failed for the foreground thread",
+            ));
+        }
         let mut cursor = Point::default();
         if unsafe { GetCursorPos(&mut cursor) } == 0 {
             return Err(input_error("GetCursorPos failed"));
         }
+        Self::from_observations(
+            foreground,
+            info.hwnd_focus,
+            Some(cursor),
+            Some(input_desktop_identity()?),
+        )
+    }
+
+    fn from_observations(
+        foreground: Hwnd,
+        user_focus: Hwnd,
+        cursor: Option<Point>,
+        input_desktop: Option<InputDesktopIdentity>,
+    ) -> Result<Self, ComputerError> {
+        if foreground == 0 {
+            return Err(input_error("The foreground window identity is unknown"));
+        }
+        if user_focus == 0 {
+            return Err(input_error("The user focus window identity is unknown"));
+        }
         Ok(Self {
             foreground,
             user_focus,
-            cursor,
+            cursor: cursor.ok_or_else(|| input_error("The hardware cursor is unreadable"))?,
+            input_desktop: input_desktop
+                .ok_or_else(|| input_error("The input desktop identity is unknown"))?,
         })
     }
 
@@ -539,8 +729,53 @@ impl DesktopSnapshot {
             foreground_unchanged: self.foreground == after.foreground,
             user_focus_unchanged: self.user_focus == after.user_focus,
             cursor_unchanged: self.cursor == after.cursor,
-            space_unchanged: true,
+            space_unchanged: self.input_desktop == after.input_desktop,
         }
+    }
+}
+
+fn input_desktop_identity() -> Result<InputDesktopIdentity, ComputerError> {
+    let desktop = unsafe { OpenInputDesktop(0, 0, DESKTOP_READOBJECTS) };
+    if desktop == 0 {
+        return Err(input_error("OpenInputDesktop failed"));
+    }
+    let _desktop = DesktopHandle(desktop);
+    let mut needed = 0_u32;
+    unsafe { GetUserObjectInformationW(desktop, UOI_NAME, std::ptr::null_mut(), 0, &mut needed) };
+    if needed < std::mem::size_of::<u16>() as u32 || needed % 2 != 0 {
+        return Err(input_error(
+            "GetUserObjectInformationW returned an invalid desktop-name size",
+        ));
+    }
+    let mut name = vec![0_u16; needed as usize / std::mem::size_of::<u16>()];
+    if unsafe {
+        GetUserObjectInformationW(
+            desktop,
+            UOI_NAME,
+            name.as_mut_ptr().cast(),
+            needed,
+            &mut needed,
+        )
+    } == 0
+    {
+        return Err(input_error(
+            "GetUserObjectInformationW failed for the input desktop",
+        ));
+    }
+    while name.last() == Some(&0) {
+        name.pop();
+    }
+    if name.is_empty() {
+        return Err(input_error("The input desktop name is empty"));
+    }
+    Ok(InputDesktopIdentity(name))
+}
+
+struct DesktopHandle(Hdesk);
+
+impl Drop for DesktopHandle {
+    fn drop(&mut self) {
+        unsafe { CloseDesktop(self.0) };
     }
 }
 
@@ -550,4 +785,44 @@ fn capture_error(error: impl std::fmt::Display) -> ComputerError {
 
 fn input_error(message: impl Into<String>) -> ComputerError {
     ComputerError::new("COMPUTER_INPUT_FAILED", message)
+}
+
+#[cfg(test)]
+mod invariant_tests {
+    use super::*;
+
+    fn identity(name: &str) -> InputDesktopIdentity {
+        InputDesktopIdentity(name.encode_utf16().collect())
+    }
+
+    #[test]
+    fn unreadable_invariant_components_fail_closed() {
+        let point = Some(Point { x: 10, y: 20 });
+        let desktop = Some(identity("Default"));
+        assert!(DesktopSnapshot::from_observations(0, 2, point, desktop.clone()).is_err());
+        assert!(DesktopSnapshot::from_observations(1, 0, point, desktop.clone()).is_err());
+        assert!(DesktopSnapshot::from_observations(1, 2, None, desktop.clone()).is_err());
+        assert!(DesktopSnapshot::from_observations(1, 2, point, None).is_err());
+    }
+
+    #[test]
+    fn input_desktop_identity_must_match() {
+        let before = DesktopSnapshot::from_observations(
+            1,
+            2,
+            Some(Point { x: 10, y: 20 }),
+            Some(identity("Default")),
+        )
+        .unwrap();
+        let same = before.clone();
+        let changed = DesktopSnapshot::from_observations(
+            1,
+            2,
+            Some(Point { x: 10, y: 20 }),
+            Some(identity("Secure")),
+        )
+        .unwrap();
+        assert!(before.compare(&same).space_unchanged);
+        assert!(!before.compare(&changed).space_unchanged);
+    }
 }

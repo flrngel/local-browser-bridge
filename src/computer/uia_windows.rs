@@ -21,7 +21,10 @@ use windows::Win32::UI::Accessibility::{
 };
 use windows::core::{BSTR, Interface};
 
-use super::{ComputerError, SemanticBounds, SemanticElement, SemanticTarget, WindowDescriptor};
+use super::{
+    CommandCancellation, ComputerError, SemanticBounds, SemanticElement, SemanticTarget,
+    WindowDescriptor,
+};
 
 const MAX_ELEMENTS: i32 = 500;
 
@@ -62,6 +65,7 @@ pub fn invoke(
     target: &WindowDescriptor,
     semantic: &SemanticTarget,
     action: &str,
+    cancellation: &CommandCancellation,
 ) -> Result<Value, ComputerError> {
     if action != "press" {
         return Err(ComputerError::new(
@@ -73,29 +77,40 @@ pub fn invoke(
     unsafe {
         let element = resolve_verified(target, semantic)?;
         if let Ok(pattern) = element.GetCurrentPattern(UIA_InvokePatternId) {
-            pattern
+            let pattern = pattern
                 .cast::<IUIAutomationInvokePattern>()
-                .and_then(|pattern| pattern.Invoke())
+                .map_err(|error| uia_error("InvokePattern cast", error))?;
+            cancellation.begin_side_effect("UI Automation Invoke dispatch")?;
+            pattern
+                .Invoke()
                 .map_err(|error| uia_error("InvokePattern.Invoke", error))?;
         } else if let Ok(pattern) = element.GetCurrentPattern(UIA_TogglePatternId) {
-            pattern
+            let pattern = pattern
                 .cast::<IUIAutomationTogglePattern>()
-                .and_then(|pattern| pattern.Toggle())
+                .map_err(|error| uia_error("TogglePattern cast", error))?;
+            cancellation.begin_side_effect("UI Automation Toggle dispatch")?;
+            pattern
+                .Toggle()
                 .map_err(|error| uia_error("TogglePattern.Toggle", error))?;
         } else if let Ok(pattern) = element.GetCurrentPattern(UIA_SelectionItemPatternId) {
-            pattern
+            let pattern = pattern
                 .cast::<IUIAutomationSelectionItemPattern>()
-                .and_then(|pattern| pattern.Select())
+                .map_err(|error| uia_error("SelectionItemPattern cast", error))?;
+            cancellation.begin_side_effect("UI Automation Select dispatch")?;
+            pattern
+                .Select()
                 .map_err(|error| uia_error("SelectionItemPattern.Select", error))?;
         } else if let Ok(pattern) = element.GetCurrentPattern(UIA_ExpandCollapsePatternId) {
             let pattern = pattern
                 .cast::<IUIAutomationExpandCollapsePattern>()
                 .map_err(|error| uia_error("ExpandCollapsePattern cast", error))?;
             if pattern.CurrentExpandCollapseState().ok() == Some(ExpandCollapseState_Collapsed) {
+                cancellation.begin_side_effect("UI Automation Expand dispatch")?;
                 pattern
                     .Expand()
                     .map_err(|error| uia_error("ExpandCollapsePattern.Expand", error))?;
             } else {
+                cancellation.begin_side_effect("UI Automation Collapse dispatch")?;
                 pattern
                     .Collapse()
                     .map_err(|error| uia_error("ExpandCollapsePattern.Collapse", error))?;
@@ -107,7 +122,9 @@ pub fn invoke(
             ));
         }
     }
+    cancellation.check("UI Automation action observation")?;
     thread::sleep(Duration::from_millis(90));
+    cancellation.check("UI Automation action observation")?;
     let after = snapshot(target).ok();
     let changed = after.as_ref().is_some_and(|after| {
         before
@@ -126,19 +143,30 @@ pub fn set_value(
     target: &WindowDescriptor,
     semantic: &SemanticTarget,
     value: &str,
+    cancellation: &CommandCancellation,
 ) -> Result<Value, ComputerError> {
+    if semantic.element.sensitive || semantic.element.value_redacted {
+        return Err(sensitive_semantic());
+    }
     unsafe {
         let element = resolve_verified(target, semantic)?;
+        if sensitive_uia_element(&element) {
+            return Err(sensitive_semantic());
+        }
         let pattern = element
             .GetCurrentPattern(UIA_ValuePatternId)
             .map_err(|error| uia_error("ValuePattern lookup", error))?
             .cast::<IUIAutomationValuePattern>()
             .map_err(|error| uia_error("ValuePattern cast", error))?;
+        let value = BSTR::from(value);
+        cancellation.begin_side_effect("UI Automation SetValue dispatch")?;
         pattern
-            .SetValue(&BSTR::from(value))
+            .SetValue(&value)
             .map_err(|error| uia_error("ValuePattern.SetValue", error))?;
     }
+    cancellation.check("UI Automation value observation")?;
     thread::sleep(Duration::from_millis(60));
+    cancellation.check("UI Automation value observation")?;
     let current = snapshot(target)?
         .into_iter()
         .find(|candidate| candidate.path == semantic.path)
@@ -204,6 +232,7 @@ unsafe fn resolve_verified(
 unsafe fn signature(element: &IUIAutomationElement, reference: &str) -> Option<SemanticElement> {
     let control_type = unsafe { element.CurrentControlType().ok()? };
     let name = unsafe { element.CurrentName().ok()?.to_string() };
+    let sensitive = unsafe { sensitive_uia_element(element) };
     let enabled = unsafe { element.CurrentIsEnabled().ok() }.map(|enabled| enabled.as_bool());
     let rectangle = unsafe { element.CurrentBoundingRectangle().ok() };
     let bounds = rectangle.and_then(|rectangle| {
@@ -224,8 +253,9 @@ unsafe fn signature(element: &IUIAutomationElement, reference: &str) -> Option<S
     {
         actions.push("press".to_owned());
     }
-    let value_pattern = unsafe { element.GetCurrentPattern(UIA_ValuePatternId) }
-        .ok()
+    let value_pattern = (!sensitive)
+        .then(|| unsafe { element.GetCurrentPattern(UIA_ValuePatternId) })
+        .and_then(Result::ok)
         .and_then(|pattern| pattern.cast::<IUIAutomationValuePattern>().ok());
     let value = value_pattern
         .as_ref()
@@ -239,10 +269,33 @@ unsafe fn signature(element: &IUIAutomationElement, reference: &str) -> Option<S
         role: format!("UIAControlType({})", control_type.0),
         name,
         value,
+        sensitive,
+        value_redacted: sensitive,
         enabled,
         actions,
         bounds,
+        coordinate_space: "screen-pixels".to_owned(),
+        screen_bounds: None,
     })
+}
+
+unsafe fn sensitive_uia_element(element: &IUIAutomationElement) -> bool {
+    fail_closed_password_state(
+        unsafe { element.CurrentIsPassword() }
+            .ok()
+            .map(|password| password.as_bool()),
+    )
+}
+
+fn fail_closed_password_state(password: Option<bool>) -> bool {
+    password.unwrap_or(true)
+}
+
+fn sensitive_semantic() -> ComputerError {
+    ComputerError::new(
+        "COMPUTER_SENSITIVE_ELEMENT",
+        "Sensitive UI Automation values are redacted and cannot be read or set",
+    )
 }
 
 fn uia_error(operation: &str, error: impl std::fmt::Display) -> ComputerError {
@@ -250,4 +303,16 @@ fn uia_error(operation: &str, error: impl std::fmt::Display) -> ComputerError {
         "COMPUTER_SEMANTIC_UNAVAILABLE",
         format!("Windows UI Automation {operation} failed: {error}"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn password_state_errors_fail_closed() {
+        assert!(!fail_closed_password_state(Some(false)));
+        assert!(fail_closed_password_state(Some(true)));
+        assert!(fail_closed_password_state(None));
+    }
 }

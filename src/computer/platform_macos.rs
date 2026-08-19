@@ -12,7 +12,8 @@ use libc::pid_t;
 use xcap::Window;
 
 use super::{
-    ComputerError, InvariantReport, SemanticTarget, TargetPoint, WindowDescriptor, ax_macos,
+    CommandCancellation, ComputerError, InvariantReport, SemanticTarget, TargetPoint,
+    WindowDescriptor, ax_macos,
 };
 
 type PostToPidFn = unsafe extern "C" fn(pid_t, *mut c_void);
@@ -66,16 +67,22 @@ pub fn invoke(
     target: &WindowDescriptor,
     semantic: &SemanticTarget,
     action: &str,
+    cancellation: &CommandCancellation,
 ) -> Result<serde_json::Value, ComputerError> {
-    ax_macos::invoke(target, semantic, action)
+    guarded_semantic(target, cancellation, || {
+        ax_macos::invoke(target, semantic, action, cancellation)
+    })
 }
 
 pub fn set_value(
     target: &WindowDescriptor,
     semantic: &SemanticTarget,
     value: &str,
+    cancellation: &CommandCancellation,
 ) -> Result<serde_json::Value, ComputerError> {
-    ax_macos::set_value(target, semantic, value)
+    guarded_semantic(target, cancellation, || {
+        ax_macos::set_value(target, semantic, value, cancellation)
+    })
 }
 
 pub fn limitations() -> Vec<&'static str> {
@@ -99,8 +106,8 @@ pub fn windows(limit: usize) -> Result<Vec<WindowDescriptor>, ComputerError> {
         .filter_map(|window| descriptor(&window).ok())
         .map(|mut window| {
             window.focused = focus.is_some_and(|focus| {
-                focus.front_pid == Some(window.pid)
-                    && focus.front_window_id == window.id.parse::<u32>().ok()
+                focus.front_pid == window.pid
+                    && Some(focus.front_window_id) == window.id.parse::<u32>().ok()
             });
             window
         })
@@ -128,12 +135,31 @@ pub fn capture_window(target: &WindowDescriptor) -> Result<RgbaImage, ComputerEr
         })
 }
 
-pub fn move_pointer(
+pub fn move_pointer_path(
     target: &WindowDescriptor,
-    point: TargetPoint,
+    points: &[TargetPoint],
+    step_delay: Duration,
+    cancellation: &CommandCancellation,
 ) -> Result<InvariantReport, ComputerError> {
-    guarded(target, false, || {
-        post_mouse(target, point, CGEventType::MouseMoved, 0, 0, 0)
+    guarded(target, false, cancellation, || {
+        if points.is_empty() {
+            return Err(input_error("synthetic pointer trajectory is empty"));
+        }
+        for (index, point) in points.iter().copied().enumerate() {
+            post_mouse(
+                target,
+                point,
+                CGEventType::MouseMoved,
+                0,
+                0,
+                0,
+                cancellation,
+            )?;
+            if index + 1 < points.len() {
+                thread::sleep(step_delay);
+            }
+        }
+        Ok(())
     })
 }
 
@@ -142,6 +168,7 @@ pub fn click(
     point: TargetPoint,
     button: &str,
     count: usize,
+    cancellation: &CommandCancellation,
 ) -> Result<InvariantReport, ComputerError> {
     let (down, up, mouse_button, number) = match button {
         "right" => (
@@ -163,10 +190,18 @@ pub fn click(
             0,
         ),
     };
-    guarded(target, true, || {
-        post_mouse(target, point, CGEventType::MouseMoved, 0, number, 0)?;
+    guarded(target, true, cancellation, || {
+        post_mouse(
+            target,
+            point,
+            CGEventType::MouseMoved,
+            0,
+            number,
+            0,
+            cancellation,
+        )?;
         for index in 0..count.max(1) {
-            post_mouse_with_button(
+            let down_event = mouse_event(
                 target,
                 point,
                 down,
@@ -175,8 +210,7 @@ pub fn click(
                 number,
                 3,
             )?;
-            thread::sleep(Duration::from_millis(24));
-            post_mouse_with_button(
+            let up_event = mouse_event(
                 target,
                 point,
                 up,
@@ -184,6 +218,16 @@ pub fn click(
                 (index + 1) as i64,
                 number,
                 3,
+            )?;
+            held_event_sequence(
+                target,
+                cancellation,
+                &down_event,
+                || {
+                    thread::sleep(Duration::from_millis(24));
+                    Ok(())
+                },
+                &up_event,
             )?;
             if index + 1 < count {
                 thread::sleep(Duration::from_millis(70));
@@ -198,10 +242,11 @@ pub fn drag(
     from: TargetPoint,
     to: TargetPoint,
     duration_ms: u64,
+    cancellation: &CommandCancellation,
 ) -> Result<InvariantReport, ComputerError> {
-    guarded(target, true, || {
-        post_mouse(target, from, CGEventType::MouseMoved, 0, 0, 0)?;
-        post_mouse_with_button(
+    guarded(target, true, cancellation, || {
+        post_mouse(target, from, CGEventType::MouseMoved, 0, 0, 0, cancellation)?;
+        let down_event = mouse_event(
             target,
             from,
             CGEventType::LeftMouseDown,
@@ -210,34 +255,48 @@ pub fn drag(
             0,
             3,
         )?;
-        let steps = (duration_ms / 16).clamp(4, 120);
-        for step in 1..=steps {
-            let progress = step as f64 / steps as f64;
-            let point = TargetPoint {
-                local_x: interpolate(from.local_x, to.local_x, progress),
-                local_y: interpolate(from.local_y, to.local_y, progress),
-                screen_x: interpolate(from.screen_x, to.screen_x, progress),
-                screen_y: interpolate(from.screen_y, to.screen_y, progress),
-            };
-            post_mouse_with_button(
-                target,
-                point,
-                CGEventType::LeftMouseDragged,
-                CGMouseButton::Left,
-                1,
-                0,
-                3,
-            )?;
-            thread::sleep(Duration::from_millis((duration_ms / steps).max(1)));
-        }
-        post_mouse_with_button(
+        let up_event = mouse_event(
             target,
-            to,
+            from,
             CGEventType::LeftMouseUp,
             CGMouseButton::Left,
             1,
             0,
             3,
+        )?;
+        held_event_sequence(
+            target,
+            cancellation,
+            &down_event,
+            || {
+                let steps = (duration_ms / 16).clamp(4, 120);
+                for step in 1..=steps {
+                    let progress = step as f64 / steps as f64;
+                    let point = TargetPoint {
+                        local_x: interpolate(from.local_x, to.local_x, progress),
+                        local_y: interpolate(from.local_y, to.local_y, progress),
+                        screen_x: interpolate(from.screen_x, to.screen_x, progress),
+                        screen_y: interpolate(from.screen_y, to.screen_y, progress),
+                    };
+                    // Keep the prebuilt release event at the latest attempted
+                    // point, so cancellation or a dispatch failure still sends
+                    // a mouse-up at the best-known drag location.
+                    retarget_mouse_event(target, &up_event, point, 1, 0, 3)?;
+                    post_mouse_with_button(
+                        target,
+                        point,
+                        CGEventType::LeftMouseDragged,
+                        CGMouseButton::Left,
+                        1,
+                        0,
+                        3,
+                        cancellation,
+                    )?;
+                    thread::sleep(Duration::from_millis((duration_ms / steps).max(1)));
+                }
+                Ok(())
+            },
+            &up_event,
         )
     })
 }
@@ -247,9 +306,18 @@ pub fn scroll(
     point: TargetPoint,
     delta_x: i32,
     delta_y: i32,
+    cancellation: &CommandCancellation,
 ) -> Result<InvariantReport, ComputerError> {
-    guarded(target, true, || {
-        post_mouse(target, point, CGEventType::MouseMoved, 0, 0, 0)?;
+    guarded(target, true, cancellation, || {
+        post_mouse(
+            target,
+            point,
+            CGEventType::MouseMoved,
+            0,
+            0,
+            0,
+            cancellation,
+        )?;
         let source = source()?;
         let event = CGEvent::new_scroll_event(
             source,
@@ -268,31 +336,32 @@ pub fn scroll(
             )
         };
         stamp(target, point, raw, 0, 0, 0)?;
-        post(target, &event)
+        post(target, &event, cancellation, "scroll dispatch")
     })
 }
 
-pub fn type_text(target: &WindowDescriptor, text: &str) -> Result<InvariantReport, ComputerError> {
+pub fn type_text(
+    target: &WindowDescriptor,
+    text: &str,
+    cancellation: &CommandCancellation,
+) -> Result<InvariantReport, ComputerError> {
     ensure_unique_keyboard_destination(target)?;
-    guarded(target, true, || {
+    guarded(target, true, cancellation, || {
         for character in text.chars() {
             let value = character.to_string();
-            let down = CGEvent::new_keyboard_event(source()?, 0, true)
-                .map_err(|_| input_error("CGEventCreateKeyboardEvent failed"))?;
-            down.set_string(&value);
-            stamp_keyboard(target, &down)?;
-            post(target, &down)?;
-            let up = CGEvent::new_keyboard_event(source()?, 0, false)
-                .map_err(|_| input_error("CGEventCreateKeyboardEvent failed"))?;
-            up.set_string(&value);
-            stamp_keyboard(target, &up)?;
-            post(target, &up)?;
+            let down = keyboard_event(target, 0, true, CGEventFlags::empty(), Some(&value))?;
+            let up = keyboard_event(target, 0, false, CGEventFlags::empty(), Some(&value))?;
+            held_event_sequence(target, cancellation, &down, || Ok(()), &up)?;
         }
         Ok(())
     })
 }
 
-pub fn key(target: &WindowDescriptor, chord: &str) -> Result<InvariantReport, ComputerError> {
+pub fn key(
+    target: &WindowDescriptor,
+    chord: &str,
+    cancellation: &CommandCancellation,
+) -> Result<InvariantReport, ComputerError> {
     ensure_unique_keyboard_destination(target)?;
     let parts = chord.split('+').map(str::trim).collect::<Vec<_>>();
     let last = parts.last().copied().unwrap_or("");
@@ -303,18 +372,19 @@ pub fn key(target: &WindowDescriptor, chord: &str) -> Result<InvariantReport, Co
             format!("The macOS background backend does not map key {last}"),
         )
     })?;
-    guarded(target, true, || {
-        let down = CGEvent::new_keyboard_event(source()?, keycode, true)
-            .map_err(|_| input_error("CGEventCreateKeyboardEvent failed"))?;
-        down.set_flags(flags);
-        stamp_keyboard(target, &down)?;
-        post(target, &down)?;
-        thread::sleep(Duration::from_millis(18));
-        let up = CGEvent::new_keyboard_event(source()?, keycode, false)
-            .map_err(|_| input_error("CGEventCreateKeyboardEvent failed"))?;
-        up.set_flags(flags);
-        stamp_keyboard(target, &up)?;
-        post(target, &up)
+    guarded(target, true, cancellation, || {
+        let down = keyboard_event(target, keycode, true, flags, None)?;
+        let up = keyboard_event(target, keycode, false, flags, None)?;
+        held_event_sequence(
+            target,
+            cancellation,
+            &down,
+            || {
+                thread::sleep(Duration::from_millis(18));
+                Ok(())
+            },
+            &up,
+        )
     })
 }
 
@@ -377,20 +447,36 @@ fn exact_window(target: &WindowDescriptor) -> Result<Window, ComputerError> {
 fn guarded(
     target: &WindowDescriptor,
     prepare_focus: bool,
+    cancellation: &CommandCancellation,
     action: impl FnOnce() -> Result<(), ComputerError>,
 ) -> Result<InvariantReport, ComputerError> {
     let before = DesktopSnapshot::capture()?;
     let focus = prepare_focus
-        .then(|| activate_without_raise(target, &before))
+        .then(|| activate_without_raise(target, &before, cancellation))
         .transpose()?
         .flatten();
     let action_result = action();
-    if let Some(focus) = focus {
-        focus.restore()?;
-    }
-    action_result?;
+    let restore_result = focus.map(FocusLease::restore).transpose();
     thread::sleep(Duration::from_millis(35));
-    Ok(before.compare(&DesktopSnapshot::capture()?))
+    let report = before.compare(&DesktopSnapshot::capture()?);
+    report.clone().assert_held()?;
+    restore_result?;
+    action_result?;
+    Ok(report)
+}
+
+fn guarded_semantic<T>(
+    target: &WindowDescriptor,
+    cancellation: &CommandCancellation,
+    action: impl FnOnce() -> Result<T, ComputerError>,
+) -> Result<T, ComputerError> {
+    let before = DesktopSnapshot::capture()?;
+    exact_window(target)?;
+    cancellation.check("semantic resolution")?;
+    let action_result = action();
+    thread::sleep(Duration::from_millis(35));
+    before.compare(&DesktopSnapshot::capture()?).assert_held()?;
+    action_result
 }
 
 fn post_mouse(
@@ -400,6 +486,7 @@ fn post_mouse(
     click_state: i64,
     button_number: i64,
     subtype: i64,
+    cancellation: &CommandCancellation,
 ) -> Result<(), ComputerError> {
     post_mouse_with_button(
         target,
@@ -409,9 +496,11 @@ fn post_mouse(
         click_state,
         button_number,
         subtype,
+        cancellation,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn post_mouse_with_button(
     target: &WindowDescriptor,
     point: TargetPoint,
@@ -420,7 +509,29 @@ fn post_mouse_with_button(
     click_state: i64,
     button_number: i64,
     subtype: i64,
+    cancellation: &CommandCancellation,
 ) -> Result<(), ComputerError> {
+    let event = mouse_event(
+        target,
+        point,
+        event_type,
+        button,
+        click_state,
+        button_number,
+        subtype,
+    )?;
+    post(target, &event, cancellation, "pointer dispatch")
+}
+
+fn mouse_event(
+    target: &WindowDescriptor,
+    point: TargetPoint,
+    event_type: CGEventType,
+    button: CGMouseButton,
+    click_state: i64,
+    button_number: i64,
+    subtype: i64,
+) -> Result<CGEvent, ComputerError> {
     let event = CGEvent::new_mouse_event(
         source()?,
         event_type,
@@ -436,7 +547,63 @@ fn post_mouse_with_button(
         button_number,
         subtype,
     )?;
-    post(target, &event)
+    Ok(event)
+}
+
+fn retarget_mouse_event(
+    target: &WindowDescriptor,
+    event: &CGEvent,
+    point: TargetPoint,
+    click_state: i64,
+    button_number: i64,
+    subtype: i64,
+) -> Result<(), ComputerError> {
+    let raw = event.as_ptr() as *mut c_void;
+    unsafe {
+        CGEventSetLocation(
+            raw,
+            CGPoint::new(point.screen_x as f64, point.screen_y as f64),
+        )
+    };
+    stamp(target, point, raw, click_state, button_number, subtype)
+}
+
+fn keyboard_event(
+    target: &WindowDescriptor,
+    keycode: u16,
+    down: bool,
+    flags: CGEventFlags,
+    text: Option<&str>,
+) -> Result<CGEvent, ComputerError> {
+    let event = CGEvent::new_keyboard_event(source()?, keycode, down)
+        .map_err(|_| input_error("CGEventCreateKeyboardEvent failed"))?;
+    event.set_flags(flags);
+    if let Some(text) = text {
+        event.set_string(text);
+    }
+    stamp_keyboard(target, &event)?;
+    Ok(event)
+}
+
+fn held_event_sequence<T>(
+    target: &WindowDescriptor,
+    cancellation: &CommandCancellation,
+    down: &CGEvent,
+    action: impl FnOnce() -> Result<T, ComputerError>,
+    up: &CGEvent,
+) -> Result<T, ComputerError> {
+    let press = post(target, down, cancellation, "held input press");
+    if let Err(press_error) = press {
+        return match post_release(target, up) {
+            Ok(()) => Err(press_error),
+            Err(release_error) => Err(release_error),
+        };
+    }
+    let action_result = action();
+    match post_release(target, up) {
+        Ok(()) => action_result,
+        Err(release_error) => Err(release_error),
+    }
 }
 
 fn stamp(
@@ -471,7 +638,17 @@ fn stamp_keyboard(target: &WindowDescriptor, event: &CGEvent) -> Result<(), Comp
     Ok(())
 }
 
-fn post(target: &WindowDescriptor, event: &CGEvent) -> Result<(), ComputerError> {
+fn post(
+    target: &WindowDescriptor,
+    event: &CGEvent,
+    cancellation: &CommandCancellation,
+    boundary: &str,
+) -> Result<(), ComputerError> {
+    cancellation.begin_side_effect(boundary)?;
+    post_release(target, event)
+}
+
+fn post_release(target: &WindowDescriptor, event: &CGEvent) -> Result<(), ComputerError> {
     let symbols = symbols().ok_or_else(|| input_error("SkyLight symbols are unavailable"))?;
     unsafe { (symbols.post_to_pid)(target.pid as pid_t, event.as_ptr() as *mut c_void) };
     Ok(())
@@ -480,8 +657,9 @@ fn post(target: &WindowDescriptor, event: &CGEvent) -> Result<(), ComputerError>
 fn activate_without_raise(
     target: &WindowDescriptor,
     before: &DesktopSnapshot,
+    cancellation: &CommandCancellation,
 ) -> Result<Option<FocusLease>, ComputerError> {
-    if before.front_pid == Some(target.pid) {
+    if before.front_pid == target.pid {
         return Ok(None);
     }
     let symbols = symbols().ok_or_else(|| input_error("SkyLight symbols are unavailable"))?;
@@ -499,36 +677,73 @@ fn activate_without_raise(
             "macOS could not resolve the exact target process for background focus",
         ));
     }
-    let previous_window_id = before.front_window_id.ok_or_else(|| {
-        ComputerError::new(
-            "COMPUTER_BACKGROUND_UNAVAILABLE",
-            "macOS could not prove the user's prior front window for focus restoration",
-        )
-    })?;
-    let mut record = [0u8; 0xF8];
-    record[0x04] = 0xF8;
-    record[0x08] = 0x0D;
-    record[0x3C..0x40].copy_from_slice(&window_id.to_le_bytes());
-    record[0x8A] = 0x02;
-    let defocused = unsafe {
-        (symbols.post_event_record)(before.front_process.as_ptr().cast(), record.as_ptr())
-    } == 0;
-    record[0x8A] = 0x01;
-    let focused =
-        unsafe { (symbols.post_event_record)(destination.as_ptr().cast(), record.as_ptr()) } == 0;
-    if !defocused || !focused {
-        return Err(ComputerError::new(
-            "COMPUTER_BACKGROUND_UNAVAILABLE",
-            "macOS could not establish exact-window background focus without activation",
-        ));
-    }
-    Ok(Some(FocusLease {
+    let previous_window_id = before.front_window_id;
+    let lease = FocusLease {
         symbols,
         previous_psn: before.front_process,
         previous_window_id,
         target_psn: destination,
         target_window_id: window_id,
-    }))
+    };
+    cancellation.begin_side_effect("background focus preparation")?;
+    if !post_focus_record(
+        symbols,
+        &lease.previous_psn,
+        lease.previous_window_id,
+        FocusOperation::Defocus,
+    ) {
+        lease.restore_previous_after_failed_activation(false)?;
+        assert_snapshot_held(before)?;
+        return Err(ComputerError::new(
+            "COMPUTER_BACKGROUND_UNAVAILABLE",
+            "macOS could not release the prior background focus without activation",
+        ));
+    }
+    if let Err(error) = cancellation.check("target background focus") {
+        lease.restore_previous_after_failed_activation(false)?;
+        assert_snapshot_held(before)?;
+        return Err(error);
+    }
+    if !post_focus_record(symbols, &destination, window_id, FocusOperation::Focus) {
+        lease.restore_previous_after_failed_activation(true)?;
+        assert_snapshot_held(before)?;
+        return Err(ComputerError::new(
+            "COMPUTER_BACKGROUND_UNAVAILABLE",
+            "macOS could not establish exact-window background focus without activation",
+        ));
+    }
+    Ok(Some(lease))
+}
+
+fn assert_snapshot_held(before: &DesktopSnapshot) -> Result<(), ComputerError> {
+    thread::sleep(Duration::from_millis(35));
+    before
+        .compare(&DesktopSnapshot::capture()?)
+        .assert_held()
+        .map(|_| ())
+}
+
+#[derive(Clone, Copy)]
+enum FocusOperation {
+    Focus,
+    Defocus,
+}
+
+fn post_focus_record(
+    symbols: &Symbols,
+    process: &[u8; 8],
+    window_id: u32,
+    operation: FocusOperation,
+) -> bool {
+    let mut record = [0u8; 0xF8];
+    record[0x04] = 0xF8;
+    record[0x08] = 0x0D;
+    record[0x3C..0x40].copy_from_slice(&window_id.to_le_bytes());
+    record[0x8A] = match operation {
+        FocusOperation::Focus => 0x01,
+        FocusOperation::Defocus => 0x02,
+    };
+    unsafe { (symbols.post_event_record)(process.as_ptr().cast(), record.as_ptr()) == 0 }
 }
 
 struct FocusLease {
@@ -541,25 +756,51 @@ struct FocusLease {
 
 impl FocusLease {
     fn restore(self) -> Result<(), ComputerError> {
-        let mut record = [0u8; 0xF8];
-        record[0x04] = 0xF8;
-        record[0x08] = 0x0D;
-        record[0x3C..0x40].copy_from_slice(&self.target_window_id.to_le_bytes());
-        record[0x8A] = 0x02;
-        let defocused = unsafe {
-            (self.symbols.post_event_record)(self.target_psn.as_ptr().cast(), record.as_ptr())
-        } == 0;
-        record[0x3C..0x40].copy_from_slice(&self.previous_window_id.to_le_bytes());
-        record[0x8A] = 0x01;
-        let focused = unsafe {
-            (self.symbols.post_event_record)(self.previous_psn.as_ptr().cast(), record.as_ptr())
-        } == 0;
+        let defocused = post_focus_record(
+            self.symbols,
+            &self.target_psn,
+            self.target_window_id,
+            FocusOperation::Defocus,
+        );
+        let focused = post_focus_record(
+            self.symbols,
+            &self.previous_psn,
+            self.previous_window_id,
+            FocusOperation::Focus,
+        );
         if defocused && focused {
             Ok(())
         } else {
             Err(ComputerError::new(
                 "COMPUTER_BACKGROUND_CONTRACT_VIOLATION",
                 "macOS could not restore the user's prior background-focus state",
+            ))
+        }
+    }
+
+    fn restore_previous_after_failed_activation(
+        &self,
+        target_may_be_focused: bool,
+    ) -> Result<(), ComputerError> {
+        if target_may_be_focused {
+            let _ = post_focus_record(
+                self.symbols,
+                &self.target_psn,
+                self.target_window_id,
+                FocusOperation::Defocus,
+            );
+        }
+        if post_focus_record(
+            self.symbols,
+            &self.previous_psn,
+            self.previous_window_id,
+            FocusOperation::Focus,
+        ) {
+            Ok(())
+        } else {
+            Err(ComputerError::new(
+                "COMPUTER_BACKGROUND_CONTRACT_VIOLATION",
+                "macOS could not restore the user's prior focus after background activation failed",
             ))
         }
     }
@@ -672,8 +913,8 @@ fn keycode(value: &str) -> Option<u16> {
 #[derive(Clone, Copy)]
 struct DesktopSnapshot {
     front_process: [u8; 8],
-    front_pid: Option<u32>,
-    front_window_id: Option<u32>,
+    front_pid: u32,
+    front_window_id: u32,
     cursor: CGPoint,
     active_space: u64,
 }
@@ -704,6 +945,7 @@ impl DesktopSnapshot {
                 .find(|window| window.pid().ok() == Some(pid))
         });
         let front_window_id = front_window.as_ref().and_then(|window| window.id().ok());
+        let (front_pid, front_window_id) = resolved_front_identity(front_pid, front_window_id)?;
         let active_space = unsafe { (symbols.get_active_space)((symbols.connection_id)()) };
         if active_space == 0 {
             return Err(input_error("Could not prove the active macOS Space"));
@@ -726,6 +968,21 @@ impl DesktopSnapshot {
                 && (self.cursor.y - after.cursor.y).abs() < 0.01,
             space_unchanged: self.active_space == after.active_space,
         }
+    }
+}
+
+fn resolved_front_identity(
+    front_pid: Option<u32>,
+    front_window_id: Option<u32>,
+) -> Result<(u32, u32), ComputerError> {
+    match (
+        front_pid.filter(|pid| *pid != 0),
+        front_window_id.filter(|id| *id != 0),
+    ) {
+        (Some(pid), Some(window_id)) => Ok((pid, window_id)),
+        _ => Err(input_error(
+            "Could not prove the front process and exact front window",
+        )),
     }
 }
 
@@ -765,4 +1022,18 @@ fn capture_error(error: impl std::fmt::Display) -> ComputerError {
 
 fn input_error(message: impl Into<String>) -> ComputerError {
     ComputerError::new("COMPUTER_INPUT_FAILED", message)
+}
+
+#[cfg(test)]
+mod invariant_tests {
+    use super::*;
+
+    #[test]
+    fn unresolved_front_identity_fails_closed() {
+        assert!(resolved_front_identity(None, Some(7)).is_err());
+        assert!(resolved_front_identity(Some(42), None).is_err());
+        assert!(resolved_front_identity(Some(0), Some(7)).is_err());
+        assert!(resolved_front_identity(Some(42), Some(0)).is_err());
+        assert_eq!(resolved_front_identity(Some(42), Some(7)).unwrap(), (42, 7));
+    }
 }

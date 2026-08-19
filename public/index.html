@@ -54,11 +54,43 @@
         </div>
       </section>
 
+      <section id="browser-control-panel" class="control-panel panel" aria-labelledby="browser-control-title">
+        <div class="section-heading control-heading">
+          <div>
+            <p class="eyebrow">VISIBLE BROWSER CONTROL</p>
+            <h2 id="browser-control-title">Chrome control lease</h2>
+            <p id="browser-control-summary" class="target-meta" role="status" aria-live="polite">Connect the extension and select a tab to start a visible control session.</p>
+          </div>
+          <span id="browser-control-badge" class="state-badge inactive">Inactive</span>
+        </div>
+        <p class="control-boundary"><strong>Two visible signals:</strong> while the debugger-backed lease is active, Chrome owns the “Local Browser Bridge started debugging this browser” banner. The extension separately shows “Local Browser Bridge is using this tab” inside the page. Stop here, press the in-tab Stop button, or use Chrome's Cancel action to revoke control.</p>
+        <div class="control-layout">
+          <dl id="browser-control-details" class="metadata-list" aria-label="Browser control session details">
+            <div><dt>Session</dt><dd>Not started</dd></div>
+            <div><dt>Target</dt><dd>No tab selected</dd></div>
+            <div><dt>Pointer</dt><dd>No pointer state</dd></div>
+          </dl>
+          <form id="browser-control-form" class="control-form">
+            <label for="browser-control-ttl">Lease duration</label>
+            <select id="browser-control-ttl">
+              <option value="60000">1 minute</option>
+              <option value="300000" selected>5 minutes</option>
+              <option value="900000">15 minutes</option>
+            </select>
+            <div class="button-grid three-buttons">
+              <button id="browser-control-start" type="submit" class="button primary">Start control</button>
+              <button id="browser-control-status" type="button" class="button ghost">Refresh</button>
+              <button id="browser-control-stop" type="button" class="button danger">Stop</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
       <section class="computer-panel panel" aria-labelledby="computer-title">
         <div class="section-heading computer-heading">
           <div>
             <p class="eyebrow">NATIVE COMPUTER</p>
-            <h2 id="computer-title">Background window sessions</h2>
+            <h2 id="computer-title">Exact-window computer control</h2>
             <p id="computer-meta" class="target-meta">Start Local Computer Helper to enable desktop control.</p>
           </div>
           <div class="computer-actions">
@@ -66,9 +98,26 @@
             <button id="computer-observe" type="button" class="button primary">Observe window</button>
           </div>
         </div>
-        <p class="computer-boundary"><strong>Non-interruption contract:</strong> every action is bound to one exact background window. The helper never uses global HID input, moves the hardware cursor, activates the target app, or silently falls back to foreground control. Unsupported delivery fails closed.</p>
-        <label for="computer-window">Target application window</label>
-        <select id="computer-window" aria-label="Target application window"></select>
+        <p class="computer-boundary"><strong>Non-interruption contract:</strong> exact-window background delivery preserves the foreground, keyboard focus, active desktop, and hardware pointer on supported targets. Unsupported delivery fails closed. The stream below is a captured target-window feed, not a separate OS session or virtual desktop.</p>
+        <div class="share-toolbar">
+          <label class="share-target" for="computer-window">Target application window
+            <select id="computer-window"></select>
+          </label>
+          <form id="computer-share-form" class="share-form">
+            <label for="computer-share-fps">Share rate
+              <select id="computer-share-fps">
+                <option value="1">1 FPS</option>
+                <option value="2">2 FPS</option>
+                <option value="4" selected>4 FPS</option>
+                <option value="6">6 FPS</option>
+                <option value="10">10 FPS</option>
+              </select>
+            </label>
+            <button id="computer-share-start" type="submit" class="button secondary">Start share</button>
+            <button id="computer-share-stop" type="button" class="button danger">Stop share</button>
+          </form>
+        </div>
+        <p id="computer-share-status" class="share-status" role="status" aria-live="polite">Exact-window share is inactive.</p>
         <div class="computer-grid">
           <div>
             <div class="screenshot-shell computer-screenshot-shell">
@@ -76,15 +125,34 @@
               <div id="computer-screenshot-empty" class="empty-state">Connect the helper, choose a window, then observe it. Click the captured window to select coordinates.</div>
             </div>
             <p id="computer-frame-meta" class="frame-meta">No frame is available. Input stays disabled until a fresh frame is captured.</p>
+            <div class="evidence-grid">
+              <section class="evidence-card" aria-labelledby="pointer-title">
+                <p class="eyebrow">SYNTHETIC POINTER</p>
+                <h3 id="pointer-title">Session-owned cursor</h3>
+                <dl id="computer-pointer-details" class="metadata-list compact-metadata">
+                  <div><dt>State</dt><dd>No pointer frame</dd></div>
+                </dl>
+              </section>
+              <section class="evidence-card" aria-labelledby="computer-session-title">
+                <p class="eyebrow">TRANSPORT</p>
+                <h3 id="computer-session-title">Helper session</h3>
+                <dl id="computer-session-details" class="metadata-list compact-metadata">
+                  <div><dt>Session</dt><dd>Helper offline</dd></div>
+                </dl>
+              </section>
+            </div>
           </div>
           <div class="computer-controls">
             <form id="computer-click-form">
-              <label>Point in captured image</label>
+              <p class="form-label">Point in captured image</p>
               <div class="coordinate-grid">
                 <label>X <input id="computer-x" type="number" min="0" step="any" required placeholder="420"></label>
                 <label>Y <input id="computer-y" type="number" min="0" step="any" required placeholder="300"></label>
               </div>
-              <div class="button-grid">
+              <label for="computer-move-duration">Pointer motion duration (ms)</label>
+              <input id="computer-move-duration" type="number" min="50" max="2000" step="10" value="240" required>
+              <div class="button-grid three-buttons">
+                <button id="computer-move" class="button ghost" type="button">Move pointer</button>
                 <button class="button secondary" type="submit">Click point</button>
                 <button id="computer-double-click" class="button ghost" type="button">Double-click</button>
               </div>
@@ -95,6 +163,30 @@
               <button type="button" class="button ghost computer-scroll" data-x="3" data-y="0">Scroll left</button>
               <button type="button" class="button ghost computer-scroll" data-x="-3" data-y="0">Scroll right</button>
             </div>
+            <form id="computer-scroll-form">
+              <p class="form-label">Custom scroll at selected point</p>
+              <div class="coordinate-grid">
+                <label>Horizontal delta <input id="computer-scroll-x" type="number" min="-50" max="50" step="1" value="0" required></label>
+                <label>Vertical delta <input id="computer-scroll-y" type="number" min="-50" max="50" step="1" value="-3" required></label>
+              </div>
+              <button class="button ghost full" type="submit">Scroll by deltas</button>
+            </form>
+            <form id="computer-drag-form">
+              <p class="form-label">Drag in captured image</p>
+              <div class="coordinate-grid drag-grid">
+                <label>From X <input id="computer-drag-from-x" type="number" min="0" step="any" required placeholder="120"></label>
+                <label>From Y <input id="computer-drag-from-y" type="number" min="0" step="any" required placeholder="180"></label>
+                <label>To X <input id="computer-drag-to-x" type="number" min="0" step="any" required placeholder="420"></label>
+                <label>To Y <input id="computer-drag-to-y" type="number" min="0" step="any" required placeholder="180"></label>
+              </div>
+              <label for="computer-drag-duration">Drag duration (ms)</label>
+              <input id="computer-drag-duration" type="number" min="50" max="2000" step="10" value="500" required>
+              <div class="button-grid">
+                <button id="computer-drag-use-start" class="button ghost" type="button">Use point as start</button>
+                <button id="computer-drag-use-end" class="button ghost" type="button">Use point as end</button>
+              </div>
+              <button class="button secondary full" type="submit">Drag</button>
+            </form>
             <form id="computer-type-form">
               <label for="computer-type-text">Type into the target window's focused control</label>
               <textarea id="computer-type-text" rows="3" required placeholder="Text to type"></textarea>
@@ -107,6 +199,43 @@
             </form>
           </div>
         </div>
+        <section class="semantic-section" aria-labelledby="computer-elements-title">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">ACCESSIBILITY CONTROL</p>
+              <h3 id="computer-elements-title">Semantic window elements</h3>
+            </div>
+            <span id="computer-element-count" class="count">0 elements</span>
+          </div>
+          <p id="computer-semantic-status" class="semantic-status">Observe a window to load accessibility-backed elements.</p>
+          <div class="table-scroll">
+            <table class="computer-elements-table">
+              <thead>
+                <tr>
+                  <th scope="col">Ref</th>
+                  <th scope="col">Role / name</th>
+                  <th scope="col">Value / bounds</th>
+                  <th scope="col">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="computer-elements"></tbody>
+            </table>
+          </div>
+          <div id="computer-elements-empty" class="empty-state">No semantic elements are available for this frame.</div>
+        </section>
+        <section class="action-evidence" aria-labelledby="computer-evidence-title">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">ACTION EVIDENCE</p>
+              <h3 id="computer-evidence-title">Last native result</h3>
+            </div>
+            <span id="computer-action-effect" class="state-badge inactive">No action</span>
+          </div>
+          <p id="computer-action-summary" class="evidence-summary">Run a native action to inspect its delivery invariants and any verified target-side postcondition.</p>
+          <dl id="computer-action-details" class="metadata-list evidence-details"></dl>
+          <ul id="computer-action-evidence" class="evidence-list"></ul>
+          <p class="evidence-note"><strong>Evidence rule:</strong> unchanged foreground and hardware pointer prove non-interrupting delivery only. A target effect is confirmed only when a semantic postcondition is observed.</p>
+        </section>
       </section>
 
       <section class="workspace-grid">
@@ -268,5 +397,16 @@
     </main>
 
     <div id="toast" role="status" aria-live="assertive" class="toast" hidden></div>
+    <dialog id="auth-dialog" class="auth-dialog" aria-labelledby="auth-title">
+      <form id="auth-form" class="auth-form">
+        <p class="eyebrow">LOCAL AUTHENTICATION</p>
+        <h2 id="auth-title">Unlock this dashboard</h2>
+        <p>Paste the master token printed by the server. It is exchanged once for a random, expiring dashboard capability stored only for this exact port origin; the master token is not retained.</p>
+        <label for="auth-token">Bridge token</label>
+        <input id="auth-token" type="password" required autocomplete="off" spellcheck="false">
+        <p id="auth-error" class="auth-error" role="alert" hidden></p>
+        <button class="button primary full" type="submit">Unlock dashboard</button>
+      </form>
+    </dialog>
   </body>
 </html>

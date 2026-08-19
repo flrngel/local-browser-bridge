@@ -23,7 +23,10 @@ use core_foundation::number::CFNumber;
 use core_foundation::string::{CFString, CFStringRef};
 use serde_json::{Value, json};
 
-use super::{ComputerError, SemanticBounds, SemanticElement, SemanticTarget, WindowDescriptor};
+use super::{
+    CommandCancellation, ComputerError, SemanticBounds, SemanticElement, SemanticTarget,
+    WindowDescriptor,
+};
 
 const AX_SUCCESS: i32 = 0;
 const AX_POINT: i32 = 1;
@@ -100,6 +103,7 @@ pub fn invoke(
     target: &WindowDescriptor,
     semantic: &SemanticTarget,
     action: &str,
+    cancellation: &CommandCancellation,
 ) -> Result<Value, ComputerError> {
     let before_snapshot = snapshot(target).ok();
     let native_action = match action {
@@ -114,6 +118,10 @@ pub fn invoke(
     unsafe {
         let element = resolve_verified(target, semantic)?;
         let action_name = CFString::new(native_action);
+        if let Err(error) = cancellation.begin_side_effect("macOS AX action dispatch") {
+            CFRelease(element as CFTypeRef);
+            return Err(error);
+        }
         let result = AXUIElementPerformAction(element, action_name.as_concrete_TypeRef());
         CFRelease(element as CFTypeRef);
         if result != AX_SUCCESS {
@@ -123,7 +131,9 @@ pub fn invoke(
             ));
         }
     }
+    cancellation.check("macOS AX action observation")?;
     thread::sleep(Duration::from_millis(90));
+    cancellation.check("macOS AX action observation")?;
     let mut effect = observe_effect(target, semantic, None);
     if !effect.0
         && let (Some(before), Ok(after)) = (before_snapshot, snapshot(target))
@@ -151,11 +161,19 @@ pub fn set_value(
     target: &WindowDescriptor,
     semantic: &SemanticTarget,
     value: &str,
+    cancellation: &CommandCancellation,
 ) -> Result<Value, ComputerError> {
+    if semantic.element.sensitive || semantic.element.value_redacted {
+        return Err(sensitive_semantic());
+    }
     unsafe {
         let element = resolve_verified(target, semantic)?;
         let attr = CFString::new("AXValue");
         let cf_value = CFString::new(value);
+        if let Err(error) = cancellation.begin_side_effect("macOS AX value dispatch") {
+            CFRelease(element as CFTypeRef);
+            return Err(error);
+        }
         let result = AXUIElementSetAttributeValue(
             element,
             attr.as_concrete_TypeRef(),
@@ -169,7 +187,9 @@ pub fn set_value(
             ));
         }
     }
+    cancellation.check("macOS AX value observation")?;
     thread::sleep(Duration::from_millis(60));
+    cancellation.check("macOS AX value observation")?;
     let effect = observe_effect(target, semantic, Some(value));
     if !effect.0 {
         return Err(ComputerError::new(
@@ -198,7 +218,11 @@ fn observe_effect(
         let Some(element) = resolved else {
             return (true, "element-disappeared");
         };
-        let value = stringish_attr(element, "AXValue");
+        let value = if expected_value.is_some() && !semantic.element.sensitive {
+            stringish_attr(element, "AXValue")
+        } else {
+            None
+        };
         let current = element_signature(element, &semantic.element.reference);
         CFRelease(element as CFTypeRef);
         if let Some(expected) = expected_value {
@@ -300,8 +324,7 @@ unsafe fn exact_window(target: &WindowDescriptor) -> Result<AXUIElementRef, Comp
         unsafe { CFRelease(surface as CFTypeRef) };
     }
     Err(semantic_unavailable(format!(
-        "CGWindowID {expected} did not resolve to an exact AX window; AX exposed {:?}; top-level {:?}",
-        candidate_ids, candidate_summaries
+        "CGWindowID {expected} did not resolve to an exact AX window; AX exposed {candidate_ids:?}; top-level {candidate_summaries:?}"
     )))
 }
 
@@ -451,10 +474,16 @@ unsafe fn resolve_path(root: AXUIElementRef, path: &[usize]) -> Option<AXUIEleme
 
 unsafe fn element_signature(element: AXUIElementRef, reference: &str) -> Option<SemanticElement> {
     let role = unsafe { string_attr(element, "AXRole") }?;
+    let subrole = unsafe { string_attr(element, "AXSubrole") };
+    let sensitive = sensitive_ax_semantics(&role, subrole.as_deref());
     let title = unsafe { string_attr(element, "AXTitle") }.unwrap_or_default();
     let description = unsafe { string_attr(element, "AXDescription") }.unwrap_or_default();
     let identifier = unsafe { string_attr(element, "AXIdentifier") }.unwrap_or_default();
-    let value = unsafe { stringish_attr(element, "AXValue") };
+    let value = if sensitive {
+        None
+    } else {
+        unsafe { stringish_attr(element, "AXValue") }
+    };
     let name = [&title, &description, &identifier]
         .into_iter()
         .find(|candidate| !candidate.trim().is_empty())
@@ -474,10 +503,17 @@ unsafe fn element_signature(element: AXUIElementRef, reference: &str) -> Option<
         })
         .map(str::to_owned)
         .collect::<Vec<_>>();
-    if matches!(
-        role.as_str(),
-        "AXTextField" | "AXTextArea" | "AXComboBox" | "AXSlider" | "AXStepper" | "AXIncrementor"
-    ) && unsafe { attribute_settable(element, "AXValue") }
+    if !sensitive
+        && matches!(
+            role.as_str(),
+            "AXTextField"
+                | "AXTextArea"
+                | "AXComboBox"
+                | "AXSlider"
+                | "AXStepper"
+                | "AXIncrementor"
+        )
+        && unsafe { attribute_settable(element, "AXValue") }
     {
         actions.push("setValue".to_owned());
     }
@@ -488,10 +524,28 @@ unsafe fn element_signature(element: AXUIElementRef, reference: &str) -> Option<
         role,
         name,
         value,
+        sensitive,
+        value_redacted: sensitive,
         enabled: unsafe { bool_attr(element, "AXEnabled") },
         actions,
         bounds: unsafe { element_bounds(element) },
+        coordinate_space: "screen-points".to_owned(),
+        screen_bounds: None,
     })
+}
+
+fn sensitive_ax_semantics(role: &str, subrole: Option<&str>) -> bool {
+    role == "AXSecureTextField"
+        || subrole.is_some_and(|subrole| {
+            subrole == "AXSecureTextField" || subrole.starts_with("AXSecure")
+        })
+}
+
+fn sensitive_semantic() -> ComputerError {
+    ComputerError::new(
+        "COMPUTER_SENSITIVE_ELEMENT",
+        "Sensitive accessibility values are redacted and cannot be read or set",
+    )
 }
 
 unsafe fn element_array_attr(element: AXUIElementRef, name: &str) -> Vec<AXUIElementRef> {
@@ -668,4 +722,23 @@ fn semantic_unavailable(message: impl Into<String>) -> ComputerError {
 
 fn invalid_semantic(message: impl Into<String>) -> ComputerError {
     ComputerError::new("COMPUTER_INVALID_REQUEST", message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn secure_role_or_subrole_is_always_sensitive() {
+        assert!(sensitive_ax_semantics("AXSecureTextField", None));
+        assert!(sensitive_ax_semantics(
+            "AXTextField",
+            Some("AXSecureTextField")
+        ));
+        assert!(sensitive_ax_semantics(
+            "AXTextField",
+            Some("AXSecureCustomField")
+        ));
+        assert!(!sensitive_ax_semantics("AXTextField", None));
+    }
 }

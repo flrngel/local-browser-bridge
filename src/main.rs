@@ -54,7 +54,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let address = server.local_addr()?;
 
     println!("Local Browser Bridge {VERSION}");
-    println!("Control surface: http://127.0.0.1:{}", address.port());
+    println!(
+        "Control surface: http://127.0.0.1:{}/#token={token}",
+        address.port()
+    );
     println!("Extension token: {token}");
     if explicit_token.is_some() {
         println!("Token source: LBB_TOKEN");

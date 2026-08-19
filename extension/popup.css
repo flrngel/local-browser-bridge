@@ -13,11 +13,17 @@ label { color: #c9d5cd; font-size: 12px; font-weight: 700; }
 input { min-width: 0; width: 100%; background: #151b17; border: 1px solid #3b483f; border-radius: 7px; color: inherit; padding: 9px; }
 button { border: 0; border-radius: 7px; background: #b8f55d; color: #152007; font-weight: 750; padding: 9px 11px; cursor: pointer; }
 button.reject, li button { background: #2b342f; color: #f1f5f2; }
+button:disabled { cursor: not-allowed; opacity: .48; }
 button.approve { background: #ffd479; color: #291d03; }
 .row { display: flex; gap: 8px; align-items: center; }
 .between { justify-content: space-between; }
 #enabled, #full-access { width: 20px; height: 20px; flex: 0 0 20px; }
 .danger-zone { margin: 0 -10px; padding: 14px 10px; border: 1px solid #773d36; border-radius: 9px; background: #251513; }
+.control-zone { margin: 0 -10px; padding: 14px 10px; border: 1px solid #37453d; border-radius: 9px; background: #121916; }
+.control-zone.active { border-color: #668d4d; background: #152014; }
+.control-copy { margin: 8px 0 10px; color: #a7b5ac; font-size: 11px; line-height: 1.4; }
+.live-dot { width: 9px; height: 9px; flex: 0 0 9px; border-radius: 50%; background: #59645d; }
+.live-dot.active { background: #a8ee57; box-shadow: 0 0 0 4px rgba(168,238,87,.14); }
 .danger-zone h2 { color: #ff9788; margin-bottom: 5px; }
 .danger-copy { color: #d9b4ad; font-size: 11px; line-height: 1.4; margin: 0 14px 0 0; }
 .mode-status { color: #bdc9c1; font-size: 11px; margin: 10px 0 0; }

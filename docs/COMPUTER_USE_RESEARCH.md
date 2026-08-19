@@ -1,131 +1,186 @@
-# Non-interrupting computer-use research and architecture
+# Session-visible browser control and non-interrupting computer use
 
-Research snapshot: 2026-08-18
+Research snapshot: 2026-08-18. Implementation target: version 0.9.0.
 
-## Correction to the original implementation
+## The corrected target
 
-Version 0.6 captured a physical display with xcap and injected global input with Enigo. A real end-to-end run proved that this was the wrong architecture: the helper moved the user's pointer and typed into whichever application currently owned focus. A frame ID protected only monitor geometry; it did not bind input to an application window. That implementation has been removed rather than retained as an automatic fallback.
+Version 0.6 captured a physical display and injected global input. A live end-to-end run proved that architecture wrong for concurrent use: it moved the person's hardware pointer and typed into whichever application owned focus. Version 0.8 replaced it with exact-window capture, semantic-first action, target-routed background input, and foreground/cursor/desktop invariants.
 
-Version 0.8 keeps the stricter product invariant and adds semantic-first control:
+Version 0.9 adds two properties that must not be conflated:
 
-1. Observation is bound to one exact `(pid, native window id)` target.
-2. Input is delivered only through a target-addressed background route.
-3. The foreground process, user's focused window/control, hardware cursor, and active desktop must not change.
-4. A route that cannot prove those properties returns a structured error. It never retries through global HID input, target activation, `SetForegroundWindow`, or a desktop/Space switch.
-5. The server captures the target window again after every action so the caller can verify the result.
-6. macOS Accessibility and Windows UI Automation refs are bound to that frame, re-resolved before action, and paired with an application-owned postcondition when one is observable.
+1. **Session visibility:** a person can tell when browser or helper control is active, see a synthetic pointer in the agent's image stream, and stop control through a trusted surface.
+2. **Non-interruption:** desktop input is routed to one observed window while the foreground, focused control, hardware cursor, and active desktop remain unchanged.
+
+Neither property creates an isolated operating-system session. A shared image of a background window is not a VM, remote desktop, virtual display, sandbox, or separate input seat.
 
 ## Evidence reviewed
 
-The review used current source code, vendor documentation, research papers, and community reports. Repository popularity is only a discovery signal; architecture claims below come from code or primary documentation.
+The review used pinned source code, vendor source/documentation, primary papers, empirical public-extension packages, and community reports. Popularity was used only for discovery. Architecture claims come from source or primary documentation; community reports identify failure modes but do not establish platform guarantees.
 
-| Project or source | Pinned snapshot | What the implementation actually establishes |
+| Source | Pinned snapshot | Focus relevant to this bridge |
 |---|---:|---|
-| [Cua Driver](https://github.com/trycua/cua) | `c43f10243856658fe706c08c155a95628fc81248` | Current Rust code implements exact-window capture and background delivery on macOS and Windows, with explicit background/foreground modes and fail-closed target proofs |
-| [Microsoft UFO](https://github.com/microsoft/UFO) | `96983c73ed09e884a5f1d7ff8936c953b234b684` | Strong Windows UIA/Win32 automation and RDP-safe capture fallbacks; the repository still labels Picture-in-Picture Desktop “coming soon” |
-| [UFO² paper](https://arxiv.org/abs/2504.14603) | 2025 paper / 2026 TMLR | Describes an RDP-loopback PiP architecture that isolates agent and human input sessions; this is a design result, not proof that the current UFO repository ships it |
-| [Agent Workspace Linux](https://github.com/agent-sh/agent-workspace-linux) | current snapshot | Runs a hidden Xvfb/Openbox/xdotool workspace, a clean example of true separate-display isolation on Linux |
-| [Apple High Performance Screen Sharing](https://support.apple.com/guide/mac-help/screen-sharing-type-options-mchl1883115d/mac) | macOS 14+ | Can create one or two virtual displays, but a same-user connection blanks hardware displays and prevents local use; it does not satisfy this product's simultaneous-use invariant |
-| [Power Automate PiP](https://learn.microsoft.com/power-automate/desktop-flows/run-desktop-flows-pip) | current documentation | Windows child sessions and preview virtual desktops provide real separation but require Power Automate, policy prerequisites, and administrator setup |
-| [Power Automate unattended](https://learn.microsoft.com/power-automate/desktop-flows/run-unattended-desktop-flows) | current documentation | Microsoft creates, manages, and releases an RDP user session; credentials and session lifecycle are part of the security boundary |
-| [ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit/scscreenshotmanager) | current SDK | Supports window-scoped capture independent of desktop occlusion; capture alone does not create isolated input |
-| [OSWorld](https://arxiv.org/abs/2404.07972) | 369 desktop tasks | Desktop-agent correctness requires multi-step application verification, not merely a callable click primitive |
-| [Tactile](https://arxiv.org/abs/2607.14443) | 2026 paper | Semantic actions and application structure improve reliability beyond screenshot-only control |
+| [Chrome `debugger` API](https://developer.chrome.com/docs/extensions/reference/api/debugger) and [Chromium implementation](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/chrome/browser/extensions/api/debugger/debugger_api.cc) | Chromium main reviewed 2026-08-18 | A held extension debugger attachment creates Chrome's warning UI, keeps the MV3 worker alive on supported Chrome versions, exposes `canceled_by_user`, and fails pending debugger calls when the warning is canceled |
+| Public ChatGPT Chrome extension package | `1.2.27259.19709`; ID `hehggadaopoacecdllhhajmbjkdcmajg`; SHA-256 `f9ba06c44525b53a0189d0ad97cf1d457987970063aea0609dec31b1d6782c96` | Empirical benchmark: held debugger sessions, exclusive tab ownership, managed tab group, serialized target work, session/turn/move state, and acknowledged synthetic-cursor arrival |
+| Public Claude Chrome extension package | `1.0.85`; ID `fcoeoabgfenejglbffodgkkbkcdhcgfn`; SHA-256 `5c1c1318acf10bb4638be129ae34f9dfe728b867a70c603382f89e66a5d08be3` | Empirical benchmark: clear page indicator, trusted Stop path, heartbeat, page glow, and a simpler CSS synthetic cursor |
+| [Cua Driver](https://github.com/trycua/cua/tree/c43f10243856658fe706c08c155a95628fc81248/libs/cua-driver/rust) | `c43f10243856658fe706c08c155a95628fc81248` | Rust exact-window backends plus a session-owned native cursor overlay with Dubins paths, velocity profile, spring settling, click state, themes, click-through windows, and platform-specific rendering |
+| [agent-browser](https://github.com/vercel-labs/agent-browser/tree/548b159b30eef119ccf6846c8bc807d0eaa3f6f8) | `548b159b30eef119ccf6846c8bc807d0eaa3f6f8` | Persistent browser sessions, serialized CDP interaction, live screencast input, monotonic frame IDs, latest-frame-wins delivery, and optional renderer acknowledgements |
+| [pi-computer-use](https://github.com/injaneity/pi-computer-use/tree/de725835d3b0e3bd13aa8885d6c3f3a9dc23bcdc) | `de725835d3b0e3bd13aa8885d6c3f3a9dc23bcdc` | Immutable state-scoped observations, resource epochs, per-resource serialization, successor state/diffs, checked action outcomes, and an optional non-blocking native ghost cursor on macOS |
+| [OSWorld](https://arxiv.org/abs/2404.07972) | 2024 paper | Long-horizon desktop evaluation and environment diversity; its reference execution path uses the physical desktop/cursor and is not a concurrent-user isolation design |
+| [Microsoft UFO](https://github.com/microsoft/UFO/tree/96983c73ed09e884a5f1d7ff8936c953b234b684) and [UFO²](https://arxiv.org/abs/2504.14603) | source `96983c7`; 2025 paper / 2026 TMLR | UIA/Win32 automation in shipped source; the paper's RDP-loopback Picture-in-Picture architecture is the strongest reviewed separate-input-session design, but the reviewed public repository still described PiP Desktop as coming soon |
+| [UI-TARS](https://github.com/bytedance/UI-TARS/tree/582f3a7ea5d285ee8ed9e2e84048d1ab01453c49) | `582f3a7ea5d285ee8ed9e2e84048d1ab01453c49` | Vision-language grounding and screenshot/action history; this improves the planner/model, while its normal desktop operator remains physical screen input rather than a non-interrupting transport |
+| [Temporal UI State Inconsistency / PUSV](https://arxiv.org/abs/2604.18860) | 2026 paper | Formalizes observation-to-action TOCTOU and rechecks local pixels, the global frame, and window identity immediately before action; also shows that visual checks alone miss zero-visual-footprint DOM replacement |
+| [Apple High Performance Screen Sharing](https://support.apple.com/guide/mac-help/screen-sharing-type-options-mchl1883115d/mac) | macOS 14+ documentation | Can create virtual displays, but same-user use blanks hardware displays and prevents simultaneous local use; capture or sharing alone does not imply an independent input seat |
+| [Power Automate PiP](https://learn.microsoft.com/power-automate/desktop-flows/run-desktop-flows-pip) and [unattended sessions](https://learn.microsoft.com/power-automate/desktop-flows/run-unattended-desktop-flows) | current documentation | Real Windows child/RDP sessions with credential, policy, lifecycle, and cleanup requirements |
 
-Community reports about separate macOS Screen Sharing logins and Windows RDP sessions were used only to identify operational questions. They are not treated as proof of an API or security property.
+Community signals included [real-session bridge discussion on Reddit](https://www.reddit.com/r/ClaudeAI/comments/1v5fz09/browser_bridge_an_mcp_server_that_drives_your/) and issue reports in agent-browser and other automation projects about stale transports, frame/viewport scaling, and pointer offsets. They informed test cases; they are not cited as proof of Chrome or OS behavior.
 
-## What the current code focuses on
+The ChatGPT and Claude rows are black-box observations of publicly distributed Chrome packages on the date above, not claims about an unpublished server protocol or future versions. Their exact version, extension ID, and hash are recorded so findings are not silently generalized to another package. Both reviewed manifests requested `debugger` and `tabGroups`; neither requested `tabCapture`.
 
-### Cua: exact target identity and no silent escalation
+## Three different visibility surfaces
 
-Cua's current macOS background-input policy carries one `(pid, CGWindowID)` from observation through dispatch and postcondition. It gathers fresh WindowServer ownership, AX window membership, minimized/hidden state, same-process keyboard ambiguity, and element ancestry. Unknown facts do not unlock a route. Its route ladder prioritizes semantic AX and exact browser mechanisms, then window-local pointer delivery and PID keyboard delivery; the background mode never silently activates the app or posts global HID input.
+### 1. Chrome's native debugger warning
 
-The relevant macOS mechanisms are:
+`chrome.debugger.attach` is the mechanism that makes desktop Chrome display the extension-owned warning, normally rendered as **<extension name> started debugging this browser**. Chromium creates this warning when an extension debugger client attaches, except for explicitly suppressed command-line or policy-installed cases. The warning is browser chrome, not HTML, and a page cannot faithfully recreate it.
 
-- window-scoped capture with ScreenCaptureKit;
-- PID-routed events through `SLEventPostToPid`;
-- window-local coordinates through `CGEventSetWindowLocation`;
-- window identity fields carried on the event;
-- focus-without-raise through `SLPSPostEventRecordTo`;
-- post-action verification against the exact target.
+Chromium's Cancel path marks the detach reason `canceled_by_user`, fails pending debugger requests, sends `chrome.debugger.onDetach`, and closes the attachment. The infobar delegate is extension-scoped, so canceling it terminates that extension's attached debugger clients. Local Browser Bridge uses one attachment at a time, making the effective boundary one controlled tab.
 
-These are undocumented SkyLight interfaces. They are practical for a separately distributed helper but create an explicit OS-compatibility risk and are unsuitable for App Store assumptions.
+Attaching only around a click and immediately detaching makes the warning flash or disappear and removes the person's reliable indication of ongoing authority. Version 0.9 therefore holds the attachment for an explicit, expiring lease. Unexpected detach is a hard revocation; there is no synthetic DOM-click fallback.
 
-On Windows, Cua defaults to background PostMessage/UIA delivery and returns `background_unavailable` for framework/event pairs known to drop it. Foreground `SendInput` is a separate explicit caller choice. Its window capture uses PrintWindow and Windows.Graphics.Capture fallbacks, and its delivery code guards against self-activation. The important pattern is the refusal boundary, not a claim that one actuator works for every Windows UI framework.
+### 2. The extension's page overlay
 
-### UFO and PiP: paper architecture versus shipped code
+The page pill and pointer are content injected by the extension. They communicate product-specific state that Chrome's native warning does not know: controlled tab, turn, pointer sequence, and a trusted Stop action. The overlay uses an isolated closed shadow tree and excludes its own mutations from page-snapshot invalidation.
 
-The UFO² paper's RDP-loopback desktop is the strongest Windows session-isolation design reviewed: the agent and user receive separate input sessions. The current open-source UFO tree, however, contains RDP-safe PrintWindow capture paths while its README still marks PiP as in development. This bridge therefore does not advertise UFO PiP as an available dependency.
+This is independently stoppable. The Stop button sends an extension-internal message whose sender and tab are validated before the service worker releases the lease. A hostile page cannot call that privileged handler as the extension. Conversely, the pill cannot override Chrome's Cancel action; `onDetach` remains authoritative.
 
-True session isolation also changes product setup. It needs a Windows edition that supports the required session technology, credentials or a managed identity, local policy changes, resolution/session lifecycle management, and deterministic cleanup. Hiding those requirements inside a permissive localhost helper would create a credential and persistence system far beyond the current bounded authority.
+The reviewed Claude package emphasizes this human-facing layer: a persistent status pill, clear Stop action, heartbeat, and visual attention treatment. The reviewed ChatGPT package goes further on controller state and pointer arrival. Version 0.9 combines those product lessons without copying either package's private protocol or source.
 
-### Apple Screen Sharing virtual displays: not simultaneous local use
+### 3. The computer helper's synthetic pointer
 
-Apple's High Performance Screen Sharing is often described as a virtual-display solution. Apple documents that when the connection authenticates as the currently logged-in user, hardware displays are blanked and nobody else can use the Mac. It requires another Apple-silicon Mac, macOS 14 or later, high bandwidth, UDP ports, and an authenticated Screen Sharing connection. It is useful for private remote operation, but it is not a local background-control primitive and fails the user's “keep using my screen” requirement in the common same-user configuration.
+The helper pointer is Rust state owned by one helper process. Pixel actions plan a bounded cubic Bézier path with minimum-jerk timing, deliver intermediate window-local moves through the existing exact-window background route, and record an arrival sequence. The last state is composited into exact-window observations and share frames, with an outline, session-derived color, action/ring state, and explicit image/screen coordinates.
 
-A separate macOS login or a Virtualization.framework guest can provide true isolation, but it does not automatically contain the user's already-installed app state. It also requires credentials or a guest OS image and a clear data-sharing policy. Version 0.8 does not create hidden users, store login credentials, or install a VM.
+It is not the hardware cursor and version 0.9 does not create a native click-through desktop overlay. Consequently, a person looking only at the physical desktop does not see this helper pointer; a person or model looking at the returned exact-window frames does. The current helper's action loop completes the path before it can emit the next captured frame, so shared frames reliably show the settled pointer but are not claimed to reproduce every intermediate animation sample.
 
-## Version 0.8 architecture
+The separately observed ChatGPT desktop **using your computer / Esc to cancel** treatment is also not Chrome's debugger warning. It is an operating-system/app-level computer-use surface. Reproducing its semantics would require a native overlay and global trusted cancel integration, which this release does not claim.
+
+## What the benchmark projects prioritize
+
+### Cua: renderer and actuator as one native session
+
+Cua is the strongest open-source pointer-rendering reference reviewed. Its cursor core preserves position, heading, press state, theme, session label, idle fade, and target window. Its path planner chooses a minimum-turning-radius Dubins arc/straight/arc route; motion adds speed floors and spring settling. Platform code renders transparent click-through overlay windows (`NSWindow`, layered/no-activate Win32, or X11 input shaping) and keeps those windows out of input ownership.
+
+Version 0.9 adopts the durable product properties—session ownership, bounded motion, stable style, press/action state, explicit coordinate spaces, and screenshot compositing—but not Cua's overlay implementation or Dubins planner. Local Browser Bridge uses its own bounded cubic candidates and minimum-jerk timing. It must therefore be described as benchmark-informed, not equivalent to Cua's native overlay.
+
+### agent-browser: fresh live transport under backpressure
+
+agent-browser's streaming path distinguishes browser/session lifetime from client lifetime. It assigns monotonically increasing frames, keeps the newest frame instead of building an unbounded backlog, dispatches input independently from frame writes, and optionally permits one in-flight frame until the renderer acknowledges it. Its public issue history also demonstrates why screenshot dimensions and input coordinate metadata must come from the actual frame rather than a configured viewport.
+
+Local Browser Bridge uses a smaller bounded share contract: one exact window, 1–10 FPS, monotonic share sequence, explicit image dimensions and X/Y transport scales, and producer-blocking capture. It does not yet implement renderer acknowledgements or latest-frame replacement. Those are valid future improvements if remote or slow viewers become a supported use case.
+
+### pi-computer-use: immutable state and resource ownership
+
+pi-computer-use treats each observation as immutable state, serializes live work per physical resource, invalidates a base epoch before mutation, records checked outcomes, and creates one successor state. That is more important for correctness than cursor cosmetics. Its native cursor is observational and may be superseded without blocking action delivery.
+
+Local Browser Bridge applies the same class of invariant at narrower layers: WebSocket session and sequence, one browser control lease, observation turn, DOM generation/revision, exact-window frame ID, PID/native-window revalidation, and post-action observation. It does not claim pi-computer-use's complete state store, resource-epoch scheduler, or transaction/diff system.
+
+### UI-TARS and OSWorld: planner quality is not transport isolation
+
+UI-TARS focuses on vision-language grounding, action vocabulary, and prior screenshot/action context. OSWorld focuses on representative, long-horizon task evaluation. Both are essential to end-task quality, but neither makes physical desktop input non-interrupting. This project uses them to shape action coverage and verification, not as evidence for a background-input mechanism.
+
+### PUSV: observe-then-act is a security gap
+
+PUSV demonstrates that an apparently correct screenshot can become unsafe before dispatch. Version 0.9 reduces that gap in complementary ways:
+
+- browser mutations, scroll, and resize invalidate the generation;
+- click targets revalidate signature, bounds, connectivity, visibility, and hit-test immediately before CDP dispatch;
+- coordinate clicks bind a one-time point token to the exact element and proof;
+- desktop actions re-enumerate PID/native-window ownership and geometry immediately before delivery;
+- semantic actions re-resolve the exact frame-bound accessibility path and verify an application-owned postcondition when available.
+
+This is partial PUSV coverage. Version 0.9 does not calculate target-patch SSIM or a fresh full-frame visual diff immediately before every action. DOM revalidation catches attacks that pure pixels miss, while a visually identical custom/canvas surface can still change meaning without a semantic signal. The correct claim is defense in depth, not visual atomicity.
+
+## Version 0.9 architecture
 
 ```text
 browser-only agent
       |
       v
-loopback control page/API --- Rust server --- Chromium extension ---> browser tabs
-                                  |
-                                  +--- authenticated helper process
-                                             |
-                                             +--- exact-window capture
-                                             +--- AX/UIA semantic snapshot and action
-                                             +--- target-routed background input
-                                             +--- foreground/cursor/desktop oracle
+loopback UI / REST API
+      |
+      v
+Rust server -- version + protocol + session + sequence handshake
+      |
+      +-- Chromium extension
+      |      +-- one expiring debugger/tab lease
+      |      +-- Chrome-native debugger warning
+      |      +-- page pill + trusted Stop + browser synthetic cursor
+      |      +-- turn + DOM generation + target proof
+      |
+      +-- separate native helper
+             +-- one exact-window frame authority
+             +-- AX/UIA semantic snapshot and action
+             +-- target-routed background input
+             +-- foreground/focus/hardware-cursor/desktop oracle
+             +-- bounded exact-window frame feed
+             +-- pointer composited into returned frames
 ```
 
-The separate helper remains the permission-owning process and opens no listening socket. It authenticates outbound to the loopback server with the shared random token and the private Origin `lbb-computer-helper://local`. Its fixed command allowlist contains status, observe, move, click, drag, scroll, type text, key chord, semantic invoke, and semantic value write. There is no shell, filesystem, process-launch, clipboard, downloader, arbitrary-code, credential, user-management, or telemetry method.
+The helper opens no listening socket. It authenticates outbound to loopback and exposes only status, share start/status/stop, observe, move, click, drag, scroll, text, key, semantic invoke, and semantic value write. There is no shell, filesystem, process-launch, clipboard, downloader, arbitrary-code, credential, hidden-user, VM-management, or telemetry command.
 
-### macOS backend
+### Browser lease lifecycle
 
-- xcap enumerates shareable on-screen windows and captures one exact CGWindowID without exposing unrelated windows or notifications.
-- The frame stores the window owner PID, CGWindowID, bounds, and delivered image dimensions.
-- Before every action, the helper re-enumerates the target and rejects changed ownership or geometry.
-- The Accessibility snapshot returns actionable elements with role, name, value, enabled state, actions, and bounds. Each action re-resolves the exact-window path and verifies its captured signature before dispatch.
-- Semantic actions report value read-back, masked-value length proof, target-window closure, element disappearance/change, or whole-window semantic change. Transport success alone is not treated as effect proof.
-- Mouse and scroll events carry screen coordinates, window-local coordinates, target PID, and target window fields, then post to that PID through SkyLight.
-- Keyboard events post to the exact PID after a focus-without-raise record for the exact window. Multiple eligible windows in the same process are rejected because PID-scoped delivery would otherwise be ambiguous.
-- The helper snapshots the front process PSN, user's front window, real cursor location, and active Space before and after dispatch. Focus-without-raise is restored to the prior front window after dispatch. Any change produces `COMPUTER_BACKGROUND_CONTRACT_VIOLATION`.
-- Only non-minimized windows on the active Space are mutable in v0.8. Secure input, protected video, games, and OS/framework changes may refuse delivery.
+- Explicit start attaches `chrome.debugger`, enables required CDP domains, persists a lease in extension session storage, starts a heartbeat, and shows the page overlay.
+- A normal browser operation may create a lease only when the tab has no hard revocation. Once Chrome or a human Stop control cancels, a durable global pause rejects all remote mutations until a person selects Resume in the extension popup; a remote explicit start cannot clear it.
+- One lease owns one tab. Switching targets releases the old attachment first.
+- `page.observe` advances the turn and returns control state. Pointer moves advance `moveSequence` and wait for the exact arrival point before the click is committed.
+- Page mutation, scroll, or resize invalidates the DOM observation. The bridge's own overlay mutations are ignored.
+- Chrome `onDetach`, page Stop, popup release, TTL, heartbeat failure, target close, bridge pause, and disconnect all revoke authority.
 
-### Windows backend
+### Computer share and pointer lifecycle
 
-- xcap enumerates top-level HWNDs and captures one exact HWND using its Windows capture backend.
-- UI Automation enumerates actionable descendants beneath that exact HWND. Invoke, Toggle, SelectionItem, ExpandCollapse, and Value patterns provide the semantic route and revalidate the captured signature before use.
-- Background mouse messages are routed to the deepest eligible child window at the target point; keyboard messages go to the target GUI thread's focused control only when its root is the requested top-level window.
-- A temporary `WS_EX_NOACTIVATE` guard prevents the target top-level window from activating itself while handling a message.
-- The helper verifies HWND ownership immediately before every action and snapshots `GetForegroundWindow`, the user's GUI-thread focus HWND, and `GetCursorPos` around delivery.
-- Controls without a supported UIA pattern can use exact-HWND background messages. Elevated, game, protected, and custom-rendered surfaces may ignore those messages; they fail rather than using `SendInput` or `SetForegroundWindow`.
+- `computer.share.start` binds one share ID to one non-minimized native window and a requested 1–10 FPS rate.
+- The helper repeatedly invokes the same bounded exact-window observation path and emits unsolicited `computer.share.frame` events with monotonic sequence metadata.
+- The server keeps the latest sanitized computer observation and screenshot. It does not queue an unbounded video history.
+- Pointer state is owned by the helper session and remains window-specific. A move to another window reseeds it rather than implying a global desktop location.
+- All model-facing pointer/element coordinates use delivered image pixels. OS screen bounds remain separately labeled diagnostic data.
+- The hardware cursor is snapshotted as an invariant and must remain unchanged.
 
-## Verification performed
+## Exact-window backend boundary
 
-The macOS end-to-end fixture is a real AppKit window launched without activation. It records every event to a machine-readable state file and redraws its visible state. The test uses only the shipped server REST command, the shipped computer-helper WebSocket, and exact-window screenshots.
+The macOS and Windows backends retain the version 0.8 refusal contract:
 
-The exercised matrix is:
+1. An observation binds one `(pid, native window id)` and captured geometry.
+2. The helper re-enumerates that identity immediately before input.
+3. Semantic AX/UIA is preferred where the platform exposes a reliable action and postcondition.
+4. Pixel input is target-routed to the exact window, never posted as global HID.
+5. Foreground process, user focus, hardware cursor, and active desktop are checked around delivery.
+6. Unknown or unsupported delivery fails; it never silently activates the app or changes input mode.
 
-| Action | Target state proof | Non-interruption proof |
-|---|---|---|
-| observe | Window-only PNG captured while fixture was backgrounded | Target reported `focused: false` |
-| move | Routed move completed | Foreground, user focus, cursor, and Space unchanged |
-| click | Click counter incremented | Foreground, user focus, cursor, and Space unchanged |
-| drag | Drag counter incremented across 18 delivered steps | Foreground, user focus, cursor, and Space unchanged |
-| scroll | Scroll accumulator changed by the requested delta | Foreground, user focus, cursor, and Space unchanged |
-| Unicode text | State became `background-input` | Foreground, user focus, cursor, and Space unchanged |
-| named key | State appended `[enter]` | Foreground, user focus, cursor, and Space unchanged |
-| semantic value | Native text field read back the requested value | Frame-bound AX path and signature revalidated |
-| semantic invoke | Native button state became `Semantic action complete` | Visible state and AX signature changed while Chrome stayed foreground |
+macOS uses window capture plus dynamically resolved private SkyLight routing. Only non-minimized windows on the active Space are mutable, and OS changes can break private symbols. Windows uses exact-HWND capture/UIA and background window messages. Elevated, game, secure-input, protected, and custom-rendered surfaces may reject either backend.
 
-The fixture source is `tests/fixtures/macos/BackgroundFixture.swift`. Privacy-safe per-action screenshots and machine-readable results are checked in under `evidence/v0.8.0`; screenshots containing the user's real Chrome metadata remain only in ignored local test output. Cross-platform CI compiles the same Rust version for Windows x86_64 and macOS arm64/x86_64, while Windows UIA runtime behavior still requires a representative Windows fixture before it is called complete.
+## Isolation boundary
 
-## Remaining work
+The bounded live feed satisfies a viewing requirement: the model and a person can observe one background window without capturing unrelated desktop windows. Target-routed input satisfies a non-interruption requirement on supported applications. Neither satisfies a hostile-workload isolation requirement.
 
-A managed `isolated-session` backend can be added later as a separate capability with explicit credentials, OS prerequisites, visible lifecycle, and cleanup; it must not be presented as a transparent implementation detail of `background-window`. Cross-origin browser iframe semantic merging and representative Windows UIA runtime fixtures also remain open verification boundaries.
+True independent input requires a separately managed environment such as:
 
-The private macOS interfaces and framework-specific Windows behavior require continued release-by-release testing. No researched model runtime, planner, or remote protocol was embedded. The implementation follows the published architecture patterns and platform behavior while keeping its own protocol and bounded authority.
+- a Windows RDP/child desktop session with credentials, edition/policy checks, resolution management, disconnect semantics, and cleanup;
+- a macOS VM or separate login with an explicit data-sharing and credential model;
+- a Linux VM/container plus virtual X/Wayland display when application compatibility permits.
+
+UFO²'s RDP-loopback PiP design is the closest reviewed architecture, but its paper is not evidence that the pinned public UFO source ships that complete mode. Apple High Performance Screen Sharing also cannot be treated as a transparent local background seat. An `isolated-session` backend may be added later only as a separate capability with visible prerequisites and lifecycle. It must never be aliased to `background-window` or silently enabled.
+
+## Release acceptance criteria
+
+Version 0.9 evidence must independently prove:
+
+- real Chrome loaded from `chrome://extensions`, with the extension package actually selected;
+- native Chrome debugger warning remains visible throughout the lease;
+- in-page pill, browser cursor, and trusted Stop are visible and functional;
+- Chrome Cancel produces `canceled_by_user`, revokes the lease, blocks fallback, and requires popup Resume followed by a new explicit lease;
+- stale WebSocket session/sequence, browser turn/generation/move sequence, and computer frame IDs fail closed;
+- each browser command class and each helper action has a machine-readable result plus a screenshot where visual evidence is meaningful;
+- exact-window live frames carry monotonic sequence, correct dimensions/scales, share state, and the settled synthetic pointer;
+- macOS foreground/focus/hardware-cursor/Space invariants remain unchanged for supported background actions;
+- Windows compiles and runs the shared contracts, while representative Windows UIA/background runtime coverage remains explicitly identified if it is not executed on a real Windows host.
+
+Transport success alone is diagnostic evidence. A platform/action combination is supported only after a representative application-owned outcome and the advertised non-interruption invariants are observed.

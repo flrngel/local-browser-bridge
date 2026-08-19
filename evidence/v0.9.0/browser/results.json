@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "productVersion": "0.9.0",
+  "evidenceClass": "exploratory-real-chrome",
+  "finalReleaseVerification": false,
+  "factSource": "Visual inspection and SHA-256 hashing of the listed sanitized screenshots only",
+  "artifacts": [
+    {
+      "file": "browser-01-real-chrome-extension.jpg",
+      "sha256": "07c8d3cdf62b865efeaac9582b937cb3ed8254a400a79e1a7b75f6daa33a4a03",
+      "width": 370,
+      "height": 220,
+      "visibleObservations": [
+        "Google Chrome extension card",
+        "Local Browser Bridge version 0.9.0",
+        "Extension enabled"
+      ]
+    },
+    {
+      "file": "browser-02-native-held-debugger.jpg",
+      "sha256": "90e9d8ebe0add1cd568807cff67077736222b6c94bafdad8b6e920c10feb9121",
+      "width": 1247,
+      "height": 693,
+      "visibleObservations": [
+        "Chrome native debugger disclosure names Local Browser Bridge",
+        "Chrome Cancel control visible",
+        "Deterministic local demo visible"
+      ]
+    },
+    {
+      "file": "browser-03-native-and-page-indicators.jpg",
+      "sha256": "62c0a38cdb4d3478327dfe9c53929c9c0a0b53f6660fba3ee1a6d28244b1fca3",
+      "width": 1247,
+      "height": 693,
+      "visibleObservations": [
+        "Chrome native debugger disclosure visible",
+        "Page-level Local Browser Bridge status pill visible",
+        "Page-level Stop control visible"
+      ]
+    },
+    {
+      "file": "browser-04-trusted-click-pointer.jpg",
+      "sha256": "fd53f2818b183d2cfe8e29f37b76c5617e75987a115e5b39f1e09944b11ca3d9",
+      "width": 1400,
+      "height": 723,
+      "visibleObservations": [
+        "Demo display name is SOTA Bridge",
+        "Demo selected color is Blue",
+        "Greeting result is visible",
+        "Pointer is visible over the greeting button"
+      ]
+    },
+    {
+      "file": "browser-05-long-pointer-click-at.jpg",
+      "sha256": "ae0dbc04733989885c0de16bb7932e166cfbaefbdb264e9506c6189b7f4f9e5c",
+      "width": 1400,
+      "height": 723,
+      "visibleObservations": [
+        "Bottom action target visible",
+        "Demo action log reads bottom-click",
+        "Pointer is visible over the bottom action target"
+      ]
+    },
+    {
+      "file": "browser-06-type-text.jpg",
+      "sha256": "655c9e7cb182fda6d989916b30eca4bfc096828e8e624ec93c3983609467920e",
+      "width": 1400,
+      "height": 723,
+      "visibleObservations": [
+        "Direct-input field contains keyboard-sota"
+      ]
+    },
+    {
+      "file": "browser-07-key.jpg",
+      "sha256": "655c9e7cb182fda6d989916b30eca4bfc096828e8e624ec93c3983609467920e",
+      "width": 1400,
+      "height": 723,
+      "duplicateOf": "browser-06-type-text.jpg",
+      "independentActionProof": false,
+      "visibleObservations": [
+        "Direct-input field contains keyboard-sota"
+      ]
+    },
+    {
+      "file": "browser-08-scroll.jpg",
+      "sha256": "6e0d89450f9a1e02642b0a1d6f635962eb57ce2890265fe66b13e7e20d84055f",
+      "width": 1400,
+      "height": 723,
+      "visibleObservations": [
+        "Viewport is scrolled to the bottom target",
+        "Demo action log reads submit:SOTA Bridge:blue"
+      ]
+    }
+  ],
+  "unsupportedByThisRecord": [
+    "Continuous end-to-end run from a packaged release extension",
+    "Raw browser command requests or responses",
+    "Pointer path timing or trusted-event provenance",
+    "Chrome Cancel outcome",
+    "Page Stop or Resume outcome",
+    "Stale-target, replay, timeout, or protocol-mismatch refusal",
+    "Absence of late or unintended mutations",
+    "Release binary, ZIP, checksum, signature, or attestation verification"
+  ]
+}

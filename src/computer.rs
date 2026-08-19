@@ -5,17 +5,29 @@
 //! before using a platform background-delivery primitive. Unsupported delivery
 //! fails closed instead of stealing the foreground or moving the real cursor.
 
+use std::collections::VecDeque;
 use std::io::Cursor;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use image::imageops::FilterType;
 use serde::Serialize;
-use serde_json::{Map, Value, json};
-use thiserror::Error;
+use serde_json::{Value, json};
 use time::OffsetDateTime;
 use uuid::Uuid;
+
+pub use crate::computer_protocol::{
+    COMPUTER_HELPER_ORIGIN, COMPUTER_METHODS, CommandCancellation, ComputerError, command_parts,
+    result_envelope,
+};
+
+mod action_record;
+mod cursor;
+use action_record::{
+    ActionEffect, ActionEvidence, ActionRecord, ActionTimer, invariant_evidence, semantic_evidence,
+};
+use cursor::SyntheticCursor;
 
 #[cfg(target_os = "macos")]
 #[path = "computer/ax_macos.rs"]
@@ -30,39 +42,14 @@ mod platform;
 #[path = "computer/uia_windows.rs"]
 mod uia_windows;
 
-pub const COMPUTER_HELPER_ORIGIN: &str = "lbb-computer-helper://local";
-pub const COMPUTER_METHODS: &[&str] = &[
-    "computer.status",
-    "computer.observe",
-    "computer.move",
-    "computer.click",
-    "computer.drag",
-    "computer.scroll",
-    "computer.typeText",
-    "computer.key",
-    "computer.invoke",
-    "computer.setValue",
-];
+pub const NATIVE_COMPUTER_SUPPORTED: bool = true;
 
 const MAX_CAPTURE_PIXELS: u64 = 1_000_000;
 const MAX_WINDOWS: usize = 128;
 const MAX_DRAG_DURATION_MS: u64 = 2_000;
-
-#[derive(Debug, Clone, Error)]
-#[error("{message}")]
-pub struct ComputerError {
-    pub code: String,
-    pub message: String,
-}
-
-impl ComputerError {
-    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            code: code.into(),
-            message: message.into(),
-        }
-    }
-}
+const MAX_CURSOR_DURATION_MS: u64 = 2_000;
+const MAX_SHARE_FPS: u64 = 10;
+const MAX_FRAME_AGE: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -106,12 +93,13 @@ impl InvariantReport {
 }
 
 #[derive(Debug, Clone)]
-struct FrameState {
+pub(crate) struct FrameState {
     id: String,
     target: WindowDescriptor,
     image_width: u32,
     image_height: u32,
     elements: Vec<SemanticTarget>,
+    captured_at: Instant,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -131,9 +119,14 @@ pub(crate) struct SemanticElement {
     pub role: String,
     pub name: String,
     pub value: Option<String>,
+    pub sensitive: bool,
+    pub value_redacted: bool,
     pub enabled: Option<bool>,
     pub actions: Vec<String>,
     pub bounds: Option<SemanticBounds>,
+    pub coordinate_space: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub screen_bounds: Option<SemanticBounds>,
 }
 
 #[derive(Debug, Clone)]
@@ -144,6 +137,19 @@ pub(crate) struct SemanticTarget {
 
 pub struct ComputerController {
     frame: Option<FrameState>,
+    recent_frames: VecDeque<FrameState>,
+    cursor: SyntheticCursor,
+    share: Option<ShareSession>,
+}
+
+#[derive(Debug, Clone)]
+struct ShareSession {
+    id: String,
+    window_id: String,
+    fps: u64,
+    sequence: u64,
+    started_at: String,
+    last_capture: Option<Instant>,
 }
 
 impl Default for ComputerController {
@@ -154,7 +160,12 @@ impl Default for ComputerController {
 
 impl ComputerController {
     pub fn new() -> Self {
-        Self { frame: None }
+        Self {
+            frame: None,
+            recent_frames: VecDeque::with_capacity(32),
+            cursor: SyntheticCursor::new(Uuid::new_v4().to_string()),
+            share: None,
+        }
     }
 
     pub fn hello(&mut self) -> Value {
@@ -176,30 +187,67 @@ impl ComputerController {
                 "activatesTargetApplication": false,
                 "exactWindowRequired": true,
                 "implicitForegroundFallback": false
-            }
+            },
+            "pointer": self.cursor.snapshot(self.frame.as_ref()),
+            "capture": {
+                "mode": "exact-window-share",
+                "transport": "request-response+bounded-live-frames",
+                "cursorComposited": true
+            },
+            "share": self.share_status_value(),
         })
     }
 
     pub fn execute(&mut self, method: &str, params: &Value) -> Result<Value, ComputerError> {
+        self.execute_cancellable(method, params, &CommandCancellation::new())
+    }
+
+    pub fn execute_cancellable(
+        &mut self,
+        method: &str,
+        params: &Value,
+        cancellation: &CommandCancellation,
+    ) -> Result<Value, ComputerError> {
+        cancellation.check("command dispatch")?;
         if !COMPUTER_METHODS.contains(&method) {
             return Err(ComputerError::new(
                 "COMPUTER_UNSUPPORTED_ACTION",
                 format!("Unsupported computer action: {method}"),
             ));
         }
-        match method {
+        let previous_share = (method == "computer.share.start").then(|| self.share.clone());
+        let result = match method {
             "computer.status" => self.status(),
+            "computer.share.start" => self.share_start(params, cancellation),
+            "computer.share.status" => Ok(self.share_status_value()),
+            "computer.share.stop" => self.share_stop(cancellation),
             "computer.observe" => self.observe(params),
-            "computer.move" => self.move_pointer(params),
-            "computer.click" => self.click(params),
-            "computer.drag" => self.drag(params),
-            "computer.scroll" => self.scroll(params),
-            "computer.typeText" => self.type_text(params),
-            "computer.key" => self.key(params),
-            "computer.invoke" => self.invoke(params),
-            "computer.setValue" => self.set_value(params),
+            "computer.move" => self.move_pointer(params, cancellation),
+            "computer.click" => self.click(params, cancellation),
+            "computer.drag" => self.drag(params, cancellation),
+            "computer.scroll" => self.scroll(params, cancellation),
+            "computer.typeText" => self.type_text(params, cancellation),
+            "computer.key" => self.key(params, cancellation),
+            "computer.invoke" => self.invoke(params, cancellation),
+            "computer.setValue" => self.set_value(params, cancellation),
             _ => unreachable!(),
+        };
+        let result = cancellation.finish(result);
+        if method == "computer.share.start" && result.is_err() {
+            self.share = previous_share.flatten();
         }
+        result
+    }
+
+    /// Revokes all observation and action state owned by a helper transport session.
+    ///
+    /// A replacement WebSocket session must explicitly start sharing and observe
+    /// a fresh frame before it can issue an action.
+    pub fn reset_transport_session(&mut self) {
+        self.share = None;
+        self.frame = None;
+        self.recent_frames.clear();
+        self.cursor = SyntheticCursor::new(Uuid::new_v4().to_string());
     }
 
     pub fn request_permissions(&mut self) -> Value {
@@ -269,6 +317,8 @@ impl ComputerController {
             "windowCount": windows.len(),
             "windows": windows,
             "frameReady": self.frame.is_some(),
+            "pointer": self.cursor.snapshot(self.frame.as_ref()),
+            "share": self.share_status_value(),
             "limitations": platform::limitations(),
         }))
     }
@@ -290,7 +340,7 @@ impl ComputerController {
                     "No capturable application window is available on the active desktop",
                 )
             })?;
-        let image = resize_for_transport(platform::capture_window(&target)?);
+        let mut image = resize_for_transport(platform::capture_window(&target)?);
         let (elements, semantic_available, semantic_error) =
             match platform::semantic_elements(&target) {
                 Ok(elements) => (elements, true, None),
@@ -298,19 +348,39 @@ impl ComputerController {
             };
         let image_width = image.width();
         let image_height = image.height();
-        let mut png = Cursor::new(Vec::new());
-        image
-            .write_to(&mut png, image::ImageFormat::Png)
-            .map_err(|error| ComputerError::new("COMPUTER_CAPTURE_FAILED", error.to_string()))?;
         let frame_id = Uuid::new_v4().to_string();
-        self.frame = Some(FrameState {
+        let frame = FrameState {
             id: frame_id.clone(),
             target: target.clone(),
             image_width,
             image_height,
             elements: elements.clone(),
-        });
-        Ok(json!({
+            captured_at: Instant::now(),
+        };
+        let transport_elements = elements
+            .iter()
+            .cloned()
+            .map(|mut semantic| {
+                let screen_bounds = semantic.element.bounds.clone();
+                semantic.element.bounds = screen_bounds.as_ref().and_then(|bounds| {
+                    screen_bounds_to_image(bounds, &target, image_width, image_height)
+                });
+                semantic.element.screen_bounds = screen_bounds;
+                semantic.element.coordinate_space = "image-pixels".to_owned();
+                semantic
+            })
+            .collect::<Vec<_>>();
+        self.cursor.composite(&mut image, &target);
+        let pointer = self.cursor.snapshot(Some(&frame));
+        let mut png = Cursor::new(Vec::new());
+        image
+            .write_to(&mut png, image::ImageFormat::Png)
+            .map_err(|error| ComputerError::new("COMPUTER_CAPTURE_FAILED", error.to_string()))?;
+        if let Some(previous) = self.frame.replace(frame) {
+            self.recent_frames.push_front(previous);
+            self.recent_frames.truncate(32);
+        }
+        let mut result = json!({
             "screenshot": format!("data:image/png;base64,{}", BASE64_STANDARD.encode(png.into_inner())),
             "frame": {
                 "id": frame_id,
@@ -334,24 +404,184 @@ impl ComputerController {
                 "screenY": target.y,
                 "screenWidth": target.width,
                 "screenHeight": target.height,
-                "scaleFactor": 1.0,
+                "scaleFactor": image_width as f64 / target.width.max(1) as f64,
+                "transportScaleX": image_width as f64 / target.width.max(1) as f64,
+                "transportScaleY": image_height as f64 / target.height.max(1) as f64,
                 "rotation": 0.0,
                 "semanticMode": platform::semantic_backend_name(),
                 "semanticAvailable": semantic_available,
                 "semanticError": semantic_error,
-                "elements": elements.into_iter().map(|target| target.element).collect::<Vec<_>>(),
+                "elements": transport_elements.into_iter().map(|target| target.element).collect::<Vec<_>>(),
+                "pointer": pointer,
+                "share": self.share_frame_value(),
             },
             "windows": windows,
+        });
+        if let Some(share) = self.share.as_mut()
+            && share.window_id == target.id
+        {
+            share.sequence = share.sequence.saturating_add(1);
+            if let Some(frame) = result.get_mut("frame").and_then(Value::as_object_mut) {
+                frame.insert(
+                    "share".to_owned(),
+                    json!({
+                        "id": share.id,
+                        "active": true,
+                        "windowId": share.window_id,
+                        "sequence": share.sequence,
+                        "fps": share.fps,
+                        "startedAt": share.started_at,
+                        "captureScope": "exact-window",
+                        "cursorComposited": true,
+                        "droppedFrames": 0,
+                        "backpressure": "producer-blocking",
+                    }),
+                );
+            }
+        }
+        Ok(result)
+    }
+
+    fn share_start(
+        &mut self,
+        params: &Value,
+        cancellation: &CommandCancellation,
+    ) -> Result<Value, ComputerError> {
+        let window_id = params
+            .get("windowId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid("windowId must be a string"))?;
+        let fps = params.get("fps").and_then(Value::as_u64).unwrap_or(4);
+        if !(1..=MAX_SHARE_FPS).contains(&fps) {
+            return Err(invalid(format!(
+                "fps must be between 1 and {MAX_SHARE_FPS}"
+            )));
+        }
+        let target_exists = available_windows()?
+            .into_iter()
+            .any(|window| window.id == window_id && !window.minimized);
+        if !target_exists {
+            return Err(ComputerError::new(
+                "COMPUTER_NO_WINDOW",
+                "The requested exact window is not available for sharing",
+            ));
+        }
+        cancellation.begin_side_effect("share start")?;
+        self.share = Some(ShareSession {
+            id: Uuid::new_v4().to_string(),
+            window_id: window_id.to_owned(),
+            fps,
+            sequence: 0,
+            started_at: now_iso(),
+            last_capture: None,
+        });
+        if let Err(error) = cancellation.check("share start commit") {
+            self.share = None;
+            return Err(error);
+        }
+        Ok(self.share_status_value())
+    }
+
+    fn share_stop(&mut self, cancellation: &CommandCancellation) -> Result<Value, ComputerError> {
+        cancellation.begin_side_effect("share stop")?;
+        let stopped = self.share.take();
+        Ok(json!({
+            "active": false,
+            "stopped": stopped.is_some(),
+            "id": stopped.as_ref().map(|share| share.id.clone()),
+            "reason": "requested",
         }))
     }
 
-    fn move_pointer(&mut self, params: &Value) -> Result<Value, ComputerError> {
-        let (frame, point) = self.point(params, "x", "y")?;
-        let invariants = platform::move_pointer(&frame.target, point)?.assert_held()?;
-        Ok(action_result(&frame, point, invariants, json!({})))
+    fn share_status_value(&self) -> Value {
+        self.share
+            .as_ref()
+            .map(|share| {
+                json!({
+                    "active": true,
+                    "id": share.id,
+                    "windowId": share.window_id,
+                    "fps": share.fps,
+                    "sequence": share.sequence,
+                    "startedAt": share.started_at,
+                    "captureScope": "exact-window",
+                    "cursorComposited": true,
+                    "backpressure": "producer-blocking",
+                })
+            })
+            .unwrap_or_else(|| json!({ "active": false }))
     }
 
-    fn click(&mut self, params: &Value) -> Result<Value, ComputerError> {
+    fn share_frame_value(&self) -> Value {
+        self.share_status_value()
+    }
+
+    pub fn next_share_frame(&mut self) -> Option<Result<Value, ComputerError>> {
+        let share = self.share.as_mut()?;
+        let interval = Duration::from_secs_f64(1.0 / share.fps as f64);
+        if share
+            .last_capture
+            .is_some_and(|last_capture| last_capture.elapsed() < interval)
+        {
+            return None;
+        }
+        share.last_capture = Some(Instant::now());
+        let window_id = share.window_id.clone();
+        Some(self.observe(&json!({ "windowId": window_id })))
+    }
+
+    fn move_pointer(
+        &mut self,
+        params: &Value,
+        cancellation: &CommandCancellation,
+    ) -> Result<Value, ComputerError> {
+        let mut timer = ActionTimer::start();
+        let (frame, point) = self.point(params, "x", "y")?;
+        let duration_ms = optional_duration(params, "durationMs", 50, MAX_CURSOR_DURATION_MS)?;
+        let trajectory = self.cursor.plan(&frame, point, duration_ms, "move");
+        timer.resolved();
+        let invariants = match platform::move_pointer_path(
+            &frame.target,
+            &trajectory.points,
+            trajectory.step_delay(),
+            cancellation,
+        )
+        .and_then(InvariantReport::assert_held)
+        {
+            Ok(invariants) => invariants,
+            Err(error) => {
+                self.cursor.mark_unknown("moveFailed");
+                return Err(error);
+            }
+        };
+        if let Err(error) = cancellation.check("pointer state commit") {
+            self.cursor.mark_unknown("moveCanceled");
+            return Err(error);
+        }
+        timer.dispatched();
+        self.cursor.commit(&frame, &trajectory, "move");
+        self.cursor.settle("move");
+        let evidence = invariant_evidence(&invariants);
+        recorded_action_result(
+            timer,
+            ActionEffect::Unverifiable,
+            evidence,
+            &frame,
+            point,
+            invariants,
+            json!({
+                "pointer": self.cursor.snapshot(Some(&frame)),
+                "motion": trajectory.metadata(),
+            }),
+        )
+    }
+
+    fn click(
+        &mut self,
+        params: &Value,
+        cancellation: &CommandCancellation,
+    ) -> Result<Value, ComputerError> {
+        let mut timer = ActionTimer::start();
         let (frame, point) = self.point(params, "x", "y")?;
         let button = params
             .get("button")
@@ -365,16 +595,57 @@ impl ComputerController {
             .and_then(Value::as_u64)
             .unwrap_or(1)
             .clamp(1, 3) as usize;
-        let invariants = platform::click(&frame.target, point, button, count)?.assert_held()?;
-        Ok(action_result(
+        let duration_ms = optional_duration(params, "durationMs", 50, MAX_CURSOR_DURATION_MS)?;
+        let action = if button == "right" {
+            "rightClick"
+        } else if count > 1 {
+            "doubleClick"
+        } else {
+            "click"
+        };
+        let trajectory = self.cursor.plan(&frame, point, duration_ms, action);
+        timer.resolved();
+        if let Err(error) = platform::move_pointer_path(
+            &frame.target,
+            &trajectory.points,
+            trajectory.step_delay(),
+            cancellation,
+        )
+        .and_then(InvariantReport::assert_held)
+        {
+            self.cursor.mark_unknown("clickMoveFailed");
+            return Err(error);
+        }
+        cancellation.check("click pointer state commit")?;
+        self.cursor.commit(&frame, &trajectory, "moveForClick");
+        let invariants =
+            platform::click(&frame.target, point, button, count, cancellation)?.assert_held()?;
+        cancellation.check("click result commit")?;
+        timer.dispatched();
+        self.cursor.settle(action);
+        let evidence = invariant_evidence(&invariants);
+        recorded_action_result(
+            timer,
+            ActionEffect::Unverifiable,
+            evidence,
             &frame,
             point,
             invariants,
-            json!({ "button": button, "clickCount": count }),
-        ))
+            json!({
+                "button": button,
+                "clickCount": count,
+                "pointer": self.cursor.snapshot(Some(&frame)),
+                "motion": trajectory.metadata(),
+            }),
+        )
     }
 
-    fn drag(&mut self, params: &Value) -> Result<Value, ComputerError> {
+    fn drag(
+        &mut self,
+        params: &Value,
+        cancellation: &CommandCancellation,
+    ) -> Result<Value, ComputerError> {
+        let mut timer = ActionTimer::start();
         let frame = self.verify_frame(params)?;
         let from = self.frame_point(&frame, params, "fromX", "fromY")?;
         let to = self.frame_point(&frame, params, "toX", "toY")?;
@@ -383,62 +654,162 @@ impl ComputerController {
             .and_then(Value::as_u64)
             .unwrap_or(500)
             .clamp(50, MAX_DRAG_DURATION_MS);
-        let invariants = platform::drag(&frame.target, from, to, duration_ms)?.assert_held()?;
-        Ok(json!({
+        let trajectory = self
+            .cursor
+            .plan(&frame, from, Some(duration_ms.min(400)), "drag");
+        timer.resolved();
+        if let Err(error) = platform::move_pointer_path(
+            &frame.target,
+            &trajectory.points,
+            trajectory.step_delay(),
+            cancellation,
+        )
+        .and_then(InvariantReport::assert_held)
+        {
+            self.cursor.mark_unknown("dragApproachFailed");
+            return Err(error);
+        }
+        cancellation.check("drag pointer state commit")?;
+        self.cursor.commit(&frame, &trajectory, "dragApproach");
+        let invariants = match platform::drag(&frame.target, from, to, duration_ms, cancellation)
+            .and_then(InvariantReport::assert_held)
+        {
+            Ok(invariants) => invariants,
+            Err(error) => {
+                self.cursor.mark_unknown("dragFailed");
+                return Err(error);
+            }
+        };
+        cancellation.check("drag result commit")?;
+        timer.dispatched();
+        let arrival = self.cursor.plan(&frame, to, Some(50), "drag");
+        self.cursor.commit(&frame, &arrival, "drag");
+        self.cursor.settle("drag");
+        let evidence = invariant_evidence(&invariants);
+        let result = json!({
             "deliveryMode": "exact-window-background",
             "frameId": frame.id,
             "from": { "x": from.local_x, "y": from.local_y },
             "to": { "x": to.local_x, "y": to.local_y },
             "durationMs": duration_ms,
             "invariants": invariants,
-        }))
+            "pointer": self.cursor.snapshot(Some(&frame)),
+            "motion": {
+                "approach": trajectory.metadata(),
+                "gesture": {
+                    "curve": "minimum-jerk-drag",
+                    "durationMs": duration_ms,
+                    "arrivalSequence": arrival.sequence,
+                    "arrivalAcknowledged": true
+                }
+            },
+        });
+        finish_action_record(timer, ActionEffect::Unverifiable, evidence, result)
     }
 
-    fn scroll(&mut self, params: &Value) -> Result<Value, ComputerError> {
+    fn scroll(
+        &mut self,
+        params: &Value,
+        cancellation: &CommandCancellation,
+    ) -> Result<Value, ComputerError> {
+        let mut timer = ActionTimer::start();
         let (frame, point) = self.point(params, "x", "y")?;
         let delta_x = integer(params, "deltaX", 0)?.clamp(-50, 50) as i32;
         let delta_y = integer(params, "deltaY", 0)?.clamp(-50, 50) as i32;
-        let invariants = platform::scroll(&frame.target, point, delta_x, delta_y)?.assert_held()?;
-        Ok(action_result(
+        let trajectory = self.cursor.plan(&frame, point, None, "scroll");
+        timer.resolved();
+        if let Err(error) = platform::move_pointer_path(
+            &frame.target,
+            &trajectory.points,
+            trajectory.step_delay(),
+            cancellation,
+        )
+        .and_then(InvariantReport::assert_held)
+        {
+            self.cursor.mark_unknown("scrollMoveFailed");
+            return Err(error);
+        }
+        cancellation.check("scroll pointer state commit")?;
+        self.cursor.commit(&frame, &trajectory, "moveForScroll");
+        let invariants = platform::scroll(&frame.target, point, delta_x, delta_y, cancellation)?
+            .assert_held()?;
+        cancellation.check("scroll result commit")?;
+        timer.dispatched();
+        self.cursor.settle("scroll");
+        let evidence = invariant_evidence(&invariants);
+        recorded_action_result(
+            timer,
+            ActionEffect::Unverifiable,
+            evidence,
             &frame,
             point,
             invariants,
-            json!({ "deltaX": delta_x, "deltaY": delta_y }),
-        ))
+            json!({
+                "deltaX": delta_x,
+                "deltaY": delta_y,
+                "pointer": self.cursor.snapshot(Some(&frame)),
+                "motion": trajectory.metadata(),
+            }),
+        )
     }
 
-    fn type_text(&mut self, params: &Value) -> Result<Value, ComputerError> {
+    fn type_text(
+        &mut self,
+        params: &Value,
+        cancellation: &CommandCancellation,
+    ) -> Result<Value, ComputerError> {
+        let mut timer = ActionTimer::start();
         let frame = self.verify_frame(params)?;
         let text = params
             .get("text")
             .and_then(Value::as_str)
             .ok_or_else(|| invalid("text must be a string"))?;
-        let invariants = platform::type_text(&frame.target, text)?.assert_held()?;
-        Ok(json!({
+        timer.resolved();
+        let invariants = platform::type_text(&frame.target, text, cancellation)?.assert_held()?;
+        cancellation.check("text result commit")?;
+        timer.dispatched();
+        let evidence = invariant_evidence(&invariants);
+        let result = json!({
             "deliveryMode": "exact-window-background",
             "frameId": frame.id,
             "characters": text.chars().count(),
             "invariants": invariants,
-        }))
+        });
+        finish_action_record(timer, ActionEffect::Unverifiable, evidence, result)
     }
 
-    fn key(&mut self, params: &Value) -> Result<Value, ComputerError> {
+    fn key(
+        &mut self,
+        params: &Value,
+        cancellation: &CommandCancellation,
+    ) -> Result<Value, ComputerError> {
+        let mut timer = ActionTimer::start();
         let frame = self.verify_frame(params)?;
         let chord = params
             .get("key")
             .and_then(Value::as_str)
             .ok_or_else(|| invalid("key must be a string"))?;
         validate_key_chord(chord)?;
-        let invariants = platform::key(&frame.target, chord)?.assert_held()?;
-        Ok(json!({
+        timer.resolved();
+        let invariants = platform::key(&frame.target, chord, cancellation)?.assert_held()?;
+        cancellation.check("key result commit")?;
+        timer.dispatched();
+        let evidence = invariant_evidence(&invariants);
+        let result = json!({
             "deliveryMode": "exact-window-background",
             "frameId": frame.id,
             "key": chord,
             "invariants": invariants,
-        }))
+        });
+        finish_action_record(timer, ActionEffect::Unverifiable, evidence, result)
     }
 
-    fn invoke(&mut self, params: &Value) -> Result<Value, ComputerError> {
+    fn invoke(
+        &mut self,
+        params: &Value,
+        cancellation: &CommandCancellation,
+    ) -> Result<Value, ComputerError> {
+        let mut timer = ActionTimer::start();
         let frame = self.verify_frame(params)?;
         let target = semantic_target(&frame, params)?;
         let action = params
@@ -456,23 +827,39 @@ impl ComputerController {
                 target.element.reference
             )));
         }
-        let result = platform::invoke(&frame.target, &target, action)?;
-        Ok(json!({
+        timer.resolved();
+        let backend_effect = platform::invoke(&frame.target, &target, action, cancellation)?;
+        cancellation.check("semantic invoke result commit")?;
+        timer.dispatched();
+        let (effect, evidence) = semantic_evidence(&backend_effect);
+        let result = json!({
             "deliveryMode": "exact-window-semantic",
             "frameId": frame.id,
             "elementRef": target.element.reference,
             "action": action,
-            "effect": result,
-        }))
+            "backendEffect": backend_effect,
+        });
+        finish_action_record(timer, effect, evidence, result)
     }
 
-    fn set_value(&mut self, params: &Value) -> Result<Value, ComputerError> {
+    fn set_value(
+        &mut self,
+        params: &Value,
+        cancellation: &CommandCancellation,
+    ) -> Result<Value, ComputerError> {
+        let mut timer = ActionTimer::start();
         let frame = self.verify_frame(params)?;
         let target = semantic_target(&frame, params)?;
         let value = params
             .get("value")
             .and_then(Value::as_str)
             .ok_or_else(|| invalid("value must be a string"))?;
+        if target.element.sensitive || target.element.value_redacted {
+            return Err(ComputerError::new(
+                "COMPUTER_SENSITIVE_ELEMENT",
+                "Sensitive semantic values are redacted and cannot be set",
+            ));
+        }
         if !target
             .element
             .actions
@@ -484,14 +871,19 @@ impl ComputerController {
                 target.element.reference
             )));
         }
-        let result = platform::set_value(&frame.target, &target, value)?;
-        Ok(json!({
+        timer.resolved();
+        let backend_effect = platform::set_value(&frame.target, &target, value, cancellation)?;
+        cancellation.check("semantic value result commit")?;
+        timer.dispatched();
+        let (effect, evidence) = semantic_evidence(&backend_effect);
+        let result = json!({
             "deliveryMode": "exact-window-semantic",
             "frameId": frame.id,
             "elementRef": target.element.reference,
             "characters": value.chars().count(),
-            "effect": result,
-        }))
+            "backendEffect": backend_effect,
+        });
+        finish_action_record(timer, effect, evidence, result)
     }
 
     fn point(
@@ -525,9 +917,16 @@ impl ComputerController {
 
     fn verify_frame(&self, params: &Value) -> Result<FrameState, ComputerError> {
         let supplied = params.get("frameId").and_then(Value::as_str).unwrap_or("");
-        let frame = self.frame.as_ref().ok_or_else(stale_frame)?;
-        if supplied != frame.id {
-            return Err(stale_frame());
+        let frame = self.requested_frame(supplied).ok_or_else(stale_frame)?;
+        if let Some(expected_revision) = params
+            .get("expectedPointerRevision")
+            .and_then(Value::as_u64)
+            && expected_revision != self.cursor.snapshot(Some(frame)).sequence
+        {
+            return Err(ComputerError::new(
+                "COMPUTER_STALE_POINTER",
+                "The synthetic pointer advanced after this request was prepared. Observe the exact window again before acting.",
+            ));
         }
         let live = available_windows()?
             .into_iter()
@@ -543,6 +942,35 @@ impl ComputerController {
         }
         Ok(frame.clone())
     }
+
+    fn requested_frame(&self, supplied: &str) -> Option<&FrameState> {
+        self.requested_frame_at(supplied, Instant::now())
+    }
+
+    fn requested_frame_at(&self, supplied: &str, now: Instant) -> Option<&FrameState> {
+        let current = self.frame.as_ref()?;
+        let frame = if supplied == current.id {
+            frame_is_fresh(current, now).then_some(current)?
+        } else {
+            let share = self.share.as_ref()?;
+            self.recent_frames.iter().find(|candidate| {
+                candidate.id == supplied
+                    && frame_is_fresh(candidate, now)
+                    && candidate.target.id == share.window_id
+                    && candidate.target.id == current.target.id
+                    && candidate.target.pid == current.target.pid
+                    && candidate.target.x == current.target.x
+                    && candidate.target.y == current.target.y
+                    && candidate.target.width == current.target.width
+                    && candidate.target.height == current.target.height
+            })?
+        };
+        Some(frame)
+    }
+}
+
+fn frame_is_fresh(frame: &FrameState, now: Instant) -> bool {
+    now.saturating_duration_since(frame.captured_at) <= MAX_FRAME_AGE
 }
 
 fn semantic_target(frame: &FrameState, params: &Value) -> Result<SemanticTarget, ComputerError> {
@@ -590,6 +1018,34 @@ fn action_result(
     result
 }
 
+fn recorded_action_result(
+    timer: ActionTimer,
+    effect: ActionEffect,
+    evidence: Vec<ActionEvidence>,
+    frame: &FrameState,
+    point: TargetPoint,
+    invariants: InvariantReport,
+    extra: Value,
+) -> Result<Value, ComputerError> {
+    finish_action_record(
+        timer,
+        effect,
+        evidence,
+        action_result(frame, point, invariants, extra),
+    )
+}
+
+fn finish_action_record(
+    timer: ActionTimer,
+    effect: ActionEffect,
+    evidence: Vec<ActionEvidence>,
+    mut result: Value,
+) -> Result<Value, ComputerError> {
+    let record: ActionRecord = timer.finish(effect, evidence)?;
+    record.insert_into(&mut result)?;
+    Ok(result)
+}
+
 fn available_windows() -> Result<Vec<WindowDescriptor>, ComputerError> {
     platform::windows(MAX_WINDOWS)
 }
@@ -618,6 +1074,35 @@ fn map_image_point(frame: &FrameState, x: f64, y: f64) -> TargetPoint {
         screen_x: frame.target.x.saturating_add(local_x),
         screen_y: frame.target.y.saturating_add(local_y),
     }
+}
+
+fn screen_bounds_to_image(
+    bounds: &SemanticBounds,
+    target: &WindowDescriptor,
+    image_width: u32,
+    image_height: u32,
+) -> Option<SemanticBounds> {
+    let scale_x = f64::from(image_width) / f64::from(target.width.max(1));
+    let scale_y = f64::from(image_height) / f64::from(target.height.max(1));
+    let x = (bounds.x - f64::from(target.x)) * scale_x;
+    let y = (bounds.y - f64::from(target.y)) * scale_y;
+    let width = bounds.width * scale_x;
+    let height = bounds.height * scale_y;
+    if !x.is_finite()
+        || !y.is_finite()
+        || !width.is_finite()
+        || !height.is_finite()
+        || width <= 0.0
+        || height <= 0.0
+    {
+        return None;
+    }
+    Some(SemanticBounds {
+        x,
+        y,
+        width,
+        height,
+    })
 }
 
 fn validate_key_chord(value: &str) -> Result<(), ComputerError> {
@@ -661,6 +1146,26 @@ fn integer(params: &Value, name: &str, default: i64) -> Result<i64, ComputerErro
     }
 }
 
+fn optional_duration(
+    params: &Value,
+    name: &str,
+    minimum: u64,
+    maximum: u64,
+) -> Result<Option<u64>, ComputerError> {
+    let Some(value) = params.get(name) else {
+        return Ok(None);
+    };
+    let value = value
+        .as_u64()
+        .ok_or_else(|| invalid(format!("{name} must be an integer")))?;
+    if !(minimum..=maximum).contains(&value) {
+        return Err(invalid(format!(
+            "{name} must be between {minimum} and {maximum}"
+        )));
+    }
+    Ok(Some(value))
+}
+
 fn invalid(message: impl Into<String>) -> ComputerError {
     ComputerError::new("COMPUTER_INVALID_REQUEST", message)
 }
@@ -678,35 +1183,11 @@ fn now_iso() -> String {
         .unwrap_or_else(|_| "unknown".to_owned())
 }
 
-pub fn result_envelope(id: &str, result: Result<Value, ComputerError>) -> Value {
-    match result {
-        Ok(result) => json!({ "id": id, "type": "result", "ok": true, "result": result }),
-        Err(error) => json!({
-            "id": id,
-            "type": "result",
-            "ok": false,
-            "error": { "code": error.code, "message": error.message },
-        }),
-    }
-}
-
-pub fn command_parts(message: &Value) -> Option<(&str, &str, Value)> {
-    if message.get("type").and_then(Value::as_str) != Some("command") {
-        return None;
-    }
-    Some((
-        message.get("id")?.as_str()?,
-        message.get("method")?.as_str()?,
-        message
-            .get("params")
-            .cloned()
-            .unwrap_or_else(|| Value::Object(Map::new())),
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn frame() -> FrameState {
         FrameState {
@@ -726,7 +1207,71 @@ mod tests {
             image_width: 1_000,
             image_height: 500,
             elements: vec![],
+            captured_at: Instant::now(),
         }
+    }
+
+    #[test]
+    fn cancellation_before_dispatch_never_claims_an_unknown_side_effect() {
+        let cancellation = CommandCancellation::new();
+        cancellation.cancel();
+        let error = cancellation.begin_side_effect("test dispatch").unwrap_err();
+        assert_eq!(error.code, "COMPUTER_CANCELED");
+        assert!(!cancellation.was_dispatched());
+    }
+
+    #[test]
+    fn cancellation_during_a_long_path_stops_at_the_next_boundary_as_unknown() {
+        let cancellation = CommandCancellation::new();
+        let worker_cancellation = cancellation.clone();
+        let dispatched = Arc::new(AtomicUsize::new(0));
+        let worker_dispatched = Arc::clone(&dispatched);
+        let (step_tx, step_rx) = std::sync::mpsc::sync_channel(0);
+        let (continue_tx, continue_rx) = std::sync::mpsc::sync_channel(0);
+        let worker = std::thread::spawn(move || {
+            for step in 0..100 {
+                worker_cancellation.begin_side_effect("path step")?;
+                worker_dispatched.fetch_add(1, Ordering::SeqCst);
+                step_tx.send(step).unwrap();
+                continue_rx.recv().unwrap();
+            }
+            Ok::<(), ComputerError>(())
+        });
+
+        for expected in 0..3 {
+            assert_eq!(step_rx.recv().unwrap(), expected);
+            if expected < 2 {
+                continue_tx.send(()).unwrap();
+            }
+        }
+        cancellation.cancel();
+        continue_tx.send(()).unwrap();
+        let error = worker.join().unwrap().unwrap_err();
+        assert_eq!(error.code, "COMPUTER_OUTCOME_UNKNOWN");
+        assert_eq!(dispatched.load(Ordering::SeqCst), 3);
+        assert!(cancellation.was_dispatched());
+    }
+
+    #[test]
+    fn resetting_transport_session_revokes_share_and_stale_frames() {
+        let mut controller = ComputerController::new();
+        controller.frame = Some(frame());
+        controller.recent_frames.push_back(frame());
+        controller.share = Some(ShareSession {
+            id: "share-1".to_owned(),
+            window_id: "window-1".to_owned(),
+            fps: 4,
+            sequence: 9,
+            started_at: now_iso(),
+            last_capture: Some(Instant::now()),
+        });
+
+        controller.reset_transport_session();
+
+        assert!(controller.share.is_none());
+        assert!(controller.frame.is_none());
+        assert!(controller.recent_frames.is_empty());
+        assert_eq!(controller.share_status_value(), json!({ "active": false }));
     }
 
     #[test]
@@ -771,5 +1316,140 @@ mod tests {
             report.assert_held().unwrap_err().code,
             "COMPUTER_BACKGROUND_CONTRACT_VIOLATION"
         );
+    }
+
+    #[test]
+    fn unverified_delivery_result_carries_a_non_confirming_action_record() {
+        let mut timer = ActionTimer::start();
+        timer.resolved();
+        timer.dispatched();
+        let invariants = InvariantReport {
+            foreground_unchanged: true,
+            user_focus_unchanged: true,
+            cursor_unchanged: true,
+            space_unchanged: true,
+        };
+        let evidence = invariant_evidence(&invariants);
+        let result = recorded_action_result(
+            timer,
+            ActionEffect::Unverifiable,
+            evidence,
+            &frame(),
+            TargetPoint {
+                local_x: 10,
+                local_y: 20,
+                screen_x: -90,
+                screen_y: 40,
+            },
+            invariants,
+            json!({}),
+        )
+        .unwrap();
+
+        assert!(result.get("actionId").and_then(Value::as_str).is_some());
+        assert_eq!(
+            result.get("effect").and_then(Value::as_str),
+            Some("Unverifiable")
+        );
+        assert!(
+            result
+                .pointer("/timings/totalMs")
+                .and_then(Value::as_f64)
+                .is_some()
+        );
+        assert!(
+            result["evidence"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|item| item["supportsConfirmation"] == false)
+        );
+    }
+
+    #[test]
+    fn active_share_accepts_only_recent_frames_with_unchanged_exact_window_geometry() {
+        let mut controller = ComputerController::new();
+        let now = Instant::now();
+        let mut current = frame();
+        current.id = "frame-current".to_owned();
+        current.captured_at = now;
+        let mut recent = current.clone();
+        recent.id = "frame-rendered".to_owned();
+        recent.captured_at = now - MAX_FRAME_AGE;
+        controller.frame = Some(current);
+        controller.recent_frames.push_front(recent);
+
+        assert!(
+            controller
+                .requested_frame_at("frame-rendered", now)
+                .is_none()
+        );
+        controller.share = Some(ShareSession {
+            id: "share-1".to_owned(),
+            window_id: "window-1".to_owned(),
+            fps: 10,
+            sequence: 2,
+            started_at: now_iso(),
+            last_capture: None,
+        });
+
+        assert!(
+            controller
+                .requested_frame_at("frame-rendered", now)
+                .is_some()
+        );
+
+        controller.recent_frames.front_mut().unwrap().captured_at =
+            now - MAX_FRAME_AGE - Duration::from_nanos(1);
+        assert!(
+            controller
+                .requested_frame_at("frame-rendered", now)
+                .is_none()
+        );
+        controller.recent_frames.front_mut().unwrap().captured_at = now;
+
+        controller.frame.as_mut().unwrap().target.width += 1;
+        assert!(
+            controller
+                .requested_frame_at("frame-rendered", now)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn current_frame_lease_has_an_inclusive_three_second_boundary() {
+        let mut controller = ComputerController::new();
+        let now = Instant::now();
+        let mut current = frame();
+        current.captured_at = now - MAX_FRAME_AGE;
+        let frame_id = current.id.clone();
+        controller.frame = Some(current);
+
+        assert!(controller.requested_frame_at(&frame_id, now).is_some());
+
+        controller.frame.as_mut().unwrap().captured_at =
+            now - MAX_FRAME_AGE - Duration::from_nanos(1);
+        assert!(controller.requested_frame_at(&frame_id, now).is_none());
+    }
+
+    #[test]
+    fn expired_current_frame_rejects_mutation_before_any_dispatch() {
+        let mut controller = ComputerController::new();
+        let mut expired = frame();
+        expired.captured_at = Instant::now() - MAX_FRAME_AGE - Duration::from_millis(1);
+        let frame_id = expired.id.clone();
+        controller.frame = Some(expired);
+        let cancellation = CommandCancellation::new();
+
+        let error = controller
+            .execute_cancellable(
+                "computer.move",
+                &json!({ "frameId": frame_id, "x": 10, "y": 10 }),
+                &cancellation,
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code, "COMPUTER_STALE_FRAME");
+        assert!(!cancellation.was_dispatched());
     }
 }

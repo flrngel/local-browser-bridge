@@ -1,8 +1,8 @@
 # Local Browser Bridge
 
-Local Browser Bridge lets browser-only AI agents control real Chrome or Edge tabs—and, when the separate helper is running, the macOS or Windows desktop—through a `localhost` control surface. A local browser agent such as Microsoft 365 Copilot Cowork opens `http://127.0.0.1:17373`; the target Chromium extension and native computer helper connect outbound to the same Rust server.
+Local Browser Bridge lets browser-only AI agents control real Chrome or Edge tabs—and, when the separate helper is running, selected macOS or Windows application windows—through a `localhost` control surface. A local browser agent such as Microsoft 365 Copilot Cowork opens `http://127.0.0.1:17373`; the target Chromium extension and native computer helper connect outbound to the same Rust server.
 
-This project does not copy any private OpenAI protocol. It independently implements publicly documented product behavior and established browser-extension patterns. See [docs/RESEARCH.md](docs/RESEARCH.md) for the research sources and feature comparison.
+This project does not copy any private OpenAI protocol. It independently implements publicly documented product behavior and established browser-extension patterns. See [docs/RESEARCH.md](docs/RESEARCH.md) for the original extension comparison and [docs/COMPUTER_USE_RESEARCH.md](docs/COMPUTER_USE_RESEARCH.md) for the pinned version 0.9 browser-control and computer-use review.
 
 ## Features
 
@@ -12,14 +12,20 @@ This project does not copy any private OpenAI protocol. It independently impleme
 - Click, fill, and select by element reference
 - Click viewport coordinates, type into the focused control, and send arbitrary key chords
 - Execute arbitrary JavaScript, including Promises, in the current page's main world
+- Hold one explicit, expiring browser-control lease on one tab, with `sessionId`, observation `turn`, and pointer `moveSequence` bindings
+- Keep Chrome's native **Local Browser Bridge started debugging this browser** warning visible for the full trusted-control lease
+- Show a separate in-page **Local Browser Bridge is using this tab** pill, trusted **Stop** button, and model-visible synthetic cursor
+- Put tabs created by the bridge in a named **Local Browser Bridge** Chrome tab group
 - **Full Access mode by default:** control all HTTP(S) sites, sensitive fields, risky clicks, and tab closing without approval
 - Optional **Safe mode:** site allowlist, sensitive-field blocking, and popup approval for risky actions
 - Control `file://` pages when Chrome's file-URL permission is enabled
 - Redact URL query strings and fragments from returned tab metadata
-- Loopback-only server, WebSocket token and extension-Origin validation, SameSite UI sessions, CSRF validation, CSP, and no CORS
+- Loopback-only server, token-authenticated dashboard/read APIs, token-free mutual-HMAC connector WebSockets, exact connector-Origin validation, expiring port-origin dashboard sessions, CSRF validation, CSP, and no CORS
+- Versioned connector handshakes, per-connection session IDs, monotonic command/event sequences, bounded outbound queues, and exact package-version compatibility checks
 - Accessible agent-facing DOM, activity log, and live SSE state updates
 - Bearer-token REST command API and a Rust mock extension for testing
 - Optional standalone Rust computer helper for macOS and Windows exact-window capture, background-routed mouse input, Unicode text, and key chords
+- Optional exact-window live frame feed at 1–10 FPS, with a session-owned synthetic pointer composited into observations and shared frames
 - Non-interrupting computer-use contract: no global HID input, hardware-cursor movement, user-focus loss, target-app activation, desktop switching, or implicit foreground fallback
 - Separate computer-process status and authority in the UI; no shell, filesystem, process-launch, clipboard, downloader, or telemetry command
 - Standalone Rust binary with the entire control UI embedded; Node.js is not required
@@ -34,14 +40,16 @@ This project does not copy any private OpenAI protocol. It independently impleme
 flowchart LR
   A["M365 Copilot Cowork<br/>local Edge browser"] -->|"opens localhost UI"| B["Local control surface<br/>127.0.0.1:17373"]
   B --> C["Standalone Rust binary<br/>embedded UI + HTTP/SSE/WebSocket"]
-  D["Target Chrome/Edge extension<br/>Manifest V3"] -->|"outbound token-auth WebSocket"| C
-  C -->|"browser commands"| D
+  D["Target Chrome/Edge extension<br/>Manifest V3"] -->|"outbound mutual-HMAC WebSocket"| C
+  C -->|"session + sequence-bound commands"| D
   D --> E["Browser tabs<br/>existing login/session"]
-  E -->|"screenshot + DOM refs"| D
-  G["Local Computer Helper<br/>separate Rust process"] -->|"outbound token-auth WebSocket"| C
-  C -->|"exact-window frame-bound input"| G
+  D --> I["Held debugger lease<br/>native Chrome warning"]
+  D --> J["In-page control pill<br/>Stop + virtual cursor"]
+  E -->|"screenshot + mutation-bound DOM refs"| D
+  G["Local Computer Helper<br/>separate Rust process"] -->|"outbound mutual-HMAC WebSocket"| C
+  C -->|"frame-bound input<br/>or bounded live-frame request"| G
   G --> H["Background app window<br/>macOS / Windows"]
-  H -->|"window-only screenshot"| G
+  H -->|"window-only frames<br/>synthetic cursor composited"| G
   F["Human"] -->|"toggle Full Access / Safe mode"| D
 ```
 
@@ -85,9 +93,11 @@ cargo build --release
 The server prints:
 
 ```text
-Control surface: http://127.0.0.1:17373
+Control surface: http://127.0.0.1:17373/#token=<random token>
 Extension token: <random token>
 ```
+
+Open the complete control-surface URL printed by the server. The master token stays in the URL fragment, is removed from browser history immediately, and is exchanged once for an expiring random dashboard capability kept in this exact origin's `sessionStorage`. It is not a localhost cookie, so unrelated services on other ports do not receive it. If you open the bare URL without an existing session, the dashboard asks you to paste the master token. State, event, and screenshot endpoints reject unauthenticated local clients.
 
 Load the extension in the target browser:
 
@@ -98,15 +108,21 @@ Load the extension in the target browser:
 5. Confirm that **Full Access mode** is enabled. It is ON by default.
 6. To control `file://` pages, also enable **Allow access to file URLs** in the extension details page.
 
+When trusted control starts, Chrome itself displays **Local Browser Bridge started debugging this browser**. The controlled page separately displays **Local Browser Bridge is using this tab** with a **Stop** button. They are intentionally independent: Chrome owns the first warning and the extension owns the second. Choosing Chrome's Cancel action, the in-page Stop button, **Release control** in the extension popup, lease expiry, tab closure, or bridge disconnection revokes the lease. Chrome Cancel and either human Stop control also persist a global pause across browser and service-worker restarts: remote commands cannot resume on any tab until a person selects **Resume** in the extension popup and then starts a new lease. The extension never falls back to an untrusted DOM click.
+
 For M365 Copilot Cowork running with the local Edge browser, use a prompt such as:
 
 ```text
-Open http://127.0.0.1:17373 in the browser. Follow the Browser Bridge
+Open the complete authenticated Control surface URL printed by Local Browser
+Bridge. Follow the Browser Bridge
 instructions to observe the target tab and complete [the requested task].
-Observe again after each action to verify the result. Use Direct browser
-control for coordinate clicks, arbitrary key input, or JavaScript when needed.
-If Local Computer Helper is connected, use the Native Computer observation for
-other desktop applications and always act against its current frame ID.
+Start a visible browser control session for the target tab. Observe again after
+each action to verify the result and use the current session, turn, generation,
+and move sequence. Use Direct browser control for coordinate clicks, arbitrary
+key input, or JavaScript when needed. If Local Computer Helper is connected,
+use the Native Computer observation for other desktop applications, always act
+against its current frame ID, and start an exact-window share only when a live
+preview is useful. Stop both control sessions when the task is complete.
 ```
 
 Full Access executes sensitive actions immediately. Turning Full Access off restores Safe mode, where risky actions wait for **Approve once** or **Reject** in the extension popup. Pending approvals expire after two minutes.
@@ -116,14 +132,14 @@ Full Access executes sensitive actions immediately. Turning Full Access off rest
 Use two terminals to test the embedded UI and protocol without installing the real extension:
 
 ```bash
-LBB_TOKEN=demo-token cargo run --release
+cargo run --release
 ```
 
 ```bash
-LBB_TOKEN=demo-token cargo run --release --bin mock-extension
+cargo run --release --bin mock-extension
 ```
 
-Open `http://127.0.0.1:17373` and select **Observe target**. The mock tab and element references will appear. The `/demo` route also contains a local form for testing the real extension.
+Open the complete authenticated URL printed by the server and select **Observe target**. Both processes read the same generated token file automatically. The mock tab and element references will appear. The `/demo` route also contains a local form for testing the real extension.
 
 On macOS or Windows, a third terminal can start `cargo run --release --bin local-computer-helper`. It shares the server token automatically. Choose a target application window in the control page, then observe it. macOS will ask for Screen Recording when observing and Accessibility when input is first used.
 
@@ -159,7 +175,7 @@ cargo clippy --all-targets -- -D warnings
 cargo test --locked --all-targets
 ```
 
-The test suite covers version alignment, exact extension permissions and package files, absence of remote extension code and updater APIs, command parity, token persistence, update metadata validation, command validation, CSRF and both WebSocket Origin boundaries, browser/computer relays, screenshot serving, frame freshness, and the helper's bounded capability contract. The implementation review and sanitized live screenshots are in [docs/SOTA_AUDIT.md](docs/SOTA_AUDIT.md) and [evidence/v0.8.0](evidence/v0.8.0).
+The test suite covers version alignment, exact extension permissions and package files, absence of remote extension code and updater APIs, command parity, token persistence, update metadata validation, command validation, CSRF and both WebSocket Origin boundaries, protocol/session mismatch rejection, browser/computer relays, screenshot serving, frame freshness, debugger-revocation contracts, and the helper's bounded capability contract. The implementation review and release-specific evidence index are in [docs/SOTA_AUDIT.md](docs/SOTA_AUDIT.md).
 
 ## Deployment contract
 
@@ -177,12 +193,16 @@ The canonical build is `.github/workflows/deploy.yml`, triggered by a matching `
 ## Limitations
 
 - Native computer control is hybrid and exact-window scoped: frame-bound macOS Accessibility or Windows UI Automation refs are preferred for supported controls, with background pixel input available for visual targets. Unsupported delivery fails closed; the helper never escalates to foreground input automatically.
+- The helper's exact-window live feed is repeated, bounded capture from one selected window. It is not an OS screen-sharing session, virtual display, remote desktop, VM, or separate input seat. It preserves the foreground and hardware cursor but does not isolate untrusted work from the user's login session.
+- The helper pointer is synthetic state composited into returned exact-window images. Version 0.9 does not install a native click-through desktop cursor overlay, and the hardware cursor never represents agent state.
 - macOS pixel input relies on dynamically resolved, undocumented SkyLight symbols and is limited to non-minimized windows on the active Space. Windows uses UI Automation plus exact-HWND background messages. Elevated, game, secure-input, protected-content, and custom-rendered surfaces can still refuse control.
 - Chromium does not allow control of `chrome://`, `edge://`, extension pages, or browser permission UI through this extension.
 - File-page control requires the user to enable Chrome's file-URL permission for the extension.
 - Element references expire when the page structure changes. Observe again before reusing them.
 - Open shadow roots are included in browser observations. Cross-origin iframe semantic merging is not implemented; use a visual/CDP action or navigate into the frame's page instead of assuming a ref exists.
-- Reference clicks use trusted Chrome DevTools Protocol input when possible and detach immediately. If DevTools is already attached, the extension falls back to a synthetic click and returns `trusted: false`.
+- Trusted browser control holds one `chrome.debugger` attachment for the lease. Chrome therefore keeps its native warning visible, and another debugger cannot attach to that tab at the same time. There is no DOM `.click()` fallback: debugger loss or user cancellation revokes authority and the pending action fails closed.
+- One extension-controlled tab lease is active at a time. Switching the controlled target ends the old lease before attaching to the new tab.
+- The Chrome warning, page control pill, and helper pointer are different surfaces. The warning is browser chrome, the pill/cursor are page content, and the helper pointer exists only in returned exact-window frames.
 - Full Access can enter passwords, payment data, and OTPs and can execute page JavaScript. Treat it as remote-control authority over the signed-in browser profile.
 - Unpacked extensions are intended for development or personal installation. Organization-wide deployment requires signing, policy review, and privacy disclosures.
 - Windows artifacts are not yet publisher-signed, and macOS artifacts are not yet Developer ID-signed or notarized. SmartScreen or Gatekeeper may warn. See [docs/INSTALL.md](docs/INSTALL.md) before overriding a per-app warning; never disable platform protection globally.

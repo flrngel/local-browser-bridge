@@ -70,4 +70,22 @@ fn native_desktop_dependencies_are_not_built_on_unsupported_hosts() {
             "{dependency} must stay macOS-gated"
         );
     }
+
+    let library = fs::read_to_string("src/lib.rs").unwrap();
+    assert!(library.contains("cfg(any(target_os = \"macos\", target_os = \"windows\"))"));
+    assert!(library.contains("path = \"computer_unsupported.rs\""));
+    let unsupported = fs::read_to_string("src/computer_unsupported.rs").unwrap();
+    assert!(unsupported.contains("COMPUTER_UNSUPPORTED_PLATFORM"));
+    assert!(unsupported.contains("NATIVE_COMPUTER_SUPPORTED: bool = false"));
+    for forbidden in ["image::", "xcap::", "platform_macos", "platform_windows"] {
+        assert!(
+            !unsupported.contains(forbidden),
+            "unsupported-host stub must not reference {forbidden}"
+        );
+    }
+
+    let ci = fs::read_to_string(".github/workflows/ci.yml").unwrap();
+    assert!(ci.contains("runs-on: ubuntu-latest"));
+    assert!(ci.contains("cargo clippy --locked --all-targets -- -D warnings"));
+    assert!(ci.contains("cargo test --locked --all-targets"));
 }

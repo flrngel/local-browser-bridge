@@ -22,6 +22,21 @@
       </div>
     </section>
 
+    <section id="control-section" class="control-zone">
+      <div class="row between">
+        <div>
+          <h2>Visible browser control</h2>
+          <p id="control-status" class="muted">Checking the control session…</p>
+        </div>
+        <span id="control-live" class="live-dot" aria-hidden="true"></span>
+      </div>
+      <p class="control-copy">Chrome shows its native debugging notice while control is attached. The page also shows a Stop pill and the model-visible virtual cursor. Stop pauses all future remote control until you use Resume here.</p>
+      <div class="row">
+        <button id="start-control" type="button">Start on this tab</button>
+        <button id="release-control" class="reject" type="button">Release control</button>
+      </div>
+    </section>
+
     <section class="danger-zone">
       <div class="row between">
         <div>

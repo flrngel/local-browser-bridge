@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust formatting, lint, and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the minimum supported Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
+          rustup default 1.88.0
+      - name: Audit distributed versions
+        run: bash scripts/audit-versions.sh
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Reject lint warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Run all tests
+        run: cargo test --locked --all-targets
+
+  extension:
+    name: Extension static and contract tests (Node-free)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the minimum supported Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+      - name: Validate the manifest as JSON
+        run: python3 -m json.tool extension/manifest.json >/dev/null
+      - name: Run extension capability, safety, and protocol contract tests
+        run: cargo test --locked --test extension_contract
+
+  package:
+    name: Reproducible extension package (Node-free)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check packaging scripts and versions
+        shell: bash
+        run: |
+          bash -n scripts/*.sh
+          bash scripts/audit-versions.sh
+      - name: Build the extension twice and compare bytes
+        shell: bash
+        run: |
+          stage="$(mktemp -d)"
+          trap 'rm -rf "$stage"' EXIT
+          bash scripts/package-extension.sh "$stage/first.zip" >/dev/null
+          bash scripts/package-extension.sh "$stage/second.zip" >/dev/null
+          cmp "$stage/first.zip" "$stage/second.zip"
+          unzip -tq "$stage/first.zip"
+      - name: Ensure packaging did not mutate tracked source
+        run: git diff --exit-code

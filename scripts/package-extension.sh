@@ -4,27 +4,32 @@ set -euo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_root"
 
-version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
-manifest_version="$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' extension/manifest.json | head -n 1)"
-if [[ -z "$version" || "$version" != "$manifest_version" ]]; then
-  echo "Server and extension versions are missing or do not match." >&2
-  exit 1
-fi
+version="$(bash scripts/audit-versions.sh)"
 
 output="${1:-$project_root/dist/local-browser-bridge-extension-v${version}.zip}"
 mkdir -p "$(dirname "$output")"
+output_dir="$(cd "$(dirname "$output")" && pwd -P)"
+output="$output_dir/$(basename "$output")"
 rm -f "$output"
 
 files=(background.js content.js lib.js manifest.json popup.css popup.html popup.js)
 for file in "${files[@]}"; do
-  if [[ ! -f "extension/$file" ]]; then
+  if [[ ! -f "extension/$file" || -L "extension/$file" ]]; then
     echo "Missing extension package file: $file" >&2
     exit 1
   fi
 done
 
+stage="$(mktemp -d)"
+trap 'rm -rf "$stage"' EXIT
+for file in "${files[@]}"; do
+  cp "extension/$file" "$stage/$file"
+  chmod 644 "$stage/$file"
+  touch -t 198001010000.00 "$stage/$file"
+done
+
 (
-  cd extension
+  cd "$stage"
   zip -q -X "$output" "${files[@]}"
 )
 unzip -tq "$output" >/dev/null
@@ -36,5 +41,12 @@ if [[ "$actual" != "$expected" ]]; then
   diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") || true
   exit 1
 fi
+
+for file in "${files[@]}"; do
+  if ! unzip -p "$output" "$file" | cmp -s - "extension/$file"; then
+    echo "Extension archive payload differs from extension/$file." >&2
+    exit 1
+  fi
+done
 
 echo "$output"

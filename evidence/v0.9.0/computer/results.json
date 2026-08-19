@@ -1,0 +1,781 @@
+{
+  "version": "0.9.0",
+  "capturedAt": "2026-08-19T07:46:00Z/2026-08-19T07:52:15Z",
+  "fixture": {
+    "appName": "BackgroundFixtureSemantic",
+    "windowTitle": "LBB Background Fixture",
+    "windowId": "51345"
+  },
+  "observation": {
+    "frameId": "e5c4948b-e22c-4382-b121-6232188244dc",
+    "deliveryMode": "exact-window-background",
+    "sessionMode": "background-window",
+    "imageWidth": 1209,
+    "imageHeight": 826,
+    "semanticMode": "macos-accessibility",
+    "coordinateSpace": "image-pixels"
+  },
+  "actions": {
+    "move": {
+      "actionId": "5c2cf2e6-452c-4d35-8462-9a691e8f3646",
+      "deliveryMode": "exact-window-background",
+      "effect": "Unverifiable",
+      "evidence": [
+        {
+          "claim": "foregroundUnchanged",
+          "detail": "The foreground application was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "userFocusUnchanged",
+          "detail": "Keyboard focus was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "hardwareCursorUnchanged",
+          "detail": "The hardware cursor was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "desktopSpaceUnchanged",
+          "detail": "The active desktop or Space was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        }
+      ],
+      "frameId": "e5c4948b-e22c-4382-b121-6232188244dc",
+      "invariants": {
+        "cursorUnchanged": true,
+        "foregroundUnchanged": true,
+        "spaceUnchanged": true,
+        "userFocusUnchanged": true
+      },
+      "motion": {
+        "arrivalAcknowledged": true,
+        "arrivalHeadingDegrees": 41.73062175068509,
+        "candidateCount": 20,
+        "curve": "bounded-cubic-bezier-minimum-jerk",
+        "durationMs": 650,
+        "pathScore": 97.60332045510089,
+        "profile": "candidate-scored-spring-v1",
+        "seeded": true,
+        "sequence": 1,
+        "steps": 36
+      },
+      "pointer": {
+        "action": "move",
+        "buttonsMask": 0,
+        "coordinateSpace": "image-pixels",
+        "headingDegrees": 41.73062175068509,
+        "id": "60c02226-bc36-469c-b0e9-abea0124e85e",
+        "imageX": 179.67083333333332,
+        "imageY": 179.6382113821138,
+        "pressed": false,
+        "revision": 1,
+        "screenX": 287,
+        "screenY": 875,
+        "sequence": 1,
+        "style": {
+          "fill": "#FF7AB8",
+          "hotspot": "tip",
+          "logicalSize": 42,
+          "outline": "#FFFFFF",
+          "theme": "lbb.session-pointer.v1"
+        },
+        "updatedAt": "2026-08-19T07:46:51.388783Z",
+        "visible": true,
+        "windowId": "51345"
+      },
+      "timings": {
+        "dispatchMs": 881.518,
+        "resolveMs": 275.972333,
+        "totalMs": 1157.681792,
+        "verifyMs": 0.191459
+      },
+      "x": 107,
+      "y": 107
+    },
+    "click": {
+      "actionId": "fd08901f-a973-4c69-ae19-a9ecc97463d3",
+      "button": "left",
+      "clickCount": 1,
+      "deliveryMode": "exact-window-background",
+      "effect": "Unverifiable",
+      "evidence": [
+        {
+          "claim": "foregroundUnchanged",
+          "detail": "The foreground application was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "userFocusUnchanged",
+          "detail": "Keyboard focus was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "hardwareCursorUnchanged",
+          "detail": "The hardware cursor was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "desktopSpaceUnchanged",
+          "detail": "The active desktop or Space was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        }
+      ],
+      "frameId": "8ba0e065-0e55-4d43-a31d-1360bbc37350",
+      "invariants": {
+        "cursorUnchanged": true,
+        "foregroundUnchanged": true,
+        "spaceUnchanged": true,
+        "userFocusUnchanged": true
+      },
+      "motion": {
+        "arrivalAcknowledged": true,
+        "arrivalHeadingDegrees": 71.04754050019945,
+        "candidateCount": 20,
+        "curve": "bounded-cubic-bezier-minimum-jerk",
+        "durationMs": 700,
+        "pathScore": 1.047378761350394,
+        "profile": "candidate-scored-spring-v1",
+        "seeded": false,
+        "sequence": 2,
+        "steps": 41
+      },
+      "pointer": {
+        "action": "click",
+        "buttonsMask": 0,
+        "coordinateSpace": "image-pixels",
+        "headingDegrees": 71.04754050019945,
+        "id": "60c02226-bc36-469c-b0e9-abea0124e85e",
+        "imageX": 599.4625,
+        "imageY": 679.9390243902438,
+        "pressed": false,
+        "revision": 2,
+        "screenX": 537,
+        "screenY": 1173,
+        "sequence": 2,
+        "style": {
+          "fill": "#FF7AB8",
+          "hotspot": "tip",
+          "logicalSize": 42,
+          "outline": "#FFFFFF",
+          "theme": "lbb.session-pointer.v1"
+        },
+        "updatedAt": "2026-08-19T07:47:12.895666Z",
+        "visible": true,
+        "windowId": "51345"
+      },
+      "timings": {
+        "dispatchMs": 1041.4416660000002,
+        "resolveMs": 287.454625,
+        "totalMs": 1328.9635,
+        "verifyMs": 0.067209
+      },
+      "x": 357,
+      "y": 405
+    },
+    "drag": {
+      "actionId": "49541303-4ad9-41de-8ddd-8cacdf9cf21f",
+      "deliveryMode": "exact-window-background",
+      "durationMs": 900,
+      "effect": "Unverifiable",
+      "evidence": [
+        {
+          "claim": "foregroundUnchanged",
+          "detail": "The foreground application was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "userFocusUnchanged",
+          "detail": "Keyboard focus was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "hardwareCursorUnchanged",
+          "detail": "The hardware cursor was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "desktopSpaceUnchanged",
+          "detail": "The active desktop or Space was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        }
+      ],
+      "frameId": "30440743-b9e6-40c7-9a4d-e55f7b00166e",
+      "from": {
+        "x": 238,
+        "y": 405
+      },
+      "invariants": {
+        "cursorUnchanged": true,
+        "foregroundUnchanged": true,
+        "spaceUnchanged": true,
+        "userFocusUnchanged": true
+      },
+      "motion": {
+        "approach": {
+          "arrivalAcknowledged": true,
+          "arrivalHeadingDegrees": -161.14671646378008,
+          "candidateCount": 20,
+          "curve": "bounded-cubic-bezier-minimum-jerk",
+          "durationMs": 400,
+          "pathScore": 0.9939519325203988,
+          "profile": "candidate-scored-spring-v1",
+          "seeded": false,
+          "sequence": 3,
+          "steps": 23
+        },
+        "gesture": {
+          "arrivalAcknowledged": true,
+          "arrivalSequence": 4,
+          "curve": "minimum-jerk-drag",
+          "durationMs": 900
+        }
+      },
+      "pointer": {
+        "action": "drag",
+        "buttonsMask": 0,
+        "coordinateSpace": "image-pixels",
+        "headingDegrees": -15.473666641565249,
+        "id": "60c02226-bc36-469c-b0e9-abea0124e85e",
+        "imageX": 799.2833333333333,
+        "imageY": 679.9390243902438,
+        "pressed": false,
+        "revision": 4,
+        "screenX": 656,
+        "screenY": 1173,
+        "sequence": 4,
+        "style": {
+          "fill": "#FF7AB8",
+          "hotspot": "tip",
+          "logicalSize": 42,
+          "outline": "#FFFFFF",
+          "theme": "lbb.session-pointer.v1"
+        },
+        "updatedAt": "2026-08-19T07:47:34.410947Z",
+        "visible": true,
+        "windowId": "51345"
+      },
+      "timings": {
+        "dispatchMs": 1751.983042,
+        "resolveMs": 297.31041600000003,
+        "totalMs": 2049.516416,
+        "verifyMs": 0.222958
+      },
+      "to": {
+        "x": 476,
+        "y": 405
+      }
+    },
+    "scroll": {
+      "actionId": "bd770f63-5354-462c-ae55-9f5f7ae46763",
+      "deliveryMode": "exact-window-background",
+      "deltaX": 0,
+      "deltaY": -7,
+      "effect": "Unverifiable",
+      "evidence": [
+        {
+          "claim": "foregroundUnchanged",
+          "detail": "The foreground application was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "userFocusUnchanged",
+          "detail": "Keyboard focus was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "hardwareCursorUnchanged",
+          "detail": "The hardware cursor was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "desktopSpaceUnchanged",
+          "detail": "The active desktop or Space was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        }
+      ],
+      "frameId": "05a8c9f9-684d-4167-a43f-59e3097fb433",
+      "invariants": {
+        "cursorUnchanged": true,
+        "foregroundUnchanged": true,
+        "spaceUnchanged": true,
+        "userFocusUnchanged": true
+      },
+      "motion": {
+        "arrivalAcknowledged": true,
+        "arrivalHeadingDegrees": -157.73167129760358,
+        "candidateCount": 20,
+        "curve": "bounded-cubic-bezier-minimum-jerk",
+        "durationMs": 132,
+        "pathScore": 0.8673547718841529,
+        "profile": "candidate-scored-spring-v1",
+        "seeded": false,
+        "sequence": 5,
+        "steps": 8
+      },
+      "pointer": {
+        "action": "scroll",
+        "buttonsMask": 0,
+        "coordinateSpace": "image-pixels",
+        "headingDegrees": -157.73167129760358,
+        "id": "60c02226-bc36-469c-b0e9-abea0124e85e",
+        "imageX": 599.4625,
+        "imageY": 679.9390243902438,
+        "pressed": false,
+        "revision": 5,
+        "screenX": 537,
+        "screenY": 1173,
+        "sequence": 5,
+        "style": {
+          "fill": "#FF7AB8",
+          "hotspot": "tip",
+          "logicalSize": 42,
+          "outline": "#FFFFFF",
+          "theme": "lbb.session-pointer.v1"
+        },
+        "updatedAt": "2026-08-19T07:49:45.642367Z",
+        "visible": true,
+        "windowId": "51345"
+      },
+      "timings": {
+        "dispatchMs": 317.356333,
+        "resolveMs": 305.351584,
+        "totalMs": 622.787792,
+        "verifyMs": 0.079875
+      },
+      "x": 357,
+      "y": 405
+    },
+    "setValue": {
+      "actionId": "b85dc541-02df-4f4c-b618-b4ab9cb2a39a",
+      "backendEffect": {
+        "delivered": true,
+        "effectObserved": true,
+        "postcondition": "value-confirmed"
+      },
+      "characters": 14,
+      "deliveryMode": "exact-window-semantic",
+      "effect": "Confirmed",
+      "elementRef": "a1",
+      "evidence": [
+        {
+          "claim": "semanticDispatchReturned",
+          "detail": "The semantic backend returned after dispatch; this is not target-effect proof",
+          "kind": "dispatchAcknowledgement",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "value-confirmed",
+          "detail": "The semantic backend observed this target-side postcondition",
+          "kind": "postcondition",
+          "observed": true,
+          "supportsConfirmation": true
+        }
+      ],
+      "frameId": "d0960c84-65d1-40c2-a21a-8f1b0e541634",
+      "timings": {
+        "dispatchMs": 133.259333,
+        "resolveMs": 280.202,
+        "totalMs": 413.47574999999995,
+        "verifyMs": 0.014417
+      }
+    },
+    "invoke": {
+      "action": "press",
+      "actionId": "ebadf04f-4d76-4bca-b925-d9775961e9f6",
+      "backendEffect": {
+        "delivered": true,
+        "effectObserved": true,
+        "postcondition": "element-state-changed"
+      },
+      "deliveryMode": "exact-window-semantic",
+      "effect": "Confirmed",
+      "elementRef": "a2",
+      "evidence": [
+        {
+          "claim": "semanticDispatchReturned",
+          "detail": "The semantic backend returned after dispatch; this is not target-effect proof",
+          "kind": "dispatchAcknowledgement",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "element-state-changed",
+          "detail": "The semantic backend observed this target-side postcondition",
+          "kind": "postcondition",
+          "observed": true,
+          "supportsConfirmation": true
+        }
+      ],
+      "frameId": "0b31cc25-fe15-4d6f-8a91-3c7e4ae38a91",
+      "timings": {
+        "dispatchMs": 295.116916,
+        "resolveMs": 271.8855,
+        "totalMs": 567.054166,
+        "verifyMs": 0.05175
+      }
+    },
+    "focusClick": {
+      "actionId": "f4711523-8a60-45f4-87ac-49fe9c1e22a0",
+      "button": "left",
+      "clickCount": 1,
+      "deliveryMode": "exact-window-background",
+      "effect": "Unverifiable",
+      "evidence": [
+        {
+          "claim": "foregroundUnchanged",
+          "detail": "The foreground application was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "userFocusUnchanged",
+          "detail": "Keyboard focus was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "hardwareCursorUnchanged",
+          "detail": "The hardware cursor was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "desktopSpaceUnchanged",
+          "detail": "The active desktop or Space was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        }
+      ],
+      "frameId": "b044e6ae-d67a-4c65-b78d-93da997f7c9e",
+      "invariants": {
+        "cursorUnchanged": true,
+        "foregroundUnchanged": true,
+        "spaceUnchanged": true,
+        "userFocusUnchanged": true
+      },
+      "motion": {
+        "arrivalAcknowledged": true,
+        "arrivalHeadingDegrees": -176.6003825367358,
+        "candidateCount": 20,
+        "curve": "bounded-cubic-bezier-minimum-jerk",
+        "durationMs": 450,
+        "pathScore": 1.0858357219455212,
+        "profile": "candidate-scored-spring-v1",
+        "seeded": false,
+        "sequence": 6,
+        "steps": 26
+      },
+      "pointer": {
+        "action": "click",
+        "buttonsMask": 0,
+        "coordinateSpace": "image-pixels",
+        "headingDegrees": -176.6003825367358,
+        "id": "60c02226-bc36-469c-b0e9-abea0124e85e",
+        "imageX": 349.26666666666665,
+        "imageY": 545.630081300813,
+        "pressed": false,
+        "revision": 6,
+        "screenX": 388,
+        "screenY": 1093,
+        "sequence": 6,
+        "style": {
+          "fill": "#FF7AB8",
+          "hotspot": "tip",
+          "logicalSize": 42,
+          "outline": "#FFFFFF",
+          "theme": "lbb.session-pointer.v1"
+        },
+        "updatedAt": "2026-08-19T07:50:26.567924Z",
+        "visible": true,
+        "windowId": "51345"
+      },
+      "timings": {
+        "dispatchMs": 726.3222910000001,
+        "resolveMs": 313.02970899999997,
+        "totalMs": 1039.405,
+        "verifyMs": 0.053
+      },
+      "x": 208,
+      "y": 325
+    },
+    "typeText": {
+      "actionId": "7c820061-8538-4fb6-876f-b8eda13ff784",
+      "characters": 12,
+      "deliveryMode": "exact-window-background",
+      "effect": "Unverifiable",
+      "evidence": [
+        {
+          "claim": "foregroundUnchanged",
+          "detail": "The foreground application was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "userFocusUnchanged",
+          "detail": "Keyboard focus was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "hardwareCursorUnchanged",
+          "detail": "The hardware cursor was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "desktopSpaceUnchanged",
+          "detail": "The active desktop or Space was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        }
+      ],
+      "frameId": "70a02fc7-f0bd-4880-97ba-2d2f3d29ccad",
+      "invariants": {
+        "cursorUnchanged": true,
+        "foregroundUnchanged": true,
+        "spaceUnchanged": true,
+        "userFocusUnchanged": true
+      },
+      "timings": {
+        "dispatchMs": 87.900375,
+        "resolveMs": 234.647458,
+        "totalMs": 322.563125,
+        "verifyMs": 0.015291999999999998
+      }
+    },
+    "key": {
+      "actionId": "36f2f8a7-a674-44c5-bff4-a8ed6f2497c5",
+      "deliveryMode": "exact-window-background",
+      "effect": "Unverifiable",
+      "evidence": [
+        {
+          "claim": "foregroundUnchanged",
+          "detail": "The foreground application was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "userFocusUnchanged",
+          "detail": "Keyboard focus was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "hardwareCursorUnchanged",
+          "detail": "The hardware cursor was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "desktopSpaceUnchanged",
+          "detail": "The active desktop or Space was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        }
+      ],
+      "frameId": "ae2d1985-54b3-4205-badd-94ee08a7a6c9",
+      "invariants": {
+        "cursorUnchanged": true,
+        "foregroundUnchanged": true,
+        "spaceUnchanged": true,
+        "userFocusUnchanged": true
+      },
+      "key": "Backspace",
+      "timings": {
+        "dispatchMs": 106.931667,
+        "resolveMs": 278.92475,
+        "totalMs": 385.868875,
+        "verifyMs": 0.012458
+      }
+    }
+  },
+  "observedApplicationState": {
+    "semanticValue": "semantic-value",
+    "semanticActionName": "Semantic action complete",
+    "typedValue": "semantic-value-pixel-input",
+    "valueAfterBackspace": "semantic-value-pixel-inpu"
+  },
+  "liveShare": {
+    "start": {
+      "active": true,
+      "backpressure": "producer-blocking",
+      "captureScope": "exact-window",
+      "cursorComposited": true,
+      "fps": 10,
+      "id": "1d9b1eea-7658-471f-8bc7-4064a62f70bf",
+      "sequence": 0,
+      "startedAt": "2026-08-19T07:50:56.121124Z",
+      "windowId": "51345"
+    },
+    "sampledFrame": {
+      "frameId": "abaae776-db1b-42f1-9854-5e2126f68502",
+      "sequence": 0,
+      "captureScope": "exact-window",
+      "cursorComposited": true,
+      "fps": 10,
+      "droppedFrames": 0
+    },
+    "actionUsingSampledFrame": {
+      "actionId": "ae572053-5d13-4245-87cf-cfe554c561f5",
+      "deliveryMode": "exact-window-background",
+      "effect": "Unverifiable",
+      "evidence": [
+        {
+          "claim": "foregroundUnchanged",
+          "detail": "The foreground application was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "userFocusUnchanged",
+          "detail": "Keyboard focus was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "hardwareCursorUnchanged",
+          "detail": "The hardware cursor was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "desktopSpaceUnchanged",
+          "detail": "The active desktop or Space was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        }
+      ],
+      "frameId": "abaae776-db1b-42f1-9854-5e2126f68502",
+      "invariants": {
+        "cursorUnchanged": true,
+        "foregroundUnchanged": true,
+        "spaceUnchanged": true,
+        "userFocusUnchanged": true
+      },
+      "motion": {
+        "arrivalAcknowledged": true,
+        "arrivalHeadingDegrees": -51.987724684530015,
+        "candidateCount": 20,
+        "curve": "bounded-cubic-bezier-minimum-jerk",
+        "durationMs": 550,
+        "pathScore": 1.0809974339439417,
+        "profile": "candidate-scored-spring-v1",
+        "seeded": false,
+        "sequence": 7,
+        "steps": 32
+      },
+      "pointer": {
+        "action": "move",
+        "buttonsMask": 0,
+        "coordinateSpace": "image-pixels",
+        "headingDegrees": -51.987724684530015,
+        "id": "60c02226-bc36-469c-b0e9-abea0124e85e",
+        "imageX": 900.0333333333333,
+        "imageY": 179.6382113821138,
+        "pressed": false,
+        "revision": 7,
+        "screenX": 716,
+        "screenY": 875,
+        "sequence": 7,
+        "style": {
+          "fill": "#FF7AB8",
+          "hotspot": "tip",
+          "logicalSize": 42,
+          "outline": "#FFFFFF",
+          "theme": "lbb.session-pointer.v1"
+        },
+        "updatedAt": "2026-08-19T07:51:00.500167Z",
+        "visible": true,
+        "windowId": "51345"
+      },
+      "timings": {
+        "dispatchMs": 742.960916,
+        "resolveMs": 291.87229199999996,
+        "totalMs": 1034.944833,
+        "verifyMs": 0.111625
+      },
+      "x": 536,
+      "y": 107
+    },
+    "status": {
+      "active": true,
+      "backpressure": "producer-blocking",
+      "captureScope": "exact-window",
+      "cursorComposited": true,
+      "fps": 10,
+      "id": "1d9b1eea-7658-471f-8bc7-4064a62f70bf",
+      "sequence": 6,
+      "startedAt": "2026-08-19T07:50:56.121124Z",
+      "windowId": "51345"
+    },
+    "stop": {
+      "active": false,
+      "id": "1d9b1eea-7658-471f-8bc7-4064a62f70bf",
+      "reason": "requested",
+      "stopped": true
+    }
+  },
+  "independentlySampledNonInterruption": {
+    "before": {
+      "frontmostApp": "Google Chrome",
+      "hardwareCursor": "2041,924"
+    },
+    "after": {
+      "frontmostApp": "Google Chrome",
+      "hardwareCursor": "2041,924"
+    },
+    "foregroundUnchanged": true,
+    "hardwareCursorUnchanged": true
+  }
+}

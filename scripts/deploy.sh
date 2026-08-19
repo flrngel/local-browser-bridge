@@ -4,12 +4,7 @@ set -euo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_root"
 
-version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
-manifest_version="$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' extension/manifest.json | head -n 1)"
-if [[ -z "$version" || "$version" != "$manifest_version" ]]; then
-  echo "Server and extension versions are missing or do not match." >&2
-  exit 1
-fi
+version="$(bash scripts/audit-versions.sh)"
 
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
@@ -60,6 +55,10 @@ for output in "$windows_output" "$windows_helper_output"; do
     exit 1
   fi
 done
+if [[ "${OS:-}" == "Windows_NT" ]]; then
+  test "$("$windows_output" --version)" = "local-browser-bridge $version"
+  test "$("$windows_helper_output" --version)" = "local-computer-helper $version"
+fi
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "A macOS host is required for the universal binary. Use the tagged GitHub release workflow." >&2
@@ -90,10 +89,12 @@ for executable in "$mac_stage/local-browser-bridge" "$mac_stage/Local Computer H
 done
 test "$("$mac_stage/local-browser-bridge" --version)" = "local-browser-bridge $version"
 test "$("$mac_stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper" --version)" = "local-computer-helper $version"
+codesign --force --sign - "$mac_stage/local-browser-bridge"
+codesign --verify --strict "$mac_stage/local-browser-bridge"
 codesign --force --deep --sign - "$mac_stage/Local Computer Helper.app"
 codesign --verify --deep --strict "$mac_stage/Local Computer Helper.app"
 mac_output="dist/local-browser-bridge-v${version}-macos-universal.tar.gz"
-tar -czf "$mac_output" -C "$mac_stage" local-browser-bridge "Local Computer Helper.app"
+COPYFILE_DISABLE=1 tar -czf "$mac_output" -C "$mac_stage" local-browser-bridge "Local Computer Helper.app"
 
 checksum_output="dist/SHA256SUMS.txt"
 assets=("$(basename "$windows_output")" "$(basename "$windows_helper_output")" "$(basename "$mac_output")" "$(basename "$extension_output")")
@@ -107,6 +108,7 @@ fi
 unzip -tq "$extension_output" >/dev/null
 tar -tzf "$mac_output" | grep -Fxq local-browser-bridge
 tar -tzf "$mac_output" | grep -Fxq "Local Computer Helper.app/Contents/MacOS/local-computer-helper"
+bash scripts/verify-release-assets.sh "$version" dist
 
 echo "Created and verified Local Browser Bridge $version:"
 printf '  %s\n' \
