@@ -54,7 +54,9 @@ fn helper_binary_reports_the_aligned_version_without_starting_a_daemon() {
 fn helper_source_has_no_shell_filesystem_or_clipboard_implementation() {
     let helper = fs::read_to_string("src/bin/local-computer-helper.rs").unwrap();
     let controller = fs::read_to_string("src/computer.rs").unwrap();
-    let source = format!("{helper}\n{controller}");
+    let macos = fs::read_to_string("src/computer/platform_macos.rs").unwrap();
+    let windows = fs::read_to_string("src/computer/platform_windows.rs").unwrap();
+    let source = format!("{helper}\n{controller}\n{macos}\n{windows}");
     for forbidden in [
         "std::process::Command",
         "tokio::process",
@@ -69,4 +71,29 @@ fn helper_source_has_no_shell_filesystem_or_clipboard_implementation() {
             "found forbidden source: {forbidden}"
         );
     }
+}
+
+#[test]
+fn background_backend_has_no_global_or_foreground_input_fallback() {
+    let manifest = fs::read_to_string("Cargo.toml").unwrap();
+    let macos = fs::read_to_string("src/computer/platform_macos.rs").unwrap();
+    let windows = fs::read_to_string("src/computer/platform_windows.rs").unwrap();
+    assert!(!manifest.contains("enigo"));
+    for forbidden in [
+        "CGEventTapLocation::HID",
+        "CGEventPost(",
+        "CGWarpMouseCursorPosition",
+        "SendInput(",
+        "SetForegroundWindow(",
+        "keybd_event(",
+    ] {
+        assert!(
+            !macos.contains(forbidden) && !windows.contains(forbidden),
+            "found forbidden foreground fallback: {forbidden}"
+        );
+    }
+    assert!(macos.contains("SLEventPostToPid"));
+    assert!(macos.contains("CGEventSetWindowLocation"));
+    assert!(windows.contains("PostMessageW"));
+    assert!(windows.contains("WS_EX_NOACTIVATE"));
 }

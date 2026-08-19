@@ -94,6 +94,6 @@ The extension includes no remote code, analytics, cookie API, native messaging h
 
 Full Access mode is enabled by default and can control all regular HTTP(S) tabs in the selected Chromium profile, enter sensitive text, close tabs, send keys, click coordinates, and evaluate page JavaScript. Use a dedicated browser profile if you do not want the bridge to reach personal sessions. Turn Full Access off to use the site allowlist and one-time approvals in Safe mode.
 
-The computer helper can see all pixels on the selected display and can send native mouse and keyboard input to whichever application is active. It does not offer shell, filesystem, clipboard, process-launch, downloader, or telemetry commands. Stop the helper whenever desktop authority is not needed.
+The computer helper can capture the exact application window selected in the control page and route background mouse or keyboard events only to that `(process, window)` target. It does not use global HID input, move the hardware cursor, activate the target app, change the active desktop, or silently fall back to foreground control. It also offers no shell, filesystem, clipboard, process-launch, downloader, or telemetry commands. Stop the helper whenever native application authority is not needed.
 
 Stopping the server immediately breaks both connections. You can also stop the helper, pause browser control in the extension popup, or remove the extension from `chrome://extensions`.

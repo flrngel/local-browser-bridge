@@ -58,20 +58,22 @@
         <div class="section-heading computer-heading">
           <div>
             <p class="eyebrow">NATIVE COMPUTER</p>
-            <h2 id="computer-title">Desktop observation and input</h2>
+            <h2 id="computer-title">Background window sessions</h2>
             <p id="computer-meta" class="target-meta">Start Local Computer Helper to enable desktop control.</p>
           </div>
           <div class="computer-actions">
             <button id="computer-status" type="button" class="button ghost">Refresh status</button>
-            <button id="computer-observe" type="button" class="button primary">Observe desktop</button>
+            <button id="computer-observe" type="button" class="button primary">Observe window</button>
           </div>
         </div>
-        <p class="computer-boundary"><strong>Visible authority:</strong> the separate helper can capture screens and send mouse or keyboard input only while it is running. It has no shell, filesystem, process-launch, clipboard, or telemetry command.</p>
+        <p class="computer-boundary"><strong>Non-interruption contract:</strong> every action is bound to one exact background window. The helper never uses global HID input, moves the hardware cursor, activates the target app, or silently falls back to foreground control. Unsupported delivery fails closed.</p>
+        <label for="computer-window">Target application window</label>
+        <select id="computer-window" aria-label="Target application window"></select>
         <div class="computer-grid">
           <div>
             <div class="screenshot-shell computer-screenshot-shell">
-              <img id="computer-screenshot" alt="Current desktop screenshot; select a point to fill the coordinate controls" hidden>
-              <div id="computer-screenshot-empty" class="empty-state">Connect the helper, then observe the desktop. Click a captured image to select coordinates.</div>
+              <img id="computer-screenshot" alt="Current exact-window screenshot; select a point to fill the coordinate controls" hidden>
+              <div id="computer-screenshot-empty" class="empty-state">Connect the helper, choose a window, then observe it. Click the captured window to select coordinates.</div>
             </div>
             <p id="computer-frame-meta" class="frame-meta">No frame is available. Input stays disabled until a fresh frame is captured.</p>
           </div>
@@ -94,7 +96,7 @@
               <button type="button" class="button ghost computer-scroll" data-x="-3" data-y="0">Scroll right</button>
             </div>
             <form id="computer-type-form">
-              <label for="computer-type-text">Type into the focused control</label>
+              <label for="computer-type-text">Type into the target window's focused control</label>
               <textarea id="computer-type-text" rows="3" required placeholder="Text to type"></textarea>
               <button class="button secondary full" type="submit">Type text</button>
             </form>

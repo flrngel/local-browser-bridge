@@ -19,7 +19,7 @@ Extension hello:
 ```json
 {
   "type": "hello",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "browser": "Google Chrome",
   "mode": "full-access",
   "capabilities": ["tabs.list", "page.observe"]
@@ -31,10 +31,11 @@ Computer-helper hello:
 ```json
 {
   "type": "hello",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "platform": "macos",
   "architecture": "aarch64",
-  "backend": "xcap+enigo",
+  "backend": "background-window/skylight+cgwindow",
+  "sessionMode": "background-window",
   "inputReady": true,
   "capabilities": ["computer.status", "computer.observe", "computer.click"]
 }
@@ -112,13 +113,13 @@ Refs are scoped to an observation `generation`. A page mutation or a new observa
 
 | Method | Parameters | Notes |
 |---|---|---|
-| `computer.status` | none | Platform, architecture, backend, displays, permission/input readiness, and current-frame status |
-| `computer.observe` | optional `displayId` | Captures the requested display or primary display and returns PNG plus frame/display metadata |
-| `computer.move` | `frameId`, `x`, `y` | Moves the native pointer to image-space coordinates |
+| `computer.status` | none | Platform, exact-window background backend, target windows, permission/input readiness, and current-frame status |
+| `computer.observe` | optional `windowId` | Captures the requested application window without capturing unrelated desktop windows |
+| `computer.move` | `frameId`, `x`, `y` | Sends a window-local move event; never moves the hardware cursor |
 | `computer.click` | `frameId`, `x`, `y`, optional `button`, `clickCount` | Left/middle/right, one to three clicks |
 | `computer.drag` | `frameId`, `fromX`, `fromY`, `toX`, `toY`, optional `durationMs` | Left-button drag; duration is 50–2000 ms |
-| `computer.scroll` | `frameId`, `x`, `y`, `deltaX`, `deltaY` | Moves to image-space point, then scrolls each axis with deltas clamped to ±50 |
-| `computer.typeText` | `frameId`, `text` | Types Unicode text into the focused native control |
+| `computer.scroll` | `frameId`, `x`, `y`, `deltaX`, `deltaY` | Sends window-local scroll events with deltas clamped to ±50 |
+| `computer.typeText` | `frameId`, `text` | Routes Unicode text to the exact target process/window |
 | `computer.key` | `frameId`, `key` | Sends one named key or a bounded chord such as `Meta+L` or `Control+L` |
 
 `computer.observe` returns a private screenshot data URL to the server plus metadata shaped like:
@@ -128,22 +129,25 @@ Refs are scoped to an observation `generation`. A page mutation or a new observa
   "frame": {
     "id": "uuid",
     "capturedAt": "2026-08-18T00:00:00Z",
-    "displayId": "1",
-    "displayIndex": 0,
-    "displayName": "Built-in Display",
-    "imageWidth": 1333,
-    "imageHeight": 750,
-    "screenX": 0,
-    "screenY": 0,
-    "screenWidth": 2560,
-    "screenHeight": 1440,
-    "scaleFactor": 2.0,
-    "rotation": 0.0
+    "windowId": "47782",
+    "pid": 51641,
+    "appName": "Example App",
+    "windowTitle": "Document",
+    "imageWidth": 1209,
+    "imageHeight": 826,
+    "windowX": 180,
+    "windowY": 768,
+    "windowWidth": 720,
+    "windowHeight": 492,
+    "sessionMode": "background-window",
+    "deliveryMode": "exact-window-background"
   }
 }
 ```
 
-Coordinates use the delivered image dimensions, not assumed physical pixels. The helper maps them into the captured display's screen space. It retains only the latest frame, re-enumerates the display immediately before input, and returns `COMPUTER_STALE_FRAME` if the frame ID or display identity/geometry/scale/rotation changed. The server serializes all actions and requests a new computer observation after every successful input action.
+Coordinates use the delivered image dimensions, not assumed physical pixels. The helper maps them into the captured window's local and screen coordinate spaces. It retains only the latest frame, re-enumerates the exact `(pid, native window id)` target immediately before input, and returns `COMPUTER_STALE_FRAME` if ownership or geometry changed. It snapshots the foreground process, user's focused window/control, hardware cursor, and active desktop around delivery and returns `COMPUTER_BACKGROUND_CONTRACT_VIOLATION` if the non-interruption invariant fails. There is no implicit global-HID or foreground fallback. The server serializes all actions and requests a new exact-window observation after every successful input action.
+
+Version 0.7 still accepts `displayId` and returns legacy display-shaped aliases for compatibility with v0.6 clients. They identify the selected window, not a physical display, and are deprecated.
 
 The native allowlist intentionally contains no shell, filesystem, process-launch, clipboard, downloader, or arbitrary-code method.
 

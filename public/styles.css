@@ -28,9 +28,9 @@ body {
     var(--bg);
 }
 
-button, input, textarea { font: inherit; }
+button, input, textarea, select { font: inherit; }
 
-button:focus-visible, input:focus-visible, textarea:focus-visible, pre:focus-visible {
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, pre:focus-visible {
   outline: 3px solid var(--cyan);
   outline-offset: 2px;
 }
@@ -131,7 +131,7 @@ main { width: min(1680px, 100%); margin: 0 auto; padding: 26px clamp(16px, 3vw, 
 form { display: grid; gap: 8px; margin-top: 14px; }
 form + form { border-top: 1px solid var(--line); padding-top: 14px; }
 label { color: #bfcbc3; font-size: 0.78rem; font-weight: 700; }
-input, textarea {
+input, textarea, select {
   width: 100%;
   background: #0d110f;
   color: var(--text);

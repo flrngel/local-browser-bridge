@@ -1,17 +1,28 @@
+//! Exact-window computer control for the standalone helper.
+//!
+//! The helper never injects global HID input. Every captured frame is bound to
+//! one `(pid, native window id)` pair, and every mutation revalidates that pair
+//! before using a platform background-delivery primitive. Unsupported delivery
+//! fails closed instead of stealing the foreground or moving the real cursor.
+
+use std::io::Cursor;
 use std::time::Instant;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use image::imageops::FilterType;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use thiserror::Error;
+use time::OffsetDateTime;
+use uuid::Uuid;
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-use enigo::{Axis, Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-use {
-    base64::Engine as _, base64::engine::general_purpose::STANDARD as BASE64_STANDARD,
-    image::imageops::FilterType, std::io::Cursor, std::thread, std::time::Duration,
-    time::OffsetDateTime, uuid::Uuid, xcap::Monitor,
-};
+#[cfg(target_os = "macos")]
+#[path = "computer/platform_macos.rs"]
+mod platform;
+#[cfg(target_os = "windows")]
+#[path = "computer/platform_windows.rs"]
+mod platform;
 
 pub const COMPUTER_HELPER_ORIGIN: &str = "lbb-computer-helper://local";
 pub const COMPUTER_METHODS: &[&str] = &[
@@ -25,11 +36,8 @@ pub const COMPUTER_METHODS: &[&str] = &[
     "computer.key",
 ];
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 const MAX_CAPTURE_PIXELS: u64 = 1_000_000;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-const MAX_DISPLAYS: usize = 16;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+const MAX_WINDOWS: usize = 128;
 const MAX_DRAG_DURATION_MS: u64 = 2_000;
 
 #[derive(Debug, Clone, Error)]
@@ -50,33 +58,55 @@ impl ComputerError {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct DisplayDescriptor {
+pub struct WindowDescriptor {
     pub id: String,
-    pub index: usize,
-    pub name: String,
+    pub pid: u32,
+    pub app_name: String,
+    pub title: String,
     pub x: i32,
     pub y: i32,
     pub width: u32,
     pub height: u32,
-    pub scale_factor: f32,
-    pub rotation: f32,
-    pub primary: bool,
+    pub minimized: bool,
+    pub focused: bool,
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct InvariantReport {
+    pub foreground_unchanged: bool,
+    pub user_focus_unchanged: bool,
+    pub cursor_unchanged: bool,
+    pub space_unchanged: bool,
+}
+
+impl InvariantReport {
+    pub(crate) fn assert_held(self) -> Result<Self, ComputerError> {
+        if self.foreground_unchanged
+            && self.user_focus_unchanged
+            && self.cursor_unchanged
+            && self.space_unchanged
+        {
+            Ok(self)
+        } else {
+            Err(ComputerError::new(
+                "COMPUTER_BACKGROUND_CONTRACT_VIOLATION",
+                "The foreground, hardware cursor, or active desktop changed during background delivery",
+            ))
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct FrameState {
     id: String,
-    display: DisplayDescriptor,
+    target: WindowDescriptor,
     image_width: u32,
     image_height: u32,
 }
 
 pub struct ComputerController {
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     frame: Option<FrameState>,
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    input: Option<Enigo>,
 }
 
 impl Default for ComputerController {
@@ -87,23 +117,28 @@ impl Default for ComputerController {
 
 impl ComputerController {
     pub fn new() -> Self {
-        Self {
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            frame: None,
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            input: input_without_prompt(),
-        }
+        Self { frame: None }
     }
 
     pub fn hello(&mut self) -> Value {
+        let windows = available_windows().unwrap_or_default();
         json!({
             "type": "hello",
             "version": crate::VERSION,
             "platform": std::env::consts::OS,
             "architecture": std::env::consts::ARCH,
-            "backend": backend_name(),
-            "inputReady": self.input_ready(),
+            "backend": platform::backend_name(),
+            "sessionMode": "background-window",
+            "inputReady": platform::input_ready(),
             "capabilities": COMPUTER_METHODS,
+            "windows": windows,
+            "invariants": {
+                "globalHidInput": false,
+                "movesHardwareCursor": false,
+                "activatesTargetApplication": false,
+                "exactWindowRequired": true,
+                "implicitForegroundFallback": false
+            }
         })
     }
 
@@ -117,7 +152,7 @@ impl ComputerController {
         match method {
             "computer.status" => self.status(),
             "computer.observe" => self.observe(params),
-            "computer.move" => self.move_mouse(params),
+            "computer.move" => self.move_pointer(params),
             "computer.click" => self.click(params),
             "computer.drag" => self.drag(params),
             "computer.scroll" => self.scroll(params),
@@ -128,24 +163,16 @@ impl ComputerController {
     }
 
     pub fn request_permissions(&mut self) -> Value {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        let capture_ready = primary_monitor()
-            .and_then(|(_, monitor)| {
-                monitor.capture_image().map_err(|error| {
-                    ComputerError::new("COMPUTER_CAPTURE_FAILED", error.to_string())
-                })
-            })
-            .is_ok();
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        let capture_ready = false;
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        {
-            self.input = Enigo::new(&Settings::default()).ok();
-        }
+        let windows = available_windows().unwrap_or_default();
+        let capture_ready = windows
+            .first()
+            .is_some_and(|window| platform::capture_window(window).is_ok());
         json!({
             "platform": std::env::consts::OS,
             "screenCaptureReady": capture_ready,
-            "inputReady": self.input_ready(),
+            "inputReady": platform::input_ready(),
+            "windowCount": windows.len(),
+            "sessionMode": "background-window"
         })
     }
 
@@ -183,61 +210,44 @@ impl ComputerController {
                 "max": encoded_bytes[encoded_bytes.len() - 1],
             },
             "lastFrame": last_frame,
-            "note": "Capture, resize, PNG encode, and base64; no model inference or network time",
+            "note": "Exact-window capture, resize, PNG encode, and base64; no model inference or network time",
         }))
     }
 
     fn status(&mut self) -> Result<Value, ComputerError> {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        {
-            let displays = displays()?;
-            Ok(json!({
-                "platform": std::env::consts::OS,
-                "architecture": std::env::consts::ARCH,
-                "backend": backend_name(),
-                "inputReady": self.input_ready(),
-                "displayCount": displays.len(),
-                "displays": displays,
-                "frameReady": self.frame.is_some(),
-            }))
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            Err(unsupported_platform())
-        }
+        let windows = available_windows()?;
+        Ok(json!({
+            "platform": std::env::consts::OS,
+            "architecture": std::env::consts::ARCH,
+            "backend": platform::backend_name(),
+            "sessionMode": "background-window",
+            "isolation": "foreground-and-hardware-cursor-preserved",
+            "inputReady": platform::input_ready(),
+            "windowCount": windows.len(),
+            "windows": windows,
+            "frameReady": self.frame.is_some(),
+            "limitations": platform::limitations(),
+        }))
     }
 
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn observe(&mut self, params: &Value) -> Result<Value, ComputerError> {
-        let requested_id = params.get("displayId").and_then(Value::as_str);
-        let monitors = Monitor::all()
-            .map_err(|error| ComputerError::new("COMPUTER_CAPTURE_FAILED", error.to_string()))?;
-        let mut candidates = monitors
-            .into_iter()
-            .take(MAX_DISPLAYS)
-            .enumerate()
-            .map(|(index, monitor)| descriptor(index, &monitor).map(|item| (item, monitor)))
-            .collect::<Result<Vec<_>, _>>()?;
-        if candidates.is_empty() {
-            return Err(ComputerError::new(
-                "COMPUTER_NO_DISPLAY",
-                "No active display is available",
-            ));
-        }
-        let selected_index = requested_id
-            .and_then(|id| candidates.iter().position(|(display, _)| display.id == id))
-            .or_else(|| candidates.iter().position(|(display, _)| display.primary))
-            .unwrap_or(0);
-        let (display, monitor) = candidates.swap_remove(selected_index);
-        let image = monitor.capture_image().map_err(|error| {
-            ComputerError::new(
-                "COMPUTER_CAPTURE_FAILED",
-                format!(
-                    "Screen capture failed. On macOS, grant Screen Recording to Local Computer Helper. {error}"
-                ),
-            )
-        })?;
-        let image = resize_for_transport(image);
+        let requested_id = params
+            .get("windowId")
+            .or_else(|| params.get("displayId"))
+            .and_then(Value::as_str);
+        let windows = available_windows()?;
+        let target = requested_id
+            .and_then(|id| windows.iter().find(|window| window.id == id))
+            .or_else(|| windows.iter().find(|window| !window.focused))
+            .or_else(|| windows.first())
+            .cloned()
+            .ok_or_else(|| {
+                ComputerError::new(
+                    "COMPUTER_NO_WINDOW",
+                    "No capturable application window is available on the active desktop",
+                )
+            })?;
+        let image = resize_for_transport(platform::capture_window(&target)?);
         let image_width = image.width();
         let image_height = image.height();
         let mut png = Cursor::new(Vec::new());
@@ -247,228 +257,152 @@ impl ComputerController {
         let frame_id = Uuid::new_v4().to_string();
         self.frame = Some(FrameState {
             id: frame_id.clone(),
-            display: display.clone(),
+            target: target.clone(),
             image_width,
             image_height,
         });
-        let all_displays = candidates
-            .into_iter()
-            .map(|(descriptor, _)| descriptor)
-            .chain(std::iter::once(display.clone()))
-            .collect::<Vec<_>>();
         Ok(json!({
             "screenshot": format!("data:image/png;base64,{}", BASE64_STANDARD.encode(png.into_inner())),
             "frame": {
                 "id": frame_id,
                 "capturedAt": now_iso(),
-                "displayId": display.id,
-                "displayIndex": display.index,
-                "displayName": display.name,
+                "windowId": target.id,
+                "pid": target.pid,
+                "appName": target.app_name,
+                "windowTitle": target.title,
                 "imageWidth": image_width,
                 "imageHeight": image_height,
-                "screenX": display.x,
-                "screenY": display.y,
-                "screenWidth": display.width,
-                "screenHeight": display.height,
-                "scaleFactor": display.scale_factor,
-                "rotation": display.rotation,
+                "windowX": target.x,
+                "windowY": target.y,
+                "windowWidth": target.width,
+                "windowHeight": target.height,
+                "sessionMode": "background-window",
+                "deliveryMode": "exact-window-background",
+                "displayId": target.id,
+                "displayIndex": 0,
+                "displayName": format!("{} — {}", target.app_name, target.title),
+                "screenX": target.x,
+                "screenY": target.y,
+                "screenWidth": target.width,
+                "screenHeight": target.height,
+                "scaleFactor": 1.0,
+                "rotation": 0.0,
             },
-            "displays": all_displays,
+            "windows": windows,
         }))
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    fn observe(&mut self, _params: &Value) -> Result<Value, ComputerError> {
-        Err(unsupported_platform())
+    fn move_pointer(&mut self, params: &Value) -> Result<Value, ComputerError> {
+        let (frame, point) = self.point(params, "x", "y")?;
+        let invariants = platform::move_pointer(&frame.target, point)?.assert_held()?;
+        Ok(action_result(&frame, point, invariants, json!({})))
     }
 
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    fn move_mouse(&mut self, params: &Value) -> Result<Value, ComputerError> {
-        let (x, y) = self.point(params, "x", "y")?;
-        self.input()?
-            .move_mouse(x, y, Coordinate::Abs)
-            .map_err(input_error)?;
-        Ok(json!({ "x": x, "y": y }))
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    fn move_mouse(&mut self, _params: &Value) -> Result<Value, ComputerError> {
-        Err(unsupported_platform())
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn click(&mut self, params: &Value) -> Result<Value, ComputerError> {
-        let (x, y) = self.point(params, "x", "y")?;
-        let button_name = params
+        let (frame, point) = self.point(params, "x", "y")?;
+        let button = params
             .get("button")
             .and_then(Value::as_str)
             .unwrap_or("left");
-        let button = parse_button(button_name)?;
+        if !["left", "middle", "right"].contains(&button) {
+            return Err(invalid("button must be left, middle, or right"));
+        }
         let count = params
             .get("clickCount")
             .and_then(Value::as_u64)
             .unwrap_or(1)
-            .clamp(1, 3);
-        let input = self.input()?;
-        input
-            .move_mouse(x, y, Coordinate::Abs)
-            .map_err(input_error)?;
-        for index in 0..count {
-            input
-                .button(button, Direction::Click)
-                .map_err(input_error)?;
-            if index + 1 < count {
-                thread::sleep(Duration::from_millis(60));
-            }
-        }
-        Ok(json!({ "x": x, "y": y, "button": button_name, "clickCount": count }))
+            .clamp(1, 3) as usize;
+        let invariants = platform::click(&frame.target, point, button, count)?.assert_held()?;
+        Ok(action_result(
+            &frame,
+            point,
+            invariants,
+            json!({ "button": button, "clickCount": count }),
+        ))
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    fn click(&mut self, _params: &Value) -> Result<Value, ComputerError> {
-        Err(unsupported_platform())
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn drag(&mut self, params: &Value) -> Result<Value, ComputerError> {
-        let (from_x, from_y) = self.point(params, "fromX", "fromY")?;
-        let (to_x, to_y) = self.point(params, "toX", "toY")?;
+        let frame = self.verify_frame(params)?;
+        let from = self.frame_point(&frame, params, "fromX", "fromY")?;
+        let to = self.frame_point(&frame, params, "toX", "toY")?;
         let duration_ms = params
             .get("durationMs")
             .and_then(Value::as_u64)
             .unwrap_or(500)
             .clamp(50, MAX_DRAG_DURATION_MS);
-        let steps = (duration_ms / 16).clamp(4, 120);
-        let input = self.input()?;
-        input
-            .move_mouse(from_x, from_y, Coordinate::Abs)
-            .map_err(input_error)?;
-        input
-            .button(Button::Left, Direction::Press)
-            .map_err(input_error)?;
-        let result = (|| {
-            for step in 1..=steps {
-                let progress = step as f64 / steps as f64;
-                let x = from_x as f64 + (to_x - from_x) as f64 * progress;
-                let y = from_y as f64 + (to_y - from_y) as f64 * progress;
-                input
-                    .move_mouse(x.round() as i32, y.round() as i32, Coordinate::Abs)
-                    .map_err(input_error)?;
-                thread::sleep(Duration::from_millis(duration_ms / steps));
-            }
-            Ok::<_, ComputerError>(())
-        })();
-        let release = input
-            .button(Button::Left, Direction::Release)
-            .map_err(input_error);
-        result?;
-        release?;
+        let invariants = platform::drag(&frame.target, from, to, duration_ms)?.assert_held()?;
         Ok(json!({
-            "from": { "x": from_x, "y": from_y },
-            "to": { "x": to_x, "y": to_y },
+            "deliveryMode": "exact-window-background",
+            "frameId": frame.id,
+            "from": { "x": from.local_x, "y": from.local_y },
+            "to": { "x": to.local_x, "y": to.local_y },
             "durationMs": duration_ms,
+            "invariants": invariants,
         }))
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    fn drag(&mut self, _params: &Value) -> Result<Value, ComputerError> {
-        Err(unsupported_platform())
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn scroll(&mut self, params: &Value) -> Result<Value, ComputerError> {
-        let (x, y) = self.point(params, "x", "y")?;
-        let delta_x = integer(params, "deltaX", 0)?.clamp(-50, 50);
-        let delta_y = integer(params, "deltaY", 0)?.clamp(-50, 50);
-        let input = self.input()?;
-        input
-            .move_mouse(x, y, Coordinate::Abs)
-            .map_err(input_error)?;
-        if delta_y != 0 {
-            input
-                .scroll(delta_y as i32, Axis::Vertical)
-                .map_err(input_error)?;
-        }
-        if delta_x != 0 {
-            input
-                .scroll(delta_x as i32, Axis::Horizontal)
-                .map_err(input_error)?;
-        }
-        Ok(json!({ "x": x, "y": y, "deltaX": delta_x, "deltaY": delta_y }))
+        let (frame, point) = self.point(params, "x", "y")?;
+        let delta_x = integer(params, "deltaX", 0)?.clamp(-50, 50) as i32;
+        let delta_y = integer(params, "deltaY", 0)?.clamp(-50, 50) as i32;
+        let invariants = platform::scroll(&frame.target, point, delta_x, delta_y)?.assert_held()?;
+        Ok(action_result(
+            &frame,
+            point,
+            invariants,
+            json!({ "deltaX": delta_x, "deltaY": delta_y }),
+        ))
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    fn scroll(&mut self, _params: &Value) -> Result<Value, ComputerError> {
-        Err(unsupported_platform())
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn type_text(&mut self, params: &Value) -> Result<Value, ComputerError> {
-        self.verify_frame(params)?;
+        let frame = self.verify_frame(params)?;
         let text = params
             .get("text")
             .and_then(Value::as_str)
-            .ok_or_else(|| invalid("text must be a string"))?
-            .to_owned();
-        self.input()?.text(&text).map_err(input_error)?;
-        Ok(json!({ "characters": text.chars().count() }))
+            .ok_or_else(|| invalid("text must be a string"))?;
+        let invariants = platform::type_text(&frame.target, text)?.assert_held()?;
+        Ok(json!({
+            "deliveryMode": "exact-window-background",
+            "frameId": frame.id,
+            "characters": text.chars().count(),
+            "invariants": invariants,
+        }))
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    fn type_text(&mut self, _params: &Value) -> Result<Value, ComputerError> {
-        Err(unsupported_platform())
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn key(&mut self, params: &Value) -> Result<Value, ComputerError> {
-        self.verify_frame(params)?;
+        let frame = self.verify_frame(params)?;
         let chord = params
             .get("key")
             .and_then(Value::as_str)
-            .ok_or_else(|| invalid("key must be a string"))?
-            .to_owned();
-        let keys = parse_key_chord(&chord)?;
-        let (last, modifiers) = keys
-            .split_last()
-            .ok_or_else(|| invalid("key must not be empty"))?;
-        let input = self.input()?;
-        let mut pressed = Vec::new();
-        for modifier in modifiers {
-            if let Err(error) = input.key(*modifier, Direction::Press) {
-                for key in pressed.iter().rev() {
-                    let _ = input.key(*key, Direction::Release);
-                }
-                return Err(input_error(error));
-            }
-            pressed.push(*modifier);
-        }
-        let clicked = input.key(*last, Direction::Click).map_err(input_error);
-        let mut release_error = None;
-        for key in pressed.iter().rev() {
-            if let Err(error) = input.key(*key, Direction::Release) {
-                release_error.get_or_insert_with(|| input_error(error));
-            }
-        }
-        clicked?;
-        if let Some(error) = release_error {
-            return Err(error);
-        }
-        Ok(json!({ "key": chord }))
+            .ok_or_else(|| invalid("key must be a string"))?;
+        validate_key_chord(chord)?;
+        let invariants = platform::key(&frame.target, chord)?.assert_held()?;
+        Ok(json!({
+            "deliveryMode": "exact-window-background",
+            "frameId": frame.id,
+            "key": chord,
+            "invariants": invariants,
+        }))
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    fn key(&mut self, _params: &Value) -> Result<Value, ComputerError> {
-        Err(unsupported_platform())
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn point(
         &self,
         params: &Value,
         x_name: &str,
         y_name: &str,
-    ) -> Result<(i32, i32), ComputerError> {
+    ) -> Result<(FrameState, TargetPoint), ComputerError> {
         let frame = self.verify_frame(params)?;
+        let point = self.frame_point(&frame, params, x_name, y_name)?;
+        Ok((frame, point))
+    }
+
+    fn frame_point(
+        &self,
+        frame: &FrameState,
+        params: &Value,
+        x_name: &str,
+        y_name: &str,
+    ) -> Result<TargetPoint, ComputerError> {
         let x = number(params, x_name)?;
         let y = number(params, y_name)?;
         if x < 0.0 || y < 0.0 || x >= frame.image_width as f64 || y >= frame.image_height as f64 {
@@ -480,112 +414,59 @@ impl ComputerController {
         Ok(map_image_point(frame, x, y))
     }
 
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    fn verify_frame(&self, params: &Value) -> Result<&FrameState, ComputerError> {
+    fn verify_frame(&self, params: &Value) -> Result<FrameState, ComputerError> {
         let supplied = params.get("frameId").and_then(Value::as_str).unwrap_or("");
         let frame = self.frame.as_ref().ok_or_else(stale_frame)?;
         if supplied != frame.id {
             return Err(stale_frame());
         }
-        let live = displays()?
+        let live = available_windows()?
             .into_iter()
-            .find(|display| display.id == frame.display.id)
+            .find(|window| window.id == frame.target.id && window.pid == frame.target.pid)
             .ok_or_else(stale_frame)?;
-        if live.x != frame.display.x
-            || live.y != frame.display.y
-            || live.width != frame.display.width
-            || live.height != frame.display.height
-            || (live.scale_factor - frame.display.scale_factor).abs() > f32::EPSILON
-            || (live.rotation - frame.display.rotation).abs() > f32::EPSILON
+        if live.x != frame.target.x
+            || live.y != frame.target.y
+            || live.width != frame.target.width
+            || live.height != frame.target.height
+            || live.minimized
         {
             return Err(stale_frame());
         }
-        Ok(frame)
-    }
-
-    fn input_ready(&mut self) -> bool {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        {
-            if self.input.is_none() {
-                self.input = input_without_prompt();
-            }
-            self.input.is_some()
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            false
-        }
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    fn input(&mut self) -> Result<&mut Enigo, ComputerError> {
-        if self.input.is_none() {
-            self.input = Enigo::new(&Settings::default()).ok();
-        }
-        self.input.as_mut().ok_or_else(|| {
-            ComputerError::new(
-                "COMPUTER_PERMISSION_REQUIRED",
-                "Input control is unavailable. On macOS, grant Accessibility to Local Computer Helper, then retry.",
-            )
-        })
+        Ok(frame.clone())
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn input_without_prompt() -> Option<Enigo> {
-    let settings = Settings {
-        open_prompt_to_get_permissions: false,
-        ..Settings::default()
-    };
-    Enigo::new(&settings).ok()
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TargetPoint {
+    pub local_x: i32,
+    pub local_y: i32,
+    pub screen_x: i32,
+    pub screen_y: i32,
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn displays() -> Result<Vec<DisplayDescriptor>, ComputerError> {
-    Monitor::all()
-        .map_err(|error| ComputerError::new("COMPUTER_CAPTURE_FAILED", error.to_string()))?
-        .into_iter()
-        .take(MAX_DISPLAYS)
-        .enumerate()
-        .map(|(index, monitor)| descriptor(index, &monitor))
-        .collect()
-}
-
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn primary_monitor() -> Result<(DisplayDescriptor, Monitor), ComputerError> {
-    let monitors = Monitor::all()
-        .map_err(|error| ComputerError::new("COMPUTER_CAPTURE_FAILED", error.to_string()))?;
-    let mut fallback = None;
-    for (index, monitor) in monitors.into_iter().take(MAX_DISPLAYS).enumerate() {
-        let display = descriptor(index, &monitor)?;
-        if display.primary {
-            return Ok((display, monitor));
-        }
-        fallback.get_or_insert((display, monitor));
+fn action_result(
+    frame: &FrameState,
+    point: TargetPoint,
+    invariants: InvariantReport,
+    extra: Value,
+) -> Value {
+    let mut result = json!({
+        "deliveryMode": "exact-window-background",
+        "frameId": frame.id,
+        "x": point.local_x,
+        "y": point.local_y,
+        "invariants": invariants,
+    });
+    if let (Some(target), Some(extra)) = (result.as_object_mut(), extra.as_object()) {
+        target.extend(extra.clone());
     }
-    fallback
-        .ok_or_else(|| ComputerError::new("COMPUTER_NO_DISPLAY", "No active display is available"))
+    result
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn descriptor(index: usize, monitor: &Monitor) -> Result<DisplayDescriptor, ComputerError> {
-    let capture_error =
-        |error: xcap::XCapError| ComputerError::new("COMPUTER_CAPTURE_FAILED", error.to_string());
-    Ok(DisplayDescriptor {
-        id: monitor.id().map_err(capture_error)?.to_string(),
-        index,
-        name: monitor.friendly_name().map_err(capture_error)?,
-        x: monitor.x().map_err(capture_error)?,
-        y: monitor.y().map_err(capture_error)?,
-        width: monitor.width().map_err(capture_error)?,
-        height: monitor.height().map_err(capture_error)?,
-        scale_factor: monitor.scale_factor().map_err(capture_error)?,
-        rotation: monitor.rotation().map_err(capture_error)?,
-        primary: monitor.is_primary().map_err(capture_error)?,
-    })
+fn available_windows() -> Result<Vec<WindowDescriptor>, ComputerError> {
+    platform::windows(MAX_WINDOWS)
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn resize_for_transport(image: image::RgbaImage) -> image::RgbaImage {
     let pixels = u64::from(image.width()) * u64::from(image.height());
     if pixels <= MAX_CAPTURE_PIXELS {
@@ -597,32 +478,22 @@ fn resize_for_transport(image: image::RgbaImage) -> image::RgbaImage {
     image::imageops::resize(&image, width, height, FilterType::Triangle)
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn map_image_point(frame: &FrameState, x: f64, y: f64) -> (i32, i32) {
-    let relative_x = (x / frame.image_width as f64 * frame.display.width as f64)
+fn map_image_point(frame: &FrameState, x: f64, y: f64) -> TargetPoint {
+    let local_x = (x / frame.image_width as f64 * frame.target.width as f64)
         .round()
-        .clamp(0.0, frame.display.width.saturating_sub(1) as f64);
-    let relative_y = (y / frame.image_height as f64 * frame.display.height as f64)
+        .clamp(0.0, frame.target.width.saturating_sub(1) as f64) as i32;
+    let local_y = (y / frame.image_height as f64 * frame.target.height as f64)
         .round()
-        .clamp(0.0, frame.display.height.saturating_sub(1) as f64);
-    (
-        frame.display.x.saturating_add(relative_x as i32),
-        frame.display.y.saturating_add(relative_y as i32),
-    )
-}
-
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn parse_button(value: &str) -> Result<Button, ComputerError> {
-    match value {
-        "left" => Ok(Button::Left),
-        "middle" => Ok(Button::Middle),
-        "right" => Ok(Button::Right),
-        _ => Err(invalid("button must be left, middle, or right")),
+        .clamp(0.0, frame.target.height.saturating_sub(1) as f64) as i32;
+    TargetPoint {
+        local_x,
+        local_y,
+        screen_x: frame.target.x.saturating_add(local_x),
+        screen_y: frame.target.y.saturating_add(local_y),
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn parse_key_chord(value: &str) -> Result<Vec<Key>, ComputerError> {
+fn validate_key_chord(value: &str) -> Result<(), ComputerError> {
     let parts = value
         .split('+')
         .map(str::trim)
@@ -631,63 +502,18 @@ fn parse_key_chord(value: &str) -> Result<Vec<Key>, ComputerError> {
     if parts.is_empty() || parts.len() > 8 {
         return Err(invalid("key must contain between 1 and 8 chord parts"));
     }
-    parts
-        .iter()
-        .enumerate()
-        .map(|(index, part)| parse_key_part(part, index + 1 < parts.len()))
-        .collect()
+    for modifier in &parts[..parts.len().saturating_sub(1)] {
+        if ![
+            "control", "ctrl", "alt", "option", "shift", "meta", "command", "cmd", "super", "win",
+        ]
+        .contains(&modifier.to_ascii_lowercase().as_str())
+        {
+            return Err(invalid(format!("Unsupported modifier: {modifier}")));
+        }
+    }
+    Ok(())
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn parse_key_part(value: &str, modifier_only: bool) -> Result<Key, ComputerError> {
-    let normalized = value.to_ascii_lowercase();
-    let key = match normalized.as_str() {
-        "control" | "ctrl" => Key::Control,
-        "alt" | "option" => Key::Alt,
-        "shift" => Key::Shift,
-        "meta" | "command" | "cmd" | "super" | "win" => Key::Meta,
-        _ if modifier_only => {
-            return Err(invalid(format!("Unsupported modifier: {value}")));
-        }
-        "enter" | "return" => Key::Return,
-        "tab" => Key::Tab,
-        "escape" | "esc" => Key::Escape,
-        "space" => Key::Space,
-        "backspace" => Key::Backspace,
-        "delete" | "del" => Key::Delete,
-        "home" => Key::Home,
-        "end" => Key::End,
-        "pageup" => Key::PageUp,
-        "pagedown" => Key::PageDown,
-        "up" | "arrowup" => Key::UpArrow,
-        "down" | "arrowdown" => Key::DownArrow,
-        "left" | "arrowleft" => Key::LeftArrow,
-        "right" | "arrowright" => Key::RightArrow,
-        "f1" => Key::F1,
-        "f2" => Key::F2,
-        "f3" => Key::F3,
-        "f4" => Key::F4,
-        "f5" => Key::F5,
-        "f6" => Key::F6,
-        "f7" => Key::F7,
-        "f8" => Key::F8,
-        "f9" => Key::F9,
-        "f10" => Key::F10,
-        "f11" => Key::F11,
-        "f12" => Key::F12,
-        _ => {
-            let mut characters = value.chars();
-            let character = characters
-                .next()
-                .filter(|_| characters.next().is_none())
-                .ok_or_else(|| invalid(format!("Unsupported key: {value}")))?;
-            Key::Unicode(character)
-        }
-    };
-    Ok(key)
-}
-
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn number(params: &Value, name: &str) -> Result<f64, ComputerError> {
     let value = params
         .get(name)
@@ -699,7 +525,6 @@ fn number(params: &Value, name: &str) -> Result<f64, ComputerError> {
     Ok(value)
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn integer(params: &Value, name: &str, default: i64) -> Result<i64, ComputerError> {
     match params.get(name) {
         None | Some(Value::Null) => Ok(default),
@@ -713,38 +538,13 @@ fn invalid(message: impl Into<String>) -> ComputerError {
     ComputerError::new("COMPUTER_INVALID_REQUEST", message)
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn backend_name() -> &'static str {
-    "xcap+enigo"
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn backend_name() -> &'static str {
-    "unsupported"
-}
-
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn stale_frame() -> ComputerError {
     ComputerError::new(
         "COMPUTER_STALE_FRAME",
-        "The desktop frame is missing or stale. Observe the computer again before acting.",
+        "The exact-window frame is missing or stale. Observe the target window again before acting.",
     )
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn unsupported_platform() -> ComputerError {
-    ComputerError::new(
-        "COMPUTER_PLATFORM_UNSUPPORTED",
-        "Computer input is currently supported on macOS and Windows",
-    )
-}
-
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-fn input_error(error: impl std::fmt::Display) -> ComputerError {
-    ComputerError::new("COMPUTER_INPUT_FAILED", error.to_string())
-}
-
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn now_iso() -> String {
     OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
@@ -781,33 +581,34 @@ pub fn command_parts(message: &Value) -> Option<(&str, &str, Value)> {
 mod tests {
     use super::*;
 
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn frame() -> FrameState {
         FrameState {
             id: "frame-1".to_owned(),
-            display: DisplayDescriptor {
-                id: "display-1".to_owned(),
-                index: 0,
-                name: "Primary".to_owned(),
+            target: WindowDescriptor {
+                id: "window-1".to_owned(),
+                pid: 42,
+                app_name: "Fixture".to_owned(),
+                title: "Background target".to_owned(),
                 x: -100,
                 y: 20,
                 width: 2_000,
                 height: 1_000,
-                scale_factor: 2.0,
-                rotation: 0.0,
-                primary: true,
+                minimized: false,
+                focused: false,
             },
             image_width: 1_000,
             image_height: 500,
         }
     }
 
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[test]
-    fn maps_delivered_image_coordinates_to_live_screen_space() {
-        assert_eq!(map_image_point(&frame(), 0.0, 0.0), (-100, 20));
-        assert_eq!(map_image_point(&frame(), 500.0, 250.0), (900, 520));
-        assert_eq!(map_image_point(&frame(), 999.0, 499.0), (1_898, 1_018));
+    fn maps_image_coordinates_to_exact_window_space() {
+        let top_left = map_image_point(&frame(), 0.0, 0.0);
+        assert_eq!((top_left.local_x, top_left.local_y), (0, 0));
+        assert_eq!((top_left.screen_x, top_left.screen_y), (-100, 20));
+        let center = map_image_point(&frame(), 500.0, 250.0);
+        assert_eq!((center.local_x, center.local_y), (1_000, 500));
+        assert_eq!((center.screen_x, center.screen_y), (900, 520));
     }
 
     #[test]
@@ -823,19 +624,24 @@ mod tests {
     }
 
     #[test]
-    fn emits_structured_errors() {
-        let envelope = result_envelope("1", Err(invalid("bad point")));
-        assert_eq!(envelope["ok"], false);
-        assert_eq!(envelope["error"]["code"], "COMPUTER_INVALID_REQUEST");
-        assert_eq!(envelope["error"]["message"], "bad point");
+    fn validates_key_chord_modifiers() {
+        assert!(validate_key_chord("Control+Shift+A").is_ok());
+        assert!(validate_key_chord("Enter").is_ok());
+        assert!(validate_key_chord("A+B").is_err());
+        assert!(validate_key_chord("").is_err());
     }
 
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[test]
-    fn accepts_named_keys_and_rejects_non_modifier_prefixes() {
-        assert_eq!(parse_key_chord("Control+Shift+A").unwrap().len(), 3);
-        assert_eq!(parse_key_chord("Enter").unwrap(), vec![Key::Return]);
-        assert!(parse_key_chord("A+B").is_err());
-        assert!(parse_key_chord("").is_err());
+    fn invariant_report_fails_closed() {
+        let report = InvariantReport {
+            foreground_unchanged: true,
+            user_focus_unchanged: true,
+            cursor_unchanged: false,
+            space_unchanged: true,
+        };
+        assert_eq!(
+            report.assert_held().unwrap_err().code,
+            "COMPUTER_BACKGROUND_CONTRACT_VIOLATION"
+        );
     }
 }

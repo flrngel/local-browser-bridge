@@ -50,10 +50,24 @@ fn native_desktop_dependencies_are_not_built_on_unsupported_hosts() {
         .split("[dev-dependencies]")
         .next()
         .unwrap();
-    for dependency in ["enigo", "image", "xcap"] {
+    for dependency in ["image", "xcap"] {
         assert!(
             target_section.contains(dependency),
             "{dependency} must stay target-gated"
+        );
+    }
+    assert!(!cargo.contains("enigo"));
+    let mac_section = cargo
+        .split("[target.'cfg(target_os = \"macos\")'.dependencies]")
+        .nth(1)
+        .unwrap()
+        .split("[dev-dependencies]")
+        .next()
+        .unwrap();
+    for dependency in ["core-graphics", "foreign-types", "libc"] {
+        assert!(
+            mac_section.contains(dependency),
+            "{dependency} must stay macOS-gated"
         );
     }
 }

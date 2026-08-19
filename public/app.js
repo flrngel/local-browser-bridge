@@ -7,7 +7,7 @@ const ui = Object.fromEntries(
     "coordinates-form", "coordinate-x", "coordinate-y", "type-text-form", "type-text", "custom-key-form", "custom-key",
     "evaluate-form", "expression", "evaluation-result",
     "release-panel", "current-version", "update-status", "update-detail", "check-update", "update-link",
-    "computer-connection", "computer-connection-text", "computer-meta", "computer-status", "computer-observe",
+    "computer-connection", "computer-connection-text", "computer-meta", "computer-status", "computer-observe", "computer-window",
     "computer-screenshot", "computer-screenshot-empty", "computer-frame-meta", "computer-click-form",
     "computer-x", "computer-y", "computer-double-click", "computer-type-form", "computer-type-text",
     "computer-key-form", "computer-key",
@@ -94,8 +94,10 @@ function syncComputerAvailability() {
   const connected = Boolean(currentState.computerConnected);
   const frameReady = Boolean(currentState.computerObservation?.frameId);
   const inputReady = Boolean(currentState.computer?.inputReady && currentState.computer?.compatible);
+  const windowReady = Boolean(ui["computer-window"].value);
   ui["computer-status"].disabled = busy || !connected;
-  ui["computer-observe"].disabled = busy || !connected;
+  ui["computer-observe"].disabled = busy || !connected || !windowReady;
+  ui["computer-window"].disabled = busy || !connected || !(currentState.computer?.windows?.length);
   for (const control of document.querySelectorAll("#computer-click-form button, .computer-scroll, #computer-type-form button, #computer-key-form button")) {
     control.disabled = busy || !connected || !frameReady || !inputReady;
   }
@@ -105,6 +107,16 @@ function renderComputer(state) {
   const connected = Boolean(state.computerConnected);
   const computer = state.computer;
   const observation = state.computerObservation;
+  const priorWindow = ui["computer-window"].value;
+  const preferredWindow = observation?.windowId || priorWindow;
+  ui["computer-window"].replaceChildren();
+  for (const window of computer?.windows ?? []) {
+    const option = document.createElement("option");
+    option.value = window.id;
+    option.textContent = `${window.appName} — ${window.title || "Untitled window"} (${window.width}×${window.height})`;
+    option.selected = window.id === preferredWindow;
+    ui["computer-window"].append(option);
+  }
   ui["computer-connection"].classList.toggle("online", connected);
   ui["computer-connection"].classList.toggle("offline", !connected);
   if (!connected) {
@@ -121,7 +133,7 @@ function renderComputer(state) {
   } else {
     const input = computer.inputReady ? "input ready" : "input permission required";
     ui["computer-connection-text"].textContent = `Computer connected · ${computer.platform} ${computer.architecture} · ${input}`;
-    ui["computer-meta"].textContent = `${computer.backend} · helper ${computer.version} · ${computer.capabilities.length} bounded capabilities · ${input}`;
+    ui["computer-meta"].textContent = `${computer.sessionMode} · ${computer.isolation} · ${computer.backend} · helper ${computer.version} · ${input}`;
   }
 
   if (!observation) {
@@ -137,7 +149,7 @@ function renderComputer(state) {
     ui["computer-screenshot"].src = `${observation.screenshotUrl}&cache=${Date.now()}`;
     ui["computer-screenshot"].hidden = false;
     ui["computer-screenshot-empty"].hidden = true;
-    ui["computer-frame-meta"].textContent = `${observation.displayName} · image ${observation.imageWidth}×${observation.imageHeight} · screen ${observation.screenWidth}×${observation.screenHeight} at ${observation.screenX},${observation.screenY} · frame ${observation.frameId}`;
+    ui["computer-frame-meta"].textContent = `${observation.appName} — ${observation.windowTitle} · ${observation.deliveryMode} · image ${observation.imageWidth}×${observation.imageHeight} · window ${observation.screenWidth}×${observation.screenHeight} · frame ${observation.frameId}`;
     ui["computer-x"].max = String(observation.imageWidth - 1);
     ui["computer-y"].max = String(observation.imageHeight - 1);
   }
@@ -341,7 +353,7 @@ async function checkForUpdate() {
 ui["refresh-tabs"].addEventListener("click", () => runAction("tabs.list"));
 ui["check-update"].addEventListener("click", () => void checkForUpdate());
 ui["computer-status"].addEventListener("click", () => runAction("computer.status"));
-ui["computer-observe"].addEventListener("click", () => runAction("computer.observe"));
+ui["computer-observe"].addEventListener("click", () => runAction("computer.observe", { windowId: ui["computer-window"].value }));
 ui["computer-screenshot"].addEventListener("click", (event) => {
   const observation = currentState?.computerObservation;
   if (!observation) return;
@@ -350,7 +362,7 @@ ui["computer-screenshot"].addEventListener("click", (event) => {
   const y = Math.max(0, Math.min(observation.imageHeight - 1, Math.floor((event.clientY - bounds.top) * observation.imageHeight / bounds.height)));
   ui["computer-x"].value = String(x);
   ui["computer-y"].value = String(y);
-  showToast(`Selected desktop point ${x}, ${y}`);
+  showToast(`Selected window point ${x}, ${y}`);
 });
 ui["computer-click-form"].addEventListener("submit", (event) => {
   event.preventDefault();

@@ -1,80 +1,70 @@
-# Computer-use research and architecture decision
+# Non-interrupting computer-use research and architecture
 
 Research snapshot: 2026-08-18
 
-## Question and method
+## Correction to the original implementation
 
-The product already lets a browser-only agent reach a real Chromium profile through a loopback web page and an outbound extension connection. The question was how to add native macOS and Windows control without turning the bridge into an opaque model runtime or an arbitrary remote-execution service.
+Version 0.6 captured a physical display with xcap and injected global input with Enigo. A real end-to-end run proved that this was the wrong architecture: the helper moved the user's pointer and typed into whichever application currently owned focus. A frame ID protected only monitor geometry; it did not bind input to an application window. That implementation has been removed rather than retained as an automatic fallback.
 
-The comparison used four evidence classes:
+Version 0.7 defines a stricter product invariant:
 
-1. Current repository activity and adoption, collected from GitHub on the research date.
-2. Representative implementation code, read at the pinned revisions below.
-3. Primary research papers and benchmark reports.
-4. Community reports, used only as qualitative evidence about setup cost and operational friction.
+1. Observation is bound to one exact `(pid, native window id)` target.
+2. Input is delivered only through a target-addressed background route.
+3. The foreground process, user's focused window/control, hardware cursor, and active desktop must not change.
+4. A route that cannot prove those properties returns a structured error. It never retries through global HID input, target activation, `SetForegroundWindow`, or a desktop/Space switch.
+5. The server captures the target window again after every action so the caller can verify the result.
 
-Star counts are a volatile popularity signal, not a quality score. “Active shortlist” below means recently maintained and/or widely adopted, not a claim about a specific GitHub Trending page position.
+## Evidence reviewed
 
-## Active open-source shortlist
+The review used current source code, vendor documentation, research papers, and community reports. Repository popularity is only a discovery signal; architecture claims below come from code or primary documentation.
 
-| Project | Snapshot | Primary focus | Useful lesson for this bridge |
-|---|---:|---|---|
-| [UI-TARS Desktop](https://github.com/bytedance/UI-TARS-desktop) | 38.6k stars | End-to-end screenshot-model action loop in Electron | Keep normalized image coordinates and native input behind a narrow operator seam; do not embed its large model/runtime stack here |
-| [Cua](https://github.com/trycua/cua) | 21.5k stars | Cross-platform computer-use infrastructure and the Rust Cua Driver | A long-lived permission-owning process, capability/version handshake, serialized physical input, and explicit frame geometry are the strongest production patterns |
-| [Microsoft UFO](https://github.com/microsoft/UFO) | 9.5k stars | Windows application automation using UI Automation and agent planning | A future semantic layer should prefer UIA on Windows and retain pixel/Win32 fallbacks |
-| [Microsoft OmniParser](https://github.com/microsoft/OmniParser) | 25.3k stars | Turning screenshots into grounded UI regions and labels | Screen parsing can improve grounding later, but it is a vision dependency rather than the native control boundary |
-| [Agent S](https://github.com/simular-ai/Agent-S) | 12.2k stars | Hierarchical planning, visual grounding, OCR, and code-agent routing | Planning and OCR belong with the calling agent unless there is measured evidence that local preprocessing is needed |
-| [OpenClaw](https://github.com/openclaw/openclaw) | 386.7k stars | Broad local agent runtime with a current Cua Driver integration | Bind coordinate actions to a specific delivered frame and provider generation; keep native resource identifiers opaque |
-| [OpenKosmos](https://github.com/microsoft/open-kosmos) | 35 stars | Recent Electron computer-use implementation | Useful low-adoption architecture comparator: default-off control, pure coordinate mapping, structured failures, visible AI cursor, and real-cursor restoration |
-| [OSWorld](https://github.com/xlang-ai/OSWorld) | 3.1k stars | Reproducible desktop-agent evaluation | Desktop success must be judged across multi-step real applications, not by whether a click API works once |
+| Project or source | Pinned snapshot | What the implementation actually establishes |
+|---|---:|---|
+| [Cua Driver](https://github.com/trycua/cua) | `c43f10243856658fe706c08c155a95628fc81248` | Current Rust code implements exact-window capture and background delivery on macOS and Windows, with explicit background/foreground modes and fail-closed target proofs |
+| [Microsoft UFO](https://github.com/microsoft/UFO) | `96983c73ed09e884a5f1d7ff8936c953b234b684` | Strong Windows UIA/Win32 automation and RDP-safe capture fallbacks; the repository still labels Picture-in-Picture Desktop “coming soon” |
+| [UFO² paper](https://arxiv.org/abs/2504.14603) | 2025 paper / 2026 TMLR | Describes an RDP-loopback PiP architecture that isolates agent and human input sessions; this is a design result, not proof that the current UFO repository ships it |
+| [Agent Workspace Linux](https://github.com/agent-sh/agent-workspace-linux) | current snapshot | Runs a hidden Xvfb/Openbox/xdotool workspace, a clean example of true separate-display isolation on Linux |
+| [Apple High Performance Screen Sharing](https://support.apple.com/guide/mac-help/screen-sharing-type-options-mchl1883115d/mac) | macOS 14+ | Can create one or two virtual displays, but a same-user connection blanks hardware displays and prevents local use; it does not satisfy this product's simultaneous-use invariant |
+| [Power Automate PiP](https://learn.microsoft.com/power-automate/desktop-flows/run-desktop-flows-pip) | current documentation | Windows child sessions and preview virtual desktops provide real separation but require Power Automate, policy prerequisites, and administrator setup |
+| [Power Automate unattended](https://learn.microsoft.com/power-automate/desktop-flows/run-unattended-desktop-flows) | current documentation | Microsoft creates, manages, and releases an RDP user session; credentials and session lifecycle are part of the security boundary |
+| [ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit/scscreenshotmanager) | current SDK | Supports window-scoped capture independent of desktop occlusion; capture alone does not create isolated input |
+| [OSWorld](https://arxiv.org/abs/2404.07972) | 369 desktop tasks | Desktop-agent correctness requires multi-step application verification, not merely a callable click primitive |
+| [Tactile](https://arxiv.org/abs/2607.14443) | 2026 paper | Semantic actions and application structure improve reliability beyond screenshot-only control |
 
-Counts were rounded from GitHub metadata captured on the research date. The code-reading revisions were UI-TARS `c2ad42e3eb9b27830db41a3e6f51ca7179d9b168`, Cua `9045b0c74f7c7de72fde3d9dc622f2cacf1cf848`, UFO `96983c73ed09e884a5f1d7ff8936c953b234b684`, Agent S `bffdb59c60cbbb38c3a190b2e91da12039e4063c`, and OpenKosmos `9e45cc51bae33d65e412824ab5915606f99ae038`.
+Community reports about separate macOS Screen Sharing logins and Windows RDP sessions were used only to identify operational questions. They are not treated as proof of an API or security property.
 
-## What the implementations optimize
+## What the current code focuses on
 
-### UI-TARS Desktop: a complete visual agent
+### Cua: exact target identity and no silent escalation
 
-The [Electron operator](https://github.com/bytedance/UI-TARS-desktop/blob/c2ad42e3eb9b27830db41a3e6f51ca7179d9b168/apps/ui-tars/src/main/agent/operator.ts) captures the primary display through `desktopCapturer`, resizes it for the model, JPEG-encodes it, and dispatches parsed actions through a NutJS operator. Its Windows text path uses clipboard paste and restores the old clipboard. The repository therefore optimizes for an integrated model-to-action application, normalized coordinates, and practical cross-platform fallbacks. It also brings Electron, Node.js, native modules, and a model-serving stack that conflict with this project’s small Node-free distribution.
+Cua's current macOS background-input policy carries one `(pid, CGWindowID)` from observation through dispatch and postcondition. It gathers fresh WindowServer ownership, AX window membership, minimized/hidden state, same-process keyboard ambiguity, and element ancestry. Unknown facts do not unlock a route. Its route ladder prioritizes semantic AX and exact browser mechanisms, then window-local pointer delivery and PID keyboard delivery; the background mode never silently activates the app or posts global HID input.
 
-### Agent S and OmniParser: grounding quality
+The relevant macOS mechanisms are:
 
-Agent S’s [grounding implementation](https://github.com/simular-ai/Agent-S/blob/bffdb59c60cbbb38c3a190b2e91da12039e4063c/gui_agents/s3/agents/grounding.py) combines a visual grounding model, Tesseract OCR, text alignment, and a code-agent route. [OmniParser](https://arxiv.org/abs/2408.00203) focuses even more directly on parsing screenshots into interactable regions and meaningful icon descriptions. These projects address the hardest model-side question—“where is the requested thing?”—but neither is the minimal native authority needed to capture a screen and deliver bounded input.
+- window-scoped capture with ScreenCaptureKit;
+- PID-routed events through `SLEventPostToPid`;
+- window-local coordinates through `CGEventSetWindowLocation`;
+- window identity fields carried on the event;
+- focus-without-raise through `SLPSPostEventRecordTo`;
+- post-action verification against the exact target.
 
-The calling browser agent already supplies reasoning and vision. Bundling another planner, OCR service, or model would duplicate that layer, increase installation size, create GPU/runtime expectations, and make updates substantially harder. Local parsing remains a future measured optimization rather than a v0.6 dependency.
+These are undocumented SkyLight interfaces. They are practical for a separately distributed helper but create an explicit OS-compatibility risk and are unsuitable for App Store assumptions.
 
-### UFO: semantic Windows control
+On Windows, Cua defaults to background PostMessage/UIA delivery and returns `background_unavailable` for framework/event pairs known to drop it. Foreground `SendInput` is a separate explicit caller choice. Its window capture uses PrintWindow and Windows.Graphics.Capture fallbacks, and its delivery code guards against self-activation. The important pattern is the refusal boundary, not a claim that one actuator works for every Windows UI framework.
 
-UFO’s [control implementation](https://github.com/microsoft/UFO/tree/96983c73ed09e884a5f1d7ff8936c953b234b684/ufo/automator/ui_control) is Windows-first. It uses pywinauto/UI Automation for structured controls, Win32 APIs, and pyautogui-style fallbacks. Its screenshot code explicitly falls through pywinauto, `PrintWindow`, and desktop capture, including behavior for disconnected RDP sessions. The important lesson is that accessibility trees materially improve target selection and application semantics on Windows, but a correct implementation needs native per-platform work and a larger interactive test matrix.
+### UFO and PiP: paper architecture versus shipped code
 
-### Cua Driver and OpenClaw: the native capability boundary
+The UFO² paper's RDP-loopback desktop is the strongest Windows session-isolation design reviewed: the agent and user receive separate input sessions. The current open-source UFO tree, however, contains RDP-safe PrintWindow capture paths while its README still marks PiP as in development. This bridge therefore does not advertise UFO PiP as an available dependency.
 
-Cua’s [driver documentation](https://github.com/trycua/cua/blob/9045b0c74f7c7de72fde3d9dc622f2cacf1cf848/libs/cua-driver/README.md) describes in-process, worker, and daemon modes. The Rust workspace separates platform capture/input/accessibility backends from transport and testing. The design details most relevant here are:
+True session isolation also changes product setup. It needs a Windows edition that supports the required session technology, credentials or a managed identity, local policy changes, resolution/session lifecycle management, and deterministic cleanup. Hiding those requirements inside a permissive localhost helper would create a credential and persistence system far beyond the current bounded authority.
 
-- macOS Screen Recording and Accessibility grants attach to a stable application identity; a raw binary path is not a production permission owner;
-- Windows control must run in the interactive user session rather than Session 0;
-- the machine has one physical input stream, so input must be serialized;
-- the client and provider exchange explicit version/capability metadata and should fail closed on incompatible capabilities;
-- observation combines screenshots and accessibility information, while native APIs remain platform-specific;
-- local transports still require authentication and browser-Origin defense.
+### Apple Screen Sharing virtual displays: not simultaneous local use
 
-OpenClaw’s [computer-use documentation](https://github.com/openclaw/openclaw/blob/main/docs/nodes/computer-use.md) and Cua integration add a particularly strong invariant: coordinate actions carry a `displayFrameId`, and the receiver rejects a frame if the provider generation or live display geometry no longer matches. Commands are one action per call and physical input is queued. That prevents a delayed action from clicking the same pixels after a monitor, resolution, scale, or frame change.
+Apple's High Performance Screen Sharing is often described as a virtual-display solution. Apple documents that when the connection authenticates as the currently logged-in user, hardware displays are blanked and nobody else can use the Mac. It requires another Apple-silicon Mac, macOS 14 or later, high bandwidth, UDP ports, and an authenticated Screen Sharing connection. It is useful for private remote operation, but it is not a local background-control primitive and fails the user's “keep using my screen” requirement in the common same-user configuration.
 
-### OpenKosmos: understandable human UX
+A separate macOS login or a Virtualization.framework guest can provide true isolation, but it does not automatically contain the user's already-installed app state. It also requires credentials or a guest OS image and a clear data-sharing policy. Version 0.7 does not create hidden users, store login credentials, or install a VM.
 
-OpenKosmos’s [technical design](https://github.com/microsoft/open-kosmos/blob/9e45cc51bae33d65e412824ab5915606f99ae038/docs/computer-use-tech-doc.md) emphasizes default-off authority, OS permission checks, per-app allowlisting, structured recoverable results, deterministic multi-display mapping, a visible AI cursor, and restoration of the user’s real cursor after input. Its adoption is currently much smaller than the other projects, so it is not used as dominant evidence. It is useful confirmation that visible action feedback and non-hijacking cursor behavior are important UX improvements for a later native UI layer.
-
-## Research evidence about difficulty
-
-- [OSWorld](https://arxiv.org/abs/2404.07972) introduced 369 real desktop tasks. Its original evaluation reported 72.36% human success versus 12.24% for the best evaluated model, with GUI grounding and operational knowledge as major failures.
-- [UI-TARS](https://arxiv.org/abs/2501.12326) argues for native screenshot-based agents and a unified action representation across platforms.
-- [Agent S2](https://arxiv.org/abs/2504.00906) attributes gains to better grounding plus hierarchical planning, reinforcing that the effector alone is not the agent.
-- [OSWorld-Human](https://arxiv.org/abs/2506.16042) reports that model planning and reflection dominate latency and that later task steps become much slower. A local helper should therefore keep capture/action overhead predictable rather than add a second planning loop.
-
-A [LocalLLaMA community discussion](https://www.reddit.com/r/LocalLLaMA/comments/1kwzrh4/) praised UI-TARS’s open computer-use quality but reported very high local VRAM use for one deployment. This is anecdotal and hardware/configuration dependent; it supports only the narrower conclusion that bundling a visual model would create meaningful setup friction.
-
-## Decision for Local Browser Bridge v0.6
-
-The right v0.6 boundary is a thin, separately launched native capability provider:
+## Version 0.7 architecture
 
 ```text
 browser-only agent
@@ -82,49 +72,53 @@ browser-only agent
       v
 loopback control page/API --- Rust server --- Chromium extension ---> browser tabs
                                   |
-                                  +--- authenticated outbound helper ---> screen + mouse/keyboard
+                                  +--- authenticated helper process
+                                             |
+                                             +--- exact-window capture
+                                             +--- target-routed background input
+                                             +--- foreground/cursor/desktop oracle
 ```
 
-The helper is implemented in Rust with [xcap](https://github.com/nashaofu/xcap) for macOS/Windows capture and [Enigo](https://github.com/enigo-rs/enigo) for native input. It does not embed a model, OCR engine, shell, filesystem interface, process launcher, clipboard API, downloader, or telemetry client.
+The separate helper remains the permission-owning process and opens no listening socket. It authenticates outbound to the loopback server with the shared random token and the private Origin `lbb-computer-helper://local`. Its fixed command allowlist still contains only status, observe, move, click, drag, scroll, type text, and key chord. There is no shell, filesystem, process-launch, clipboard, downloader, arbitrary-code, credential, user-management, or telemetry method.
 
-Implemented invariants:
+### macOS backend
 
-- The helper owns no listening socket. It makes an outbound WebSocket connection to the existing loopback server.
-- The handshake requires the shared random token and exact private Origin `lbb-computer-helper://local`.
-- The helper advertises a versioned, fixed allowlist: status, observe, move, click, drag, scroll, type text, and key chord.
-- The server intersects advertised capabilities with its own allowlist and rejects every other `computer.*` method.
-- All browser and computer actions share one server-side action lock, preventing competing physical input streams.
-- Captures are resized to at most one million pixels before lossless PNG/base64 transport so they remain within the bounded WebSocket message size.
-- Every input command must reference the most recently delivered frame. Immediately before input, the helper re-enumerates the display and rejects changed identity, origin, dimensions, scale, or rotation.
-- Image-space coordinates are mapped to the captured display’s live screen space, including negative multi-monitor origins.
-- After every input action, the server requests and exposes a fresh observation for verification.
-- macOS releases put the helper in a stable `.app` bundle that owns Screen Recording and Accessibility grants. Until Developer ID signing/notarization is added, an OS update or binary change can still require permission to be granted again.
-- Windows releases provide a separate console executable that runs in the signed-in user’s interactive session.
+- xcap enumerates shareable on-screen windows and captures one exact CGWindowID without exposing unrelated windows or notifications.
+- The frame stores the window owner PID, CGWindowID, bounds, and delivered image dimensions.
+- Before every action, the helper re-enumerates the target and rejects changed ownership or geometry.
+- Mouse and scroll events carry screen coordinates, window-local coordinates, target PID, and target window fields, then post to that PID through SkyLight.
+- Keyboard events post to the exact PID after a focus-without-raise record for the exact window. Multiple eligible windows in the same process are rejected because PID-scoped delivery would otherwise be ambiguous.
+- The helper snapshots the front process PSN, user's front window, real cursor location, and active Space before and after dispatch. Focus-without-raise is restored to the prior front window after dispatch. Any change produces `COMPUTER_BACKGROUND_CONTRACT_VIOLATION`.
+- Only non-minimized windows on the active Space are mutable in v0.7. Secure input, protected video, games, and OS/framework changes may refuse delivery.
 
-## Local capture benchmark
+### Windows backend
 
-The release-mode helper was measured on the development Mac after a warm build with:
+- xcap enumerates top-level HWNDs and captures one exact HWND using its Windows capture backend.
+- Background mouse messages are routed to the deepest eligible child window at the target point; keyboard messages go to the target GUI thread's focused control only when its root is the requested top-level window.
+- A temporary `WS_EX_NOACTIVATE` guard prevents the target top-level window from activating itself while handling a message.
+- The helper verifies HWND ownership immediately before every action and snapshots `GetForegroundWindow`, the user's GUI-thread focus HWND, and `GetCursorPos` around delivery.
+- Chromium, WPF, WinUI, elevated, game, and protected surfaces may ignore Win32 messages. They fail rather than using `SendInput` or `SetForegroundWindow`.
 
-```bash
-cargo run --locked --release --bin local-computer-helper -- --benchmark
-```
+## Verification performed
 
-Environment: macOS 26.5.1, arm64, one selected 2560×1440 display at scale factor 2.0. Each of five iterations performed native capture, resize to 1333×750 (the one-million-pixel transport ceiling), PNG encoding, and base64 generation. It did not include WebSocket transport, model inference, or an action.
+The macOS end-to-end fixture is a real AppKit window launched without activation. It records every event to a machine-readable state file and redraws its visible state. The test uses only the shipped server REST command, the shipped computer-helper WebSocket, and exact-window screenshots.
 
-| Metric | Result |
-|---|---:|
-| Minimum | 71.2 ms |
-| Median | 77.7 ms |
-| Mean | 87.6 ms |
-| Maximum | 129.9 ms |
-| Median encoded data URL | 447,314 bytes |
+The exercised matrix is:
 
-This is a small local engineering sample, not a cross-project leaderboard. The compared agent repositories include different models, prompts, capture formats, resolutions, and planning loops, so an end-to-end latency ranking would be misleading. The result establishes that this helper’s local observation path is sub-100-ms at the median on the measured machine and that its payload stays well below the server’s 8 MB message limit.
+| Action | Target state proof | Non-interruption proof |
+|---|---|---|
+| observe | Window-only PNG captured while fixture was backgrounded | Target reported `focused: false` |
+| move | Routed move completed | Foreground, user focus, cursor, and Space unchanged |
+| click | Click counter incremented | Foreground, user focus, cursor, and Space unchanged |
+| drag | Drag counter incremented across 18 delivered steps | Foreground, user focus, cursor, and Space unchanged |
+| scroll | Scroll accumulator changed by the requested delta | Foreground, user focus, cursor, and Space unchanged |
+| Unicode text | State became `background-✓` | Foreground, user focus, cursor, and Space unchanged |
+| named key | State appended `[enter]` | Foreground, user focus, cursor, and Space unchanged |
 
-## Deliberately deferred
+The fixture source is `tests/fixtures/macos/BackgroundFixture.swift`. Per-action screenshots are generated under ignored `target/background-e2e/` during the local run. Cross-platform CI and local verification still compile the same Rust version for Windows x86_64 and macOS arm64/x86_64.
 
-Native accessibility trees and window/application targeting are the highest-value next layer. Cua and UFO show that semantic UI elements reduce dependence on pixel grounding, but implementing AX on macOS and UIA on Windows deserves its own typed protocol, privacy review, and real interactive test matrix. OCR/model bundling, arbitrary code execution, background autostart, silent updating, and hidden persistence are not part of the plan.
+## Remaining work
 
-A future visible agent cursor and real-cursor restoration should also be evaluated. They improve human legibility, but cursor restoration changes hover/focus behavior and must be tested against drag, menu, and multi-display interactions rather than copied mechanically.
+AX on macOS and UIA on Windows are the next reliability layer. They should expose semantic elements and verified value/action mutations before attempting another pixel route. A managed `isolated-session` backend can be added later as a separate capability with explicit credentials, OS prerequisites, visible lifecycle, and cleanup; it must not be presented as a transparent implementation detail of `background-window`.
 
-No implementation code was copied from the researched projects. Their source was used to compare architecture, invariants, and tradeoffs; this project uses its own protocol and implementation.
+The private macOS interfaces and framework-specific Windows behavior require continued release-by-release testing. No researched model runtime, planner, or remote protocol was embedded. The implementation follows the published architecture patterns and platform behavior while keeping its own protocol and bounded authority.

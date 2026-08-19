@@ -145,6 +145,14 @@ fn extension_executes_no_remote_code_or_update_client() {
 }
 
 #[test]
+fn extension_allows_only_the_demo_on_the_bridge_origin() {
+    let library = fs::read_to_string("extension/lib.js").unwrap();
+    assert!(library.contains("bridgeOrigin && url.pathname !== \"/demo\""));
+    assert!(library.contains("The bridge cannot control its own control surface"));
+    assert!(!library.contains("url.pathname.startsWith(\"/api\")"));
+}
+
+#[test]
 fn server_and_extension_command_allowlists_match() {
     let background = fs::read_to_string("extension/background.js").unwrap();
     let start = background.find("const COMMANDS = new Set([").unwrap();

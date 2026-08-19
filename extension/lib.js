@@ -1,4 +1,4 @@
-export const VERSION = "0.6.0";
+export const VERSION = "0.7.0";
 export const DEFAULT_PORT = 17_373;
 
 const RISK_PATTERNS = [
@@ -52,7 +52,9 @@ export function isUrlAllowed(rawUrl, allowedHosts, bridgePort = DEFAULT_PORT, fu
   if (url.protocol !== "http:" && url.protocol !== "https:" && !(fullAccess && url.protocol === "file:")) {
     return { allowed: false, reason: fullAccess ? "Browser-internal pages are not controllable" : "Only HTTP and HTTPS pages are controllable" };
   }
-  if ((url.hostname === "127.0.0.1" || url.hostname === "localhost") && Number(url.port || (url.protocol === "https:" ? 443 : 80)) === Number(bridgePort)) {
+  const bridgeOrigin = (url.hostname === "127.0.0.1" || url.hostname === "localhost")
+    && Number(url.port || (url.protocol === "https:" ? 443 : 80)) === Number(bridgePort);
+  if (bridgeOrigin && url.pathname !== "/demo") {
     return { allowed: false, reason: "The bridge cannot control its own control surface" };
   }
   if (!fullAccess && !hostAllowed(url.hostname, allowedHosts)) {

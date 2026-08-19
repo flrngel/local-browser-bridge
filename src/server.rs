@@ -236,11 +236,11 @@ impl AppState {
         let cookie_id = parse_cookie(headers, "lbb_session");
         let now = OffsetDateTime::now_utc().unix_timestamp();
         let mut sessions = self.sessions.lock().unwrap();
-        if let Some(id) = cookie_id {
-            if let Some(session) = sessions.get_mut(&id) {
-                session.touched_at = now;
-                return (session.csrf.clone(), None);
-            }
+        if let Some(id) = cookie_id
+            && let Some(session) = sessions.get_mut(&id)
+        {
+            session.touched_at = now;
+            return (session.csrf.clone(), None);
         }
 
         if sessions.len() >= 1_000 {
@@ -346,9 +346,24 @@ struct ComputerInfo {
     platform: String,
     architecture: String,
     backend: String,
+    session_mode: String,
+    isolation: String,
     input_ready: bool,
     capabilities: Vec<String>,
+    windows: Vec<ComputerWindow>,
     connected_at: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ComputerWindow {
+    id: String,
+    pid: u64,
+    app_name: String,
+    title: String,
+    width: u64,
+    height: u64,
+    focused: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -356,6 +371,12 @@ struct ComputerInfo {
 struct ComputerObservation {
     frame_id: String,
     captured_at: String,
+    window_id: String,
+    pid: u64,
+    app_name: String,
+    window_title: String,
+    session_mode: String,
+    delivery_mode: String,
     display_id: String,
     display_index: u64,
     display_name: String,
@@ -946,12 +967,21 @@ async fn handle_computer_hello(state: &AppState, message: &Value) {
                 .unwrap_or("unknown"),
             100,
         ),
+        session_mode: bounded(
+            message
+                .get("sessionMode")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown"),
+            80,
+        ),
+        isolation: "foreground-and-hardware-cursor-preserved".to_owned(),
         input_ready: compatible
             && message
                 .get("inputReady")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
         capabilities,
+        windows: sanitize_computer_windows(message.get("windows")),
         connected_at: now_iso(),
     };
     state.data.write().await.public.computer = Some(computer);
@@ -1043,10 +1073,10 @@ async fn handle_extension_event(state: &AppState, message: &Value) {
                     let _guard = state.action_lock.lock().await;
                     let _ = state.refresh_tabs().await;
                     let target = state.data.read().await.public.target_tab_id;
-                    if data.get("method").and_then(Value::as_str) != Some("tabs.close") {
-                        if let Some(tab_id) = target {
-                            let _ = state.refresh_observation(tab_id).await;
-                        }
+                    if data.get("method").and_then(Value::as_str) != Some("tabs.close")
+                        && let Some(tab_id) = target
+                    {
+                        let _ = state.refresh_observation(tab_id).await;
                     }
                 });
             }
@@ -1126,10 +1156,10 @@ impl AppState {
             let mut data = self.data.write().await;
             if method == "tabs.activate" {
                 data.public.target_tab_id = params.get("tabId").and_then(Value::as_u64);
-            } else if method == "tabs.new" {
-                if let Some(tab_id) = result.get("tabId").and_then(Value::as_u64) {
-                    data.public.target_tab_id = Some(tab_id);
-                }
+            } else if method == "tabs.new"
+                && let Some(tab_id) = result.get("tabId").and_then(Value::as_u64)
+            {
+                data.public.target_tab_id = Some(tab_id);
             }
         }
 
@@ -1158,21 +1188,21 @@ impl AppState {
         };
         self.log(method, "ok", log_message).await;
 
-        if method.starts_with("tabs.") {
-            if let Err(error) = self.refresh_tabs().await {
-                self.log("tabs.list", "warning", &error.message).await;
-                self.bump("warning").await;
-            }
+        if method.starts_with("tabs.")
+            && let Err(error) = self.refresh_tabs().await
+        {
+            self.log("tabs.list", "warning", &error.message).await;
+            self.bump("warning").await;
         }
 
         if let Some(delay) = observation_delay(method) {
             tokio::time::sleep(delay).await;
             let target = self.data.read().await.public.target_tab_id;
-            if let Some(tab_id) = target {
-                if let Err(error) = self.refresh_observation(tab_id).await {
-                    self.log("page.observe", "warning", &error.message).await;
-                    self.bump("warning").await;
-                }
+            if let Some(tab_id) = target
+                && let Err(error) = self.refresh_observation(tab_id).await
+            {
+                self.log("page.observe", "warning", &error.message).await;
+                self.bump("warning").await;
             }
         }
 
@@ -1213,7 +1243,12 @@ impl AppState {
         }
         if method == "computer.observe" {
             return self
-                .refresh_computer_observation(params.get("displayId").and_then(Value::as_str))
+                .refresh_computer_observation(
+                    params
+                        .get("windowId")
+                        .or_else(|| params.get("displayId"))
+                        .and_then(Value::as_str),
+                )
                 .await;
         }
 
@@ -1227,10 +1262,25 @@ impl AppState {
         };
 
         if method == "computer.status" {
-            if let Some(input_ready) = result.get("inputReady").and_then(Value::as_bool) {
-                if let Some(computer) = self.data.write().await.public.computer.as_mut() {
+            if let Some(computer) = self.data.write().await.public.computer.as_mut() {
+                if let Some(input_ready) = result.get("inputReady").and_then(Value::as_bool) {
                     computer.input_ready = input_ready;
                 }
+                computer.session_mode = bounded(
+                    result
+                        .get("sessionMode")
+                        .and_then(Value::as_str)
+                        .unwrap_or(&computer.session_mode),
+                    80,
+                );
+                computer.isolation = bounded(
+                    result
+                        .get("isolation")
+                        .and_then(Value::as_str)
+                        .unwrap_or(&computer.isolation),
+                    100,
+                );
+                computer.windows = sanitize_computer_windows(result.get("windows"));
             }
             self.log(method, "ok", "Computer helper status refreshed")
                 .await;
@@ -1240,16 +1290,16 @@ impl AppState {
 
         self.log(method, "ok", format!("{method} completed")).await;
         tokio::time::sleep(computer_observation_delay(method)).await;
-        let display_id = self
+        let window_id = self
             .data
             .read()
             .await
             .public
             .computer_observation
             .as_ref()
-            .map(|observation| observation.display_id.clone());
+            .map(|observation| observation.window_id.clone());
         if let Err(error) = self
-            .refresh_computer_observation(display_id.as_deref())
+            .refresh_computer_observation(window_id.as_deref())
             .await
         {
             self.log("computer.observe", "warning", error.message).await;
@@ -1260,10 +1310,10 @@ impl AppState {
 
     async fn refresh_computer_observation(
         &self,
-        display_id: Option<&str>,
+        window_id: Option<&str>,
     ) -> Result<Value, ApiError> {
-        let params = display_id
-            .map(|display_id| json!({ "displayId": display_id }))
+        let params = window_id
+            .map(|window_id| json!({ "windowId": window_id }))
             .unwrap_or_else(|| json!({}));
         let result = self
             .computer_hub
@@ -1286,7 +1336,10 @@ impl AppState {
         self.log(
             "computer.observe",
             "ok",
-            format!("Observed {}", observation.display_name),
+            format!(
+                "Observed {} — {} in background",
+                observation.app_name, observation.window_title
+            ),
         )
         .await;
         self.bump("computer-observation").await;
@@ -1442,11 +1495,11 @@ fn sanitize_computer_params(method: &str, input: Value) -> Result<Value, ApiErro
     match method {
         "computer.status" => Ok(json!({})),
         "computer.observe" => {
-            let Some(display_id) = source.get("displayId") else {
+            let Some(window_id) = source.get("windowId").or_else(|| source.get("displayId")) else {
                 return Ok(json!({}));
             };
             Ok(json!({
-                "displayId": required_string(Some(display_id), "displayId", 100)?
+                "windowId": required_string(Some(window_id), "windowId", 100)?
             }))
         }
         "computer.move" | "computer.click" | "computer.scroll" => {
@@ -1596,6 +1649,18 @@ fn sanitize_computer_observation(value: Option<&Value>) -> Result<ComputerObserv
         }
         Ok(value)
     };
+    let window_id = required_string(
+        frame.get("windowId").or_else(|| frame.get("displayId")),
+        "frame.windowId",
+        100,
+    )?;
+    let display_name = bounded(
+        frame
+            .get("displayName")
+            .and_then(Value::as_str)
+            .unwrap_or("Window"),
+        200,
+    );
     Ok(ComputerObservation {
         frame_id: required_string(frame.get("id"), "frame.id", 100)?,
         captured_at: bounded(
@@ -1604,6 +1669,36 @@ fn sanitize_computer_observation(value: Option<&Value>) -> Result<ComputerObserv
                 .and_then(Value::as_str)
                 .unwrap_or("unknown"),
             100,
+        ),
+        window_id: window_id.clone(),
+        pid: frame.get("pid").and_then(Value::as_u64).unwrap_or(0),
+        app_name: bounded(
+            frame
+                .get("appName")
+                .and_then(Value::as_str)
+                .unwrap_or(&display_name),
+            200,
+        ),
+        window_title: bounded(
+            frame
+                .get("windowTitle")
+                .and_then(Value::as_str)
+                .unwrap_or(&display_name),
+            500,
+        ),
+        session_mode: bounded(
+            frame
+                .get("sessionMode")
+                .and_then(Value::as_str)
+                .unwrap_or("legacy-display"),
+            80,
+        ),
+        delivery_mode: bounded(
+            frame
+                .get("deliveryMode")
+                .and_then(Value::as_str)
+                .unwrap_or("legacy-foreground"),
+            80,
         ),
         display_id: required_string(frame.get("displayId"), "frame.displayId", 100)?,
         display_index: frame
@@ -1617,13 +1712,7 @@ fn sanitize_computer_observation(value: Option<&Value>) -> Result<ComputerObserv
                     "Computer frame displayIndex is invalid",
                 )
             })?,
-        display_name: bounded(
-            frame
-                .get("displayName")
-                .and_then(Value::as_str)
-                .unwrap_or("Display"),
-            200,
-        ),
+        display_name,
         image_width: bounded_u64("imageWidth", 16_384)?,
         image_height: bounded_u64("imageHeight", 16_384)?,
         screen_x: signed("screenX")?,
@@ -1633,6 +1722,54 @@ fn sanitize_computer_observation(value: Option<&Value>) -> Result<ComputerObserv
         scale_factor: finite("scaleFactor", 0.1, 16.0)?,
         rotation: finite("rotation", 0.0, 359.0)?,
     })
+}
+
+fn sanitize_computer_windows(value: Option<&Value>) -> Vec<ComputerWindow> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let item = item.as_object()?;
+                    let id = item.get("id")?.as_str()?;
+                    let pid = item.get("pid")?.as_u64()?;
+                    let width = item.get("width")?.as_u64()?;
+                    let height = item.get("height")?.as_u64()?;
+                    if id.len() > 100
+                        || pid == 0
+                        || width == 0
+                        || width > 100_000
+                        || height == 0
+                        || height > 100_000
+                    {
+                        return None;
+                    }
+                    Some(ComputerWindow {
+                        id: id.to_owned(),
+                        pid,
+                        app_name: bounded(
+                            item.get("appName").and_then(Value::as_str).unwrap_or("App"),
+                            200,
+                        ),
+                        title: bounded(
+                            item.get("title")
+                                .and_then(Value::as_str)
+                                .unwrap_or("Window"),
+                            500,
+                        ),
+                        width,
+                        height,
+                        focused: item
+                            .get("focused")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                    })
+                })
+                .take(128)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn sanitize_params(
@@ -1997,5 +2134,55 @@ mod tests {
         .unwrap();
         assert_eq!(screenshot.content_type, "image/png");
         assert!(!screenshot.bytes.is_empty());
+    }
+
+    #[test]
+    fn preserves_exact_window_identity_through_computer_sanitizers() {
+        let params = sanitize_computer_params(
+            "computer.observe",
+            json!({ "windowId": "47782", "displayId": "legacy" }),
+        )
+        .unwrap();
+        assert_eq!(params, json!({ "windowId": "47782" }));
+
+        let frame = json!({
+            "id": "frame-1",
+            "capturedAt": "2026-08-18T00:00:00Z",
+            "windowId": "47782",
+            "pid": 51641,
+            "appName": "Fixture",
+            "windowTitle": "Background target",
+            "sessionMode": "background-window",
+            "deliveryMode": "exact-window-background",
+            "displayId": "47782",
+            "displayIndex": 0,
+            "displayName": "Fixture — Background target",
+            "imageWidth": 1209,
+            "imageHeight": 826,
+            "screenX": 180,
+            "screenY": 768,
+            "screenWidth": 720,
+            "screenHeight": 492,
+            "scaleFactor": 1.0,
+            "rotation": 0.0
+        });
+        let observation = sanitize_computer_observation(Some(&frame)).unwrap();
+        assert_eq!(observation.window_id, "47782");
+        assert_eq!(observation.pid, 51641);
+        assert_eq!(observation.session_mode, "background-window");
+        assert_eq!(observation.delivery_mode, "exact-window-background");
+
+        let windows = sanitize_computer_windows(Some(&json!([{
+            "id": "47782",
+            "pid": 51641,
+            "appName": "Fixture",
+            "title": "Background target",
+            "width": 720,
+            "height": 492,
+            "focused": false
+        }])));
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].id, "47782");
+        assert!(!windows[0].focused);
     }
 }

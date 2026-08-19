@@ -57,8 +57,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     println!("Local Computer Helper {VERSION}");
-    println!("Desktop capability provider for Local Browser Bridge");
+    println!("Non-interrupting background-window provider for Local Browser Bridge");
     println!("Connecting to 127.0.0.1:{port}; press Ctrl+C to stop.");
+    println!("No global HID input or implicit foreground fallback is used.");
     println!(
         "No shell, filesystem, clipboard, process-launch, or telemetry capability is exposed."
     );

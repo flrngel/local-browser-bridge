@@ -19,7 +19,8 @@ This project does not copy any private OpenAI protocol. It independently impleme
 - Loopback-only server, WebSocket token and extension-Origin validation, SameSite UI sessions, CSRF validation, CSP, and no CORS
 - Accessible agent-facing DOM, activity log, and live SSE state updates
 - Bearer-token REST command API and a Rust mock extension for testing
-- Optional standalone Rust computer helper for macOS and Windows screen capture, frame-bound mouse input, Unicode text, and key chords
+- Optional standalone Rust computer helper for macOS and Windows exact-window capture, background-routed mouse input, Unicode text, and key chords
+- Non-interrupting computer-use contract: no global HID input, hardware-cursor movement, user-focus loss, target-app activation, desktop switching, or implicit foreground fallback
 - Separate computer-process status and authority in the UI; no shell, filesystem, process-launch, clipboard, downloader, or telemetry command
 - Standalone Rust binary with the entire control UI embedded; Node.js is not required
 - Same-version Windows x86_64, macOS universal, and Chromium extension release assets
@@ -37,9 +38,9 @@ flowchart LR
   D --> E["Browser tabs<br/>existing login/session"]
   E -->|"screenshot + DOM refs"| D
   G["Local Computer Helper<br/>separate Rust process"] -->|"outbound token-auth WebSocket"| C
-  C -->|"frame-bound input"| G
-  G --> H["macOS / Windows desktop"]
-  H -->|"bounded screenshot"| G
+  C -->|"exact-window frame-bound input"| G
+  G --> H["Background app window<br/>macOS / Windows"]
+  H -->|"window-only screenshot"| G
   F["Human"] -->|"toggle Full Access / Safe mode"| D
 ```
 
@@ -123,7 +124,7 @@ LBB_TOKEN=demo-token cargo run --release --bin mock-extension
 
 Open `http://127.0.0.1:17373` and select **Observe target**. The mock tab and element references will appear. The `/demo` route also contains a local form for testing the real extension.
 
-On macOS or Windows, a third terminal can start `cargo run --release --bin local-computer-helper`. It shares the server token automatically. macOS will ask for Screen Recording when observing and Accessibility when input is first used.
+On macOS or Windows, a third terminal can start `cargo run --release --bin local-computer-helper`. It shares the server token automatically. Choose a target application window in the control page, then observe it. macOS will ask for Screen Recording when observing and Accessibility when input is first used.
 
 ## Environment variables
 
@@ -174,7 +175,8 @@ The canonical build is `.github/workflows/deploy.yml`, triggered by a matching `
 
 ## Limitations
 
-- Native desktop v0.6 is pixel-first. It does not yet return macOS AX or Windows UIA element trees, focus applications by semantic identity, preserve the user's real cursor, or draw a separate agent cursor.
+- Native computer control is pixel-first and exact-window scoped. It does not yet return macOS AX or Windows UIA element trees. Frameworks that reject background delivery fail closed; the helper never escalates to foreground input automatically.
+- macOS input currently relies on dynamically resolved, undocumented SkyLight symbols and is limited to non-minimized windows on the active Space. Windows uses background Win32 messages and exact-window capture; Chromium, WPF, WinUI, elevated, game, secure-input, and protected-content surfaces may refuse it.
 - Chromium does not allow control of `chrome://`, `edge://`, extension pages, or browser permission UI through this extension.
 - File-page control requires the user to enable Chrome's file-URL permission for the extension.
 - Element references expire when the page structure changes. Observe again before reusing them.
