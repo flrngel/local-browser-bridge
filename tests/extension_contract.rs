@@ -336,6 +336,337 @@ fn trusted_pointer_has_dynamic_motion_and_two_phase_target_validation() {
 }
 
 #[test]
+fn background_pointer_teleports_once_without_focus_or_animation_latency() {
+    let background = fs::read_to_string("extension/background.js").unwrap();
+    let presentation_start = background
+        .find("async function pointerPresentationState")
+        .unwrap();
+    let presentation_end = background[presentation_start..]
+        .find("function assertPointerArrival")
+        .unwrap()
+        + presentation_start;
+    let presentation = &background[presentation_start..presentation_end];
+    assert!(presentation.contains("chrome.tabs.get(tabId)"));
+    assert!(presentation.contains("target tab presentation confirmation"));
+    assert!(presentation.contains("confirmedTab?.windowId !== tab.windowId"));
+    assert!(presentation.contains("reason: \"tab_presentation_changed\""));
+    assert!(presentation.contains("chrome.windows.get(tab.windowId)"));
+    assert!(presentation.contains("confirmedTab.active === true"));
+    assert!(presentation.contains("confirmedWindow.focused === true"));
+    assert!(presentation.contains("target window presentation confirmation"));
+    assert!(presentation.contains("reason: \"window_presentation_changed\""));
+    assert!(presentation.contains("windowState === \"normal\""));
+    assert!(!presentation.contains("chrome.tabs.update"));
+    assert!(!presentation.contains("chrome.windows.update"));
+
+    let movement_start = background.find("async function moveVirtualCursor").unwrap();
+    let movement_end = background[movement_start..]
+        .find("async function trustedClick")
+        .unwrap()
+        + movement_start;
+    let movement = &background[movement_start..movement_end];
+    assert!(movement.contains("if (!presentation.animate)"));
+    assert!(movement.contains("await dispatchPointerPoint(target)"));
+    assert!(
+        movement
+            .matches("pointerPresentationState(tabId, authority, commandContext)")
+            .count()
+            >= 3
+    );
+    assert!(movement.contains("arrival: skippedAnimation ? \"skipped_background\" : \"arrived\""));
+    assert!(movement.contains("profile: skippedAnimation ? \"background-final-arrival\" : \"bounded-cubic-minimum-jerk-spring\""));
+
+    for function in [
+        "async function trustedClick(",
+        "async function trustedClickAt(",
+    ] {
+        let start = background.find(function).unwrap();
+        let end = background[start..].find("\n}\n").unwrap() + start + 3;
+        let click = &background[start..end];
+        assert!(
+            click.find("assertPointerArrival(motion)").unwrap()
+                < click.find("mousePressed").unwrap()
+        );
+        assert!(
+            click.find("await moveVirtualCursor").unwrap()
+                < click.find("assertPointerArrival(motion)").unwrap()
+        );
+    }
+
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const signatureEnd = source.indexOf(") {", start);
+        const brace = signatureEnd + 2;
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      function deferred() {
+        let resolve, reject;
+        const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+        return { promise, resolve, reject };
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const pointerPresentationState = extractFunction(source, "pointerPresentationState");
+      const presentationBridge = new Function(`
+        const POINTER_PRESENTATION_TIMEOUT_MS = 1_000;
+        let tab = { id: 9, windowId: 4, active: true };
+        let tabSequence = [];
+        let targetWindow = { id: 4, focused: true, state: "normal" };
+        let windowSequence = [];
+        const chrome = {
+          tabs: { get: async () => ({ ...(tabSequence.length ? tabSequence.shift() : tab) }) },
+          windows: { get: async () => ({ ...(windowSequence.length ? windowSequence.shift() : targetWindow) }) },
+        };
+        function assertLeaseAuthority() {}
+        function withCommandCancellation(promise) { return promise; }
+        function withTimeout(promise) { return promise; }
+        ${pointerPresentationState}
+        return {
+          read: () => pointerPresentationState(9, {}, null),
+          set(nextTab, nextWindow) { tab = nextTab; targetWindow = nextWindow; },
+          sequence(nextTabs) { tabSequence = nextTabs.map((item) => ({ ...item })); },
+          windowSequence(nextWindows) { windowSequence = nextWindows.map((item) => ({ ...item })); },
+        };
+      `)();
+      if (!(await presentationBridge.read()).animate) {
+        throw new Error("active tab in a focused visible window was not classified for animation");
+      }
+      presentationBridge.set(
+        { id: 9, windowId: 4, active: false },
+        { id: 4, focused: true, state: "normal" },
+      );
+      if ((await presentationBridge.read()).reason !== "tab_inactive") {
+        throw new Error("inactive tab was not routed to final-arrival movement");
+      }
+      presentationBridge.set(
+        { id: 9, windowId: 4, active: true },
+        { id: 4, focused: false, state: "normal" },
+      );
+      if ((await presentationBridge.read()).reason !== "window_unfocused") {
+        throw new Error("unfocused window was not routed to final-arrival movement");
+      }
+      presentationBridge.set(
+        { id: 9, windowId: 4, active: true },
+        { id: 4, focused: true, state: "minimized" },
+      );
+      if ((await presentationBridge.read()).reason !== "window_minimized") {
+        throw new Error("minimized window was not routed to final-arrival movement");
+      }
+      presentationBridge.set(
+        { id: 9, windowId: 4, active: true },
+        { id: 4, focused: true, state: "normal" },
+      );
+      presentationBridge.sequence([
+        { id: 9, windowId: 4, active: true },
+        { id: 9, windowId: 5, active: true },
+      ]);
+      if ((await presentationBridge.read()).reason !== "tab_presentation_changed") {
+        throw new Error("tab window migration passed a stale window presentation sample");
+      }
+      presentationBridge.set(
+        { id: 9, windowId: 4, active: true },
+        { id: 4, focused: true, state: "normal" },
+      );
+      presentationBridge.windowSequence([
+        { id: 4, focused: true, state: "normal" },
+        { id: 4, focused: false, state: "normal" },
+      ]);
+      if ((await presentationBridge.read()).reason !== "window_presentation_changed") {
+        throw new Error("window focus transition passed a stale presentation sample");
+      }
+
+      const moveVirtualCursor = extractFunction(source, "moveVirtualCursor");
+      const bridge = new Function("deferred", `
+        const lease = {
+          tabId: 9, sessionId: "lease-9", epoch: 3, documentEpoch: 2,
+          viewport: { width: 800, height: 600 }, moveSequence: 7, turn: 4,
+          expiresAt: Date.now() + 30_000,
+          cursor: { x: 20, y: 25, visible: true, updatedAt: Date.now() },
+        };
+        let animate = false;
+        let deferOperations = true;
+        let debuggerCalls = 0, contentCalls = 0, pauses = 0, persists = 0;
+        const debuggerPoints = [], contentPoints = [];
+        const debuggerGates = [], contentGates = [];
+        function requireControl() { return Promise.resolve(lease); }
+        function captureLeaseAuthority() {
+          return { tabId: 9, sessionId: "lease-9", epoch: 3, documentEpoch: 2 };
+        }
+        function assertLeaseAuthority() {}
+        function outcomeUnknownError(boundary, cause) {
+          const error = new Error("ACTION_OUTCOME_UNKNOWN: " + boundary);
+          error.code = "ACTION_OUTCOME_UNKNOWN";
+          error.cause = cause;
+          return error;
+        }
+        function clamp(value, minimum, maximum) { return Math.min(maximum, Math.max(minimum, value)); }
+        function boundedBezierSpringPath(_start, target) {
+          return {
+            points: Array.from({ length: 12 }, (_, index) => ({
+              x: target.x - 11 + index,
+              y: target.y - 11 + index,
+            })),
+            durationMs: 192, distance: 140, candidateCount: 20, score: 1.5,
+          };
+        }
+        function pointerPresentationState() {
+          return Promise.resolve({
+            animate, tabActive: animate, windowFocused: animate,
+            windowState: animate ? "normal" : "normal",
+            reason: animate ? "foreground_visible" : "tab_inactive",
+          });
+        }
+        function debuggerCommand(_tabId, _method, params) {
+          debuggerCalls += 1;
+          debuggerPoints.push({ x: params.x, y: params.y });
+          if (!deferOperations) return Promise.resolve();
+          const gate = deferred();
+          debuggerGates.push(gate);
+          return gate.promise;
+        }
+        function contentRequest(_tabId, payload) {
+          contentCalls += 1;
+          contentPoints.push({ x: payload.cursor.x, y: payload.cursor.y });
+          if (!deferOperations) return Promise.resolve();
+          const gate = deferred();
+          contentGates.push(gate);
+          return gate.promise;
+        }
+        function pause() { pauses += 1; return Promise.resolve(); }
+        function persistControlState() { persists += 1; return Promise.resolve(); }
+        ${moveVirtualCursor}
+        return {
+          move: () => moveVirtualCursor(9, 400, 300),
+          releaseDebugger: () => debuggerGates.shift().resolve(),
+          releaseContent: () => contentGates.shift().resolve(),
+          rejectContent: (error) => contentGates.shift().reject(error),
+          foreground() {
+            animate = true; deferOperations = false;
+            debuggerCalls = 0; contentCalls = 0; pauses = 0; persists = 0;
+            debuggerPoints.length = 0; contentPoints.length = 0;
+          },
+          transitioningForeground() {
+            animate = true; deferOperations = true;
+            debuggerCalls = 0; contentCalls = 0; pauses = 0; persists = 0;
+            debuggerPoints.length = 0; contentPoints.length = 0;
+          },
+          failingForeground() {
+            animate = true; deferOperations = true;
+            debuggerCalls = 0; contentCalls = 0; pauses = 0; persists = 0;
+            debuggerPoints.length = 0; contentPoints.length = 0;
+          },
+          background() { animate = false; },
+          state: () => ({
+            debuggerCalls, contentCalls, pauses, persists, cursor: lease.cursor,
+            debuggerPoints: [...debuggerPoints], contentPoints: [...contentPoints],
+          }),
+        };
+      `)(deferred);
+
+      const backgroundMove = bridge.move();
+      while (bridge.state().debuggerCalls === 0) await Promise.resolve();
+      if (bridge.state().debuggerCalls !== 1 || bridge.state().contentCalls !== 0) {
+        throw new Error("background movement dispatched more than its single final CDP move");
+      }
+      bridge.releaseDebugger();
+      while (bridge.state().contentCalls === 0) await Promise.resolve();
+      if (bridge.state().contentCalls !== 1) {
+        throw new Error("background movement sent more than one cursor state");
+      }
+      bridge.releaseContent();
+      const skipped = await backgroundMove;
+      const backgroundState = bridge.state();
+      if (skipped.arrival !== "skipped_background" || skipped.points !== 1
+        || skipped.durationMs !== 0 || backgroundState.debuggerCalls !== 1
+        || backgroundState.contentCalls !== 1 || backgroundState.pauses !== 0
+        || backgroundState.persists !== 1 || backgroundState.cursor.x !== 400
+        || backgroundState.cursor.y !== 300) {
+        throw new Error("background movement did not acknowledge one persisted final arrival");
+      }
+
+      bridge.transitioningForeground();
+      const transitionedMove = bridge.move();
+      while (bridge.state().debuggerCalls === 0) await Promise.resolve();
+      bridge.releaseDebugger();
+      while (bridge.state().contentCalls === 0) await Promise.resolve();
+      bridge.background();
+      bridge.releaseContent();
+      while (bridge.state().debuggerCalls < 2) await Promise.resolve();
+      bridge.releaseDebugger();
+      while (bridge.state().contentCalls < 2) await Promise.resolve();
+      bridge.releaseContent();
+      const transitioned = await transitionedMove;
+      const transitionedState = bridge.state();
+      const finalDebuggerPoint = transitionedState.debuggerPoints.at(-1);
+      const finalContentPoint = transitionedState.contentPoints.at(-1);
+      if (transitioned.arrival !== "skipped_background" || transitioned.points !== 2
+        || transitionedState.debuggerCalls !== 2 || transitionedState.contentCalls !== 2
+        || transitionedState.pauses !== 0 || finalDebuggerPoint.x !== 400
+        || finalDebuggerPoint.y !== 300 || finalContentPoint.x !== 400
+        || finalContentPoint.y !== 300) {
+        throw new Error("foreground-to-background transition did not collapse to one final arrival");
+      }
+
+      bridge.failingForeground();
+      const failedMove = bridge.move();
+      while (bridge.state().debuggerCalls === 0) await Promise.resolve();
+      bridge.releaseDebugger();
+      while (bridge.state().contentCalls === 0) await Promise.resolve();
+      const contentFailure = new Error("PAGE_UNAVAILABLE: renderer rejected the cursor update");
+      contentFailure.code = "PAGE_UNAVAILABLE";
+      bridge.rejectContent(contentFailure);
+      let failureWasUnknown = false;
+      let dependentClickStarted = false;
+      try {
+        await failedMove;
+        dependentClickStarted = true;
+      } catch (error) {
+        failureWasUnknown = error.code === "ACTION_OUTCOME_UNKNOWN";
+      }
+      if (!failureWasUnknown || dependentClickStarted || bridge.state().debuggerCalls !== 1) {
+        throw new Error("post-CDP cursor failure remained retryable or allowed the dependent click");
+      }
+
+      bridge.foreground();
+      const arrived = await bridge.move();
+      const foregroundState = bridge.state();
+      if (arrived.arrival !== "arrived" || arrived.points !== 12
+        || foregroundState.debuggerCalls !== 12 || foregroundState.contentCalls !== 12
+        || foregroundState.pauses !== 11 || foregroundState.persists !== 1) {
+        throw new Error("foreground movement did not retain the full animated path");
+      }
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run background pointer routing harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node background pointer routing harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn snapshots_invalidate_on_mutation_scroll_and_resize() {
     let content = fs::read_to_string("extension/content.js").unwrap();
     assert!(content.contains("new MutationObserver"));

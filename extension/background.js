@@ -2169,6 +2169,7 @@ async function debuggerCommand(tabId, method, params, authority = null, commandC
 }
 
 const POINTER_CANDIDATE_COUNT = 20;
+const POINTER_PRESENTATION_TIMEOUT_MS = 1_000;
 
 function deterministicUnit(seed, index) {
   let value = (Math.imul((seed + 1) >>> 0, 0x9e3779b1) + Math.imul(index + 1, 0x85ebca6b)) >>> 0;
@@ -2283,6 +2284,95 @@ function pause(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+async function pointerPresentationState(tabId, authority, commandContext) {
+  const read = async (operation, label) => {
+    operation.catch(() => {});
+    return withTimeout(
+      withCommandCancellation(operation, commandContext, label),
+      POINTER_PRESENTATION_TIMEOUT_MS,
+      label,
+      "POINTER_PRESENTATION_TIMEOUT",
+    );
+  };
+  try {
+    assertLeaseAuthority(authority, commandContext, "pointer presentation lookup");
+    const tab = await read(chrome.tabs.get(tabId), "target tab presentation lookup");
+    assertLeaseAuthority(authority, commandContext, "target tab presentation lookup");
+    if (!Number.isInteger(tab?.windowId)) {
+      return {
+        animate: false,
+        tabActive: Boolean(tab?.active),
+        windowFocused: false,
+        windowState: "unknown",
+        reason: "window_unavailable",
+      };
+    }
+    const targetWindow = await read(chrome.windows.get(tab.windowId), "target window presentation lookup");
+    assertLeaseAuthority(authority, commandContext, "target window presentation lookup");
+    const confirmedTab = await read(chrome.tabs.get(tabId), "target tab presentation confirmation");
+    assertLeaseAuthority(authority, commandContext, "target tab presentation confirmation");
+    if (confirmedTab?.id !== tab.id
+      || confirmedTab?.windowId !== tab.windowId
+      || confirmedTab?.active !== tab.active) {
+      return {
+        animate: false,
+        tabActive: Boolean(confirmedTab?.active),
+        windowFocused: false,
+        windowState: "unknown",
+        reason: "tab_presentation_changed",
+      };
+    }
+    const confirmedWindow = await read(chrome.windows.get(tab.windowId), "target window presentation confirmation");
+    assertLeaseAuthority(authority, commandContext, "target window presentation confirmation");
+    if (confirmedWindow?.id !== targetWindow?.id
+      || confirmedWindow?.focused !== targetWindow?.focused
+      || confirmedWindow?.state !== targetWindow?.state) {
+      return {
+        animate: false,
+        tabActive: Boolean(confirmedTab.active),
+        windowFocused: false,
+        windowState: "unknown",
+        reason: "window_presentation_changed",
+      };
+    }
+    const tabActive = confirmedTab.active === true;
+    const windowFocused = confirmedWindow.focused === true;
+    const windowState = String(confirmedWindow.state || "unknown");
+    const animate = tabActive && windowFocused && windowState === "normal";
+    return {
+      animate,
+      tabActive,
+      windowFocused,
+      windowState,
+      reason: animate
+        ? "foreground_visible"
+        : !tabActive
+          ? "tab_inactive"
+          : !windowFocused
+            ? "window_unfocused"
+            : windowState !== "normal"
+              ? `window_${windowState}`
+              : "window_unavailable",
+    };
+  } catch (error) {
+    if (["COMMAND_CANCELED", "CONTROL_CANCELED", "DOCUMENT_CHANGED"].includes(error.code)) throw error;
+    assertLeaseAuthority(authority, commandContext, "pointer presentation fallback");
+    return {
+      animate: false,
+      tabActive: false,
+      windowFocused: false,
+      windowState: "unknown",
+      reason: error.code === "POINTER_PRESENTATION_TIMEOUT" ? "presentation_timeout" : "presentation_unavailable",
+    };
+  }
+}
+
+function assertPointerArrival(motion) {
+  if (!motion || !["arrived", "skipped_background"].includes(motion.arrival)) {
+    throw new Error("POINTER_NOT_ARRIVED: trusted input requires an acknowledged final pointer position");
+  }
+}
+
 async function moveVirtualCursor(tabId, targetX, targetY, commandContext = null, existingAuthority = null) {
   const lease = await requireControl(tabId, "trusted_pointer_input", commandContext);
   const authority = existingAuthority ?? captureLeaseAuthority(lease);
@@ -2301,8 +2391,12 @@ async function moveVirtualCursor(tabId, targetX, targetY, commandContext = null,
   lease.moveSequence += 1;
   const sequence = lease.moveSequence;
   const motion = boundedBezierSpringPath(start, target, viewport, sequence);
+  let presentation = await pointerPresentationState(tabId, authority, commandContext);
   const frameDelay = Math.max(4, Math.round(motion.durationMs / motion.points.length));
-  for (const point of motion.points) {
+  let dispatchedPointCount = 0;
+  let completedFramePauses = 0;
+  let skippedAnimation = !presentation.animate;
+  const dispatchPointerPoint = async (point) => {
     assertLeaseAuthority(authority, commandContext, "pointer movement frame");
     await debuggerCommand(
       tabId,
@@ -2311,24 +2405,60 @@ async function moveVirtualCursor(tabId, targetX, targetY, commandContext = null,
       authority,
       commandContext,
     );
+    dispatchedPointCount += 1;
     lease.cursor = { x: point.x, y: point.y, visible: true, updatedAt: Date.now() };
     await contentRequest(tabId, {
       method: "control.cursor",
       cursor: { ...lease.cursor, turn: lease.turn, moveSequence: sequence },
       expiresAt: lease.expiresAt,
     }, { authority, commandContext });
-    await pause(frameDelay);
+  };
+  try {
+    if (!presentation.animate) {
+      await dispatchPointerPoint(target);
+    } else {
+      for (let index = 0; index < motion.points.length; index += 1) {
+        if (index > 0) {
+          presentation = await pointerPresentationState(tabId, authority, commandContext);
+          if (!presentation.animate) {
+            skippedAnimation = true;
+            await dispatchPointerPoint(target);
+            break;
+          }
+        }
+        await dispatchPointerPoint(motion.points[index]);
+        if (index === motion.points.length - 1) break;
+        presentation = await pointerPresentationState(tabId, authority, commandContext);
+        if (!presentation.animate) {
+          skippedAnimation = true;
+          await dispatchPointerPoint(target);
+          break;
+        }
+        await pause(frameDelay);
+        completedFramePauses += 1;
+      }
+    }
+    await persistControlState();
+    assertLeaseAuthority(authority, commandContext, "pointer movement completion");
+  } catch (error) {
+    if (dispatchedPointCount > 0
+      && !["ACTION_OUTCOME_UNKNOWN", "CDP_OUTCOME_UNKNOWN"].includes(error.code)) {
+      throw outcomeUnknownError("pointer movement", error);
+    }
+    throw error;
   }
-  await persistControlState();
-  assertLeaseAuthority(authority, commandContext, "pointer movement completion");
   return {
     moveSequence: sequence,
-    durationMs: motion.durationMs,
+    arrival: skippedAnimation ? "skipped_background" : "arrived",
+    status: skippedAnimation ? "skipped_background" : "arrived",
+    durationMs: skippedAnimation ? completedFramePauses * frameDelay : motion.durationMs,
     distance: motion.distance,
-    points: motion.points.length,
+    points: dispatchedPointCount,
+    plannedPoints: motion.points.length,
     candidateCount: motion.candidateCount,
     pathScore: motion.score,
-    profile: "bounded-cubic-minimum-jerk-spring",
+    profile: skippedAnimation ? "background-final-arrival" : "bounded-cubic-minimum-jerk-spring",
+    presentation,
   };
 }
 
@@ -2338,6 +2468,7 @@ async function trustedClick(tabId, description, ref, generation, commandContext 
   const x = description.bounds.x + description.bounds.width / 2;
   const y = description.bounds.y + description.bounds.height / 2;
   const motion = await moveVirtualCursor(tabId, x, y, commandContext, authority);
+  assertPointerArrival(motion);
   assertLeaseAuthority(authority, commandContext, "click target commit");
   await contentRequest(
     tabId,
@@ -2387,6 +2518,7 @@ async function trustedClickAt(tabId, x, y, button = "left", clickCount = 1, targ
   const authority = existingAuthority ?? captureLeaseAuthority();
   await verifyDocumentAuthority(tabId, authority, commandContext, "trusted point click preparation");
   const motion = await moveVirtualCursor(tabId, x, y, commandContext, authority);
+  assertPointerArrival(motion);
   assertLeaseAuthority(authority, commandContext, "point target commit");
   await contentRequest(
     tabId,
