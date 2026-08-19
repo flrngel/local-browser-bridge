@@ -45,7 +45,7 @@ These surfaces are intentionally independent. The Chrome warning proves a debugg
 | Native desktop cursor overlay | Not implemented | Pointer exists only in returned exact-window images | Do not claim Cua-equivalent click-through overlay visibility |
 | Full PUSV visual atomicity | Partial | Structural/geometry/window revalidation, but no target-patch SSIM or full-frame pre-dispatch diff | Treat custom/canvas UI meaning changes as a remaining risk |
 | Isolated OS input session | Not implemented | `background-window` preserves foreground and cursor but shares the user's login session | Use a managed VM/RDP/separate login for hostile or destructive workloads |
-| Protocol replay boundary | Implemented | Server-first welcome; exact package/protocol/session match; monotonic command/event sequences; exact result echo; bounded queues | Wrong version, session, sequence, duplicate event, reconnect, and queue-saturation tests |
+| Protocol replay boundary | Implemented | Client-first fresh nonce, role/connector/session-bound mutual HMAC proof, then exact package/protocol/session negotiation; monotonic command/event sequences; exact result echo; bounded queues | Wrong proof, replayed challenge, wrong version/session/sequence, duplicate event, reconnect, and queue-saturation tests |
 
 ## Benchmark delta
 
@@ -65,7 +65,7 @@ These surfaces are intentionally independent. The Chrome warning proves a debugg
 
 The checked-in [version 0.8 evidence](../evidence/v0.8.0/README.md) proves the earlier exact-window macOS fixture, semantic actions, browser extension load path, and non-interruption baseline. It does not prove the new version 0.9 lease, indicator, protocol, pointer, or share behavior.
 
-Before publishing version 0.9, create a separate `evidence/v0.9.0` bundle containing sanitized screenshots and machine-readable results for at least:
+The separate [version 0.9 evidence bundle](../evidence/v0.9.0/README.md) now contains both the original exploration and a frozen packaged pre-publication run. Its `final-results.json` records remain false until the published GitHub assets and attestations are downloaded and verified. The required scenario matrix is:
 
 | Scenario | Visual evidence | Machine-readable evidence |
 |---|---|---|

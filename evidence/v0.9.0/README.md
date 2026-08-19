@@ -1,6 +1,24 @@
 # v0.9.0 evidence index
 
-This directory contains sanitized, exploratory evidence captured on 2026-08-19 while version 0.9.0 was under development. It is not final release verification: the captures are not bound to a frozen release commit, packaged extension ZIP, signed platform binaries, or a release-asset checksum manifest.
+This directory contains two evidence layers captured on 2026-08-19:
+
+- The original sanitized exploratory run in `browser/results.json`, `computer/results.json`, and screenshots 01–10.
+- A frozen, packaged pre-publication run in both `final-results.json` files, browser screenshots 09–11, and computer screenshot 11. It is bound to code commit `dc31363`, the deterministic extension ZIP, and the packaged universal macOS server/helper archive.
+
+The frozen records deliberately keep `finalReleaseVerification` false until the tagged GitHub assets and build attestations have been published, downloaded, and verified. Windows runtime execution is also reported honestly as unavailable on this macOS host; Windows x86_64 check, strict Clippy, and all-target test builds passed.
+
+## Frozen package verification
+
+The exact extension ZIP was extracted and loaded in the user's real Google Chrome 151 through `chrome://extensions`. The packaged macOS server and permission-owning helper were run as separate processes. The machine-readable records are [`browser/final-results.json`](browser/final-results.json) and [`computer/final-results.json`](computer/final-results.json).
+
+| Artifact | What it supports |
+| --- | --- |
+| `browser/browser-09-final-package-details.jpg` | Real `chrome://extensions` details page: Local Browser Bridge 0.9.0 enabled, developer mode, and reviewed permissions |
+| `browser/browser-10-final-native-and-page-control.jpg` | Chrome-native debugger disclosure and Cancel, page pill/Stop, browser cursor, and deterministic demo state visible together |
+| `browser/browser-11-final-tool-screenshot.jpg` | Tool screenshot hides page controls and Chrome UI while retaining the model-visible browser cursor |
+| `computer/computer-11-final-packaged-background.jpg` | Exact-window packaged-helper capture with the separate native session pointer |
+
+The live browser record includes a successful non-interrupting background click (`skipped_background`, one final CDP move, unchanged foreground and hardware cursor), a foreground animated click, page Stop, popup-only Resume, Chrome Cancel, global remote-mutation refusal while human-paused, remote stop, and service-worker reload/reconnect. The native record includes exact-window observe/move, independent foreground/cursor sampling, 10 FPS sharing with an action during the stream, share stop, and conservative semantic effect classification.
 
 ## Real Chrome exploration
 
@@ -39,19 +57,17 @@ The native result record includes macOS delivery invariants, action timing, fram
 
 ## Privacy review
 
-All 18 JPEGs were visually reviewed at full size and as contact sheets. The bundle was also scanned with filename/type enumeration, JSON parsing, high-risk credential and identity regular expressions, printable-string inspection of every JPEG, and ImageMagick metadata inspection.
+All 22 JPEGs were visually reviewed at full size. The bundle was also scanned with filename/type enumeration, JSON parsing, high-risk credential and identity regular expressions, printable-string inspection of every JPEG, and ImageMagick metadata inspection.
 
-No bearer token, cookie, password, API key, private key, email address, account name, Chrome profile path, browsing history, personal URL, or unrelated window was found. The only Chrome identifier shown is the development extension ID in file 01; it is a non-secret identifier and does not grant access. JPEG metadata contains only basic JFIF/date and, for the native captures, color-space/pixel-dimension fields; no GPS, author, device, account, or filesystem-path metadata was found.
+No bearer token, cookie, password, API key, private key, email address, account name, Chrome profile path, browsing history, personal URL, or unrelated window was found. The unpacked extension IDs shown in browser files 01 and 09 are non-secret identifiers and do not grant access. JPEG metadata contains only basic JFIF/date and, for the native captures, color-space/pixel-dimension fields; no GPS, author, device, account, or filesystem-path metadata was found.
 
-## Required final release verification
+## Remaining publication verification
 
-Before this directory can be described as final release evidence, all of the following still need fresh proof from a frozen release commit:
+The frozen source and local package gates are complete: 120 local tests, 38 extension contracts, strict Rust 1.88 lint, RustSec audit, deterministic ZIP comparison, universal macOS architecture/signature checks, Windows PE/package checks, Linux Rust 1.88 check/lint/tests, Windows x86_64 check/lint/test-build, and macOS x86_64 lint all passed. The remaining publication steps are:
 
-- Run the complete formatting, strict lint, Rust test, extension contract, manifest, shell, version, language, secret, and deterministic-package checks on the frozen tree.
-- Build and verify the macOS and Windows release binaries plus the extension ZIP; record SHA-256 values, target architecture, archive contents, and GitHub provenance/attestation results.
-- Load the packaged extension through `chrome://extensions` and record a continuous server-to-extension run with sanitized machine-readable browser responses.
-- Exercise Chrome Cancel and the page Stop/Resume controls, proving revocation and refusal of subsequent or late mutations.
-- Record stale snapshot, target mutation/occlusion, protocol mismatch, replay, timeout/cancel, and reconnect/session-replacement failures with zero unintended side effects.
-- Repeat native runtime verification on both macOS and Windows, including share start/status/stop, session teardown, action cancellation, held-input cleanup, and independently sampled foreground/focus/cursor/Space-or-desktop invariants.
-- Verify update discovery/download UX against the published same-version multi-platform release assets.
-- Re-run the privacy/secret scan on the final evidence and release artifacts.
+- Publish the immutable `v0.9.0` GitHub release from the frozen tag.
+- Download all release assets and `SHA256SUMS.txt`, then verify package contents, hashes, release integrity, and GitHub build attestations.
+- Run the packaged server's same-version update check against the published release metadata.
+- Change both frozen records to `finalReleaseVerification: true` only after those checks pass.
+
+Windows runtime execution remains a declared coverage limitation, not an implied success.

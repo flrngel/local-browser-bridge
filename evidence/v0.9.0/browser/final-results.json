@@ -1,0 +1,153 @@
+{
+  "schemaVersion": 1,
+  "productVersion": "0.9.0",
+  "evidenceClass": "frozen-package-live-verification",
+  "finalReleaseVerification": false,
+  "publicationStatus": "awaiting-published-release-download-and-attestation-verification",
+  "capturedAt": "2026-08-19T09:50:00Z",
+  "codeCommit": "dc31363b9f55697fc1a5dbee2361a270cfc92bf7",
+  "codeGateFingerprint": "c7ea88b1bf6a3678649a83397367e0329248a6b09e2aebc8b6389ef9a23b8550",
+  "environment": {
+    "browser": "Google Chrome 151.0.7922.138",
+    "operatingSystem": "macOS 26.5.1",
+    "architecture": "arm64",
+    "browserProfile": "user Chrome profile",
+    "loadSurface": "chrome://extensions",
+    "testTarget": "http://127.0.0.1:17373/demo"
+  },
+  "package": {
+    "file": "local-browser-bridge-extension-v0.9.0.zip",
+    "sha256": "1e73439722264da7fa2ef75fdeb43c9101de69c3deb0ac174111f0ea4efbfea6",
+    "deterministicRebuildMatched": true,
+    "archivePayloadMatchedExtractedDirectory": true,
+    "loadedAsUnpackedFromExtractedArchive": true,
+    "extensionId": "moplekkonmhlnpiccfbogdobnhgegjkn",
+    "manifestVersion": "0.9.0"
+  },
+  "checks": {
+    "connectorMutualAuthentication": "passed",
+    "serverAndExtensionVersionMatch": "passed",
+    "backgroundTrustedClick": {
+      "ok": true,
+      "trusted": true,
+      "arrival": "skipped_background",
+      "profile": "background-final-arrival",
+      "presentationReason": "window_unfocused",
+      "plannedPoints": 8,
+      "dispatchedPoints": 1,
+      "durationMs": 0,
+      "foregroundBefore": "ChatGPT",
+      "foregroundAfter": "ChatGPT",
+      "hardwareCursorBefore": "1338,849",
+      "hardwareCursorAfter": "1338,849",
+      "observedPostcondition": "Hello, visitor. green selected."
+    },
+    "foregroundTrustedClick": {
+      "ok": true,
+      "trusted": true,
+      "arrival": "arrived",
+      "profile": "bounded-cubic-minimum-jerk-spring",
+      "presentationReason": "foreground_visible",
+      "candidateCount": 20,
+      "plannedPoints": 8,
+      "dispatchedPoints": 8,
+      "durationMs": 133
+    },
+    "trustedIndicators": {
+      "nativeChromeText": "\"Local Browser Bridge\" started debugging this browser",
+      "nativeChromeCancelVisible": true,
+      "pagePillVisible": true,
+      "pageStopVisible": true,
+      "browserCursorVisible": true
+    },
+    "toolScreenshotHygiene": {
+      "pagePillExcluded": true,
+      "pageStopExcluded": true,
+      "nativeChromeUiExcluded": true,
+      "browserCursorRetained": true
+    },
+    "pageStop": {
+      "clickedThroughPackagedComputerHelper": true,
+      "semanticEffect": "Confirmed",
+      "revocationReason": "released_by_user",
+      "detached": true,
+      "humanPaused": true,
+      "remoteStartRejected": "HUMAN_CONTROL_PAUSED",
+      "remotePageObserveRejected": "HUMAN_CONTROL_PAUSED",
+      "remoteTabActivateRejected": "HUMAN_CONTROL_PAUSED",
+      "remoteTabCreateRejected": "HUMAN_CONTROL_PAUSED"
+    },
+    "popupResumeAfterPageStop": {
+      "trustedPopupOnly": true,
+      "humanPausedAfter": false
+    },
+    "nativeChromeCancel": {
+      "clickedThroughPackagedComputerHelper": true,
+      "semanticEffect": "Confirmed",
+      "revocationReason": "canceled_by_user",
+      "detached": true,
+      "humanPaused": true,
+      "remoteStartRejected": "HUMAN_CONTROL_PAUSED",
+      "remoteTabCreateRejected": "HUMAN_CONTROL_PAUSED"
+    },
+    "popupResumeAfterChromeCancel": {
+      "trustedPopupOnly": true,
+      "humanPausedAfter": false
+    },
+    "remoteStop": {
+      "started": true,
+      "stopped": true,
+      "revocationReason": "released_by_client",
+      "humanPaused": false
+    },
+    "serviceWorkerReload": {
+      "reloadedFromChromeExtensions": true,
+      "mutuallyAuthenticatedReconnect": true,
+      "serverHealthAfter": {
+        "extensionConnected": true,
+        "computerConnected": true
+      }
+    }
+  },
+  "screenshots": [
+    {
+      "file": "browser-09-final-package-details.jpg",
+      "sha256": "c5cf9f8d3f79124fa3dc50b1a4f0b414599587b1adb66cc031e9635efe01e558",
+      "width": 1247,
+      "height": 693,
+      "supports": [
+        "real chrome://extensions details page",
+        "developer mode enabled",
+        "Local Browser Bridge 0.9.0 enabled",
+        "debugger, all-sites, and tab-group permissions visible"
+      ]
+    },
+    {
+      "file": "browser-10-final-native-and-page-control.jpg",
+      "sha256": "0e174346059aebaac3803eaa1686cd7bf3c921c2d1a8f4fe3b2fe5f2b38f1005",
+      "width": 1247,
+      "height": 697,
+      "supports": [
+        "Chrome-native debugger disclosure and Cancel",
+        "page-level status pill and Stop",
+        "browser cursor",
+        "deterministic demo postcondition"
+      ]
+    },
+    {
+      "file": "browser-11-final-tool-screenshot.jpg",
+      "sha256": "6aa8458d0d729a25ba39afd3b8a1b18c16e953da032560231ecb410b74f6d800",
+      "width": 1400,
+      "height": 723,
+      "supports": [
+        "tool screenshot excludes status pill and browser chrome",
+        "model-visible browser cursor remains composited"
+      ]
+    }
+  ],
+  "limitations": [
+    "Chrome presentation reads and CDP delivery are not atomic; one intermediate cursor frame can already be in flight before a presentation change is observed.",
+    "The page indicator is page-owned and best-effort; Chrome's debugger disclosure and Cancel are the trusted browser surface.",
+    "This record becomes final release verification only after the published GitHub assets and attestations are downloaded and verified."
+  ]
+}

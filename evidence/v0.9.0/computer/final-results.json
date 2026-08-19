@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 1,
+  "productVersion": "0.9.0",
+  "evidenceClass": "frozen-package-live-verification",
+  "finalReleaseVerification": false,
+  "publicationStatus": "awaiting-published-release-download-and-attestation-verification",
+  "capturedAt": "2026-08-19T09:30:00Z",
+  "codeCommit": "dc31363b9f55697fc1a5dbee2361a270cfc92bf7",
+  "environment": {
+    "operatingSystem": "macOS 26.5.1",
+    "architecture": "arm64",
+    "serverVersion": "0.9.0",
+    "helperVersion": "0.9.0",
+    "backend": "background-window/skylight+cgwindow",
+    "sessionMode": "background-window",
+    "deliveryMode": "exact-window-background"
+  },
+  "package": {
+    "archive": "local-browser-bridge-v0.9.0-macos-universal.tar.gz",
+    "archiveSha256": "69e0ea45efd36c4e72cbfab4cb4c403e141eb8de2af34ee54f64da01155a0d7c",
+    "architectures": [
+      "arm64",
+      "x86_64"
+    ],
+    "serverSha256": "99d0e7389c25204a29b4cc6a6de43e0a0c04ce4347852935e07a4f68bf790407",
+    "helperSha256": "8e4391a57552cd8d6d3238d2e5c672c88d9332069ce247fb233c26dc631a5237",
+    "adHocCodeSignVerification": "passed"
+  },
+  "fixture": {
+    "application": "BackgroundFixtureSemantic",
+    "windowTitle": "LBB Background Fixture",
+    "windowId": "51345",
+    "imageWidth": 1209,
+    "imageHeight": 826,
+    "semanticMode": "macos-accessibility"
+  },
+  "checks": {
+    "move": {
+      "ok": true,
+      "actionId": "08643b0d-8c24-49a3-a87d-4400a54fc138",
+      "effect": "Unverifiable",
+      "candidateCount": 20,
+      "pathProfile": "candidate-scored-spring-v1",
+      "arrivalAcknowledged": true,
+      "durationMs": 400,
+      "dispatchMs": 546.792917,
+      "totalMs": 862.495625,
+      "foregroundUnchanged": true,
+      "userFocusUnchanged": true,
+      "hardwareCursorUnchanged": true,
+      "spaceUnchanged": true
+    },
+    "independentNonInterruptionSample": {
+      "foregroundBefore": "ChatGPT",
+      "foregroundAfter": "ChatGPT",
+      "hardwareCursorBefore": "1338,590",
+      "hardwareCursorAfter": "1338,590"
+    },
+    "liveShare": {
+      "started": true,
+      "captureScope": "exact-window",
+      "fps": 10,
+      "cursorComposited": true,
+      "observedSequence": 66,
+      "actionWhileSharing": {
+        "ok": true,
+        "effect": "Unverifiable",
+        "foregroundUnchanged": true,
+        "userFocusUnchanged": true,
+        "hardwareCursorUnchanged": true,
+        "spaceUnchanged": true
+      },
+      "stopped": true,
+      "stopReason": "requested"
+    },
+    "semanticSetValue": {
+      "ok": true,
+      "actionId": "7d752d0d-97c4-4244-a540-09d4413bee39",
+      "effect": "Confirmed",
+      "postcondition": "value-confirmed",
+      "confirmationEvidenceObserved": true
+    },
+    "semanticInvoke": {
+      "ok": true,
+      "actionId": "5439b6e5-db74-4e34-8fee-c8600c5edc66",
+      "effect": "SuspectedNoop",
+      "postcondition": "no-observable-change",
+      "reason": "The fixture was already in its completed state; the implementation correctly did not claim confirmation."
+    },
+    "transportTeardown": {
+      "shareRevokedOnSessionLoss": "covered by executable contract test",
+      "activeAndQueuedCommandsCanceledOnDrop": "covered by executable helper unit tests",
+      "heldInputCleanup": "covered by native backend contract tests and Windows test build"
+    }
+  },
+  "crossPlatformCoverage": {
+    "linux": {
+      "rustVersion": "1.88.0",
+      "check": "passed",
+      "strictClippy": "passed",
+      "tests": "100/100 passed",
+      "nativeControl": "fail-closed unsupported backend"
+    },
+    "windowsX86_64": {
+      "cargoXwinCheck": "passed",
+      "strictClippy": "passed",
+      "allTargetTestsBuilt": "10 executables",
+      "runtimeVerification": false
+    },
+    "macosX86_64": {
+      "strictClippy": "passed"
+    },
+    "macosArm64": {
+      "packagedRuntimeVerification": true
+    }
+  },
+  "screenshot": {
+    "file": "computer-11-final-packaged-background.jpg",
+    "sha256": "bc6910619e756b0cec16311318e37caffcad796ed56cf12a965092ad132d703b",
+    "width": 1209,
+    "height": 826,
+    "supports": [
+      "exact fixture-window capture",
+      "composited session pointer",
+      "semantic and pixel fixture state"
+    ]
+  },
+  "limitations": [
+    "Pixel actions remain Unverifiable unless an independent target-side postcondition is observed.",
+    "This host verified the packaged macOS runtime; Windows was cross-compiled, linted, and test-built but not executed on a Windows host.",
+    "Background-window routing is not a separate VM, RDP seat, or isolated operating-system desktop."
+  ]
+}
