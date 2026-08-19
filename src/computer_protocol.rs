@@ -7,6 +7,10 @@ use serde_json::{Map, Value, json};
 use thiserror::Error;
 
 pub const COMPUTER_HELPER_ORIGIN: &str = "lbb-computer-helper://local";
+/// Capability string a helper advertises in its hello to negotiate
+/// server-acknowledged share-frame pacing. It is a feature flag, never a
+/// dispatchable command method.
+pub const COMPUTER_SHARE_ACK_CAPABILITY: &str = "computer.share.ack";
 pub const COMPUTER_METHODS: &[&str] = &[
     "computer.status",
     "computer.share.start",
@@ -119,6 +123,91 @@ impl CommandCancellation {
     }
 }
 
+/// Latest-frame-wins single-slot mailbox pacing `computer.share.frame` emissions.
+///
+/// The producer parks at most one captured frame; a newer capture replaces an
+/// unemitted one and counts it as dropped, so the producer never buffers more
+/// than the single slot. With ack pacing enabled the next emission waits until
+/// the server acknowledged the previously emitted share sequence; without it
+/// the mailbox degenerates to the legacy emit-on-capture timer behavior.
+/// Sequences are assigned by the capture side and stay strictly increasing,
+/// including across dropped frames.
+#[derive(Debug, Clone, Default)]
+pub struct ShareMailbox {
+    ack_paced: bool,
+    slot: Option<(u64, Value)>,
+    last_sequence: u64,
+    awaiting_ack: Option<u64>,
+    dropped_frames: u64,
+    last_acked_sequence: u64,
+}
+
+impl ShareMailbox {
+    pub fn new(ack_paced: bool) -> Self {
+        Self {
+            ack_paced,
+            ..Self::default()
+        }
+    }
+
+    pub fn ack_paced(&self) -> bool {
+        self.ack_paced
+    }
+
+    pub fn dropped_frames(&self) -> u64 {
+        self.dropped_frames
+    }
+
+    /// Share sequence of the last frame the server acknowledged; 0 before any ack.
+    pub fn last_acked_sequence(&self) -> u64 {
+        self.last_acked_sequence
+    }
+
+    /// Parks the newest captured frame in the single slot.
+    ///
+    /// A capture that does not advance the strictly increasing share sequence
+    /// is refused. Replacing a parked, still-unemitted frame counts it as
+    /// dropped; the counter is monotonic for the mailbox lifetime (one share).
+    pub fn produce(&mut self, sequence: u64, frame: Value) -> bool {
+        if sequence <= self.last_sequence {
+            return false;
+        }
+        self.last_sequence = sequence;
+        if self.slot.replace((sequence, frame)).is_some() {
+            self.dropped_frames = self.dropped_frames.saturating_add(1);
+        }
+        true
+    }
+
+    /// Takes the parked frame when pacing allows another emission.
+    ///
+    /// While an ack-paced emission is still unacknowledged, nothing is
+    /// released; the producer keeps replacing the slot in the meantime.
+    pub fn emit(&mut self) -> Option<(u64, Value)> {
+        if self.ack_paced && self.awaiting_ack.is_some() {
+            return None;
+        }
+        let (sequence, frame) = self.slot.take()?;
+        if self.ack_paced {
+            self.awaiting_ack = Some(sequence);
+        }
+        Some((sequence, frame))
+    }
+
+    /// Applies a server acknowledgement.
+    ///
+    /// Anything but the exact awaited share sequence — stale, unknown, or
+    /// duplicate — is ignored.
+    pub fn acknowledge(&mut self, sequence: u64) -> bool {
+        if self.awaiting_ack != Some(sequence) {
+            return false;
+        }
+        self.awaiting_ack = None;
+        self.last_acked_sequence = sequence;
+        true
+    }
+}
+
 pub fn result_envelope(id: &str, result: Result<Value, ComputerError>) -> Value {
     match result {
         Ok(result) => json!({ "id": id, "type": "result", "ok": true, "result": result }),
@@ -168,5 +257,66 @@ mod tests {
         let error = cancellation.begin_side_effect("test dispatch").unwrap_err();
         assert_eq!(error.code, "COMPUTER_CANCELED");
         assert!(!cancellation.was_dispatched());
+    }
+
+    #[test]
+    fn mailbox_emits_only_the_newest_frame_under_slow_acks() {
+        let mut mailbox = ShareMailbox::new(true);
+        assert!(mailbox.produce(1, json!({ "capture": 1 })));
+        let (sequence, frame) = mailbox.emit().unwrap();
+        assert_eq!(sequence, 1);
+        assert_eq!(frame, json!({ "capture": 1 }));
+
+        // The server is slow: three captures land before the first ack.
+        assert!(mailbox.produce(2, json!({ "capture": 2 })));
+        assert!(mailbox.produce(3, json!({ "capture": 3 })));
+        assert!(mailbox.produce(4, json!({ "capture": 4 })));
+        assert!(mailbox.emit().is_none());
+        assert_eq!(mailbox.dropped_frames(), 2);
+
+        assert!(mailbox.acknowledge(1));
+        let (sequence, frame) = mailbox.emit().unwrap();
+        assert_eq!(sequence, 4);
+        assert_eq!(frame, json!({ "capture": 4 }));
+        assert!(sequence > 1, "sequences stay increasing across drops");
+        assert_eq!(mailbox.dropped_frames(), 2);
+        assert!(mailbox.acknowledge(4));
+        assert_eq!(mailbox.last_acked_sequence(), 4);
+    }
+
+    #[test]
+    fn mailbox_ignores_stale_unknown_and_duplicate_acks() {
+        let mut mailbox = ShareMailbox::new(true);
+        assert!(!mailbox.acknowledge(1), "nothing was emitted yet");
+        assert!(mailbox.produce(7, json!({})));
+        assert_eq!(mailbox.emit().unwrap().0, 7);
+
+        assert!(!mailbox.acknowledge(6), "stale sequence is ignored");
+        assert!(!mailbox.acknowledge(8), "unknown sequence is ignored");
+        assert_eq!(mailbox.last_acked_sequence(), 0);
+        assert!(mailbox.produce(8, json!({})));
+        assert!(mailbox.emit().is_none(), "still awaiting the exact ack");
+
+        assert!(mailbox.acknowledge(7));
+        assert!(!mailbox.acknowledge(7), "duplicate ack is ignored");
+        assert_eq!(mailbox.emit().unwrap().0, 8);
+        assert_eq!(mailbox.last_acked_sequence(), 7);
+    }
+
+    #[test]
+    fn mailbox_without_ack_pacing_keeps_timer_behavior_and_monotonic_produce() {
+        let mut mailbox = ShareMailbox::new(false);
+        assert!(!mailbox.ack_paced());
+        assert!(mailbox.produce(1, json!({})));
+        assert_eq!(mailbox.emit().unwrap().0, 1);
+        assert!(mailbox.produce(2, json!({})));
+        assert_eq!(mailbox.emit().unwrap().0, 2, "never waits for an ack");
+        assert_eq!(mailbox.dropped_frames(), 0);
+        assert!(!mailbox.acknowledge(2), "no emission ever awaits an ack");
+
+        assert!(!mailbox.produce(2, json!({})), "sequences must advance");
+        assert!(!mailbox.produce(1, json!({})), "sequences never rewind");
+        assert!(mailbox.emit().is_none());
+        assert_eq!(mailbox.dropped_frames(), 0);
     }
 }

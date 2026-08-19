@@ -3,7 +3,7 @@ use std::convert::Infallible;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::body::{Body, Bytes};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -25,13 +25,15 @@ use futures_util::{SinkExt as _, StreamExt as _};
 use include_dir::{Dir, include_dir};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
+use sha2::{Digest as _, Sha256};
 use time::OffsetDateTime;
 use tokio::net::TcpListener;
 use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore, broadcast};
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
-use crate::computer::{COMPUTER_HELPER_ORIGIN, COMPUTER_METHODS};
+use crate::computer::{COMPUTER_HELPER_ORIGIN, COMPUTER_METHODS, COMPUTER_SHARE_ACK_CAPABILITY};
+use crate::error_taxonomy::classify;
 use crate::hub::{ExtensionHub, HubError};
 use crate::token::{create_token, token_is_valid, tokens_equal};
 use crate::update::{UpdateState, UpdateStatus, check_for_update};
@@ -45,6 +47,10 @@ const MAX_BODY_BYTES: usize = 128 * 1024;
 const MAX_ACTIVITY: usize = 80;
 const MAX_SCREENSHOT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_WS_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
+const CALL_ID_MAX_CHARS: usize = 128;
+const REPLAY_CACHE_ENTRIES: usize = 256;
+const REPLAY_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
+const NORMALIZED_COORDINATE_MAX: f64 = 1_000.0;
 const PUBLIC_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/public");
 
 pub const ACTION_METHODS: &[&str] = &[
@@ -69,7 +75,22 @@ pub const ACTION_METHODS: &[&str] = &[
     "page.clickAt",
     "page.typeText",
     "page.evaluate",
+    "page.waitFor",
+    "page.hover",
+    "page.batch",
+    "page.handleDialog",
 ];
+
+/// The only methods a `page.batch` sub-action may use: snapshot-bound page
+/// interactions with no navigation, no evaluation, and no nested batching.
+const BATCH_SUB_METHODS: &[&str] = &[
+    "page.click",
+    "page.fill",
+    "page.select",
+    "page.key",
+    "page.scroll",
+];
+const BATCH_MAX_ACTIONS: usize = 10;
 
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -105,7 +126,13 @@ impl BridgeServer {
             ));
         }
         let listener = TcpListener::bind(("127.0.0.1", config.port)).await?;
-        let state = AppState::new(config.token, config.call_timeout, config.check_for_updates);
+        let bound_port = listener.local_addr()?.port();
+        let state = AppState::new(
+            config.token,
+            bound_port,
+            config.call_timeout,
+            config.check_for_updates,
+        );
         let router = build_router(state.clone());
         if config.check_for_updates {
             let update_state = state.clone();
@@ -140,10 +167,12 @@ impl BridgeServer {
 #[derive(Clone)]
 struct AppState {
     token: Arc<String>,
+    bound_port: u16,
     hub: ExtensionHub,
     computer_hub: ExtensionHub,
     data: Arc<RwLock<StateData>>,
     sessions: Arc<Mutex<HashMap<String, Session>>>,
+    command_replay: Arc<Mutex<CommandReplay>>,
     events: broadcast::Sender<ServerEvent>,
     action_lock: Arc<tokio::sync::Mutex<()>>,
     update_lock: Arc<tokio::sync::Mutex<()>>,
@@ -152,7 +181,12 @@ struct AppState {
 }
 
 impl AppState {
-    fn new(token: String, call_timeout: Duration, check_for_updates: bool) -> Self {
+    fn new(
+        token: String,
+        bound_port: u16,
+        call_timeout: Duration,
+        check_for_updates: bool,
+    ) -> Self {
         let (events, _) = broadcast::channel(256);
         let mut data = StateData::default();
         data.public.update = if check_for_updates {
@@ -162,16 +196,32 @@ impl AppState {
         };
         Self {
             token: Arc::new(token),
+            bound_port,
             hub: ExtensionHub::new(call_timeout),
             computer_hub: ExtensionHub::computer(call_timeout),
             data: Arc::new(RwLock::new(data)),
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            command_replay: Arc::new(Mutex::new(CommandReplay::new())),
             events,
             action_lock: Arc::new(tokio::sync::Mutex::new(())),
             update_lock: Arc::new(tokio::sync::Mutex::new(())),
             browser_auth_slots: Arc::new(Semaphore::new(MAX_PROVISIONAL_CONNECTIONS)),
             computer_auth_slots: Arc::new(Semaphore::new(MAX_PROVISIONAL_CONNECTIONS)),
         }
+    }
+
+    fn admit_command_call(&self, call_id: &str, fingerprint: &str) -> ReplayAdmission {
+        self.command_replay
+            .lock()
+            .unwrap()
+            .admit(call_id, fingerprint, Instant::now())
+    }
+
+    fn complete_command_call(&self, call_id: &str, status: StatusCode, body: Value) {
+        self.command_replay
+            .lock()
+            .unwrap()
+            .complete(call_id, status, body, Instant::now());
     }
 
     async fn refresh_update(&self) -> UpdateStatus {
@@ -273,6 +323,7 @@ impl AppState {
                     .map(Value::String)
                     .unwrap_or(Value::Null),
             );
+            insert_screenshot_metadata(observation, data.screenshot.as_ref());
         }
         if let Some(observation) = value
             .get_mut("computerObservation")
@@ -286,6 +337,7 @@ impl AppState {
                     .map(Value::String)
                     .unwrap_or(Value::Null),
             );
+            insert_screenshot_metadata(observation, data.computer_screenshot.as_ref());
         }
         value
     }
@@ -417,6 +469,7 @@ struct PublicState {
     computer: Option<ComputerInfo>,
     target_tab_id: Option<u64>,
     tabs: Vec<TabInfo>,
+    pending_dialog: Value,
     observation: Option<Observation>,
     computer_observation: Option<ComputerObservation>,
     activity: VecDeque<Activity>,
@@ -500,6 +553,7 @@ struct ComputerObservation {
     semantic_error: Option<String>,
     pointer: ComputerPointer,
     elements: Vec<ComputerElement>,
+    share: Value,
 }
 
 #[derive(Clone, Serialize)]
@@ -613,6 +667,9 @@ struct Activity {
 struct Screenshot {
     bytes: Bytes,
     content_type: &'static str,
+    content_hash: String,
+    width: Option<u32>,
+    height: Option<u32>,
     id: String,
     binding: String,
     route: &'static str,
@@ -633,6 +690,32 @@ impl Screenshot {
             && query.get("id") == Some(&self.id)
             && query.get("binding") == Some(&self.binding)
     }
+}
+
+fn insert_screenshot_metadata(
+    observation: &mut Map<String, Value>,
+    screenshot: Option<&Screenshot>,
+) {
+    observation.insert(
+        "contentHash".to_owned(),
+        screenshot
+            .map(|screenshot| Value::String(screenshot.content_hash.clone()))
+            .unwrap_or(Value::Null),
+    );
+    observation.insert(
+        "screenshotWidth".to_owned(),
+        screenshot
+            .and_then(|screenshot| screenshot.width)
+            .map(|width| json!(width))
+            .unwrap_or(Value::Null),
+    );
+    observation.insert(
+        "screenshotHeight".to_owned(),
+        screenshot
+            .and_then(|screenshot| screenshot.height)
+            .map(|height| json!(height))
+            .unwrap_or(Value::Null),
+    );
 }
 
 struct Session {
@@ -669,6 +752,20 @@ impl ApiError {
     fn forbidden(code: &str, message: &str) -> Self {
         Self::new(StatusCode::FORBIDDEN, code, message)
     }
+
+    fn body(&self) -> Value {
+        let taxonomy = classify(&self.code);
+        json!({
+            "ok": false,
+            "error": { "code": self.code, "message": self.message },
+            "taxonomy": {
+                "code": taxonomy.code.as_str(),
+                "retriable": taxonomy.retriable,
+                "recoveryHint": taxonomy.recovery_hint.as_str(),
+                "prose": taxonomy.prose,
+            },
+        })
+    }
 }
 
 impl From<HubError> for ApiError {
@@ -692,14 +789,17 @@ impl From<HubError> for ApiError {
             | "STALE_REF"
             | "TARGET_CHANGED"
             | "TARGET_MISSING"
-            | "TARGET_OCCLUDED" => StatusCode::CONFLICT,
+            | "TARGET_OCCLUDED"
+            | "NO_PENDING_DIALOG"
+            | "WAIT_TIMEOUT" => StatusCode::CONFLICT,
             "COMPUTER_INVALID_REQUEST"
             | "BAD_TAB"
             | "BAD_URL"
             | "BAD_BUTTON"
             | "BAD_CLICK_COUNT"
             | "BAD_COORDINATES"
-            | "BAD_KEY" => StatusCode::BAD_REQUEST,
+            | "BAD_KEY"
+            | "BAD_MODIFIER" => StatusCode::BAD_REQUEST,
             "COMPUTER_PERMISSION_REQUIRED"
             | "SITE_BLOCKED"
             | "FULL_ACCESS_REQUIRED"
@@ -715,11 +815,163 @@ impl From<HubError> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (
-            self.status,
-            Json(json!({ "ok": false, "error": { "code": self.code, "message": self.message } })),
-        )
-            .into_response()
+        (self.status, Json(self.body())).into_response()
+    }
+}
+
+/// Idempotency bookkeeping for `POST /api/v1/command` bodies carrying a
+/// `callId`. All bearer commands share one principal because the bridge has
+/// exactly one bearer token, so the registry is keyed by `callId` alone.
+/// Every registration also pins the fingerprint of the request it was made
+/// for, so a callId reused for a different command is refused instead of
+/// silently replaying (or waiting on) the other command's outcome.
+struct CommandReplay {
+    in_flight: HashMap<String, String>,
+    completed: HashMap<String, ReplayEntry>,
+    ticks: u64,
+}
+
+struct ReplayEntry {
+    fingerprint: String,
+    status: StatusCode,
+    body: Value,
+    stored_at: Instant,
+    last_used: u64,
+}
+
+enum ReplayAdmission {
+    New,
+    InFlight,
+    Replay { status: StatusCode, body: Value },
+    Reused,
+}
+
+impl CommandReplay {
+    fn new() -> Self {
+        Self {
+            in_flight: HashMap::new(),
+            completed: HashMap::new(),
+            ticks: 0,
+        }
+    }
+
+    /// Atomically admits one command for a callId: a cached completion with
+    /// the same fingerprint replays, an in-flight duplicate is refused, a
+    /// fingerprint mismatch is rejected as reuse, anything else registers.
+    fn admit(&mut self, call_id: &str, fingerprint: &str, now: Instant) -> ReplayAdmission {
+        self.evict_expired(now);
+        self.ticks = self.ticks.saturating_add(1);
+        let tick = self.ticks;
+        if let Some(entry) = self.completed.get_mut(call_id) {
+            if entry.fingerprint != fingerprint {
+                return ReplayAdmission::Reused;
+            }
+            entry.last_used = tick;
+            return ReplayAdmission::Replay {
+                status: entry.status,
+                body: entry.body.clone(),
+            };
+        }
+        if let Some(registered) = self.in_flight.get(call_id) {
+            return if registered == fingerprint {
+                ReplayAdmission::InFlight
+            } else {
+                ReplayAdmission::Reused
+            };
+        }
+        self.in_flight
+            .insert(call_id.to_owned(), fingerprint.to_owned());
+        ReplayAdmission::New
+    }
+
+    /// Stores the exact final response for a registered callId so later
+    /// duplicates replay it without re-dispatching to any connector.
+    fn complete(&mut self, call_id: &str, status: StatusCode, body: Value, now: Instant) {
+        // A completion without a registration has no fingerprint to pin, so
+        // it is dropped instead of stored as an unverifiable entry.
+        let Some(fingerprint) = self.in_flight.remove(call_id) else {
+            return;
+        };
+        self.evict_expired(now);
+        while self.completed.len() >= REPLAY_CACHE_ENTRIES {
+            let Some(oldest) = self
+                .completed
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(id, _)| id.clone())
+            else {
+                break;
+            };
+            self.completed.remove(&oldest);
+        }
+        self.ticks = self.ticks.saturating_add(1);
+        self.completed.insert(
+            call_id.to_owned(),
+            ReplayEntry {
+                fingerprint,
+                status,
+                body,
+                stored_at: now,
+                last_used: self.ticks,
+            },
+        );
+    }
+
+    fn evict_expired(&mut self, now: Instant) {
+        self.completed
+            .retain(|_, entry| now.duration_since(entry.stored_at) < REPLAY_CACHE_TTL);
+    }
+}
+
+/// Hashes one command request (method plus its canonical JSON parameters) so
+/// a repeated callId can prove it carries the exact same command. serde_json
+/// objects serialize with sorted keys, so equal parameter values always hash
+/// identically.
+fn command_fingerprint(method: &str, params: &Value) -> String {
+    sha256_hex(format!("{method}\n{params}").as_bytes())
+}
+
+/// The synthetic cached outcome for an admitted callId whose handler future
+/// was dropped (client disconnect, panic) before the real outcome was
+/// recorded: the dispatched action may still execute, so the caller must
+/// observe before deciding whether to act again.
+fn interrupted_call_error() -> ApiError {
+    ApiError::new(
+        StatusCode::GATEWAY_TIMEOUT,
+        "COMMAND_OUTCOME_UNKNOWN",
+        "The original command with this callId was interrupted before its outcome was recorded; observe the current state before deciding whether to act again",
+    )
+}
+
+/// Completes an admitted callId with a synthetic outcome-unknown failure if
+/// the handler never reaches its own completion. The command may already be
+/// dispatched to a connector when the handler future is dropped, so freeing
+/// the callId would let a retry re-dispatch the action; caching the
+/// outcome-unknown failure makes every later replay of that callId return it
+/// without touching any connector.
+struct InFlightCallGuard {
+    replay: Arc<Mutex<CommandReplay>>,
+    call_id: Option<String>,
+}
+
+impl InFlightCallGuard {
+    fn disarm(&mut self) -> Option<String> {
+        self.call_id.take()
+    }
+}
+
+impl Drop for InFlightCallGuard {
+    fn drop(&mut self) {
+        if let Some(call_id) = self.call_id.take()
+            && let Ok(mut replay) = self.replay.lock()
+        {
+            let error = interrupted_call_error();
+            let mut body = error.body();
+            if let Some(object) = body.as_object_mut() {
+                object.insert("callId".to_owned(), Value::String(call_id.clone()));
+            }
+            replay.complete(&call_id, error.status, body, Instant::now());
+        }
     }
 }
 
@@ -738,25 +990,37 @@ fn build_router(state: AppState) -> Router {
         .route("/computer", get(computer_websocket_upgrade))
         .fallback(get(static_asset))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
-        .layer(middleware::from_fn(loopback_and_security_headers))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            loopback_and_security_headers,
+        ))
         .with_state(state)
 }
 
-async fn loopback_and_security_headers(request: Request, next: Next) -> Response {
-    let allowed = request
+async fn loopback_and_security_headers(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let host = request
         .headers()
         .get(HOST)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(is_loopback_host);
-    let mut response = if allowed {
+        .unwrap_or("");
+    let mut response = if is_loopback_host(host, state.bound_port) {
         next.run(request).await
     } else {
-        ApiError::new(
-            StatusCode::BAD_REQUEST,
-            "HOST_REJECTED",
-            "Only loopback hosts are accepted",
-        )
-        .into_response()
+        state
+            .log(
+                "host.guard",
+                "warning",
+                format!(
+                    "Rejected a request whose Host header is not this loopback server: {}",
+                    bounded(host, 200)
+                ),
+            )
+            .await;
+        ApiError::forbidden("HOST_REJECTED", "Only loopback hosts are accepted").into_response()
     };
     apply_security_headers(response.headers_mut());
     response
@@ -954,14 +1218,82 @@ async fn api_command(
     assert_json_content_type(&headers)?;
     let body = parse_json_body(&body)?;
     let method = required_string(body.get("method"), "method", 80)?;
-    let result = state
-        .perform_action(
-            &method,
-            body.get("params").cloned().unwrap_or_else(|| json!({})),
-        )
-        .await?;
-    let public = state.public_state().await;
-    Ok(Json(json!({ "ok": true, "result": result, "state": public })).into_response())
+    let params = body.get("params").cloned().unwrap_or_else(|| json!({}));
+    let call_id = optional_call_id(body.get("callId"))?;
+
+    if let Some(call_id) = call_id.as_deref() {
+        match state.admit_command_call(call_id, &command_fingerprint(&method, &params)) {
+            ReplayAdmission::New => {}
+            ReplayAdmission::InFlight => {
+                let error = ApiError::new(
+                    StatusCode::CONFLICT,
+                    "CALL_IN_PROGRESS",
+                    "A command with this callId is still in flight; wait for its outcome",
+                );
+                let mut body = error.body();
+                if let Some(object) = body.as_object_mut() {
+                    object.insert("callId".to_owned(), Value::String(call_id.to_owned()));
+                }
+                return Ok((error.status, Json(body)).into_response());
+            }
+            ReplayAdmission::Replay { status, mut body } => {
+                if let Some(object) = body.as_object_mut() {
+                    object.insert("replayed".to_owned(), Value::Bool(true));
+                }
+                return Ok((status, Json(body)).into_response());
+            }
+            ReplayAdmission::Reused => {
+                let error = ApiError::new(
+                    StatusCode::CONFLICT,
+                    "CALL_ID_REUSED",
+                    "This callId was already used for a different command; use a fresh callId for each distinct command",
+                );
+                let mut body = error.body();
+                if let Some(object) = body.as_object_mut() {
+                    object.insert("callId".to_owned(), Value::String(call_id.to_owned()));
+                }
+                return Ok((error.status, Json(body)).into_response());
+            }
+        }
+    }
+
+    let mut registration = InFlightCallGuard {
+        replay: state.command_replay.clone(),
+        call_id: call_id.clone(),
+    };
+    let outcome = state.perform_action(&method, params).await;
+    let (status, mut response_body) = match outcome {
+        Ok(result) => {
+            let public = state.public_state().await;
+            (
+                StatusCode::OK,
+                json!({ "ok": true, "result": result, "state": public }),
+            )
+        }
+        Err(error) => (error.status, error.body()),
+    };
+    if let Some(call_id) = registration.disarm() {
+        if let Some(object) = response_body.as_object_mut() {
+            object.insert("callId".to_owned(), Value::String(call_id.clone()));
+        }
+        state.complete_command_call(&call_id, status, response_body.clone());
+    }
+    Ok((status, Json(response_body)).into_response())
+}
+
+fn optional_call_id(value: Option<&Value>) -> Result<Option<String>, ApiError> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => {
+            let call_id = required_string(Some(value), "callId", CALL_ID_MAX_CHARS)?;
+            if call_id.is_empty() {
+                return Err(ApiError::bad_request(
+                    "callId must be between 1 and 128 characters",
+                ));
+            }
+            Ok(Some(call_id))
+        }
+    }
 }
 
 fn assert_command_origin(headers: &HeaderMap) -> Result<(), ApiError> {
@@ -1187,6 +1519,7 @@ async fn handle_websocket(
         data.public.connected = false;
         data.public.extension = None;
         data.public.browser_control = Value::Null;
+        data.public.pending_dialog = Value::Null;
         data.public.tabs.clear();
         data.public.target_tab_id = None;
         data.public.observation = None;
@@ -1295,6 +1628,7 @@ async fn handle_websocket(
             data.public.connected = false;
             data.public.extension = None;
             data.public.browser_control = Value::Null;
+            data.public.pending_dialog = Value::Null;
             data.public.tabs.clear();
             data.public.target_tab_id = None;
             data.public.observation = None;
@@ -1474,15 +1808,17 @@ async fn handle_computer_hello(state: &AppState, connection_id: Uuid, message: &
         && protocol_version == PROTOCOL_VERSION
         && session_id == connection_id.to_string();
     let compatible = envelope_compatible && state.computer_hub.mark_ready(connection_id);
-    let capabilities = message
+    let capabilities: Vec<String> = message
         .get("capabilities")
         .and_then(Value::as_array)
         .map(|items| {
             items
                 .iter()
                 .filter_map(Value::as_str)
-                .filter(|item| COMPUTER_METHODS.contains(item))
-                .take(COMPUTER_METHODS.len())
+                .filter(|item| {
+                    COMPUTER_METHODS.contains(item) || *item == COMPUTER_SHARE_ACK_CAPABILITY
+                })
+                .take(COMPUTER_METHODS.len() + 1)
                 .map(|item| item.to_owned())
                 .collect::<Vec<_>>()
         })
@@ -1490,6 +1826,9 @@ async fn handle_computer_hello(state: &AppState, connection_id: Uuid, message: &
         .into_iter()
         .filter(|_| compatible)
         .collect();
+    let share_ack_paced = capabilities
+        .iter()
+        .any(|item| item == COMPUTER_SHARE_ACK_CAPABILITY);
     let computer = ComputerInfo {
         version: version.clone(),
         protocol_version,
@@ -1572,6 +1911,10 @@ async fn handle_computer_hello(state: &AppState, connection_id: Uuid, message: &
         "protocolVersion": PROTOCOL_VERSION,
         "sessionId": connection_id.to_string(),
         "ok": compatible,
+        // Confirms the negotiated share-frame ack pacing so a helper that did
+        // not advertise the capability keeps the legacy timer behavior and is
+        // never sent an eventAck it does not understand.
+        "shareAck": share_ack_paced,
         "error": (!compatible).then(|| json!({
             "code": "COMPUTER_PROTOCOL_MISMATCH",
             "message": format!("Helper and server must both use package {VERSION} and protocol {PROTOCOL_VERSION}")
@@ -1718,7 +2061,12 @@ async fn handle_computer_event(state: &AppState, connection_id: Uuid, message: &
         "computer.share.frame" => {
             let mut screenshot = match decode_screenshot(data.get("screenshot")) {
                 Ok(Some(screenshot)) => screenshot,
-                Ok(None) => return,
+                Ok(None) => {
+                    // The frame is discarded, but an ack-paced helper must
+                    // still be unblocked or the share would stall forever.
+                    acknowledge_computer_share_frame(state, connection_id, data).await;
+                    return;
+                }
                 Err(error) => {
                     if state
                         .log_for_connection(
@@ -1738,6 +2086,7 @@ async fn handle_computer_event(state: &AppState, connection_id: Uuid, message: &
                             )
                             .await;
                     }
+                    acknowledge_computer_share_frame(state, connection_id, data).await;
                     return;
                 }
             };
@@ -1762,6 +2111,7 @@ async fn handle_computer_event(state: &AppState, connection_id: Uuid, message: &
                             )
                             .await;
                     }
+                    acknowledge_computer_share_frame(state, connection_id, data).await;
                     return;
                 }
             };
@@ -1783,6 +2133,7 @@ async fn handle_computer_event(state: &AppState, connection_id: Uuid, message: &
                 state_data.public.computer_observation = Some(observation);
                 state_data.computer_screenshot = Some(screenshot);
             }
+            acknowledge_computer_share_frame(state, connection_id, data).await;
             state
                 .bump_for_connection(&state.computer_hub, connection_id, "computer-share-frame")
                 .await;
@@ -1807,6 +2158,50 @@ async fn handle_computer_event(state: &AppState, connection_id: Uuid, message: &
     }
 }
 
+/// Share sequence a frame event is acknowledged under, read from the raw
+/// payload so even a frame the server could not store still unblocks the
+/// helper's ack-paced mailbox.
+fn share_frame_ack_sequence(data: &Value) -> Option<u64> {
+    data.get("frame")?.get("share")?.get("sequence")?.as_u64()
+}
+
+/// Sends the `eventAck` for one processed `computer.share.frame` event.
+///
+/// The acknowledgement is version-gated on the hello capability intersection:
+/// only a helper that advertised `computer.share.ack` ever receives one, so a
+/// legacy helper keeps its timer behavior and never sees an unknown message.
+async fn acknowledge_computer_share_frame(state: &AppState, connection_id: Uuid, data: &Value) {
+    let Some(sequence) = share_frame_ack_sequence(data) else {
+        return;
+    };
+    let negotiated = state
+        .data
+        .read()
+        .await
+        .public
+        .computer
+        .as_ref()
+        .is_some_and(|computer| {
+            computer
+                .capabilities
+                .iter()
+                .any(|item| item == COMPUTER_SHARE_ACK_CAPABILITY)
+        });
+    if !negotiated {
+        return;
+    }
+    let _ = state.computer_hub.send_to(
+        connection_id,
+        json!({
+            "type": "eventAck",
+            "protocolVersion": PROTOCOL_VERSION,
+            "sessionId": connection_id.to_string(),
+            "name": "computer.share.frame",
+            "sequence": sequence,
+        }),
+    );
+}
+
 async fn handle_extension_event(state: &AppState, connection_id: Uuid, message: &Value) {
     let name = message
         .get("name")
@@ -1821,6 +2216,8 @@ async fn handle_extension_event(state: &AppState, connection_id: Uuid, message: 
                     return;
                 }
                 state_data.public.browser_control = sanitize_browser_control(&data);
+                // A fresh lease starts without a blocking JavaScript dialog.
+                state_data.public.pending_dialog = Value::Null;
             }
             if state
                 .log_for_connection(
@@ -1847,6 +2244,9 @@ async fn handle_extension_event(state: &AppState, connection_id: Uuid, message: 
                     "active": false,
                     "revocation": sanitize_control_revocation(&data)
                 });
+                // Revoking the lease detaches the debugger, so any recorded
+                // dialog can no longer be handled through the bridge.
+                state_data.public.pending_dialog = Value::Null;
             }
             let reason = bounded(
                 data.get("reason")
@@ -1940,8 +2340,102 @@ async fn handle_extension_event(state: &AppState, connection_id: Uuid, message: 
                 .bump_for_connection(&state.hub, connection_id, "approval")
                 .await;
         }
+        "page.dialogOpened" => {
+            let dialog = sanitize_pending_dialog(&data);
+            let kind = dialog
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("dialog")
+                .to_owned();
+            {
+                let mut state_data = state.data.write().await;
+                if !state.hub.is_current_ready(connection_id) {
+                    return;
+                }
+                state_data.public.pending_dialog = dialog;
+            }
+            if state
+                .log_for_connection(
+                    &state.hub,
+                    connection_id,
+                    "page.dialog",
+                    "warning",
+                    format!(
+                        "JavaScript {kind} dialog opened; browser commands are blocked until page.handleDialog resolves it"
+                    ),
+                )
+                .await
+            {
+                state
+                    .bump_for_connection(&state.hub, connection_id, "dialog")
+                    .await;
+            }
+        }
+        "page.dialogClosed" => {
+            {
+                let mut state_data = state.data.write().await;
+                if !state.hub.is_current_ready(connection_id) {
+                    return;
+                }
+                state_data.public.pending_dialog = Value::Null;
+            }
+            if state
+                .log_for_connection(
+                    &state.hub,
+                    connection_id,
+                    "page.dialog",
+                    "ok",
+                    "JavaScript dialog closed",
+                )
+                .await
+            {
+                state
+                    .bump_for_connection(&state.hub, connection_id, "dialog")
+                    .await;
+            }
+        }
         _ => {}
     }
+}
+
+/// Sanitizes the extension's dialog-opened event payload into the published
+/// `pendingDialog` shape; anything unexpected collapses to bounded defaults.
+fn sanitize_pending_dialog(data: &Value) -> Value {
+    let kind = data
+        .get("type")
+        .and_then(Value::as_str)
+        .filter(|kind| matches!(*kind, "alert" | "confirm" | "prompt" | "beforeunload"))
+        .unwrap_or("dialog");
+    json!({
+        "type": kind,
+        "message": bounded(data.get("message").and_then(Value::as_str).unwrap_or(""), 500),
+        "hasPrompt": data
+            .get("hasPrompt")
+            .and_then(Value::as_bool)
+            .unwrap_or(kind == "prompt"),
+        "at": data.get("at").and_then(Value::as_u64),
+        "tabId": data.get("tabId").and_then(Value::as_u64),
+    })
+}
+
+/// The commands that stay usable while a JavaScript dialog is blocking the
+/// controlled page; every other browser command—including the read-only
+/// `page.observe` and `page.waitFor`, whose content-script calls would hang
+/// against the dialog-frozen renderer and revoke the lease by timeout—fails
+/// fast server-side with `BLOCKED_BY_DIALOG` and is never relayed to the
+/// extension. Every exempt method stays off the renderer main thread:
+/// `status`, `tabs.list`, and `browser.control.status` read browser-process
+/// state, `browser.control.stop`'s overlay hide is best-effort, and
+/// `page.handleDialog` resolves the dialog through browser-side CDP.
+fn dialog_tolerant_method(method: &str) -> bool {
+    matches!(
+        method,
+        "status"
+            | "tabs.list"
+            | "browser.control.status"
+            | "browser.control.stop"
+            | "page.handleDialog"
+    )
 }
 
 async fn static_asset(request: Request) -> Result<Response, ApiError> {
@@ -2002,15 +2496,39 @@ impl AppState {
                 format!("Browser extension did not advertise {method}"),
             ));
         }
-        let (target_tab_id, browser_control) = {
+        let (target_tab_id, browser_control, viewport, pending_dialog) = {
             let data = self.data.read().await;
             (
                 data.public.target_tab_id,
                 data.public.browser_control.clone(),
+                data.public.observation.as_ref().and_then(|observation| {
+                    let width = observation.viewport.get("width").and_then(Value::as_f64)?;
+                    let height = observation.viewport.get("height").and_then(Value::as_f64)?;
+                    Some((width, height))
+                }),
+                data.public.pending_dialog.clone(),
             )
         };
-        let mut params = sanitize_params(method, raw_params, target_tab_id)?;
-        if method.starts_with("page.") && method != "page.observe" {
+        // A recorded JavaScript dialog blocks every mutating browser command
+        // before sanitization or relay: the page cannot answer until a human
+        // or page.handleDialog resolves the dialog.
+        if !pending_dialog.is_null() && !dialog_tolerant_method(method) {
+            let kind = pending_dialog
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("dialog");
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "BLOCKED_BY_DIALOG",
+                format!(
+                    "A JavaScript {kind} dialog is blocking the page; resolve it with page.handleDialog (accept:false is the safe default for beforeunload) before {method} can run"
+                ),
+            ));
+        }
+        let mut params = sanitize_params(method, raw_params, target_tab_id, viewport)?;
+        // page.waitFor is read-only and runs without a control lease, so it
+        // never carries control bindings.
+        if method.starts_with("page.") && !matches!(method, "page.observe" | "page.waitFor") {
             bind_browser_control(&mut params, &browser_control);
         }
 
@@ -2044,6 +2562,12 @@ impl AppState {
             }
             if let Some(control) = returned_control.as_ref() {
                 data.public.browser_control = control.clone();
+            }
+            if method == "page.handleDialog" {
+                // The extension acknowledged Page.handleJavaScriptDialog, so
+                // the dialog gate lifts immediately; the dialogClosed event
+                // clears it again idempotently.
+                data.public.pending_dialog = Value::Null;
             }
             if method == "tabs.activate" {
                 data.public.target_tab_id = params.get("tabId").and_then(Value::as_u64);
@@ -2106,8 +2630,18 @@ impl AppState {
 
         if let Some(delay) = observation_delay(method) {
             tokio::time::sleep(delay).await;
-            let target = self.data.read().await.public.target_tab_id;
-            if let Some(tab_id) = target
+            let (target, dialog_pending) = {
+                let data = self.data.read().await;
+                (
+                    data.public.target_tab_id,
+                    !data.public.pending_dialog.is_null(),
+                )
+            };
+            // A dialog opened by the just-executed action freezes the
+            // renderer, so observing now would only time out and revoke the
+            // lease; the observation resumes once the dialog is resolved.
+            if !dialog_pending
+                && let Some(tab_id) = target
                 && let Err(error) = self
                     .refresh_observation_for(tab_id, Some(connection_id))
                     .await
@@ -2126,8 +2660,7 @@ impl AppState {
         raw_params: Value,
     ) -> Result<Value, ApiError> {
         let _guard = self.action_lock.lock().await;
-        let mut params = sanitize_computer_params(method, raw_params)?;
-        let (computer, pointer_revision) = {
+        let (computer, pointer_revision, frame_size) = {
             let data = self.data.read().await;
             (
                 data.public.computer.clone(),
@@ -2135,8 +2668,13 @@ impl AppState {
                     .computer_observation
                     .as_ref()
                     .map(|observation| observation.pointer.sequence),
+                data.public
+                    .computer_observation
+                    .as_ref()
+                    .map(|observation| (observation.image_width, observation.image_height)),
             )
         };
+        let mut params = sanitize_computer_params(method, raw_params, frame_size)?;
         let Some(computer) = computer else {
             return Err(ApiError::new(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -2559,10 +3097,12 @@ fn observation_delay(method: &str) -> Option<Duration> {
         "page.navigate" => 700,
         "page.back" | "page.forward" => 500,
         "page.reload" => 600,
-        "page.click" | "page.clickAt" => 350,
+        // A whole batch settles like a click: one auto-observe afterwards.
+        "page.click" | "page.clickAt" | "page.batch" => 350,
         "page.fill" | "page.typeText" => 100,
-        "page.select" => 200,
+        "page.select" | "page.hover" => 200,
         "page.key" => 250,
+        "page.handleDialog" => 300,
         "page.scroll" | "page.evaluate" => 150,
         _ => return None,
     }))
@@ -2579,11 +3119,26 @@ fn computer_observation_delay(method: &str) -> Duration {
     })
 }
 
-fn sanitize_computer_params(method: &str, input: Value) -> Result<Value, ApiError> {
+fn sanitize_computer_params(
+    method: &str,
+    input: Value,
+    frame_size: Option<(u64, u64)>,
+) -> Result<Value, ApiError> {
     let source = input.as_object().cloned().unwrap_or_default();
     if !COMPUTER_METHODS.contains(&method) {
         return Err(ApiError::bad_request("Unsupported computer action"));
     }
+    let computer_extents = || {
+        normalized_extents(
+            &source,
+            "image",
+            frame_size.map(|(width, height)| (width as f64, height as f64)),
+            (
+                "NO_COMPUTER_FRAME",
+                "Observe the computer first; normalized1000 coordinates need a current frame with valid image dimensions",
+            ),
+        )
+    };
     match method {
         "computer.status" | "computer.share.status" | "computer.share.stop" => Ok(json!({})),
         "computer.share.start" => {
@@ -2607,9 +3162,24 @@ fn sanitize_computer_params(method: &str, input: Value) -> Result<Value, ApiErro
             }))
         }
         "computer.move" | "computer.click" | "computer.scroll" => {
+            let extents = computer_extents()?;
             let mut output = computer_frame_params(&source)?;
-            output.insert("x".to_owned(), json!(computer_coordinate(&source, "x")?));
-            output.insert("y".to_owned(), json!(computer_coordinate(&source, "y")?));
+            output.insert(
+                "x".to_owned(),
+                json!(scaled_coordinate(
+                    computer_coordinate(&source, "x")?,
+                    "x",
+                    extents.map(|(width, _)| width),
+                )?),
+            );
+            output.insert(
+                "y".to_owned(),
+                json!(scaled_coordinate(
+                    computer_coordinate(&source, "y")?,
+                    "y",
+                    extents.map(|(_, height)| height),
+                )?),
+            );
             if matches!(method, "computer.move" | "computer.click")
                 && let Some(duration) = source.get("durationMs")
             {
@@ -2651,9 +3221,22 @@ fn sanitize_computer_params(method: &str, input: Value) -> Result<Value, ApiErro
             Ok(Value::Object(output))
         }
         "computer.drag" => {
+            let extents = computer_extents()?;
             let mut output = computer_frame_params(&source)?;
             for name in ["fromX", "fromY", "toX", "toY"] {
-                output.insert(name.to_owned(), json!(computer_coordinate(&source, name)?));
+                let extent = extents.map(
+                    |(width, height)| {
+                        if name.ends_with('X') { width } else { height }
+                    },
+                );
+                output.insert(
+                    name.to_owned(),
+                    json!(scaled_coordinate(
+                        computer_coordinate(&source, name)?,
+                        name,
+                        extent,
+                    )?),
+                );
             }
             let duration_ms = source
                 .get("durationMs")
@@ -2678,10 +3261,8 @@ fn sanitize_computer_params(method: &str, input: Value) -> Result<Value, ApiErro
         }
         "computer.key" => {
             let mut output = computer_frame_params(&source)?;
-            output.insert(
-                "key".to_owned(),
-                Value::String(required_string(source.get("key"), "key", 200)?),
-            );
+            let key = required_string(source.get("key"), "key", 200)?;
+            output.insert("key".to_owned(), Value::String(normalize_key_chord(&key)?));
             Ok(Value::Object(output))
         }
         "computer.invoke" => {
@@ -2737,6 +3318,61 @@ fn computer_coordinate(source: &Map<String, Value>, name: &str) -> Result<f64, A
         )));
     }
     Ok(value)
+}
+
+/// Resolves the optional `coordinateSpace` request field to conversion
+/// extents. `None` means the default space: coordinates pass through
+/// untouched. `Some` carries the width and height that normalized1000
+/// coordinates convert against; a missing or degenerate observation is
+/// rejected so a model cannot act on coordinates the server cannot ground.
+fn normalized_extents(
+    source: &Map<String, Value>,
+    default_space: &str,
+    frame_size: Option<(f64, f64)>,
+    missing: (&str, &str),
+) -> Result<Option<(f64, f64)>, ApiError> {
+    let space = optional_string(
+        source.get("coordinateSpace"),
+        default_space,
+        "coordinateSpace",
+        40,
+    )?;
+    if space == default_space {
+        return Ok(None);
+    }
+    if space != "normalized1000" {
+        return Err(ApiError::bad_request(format!(
+            "coordinateSpace must be {default_space} or normalized1000"
+        )));
+    }
+    let usable = |extent: f64| extent.is_finite() && extent >= 1.0;
+    let (code, message) = missing;
+    match frame_size {
+        Some((width, height)) if usable(width) && usable(height) => Ok(Some((width, height))),
+        _ => Err(ApiError::new(StatusCode::CONFLICT, code, message)),
+    }
+}
+
+/// Converts one coordinate to pixels when a normalized1000 extent applies;
+/// the caller has already validated the raw value as a finite non-negative
+/// number, so only the 0..=1000 envelope is enforced here.
+fn scaled_coordinate(value: f64, name: &str, extent: Option<f64>) -> Result<f64, ApiError> {
+    let Some(extent) = extent else {
+        return Ok(value);
+    };
+    if !(0.0..=NORMALIZED_COORDINATE_MAX).contains(&value) {
+        return Err(ApiError::bad_request(format!(
+            "{name} must be between 0 and 1000 in the normalized1000 coordinate space"
+        )));
+    }
+    Ok(normalized1000_to_pixels(value, extent))
+}
+
+/// Pure normalized1000 -> pixel conversion, clamped to the last addressable
+/// pixel: the boundary value 1000 must convert to `extent - 1`, because
+/// every downstream validator rejects coordinates at or beyond the extent.
+fn normalized1000_to_pixels(value: f64, extent: f64) -> f64 {
+    (value / NORMALIZED_COORDINATE_MAX * extent).clamp(0.0, (extent - 1.0).max(0.0))
 }
 
 fn sanitize_computer_observation(value: Option<&Value>) -> Result<ComputerObservation, ApiError> {
@@ -2907,6 +3543,7 @@ fn sanitize_computer_observation(value: Option<&Value>) -> Result<ComputerObserv
             .map(|message| bounded(message, 500)),
         pointer: sanitize_computer_pointer(frame.get("pointer"), &window_id)?,
         elements: sanitize_computer_elements(frame.get("elements")),
+        share: sanitize_share_status(frame.get("share")),
     })
 }
 
@@ -3140,6 +3777,8 @@ fn sanitize_share_status(value: Option<&Value>) -> Value {
         "captureScope": "exact-window",
         "cursorComposited": share.get("cursorComposited").and_then(Value::as_bool).unwrap_or(true),
         "droppedFrames": share.get("droppedFrames").and_then(Value::as_u64).unwrap_or(0),
+        "ackPaced": share.get("ackPaced").and_then(Value::as_bool).unwrap_or(false),
+        "lastAckedSequence": share.get("lastAckedSequence").and_then(Value::as_u64).unwrap_or(0),
         "backpressure": bounded(share.get("backpressure").and_then(Value::as_str).unwrap_or("producer-blocking"), 40),
     })
 }
@@ -3196,6 +3835,7 @@ fn sanitize_params(
     method: &str,
     input: Value,
     target_tab_id: Option<u64>,
+    viewport: Option<(f64, f64)>,
 ) -> Result<Value, ApiError> {
     let source = input.as_object().cloned().unwrap_or_default();
     let implied_tab_id = match source.get("tabId") {
@@ -3247,51 +3887,137 @@ fn sanitize_params(
             );
             Ok(Value::Object(output))
         }
-        "page.click" => ref_params(&source, with_tab()?, None),
+        "page.click" => click_params(&source, with_tab()?),
+        "page.hover" => ref_params(&source, with_tab()?, None),
         "page.fill" => ref_params(&source, with_tab()?, Some(("text", 10_000))),
         "page.select" => ref_params(&source, with_tab()?, Some(("value", 1_000))),
-        "page.key" => {
+        "page.key" => key_params(&source, with_tab()?),
+        "page.waitFor" => {
             let mut output = object(with_tab()?);
-            output.insert(
-                "generation".to_owned(),
-                Value::String(required_string(
-                    source.get("generation"),
-                    "generation",
-                    100,
-                )?),
-            );
-            output.insert(
-                "key".to_owned(),
-                Value::String(required_string(source.get("key"), "key", 80)?),
-            );
+            let mut condition_count = 0;
+            for (name, max) in [("text", 500), ("textGone", 500), ("urlPrefix", 4_096)] {
+                let Some(value) = source.get(name).filter(|value| !value.is_null()) else {
+                    continue;
+                };
+                let value = required_string(Some(value), name, max)?;
+                if value.is_empty() {
+                    return Err(ApiError::bad_request(format!("{name} must not be empty")));
+                }
+                output.insert(name.to_owned(), Value::String(value));
+                condition_count += 1;
+            }
+            if let Some(value) = source
+                .get("mutationQuietMs")
+                .filter(|value| !value.is_null())
+            {
+                let quiet_ms = as_u64(value, "mutationQuietMs")?;
+                if !(250..=5_000).contains(&quiet_ms) {
+                    return Err(ApiError::bad_request(
+                        "mutationQuietMs must be between 250 and 5000",
+                    ));
+                }
+                output.insert("mutationQuietMs".to_owned(), json!(quiet_ms));
+                condition_count += 1;
+            }
+            if condition_count == 0 {
+                return Err(ApiError::bad_request(
+                    "page.waitFor needs at least one condition: text, textGone, urlPrefix, or mutationQuietMs",
+                ));
+            }
+            let timeout_ms = source
+                .get("timeoutMs")
+                .map(|value| as_u64(value, "timeoutMs"))
+                .transpose()?
+                .unwrap_or(5_000)
+                .clamp(100, 12_000);
+            output.insert("timeoutMs".to_owned(), json!(timeout_ms));
             Ok(Value::Object(output))
         }
-        "page.scroll" => {
+        "page.scroll" => scroll_params(&source, with_tab()?),
+        "page.batch" => {
+            let base = with_tab()?;
+            let generation = required_string(source.get("generation"), "generation", 100)?;
+            let actions = source
+                .get("actions")
+                .and_then(Value::as_array)
+                .ok_or_else(|| ApiError::bad_request("actions must be an array of sub-actions"))?;
+            if actions.is_empty() || actions.len() > BATCH_MAX_ACTIONS {
+                return Err(ApiError::bad_request(format!(
+                    "page.batch needs between 1 and {BATCH_MAX_ACTIONS} sub-actions"
+                )));
+            }
+            let batch_tab_id = base.get("tabId").and_then(Value::as_u64);
+            let mut sanitized_actions = Vec::with_capacity(actions.len());
+            for (index, action) in actions.iter().enumerate() {
+                let action = action.as_object().ok_or_else(|| {
+                    ApiError::bad_request(format!(
+                        "actions[{index}] must be an object with a method"
+                    ))
+                })?;
+                let sub_method = action.get("method").and_then(Value::as_str).unwrap_or("");
+                if !BATCH_SUB_METHODS.contains(&sub_method) {
+                    return Err(ApiError::bad_request(format!(
+                        "actions[{index}] method {} is not batchable; allowed sub-methods are page.click, page.fill, page.select, page.key, and page.scroll",
+                        bounded(sub_method, 80)
+                    )));
+                }
+                // The batch tabId and generation are authoritative: every
+                // sub-action is proven against the same snapshot epoch.
+                if let Some(value) = action.get("tabId").filter(|value| !value.is_null())
+                    && Some(as_u64(value, "tabId")?) != batch_tab_id
+                {
+                    return Err(ApiError::bad_request(format!(
+                        "actions[{index}] tabId must match the batch tabId"
+                    )));
+                }
+                if let Some(value) = action.get("generation").filter(|value| !value.is_null())
+                    && required_string(Some(value), "generation", 100)? != generation
+                {
+                    return Err(ApiError::bad_request(format!(
+                        "actions[{index}] generation must match the batch generation"
+                    )));
+                }
+                let mut sub_source = action.clone();
+                sub_source.insert("generation".to_owned(), Value::String(generation.clone()));
+                // Lease bindings are injected exactly once at the batch top
+                // level, never per step.
+                for name in ["controlSessionId", "turn", "moveSequence"] {
+                    sub_source.remove(name);
+                }
+                let sanitized = match sub_method {
+                    "page.click" => click_params(&sub_source, base.clone())?,
+                    "page.fill" => ref_params(&sub_source, base.clone(), Some(("text", 10_000)))?,
+                    "page.select" => ref_params(&sub_source, base.clone(), Some(("value", 1_000)))?,
+                    "page.key" => key_params(&sub_source, base.clone())?,
+                    "page.scroll" => scroll_params(&sub_source, base.clone())?,
+                    _ => {
+                        return Err(ApiError::bad_request(format!(
+                            "actions[{index}] method is not batchable"
+                        )));
+                    }
+                };
+                let mut sanitized = object(sanitized);
+                sanitized.insert("method".to_owned(), json!(sub_method));
+                sanitized_actions.push(Value::Object(sanitized));
+            }
+            let mut output = object(base);
+            output.insert("generation".to_owned(), Value::String(generation));
+            output.insert("actions".to_owned(), Value::Array(sanitized_actions));
+            Ok(Value::Object(output))
+        }
+        "page.handleDialog" => {
             let mut output = object(with_tab()?);
-            output.insert(
-                "generation".to_owned(),
-                Value::String(required_string(
-                    source.get("generation"),
-                    "generation",
-                    100,
-                )?),
-            );
-            output.insert(
-                "deltaX".to_owned(),
-                json!(
-                    finite_number(source.get("deltaX"), 0.0, "deltaX")?
-                        .clamp(-5_000.0, 5_000.0)
-                        .trunc()
-                ),
-            );
-            output.insert(
-                "deltaY".to_owned(),
-                json!(
-                    finite_number(source.get("deltaY"), 0.0, "deltaY")?
-                        .clamp(-5_000.0, 5_000.0)
-                        .trunc()
-                ),
-            );
+            let accept = source
+                .get("accept")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| ApiError::bad_request("accept must be true or false"))?;
+            output.insert("accept".to_owned(), json!(accept));
+            if let Some(value) = source.get("promptText").filter(|value| !value.is_null()) {
+                output.insert(
+                    "promptText".to_owned(),
+                    Value::String(required_string(Some(value), "promptText", 1_000)?),
+                );
+            }
             Ok(Value::Object(output))
         }
         "page.clickAt" => {
@@ -3311,6 +4037,17 @@ fn sanitize_params(
                     "x and y must be between 0 and 100000",
                 ));
             }
+            let extents = normalized_extents(
+                &source,
+                "viewport",
+                viewport,
+                (
+                    "NO_BROWSER_OBSERVATION",
+                    "Observe the page first; normalized1000 coordinates need a current viewport observation",
+                ),
+            )?;
+            let x = scaled_coordinate(x, "x", extents.map(|(width, _)| width))?;
+            let y = scaled_coordinate(y, "y", extents.map(|(_, height)| height))?;
             let button = optional_string(source.get("button"), "left", "button", 8)?;
             if !["left", "middle", "right"].contains(&button.as_str()) {
                 return Err(ApiError::bad_request(
@@ -3364,7 +4101,7 @@ fn sanitize_params(
         _ => Err(ApiError::bad_request("Unsupported action")),
     }?;
 
-    if method.starts_with("page.") && method != "page.observe" {
+    if method.starts_with("page.") && !matches!(method, "page.observe" | "page.waitFor") {
         let output = sanitized.as_object_mut().ok_or_else(|| {
             ApiError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -3418,16 +4155,293 @@ fn bind_browser_control(params: &mut Value, control: &Value) {
     }
 }
 
+/// Accepts exactly the two published element-reference formats: a legacy
+/// bare ref such as `e12`, or an epoch-embedded ref such as
+/// `<generation>.e12` where the generation charset is `[a-z0-9-]`. This is
+/// the strict pattern `^([a-z0-9-]{1,64}\.)?e[1-9][0-9]{0,3}$`.
+fn valid_element_ref(reference: &str) -> bool {
+    let (generation, key) = match reference.rsplit_once('.') {
+        Some((generation, key)) => (Some(generation), key),
+        None => (None, reference),
+    };
+    if let Some(generation) = generation
+        && (generation.is_empty()
+            || generation.len() > 64
+            || !generation
+                .bytes()
+                .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'-')))
+    {
+        return false;
+    }
+    let Some(digits) = key.strip_prefix('e') else {
+        return false;
+    };
+    !digits.is_empty()
+        && digits.len() <= 4
+        && !digits.starts_with('0')
+        && digits.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// Sanitizes the optional `modifiers` array on `page.click` into a
+/// deduplicated subset of the four supported modifier names.
+fn sanitize_click_modifiers(value: Option<&Value>) -> Result<Vec<String>, ApiError> {
+    let items = match value {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(items)) => items,
+        Some(_) => {
+            return Err(ApiError::bad_request(
+                "modifiers must be an array of modifier names",
+            ));
+        }
+    };
+    if items.len() > 4 {
+        return Err(ApiError::bad_request(
+            "modifiers may list each of Shift, Control, Alt, and Meta at most once",
+        ));
+    }
+    let mut modifiers: Vec<String> = Vec::new();
+    for item in items {
+        let name = item
+            .as_str()
+            .ok_or_else(|| ApiError::bad_request("modifiers must be an array of modifier names"))?;
+        if !["Shift", "Control", "Alt", "Meta"].contains(&name) {
+            return Err(ApiError::bad_request(
+                "modifiers may only contain Shift, Control, Alt, or Meta",
+            ));
+        }
+        if !modifiers.iter().any(|existing| existing == name) {
+            modifiers.push(name.to_owned());
+        }
+    }
+    Ok(modifiers)
+}
+
+/// Canonical named keys shared with the extension's key-chord parser.
+const CANONICAL_NAMED_KEYS: &[&str] = &[
+    "Tab",
+    "Enter",
+    "Escape",
+    "Backspace",
+    "ArrowLeft",
+    "ArrowUp",
+    "ArrowRight",
+    "ArrowDown",
+    "PageUp",
+    "PageDown",
+    "End",
+    "Home",
+    "Space",
+    "Delete",
+    "Insert",
+    "ContextMenu",
+    "CapsLock",
+    "PrintScreen",
+    "Pause",
+];
+
+/// Normalizes one key or chord into the canonical grammar before relay, so
+/// the extension and the computer helper only ever see canonical chords.
+/// Accepts the canonical dialect ("Meta+L") and the lowercase vendor dialect
+/// ("ctrl+shift+t", "cmd+l"); rejects unknown tokens and more than three
+/// modifiers with a clear error.
+fn normalize_key_chord(chord: &str) -> Result<String, ApiError> {
+    let parts: Vec<&str> = chord.split('+').map(str::trim).collect();
+    if parts.is_empty() || parts.iter().any(|part| part.is_empty()) {
+        return Err(ApiError::bad_request(
+            "key must be a key or chord such as Enter, Meta+L, or ctrl+shift+t",
+        ));
+    }
+    let (&key, modifiers) = parts.split_last().unwrap();
+    if modifiers.len() > 3 {
+        return Err(ApiError::bad_request(
+            "key chords support at most 3 modifiers",
+        ));
+    }
+    // Ranked in the CDP modifier bitmask order so equivalent chords always
+    // normalize to one canonical spelling.
+    let mut ranked: Vec<(usize, &'static str)> = Vec::new();
+    for modifier in modifiers {
+        let (rank, canonical) = match modifier.to_ascii_lowercase().as_str() {
+            "alt" | "option" | "opt" => (0, "Alt"),
+            "control" | "ctrl" => (1, "Control"),
+            "meta" | "cmd" | "command" | "win" | "super" => (2, "Meta"),
+            "shift" => (3, "Shift"),
+            other => {
+                return Err(ApiError::bad_request(format!(
+                    "unknown key modifier {other}; use Control, Alt, Shift, or Meta (aliases: ctrl, cmd, option, opt, win, super)"
+                )));
+            }
+        };
+        if !ranked.contains(&(rank, canonical)) {
+            ranked.push((rank, canonical));
+        }
+    }
+    ranked.sort_unstable();
+    let mut normalized: Vec<String> = ranked
+        .into_iter()
+        .map(|(_, canonical)| canonical.to_owned())
+        .collect();
+    let in_chord = !normalized.is_empty();
+    normalized.push(normalize_key_name(key, in_chord)?);
+    Ok(normalized.join("+"))
+}
+
+/// Normalizes one key token: canonical names pass through, lowercase vendor
+/// aliases map onto them, and any other single printable character stays
+/// itself. A bare single letter keeps its case verbatim (legacy v0.9 clients
+/// send `j` for Gmail-style shortcuts, and uppercasing would imply Shift);
+/// letters inside modifier chords canonicalize to uppercase, matching the
+/// documented `Meta+L` form.
+fn normalize_key_name(key: &str, in_chord: bool) -> Result<String, ApiError> {
+    if CANONICAL_NAMED_KEYS.contains(&key) {
+        return Ok(key.to_owned());
+    }
+    let function_number = |token: &str| {
+        token
+            .parse::<u8>()
+            .ok()
+            .filter(|number| (1..=12).contains(number))
+    };
+    if let Some(number) = key.strip_prefix('F').and_then(function_number) {
+        return Ok(format!("F{number}"));
+    }
+    let lowered = key.to_ascii_lowercase();
+    let alias = match lowered.as_str() {
+        "esc" | "escape" => Some("Escape"),
+        "return" | "enter" => Some("Enter"),
+        "del" | "delete" => Some("Delete"),
+        "space" | "spacebar" => Some("Space"),
+        "tab" => Some("Tab"),
+        "backspace" => Some("Backspace"),
+        "up" | "arrowup" => Some("ArrowUp"),
+        "down" | "arrowdown" => Some("ArrowDown"),
+        "left" | "arrowleft" => Some("ArrowLeft"),
+        "right" | "arrowright" => Some("ArrowRight"),
+        "pageup" => Some("PageUp"),
+        "pagedown" => Some("PageDown"),
+        "home" => Some("Home"),
+        "end" => Some("End"),
+        "insert" => Some("Insert"),
+        "contextmenu" => Some("ContextMenu"),
+        "capslock" => Some("CapsLock"),
+        "printscreen" => Some("PrintScreen"),
+        "pause" => Some("Pause"),
+        _ => None,
+    };
+    if let Some(alias) = alias {
+        return Ok(alias.to_owned());
+    }
+    if let Some(number) = lowered.strip_prefix('f').and_then(function_number) {
+        return Ok(format!("F{number}"));
+    }
+    let mut characters = key.chars();
+    if let (Some(character), None) = (characters.next(), characters.next()) {
+        if character.is_ascii_alphabetic() {
+            return Ok(if in_chord {
+                character.to_ascii_uppercase().to_string()
+            } else {
+                character.to_string()
+            });
+        }
+        if !character.is_control() && !character.is_whitespace() {
+            return Ok(character.to_string());
+        }
+    }
+    Err(ApiError::bad_request(format!(
+        "unknown key token {key}; use a named key such as Enter or Escape, F1-F12, or a single character"
+    )))
+}
+
+/// The `page.click` parameter core: a validated element ref plus the pointer
+/// verb options. Shared by the top-level command and `page.batch` sub-actions.
+fn click_params(source: &Map<String, Value>, base: Value) -> Result<Value, ApiError> {
+    let mut output = object(ref_params(source, base, None)?);
+    let button = optional_string(source.get("button"), "left", "button", 8)?;
+    if !["left", "middle", "right"].contains(&button.as_str()) {
+        return Err(ApiError::bad_request(
+            "button must be left, middle, or right",
+        ));
+    }
+    let click_count = source
+        .get("clickCount")
+        .map(|value| as_u64(value, "clickCount"))
+        .transpose()?
+        .unwrap_or(1);
+    if !(1..=3).contains(&click_count) {
+        return Err(ApiError::bad_request("clickCount must be between 1 and 3"));
+    }
+    output.extend([
+        ("button".to_owned(), json!(button)),
+        ("clickCount".to_owned(), json!(click_count)),
+        (
+            "modifiers".to_owned(),
+            json!(sanitize_click_modifiers(source.get("modifiers"))?),
+        ),
+    ]);
+    Ok(Value::Object(output))
+}
+
+/// The `page.key` parameter core: a generation binding plus one normalized
+/// key chord. Shared by the top-level command and `page.batch` sub-actions.
+fn key_params(source: &Map<String, Value>, base: Value) -> Result<Value, ApiError> {
+    let mut output = object(base);
+    output.insert(
+        "generation".to_owned(),
+        Value::String(required_string(
+            source.get("generation"),
+            "generation",
+            100,
+        )?),
+    );
+    let key = required_string(source.get("key"), "key", 80)?;
+    output.insert("key".to_owned(), Value::String(normalize_key_chord(&key)?));
+    Ok(Value::Object(output))
+}
+
+/// The `page.scroll` parameter core: a generation binding plus clamped wheel
+/// deltas. Shared by the top-level command and `page.batch` sub-actions.
+fn scroll_params(source: &Map<String, Value>, base: Value) -> Result<Value, ApiError> {
+    let mut output = object(base);
+    output.insert(
+        "generation".to_owned(),
+        Value::String(required_string(
+            source.get("generation"),
+            "generation",
+            100,
+        )?),
+    );
+    output.insert(
+        "deltaX".to_owned(),
+        json!(
+            finite_number(source.get("deltaX"), 0.0, "deltaX")?
+                .clamp(-5_000.0, 5_000.0)
+                .trunc()
+        ),
+    );
+    output.insert(
+        "deltaY".to_owned(),
+        json!(
+            finite_number(source.get("deltaY"), 0.0, "deltaY")?
+                .clamp(-5_000.0, 5_000.0)
+                .trunc()
+        ),
+    );
+    Ok(Value::Object(output))
+}
+
 fn ref_params(
     source: &Map<String, Value>,
     base: Value,
     extra: Option<(&str, usize)>,
 ) -> Result<Value, ApiError> {
     let mut output = object(base);
-    output.insert(
-        "ref".to_owned(),
-        Value::String(required_string(source.get("ref"), "ref", 80)?),
-    );
+    let reference = required_string(source.get("ref"), "ref", 80)?;
+    if !valid_element_ref(&reference) {
+        return Err(ApiError::bad_request(
+            "ref must be an element reference such as e12 or <generation>.e12",
+        ));
+    }
+    output.insert("ref".to_owned(), Value::String(reference));
     output.insert(
         "generation".to_owned(),
         Value::String(required_string(
@@ -3654,13 +4668,80 @@ fn decode_screenshot(value: Option<&Value>) -> Result<Option<Screenshot>, ApiErr
     if bytes.len() > MAX_SCREENSHOT_BYTES {
         return Err(ApiError::bad_request("Screenshot exceeds the 8 MB limit"));
     }
+    let content_hash = sha256_hex(&bytes);
+    let (width, height) = match image_dimensions(content_type, &bytes) {
+        Some((width, height)) => (Some(width), Some(height)),
+        None => (None, None),
+    };
     Ok(Some(Screenshot {
         bytes: Bytes::from(bytes),
         content_type,
+        content_hash,
+        width,
+        height,
         id: Uuid::new_v4().simple().to_string(),
         binding: String::new(),
         route: "",
     }))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn image_dimensions(content_type: &str, bytes: &[u8]) -> Option<(u32, u32)> {
+    match content_type {
+        "image/png" => png_dimensions(bytes),
+        "image/jpeg" => jpeg_dimensions(bytes),
+        _ => None,
+    }
+}
+
+/// Reads the IHDR width and height of a PNG without decoding pixel data.
+fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    const PNG_SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
+    if bytes.len() < 24 || bytes[..8] != PNG_SIGNATURE || &bytes[12..16] != b"IHDR" {
+        return None;
+    }
+    let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+    let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    (width > 0 && height > 0).then_some((width, height))
+}
+
+/// Scans JPEG markers for the first start-of-frame segment and reads its
+/// dimensions without decoding pixel data.
+fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
+        return None;
+    }
+    let mut index = 2_usize;
+    while index + 9 <= bytes.len() {
+        if bytes[index] != 0xFF {
+            return None;
+        }
+        let marker = bytes[index + 1];
+        match marker {
+            0xFF => index += 1,
+            0x01 | 0xD0..=0xD8 => index += 2,
+            0xD9 => return None,
+            0xC0..=0xCF if !matches!(marker, 0xC4 | 0xC8 | 0xCC) => {
+                let height = u32::from(u16::from_be_bytes([bytes[index + 5], bytes[index + 6]]));
+                let width = u32::from(u16::from_be_bytes([bytes[index + 7], bytes[index + 8]]));
+                return (width > 0 && height > 0).then_some((width, height));
+            }
+            _ => {
+                let length = usize::from(u16::from_be_bytes([bytes[index + 2], bytes[index + 3]]));
+                if length < 2 {
+                    return None;
+                }
+                index += 2 + length;
+            }
+        }
+    }
+    None
 }
 
 fn bounded(value: &str, max_chars: usize) -> String {
@@ -3689,15 +4770,29 @@ fn session_token(headers: &HeaderMap) -> Option<&str> {
         .filter(|value| token_is_valid(value))
 }
 
-fn is_loopback_host(host: &str) -> bool {
-    let hostname = if host.starts_with('[') {
-        host.strip_prefix('[')
-            .and_then(|value| value.split_once(']'))
-            .map(|(host, _)| host)
+fn is_loopback_host(host: &str, bound_port: u16) -> bool {
+    let (hostname, port) = if let Some(bracketed) = host.strip_prefix('[') {
+        let Some((hostname, suffix)) = bracketed.split_once(']') else {
+            return false;
+        };
+        match suffix.strip_prefix(':') {
+            Some(port) => (hostname, Some(port)),
+            None if suffix.is_empty() => (hostname, None),
+            None => return false,
+        }
     } else {
-        Some(host.split(':').next().unwrap_or(""))
+        match host.split_once(':') {
+            Some((hostname, port)) => (hostname, Some(port)),
+            None => (host, None),
+        }
     };
-    matches!(hostname, Some("127.0.0.1" | "localhost" | "::1"))
+    if !matches!(hostname, "127.0.0.1" | "localhost" | "::1") {
+        return false;
+    }
+    match port {
+        None => true,
+        Some(port) => port.parse::<u16>().ok() == Some(bound_port),
+    }
 }
 
 #[cfg(test)]
@@ -3726,6 +4821,7 @@ mod tests {
             "page.clickAt",
             json!({ "tabId": 7, "generation": "g1", "x": 10.5, "y": 20, "button": "right", "clickCount": 2 }),
             None,
+            None,
         )
         .unwrap();
         assert_eq!(params["tabId"], 7);
@@ -3734,11 +4830,554 @@ mod tests {
             sanitize_params(
                 "page.clickAt",
                 json!({ "tabId": 7, "generation": "g1", "x": 10, "y": -1 }),
+                None,
                 None
             )
             .is_err()
         );
-        assert!(sanitize_params("page.evaluate", json!({ "tabId": 7 }), None).is_err());
+        assert!(sanitize_params("page.evaluate", json!({ "tabId": 7 }), None, None).is_err());
+    }
+
+    #[test]
+    fn accepts_epoch_embedded_and_legacy_element_refs() {
+        for valid in ["e1", "e12", "e500", "mfz3k2ab-a1b2c3d4.e12", "g1.e1"] {
+            assert!(valid_element_ref(valid), "rejected {valid}");
+        }
+        for invalid in [
+            "", "e", "e0", "e01", "e12345", "x1", "12", ".e1", "g1.", "g1.e", "g1.f1", "G1.e1",
+            "g!n.e1", "g1..e1", "g1.e1.e2", "g_1.e1", "e1 ",
+        ] {
+            assert!(!valid_element_ref(invalid), "accepted {invalid}");
+        }
+
+        let embedded = sanitize_params(
+            "page.click",
+            json!({ "tabId": 7, "ref": "mfz3k2ab-a1b2c3d4.e12", "generation": "mfz3k2ab-a1b2c3d4" }),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(embedded["ref"], "mfz3k2ab-a1b2c3d4.e12");
+        let legacy = sanitize_params(
+            "page.hover",
+            json!({ "tabId": 7, "ref": "e3", "generation": "g1" }),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(legacy["ref"], "e3");
+        let junk = sanitize_params(
+            "page.click",
+            json!({ "tabId": 7, "ref": "not a ref", "generation": "g1" }),
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(junk.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn validates_click_pointer_options() {
+        let defaults = sanitize_params(
+            "page.click",
+            json!({ "tabId": 7, "ref": "e1", "generation": "g1" }),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(defaults["button"], "left");
+        assert_eq!(defaults["clickCount"], 1);
+        assert_eq!(defaults["modifiers"], json!([]));
+
+        let modified = sanitize_params(
+            "page.click",
+            json!({
+                "tabId": 7,
+                "ref": "g1.e1",
+                "generation": "g1",
+                "button": "middle",
+                "clickCount": 3,
+                "modifiers": ["Shift", "Meta", "Shift"]
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(modified["button"], "middle");
+        assert_eq!(modified["clickCount"], 3);
+        assert_eq!(modified["modifiers"], json!(["Shift", "Meta"]));
+
+        for params in [
+            json!({ "tabId": 7, "ref": "e1", "generation": "g1", "button": "back" }),
+            json!({ "tabId": 7, "ref": "e1", "generation": "g1", "clickCount": 0 }),
+            json!({ "tabId": 7, "ref": "e1", "generation": "g1", "clickCount": 4 }),
+            json!({ "tabId": 7, "ref": "e1", "generation": "g1", "modifiers": ["Hyper"] }),
+            json!({ "tabId": 7, "ref": "e1", "generation": "g1", "modifiers": "Shift" }),
+            json!({ "tabId": 7, "ref": "e1", "generation": "g1", "modifiers": [8] }),
+        ] {
+            assert!(
+                sanitize_params("page.click", params.clone(), None, None).is_err(),
+                "accepted {params}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalizes_vendor_and_canonical_key_chords() {
+        for (input, expected) in [
+            ("Meta+L", "Meta+L"),
+            ("cmd+l", "Meta+L"),
+            ("ctrl+shift+t", "Control+Shift+T"),
+            ("shift+ctrl+t", "Control+Shift+T"),
+            ("Control+Shift+T", "Control+Shift+T"),
+            ("esc", "Escape"),
+            ("Escape", "Escape"),
+            ("return", "Enter"),
+            ("del", "Delete"),
+            ("space", "Space"),
+            ("alt+f4", "Alt+F4"),
+            ("option+Tab", "Alt+Tab"),
+            ("win+d", "Meta+D"),
+            ("super+ArrowLeft", "Meta+ArrowLeft"),
+            ("ctrl+ctrl+a", "Control+A"),
+            ("Control+.", "Control+."),
+            ("9", "9"),
+            // A bare single letter keeps its case verbatim (uppercasing
+            // would imply Shift for Gmail-style j/k shortcuts); letters
+            // inside modifier chords keep the canonical uppercase form.
+            ("j", "j"),
+            ("J", "J"),
+            ("shift+j", "Shift+J"),
+            ("ctrl+j", "Control+J"),
+            ("Shift+j", "Shift+J"),
+        ] {
+            assert_eq!(
+                normalize_key_chord(input).unwrap(),
+                expected,
+                "chord {input}"
+            );
+        }
+        for invalid in [
+            "",
+            "+",
+            "ctrl+",
+            "hyper+l",
+            "ctrl+banana",
+            "banana",
+            "ctrl+alt+shift+meta+a",
+            "F13",
+            "f0",
+        ] {
+            assert!(normalize_key_chord(invalid).is_err(), "accepted {invalid}");
+        }
+
+        let page_key = sanitize_params(
+            "page.key",
+            json!({ "tabId": 7, "generation": "g1", "key": "cmd+l" }),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(page_key["key"], "Meta+L");
+        let computer_key = sanitize_computer_params(
+            "computer.key",
+            json!({ "frameId": "frame-1", "key": "ctrl+shift+t" }),
+            None,
+        )
+        .unwrap();
+        assert_eq!(computer_key["key"], "Control+Shift+T");
+        assert!(
+            sanitize_computer_params(
+                "computer.key",
+                json!({ "frameId": "frame-1", "key": "hyper+l" }),
+                None,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn clamps_wait_for_timeouts_and_requires_a_condition() {
+        let clamped = sanitize_params(
+            "page.waitFor",
+            json!({ "tabId": 7, "text": "Welcome", "timeoutMs": 99_999 }),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(clamped["timeoutMs"], 12_000);
+        assert_eq!(clamped["text"], "Welcome");
+        assert!(clamped.get("controlSessionId").is_none());
+
+        let floored = sanitize_params(
+            "page.waitFor",
+            json!({ "tabId": 7, "urlPrefix": "https://example.test/", "timeoutMs": 1 }),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(floored["timeoutMs"], 100);
+
+        let defaulted = sanitize_params(
+            "page.waitFor",
+            json!({ "tabId": 7, "textGone": "Loading", "mutationQuietMs": 300 }),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(defaulted["timeoutMs"], 5_000);
+        assert_eq!(defaulted["mutationQuietMs"], 300);
+
+        for params in [
+            json!({ "tabId": 7 }),
+            json!({ "tabId": 7, "text": "" }),
+            json!({ "tabId": 7, "mutationQuietMs": 100 }),
+            json!({ "tabId": 7, "mutationQuietMs": 5_001 }),
+        ] {
+            assert!(
+                sanitize_params("page.waitFor", params.clone(), None, None).is_err(),
+                "accepted {params}"
+            );
+        }
+    }
+
+    #[test]
+    fn batch_sanitizer_validates_sub_actions_and_binds_leases_once() {
+        let mut params = sanitize_params(
+            "page.batch",
+            json!({
+                "tabId": 7,
+                "generation": "g1",
+                "controlSessionId": "control-1",
+                "actions": [
+                    { "method": "page.fill", "ref": "g1.e1", "text": "hello", "turn": 99, "moveSequence": 3 },
+                    { "method": "page.key", "key": "ctrl+a", "generation": "g1" },
+                    { "method": "page.scroll", "deltaY": 120.7 },
+                    { "method": "page.click", "ref": "e2", "button": "middle", "tabId": 7 }
+                ]
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(params["tabId"], 7);
+        assert_eq!(params["generation"], "g1");
+        assert_eq!(params["controlSessionId"], "control-1");
+        let actions = params["actions"].as_array().unwrap().clone();
+        assert_eq!(actions.len(), 4);
+        for (index, action) in actions.iter().enumerate() {
+            assert_eq!(action["tabId"], 7, "actions[{index}] lost the batch tab");
+            assert_eq!(action["generation"], "g1", "actions[{index}] generation");
+            // Per-step params are sanitized, but lease bindings never are:
+            // they are injected exactly once at the batch top level.
+            for binding in ["controlSessionId", "turn", "moveSequence"] {
+                assert!(
+                    action.get(binding).is_none(),
+                    "actions[{index}] carries a per-step {binding}"
+                );
+            }
+        }
+        assert_eq!(actions[0]["method"], "page.fill");
+        assert_eq!(actions[0]["text"], "hello");
+        assert_eq!(actions[1]["key"], "Control+A");
+        assert_eq!(actions[2]["deltaY"], 120.0);
+        assert_eq!(actions[3]["button"], "middle");
+        assert_eq!(actions[3]["clickCount"], 1);
+        assert_eq!(actions[3]["modifiers"], json!([]));
+
+        // bind_browser_control fills only the missing top-level bindings.
+        bind_browser_control(
+            &mut params,
+            &json!({ "active": true, "sessionId": "control-2", "turn": 4, "moveSequence": 9 }),
+        );
+        assert_eq!(params["controlSessionId"], "control-1");
+        assert_eq!(params["turn"], 4);
+        assert_eq!(params["moveSequence"], 9);
+        for action in params["actions"].as_array().unwrap() {
+            assert!(action.get("controlSessionId").is_none());
+            assert!(action.get("turn").is_none());
+        }
+
+        let eleven: Vec<Value> = (0..11)
+            .map(|_| json!({ "method": "page.key", "key": "Enter" }))
+            .collect();
+        for params in [
+            json!({ "tabId": 7, "generation": "g1", "actions": [] }),
+            json!({ "tabId": 7, "generation": "g1", "actions": eleven }),
+            json!({ "tabId": 7, "generation": "g1" }),
+            json!({ "tabId": 7, "actions": [{ "method": "page.key", "key": "Enter" }] }),
+            json!({ "tabId": 7, "generation": "g1", "actions": [{ "method": "page.batch", "actions": [] }] }),
+            json!({ "tabId": 7, "generation": "g1", "actions": [{ "method": "page.evaluate", "expression": "1" }] }),
+            json!({ "tabId": 7, "generation": "g1", "actions": [{ "method": "page.navigate", "url": "https://example.test/" }] }),
+            json!({ "tabId": 7, "generation": "g1", "actions": [{ "method": "page.observe" }] }),
+            json!({ "tabId": 7, "generation": "g1", "actions": [{ "method": "page.handleDialog", "accept": true }] }),
+            json!({ "tabId": 7, "generation": "g1", "actions": [{ "method": "page.click", "ref": "not a ref" }] }),
+            json!({ "tabId": 7, "generation": "g1", "actions": [{ "method": "page.fill", "ref": "e1", "text": "x", "generation": "g0" }] }),
+            json!({ "tabId": 7, "generation": "g1", "actions": [{ "method": "page.fill", "ref": "e1", "text": "x", "tabId": 8 }] }),
+            json!({ "tabId": 7, "generation": "g1", "actions": ["page.click"] }),
+        ] {
+            let error = sanitize_params("page.batch", params.clone(), None, None)
+                .expect_err(&format!("accepted {params}"));
+            assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        }
+    }
+
+    #[test]
+    fn handle_dialog_sanitizer_and_gate_cover_the_published_surface() {
+        let accepted = sanitize_params(
+            "page.handleDialog",
+            json!({ "tabId": 7, "accept": true, "promptText": "reply" }),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(accepted["accept"], true);
+        assert_eq!(accepted["promptText"], "reply");
+        let dismissed = sanitize_params(
+            "page.handleDialog",
+            json!({ "tabId": 7, "accept": false }),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(dismissed["accept"], false);
+        assert!(dismissed.get("promptText").is_none());
+        for params in [
+            json!({ "tabId": 7 }),
+            json!({ "tabId": 7, "accept": "yes" }),
+            json!({ "tabId": 7, "accept": 1 }),
+            json!({ "tabId": 7, "accept": true, "promptText": "x".repeat(1_001) }),
+        ] {
+            assert!(
+                sanitize_params("page.handleDialog", params.clone(), None, None).is_err(),
+                "accepted {params}"
+            );
+        }
+
+        let dialog = sanitize_pending_dialog(&json!({
+            "type": "confirm",
+            "message": "Proceed?",
+            "hasPrompt": false,
+            "at": 123,
+            "tabId": 7
+        }));
+        assert_eq!(dialog["type"], "confirm");
+        assert_eq!(dialog["message"], "Proceed?");
+        assert_eq!(dialog["hasPrompt"], false);
+        assert_eq!(dialog["at"], 123);
+        assert_eq!(dialog["tabId"], 7);
+        let junk = sanitize_pending_dialog(&json!({
+            "type": "weird",
+            "message": "m".repeat(600)
+        }));
+        assert_eq!(junk["type"], "dialog");
+        assert_eq!(junk["message"].as_str().unwrap().chars().count(), 500);
+        let prompt = sanitize_pending_dialog(&json!({ "type": "prompt", "message": "Name?" }));
+        assert_eq!(prompt["hasPrompt"], true);
+
+        for allowed in [
+            "status",
+            "tabs.list",
+            "page.handleDialog",
+            "browser.control.status",
+            "browser.control.stop",
+        ] {
+            assert!(dialog_tolerant_method(allowed), "{allowed} must stay open");
+        }
+        // page.observe and page.waitFor would hang against the dialog-frozen
+        // renderer and revoke the lease by timeout, and browser.control.start
+        // initializes the lease document through the renderer, so all three
+        // are gated alongside every mutation.
+        for blocked in [
+            "page.observe",
+            "page.waitFor",
+            "browser.control.start",
+            "page.click",
+            "page.batch",
+            "page.navigate",
+            "page.fill",
+            "page.select",
+            "page.key",
+            "page.scroll",
+            "page.clickAt",
+            "page.typeText",
+            "page.evaluate",
+            "page.hover",
+            "page.back",
+            "page.forward",
+            "page.reload",
+            "tabs.activate",
+            "tabs.new",
+            "tabs.close",
+        ] {
+            assert!(!dialog_tolerant_method(blocked), "{blocked} must be gated");
+        }
+    }
+
+    #[test]
+    fn converts_normalized1000_click_coordinates_against_the_observed_viewport() {
+        let params = sanitize_params(
+            "page.clickAt",
+            json!({
+                "tabId": 7,
+                "generation": "g1",
+                "x": 500,
+                "y": 250,
+                "coordinateSpace": "normalized1000"
+            }),
+            None,
+            Some((800.0, 600.0)),
+        )
+        .unwrap();
+        assert_eq!(params["x"], 400.0);
+        assert_eq!(params["y"], 150.0);
+        assert!(params.get("coordinateSpace").is_none());
+
+        // The default space keeps raw viewport coordinates untouched.
+        let untouched = sanitize_params(
+            "page.clickAt",
+            json!({ "tabId": 7, "generation": "g1", "x": 500, "y": 250 }),
+            None,
+            Some((800.0, 600.0)),
+        )
+        .unwrap();
+        assert_eq!(untouched["x"], 500.0);
+
+        // Without an observation, normalized coordinates cannot be grounded.
+        let missing = sanitize_params(
+            "page.clickAt",
+            json!({ "tabId": 7, "generation": "g1", "x": 1, "y": 1, "coordinateSpace": "normalized1000" }),
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(missing.code, "NO_BROWSER_OBSERVATION");
+        assert_eq!(missing.status, StatusCode::CONFLICT);
+
+        // A degenerate viewport is rejected with the same clear error.
+        let degenerate = sanitize_params(
+            "page.clickAt",
+            json!({ "tabId": 7, "generation": "g1", "x": 1, "y": 1, "coordinateSpace": "normalized1000" }),
+            None,
+            Some((0.0, 600.0)),
+        )
+        .unwrap_err();
+        assert_eq!(degenerate.code, "NO_BROWSER_OBSERVATION");
+
+        // Values beyond the 0..=1000 envelope and unknown spaces are refused.
+        assert!(
+            sanitize_params(
+                "page.clickAt",
+                json!({ "tabId": 7, "generation": "g1", "x": 1001, "y": 1, "coordinateSpace": "normalized1000" }),
+                None,
+                Some((800.0, 600.0)),
+            )
+            .is_err()
+        );
+        assert!(
+            sanitize_params(
+                "page.clickAt",
+                json!({ "tabId": 7, "generation": "g1", "x": 1, "y": 1, "coordinateSpace": "screen" }),
+                None,
+                Some((800.0, 600.0)),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn normalized1000_conversion_round_trips_and_clamps() {
+        for (value, extent, expected) in [
+            (0.0, 640.0, 0.0),
+            // The boundary value 1000 converts to the last addressable
+            // pixel, because downstream validators reject x >= extent.
+            (1_000.0, 640.0, 639.0),
+            (500.0, 640.0, 320.0),
+            (250.0, 400.0, 100.0),
+            (1_000.0, 1.0, 0.0),
+        ] {
+            assert_eq!(normalized1000_to_pixels(value, extent), expected);
+        }
+        // Round trip: pixels -> normalized -> pixels stays within float noise
+        // for every addressable pixel.
+        for pixels in [0.0, 1.0, 123.456, 639.0] {
+            let normalized = pixels / 640.0 * NORMALIZED_COORDINATE_MAX;
+            assert!((normalized1000_to_pixels(normalized, 640.0) - pixels).abs() < 1e-9);
+        }
+        // Out-of-range inputs clamp to the addressable image bounds.
+        assert_eq!(normalized1000_to_pixels(1_000.000_1, 640.0), 639.0);
+        assert_eq!(normalized1000_to_pixels(-0.000_1, 640.0), 0.0);
+    }
+
+    #[test]
+    fn converts_normalized1000_computer_coordinates_against_the_stored_frame() {
+        let params = sanitize_computer_params(
+            "computer.click",
+            json!({
+                "frameId": "frame-1",
+                "x": 500,
+                "y": 250,
+                "coordinateSpace": "normalized1000"
+            }),
+            Some((640, 400)),
+        )
+        .unwrap();
+        assert_eq!(params["x"], 320.0);
+        assert_eq!(params["y"], 100.0);
+        assert!(params.get("coordinateSpace").is_none());
+
+        let drag = sanitize_computer_params(
+            "computer.drag",
+            json!({
+                "frameId": "frame-1",
+                "fromX": 0,
+                "fromY": 0,
+                "toX": 1000,
+                "toY": 1000,
+                "coordinateSpace": "normalized1000"
+            }),
+            Some((640, 400)),
+        )
+        .unwrap();
+        // The 1000 boundary lands on the last addressable pixel, which every
+        // downstream `< extent` validator still accepts.
+        assert_eq!(drag["toX"], 639.0);
+        assert_eq!(drag["toY"], 399.0);
+
+        // The default image space is untouched by the stored frame size.
+        let untouched = sanitize_computer_params(
+            "computer.move",
+            json!({ "frameId": "frame-1", "x": 500, "y": 250 }),
+            Some((640, 400)),
+        )
+        .unwrap();
+        assert_eq!(untouched["x"], 500.0);
+
+        let missing = sanitize_computer_params(
+            "computer.move",
+            json!({ "frameId": "frame-1", "x": 1, "y": 1, "coordinateSpace": "normalized1000" }),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(missing.code, "NO_COMPUTER_FRAME");
+        assert_eq!(missing.status, StatusCode::CONFLICT);
+
+        assert!(
+            sanitize_computer_params(
+                "computer.move",
+                json!({ "frameId": "frame-1", "x": 1000.5, "y": 1, "coordinateSpace": "normalized1000" }),
+                Some((640, 400)),
+            )
+            .is_err()
+        );
+        assert!(
+            sanitize_computer_params(
+                "computer.move",
+                json!({ "frameId": "frame-1", "x": 1, "y": 1, "coordinateSpace": "screen" }),
+                Some((640, 400)),
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -3753,6 +5392,7 @@ mod tests {
                 "turn": 4,
                 "moveSequence": 9
             }),
+            None,
             None,
         )
         .unwrap();
@@ -3801,15 +5441,33 @@ mod tests {
 
     #[test]
     fn enforces_loopback_host_boundary() {
-        assert!(is_loopback_host("127.0.0.1:17373"));
-        assert!(is_loopback_host("localhost:17373"));
-        assert!(is_loopback_host("[::1]:17373"));
-        assert!(!is_loopback_host("example.com:17373"));
+        assert!(is_loopback_host("127.0.0.1:17373", 17_373));
+        assert!(is_loopback_host("localhost:17373", 17_373));
+        assert!(is_loopback_host("[::1]:17373", 17_373));
+        assert!(is_loopback_host("127.0.0.1", 17_373));
+        assert!(is_loopback_host("localhost", 17_373));
+        assert!(is_loopback_host("[::1]", 17_373));
+        for rejected in [
+            "example.com:17373",
+            "evil.example",
+            "127.0.0.1:9999",
+            "localhost:9999",
+            "[::1]:9999",
+            "127.0.0.1:",
+            "[::1]x",
+            "[::1]:17373x",
+            "127.0.0.1.evil.example:17373",
+            "LOCALHOST:17373",
+            "::1",
+            "",
+        ] {
+            assert!(!is_loopback_host(rejected, 17_373), "accepted {rejected}");
+        }
     }
 
     #[test]
     fn expired_dashboard_session_cannot_mutate_even_with_its_old_csrf_token() {
-        let state = AppState::new(create_token(), Duration::from_secs(1), false);
+        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false);
         let session_id = create_token();
         state.sessions.lock().unwrap().insert(
             session_id.clone(),
@@ -3840,6 +5498,218 @@ mod tests {
         .unwrap();
         assert_eq!(screenshot.content_type, "image/png");
         assert!(!screenshot.bytes.is_empty());
+        assert_eq!(screenshot.content_hash.len(), 64);
+        assert!(
+            screenshot
+                .content_hash
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        );
+        // A truncated PNG has no readable IHDR dimensions.
+        assert_eq!(screenshot.width, None);
+        assert_eq!(screenshot.height, None);
+    }
+
+    #[test]
+    fn extracts_stable_content_hashes_and_dimensions_from_screenshots() {
+        const PIXEL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+        let first = decode_screenshot(Some(&Value::String(PIXEL.to_owned())))
+            .unwrap()
+            .unwrap();
+        let second = decode_screenshot(Some(&Value::String(PIXEL.to_owned())))
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.content_hash, second.content_hash);
+        assert_eq!(first.content_hash, sha256_hex(&first.bytes));
+        assert_eq!(first.width, Some(1));
+        assert_eq!(first.height, Some(1));
+        assert_eq!(png_dimensions(&first.bytes), Some((1, 1)));
+        assert_eq!(jpeg_dimensions(&first.bytes), None);
+        // A minimal JPEG header: SOI, then an SOF0 segment with 2x3 pixels.
+        let jpeg = [
+            0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x03, 0x00, 0x02, 0x01, 0x01, 0x11,
+            0x00,
+        ];
+        assert_eq!(jpeg_dimensions(&jpeg), Some((2, 3)));
+        assert_eq!(png_dimensions(&jpeg), None);
+    }
+
+    #[test]
+    fn replay_cache_deduplicates_in_flight_and_completed_calls() {
+        let now = Instant::now();
+        let mut replay = CommandReplay::new();
+        assert!(matches!(
+            replay.admit("call-1", "fp-1", now),
+            ReplayAdmission::New
+        ));
+        assert!(matches!(
+            replay.admit("call-1", "fp-1", now),
+            ReplayAdmission::InFlight
+        ));
+        assert!(matches!(
+            replay.admit("call-2", "fp-2", now),
+            ReplayAdmission::New
+        ));
+        replay.complete("call-1", StatusCode::OK, json!({ "ok": true }), now);
+        match replay.admit("call-1", "fp-1", now) {
+            ReplayAdmission::Replay { status, body } => {
+                assert_eq!(status, StatusCode::OK);
+                assert_eq!(body, json!({ "ok": true }));
+            }
+            _ => panic!("completed call must replay"),
+        }
+    }
+
+    #[test]
+    fn replay_cache_refuses_a_call_id_reused_for_a_different_command() {
+        let now = Instant::now();
+        let mut replay = CommandReplay::new();
+        // An in-flight callId with a different fingerprint is reuse, not a
+        // duplicate of the pending command.
+        assert!(matches!(
+            replay.admit("call-1", "fp-a", now),
+            ReplayAdmission::New
+        ));
+        assert!(matches!(
+            replay.admit("call-1", "fp-b", now),
+            ReplayAdmission::Reused
+        ));
+        assert!(matches!(
+            replay.admit("call-1", "fp-a", now),
+            ReplayAdmission::InFlight
+        ));
+        // A completed callId replays only the exact same command; any other
+        // fingerprint is refused instead of returning the cached outcome.
+        replay.complete("call-1", StatusCode::OK, json!({ "ok": true }), now);
+        assert!(matches!(
+            replay.admit("call-1", "fp-b", now),
+            ReplayAdmission::Reused
+        ));
+        assert!(matches!(
+            replay.admit("call-1", "fp-a", now),
+            ReplayAdmission::Replay { .. }
+        ));
+        assert_ne!(
+            command_fingerprint("page.click", &json!({ "ref": "e1" })),
+            command_fingerprint("page.hover", &json!({ "ref": "e1" })),
+        );
+        assert_ne!(
+            command_fingerprint("page.click", &json!({ "ref": "e1" })),
+            command_fingerprint("page.click", &json!({ "ref": "e2" })),
+        );
+        assert_eq!(
+            command_fingerprint("page.click", &json!({ "a": 1, "b": 2 })),
+            command_fingerprint("page.click", &json!({ "b": 2, "a": 1 })),
+        );
+    }
+
+    #[test]
+    fn dropped_in_flight_guard_caches_an_outcome_unknown_failure() {
+        let now = Instant::now();
+        let replay = Arc::new(Mutex::new(CommandReplay::new()));
+        assert!(matches!(
+            replay.lock().unwrap().admit("call-1", "fp-1", now),
+            ReplayAdmission::New
+        ));
+        drop(InFlightCallGuard {
+            replay: replay.clone(),
+            call_id: Some("call-1".to_owned()),
+        });
+        // A retry of the interrupted command replays the synthetic
+        // outcome-unknown failure and is never admitted as New again.
+        match replay.lock().unwrap().admit("call-1", "fp-1", now) {
+            ReplayAdmission::Replay { status, body } => {
+                assert_eq!(status, StatusCode::GATEWAY_TIMEOUT);
+                assert_eq!(body["ok"], false);
+                assert_eq!(body["error"]["code"], "COMMAND_OUTCOME_UNKNOWN");
+                assert_eq!(body["taxonomy"]["code"], "outcome_unknown");
+                assert_eq!(body["taxonomy"]["retriable"], false);
+                assert_eq!(body["taxonomy"]["recoveryHint"], "reobserve");
+                assert_eq!(body["callId"], "call-1");
+            }
+            _ => panic!("a dropped guard must cache an outcome-unknown failure"),
+        }
+        // Reusing the interrupted callId for a different command stays refused.
+        assert!(matches!(
+            replay.lock().unwrap().admit("call-1", "fp-2", now),
+            ReplayAdmission::Reused
+        ));
+        // A disarmed guard leaves the real completion in charge.
+        let mut guard = InFlightCallGuard {
+            replay: replay.clone(),
+            call_id: Some("call-2".to_owned()),
+        };
+        assert!(matches!(
+            replay.lock().unwrap().admit("call-2", "fp-2", now),
+            ReplayAdmission::New
+        ));
+        assert_eq!(guard.disarm().as_deref(), Some("call-2"));
+        drop(guard);
+        replay
+            .lock()
+            .unwrap()
+            .complete("call-2", StatusCode::OK, json!({ "ok": true }), now);
+        assert!(matches!(
+            replay.lock().unwrap().admit("call-2", "fp-2", now),
+            ReplayAdmission::Replay { .. }
+        ));
+    }
+
+    #[test]
+    fn replay_cache_expires_entries_after_the_ttl() {
+        let now = Instant::now();
+        let mut replay = CommandReplay::new();
+        assert!(matches!(
+            replay.admit("call-1", "fp-1", now),
+            ReplayAdmission::New
+        ));
+        replay.complete("call-1", StatusCode::OK, json!({ "ok": true }), now);
+        let before_expiry = now + REPLAY_CACHE_TTL - Duration::from_secs(1);
+        assert!(matches!(
+            replay.admit("call-1", "fp-1", before_expiry),
+            ReplayAdmission::Replay { .. }
+        ));
+        let after_expiry = now + REPLAY_CACHE_TTL;
+        assert!(matches!(
+            replay.admit("call-1", "fp-1", after_expiry),
+            ReplayAdmission::New
+        ));
+    }
+
+    #[test]
+    fn replay_cache_evicts_the_least_recently_used_entry_at_capacity() {
+        let now = Instant::now();
+        let mut replay = CommandReplay::new();
+        for index in 0..REPLAY_CACHE_ENTRIES {
+            let call_id = format!("call-{index}");
+            assert!(matches!(
+                replay.admit(&call_id, "fp", now),
+                ReplayAdmission::New
+            ));
+            replay.complete(&call_id, StatusCode::OK, json!({ "index": index }), now);
+        }
+        // Touch the oldest entry so the second-oldest becomes least recent.
+        assert!(matches!(
+            replay.admit("call-0", "fp", now),
+            ReplayAdmission::Replay { .. }
+        ));
+        assert!(matches!(
+            replay.admit("call-overflow", "fp", now),
+            ReplayAdmission::New
+        ));
+        replay.complete("call-overflow", StatusCode::OK, json!({ "ok": true }), now);
+        assert!(matches!(
+            replay.admit("call-0", "fp", now),
+            ReplayAdmission::Replay { .. }
+        ));
+        assert!(matches!(
+            replay.admit("call-1", "fp", now),
+            ReplayAdmission::New
+        ));
+        assert!(matches!(
+            replay.admit("call-2", "fp", now),
+            ReplayAdmission::Replay { .. }
+        ));
     }
 
     #[test]
@@ -3873,6 +5743,7 @@ mod tests {
         let params = sanitize_computer_params(
             "computer.observe",
             json!({ "windowId": "47782", "displayId": "legacy" }),
+            None,
         )
         .unwrap();
         assert_eq!(params, json!({ "windowId": "47782" }));
@@ -3929,6 +5800,11 @@ mod tests {
         let observation = sanitize_computer_observation(Some(&frame)).unwrap();
         assert_eq!(observation.window_id, "47782");
         assert_eq!(observation.pid, 51641);
+        assert_eq!(
+            observation.share,
+            json!({ "active": false }),
+            "a frame without a share block reports an inactive share"
+        );
         assert_eq!(observation.session_mode, "background-window");
         assert_eq!(observation.delivery_mode, "exact-window-background");
         assert_eq!(observation.semantic_mode, "macos-accessibility");
@@ -3941,12 +5817,14 @@ mod tests {
         let invoke = sanitize_computer_params(
             "computer.invoke",
             json!({ "frameId": "frame-1", "elementRef": "a1", "action": "press" }),
+            None,
         )
         .unwrap();
         assert_eq!(invoke["elementRef"], "a1");
         let set_value = sanitize_computer_params(
             "computer.setValue",
             json!({ "frameId": "frame-1", "elementRef": "a2", "value": "hello" }),
+            None,
         )
         .unwrap();
         assert_eq!(set_value["value"], "hello");
@@ -3963,6 +5841,49 @@ mod tests {
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0].id, "47782");
         assert!(!windows[0].focused);
+    }
+
+    #[test]
+    fn share_status_sanitizer_reports_ack_pacing_metrics() {
+        let sanitized = sanitize_share_status(Some(&json!({
+            "active": true,
+            "id": "share-1",
+            "windowId": "window-9",
+            "fps": 4,
+            "sequence": 12,
+            "startedAt": "2026-08-19T00:00:00Z",
+            "droppedFrames": 3,
+            "ackPaced": true,
+            "lastAckedSequence": 11,
+            "backpressure": "latest-frame-wins"
+        })));
+        assert_eq!(sanitized["droppedFrames"], 3);
+        assert_eq!(sanitized["ackPaced"], true);
+        assert_eq!(sanitized["lastAckedSequence"], 11);
+        assert_eq!(sanitized["backpressure"], "latest-frame-wins");
+
+        let legacy = sanitize_share_status(Some(&json!({
+            "active": true,
+            "id": "share-2",
+            "windowId": "window-9",
+            "fps": 4,
+            "sequence": 2,
+            "startedAt": "2026-08-19T00:00:00Z"
+        })));
+        assert_eq!(legacy["ackPaced"], false, "legacy helpers stay unpaced");
+        assert_eq!(legacy["lastAckedSequence"], 0);
+        assert_eq!(legacy["droppedFrames"], 0);
+        assert_eq!(legacy["backpressure"], "producer-blocking");
+
+        assert_eq!(
+            share_frame_ack_sequence(&json!({ "frame": { "share": { "sequence": 9 } } })),
+            Some(9)
+        );
+        assert_eq!(
+            share_frame_ack_sequence(&json!({ "frame": { "share": { "sequence": "9" } } })),
+            None
+        );
+        assert_eq!(share_frame_ack_sequence(&json!({ "frame": {} })), None);
     }
 
     #[test]

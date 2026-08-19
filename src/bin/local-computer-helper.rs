@@ -157,6 +157,15 @@ async fn run_session(
                     )
                     .into());
                 }
+                // The bridge confirms the negotiated share-frame ack pacing in
+                // its hello acknowledgement; without the confirmation the
+                // helper keeps the legacy timer-only emission behavior.
+                let share_ack_paced =
+                    message.get("shareAck").and_then(Value::as_bool) == Some(true);
+                controller
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .set_share_ack_pacing(share_ack_paced);
                 return run_authenticated_session(socket, session_id, controller, authority).await;
             }
             Message::Ping(bytes) => socket.send(Message::Pong(bytes)).await?,
@@ -260,6 +269,7 @@ async fn run_authenticated_session(
     let mut event_sequence = 0_u64;
     let mut last_command_sequence = 0_u64;
     let mut pending = VecDeque::new();
+    let mut pending_share_acks = VecDeque::new();
     let mut active: Option<ActiveCommand> = None;
     let (completion_tx, mut completion_rx) = mpsc::unbounded_channel();
     loop {
@@ -298,6 +308,23 @@ async fn run_authenticated_session(
                             }
                             if let Some(key) = command_key(&message) {
                                 authority.cancel_exact(&key);
+                            }
+                            continue;
+                        }
+                        if message_type == Some("eventAck") {
+                            if !session_message_valid(&message, &session_id) {
+                                return Err(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    "Bridge event acknowledgement used a mismatched protocol session",
+                                ).into());
+                            }
+                            // Acks are queued instead of locking the controller
+                            // here so the reader stays responsive while a
+                            // command holds the controller lock.
+                            if let Some(sequence) =
+                                message.get("sequence").and_then(Value::as_u64)
+                            {
+                                queue_share_ack(&mut pending_share_acks, sequence);
                             }
                             continue;
                         }
@@ -372,10 +399,14 @@ async fn run_authenticated_session(
                     && finished.cancellation.was_dispatched()
                     && finished.cancellation.is_canceled()
                 {
+                    // The canceled share start may or may not have committed,
+                    // so its share authority is revoked; the transport session
+                    // itself continues, so the hello-negotiated ack pacing
+                    // must survive for later shares in this session.
                     controller
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .reset_transport_session();
+                        .revoke_command_authority();
                 }
                 authority.retire(&completion.key);
                 let mut response = result_envelope(&completion.key.id, completion.result);
@@ -391,23 +422,14 @@ async fn run_authenticated_session(
                 );
             }
             _ = share_tick.tick() => {
-                if active.is_some() || !pending.is_empty() {
-                    continue;
-                }
-                let frame = controller
-                    .try_lock()
-                    .ok()
-                    .and_then(|mut controller| controller.next_share_frame());
-                if let Some(frame) = frame {
+                let emissions = collect_share_emissions(
+                    &controller,
+                    &mut pending_share_acks,
+                    active.is_some() || !pending.is_empty(),
+                );
+                for (name, data) in emissions {
                     event_sequence = event_sequence.saturating_add(1);
-                    let mut message = match frame {
-                        Ok(frame) => json!({ "type": "event", "name": "computer.share.frame", "data": frame }),
-                        Err(error) => json!({
-                            "type": "event",
-                            "name": "computer.share.error",
-                            "data": { "code": error.code, "message": error.message }
-                        }),
-                    };
+                    let mut message = json!({ "type": "event", "name": name, "data": data });
                     if let Some(object) = message.as_object_mut() {
                         object.insert("protocolVersion".to_owned(), json!(PROTOCOL_VERSION));
                         object.insert("sessionId".to_owned(), json!(session_id));
@@ -498,6 +520,50 @@ impl Drop for SessionAuthorityGuard {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .reset_transport_session();
     }
+}
+
+/// At most one share-frame ack can be outstanding, so a tiny bound absorbs
+/// even a misbehaving bridge without growing an unbounded queue.
+const MAX_PENDING_SHARE_ACKS: usize = 8;
+
+fn queue_share_ack(pending_share_acks: &mut VecDeque<u64>, sequence: u64) {
+    if pending_share_acks.len() >= MAX_PENDING_SHARE_ACKS {
+        pending_share_acks.pop_front();
+    }
+    pending_share_acks.push_back(sequence);
+}
+
+/// Applies queued share acknowledgements, then drains at most one parked
+/// frame and one capture error for emission.
+///
+/// Command activity suppresses emissions entirely (command-priority), and a
+/// busy controller lock defers everything to the next tick without blocking.
+fn collect_share_emissions(
+    controller: &Arc<Mutex<ComputerController>>,
+    pending_share_acks: &mut VecDeque<u64>,
+    command_active: bool,
+) -> Vec<(&'static str, Value)> {
+    let Ok(mut controller) = controller.try_lock() else {
+        return Vec::new();
+    };
+    while let Some(sequence) = pending_share_acks.pop_front() {
+        controller.acknowledge_share_frame(sequence);
+    }
+    if command_active {
+        return Vec::new();
+    }
+    let capture_error = controller.pump_share_capture();
+    let mut emissions = Vec::new();
+    if let Some((_, frame)) = controller.take_share_emission() {
+        emissions.push(("computer.share.frame", frame));
+    }
+    if let Some(error) = capture_error {
+        emissions.push((
+            "computer.share.error",
+            json!({ "code": error.code, "message": error.message }),
+        ));
+    }
+    emissions
 }
 
 fn dispatch_next_command(
@@ -607,6 +673,32 @@ mod tests {
     use local_browser_bridge::ws_auth::{ClientHello, ServerChallenge};
     use tokio::net::TcpListener;
     use tokio_tungstenite::accept_hdr_async;
+
+    #[test]
+    fn share_tick_drains_queued_acks_even_while_commands_are_active() {
+        let controller = Arc::new(Mutex::new(ComputerController::new()));
+        let mut pending_share_acks = VecDeque::from([3_u64, 4]);
+        assert!(collect_share_emissions(&controller, &mut pending_share_acks, true).is_empty());
+        assert!(
+            pending_share_acks.is_empty(),
+            "acks must apply even while a command is queued or active"
+        );
+        assert!(collect_share_emissions(&controller, &mut pending_share_acks, false).is_empty());
+    }
+
+    #[test]
+    fn queued_share_acks_stay_bounded_and_keep_the_newest_entries() {
+        let mut pending_share_acks = VecDeque::new();
+        for sequence in 0..(MAX_PENDING_SHARE_ACKS as u64 + 4) {
+            queue_share_ack(&mut pending_share_acks, sequence);
+        }
+        assert_eq!(pending_share_acks.len(), MAX_PENDING_SHARE_ACKS);
+        assert_eq!(pending_share_acks.front(), Some(&4));
+        assert_eq!(
+            pending_share_acks.back(),
+            Some(&(MAX_PENDING_SHARE_ACKS as u64 + 3))
+        );
+    }
 
     #[test]
     fn parses_helper_flags_and_ports() {

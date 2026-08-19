@@ -1,3 +1,4 @@
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
@@ -9,8 +10,9 @@ use local_browser_bridge::ws_auth::{
 use local_browser_bridge::{BridgeServer, PROTOCOL_VERSION, ServerConfig, VERSION, create_token};
 use reqwest::Client;
 use serde_json::{Value, json};
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpStream;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
@@ -83,7 +85,14 @@ async fn start_server(token: &str) -> (String, oneshot::Sender<()>, JoinHandle<(
     )
 }
 
-async fn connect_fake_extension(base_url: &str, token: &str) -> JoinHandle<()> {
+async fn connect_fake_extension(
+    base_url: &str,
+    token: &str,
+) -> (
+    JoinHandle<()>,
+    Arc<Mutex<Vec<String>>>,
+    mpsc::UnboundedSender<(String, Value)>,
+) {
     let mut request = format!("{}/bridge", base_url.replace("http", "ws"))
         .into_client_request()
         .unwrap();
@@ -102,70 +111,207 @@ async fn connect_fake_extension(base_url: &str, token: &str) -> JoinHandle<()> {
                 "type": "hello", "version": VERSION, "protocolVersion": PROTOCOL_VERSION,
                 "sessionId": session_id, "controllerId": "fixture-controller", "connectionId": "fixture-connection",
                 "browser": "Test Chrome", "mode": "full-access",
-                "capabilities": ["status", "browser.control.start", "browser.control.status", "browser.control.stop", "tabs.list", "tabs.activate", "page.observe", "page.evaluate", "page.clickAt", "page.typeText"]
+                "capabilities": ["status", "browser.control.start", "browser.control.status", "browser.control.stop", "tabs.list", "tabs.activate", "page.observe", "page.evaluate", "page.click", "page.clickAt", "page.typeText", "page.waitFor", "page.hover", "page.batch", "page.handleDialog"]
             })
             .to_string()
             .into(),
         ))
         .await
         .unwrap();
-    tokio::spawn(async move {
+    let relayed_methods = Arc::new(Mutex::new(Vec::new()));
+    let relayed_methods_log = relayed_methods.clone();
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<(String, Value)>();
+    let event_session_id = session_id.clone();
+    let handle = tokio::spawn(async move {
         let (mut writer, mut reader) = socket.split();
-        while let Some(Ok(Message::Text(text))) = reader.next().await {
+        let mut event_sequence = 0_u64;
+        let mut events_open = true;
+        loop {
+            let message = tokio::select! {
+                event = event_rx.recv(), if events_open => {
+                    let Some((name, data)) = event else {
+                        events_open = false;
+                        continue;
+                    };
+                    event_sequence += 1;
+                    let envelope = json!({
+                        "type": "event",
+                        "name": name,
+                        "data": data,
+                        "protocolVersion": PROTOCOL_VERSION,
+                        "sessionId": event_session_id,
+                        "eventSequence": event_sequence,
+                    });
+                    writer
+                        .send(Message::Text(envelope.to_string().into()))
+                        .await
+                        .unwrap();
+                    continue;
+                }
+                message = reader.next() => message,
+            };
+            let Some(Ok(Message::Text(text))) = message else {
+                break;
+            };
             let message: Value = serde_json::from_str(text.as_str()).unwrap();
             let Some(id) = message.get("id").and_then(Value::as_str) else {
                 continue;
             };
-            let result = match message.get("method").and_then(Value::as_str).unwrap_or("") {
+            if message.get("type").and_then(Value::as_str) != Some("command") {
+                continue;
+            }
+            let method = message.get("method").and_then(Value::as_str).unwrap_or("");
+            relayed_methods_log.lock().unwrap().push(method.to_owned());
+            let mut response = match method {
                 "tabs.list" => json!({
-                    "activeTabId": 7,
-                    "tabs": [{ "id": 7, "title": "Test tab", "url": "https://example.test/", "active": true }]
+                    "id": id, "type": "result", "ok": true,
+                    "result": {
+                        "activeTabId": 7,
+                        "tabs": [{ "id": 7, "title": "Test tab", "url": "https://example.test/", "active": true }]
+                    }
                 }),
-                "tabs.activate" => json!({ "tabId": 7, "active": true }),
+                "tabs.activate" => json!({
+                    "id": id, "type": "result", "ok": true,
+                    "result": { "tabId": 7, "active": true }
+                }),
                 "page.observe" => json!({
-                    "screenshot": PIXEL,
-                    "control": {
-                        "active": true,
-                        "sessionId": "control-fixture",
-                        "tabId": 7,
-                        "startedAt": 1,
-                        "expiresAt": 9999999999999_u64,
-                        "lastHeartbeatAt": 2,
-                        "turn": 3,
-                        "moveSequence": 5,
-                        "cursor": { "x": 10, "y": 20, "visible": true, "updatedAt": 2 }
-                    },
-                    "snapshot": {
-                        "generation": "g1", "title": "Test tab", "url": "https://example.test/",
-                        "bodyText": "Hello from the target page", "viewport": { "width": 800, "height": 600 },
-                        "scroll": { "x": 0, "y": 0, "maxY": 0 },
-                        "elements": [{ "ref": "e1", "role": "button", "name": "Continue", "type": "submit", "disabled": false, "inViewport": true }]
+                    "id": id, "type": "result", "ok": true,
+                    "result": {
+                        "screenshot": PIXEL,
+                        "control": {
+                            "active": true,
+                            "sessionId": "control-fixture",
+                            "tabId": 7,
+                            "startedAt": 1,
+                            "expiresAt": 9999999999999_u64,
+                            "lastHeartbeatAt": 2,
+                            "turn": 3,
+                            "moveSequence": 5,
+                            "cursor": { "x": 10, "y": 20, "visible": true, "updatedAt": 2 }
+                        },
+                        "snapshot": {
+                            "generation": "g1", "title": "Test tab", "url": "https://example.test/",
+                            "bodyText": "Hello from the target page", "viewport": { "width": 800, "height": 600 },
+                            "scroll": { "x": 0, "y": 0, "maxY": 0 },
+                            "elements": [{ "ref": "e1", "role": "button", "name": "Continue", "type": "submit", "disabled": false, "inViewport": true }]
+                        }
                     }
                 }),
                 "page.evaluate" => json!({
-                    "type": "string",
-                    "value": "Eval works",
-                    "receivedControlSessionId": message["params"]["controlSessionId"],
-                    "receivedTurn": message["params"]["turn"],
-                    "receivedMoveSequence": message["params"]["moveSequence"]
+                    "id": id, "type": "result", "ok": true,
+                    "result": {
+                        "type": "string",
+                        "value": "Eval works",
+                        "receivedControlSessionId": message["params"]["controlSessionId"],
+                        "receivedTurn": message["params"]["turn"],
+                        "receivedMoveSequence": message["params"]["moveSequence"]
+                    }
                 }),
-                _ => json!({ "ok": true }),
-            };
-            writer
-                .send(Message::Text(
+                "page.click"
+                    if message["params"]["modifiers"]
+                        .as_array()
+                        .is_some_and(|modifiers| !modifiers.is_empty()) =>
+                {
                     json!({
-                        "id": id, "type": "result", "ok": true, "result": result,
-                        "protocolVersion": message["protocolVersion"],
-                        "sessionId": message["sessionId"],
-                        "sequence": message["sequence"]
+                        "id": id, "type": "result", "ok": true,
+                        "result": {
+                            "clicked": true,
+                            "receivedRef": message["params"]["ref"],
+                            "receivedButton": message["params"]["button"],
+                            "receivedClickCount": message["params"]["clickCount"],
+                            "receivedModifiers": message["params"]["modifiers"]
+                        }
                     })
-                    .to_string()
-                    .into(),
-                ))
+                }
+                "page.click" => json!({
+                    "id": id, "type": "result", "ok": false,
+                    "error": { "code": "STALE_SNAPSHOT", "message": "observe the page again before acting" }
+                }),
+                "page.hover" => json!({
+                    "id": id, "type": "result", "ok": true,
+                    "result": {
+                        "hovered": true,
+                        "receivedRef": message["params"]["ref"],
+                        "receivedGeneration": message["params"]["generation"],
+                        "receivedControlSessionId": message["params"]["controlSessionId"]
+                    }
+                }),
+                "page.waitFor" => json!({
+                    "id": id, "type": "result", "ok": true,
+                    "result": {
+                        "satisfied": true,
+                        "elapsedMs": 40,
+                        "receivedTimeoutMs": message["params"]["timeoutMs"],
+                        "receivedText": message["params"]["text"],
+                        "receivedControlSessionId": message["params"]["controlSessionId"]
+                    }
+                }),
+                "page.clickAt" => json!({
+                    "id": id, "type": "result", "ok": true,
+                    "result": {
+                        "clicked": true,
+                        "receivedX": message["params"]["x"],
+                        "receivedY": message["params"]["y"],
+                        "receivedButton": message["params"]["button"]
+                    }
+                }),
+                "page.batch" => json!({
+                    "id": id, "type": "result", "ok": true,
+                    "result": {
+                        "completed": 2,
+                        "total": message["params"]["actions"].as_array().map(Vec::len).unwrap_or(0),
+                        "failedIndex": 2,
+                        "failedError": "STALE_SNAPSHOT: observe the page again before acting",
+                        "perStep": [
+                            { "method": "page.fill", "ok": true },
+                            { "method": "page.key", "ok": true },
+                            { "method": "page.click", "ok": false, "error": "STALE_SNAPSHOT: observe the page again before acting" }
+                        ],
+                        "receivedGeneration": message["params"]["generation"],
+                        "receivedActions": message["params"]["actions"],
+                        "receivedControlSessionId": message["params"]["controlSessionId"],
+                        "receivedTurn": message["params"]["turn"],
+                        "receivedMoveSequence": message["params"]["moveSequence"]
+                    }
+                }),
+                "page.handleDialog" => json!({
+                    "id": id, "type": "result", "ok": true,
+                    "result": {
+                        "handled": true,
+                        "receivedAccept": message["params"]["accept"],
+                        "receivedPromptText": message["params"]["promptText"],
+                        "receivedControlSessionId": message["params"]["controlSessionId"]
+                    }
+                }),
+                "page.typeText" => {
+                    // Stays in flight long enough for a concurrent duplicate
+                    // callId to be observed as CALL_IN_PROGRESS.
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    json!({
+                        "id": id, "type": "result", "ok": true,
+                        "result": { "typed": true }
+                    })
+                }
+                _ => json!({
+                    "id": id, "type": "result", "ok": true,
+                    "result": { "ok": true }
+                }),
+            };
+            if let Some(object) = response.as_object_mut() {
+                object.insert(
+                    "protocolVersion".to_owned(),
+                    message["protocolVersion"].clone(),
+                );
+                object.insert("sessionId".to_owned(), message["sessionId"].clone());
+                object.insert("sequence".to_owned(), message["sequence"].clone());
+            }
+            writer
+                .send(Message::Text(response.to_string().into()))
                 .await
                 .unwrap();
         }
-    })
+    });
+    (handle, relayed_methods, event_tx)
 }
 
 async fn connect_incompatible_extension(base_url: &str, token: &str) -> JoinHandle<()> {
@@ -204,7 +350,24 @@ async fn connect_incompatible_extension(base_url: &str, token: &str) -> JoinHand
     })
 }
 
+struct FakeComputer {
+    handle: JoinHandle<()>,
+    events: mpsc::UnboundedSender<(String, Value)>,
+    server_messages: Arc<Mutex<Vec<Value>>>,
+}
+
 async fn connect_fake_computer(base_url: &str, token: &str, version: &str) -> JoinHandle<()> {
+    connect_fake_computer_with_share_ack(base_url, token, version, false)
+        .await
+        .handle
+}
+
+async fn connect_fake_computer_with_share_ack(
+    base_url: &str,
+    token: &str,
+    version: &str,
+    advertise_share_ack: bool,
+) -> FakeComputer {
     let mut request = format!("{}/computer", base_url.replace("http", "ws"))
         .into_client_request()
         .unwrap();
@@ -215,6 +378,25 @@ async fn connect_fake_computer(base_url: &str, token: &str, version: &str) -> Jo
     let welcome = authenticate_test_connector(&mut socket, token, COMPUTER_CONNECTOR).await;
     let version = version.to_owned();
     let session_id = welcome["sessionId"].as_str().unwrap().to_owned();
+    let mut capabilities = vec![
+        "computer.status",
+        "computer.observe",
+        "computer.move",
+        "computer.click",
+        "computer.invoke",
+        "computer.setValue",
+        "computer.drag",
+        "computer.scroll",
+        "computer.typeText",
+        "computer.key",
+        "computer.share.start",
+        "computer.share.status",
+        "computer.share.stop",
+        "computer.shell",
+    ];
+    if advertise_share_ack {
+        capabilities.push("computer.share.ack");
+    }
     socket
         .send(Message::Text(
             json!({
@@ -227,24 +409,58 @@ async fn connect_fake_computer(base_url: &str, token: &str, version: &str) -> Jo
                 "backend": "test-capture+test-input",
                 "inputReady": true,
                 "semanticReady": true,
-                "capabilities": [
-                    "computer.status", "computer.observe", "computer.move", "computer.click", "computer.invoke", "computer.setValue",
-                    "computer.drag", "computer.scroll", "computer.typeText", "computer.key",
-                    "computer.share.start", "computer.share.status", "computer.share.stop",
-                    "computer.shell"
-                ]
+                "capabilities": capabilities
             })
             .to_string()
             .into(),
         ))
         .await
         .unwrap();
-    tokio::spawn(async move {
+    let server_messages = Arc::new(Mutex::new(Vec::new()));
+    let server_messages_log = server_messages.clone();
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<(String, Value)>();
+    let event_session_id = session_id.clone();
+    let handle = tokio::spawn(async move {
         let (mut writer, mut reader) = socket.split();
         let mut frame_number = 0_u64;
         let mut current_frame = String::new();
-        while let Some(Ok(Message::Text(text))) = reader.next().await {
+        let mut event_sequence = 0_u64;
+        let mut events_open = true;
+        loop {
+            let message = tokio::select! {
+                event = event_rx.recv(), if events_open => {
+                    let Some((name, data)) = event else {
+                        events_open = false;
+                        continue;
+                    };
+                    event_sequence += 1;
+                    let envelope = json!({
+                        "type": "event",
+                        "name": name,
+                        "data": data,
+                        "protocolVersion": PROTOCOL_VERSION,
+                        "sessionId": event_session_id,
+                        "eventSequence": event_sequence,
+                    });
+                    writer
+                        .send(Message::Text(envelope.to_string().into()))
+                        .await
+                        .unwrap();
+                    continue;
+                }
+                message = reader.next() => message,
+            };
+            let Some(Ok(Message::Text(text))) = message else {
+                break;
+            };
             let message: Value = serde_json::from_str(text.as_str()).unwrap();
+            if matches!(
+                message.get("type").and_then(Value::as_str),
+                Some("helloAck") | Some("eventAck")
+            ) {
+                server_messages_log.lock().unwrap().push(message.clone());
+                continue;
+            }
             let Some(id) = message.get("id").and_then(Value::as_str) else {
                 continue;
             };
@@ -268,12 +484,12 @@ async fn connect_fake_computer(base_url: &str, token: &str, version: &str) -> Jo
                                 "displayId": "display-1",
                                 "displayIndex": 0,
                                 "displayName": "Test display",
-                                "imageWidth": 1,
-                                "imageHeight": 1,
+                                "imageWidth": 640,
+                                "imageHeight": 400,
                                 "screenX": 0,
                                 "screenY": 0,
-                                "screenWidth": 1,
-                                "screenHeight": 1,
+                                "screenWidth": 640,
+                                "screenHeight": 400,
                                 "scaleFactor": 1.0,
                                 "rotation": 0.0,
                                 "pointer": {
@@ -325,7 +541,101 @@ async fn connect_fake_computer(base_url: &str, token: &str, version: &str) -> Jo
                 .await
                 .unwrap();
         }
+    });
+    FakeComputer {
+        handle,
+        events: event_tx,
+        server_messages,
+    }
+}
+
+fn computer_share_frame_data(frame_id: &str, share: Value) -> Value {
+    let pointer = json!({
+        "id": "fixture-cursor",
+        "visible": false,
+        "windowId": null,
+        "imageX": null,
+        "imageY": null,
+        "screenX": null,
+        "screenY": null,
+        "headingDegrees": 45.0,
+        "action": "idle",
+        "pressed": false,
+        "sequence": 0,
+        "updatedAt": "2026-08-19T00:00:00Z",
+        "coordinateSpace": "image-pixels",
+        "style": { "theme": "fixture", "fill": "#26C6FF", "outline": "#FFFFFF", "logicalSize": 42, "hotspot": "tip" }
+    });
+    json!({
+        "screenshot": PIXEL,
+        "frame": {
+            "id": frame_id,
+            "capturedAt": "2026-08-19T00:00:00Z",
+            "windowId": "window-9",
+            "pid": 4242,
+            "appName": "Fixture",
+            "windowTitle": "Shared target",
+            "sessionMode": "background-window",
+            "deliveryMode": "exact-window-background",
+            "displayId": "window-9",
+            "displayIndex": 0,
+            "displayName": "Fixture — Shared target",
+            "imageWidth": 640,
+            "imageHeight": 400,
+            "screenX": 0,
+            "screenY": 0,
+            "screenWidth": 640,
+            "screenHeight": 400,
+            "scaleFactor": 1.0,
+            "rotation": 0.0,
+            "pointer": pointer,
+            "share": share
+        }
     })
+}
+
+async fn wait_for_server_message(
+    messages: &Arc<Mutex<Vec<Value>>>,
+    predicate: impl Fn(&Value) -> bool,
+    what: &str,
+) -> Value {
+    for _ in 0..100 {
+        if let Some(found) = messages
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|message| predicate(message))
+            .cloned()
+        {
+            return found;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("{what} did not arrive");
+}
+
+async fn wait_for_computer_frame(
+    client: &Client,
+    base_url: &str,
+    token: &str,
+    frame_id: &str,
+) -> Value {
+    for _ in 0..100 {
+        let state: Value = client
+            .get(format!("{base_url}/api/state"))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if state["state"]["computerObservation"]["frameId"] == frame_id {
+            return state;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("share frame {frame_id} was not stored");
 }
 
 async fn wait_for_tabs(client: &Client, base_url: &str, token: &str) -> Value {
@@ -472,7 +782,7 @@ async fn refuses_to_bind_with_empty_malformed_or_weak_tokens() {
 async fn relays_commands_and_serves_observations() {
     let token = create_token();
     let (base_url, shutdown, handle) = start_server(&token).await;
-    let fake = connect_fake_extension(&base_url, &token).await;
+    let (fake, _relayed_methods, _events) = connect_fake_extension(&base_url, &token).await;
     let client = Client::new();
     let state = wait_for_tabs(&client, &base_url, &token).await;
     assert_eq!(state["state"]["extension"]["mode"], "full-access");
@@ -745,10 +1055,191 @@ async fn blocks_mismatched_computer_helper_versions() {
 }
 
 #[tokio::test]
+async fn paces_negotiated_share_frames_with_event_acks_and_drop_metrics() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let fake = connect_fake_computer_with_share_ack(&base_url, &token, VERSION, true).await;
+    let client = Client::new();
+    let state = wait_for_computer(&client, &base_url, &token).await;
+    assert!(
+        state["state"]["computer"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("computer.share.ack")),
+        "the negotiated capability must survive the server-side allowlist"
+    );
+    let session_id = state["state"]["computer"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let hello_ack = wait_for_server_message(
+        &fake.server_messages,
+        |message| message["type"] == "helloAck",
+        "helloAck",
+    )
+    .await;
+    assert_eq!(hello_ack["ok"], true);
+    assert_eq!(hello_ack["shareAck"], true);
+
+    fake.events
+        .send((
+            "computer.share.frame".to_owned(),
+            computer_share_frame_data(
+                "frame-share-5",
+                json!({
+                    "active": true,
+                    "id": "share-fixture",
+                    "windowId": "window-9",
+                    "fps": 4,
+                    "sequence": 5,
+                    "startedAt": "2026-08-19T00:00:00Z",
+                    "captureScope": "exact-window",
+                    "cursorComposited": true,
+                    "droppedFrames": 3,
+                    "ackPaced": true,
+                    "lastAckedSequence": 4,
+                    "backpressure": "latest-frame-wins"
+                }),
+            ),
+        ))
+        .unwrap();
+    let state = wait_for_computer_frame(&client, &base_url, &token, "frame-share-5").await;
+    let share = &state["state"]["computer"]["share"];
+    assert_eq!(share["active"], true);
+    assert_eq!(share["sequence"], 5);
+    assert_eq!(share["ackPaced"], true);
+    assert_eq!(share["droppedFrames"], 3);
+    assert_eq!(share["lastAckedSequence"], 4);
+    assert_eq!(share["backpressure"], "latest-frame-wins");
+    let observation_share = &state["state"]["computerObservation"]["share"];
+    assert_eq!(observation_share["ackPaced"], true);
+    assert_eq!(observation_share["droppedFrames"], 3);
+    assert_eq!(observation_share["lastAckedSequence"], 4);
+
+    let ack = wait_for_server_message(
+        &fake.server_messages,
+        |message| message["type"] == "eventAck" && message["sequence"] == 5,
+        "eventAck for share sequence 5",
+    )
+    .await;
+    assert_eq!(ack["name"], "computer.share.frame");
+    assert_eq!(ack["protocolVersion"], PROTOCOL_VERSION);
+    assert_eq!(ack["sessionId"].as_str(), Some(session_id.as_str()));
+
+    fake.events
+        .send((
+            "computer.share.frame".to_owned(),
+            computer_share_frame_data(
+                "frame-share-6",
+                json!({
+                    "active": true,
+                    "id": "share-fixture",
+                    "windowId": "window-9",
+                    "fps": 4,
+                    "sequence": 6,
+                    "startedAt": "2026-08-19T00:00:00Z",
+                    "captureScope": "exact-window",
+                    "cursorComposited": true,
+                    "droppedFrames": 3,
+                    "ackPaced": true,
+                    "lastAckedSequence": 5,
+                    "backpressure": "latest-frame-wins"
+                }),
+            ),
+        ))
+        .unwrap();
+    wait_for_computer_frame(&client, &base_url, &token, "frame-share-6").await;
+    wait_for_server_message(
+        &fake.server_messages,
+        |message| message["type"] == "eventAck" && message["sequence"] == 6,
+        "eventAck for share sequence 6",
+    )
+    .await;
+
+    fake.handle.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn keeps_legacy_timer_shares_without_event_acks() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let fake = connect_fake_computer_with_share_ack(&base_url, &token, VERSION, false).await;
+    let client = Client::new();
+    let state = wait_for_computer(&client, &base_url, &token).await;
+    assert!(
+        !state["state"]["computer"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("computer.share.ack"))
+    );
+
+    let hello_ack = wait_for_server_message(
+        &fake.server_messages,
+        |message| message["type"] == "helloAck",
+        "helloAck",
+    )
+    .await;
+    assert_eq!(hello_ack["ok"], true);
+    assert_eq!(
+        hello_ack["shareAck"], false,
+        "a helper without the capability must not be promised acks"
+    );
+
+    fake.events
+        .send((
+            "computer.share.frame".to_owned(),
+            computer_share_frame_data(
+                "frame-legacy-1",
+                json!({
+                    "active": true,
+                    "id": "share-legacy",
+                    "windowId": "window-9",
+                    "fps": 4,
+                    "sequence": 1,
+                    "startedAt": "2026-08-19T00:00:00Z",
+                    "captureScope": "exact-window",
+                    "cursorComposited": true
+                }),
+            ),
+        ))
+        .unwrap();
+    let state = wait_for_computer_frame(&client, &base_url, &token, "frame-legacy-1").await;
+    let share = &state["state"]["computer"]["share"];
+    assert_eq!(share["active"], true);
+    assert_eq!(share["ackPaced"], false);
+    assert_eq!(share["droppedFrames"], 0);
+    assert_eq!(share["lastAckedSequence"], 0);
+    assert_eq!(share["backpressure"], "producer-blocking");
+    assert_eq!(
+        state["state"]["computerObservation"]["share"]["ackPaced"],
+        false
+    );
+
+    // The stored frame proves the event was fully processed; give a stray ack
+    // time to arrive before asserting that none was ever sent.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        fake.server_messages
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|message| message["type"] != "eventAck"),
+        "legacy helpers must keep the exact timer behavior with no acks"
+    );
+
+    fake.handle.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
 async fn provisional_sockets_are_bounded_and_cannot_evict_a_ready_extension() {
     let token = create_token();
     let (base_url, shutdown, handle) = start_server(&token).await;
-    let fake = connect_fake_extension(&base_url, &token).await;
+    let (fake, _relayed_methods, _events) = connect_fake_extension(&base_url, &token).await;
     let client = Client::new();
     assert_eq!(
         wait_for_tabs(&client, &base_url, &token).await["state"]["tabs"][0]["id"],
@@ -942,6 +1433,1048 @@ async fn rejects_cross_origin_and_non_extension_clients() {
     let (mut computer_socket, _) = connect_async(missing_computer_token).await.unwrap();
     computer_socket.close(None).await.unwrap();
 
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+async fn raw_response(port: u16, request: &str) -> String {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut buffer = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    loop {
+        let read = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut chunk))
+            .await
+            .expect("raw response deadline")
+            .unwrap();
+        if read == 0 {
+            break;
+        }
+        buffer.extend_from_slice(&chunk[..read]);
+        if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+    }
+    String::from_utf8_lossy(&buffer).into_owned()
+}
+
+#[tokio::test]
+async fn rejects_non_loopback_host_headers_before_routing_and_auth() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let port: u16 = base_url.rsplit(':').next().unwrap().parse().unwrap();
+
+    let health_rejected = raw_response(
+        port,
+        "GET /health HTTP/1.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(
+        health_rejected.starts_with("HTTP/1.1 403"),
+        "unexpected response: {health_rejected}"
+    );
+    assert!(health_rejected.contains("HOST_REJECTED"));
+
+    let body = r#"{"method":"tabs.list","params":{}}"#;
+    let command_rejected = raw_response(
+        port,
+        &format!(
+            "POST /api/v1/command HTTP/1.1\r\nHost: evil.example\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        ),
+    )
+    .await;
+    assert!(
+        command_rejected.starts_with("HTTP/1.1 403"),
+        "unexpected response: {command_rejected}"
+    );
+    assert!(command_rejected.contains("HOST_REJECTED"));
+
+    for good_host in [format!("127.0.0.1:{port}"), format!("localhost:{port}")] {
+        let accepted = raw_response(
+            port,
+            &format!("GET /health HTTP/1.1\r\nHost: {good_host}\r\nConnection: close\r\n\r\n"),
+        )
+        .await;
+        assert!(
+            accepted.starts_with("HTTP/1.1 200"),
+            "Host {good_host} was rejected: {accepted}"
+        );
+    }
+
+    // A WebSocket upgrade with a rebound Host never reaches authentication:
+    // the server answers 403 instead of 101 and sends no auth challenge.
+    let upgrade_rejected = raw_response(
+        port,
+        "GET /bridge HTTP/1.1\r\nHost: evil.example\r\nOrigin: chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: AAAAAAAAAAAAAAAAAAAAAA==\r\n\r\n",
+    )
+    .await;
+    assert!(
+        upgrade_rejected.starts_with("HTTP/1.1 403"),
+        "unexpected response: {upgrade_rejected}"
+    );
+
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn attaches_recovery_taxonomy_to_failed_commands() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let (fake, _relayed_methods, _events) = connect_fake_extension(&base_url, &token).await;
+    let client = Client::new();
+    wait_for_tabs(&client, &base_url, &token).await;
+
+    let response = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "page.click", "params": { "ref": "e1", "generation": "g1" } }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 409);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["ok"], false);
+    assert_eq!(body["error"]["code"], "STALE_SNAPSHOT");
+    assert_eq!(body["taxonomy"]["code"], "stale_snapshot");
+    assert_eq!(body["taxonomy"]["retriable"], true);
+    assert_eq!(body["taxonomy"]["recoveryHint"], "reobserve");
+    assert!(!body["taxonomy"]["prose"].as_str().unwrap().is_empty());
+
+    fake.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn replays_completed_commands_with_the_same_call_id_without_redispatching() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let (fake, relayed_methods, _events) = connect_fake_extension(&base_url, &token).await;
+    let client = Client::new();
+    wait_for_tabs(&client, &base_url, &token).await;
+
+    let request = json!({
+        "method": "page.evaluate",
+        "params": { "tabId": 7, "expression": "document.title" },
+        "callId": "call-replay-1"
+    });
+    let first: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&request)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(first["ok"], true);
+    assert_eq!(first["callId"], "call-replay-1");
+    assert!(first.get("replayed").is_none());
+
+    let second: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&request)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(second["ok"], true);
+    assert_eq!(second["callId"], "call-replay-1");
+    assert_eq!(second["replayed"], true);
+    assert_eq!(
+        serde_json::to_string(&second["result"]).unwrap(),
+        serde_json::to_string(&first["result"]).unwrap()
+    );
+
+    let evaluate_relays = relayed_methods
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|method| method.as_str() == "page.evaluate")
+        .count();
+    assert_eq!(evaluate_relays, 1, "the duplicate must not re-dispatch");
+
+    fake.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn refuses_a_concurrent_duplicate_call_id_with_a_conflict() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let (fake, relayed_methods, _events) = connect_fake_extension(&base_url, &token).await;
+    let client = Client::new();
+    wait_for_tabs(&client, &base_url, &token).await;
+
+    let request = json!({
+        "method": "page.typeText",
+        "params": { "tabId": 7, "generation": "g1", "text": "hello" },
+        "callId": "call-concurrent-1"
+    });
+    let first = {
+        let client = client.clone();
+        let base_url = base_url.clone();
+        let token = token.clone();
+        let request = request.clone();
+        tokio::spawn(async move {
+            client
+                .post(format!("{base_url}/api/v1/command"))
+                .bearer_auth(&token)
+                .json(&request)
+                .send()
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap()
+        })
+    };
+    // Wait until the first command has actually been relayed, so it is
+    // provably still in flight when the duplicate arrives.
+    for _ in 0..200 {
+        if relayed_methods
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|method| method == "page.typeText")
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    let duplicate = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&request)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), 409);
+    let duplicate: Value = duplicate.json().await.unwrap();
+    assert_eq!(duplicate["error"]["code"], "CALL_IN_PROGRESS");
+    assert_eq!(duplicate["callId"], "call-concurrent-1");
+
+    let first = first.await.unwrap();
+    assert_eq!(first["ok"], true);
+    assert_eq!(first["result"]["typed"], true);
+    assert_eq!(first["callId"], "call-concurrent-1");
+
+    let type_relays = relayed_methods
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|method| method.as_str() == "page.typeText")
+        .count();
+    assert_eq!(type_relays, 1, "the concurrent duplicate must not dispatch");
+
+    fake.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn caches_an_outcome_unknown_failure_when_the_client_disconnects_mid_command() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let (fake, relayed_methods, _events) = connect_fake_extension(&base_url, &token).await;
+    let client = Client::new();
+    wait_for_tabs(&client, &base_url, &token).await;
+
+    // The fixture's page.typeText arm stays in flight for 250ms; a 50ms
+    // client timeout drops the connection mid-command, after the envelope
+    // was already dispatched to the extension.
+    let request = json!({
+        "method": "page.typeText",
+        "params": { "tabId": 7, "generation": "g1", "text": "hello" },
+        "callId": "call-dropped-1"
+    });
+    let interrupted = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .timeout(Duration::from_millis(50))
+        .json(&request)
+        .send()
+        .await;
+    assert!(
+        interrupted.is_err(),
+        "the client must disconnect before the command completes"
+    );
+
+    // A retry with the same callId must never re-dispatch: it returns the
+    // cached synthetic outcome-unknown failure once the dropped handler has
+    // recorded it (retries racing that record see CALL_IN_PROGRESS).
+    let mut replayed = None;
+    for _ in 0..200 {
+        let retry: Value = client
+            .post(format!("{base_url}/api/v1/command"))
+            .bearer_auth(&token)
+            .json(&request)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if retry["error"]["code"] == "CALL_IN_PROGRESS" {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            continue;
+        }
+        replayed = Some(retry);
+        break;
+    }
+    let replayed = replayed.expect("the interrupted callId must settle");
+    assert_eq!(replayed["ok"], false);
+    assert_eq!(replayed["error"]["code"], "COMMAND_OUTCOME_UNKNOWN");
+    assert_eq!(replayed["taxonomy"]["code"], "outcome_unknown");
+    assert_eq!(replayed["taxonomy"]["retriable"], false);
+    assert_eq!(replayed["taxonomy"]["recoveryHint"], "reobserve");
+    assert_eq!(replayed["callId"], "call-dropped-1");
+    assert_eq!(replayed["replayed"], true);
+
+    let type_relays = relayed_methods
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|method| method.as_str() == "page.typeText")
+        .count();
+    assert_eq!(
+        type_relays, 1,
+        "the interrupted command must reach the extension exactly once"
+    );
+
+    fake.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn refuses_a_call_id_reused_for_a_different_command() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let (fake, relayed_methods, _events) = connect_fake_extension(&base_url, &token).await;
+    let client = Client::new();
+    wait_for_tabs(&client, &base_url, &token).await;
+
+    let first: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.evaluate",
+            "params": { "tabId": 7, "expression": "document.title" },
+            "callId": "call-reused-1"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(first["ok"], true);
+
+    // The same callId with a different method is reuse, not a replay: the
+    // cached page.evaluate response must never be returned for page.hover,
+    // and nothing is dispatched.
+    let relayed_before = relayed_methods.lock().unwrap().len();
+    let reused = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.hover",
+            "params": { "tabId": 7, "ref": "g1.e1", "generation": "g1" },
+            "callId": "call-reused-1"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reused.status(), 409);
+    let reused: Value = reused.json().await.unwrap();
+    assert_eq!(reused["error"]["code"], "CALL_ID_REUSED");
+    assert_eq!(reused["taxonomy"]["code"], "invalid_request");
+    assert_eq!(reused["taxonomy"]["retriable"], false);
+    assert_eq!(reused["callId"], "call-reused-1");
+    assert!(reused.get("replayed").is_none());
+    assert_eq!(relayed_methods.lock().unwrap().len(), relayed_before);
+
+    // Different params under the same callId are refused the same way.
+    let changed_params = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.evaluate",
+            "params": { "tabId": 7, "expression": "document.body.innerText" },
+            "callId": "call-reused-1"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(changed_params.status(), 409);
+    let changed_params: Value = changed_params.json().await.unwrap();
+    assert_eq!(changed_params["error"]["code"], "CALL_ID_REUSED");
+    assert_eq!(relayed_methods.lock().unwrap().len(), relayed_before);
+
+    // The exact original command still replays from the cache.
+    let replayed: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.evaluate",
+            "params": { "tabId": 7, "expression": "document.title" },
+            "callId": "call-reused-1"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(replayed["ok"], true);
+    assert_eq!(replayed["replayed"], true);
+    assert_eq!(relayed_methods.lock().unwrap().len(), relayed_before);
+
+    fake.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn converts_normalized1000_computer_clicks_and_exposes_stable_content_hashes() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let fake = connect_fake_computer(&base_url, &token, VERSION).await;
+    let client = Client::new();
+    wait_for_computer(&client, &base_url, &token).await;
+
+    // Without any observed frame, normalized coordinates cannot be grounded.
+    let ungrounded = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "computer.click",
+            "params": { "frameId": "frame-0", "x": 500, "y": 250, "coordinateSpace": "normalized1000" }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ungrounded.status(), 409);
+    let ungrounded: Value = ungrounded.json().await.unwrap();
+    assert_eq!(ungrounded["error"]["code"], "NO_COMPUTER_FRAME");
+    assert_eq!(ungrounded["taxonomy"]["code"], "stale_snapshot");
+    assert_eq!(ungrounded["taxonomy"]["recoveryHint"], "reobserve");
+
+    let observed: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "computer.observe", "params": {} }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(observed["result"]["imageWidth"], 640);
+    assert_eq!(observed["result"]["imageHeight"], 400);
+    let first_hash = observed["state"]["computerObservation"]["contentHash"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(first_hash.len(), 64);
+    assert_eq!(
+        observed["state"]["computerObservation"]["screenshotWidth"],
+        1
+    );
+    assert_eq!(
+        observed["state"]["computerObservation"]["screenshotHeight"],
+        1
+    );
+
+    // The helper receives image pixels: 500/1000 * 640 and 250/1000 * 400.
+    let clicked: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "computer.click",
+            "params": { "frameId": "frame-1", "x": 500, "y": 250, "coordinateSpace": "normalized1000" }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(clicked["result"]["x"].as_f64().unwrap(), 320.0);
+    assert_eq!(clicked["result"]["y"].as_f64().unwrap(), 100.0);
+
+    // Identical fixture screenshots hash identically across observations.
+    let second_hash = clicked["state"]["computerObservation"]["contentHash"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(second_hash, first_hash);
+
+    fake.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn converts_normalized1000_page_clicks_against_the_observed_viewport() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let (fake, _relayed_methods, _events) = connect_fake_extension(&base_url, &token).await;
+    let client = Client::new();
+    wait_for_tabs(&client, &base_url, &token).await;
+
+    // Before any observation the viewport is unknown, so normalized
+    // coordinates are refused with reobserve coaching.
+    let ungrounded = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.clickAt",
+            "params": { "tabId": 7, "generation": "g1", "x": 500, "y": 250, "coordinateSpace": "normalized1000" }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ungrounded.status(), 409);
+    let ungrounded: Value = ungrounded.json().await.unwrap();
+    assert_eq!(ungrounded["error"]["code"], "NO_BROWSER_OBSERVATION");
+    assert_eq!(ungrounded["taxonomy"]["code"], "stale_snapshot");
+
+    let observed: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "page.observe", "params": { "tabId": 7 } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let first_hash = observed["state"]["observation"]["contentHash"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(first_hash.len(), 64);
+    assert_eq!(observed["state"]["observation"]["screenshotWidth"], 1);
+    assert_eq!(observed["state"]["observation"]["screenshotHeight"], 1);
+
+    // The extension receives viewport pixels: 500/1000 * 800 and 250/1000 * 600.
+    let clicked: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.clickAt",
+            "params": { "tabId": 7, "generation": "g1", "x": 500, "y": 250, "coordinateSpace": "normalized1000" }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(clicked["result"]["receivedX"].as_f64().unwrap(), 400.0);
+    assert_eq!(clicked["result"]["receivedY"].as_f64().unwrap(), 150.0);
+
+    // Identical fixture screenshots hash identically across observations.
+    let second_hash = clicked["state"]["observation"]["contentHash"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(second_hash, first_hash);
+
+    fake.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn relays_wait_for_with_clamped_timeouts_and_no_control_bindings() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let (fake, relayed_methods, _events) = connect_fake_extension(&base_url, &token).await;
+    let client = Client::new();
+    wait_for_tabs(&client, &base_url, &token).await;
+
+    // Activating the tab observes it, which stores an active browser control
+    // session; a subsequent wait must still relay without control bindings.
+    let activated: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "tabs.activate", "params": { "tabId": 7 } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(activated["state"]["browserControl"]["active"], true);
+
+    let waited: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.waitFor",
+            "params": { "tabId": 7, "text": "Welcome", "timeoutMs": 99_999 }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(waited["ok"], true);
+    assert_eq!(waited["result"]["satisfied"], true);
+    assert_eq!(waited["result"]["receivedTimeoutMs"], 12_000);
+    assert_eq!(waited["result"]["receivedText"], "Welcome");
+    assert!(waited["result"]["receivedControlSessionId"].is_null());
+    assert!(
+        relayed_methods
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|method| method == "page.waitFor")
+    );
+
+    // At least one condition is required before anything is relayed.
+    let unconditional = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "page.waitFor", "params": { "tabId": 7 } }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unconditional.status(), 400);
+
+    fake.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn relays_hover_and_modifier_clicks_with_validated_refs() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let (fake, relayed_methods, _events) = connect_fake_extension(&base_url, &token).await;
+    let client = Client::new();
+    wait_for_tabs(&client, &base_url, &token).await;
+
+    let clicked: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.click",
+            "params": {
+                "tabId": 7,
+                "ref": "g1.e1",
+                "generation": "g1",
+                "button": "middle",
+                "clickCount": 2,
+                "modifiers": ["Shift", "Meta"]
+            }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(clicked["ok"], true);
+    assert_eq!(clicked["result"]["receivedRef"], "g1.e1");
+    assert_eq!(clicked["result"]["receivedButton"], "middle");
+    assert_eq!(clicked["result"]["receivedClickCount"], 2);
+    assert_eq!(
+        clicked["result"]["receivedModifiers"],
+        json!(["Shift", "Meta"])
+    );
+
+    let hovered: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.hover",
+            "params": { "tabId": 7, "ref": "g1.e2", "generation": "g1" }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(hovered["ok"], true);
+    assert_eq!(hovered["result"]["hovered"], true);
+    assert_eq!(hovered["result"]["receivedRef"], "g1.e2");
+    assert_eq!(hovered["result"]["receivedGeneration"], "g1");
+    assert!(
+        relayed_methods
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|method| method == "page.hover")
+    );
+
+    // Malformed refs are refused by the server before any relay.
+    let relayed_before = relayed_methods.lock().unwrap().len();
+    let malformed = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.hover",
+            "params": { "tabId": 7, "ref": "not a ref!", "generation": "g1" }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(malformed.status(), 400);
+    let malformed: Value = malformed.json().await.unwrap();
+    assert_eq!(malformed["error"]["code"], "BAD_REQUEST");
+    assert_eq!(malformed["taxonomy"]["code"], "invalid_request");
+    assert_eq!(relayed_methods.lock().unwrap().len(), relayed_before);
+
+    fake.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn relays_batches_with_per_step_sanitization_and_single_lease_bindings() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let (fake, relayed_methods, _events) = connect_fake_extension(&base_url, &token).await;
+    let client = Client::new();
+    wait_for_tabs(&client, &base_url, &token).await;
+
+    // Observing first stores an active browser control session, so the batch
+    // must receive the lease bindings exactly once at its top level.
+    let observed: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "page.observe", "params": { "tabId": 7 } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(observed["state"]["browserControl"]["active"], true);
+
+    let batched: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.batch",
+            "params": {
+                "tabId": 7,
+                "generation": "g1",
+                "actions": [
+                    { "method": "page.fill", "ref": "g1.e1", "text": "hello" },
+                    { "method": "page.key", "key": "ctrl+a" },
+                    { "method": "page.click", "ref": "e2" }
+                ]
+            }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(batched["ok"], true);
+    // The canned extension result reports a strict stop-at-first-failure run.
+    assert_eq!(batched["result"]["completed"], 2);
+    assert_eq!(batched["result"]["total"], 3);
+    assert_eq!(batched["result"]["failedIndex"], 2);
+    assert_eq!(batched["result"]["perStep"].as_array().unwrap().len(), 3);
+    assert_eq!(batched["result"]["receivedGeneration"], "g1");
+    // The lease binding is injected once at the top level only.
+    assert_eq!(
+        batched["result"]["receivedControlSessionId"],
+        "control-fixture"
+    );
+    assert_eq!(batched["result"]["receivedTurn"], 3);
+    assert_eq!(batched["result"]["receivedMoveSequence"], 5);
+    let actions = batched["result"]["receivedActions"].as_array().unwrap();
+    assert_eq!(actions.len(), 3);
+    for (index, action) in actions.iter().enumerate() {
+        assert_eq!(action["tabId"], 7, "actions[{index}] tab injection");
+        assert_eq!(action["generation"], "g1", "actions[{index}] generation");
+        for binding in ["controlSessionId", "turn", "moveSequence"] {
+            assert!(
+                action.get(binding).is_none(),
+                "actions[{index}] carries a per-step {binding}"
+            );
+        }
+    }
+    assert_eq!(actions[0]["method"], "page.fill");
+    assert_eq!(actions[0]["text"], "hello");
+    assert_eq!(actions[1]["key"], "Control+A");
+    assert_eq!(actions[2]["button"], "left");
+    assert_eq!(actions[2]["modifiers"], json!([]));
+
+    // Invalid batches are refused by the sanitizer before any relay.
+    let relayed_before = relayed_methods.lock().unwrap().len();
+    let eleven: Vec<Value> = (0..11)
+        .map(|_| json!({ "method": "page.key", "key": "Enter" }))
+        .collect();
+    for params in [
+        json!({ "tabId": 7, "generation": "g1", "actions": [{ "method": "page.batch", "actions": [] }] }),
+        json!({ "tabId": 7, "generation": "g1", "actions": [{ "method": "page.evaluate", "expression": "1" }] }),
+        json!({ "tabId": 7, "generation": "g1", "actions": [] }),
+        json!({ "tabId": 7, "generation": "g1", "actions": eleven }),
+    ] {
+        let refused = client
+            .post(format!("{base_url}/api/v1/command"))
+            .bearer_auth(&token)
+            .json(&json!({ "method": "page.batch", "params": params }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), 400);
+    }
+    assert_eq!(relayed_methods.lock().unwrap().len(), relayed_before);
+
+    fake.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+async fn wait_for_pending_dialog(
+    client: &Client,
+    base_url: &str,
+    token: &str,
+    expected_type: Option<&str>,
+) -> Value {
+    for _ in 0..100 {
+        let state: Value = client
+            .get(format!("{base_url}/api/state"))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let dialog = &state["state"]["pendingDialog"];
+        match expected_type {
+            Some(expected) if dialog["type"] == expected => return state,
+            None if dialog.is_null() => return state,
+            _ => {}
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("pendingDialog never reached the expected state");
+}
+
+#[tokio::test]
+async fn gates_mutations_behind_pending_dialogs_until_handled_or_closed() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let (fake, relayed_methods, events) = connect_fake_extension(&base_url, &token).await;
+    let client = Client::new();
+    wait_for_tabs(&client, &base_url, &token).await;
+
+    // The extension reports an opened dialog; /api/state publishes it.
+    events
+        .send((
+            "page.dialogOpened".to_owned(),
+            json!({ "tabId": 7, "type": "confirm", "message": "Proceed?", "hasPrompt": false, "at": 1 }),
+        ))
+        .unwrap();
+    let state = wait_for_pending_dialog(&client, &base_url, &token, Some("confirm")).await;
+    assert_eq!(state["state"]["pendingDialog"]["message"], "Proceed?");
+    assert_eq!(state["state"]["pendingDialog"]["hasPrompt"], false);
+
+    // Every renderer-touching command fails fast with zero envelopes
+    // relayed: the dialog freezes the renderer main thread, so even the
+    // read-only page.observe and page.waitFor would hang against it and
+    // revoke the lease by timeout.
+    let relayed_before = relayed_methods.lock().unwrap().len();
+    for (method, params) in [
+        (
+            "page.click",
+            json!({ "tabId": 7, "ref": "e1", "generation": "g1" }),
+        ),
+        ("tabs.activate", json!({ "tabId": 7 })),
+        (
+            "page.batch",
+            json!({ "tabId": 7, "generation": "g1", "actions": [{ "method": "page.key", "key": "Enter" }] }),
+        ),
+        ("page.observe", json!({ "tabId": 7 })),
+        ("page.waitFor", json!({ "tabId": 7, "text": "Welcome" })),
+        ("browser.control.start", json!({ "tabId": 7 })),
+    ] {
+        let blocked = client
+            .post(format!("{base_url}/api/v1/command"))
+            .bearer_auth(&token)
+            .json(&json!({ "method": method, "params": params }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(blocked.status(), 409, "{method} must be gated");
+        let blocked: Value = blocked.json().await.unwrap();
+        assert_eq!(blocked["error"]["code"], "BLOCKED_BY_DIALOG");
+        assert_eq!(blocked["taxonomy"]["code"], "blocked_by_dialog");
+        assert_eq!(blocked["taxonomy"]["retriable"], true);
+        assert_eq!(blocked["taxonomy"]["recoveryHint"], "resume");
+    }
+    assert_eq!(
+        relayed_methods.lock().unwrap().len(),
+        relayed_before,
+        "gated commands must never be relayed"
+    );
+
+    // Browser-process reads stay allowed while the dialog is pending.
+    let listed: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "tabs.list", "params": {} }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(listed["ok"], true);
+
+    // page.handleDialog relays with sanitized params and lifts the gate.
+    let handled: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.handleDialog",
+            "params": { "tabId": 7, "accept": true, "promptText": "confirmed" }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(handled["ok"], true);
+    assert_eq!(handled["result"]["receivedAccept"], true);
+    assert_eq!(handled["result"]["receivedPromptText"], "confirmed");
+    assert!(handled["state"]["pendingDialog"].is_null());
+
+    // With the gate lifted, page.click relays again (the fixture answers it
+    // with STALE_SNAPSHOT, proving the envelope reached the extension).
+    let relayed: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "page.click", "params": { "tabId": 7, "ref": "e1", "generation": "g1" } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(relayed["error"]["code"], "STALE_SNAPSHOT");
+
+    // A dialogClosed event also clears the gate without page.handleDialog.
+    events
+        .send((
+            "page.dialogOpened".to_owned(),
+            json!({ "tabId": 7, "type": "beforeunload", "message": "", "hasPrompt": false, "at": 2 }),
+        ))
+        .unwrap();
+    wait_for_pending_dialog(&client, &base_url, &token, Some("beforeunload")).await;
+    events
+        .send((
+            "page.dialogClosed".to_owned(),
+            json!({ "tabId": 7, "accepted": false }),
+        ))
+        .unwrap();
+    wait_for_pending_dialog(&client, &base_url, &token, None).await;
+    let reopened: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "page.click", "params": { "tabId": 7, "ref": "e1", "generation": "g1" } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(reopened["error"]["code"], "STALE_SNAPSHOT");
+
+    fake.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn suppresses_the_auto_observe_when_a_dialog_opens_mid_action() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let (fake, relayed_methods, events) = connect_fake_extension(&base_url, &token).await;
+    let client = Client::new();
+    wait_for_tabs(&client, &base_url, &token).await;
+
+    // page.clickAt succeeds against the fixture and normally schedules a
+    // delayed automatic page.observe; the dialog opened by the click must
+    // suppress that observe, because it would hang against the frozen
+    // renderer and revoke the lease.
+    let pending = {
+        let client = client.clone();
+        let base_url = base_url.clone();
+        let token = token.clone();
+        tokio::spawn(async move {
+            client
+                .post(format!("{base_url}/api/v1/command"))
+                .bearer_auth(&token)
+                .json(&json!({
+                    "method": "page.clickAt",
+                    "params": { "tabId": 7, "generation": "g1", "x": 10, "y": 10 }
+                }))
+                .send()
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap()
+        })
+    };
+    for _ in 0..200 {
+        if relayed_methods
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|method| method == "page.clickAt")
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    // The dialog opens well inside the 350ms observation delay.
+    events
+        .send((
+            "page.dialogOpened".to_owned(),
+            json!({ "tabId": 7, "type": "confirm", "message": "Sure?", "hasPrompt": false, "at": 1 }),
+        ))
+        .unwrap();
+    wait_for_pending_dialog(&client, &base_url, &token, Some("confirm")).await;
+
+    let clicked = pending.await.unwrap();
+    assert_eq!(clicked["ok"], true);
+    let observe_relays = relayed_methods
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|method| method.as_str() == "page.observe")
+        .count();
+    assert_eq!(
+        observe_relays, 0,
+        "the pending dialog must suppress the automatic observation"
+    );
+
+    fake.abort();
     let _ = shutdown.send(());
     handle.await.unwrap();
 }

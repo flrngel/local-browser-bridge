@@ -3,8 +3,8 @@
 use serde_json::{Value, json};
 
 pub use crate::computer_protocol::{
-    COMPUTER_HELPER_ORIGIN, COMPUTER_METHODS, CommandCancellation, ComputerError, command_parts,
-    result_envelope,
+    COMPUTER_HELPER_ORIGIN, COMPUTER_METHODS, COMPUTER_SHARE_ACK_CAPABILITY, CommandCancellation,
+    ComputerError, ShareMailbox, command_parts, result_envelope,
 };
 
 pub const NATIVE_COMPUTER_SUPPORTED: bool = false;
@@ -74,8 +74,20 @@ impl ComputerController {
 
     pub fn reset_transport_session(&mut self) {}
 
-    pub fn next_share_frame(&mut self) -> Option<Result<Value, ComputerError>> {
+    pub fn set_share_ack_pacing(&mut self, _enabled: bool) {}
+
+    pub fn revoke_command_authority(&mut self) {}
+
+    pub fn pump_share_capture(&mut self) -> Option<ComputerError> {
         None
+    }
+
+    pub fn take_share_emission(&mut self) -> Option<(u64, Value)> {
+        None
+    }
+
+    pub fn acknowledge_share_frame(&mut self, _sequence: u64) -> bool {
+        false
     }
 }
 

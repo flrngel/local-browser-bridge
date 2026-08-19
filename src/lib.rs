@@ -4,6 +4,7 @@ pub mod computer;
 #[path = "computer_unsupported.rs"]
 pub mod computer;
 mod computer_protocol;
+mod error_taxonomy;
 pub mod hub;
 pub mod server;
 pub mod token;

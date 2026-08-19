@@ -7,6 +7,10 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
   const CONTROL_WATCHDOG_INTERVAL_MS = 2_500;
   const CAPTURE_STALE_MS = 15_000;
   const PAINT_ACK_TIMEOUT_MS = 250;
+  const WAIT_POLL_INTERVAL_MS = 250;
+  const WAIT_TIMEOUT_DEFAULT_MS = 5_000;
+  const WAIT_TIMEOUT_MIN_MS = 100;
+  const WAIT_TIMEOUT_MAX_MS = 12_000;
   let generation = "";
   let refs = new Map();
   let pointRefs = new Map();
@@ -243,9 +247,27 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
     }
   }
 
+  function parseElementRef(ref) {
+    const value = String(ref ?? "");
+    const separator = value.lastIndexOf(".");
+    if (separator < 0) return { embeddedGeneration: "", key: value };
+    return { embeddedGeneration: value.slice(0, separator), key: value.slice(separator + 1) };
+  }
+
+  function assertEmbeddedGeneration(ref) {
+    const { embeddedGeneration, key } = parseElementRef(ref);
+    if (embeddedGeneration && embeddedGeneration !== generation) {
+      throw new Error(`STALE_REF: snapshot ${embeddedGeneration} superseded by ${generation}; observe the page again and use fresh refs`);
+    }
+    return key;
+  }
+
   function resolveRecord(ref, requestedGeneration) {
+    // An epoch-embedded ref fails with coaching before any map lookup; the
+    // explicit generation parameter stays authoritative afterwards.
+    const key = assertEmbeddedGeneration(ref);
     assertFresh(requestedGeneration);
-    const record = refs.get(ref);
+    const record = refs.get(key);
     if (!record?.element?.isConnected) throw new Error("STALE_REF: the element changed; observe the page again");
     return record;
   }
@@ -304,9 +326,10 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
     const elements = [];
     for (const element of composedCandidates()) {
       if (elements.length >= 500 || !visible(element)) continue;
-      const ref = `e${elements.length + 1}`;
+      const key = `e${elements.length + 1}`;
+      const ref = `${generation}.${key}`;
       const description = describe(element, ref);
-      refs.set(ref, { element, ref, signature: targetSignature(element), bounds: description.bounds });
+      refs.set(key, { element, ref, signature: targetSignature(element), bounds: description.bounds });
       elements.push(description);
     }
     snapshotRevision = documentRevision;
@@ -322,6 +345,60 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
       bodyText: clean(document.body?.innerText, 20_000),
       elements,
     };
+  }
+
+  function pageContainsText(needle) {
+    return String(document.body?.innerText ?? "").includes(needle)
+      || String(document.title ?? "").includes(needle);
+  }
+
+  function evaluateWaitConditions(conditions, quietSinceMs) {
+    const evaluated = {};
+    if (typeof conditions.text === "string") evaluated.text = pageContainsText(conditions.text);
+    if (typeof conditions.textGone === "string") evaluated.textGone = !pageContainsText(conditions.textGone);
+    if (typeof conditions.urlPrefix === "string") evaluated.urlPrefix = location.href.startsWith(conditions.urlPrefix);
+    if (Number.isFinite(conditions.mutationQuietMs)) evaluated.mutationQuiet = quietSinceMs >= conditions.mutationQuietMs;
+    return evaluated;
+  }
+
+  function waitDelay(milliseconds) {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
+  }
+
+  async function waitForConditions(message) {
+    const conditions = {};
+    if (typeof message.text === "string") conditions.text = message.text;
+    if (typeof message.textGone === "string") conditions.textGone = message.textGone;
+    if (typeof message.urlPrefix === "string") conditions.urlPrefix = message.urlPrefix;
+    if (Number.isFinite(message.mutationQuietMs)) conditions.mutationQuietMs = message.mutationQuietMs;
+    if (Object.keys(conditions).length === 0) {
+      throw new Error("BAD_REQUEST: page.waitFor needs text, textGone, urlPrefix, or mutationQuietMs");
+    }
+    const timeoutMs = Math.min(
+      Math.max(Number(message.timeoutMs) || WAIT_TIMEOUT_DEFAULT_MS, WAIT_TIMEOUT_MIN_MS),
+      WAIT_TIMEOUT_MAX_MS,
+    );
+    const startedAt = Date.now();
+    let lastRevision = documentRevision;
+    let lastRevisionChangeAt = startedAt;
+    for (;;) {
+      if (documentRevision !== lastRevision) {
+        lastRevision = documentRevision;
+        lastRevisionChangeAt = Date.now();
+      }
+      const evaluated = evaluateWaitConditions(conditions, Date.now() - lastRevisionChangeAt);
+      if (Object.values(evaluated).every(Boolean)) {
+        return { satisfied: true, elapsedMs: Date.now() - startedAt, conditions: evaluated };
+      }
+      const elapsedMs = Date.now() - startedAt;
+      if (elapsedMs >= timeoutMs) {
+        // A timed-out wait is a normal result for the caller: satisfied is
+        // false, nothing was dispatched, and repeating the same wait is
+        // pointless without a new plan.
+        throw new Error(`WAIT_TIMEOUT: conditions were not satisfied within ${timeoutMs}ms (satisfied: false, elapsedMs: ${elapsedMs}); observe the page and decide the next step instead of retrying the same wait`);
+      }
+      await waitDelay(Math.min(WAIT_POLL_INTERVAL_MS, timeoutMs - elapsedMs));
+    }
   }
 
   function setNativeValue(element, value) {
@@ -654,6 +731,10 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
       case "assertGeneration":
         assertFresh(message.generation);
         return { current: true, viewport: { width: innerWidth, height: innerHeight, devicePixelRatio } };
+      case "wait":
+        // Read-only condition wait: no control session, no snapshot
+        // freshness requirement, and never any input dispatch.
+        return waitForConditions(message);
       case "describe": {
         assertActiveControl(message.controlSessionId, message.controlEpoch);
         const record = resolveRecord(message.ref, message.generation);

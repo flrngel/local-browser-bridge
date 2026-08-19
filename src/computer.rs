@@ -18,8 +18,8 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 pub use crate::computer_protocol::{
-    COMPUTER_HELPER_ORIGIN, COMPUTER_METHODS, CommandCancellation, ComputerError, command_parts,
-    result_envelope,
+    COMPUTER_HELPER_ORIGIN, COMPUTER_METHODS, COMPUTER_SHARE_ACK_CAPABILITY, CommandCancellation,
+    ComputerError, ShareMailbox, command_parts, result_envelope,
 };
 
 mod action_record;
@@ -140,6 +140,7 @@ pub struct ComputerController {
     recent_frames: VecDeque<FrameState>,
     cursor: SyntheticCursor,
     share: Option<ShareSession>,
+    share_ack_paced: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -150,6 +151,7 @@ struct ShareSession {
     sequence: u64,
     started_at: String,
     last_capture: Option<Instant>,
+    mailbox: ShareMailbox,
 }
 
 impl Default for ComputerController {
@@ -165,6 +167,7 @@ impl ComputerController {
             recent_frames: VecDeque::with_capacity(32),
             cursor: SyntheticCursor::new(Uuid::new_v4().to_string()),
             share: None,
+            share_ack_paced: false,
         }
     }
 
@@ -179,7 +182,7 @@ impl ComputerController {
             "sessionMode": "background-window",
             "inputReady": platform::input_ready(),
             "semanticReady": platform::semantic_ready(false),
-            "capabilities": COMPUTER_METHODS,
+            "capabilities": advertised_capabilities(),
             "windows": windows,
             "invariants": {
                 "globalHidInput": false,
@@ -245,9 +248,30 @@ impl ComputerController {
     /// a fresh frame before it can issue an action.
     pub fn reset_transport_session(&mut self) {
         self.share = None;
+        self.share_ack_paced = false;
         self.frame = None;
         self.recent_frames.clear();
         self.cursor = SyntheticCursor::new(Uuid::new_v4().to_string());
+    }
+
+    /// Enables server-acknowledged share pacing for shares started afterwards.
+    ///
+    /// The helper sets this exactly once per transport session, after the
+    /// bridge confirmed the `computer.share.ack` capability in its hello
+    /// acknowledgement; a replacement session always starts unpaced.
+    pub fn set_share_ack_pacing(&mut self, enabled: bool) {
+        self.share_ack_paced = enabled;
+    }
+
+    /// Revokes share and frame authority after a canceled in-flight command
+    /// whose outcome is unknown, without touching the transport session's
+    /// negotiated share ack pacing: the session itself is unchanged, so a
+    /// later `computer.share.start` must keep the hello-negotiated pacing
+    /// the bridge still expects.
+    pub fn revoke_command_authority(&mut self) {
+        let share_ack_paced = self.share_ack_paced;
+        self.reset_transport_session();
+        self.share_ack_paced = share_ack_paced;
     }
 
     pub fn request_permissions(&mut self) -> Value {
@@ -372,6 +396,14 @@ impl ComputerController {
             .collect::<Vec<_>>();
         self.cursor.composite(&mut image, &target);
         let pointer = self.cursor.snapshot(Some(&frame));
+        // A capture of the shared exact window advances the share sequence
+        // before the frame embeds the share block, so every emitted frame
+        // carries the strictly increasing sequence it was captured under.
+        if let Some(share) = self.share.as_mut()
+            && share.window_id == target.id
+        {
+            share.sequence = share.sequence.saturating_add(1);
+        }
         let mut png = Cursor::new(Vec::new());
         image
             .write_to(&mut png, image::ImageFormat::Png)
@@ -380,7 +412,7 @@ impl ComputerController {
             self.recent_frames.push_front(previous);
             self.recent_frames.truncate(32);
         }
-        let mut result = json!({
+        let result = json!({
             "screenshot": format!("data:image/png;base64,{}", BASE64_STANDARD.encode(png.into_inner())),
             "frame": {
                 "id": frame_id,
@@ -417,28 +449,6 @@ impl ComputerController {
             },
             "windows": windows,
         });
-        if let Some(share) = self.share.as_mut()
-            && share.window_id == target.id
-        {
-            share.sequence = share.sequence.saturating_add(1);
-            if let Some(frame) = result.get_mut("frame").and_then(Value::as_object_mut) {
-                frame.insert(
-                    "share".to_owned(),
-                    json!({
-                        "id": share.id,
-                        "active": true,
-                        "windowId": share.window_id,
-                        "sequence": share.sequence,
-                        "fps": share.fps,
-                        "startedAt": share.started_at,
-                        "captureScope": "exact-window",
-                        "cursorComposited": true,
-                        "droppedFrames": 0,
-                        "backpressure": "producer-blocking",
-                    }),
-                );
-            }
-        }
         Ok(result)
     }
 
@@ -474,6 +484,7 @@ impl ComputerController {
             sequence: 0,
             started_at: now_iso(),
             last_capture: None,
+            mailbox: ShareMailbox::new(self.share_ack_paced),
         });
         if let Err(error) = cancellation.check("share start commit") {
             self.share = None;
@@ -506,7 +517,14 @@ impl ComputerController {
                     "startedAt": share.started_at,
                     "captureScope": "exact-window",
                     "cursorComposited": true,
-                    "backpressure": "producer-blocking",
+                    "droppedFrames": share.mailbox.dropped_frames(),
+                    "ackPaced": share.mailbox.ack_paced(),
+                    "lastAckedSequence": share.mailbox.last_acked_sequence(),
+                    "backpressure": if share.mailbox.ack_paced() {
+                        "latest-frame-wins"
+                    } else {
+                        "producer-blocking"
+                    },
                 })
             })
             .unwrap_or_else(|| json!({ "active": false }))
@@ -516,7 +534,14 @@ impl ComputerController {
         self.share_status_value()
     }
 
-    pub fn next_share_frame(&mut self) -> Option<Result<Value, ComputerError>> {
+    /// Captures a due share frame into the single-slot mailbox.
+    ///
+    /// A capture failure surfaces immediately for a `computer.share.error`
+    /// emission; a successful capture is parked latest-frame-wins until
+    /// `take_share_emission` releases it. A capture whose share sequence did
+    /// not advance (the shared exact window vanished and observation fell back
+    /// to another window) is discarded instead of being emitted as the share.
+    pub fn pump_share_capture(&mut self) -> Option<ComputerError> {
         let share = self.share.as_mut()?;
         let interval = Duration::from_secs_f64(1.0 / share.fps as f64);
         if share
@@ -527,7 +552,27 @@ impl ComputerController {
         }
         share.last_capture = Some(Instant::now());
         let window_id = share.window_id.clone();
-        Some(self.observe(&json!({ "windowId": window_id })))
+        match self.observe(&json!({ "windowId": window_id })) {
+            Ok(frame) => {
+                let share = self.share.as_mut()?;
+                let sequence = share.sequence;
+                share.mailbox.produce(sequence, frame);
+                None
+            }
+            Err(error) => Some(error),
+        }
+    }
+
+    /// Takes the newest parked share frame when ack pacing allows an emission.
+    pub fn take_share_emission(&mut self) -> Option<(u64, Value)> {
+        self.share.as_mut()?.mailbox.emit()
+    }
+
+    /// Applies a bridge share-frame acknowledgement; stale sequences are ignored.
+    pub fn acknowledge_share_frame(&mut self, sequence: u64) -> bool {
+        self.share
+            .as_mut()
+            .is_some_and(|share| share.mailbox.acknowledge(sequence))
     }
 
     fn move_pointer(
@@ -1050,6 +1095,13 @@ fn available_windows() -> Result<Vec<WindowDescriptor>, ComputerError> {
     platform::windows(MAX_WINDOWS)
 }
 
+/// Command methods plus negotiated feature flags advertised in the hello.
+fn advertised_capabilities() -> Vec<&'static str> {
+    let mut capabilities = COMPUTER_METHODS.to_vec();
+    capabilities.push(COMPUTER_SHARE_ACK_CAPABILITY);
+    capabilities
+}
+
 fn resize_for_transport(image: image::RgbaImage) -> image::RgbaImage {
     let pixels = u64::from(image.width()) * u64::from(image.height());
     if pixels <= MAX_CAPTURE_PIXELS {
@@ -1255,6 +1307,7 @@ mod tests {
     #[test]
     fn resetting_transport_session_revokes_share_and_stale_frames() {
         let mut controller = ComputerController::new();
+        controller.set_share_ack_pacing(true);
         controller.frame = Some(frame());
         controller.recent_frames.push_back(frame());
         controller.share = Some(ShareSession {
@@ -1264,14 +1317,105 @@ mod tests {
             sequence: 9,
             started_at: now_iso(),
             last_capture: Some(Instant::now()),
+            mailbox: ShareMailbox::new(true),
         });
 
         controller.reset_transport_session();
 
         assert!(controller.share.is_none());
+        assert!(
+            !controller.share_ack_paced,
+            "a replacement transport session must renegotiate ack pacing"
+        );
         assert!(controller.frame.is_none());
         assert!(controller.recent_frames.is_empty());
         assert_eq!(controller.share_status_value(), json!({ "active": false }));
+    }
+
+    #[test]
+    fn canceled_command_revocation_keeps_the_negotiated_ack_pacing() {
+        let mut controller = ComputerController::new();
+        controller.set_share_ack_pacing(true);
+        controller.frame = Some(frame());
+        controller.recent_frames.push_back(frame());
+        controller.share = Some(ShareSession {
+            id: "share-1".to_owned(),
+            window_id: "window-1".to_owned(),
+            fps: 4,
+            sequence: 9,
+            started_at: now_iso(),
+            last_capture: Some(Instant::now()),
+            mailbox: ShareMailbox::new(true),
+        });
+
+        controller.revoke_command_authority();
+
+        assert!(controller.share.is_none());
+        assert!(controller.frame.is_none());
+        assert!(controller.recent_frames.is_empty());
+        assert!(
+            controller.share_ack_paced,
+            "a canceled command must not discard the session's hello-negotiated pacing"
+        );
+        // A later share in the same session stays ack-paced as negotiated.
+        let cancellation = CommandCancellation::new();
+        let _ = controller.share_start(&json!({ "windowId": "window-1", "fps": 4 }), &cancellation);
+        if let Some(share) = controller.share.as_ref() {
+            assert!(share.mailbox.ack_paced());
+        }
+    }
+
+    #[test]
+    fn share_status_reports_ack_pacing_and_drop_metrics_from_the_mailbox() {
+        let mut controller = ComputerController::new();
+        controller.share = Some(ShareSession {
+            id: "share-1".to_owned(),
+            window_id: "window-1".to_owned(),
+            fps: 4,
+            sequence: 0,
+            started_at: now_iso(),
+            last_capture: None,
+            mailbox: ShareMailbox::new(true),
+        });
+        {
+            let mailbox = &mut controller.share.as_mut().unwrap().mailbox;
+            assert!(mailbox.produce(1, json!({ "capture": 1 })));
+            assert!(mailbox.produce(2, json!({ "capture": 2 })));
+        }
+
+        let (sequence, _) = controller.take_share_emission().unwrap();
+        assert_eq!(sequence, 2, "only the newest capture is emitted");
+        controller
+            .share
+            .as_mut()
+            .unwrap()
+            .mailbox
+            .produce(3, json!({ "capture": 3 }));
+        assert!(
+            controller.take_share_emission().is_none(),
+            "the next emission waits for the ack"
+        );
+        assert!(!controller.acknowledge_share_frame(1), "stale ack ignored");
+        assert!(controller.acknowledge_share_frame(2));
+        assert_eq!(controller.take_share_emission().unwrap().0, 3);
+
+        let status = controller.share_status_value();
+        assert_eq!(status["active"], true);
+        assert_eq!(status["ackPaced"], true);
+        assert_eq!(status["droppedFrames"], 1);
+        assert_eq!(status["lastAckedSequence"], 2);
+        assert_eq!(status["backpressure"], "latest-frame-wins");
+    }
+
+    #[test]
+    fn hello_advertises_share_ack_pacing_as_a_capability_not_a_method() {
+        let capabilities = advertised_capabilities();
+        assert!(capabilities.contains(&COMPUTER_SHARE_ACK_CAPABILITY));
+        assert!(!COMPUTER_METHODS.contains(&COMPUTER_SHARE_ACK_CAPABILITY));
+        let error = ComputerController::new()
+            .execute(COMPUTER_SHARE_ACK_CAPABILITY, &json!({}))
+            .unwrap_err();
+        assert_eq!(error.code, "COMPUTER_UNSUPPORTED_ACTION");
     }
 
     #[test]
@@ -1391,6 +1535,7 @@ mod tests {
             sequence: 2,
             started_at: now_iso(),
             last_capture: None,
+            mailbox: ShareMailbox::new(false),
         });
 
         assert!(

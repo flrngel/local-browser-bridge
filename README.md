@@ -10,8 +10,14 @@ This project does not copy any private OpenAI protocol. It independently impleme
 - Navigate URLs, go back or forward, reload, create tabs, and close tabs
 - Capture the current viewport, rendered text, selected text, and structured interactive-element references
 - Click, fill, and select by element reference
+- Hover elements and send right/middle, multi-click, and Shift/Control/Alt/Meta-modified clicks
 - Click viewport coordinates, type into the focused control, and send arbitrary key chords
+- Accept both `Meta+L` and `ctrl+shift+t` key-chord dialects, normalized server-side for browser and desktop keys
 - Execute arbitrary JavaScript, including Promises, in the current page's main world
+- Wait for page conditions—text appearing or disappearing, a URL prefix, or DOM quiescence—instead of polling observations
+- Run up to ten epoch-bound click/fill/select/key/scroll actions as one batch that stops at the first failure
+- Intercept JavaScript dialogs: renderer-touching commands fail fast while a dialog is pending—without revoking the control lease—until `page.handleDialog` accepts or dismisses it
+- Address browser and desktop frames with `normalized1000` coordinates converted server-side against the exact observed frame
 - Hold one explicit, expiring browser-control lease on one tab, with `sessionId`, observation `turn`, and pointer `moveSequence` bindings
 - Keep Chrome's native **Local Browser Bridge started debugging this browser** warning visible for the full trusted-control lease
 - Show a separate in-page **Local Browser Bridge is using this tab** pill, trusted **Stop** button, and model-visible synthetic cursor
@@ -21,11 +27,15 @@ This project does not copy any private OpenAI protocol. It independently impleme
 - Control `file://` pages when Chrome's file-URL permission is enabled
 - Redact URL query strings and fragments from returned tab metadata
 - Loopback-only server, token-authenticated dashboard/read APIs, token-free mutual-HMAC connector WebSockets, exact connector-Origin validation, expiring port-origin dashboard sessions, CSRF validation, CSP, and no CORS
+- Strict Host-header validation on every HTTP and WebSocket endpoint as a DNS-rebinding defense
 - Versioned connector handshakes, per-connection session IDs, monotonic command/event sequences, bounded outbound queues, and exact package-version compatibility checks
 - Accessible agent-facing DOM, activity log, and live SSE state updates
 - Bearer-token REST command API and a Rust mock extension for testing
+- Idempotent commands: an optional `callId` deduplicates in-flight calls and replays completed results verbatim
+- Structured error taxonomy with retriability and a recovery hint on every failed API response
 - Optional standalone Rust computer helper for macOS and Windows exact-window capture, background-routed mouse input, Unicode text, and key chords
 - Optional exact-window live frame feed at 1–10 FPS, with a session-owned synthetic pointer composited into observations and shared frames
+- Ack-paced latest-frame-wins share delivery with an honest dropped-frame counter when server and helper both negotiate it
 - Non-interrupting computer-use contract: no global HID input, hardware-cursor movement, user-focus loss, target-app activation, desktop switching, or implicit foreground fallback
 - Separate computer-process status and authority in the UI; no shell, filesystem, process-launch, clipboard, downloader, or telemetry command
 - Standalone Rust binary with the entire control UI embedded; Node.js is not required
@@ -194,7 +204,7 @@ The canonical build is `.github/workflows/deploy.yml`, triggered by a matching `
 
 - Native computer control is hybrid and exact-window scoped: frame-bound macOS Accessibility or Windows UI Automation refs are preferred for supported controls, with background pixel input available for visual targets. Unsupported delivery fails closed; the helper never escalates to foreground input automatically.
 - The helper's exact-window live feed is repeated, bounded capture from one selected window. It is not an OS screen-sharing session, virtual display, remote desktop, VM, or separate input seat. It preserves the foreground and hardware cursor but does not isolate untrusted work from the user's login session.
-- The helper pointer is synthetic state composited into returned exact-window images. Version 0.9 does not install a native click-through desktop cursor overlay, and the hardware cursor never represents agent state.
+- The helper pointer is synthetic state composited into returned exact-window images. Version 0.10 does not install a native click-through desktop cursor overlay, and the hardware cursor never represents agent state.
 - macOS pixel input relies on dynamically resolved, undocumented SkyLight symbols and is limited to non-minimized windows on the active Space. Windows uses UI Automation plus exact-HWND background messages. Elevated, game, secure-input, protected-content, and custom-rendered surfaces can still refuse control.
 - Chromium does not allow control of `chrome://`, `edge://`, extension pages, or browser permission UI through this extension.
 - File-page control requires the user to enable Chrome's file-URL permission for the extension.

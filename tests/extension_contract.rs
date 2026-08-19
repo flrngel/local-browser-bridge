@@ -1341,10 +1341,9 @@ fn lease_epoch_guards_page_actions_and_content_authority() {
         background
             .contains("controlEpoch: controlLease?.tabId === tabId ? controlLease.epoch : null")
     );
-    assert!(
-        background
-            .contains("async function dispatch(method, params, approved, commandContext = null)")
-    );
+    assert!(background.contains(
+        "async function dispatch(method, params, approved, commandContext = null, { batched = false } = {})"
+    ));
 
     for method in [
         "page.navigate",
@@ -2674,6 +2673,1003 @@ fn websocket_envelopes_are_versioned_ordered_and_session_bound() {
     assert!(background.contains("sequence: message.sequence"));
     assert!(background.contains("message.sessionId !== protocolServerSessionId"));
     assert!(background.contains("message.sequence <= lastCommandSequence"));
+}
+
+#[test]
+fn wait_for_is_read_only_pause_allowed_and_time_bounded() {
+    let background = fs::read_to_string("extension/background.js").unwrap();
+    let content = fs::read_to_string("extension/content.js").unwrap();
+
+    // page.waitFor is read-only, so it stays usable during a human pause.
+    let pause_allowed = background
+        .split("const PAUSE_ALLOWED_COMMANDS = new Set([")
+        .nth(1)
+        .unwrap()
+        .split("]);")
+        .next()
+        .unwrap();
+    assert!(pause_allowed.contains("\"page.waitFor\""));
+
+    let case_start = background.find("case \"page.waitFor\"").unwrap();
+    let case_end = background[case_start + 5..]
+        .find("\n    case \"")
+        .map(|offset| case_start + 5 + offset)
+        .unwrap_or(background.len());
+    let case_body = &background[case_start..case_end];
+    assert!(case_body.contains("getTab(params.tabId)"));
+    assert!(case_body.contains("assertAllowedTab(tab)"));
+    assert!(case_body.contains("WAIT_CONTENT_TIMEOUT_MARGIN_MS"));
+    assert!(case_body.contains("retryAfterTimeout: false"));
+    // No control lease, no generation, and never any trusted input.
+    assert!(!case_body.contains("requireControl"));
+    assert!(!case_body.contains("captureLeaseAuthority"));
+    assert!(!case_body.contains("generation"));
+    assert!(!case_body.contains("Input.dispatch"));
+
+    // The dedicated content bound must exceed the maximum 12s wait while
+    // staying under the server's 15s command deadline.
+    assert!(background.contains("const WAIT_CONTENT_TIMEOUT_MARGIN_MS = 1_500"));
+    assert!(background.contains("const WAIT_TIMEOUT_MAX_MS = 12_000"));
+    assert!(background.contains("timeoutMs: timeoutMs + WAIT_CONTENT_TIMEOUT_MARGIN_MS"));
+    assert!(background.contains("timeoutMs = CONTENT_TIMEOUT_MS"));
+    // A canceled wait never revokes an unrelated control lease.
+    assert!(background.contains("method.startsWith(\"page.\") && method !== \"page.waitFor\""));
+
+    assert!(content.contains("case \"wait\""));
+    let wait_start = content.find("function pageContainsText").unwrap();
+    let wait_end = content.find("function setNativeValue").unwrap();
+    let wait_body = &content[wait_start..wait_end];
+    assert!(wait_body.contains("WAIT_POLL_INTERVAL_MS"));
+    assert!(wait_body.contains("documentRevision"));
+    assert!(wait_body.contains("WAIT_TIMEOUT:"));
+    assert!(!wait_body.contains("dispatchEvent"));
+    assert!(!wait_body.contains("Input.dispatch"));
+
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const signatureEnd = source.indexOf(") {", start);
+        const brace = signatureEnd + 2;
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      const source = fs.readFileSync("extension/content.js", "utf8");
+      const functions = ["evaluateWaitConditions", "waitForConditions"]
+        .map((name) => extractFunction(source, name)).join("\n");
+      const bridge = new Function(`
+        const WAIT_POLL_INTERVAL_MS = 250;
+        const WAIT_TIMEOUT_DEFAULT_MS = 5_000;
+        const WAIT_TIMEOUT_MIN_MS = 100;
+        const WAIT_TIMEOUT_MAX_MS = 12_000;
+        let clock = 0;
+        let documentRevision = 0;
+        let pageText = "Loading spinner";
+        let inputDispatches = 0;
+        const scheduled = [];
+        const location = { href: "https://example.test/start" };
+        const Date = { now: () => clock };
+        function pageContainsText(needle) { return pageText.includes(needle); }
+        function debuggerCommand() { inputDispatches += 1; return Promise.resolve(); }
+        function waitDelay(milliseconds) {
+          clock += milliseconds;
+          for (const step of scheduled) {
+            if (!step.done && clock >= step.at) { step.done = true; step.run(); }
+          }
+          return Promise.resolve();
+        }
+        ${functions}
+        return {
+          wait: (message) => waitForConditions(message),
+          scheduleText(at, text) { scheduled.push({ at, done: false, run: () => { pageText = text; } }); },
+          scheduleRevision(at) { scheduled.push({ at, done: false, run: () => { documentRevision += 1; } }); },
+          state: () => ({ clock, inputDispatches }),
+        };
+      `)();
+
+      bridge.scheduleText(600, "Welcome back");
+      const appeared = await bridge.wait({ text: "Welcome", timeoutMs: 5_000 });
+      if (appeared.satisfied !== true || appeared.conditions.text !== true
+        || !(appeared.elapsedMs > 0) || appeared.elapsedMs > 1_000) {
+        throw new Error(`appearing text did not satisfy the wait: ${JSON.stringify(appeared)}`);
+      }
+
+      const timeoutStart = bridge.state().clock;
+      let timedOut = null;
+      try {
+        await bridge.wait({ text: "Never rendered", timeoutMs: 1_000 });
+      } catch (error) {
+        timedOut = error.message;
+      }
+      if (!timedOut || !timedOut.startsWith("WAIT_TIMEOUT:")
+        || !timedOut.includes("satisfied: false") || !timedOut.includes("elapsedMs")) {
+        throw new Error(`missing coaching WAIT_TIMEOUT: ${timedOut}`);
+      }
+      if (bridge.state().clock - timeoutStart < 1_000) {
+        throw new Error("the wait gave up before its timeout elapsed");
+      }
+
+      bridge.scheduleRevision(bridge.state().clock + 200);
+      bridge.scheduleRevision(bridge.state().clock + 400);
+      const quiet = await bridge.wait({ mutationQuietMs: 300, timeoutMs: 2_000 });
+      if (quiet.satisfied !== true || quiet.conditions.mutationQuiet !== true) {
+        throw new Error(`mutation quiet was not detected: ${JSON.stringify(quiet)}`);
+      }
+
+      const prefixed = await bridge.wait({ urlPrefix: "https://example.test/", timeoutMs: 500 });
+      if (prefixed.satisfied !== true || prefixed.conditions.urlPrefix !== true) {
+        throw new Error("urlPrefix condition failed on a matching href");
+      }
+
+      let unconditional = false;
+      try { await bridge.wait({ timeoutMs: 500 }); }
+      catch (error) { unconditional = error.message.startsWith("BAD_REQUEST:"); }
+      if (!unconditional) throw new Error("a conditionless wait was accepted");
+
+      if (bridge.state().inputDispatches !== 0) {
+        throw new Error("the wait loop dispatched trusted input");
+      }
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run wait-loop harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node wait-loop harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn epoch_embedded_refs_fail_stale_with_coaching_before_any_lookup() {
+    let content = fs::read_to_string("extension/content.js").unwrap();
+    assert!(content.contains("const ref = `${generation}.${key}`"));
+    assert!(
+        content.contains("superseded by ${generation}; observe the page again and use fresh refs")
+    );
+    let resolve_start = content.find("function resolveRecord").unwrap();
+    let resolve_end = content[resolve_start..].find("\n  }\n").unwrap() + resolve_start;
+    let resolve = &content[resolve_start..resolve_end];
+    assert!(
+        resolve.find("assertEmbeddedGeneration(ref)").unwrap()
+            < resolve.find("refs.get(key)").unwrap()
+    );
+
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const signatureEnd = source.indexOf(") {", start);
+        const brace = signatureEnd + 2;
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      const source = fs.readFileSync("extension/content.js", "utf8");
+      const functions = ["parseElementRef", "assertEmbeddedGeneration", "resolveRecord"]
+        .map((name) => extractFunction(source, name)).join("\n");
+      const bridge = new Function(`
+        let generation = "gen-b1";
+        const lookups = [];
+        const element = { isConnected: true };
+        const records = new Map([["e1", { element, ref: "gen-b1.e1" }]]);
+        const refs = { get(key) { lookups.push(key); return records.get(key); } };
+        function assertFresh() {}
+        ${functions}
+        return {
+          resolve: (ref) => resolveRecord(ref, "gen-b1"),
+          lookups: () => [...lookups],
+        };
+      `)();
+
+      let staleMessage = null;
+      try { bridge.resolve("gen-a0.e1"); }
+      catch (error) { staleMessage = error.message; }
+      if (staleMessage !== "STALE_REF: snapshot gen-a0 superseded by gen-b1; observe the page again and use fresh refs") {
+        throw new Error(`stale embedded ref lacked coaching: ${staleMessage}`);
+      }
+      if (bridge.lookups().length !== 0) {
+        throw new Error("a stale embedded ref touched the refs map");
+      }
+
+      const fresh = bridge.resolve("gen-b1.e1");
+      if (fresh.ref !== "gen-b1.e1" || bridge.lookups().join() !== "e1") {
+        throw new Error("a fresh embedded ref did not resolve against the current snapshot");
+      }
+
+      const legacy = bridge.resolve("e1");
+      if (legacy.ref !== "gen-b1.e1" || bridge.lookups().join() !== "e1,e1") {
+        throw new Error("a legacy bare ref did not resolve against the current generation");
+      }
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run embedded-ref harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node embedded-ref harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn hover_moves_the_trusted_pointer_without_press_events() {
+    let background = fs::read_to_string("extension/background.js").unwrap();
+    let case_start = background.find("case \"page.hover\"").unwrap();
+    let case_end = background[case_start + 5..]
+        .find("\n    case \"")
+        .map(|offset| case_start + 5 + offset)
+        .unwrap_or(background.len());
+    let case_body = &background[case_start..case_end];
+    assert!(case_body.contains("requireControl"));
+    assert!(case_body.contains("assertControlBinding(params)"));
+    assert!(case_body.contains("method: \"prepareClick\""));
+    assert!(case_body.contains("ELEMENT_DISABLED"));
+    assert!(case_body.contains("trustedHover"));
+
+    let hover_start = background.find("async function trustedHover(").unwrap();
+    let hover_end = background[hover_start..].find("\n}\n").unwrap() + hover_start + 3;
+    let hover = &background[hover_start..hover_end];
+    assert!(hover.contains("moveVirtualCursor"));
+    assert!(hover.contains("assertPointerArrival(motion)"));
+    assert!(!hover.contains("mousePressed"));
+    assert!(!hover.contains("mouseReleased"));
+    assert!(!hover.contains("Input.dispatchMouseEvent"));
+    assert!(!hover.contains("persistHeldInputIntent"));
+
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const signatureEnd = source.indexOf(") {", start);
+        const brace = signatureEnd + 2;
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const functions = ["assertPointerArrival", "trustedHover"]
+        .map((name) => extractFunction(source, name)).join("\n");
+      const bridge = new Function(`
+        const dispatched = [];
+        let arrival = "arrived";
+        function captureLeaseAuthority() { return { tabId: 9, sessionId: "lease-9", epoch: 3 }; }
+        function verifyDocumentAuthority() { return Promise.resolve(); }
+        function verifyDocumentAuthorityAfterDispatch() { return Promise.resolve(); }
+        function moveVirtualCursor(_tabId, x, y) {
+          dispatched.push({ kind: "move", x, y });
+          return Promise.resolve({ arrival, moveSequence: 8 });
+        }
+        function debuggerCommand(_tabId, method, params) {
+          dispatched.push({ kind: "cdp", method, type: params?.type });
+          return Promise.resolve();
+        }
+        function publicControlState() { return { active: true }; }
+        ${functions}
+        return {
+          hover: () => trustedHover(9, { bounds: { x: 10, y: 20, width: 30, height: 40 } }, "gen.e1", "gen"),
+          loseArrival() { arrival = "lost"; },
+          dispatched: () => [...dispatched],
+        };
+      `)();
+
+      const result = await bridge.hover();
+      if (result.hovered !== true || result.x !== 25 || result.y !== 40 || result.motion.moveSequence !== 8) {
+        throw new Error(`hover did not settle on the target center: ${JSON.stringify(result)}`);
+      }
+      const moves = bridge.dispatched();
+      if (moves.length !== 1 || moves[0].kind !== "move" || moves[0].x !== 25 || moves[0].y !== 40) {
+        throw new Error("hover dispatched something besides one pointer movement");
+      }
+      if (moves.some((entry) => entry.type === "mousePressed" || entry.type === "mouseReleased")) {
+        throw new Error("hover dispatched a press event");
+      }
+
+      bridge.loseArrival();
+      let refused = false;
+      try { await bridge.hover(); }
+      catch (error) { refused = error.message.startsWith("POINTER_NOT_ARRIVED:"); }
+      if (!refused) throw new Error("hover accepted an unacknowledged pointer arrival");
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run hover harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node hover harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn click_pointer_options_stay_gated_and_proof_ordered() {
+    let background = fs::read_to_string("extension/background.js").unwrap();
+    assert!(
+        background
+            .contains("const POINTER_MODIFIER_BITS = { Alt: 1, Control: 2, Meta: 4, Shift: 8 }")
+    );
+
+    // The two-phase proof is unchanged: the commit proof always precedes the
+    // trusted mouse press, whatever button, count, or modifiers are used.
+    let click_start = background.find("async function trustedClick(").unwrap();
+    let click_end = background[click_start..].find("\n}\n").unwrap() + click_start + 3;
+    let click = &background[click_start..click_end];
+    assert!(click.find("method: \"commitClick\"").unwrap() < click.find("mousePressed").unwrap());
+    assert!(click.contains("{ type: \"mousePressed\", x, y, button, clickCount, modifiers }"));
+    assert!(click.contains("{ type: \"mouseReleased\", x, y, button, clickCount, modifiers }"));
+    assert!(click.contains("BAD_BUTTON"));
+    assert!(click.contains("BAD_CLICK_COUNT"));
+
+    // Safe mode routes every non-default pointer verb through the existing
+    // risky-click approval path; Full Access stays unrestricted.
+    let case_start = background.find("case \"page.click\"").unwrap();
+    let case_end = background[case_start + 5..]
+        .find("\n    case \"")
+        .map(|offset| case_start + 5 + offset)
+        .unwrap_or(background.len());
+    let case_body = &background[case_start..case_end];
+    assert!(case_body.contains("pointerModifierMask"));
+    assert!(case_body.contains("perform a modified pointer click"));
+    assert!(case_body.contains("classifyRisk(description) ?? pointerRisk"));
+    assert!(case_body.contains("!config.fullAccess && risk && !approved"));
+    assert!(case_body.find("pointerRisk").unwrap() < case_body.find("queueApproval").unwrap());
+
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const signatureEnd = source.indexOf(") {", start);
+        const brace = signatureEnd + 2;
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const pointerModifierMask = extractFunction(source, "pointerModifierMask");
+      const bridge = new Function(`
+        const POINTER_MODIFIER_BITS = { Alt: 1, Control: 2, Meta: 4, Shift: 8 };
+        ${pointerModifierMask}
+        return { mask: pointerModifierMask };
+      `)();
+      if (bridge.mask([]) !== 0) throw new Error("no modifiers must map to an empty bitmask");
+      if (bridge.mask(["Shift"]) !== 8 || bridge.mask(["Alt"]) !== 1
+        || bridge.mask(["Control"]) !== 2 || bridge.mask(["Meta"]) !== 4) {
+        throw new Error("single modifiers diverged from the CDP bitmask");
+      }
+      if (bridge.mask(["Shift", "Meta"]) !== 12 || bridge.mask(["Control", "Alt", "Shift"]) !== 11) {
+        throw new Error("combined modifiers diverged from the CDP bitmask");
+      }
+      let refused = false;
+      try { bridge.mask(["Hyper"]); }
+      catch (error) { refused = error.message.startsWith("BAD_MODIFIER:"); }
+      if (!refused) throw new Error("an unknown modifier was accepted");
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run modifier bitmask harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node modifier bitmask harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn batch_delegates_sequentially_and_stops_at_the_first_failure() {
+    let background = fs::read_to_string("extension/background.js").unwrap();
+
+    // page.batch and page.handleDialog are mutating commands, so neither may
+    // run while a human has paused remote control.
+    let pause_allowed = background
+        .split("const PAUSE_ALLOWED_COMMANDS = new Set([")
+        .nth(1)
+        .unwrap()
+        .split("]);")
+        .next()
+        .unwrap();
+    assert!(!pause_allowed.contains("\"page.batch\""));
+    assert!(!pause_allowed.contains("\"page.handleDialog\""));
+
+    assert!(background.contains("const BATCH_MAX_ACTIONS = 10"));
+    assert!(background.contains(
+        "const BATCH_SUBMETHODS = new Set([\"page.click\", \"page.fill\", \"page.select\", \"page.key\", \"page.scroll\"])"
+    ));
+
+    let case_start = background.find("case \"page.batch\"").unwrap();
+    let case_end = background[case_start + 5..]
+        .find("\n    case \"")
+        .map(|offset| case_start + 5 + offset)
+        .unwrap_or(background.len());
+    let case_body = &background[case_start..case_end];
+    assert!(case_body.contains("requireControl"));
+    assert!(case_body.contains("assertControlBinding(params)"));
+    assert!(case_body.contains("BATCH_MAX_ACTIONS"));
+    assert!(case_body.contains("runBatchActions"));
+    // Sub-actions re-enter dispatch with the same command context and the
+    // batched marker, so every existing per-method proof runs unchanged.
+    assert!(
+        case_body
+            .contains("dispatch(subMethod, subParams, false, commandContext, { batched: true })")
+    );
+
+    // A Safe-mode approval fails the batch at its index instead of queueing.
+    let click_start = background.find("case \"page.click\"").unwrap();
+    let click_end = background[click_start + 5..]
+        .find("\n    case \"")
+        .map(|offset| click_start + 5 + offset)
+        .unwrap_or(background.len());
+    let click_body = &background[click_start..click_end];
+    assert!(click_body.contains("if (batched)"));
+    assert!(click_body.contains("APPROVAL_REQUIRED"));
+    assert!(
+        click_body.find("APPROVAL_REQUIRED").unwrap() < click_body.find("queueApproval").unwrap()
+    );
+
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const signatureEnd = source.indexOf(") {", start);
+        const brace = signatureEnd + 2;
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const runBatchActions = extractFunction(source, "runBatchActions");
+      const bridge = new Function(`
+        const BATCH_SUBMETHODS = new Set(["page.click", "page.fill", "page.select", "page.key", "page.scroll"]);
+        let controlLease = null;
+        ${runBatchActions}
+        return {
+          run: runBatchActions,
+          setLease(lease) { controlLease = lease; },
+        };
+      `)();
+
+      // Every step succeeds: no failedIndex, ordered per-step results.
+      let calls = [];
+      const all = await bridge.run(
+        [
+          { method: "page.fill", ref: "e1", text: "a", tabId: 7, generation: "g1" },
+          { method: "page.key", key: "Enter", tabId: 7, generation: "g1" },
+        ],
+        async (method, params) => { calls.push({ method, params: { ...params } }); },
+      );
+      if (all.completed !== 2 || all.total !== 2 || "failedIndex" in all
+        || all.perStep.length !== 2 || !all.perStep.every((step) => step.ok === true)) {
+        throw new Error(`a clean batch misreported: ${JSON.stringify(all)}`);
+      }
+      if (calls.length !== 2 || calls[0].method !== "page.fill"
+        || calls[0].params.method !== undefined || calls[0].params.ref !== "e1") {
+        throw new Error("sub-params were not delegated without the method field");
+      }
+
+      // The loop stops at the first failing step and never dispatches later
+      // steps: stale-snapshot strictness is preserved, not weakened.
+      calls = [];
+      const failed = await bridge.run(
+        [
+          { method: "page.fill", ref: "e1", text: "a" },
+          { method: "page.scroll", deltaY: 120 },
+          { method: "page.click", ref: "e2" },
+          { method: "page.click", ref: "e3" },
+        ],
+        async (method) => {
+          calls.push(method);
+          if (calls.length === 3) throw new Error("STALE_SNAPSHOT: observe the page again before acting");
+        },
+      );
+      if (failed.completed !== 2 || failed.total !== 4 || failed.failedIndex !== 2
+        || !failed.failedError.startsWith("STALE_SNAPSHOT:")
+        || failed.perStep.length !== 3 || failed.perStep[2].ok !== false
+        || failed.perStep[2].error !== failed.failedError) {
+        throw new Error(`stop-at-first-failure misreported: ${JSON.stringify(failed)}`);
+      }
+      if (calls.length !== 3) {
+        throw new Error("a sub-action was dispatched after the batch aborted");
+      }
+
+      // Forbidden sub-methods fail the batch at their index without any
+      // dispatch of the forbidden or later steps.
+      calls = [];
+      const forbidden = await bridge.run(
+        [
+          { method: "page.fill", ref: "e1", text: "a" },
+          { method: "page.evaluate", expression: "1" },
+          { method: "page.click", ref: "e2" },
+        ],
+        async (method) => { calls.push(method); },
+      );
+      if (forbidden.completed !== 1 || forbidden.failedIndex !== 1
+        || !forbidden.failedError.startsWith("BAD_REQUEST:")
+        || forbidden.perStep.length !== 2 || calls.join() !== "page.fill") {
+        throw new Error(`a forbidden sub-method leaked: ${JSON.stringify(forbidden)}`);
+      }
+      const nested = await bridge.run(
+        [{ method: "page.batch", actions: [] }],
+        async () => { throw new Error("nested batch must never dispatch"); },
+      );
+      if (nested.completed !== 0 || nested.failedIndex !== 0
+        || !nested.failedError.startsWith("BAD_REQUEST:")) {
+        throw new Error(`a nested batch was not refused: ${JSON.stringify(nested)}`);
+      }
+
+      // A dialog opened by a sub-step freezes the renderer, so the loop
+      // checks the synchronous pendingDialog record before EACH later step
+      // and aborts at that exact index without dispatching into the frozen
+      // page.
+      calls = [];
+      const lease = { pendingDialog: null };
+      bridge.setLease(lease);
+      const dialoged = await bridge.run(
+        [
+          { method: "page.fill", ref: "e1", text: "a" },
+          { method: "page.click", ref: "e2" },
+          { method: "page.key", key: "Enter" },
+        ],
+        async (method) => {
+          calls.push(method);
+          if (calls.length === 1) lease.pendingDialog = { type: "confirm" };
+        },
+      );
+      if (dialoged.completed !== 1 || dialoged.failedIndex !== 1
+        || !dialoged.failedError.startsWith("BLOCKED_BY_DIALOG:")
+        || dialoged.perStep.length !== 2 || dialoged.perStep[1].ok !== false
+        || calls.join() !== "page.fill") {
+        throw new Error(`a mid-batch dialog did not abort the batch: ${JSON.stringify(dialoged)}`);
+      }
+      bridge.setLease(null);
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run batch loop harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node batch loop harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn dialog_interception_records_events_and_handles_dialogs_lease_bound() {
+    let background = fs::read_to_string("extension/background.js").unwrap();
+
+    // The Page domain is enabled once per lease, so dialog lifecycle events
+    // are already flowing whenever a lease is active.
+    assert!(
+        background.contains(
+            "await debuggerCommand(tab.id, \"Page.enable\", {}, authority, commandContext)"
+        )
+    );
+
+    // Dialog listeners live on the lease-scoped debugger event stream.
+    let listener_start = background
+        .find("chrome.debugger.onEvent.addListener")
+        .unwrap();
+    let listener_end = background[listener_start..]
+        .find("chrome.tabs.onUpdated.addListener")
+        .unwrap()
+        + listener_start;
+    let listener = &background[listener_start..listener_end];
+    assert!(listener.contains("controlLease?.tabId !== source.tabId"));
+    assert!(listener.contains("Page.javascriptDialogOpening"));
+    assert!(listener.contains("Page.javascriptDialogClosed"));
+    assert!(listener.contains("name: \"page.dialogOpened\""));
+    assert!(listener.contains("name: \"page.dialogClosed\""));
+    assert!(listener.contains("DIALOG_MESSAGE_MAX_CHARS"));
+    assert!(listener.contains("controlLease.pendingDialog = null"));
+    assert!(background.contains("const DIALOG_MESSAGE_MAX_CHARS = 500"));
+    assert!(background.contains("const DIALOG_PROMPT_TEXT_MAX_CHARS = 1_000"));
+
+    // page.handleDialog is a lease-bound CDP action; it deliberately skips
+    // the document identity precheck so beforeunload dialogs (which hold the
+    // document in a pending-navigation state) stay handleable, and the
+    // documented safe default for them is accept:false.
+    let case_start = background.find("case \"page.handleDialog\"").unwrap();
+    let case_end = background[case_start + 5..]
+        .find("\n    case \"")
+        .map(|offset| case_start + 5 + offset)
+        .unwrap_or(background.len());
+    let case_body = &background[case_start..case_end];
+    assert!(case_body.contains("requireControl"));
+    assert!(case_body.contains("assertControlBinding(params)"));
+    assert!(case_body.contains("captureLeaseAuthority"));
+    assert!(case_body.contains("NO_PENDING_DIALOG"));
+    assert!(case_body.contains("Page.handleJavaScriptDialog"));
+    assert!(case_body.contains("params.accept === true"));
+    assert!(case_body.contains("DIALOG_PROMPT_TEXT_MAX_CHARS"));
+    assert!(case_body.contains("controlLease.pendingDialog = null"));
+    assert!(!case_body.contains("verifyDocumentAuthority"));
+
+    // Lease revocation drops the lease object, and the pending dialog record
+    // lives on the lease, so revocation clears it on the extension side too.
+    assert!(background.contains("pendingDialog: null"));
+}
+
+#[test]
+fn pending_dialogs_fail_fast_and_never_revoke_the_lease_by_timeout() {
+    let background = fs::read_to_string("extension/background.js").unwrap();
+
+    // The extension mirrors the server's dialog gate exactly: only these
+    // five renderer-free commands stay dispatchable while a dialog blocks
+    // the controlled page.
+    let tolerant = background
+        .split("const DIALOG_TOLERANT_COMMANDS = new Set([")
+        .nth(1)
+        .unwrap()
+        .split("]);")
+        .next()
+        .unwrap();
+    for allowed in [
+        "status",
+        "tabs.list",
+        "browser.control.status",
+        "browser.control.stop",
+        "page.handleDialog",
+    ] {
+        assert!(tolerant.contains(&format!("\"{allowed}\"")));
+    }
+    for blocked in [
+        "page.observe",
+        "page.waitFor",
+        "browser.control.start",
+        "page.click",
+        "page.batch",
+        "tabs.activate",
+    ] {
+        assert!(!tolerant.contains(&format!("\"{blocked}\"")));
+    }
+
+    // dispatch fails renderer-touching methods fast, before any content or
+    // CDP call in the per-method case bodies.
+    let dispatch_start = background.find("async function dispatch").unwrap();
+    let dispatch_end = background[dispatch_start..]
+        .find("async function popupState")
+        .unwrap()
+        + dispatch_start;
+    let dispatch = &background[dispatch_start..dispatch_end];
+    assert!(
+        dispatch.find("assertNoPendingDialog(method)").unwrap()
+            < dispatch.find("switch (method)").unwrap()
+    );
+
+    // The batch loop consults the synchronous pendingDialog record before
+    // every sub-step, ahead of the sub-method allowlist check.
+    let batch_start = background.find("async function runBatchActions").unwrap();
+    let batch_end = background[batch_start..].find("\n}\n").unwrap() + batch_start;
+    let batch = &background[batch_start..batch_end];
+    assert!(
+        batch.find("controlLease?.pendingDialog").unwrap()
+            < batch.find("BATCH_SUBMETHODS.has(method)").unwrap()
+    );
+
+    // The heartbeat keeps its browser-side attachment and document checks
+    // but skips the renderer-touching Runtime.evaluate probe and overlay
+    // refresh while the dialog is pending, and a dialog-stalled authorized
+    // navigation is not a navigation timeout.
+    let heartbeat_start = background.find("async function heartbeatControl").unwrap();
+    let heartbeat_end = background[heartbeat_start..].find("\n}\n").unwrap() + heartbeat_start;
+    let heartbeat = &background[heartbeat_start..heartbeat_end];
+    assert!(heartbeat.contains("verifyDocumentAuthority"));
+    assert!(
+        heartbeat.find("if (lease.pendingDialog)").unwrap()
+            < heartbeat.find("Runtime.evaluate").unwrap()
+    );
+    assert!(heartbeat.contains("!lease.pendingDialog && Date.now()"));
+    assert!(heartbeat.contains("BLOCKED_BY_DIALOG"));
+
+    // Timeouts that fire while a dialog is pending resolve as
+    // BLOCKED_BY_DIALOG without the lease-revoking stopControl paths.
+    let bounded_start = background
+        .find("async function boundedContentOperation")
+        .unwrap();
+    let bounded_end = background[bounded_start..].find("\n}\n").unwrap() + bounded_start;
+    let bounded = &background[bounded_start..bounded_end];
+    assert!(
+        bounded
+            .find("error.code === \"CONTENT_TIMEOUT\" && controlLease?.pendingDialog")
+            .unwrap()
+            < bounded.find("stopControl").unwrap()
+    );
+    let cdp_start = background.find("async function debuggerCommand").unwrap();
+    let cdp_end = background[cdp_start..].find("\n}\n").unwrap() + cdp_start;
+    let cdp = &background[cdp_start..cdp_end];
+    assert!(cdp.find("controlLease?.pendingDialog").unwrap() < cdp.find("stopControl").unwrap());
+
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const signatureEnd = source.indexOf(") {", start);
+        const brace = signatureEnd + 2;
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const setStart = source.indexOf("const DIALOG_TOLERANT_COMMANDS = new Set([");
+      const setEnd = source.indexOf("]);", setStart) + 3;
+      const tolerantSet = source.slice(setStart, setEnd);
+      const pendingDialogError = extractFunction(source, "pendingDialogError");
+      const assertNoPendingDialog = extractFunction(source, "assertNoPendingDialog");
+
+      // Dispatch-level fast fail: renderer-touching methods throw
+      // BLOCKED_BY_DIALOG while a dialog is pending; the tolerant five and a
+      // dialog-free lease pass through untouched.
+      const gate = new Function(`
+        ${tolerantSet}
+        let controlLease = null;
+        ${pendingDialogError}
+        ${assertNoPendingDialog}
+        return {
+          setLease(lease) { controlLease = lease; },
+          check(method) { assertNoPendingDialog(method); },
+        };
+      `)();
+      gate.setLease({ pendingDialog: { type: "confirm" } });
+      for (const blocked of ["page.observe", "page.waitFor", "page.click", "page.batch", "tabs.activate", "browser.control.start"]) {
+        let failed = null;
+        try { gate.check(blocked); } catch (error) { failed = error; }
+        if (failed?.code !== "BLOCKED_BY_DIALOG") {
+          throw new Error(`${blocked} was not fast-failed under a pending dialog`);
+        }
+      }
+      for (const allowed of ["status", "tabs.list", "browser.control.status", "browser.control.stop", "page.handleDialog"]) {
+        gate.check(allowed);
+      }
+      gate.setLease(null);
+      gate.check("page.click");
+
+      // A content timeout under a pending dialog resolves BLOCKED_BY_DIALOG
+      // without the lease-revoking stopControl; without a dialog the
+      // outcome-unknown revocation path is unchanged.
+      const boundedContentOperation = extractFunction(source, "boundedContentOperation");
+      const content = new Function(`
+        const CONTENT_TIMEOUT_MS = 6_000;
+        let controlLease = null;
+        let stopCalls = 0;
+        function withCommandCancellation(promise) { return promise; }
+        function withTimeout() {
+          const error = new Error("CONTENT_TIMEOUT: content snapshot exceeded 6000ms");
+          error.code = "CONTENT_TIMEOUT";
+          return Promise.reject(error);
+        }
+        function stopControl() { stopCalls += 1; return Promise.resolve(); }
+        function outcomeUnknownError(boundary, cause) {
+          const error = new Error("ACTION_OUTCOME_UNKNOWN: " + boundary);
+          error.code = "ACTION_OUTCOME_UNKNOWN";
+          error.cause = cause;
+          return error;
+        }
+        ${pendingDialogError}
+        ${boundedContentOperation}
+        return {
+          setLease(lease) { controlLease = lease; },
+          run: () => boundedContentOperation(Promise.resolve(), "content snapshot", { sessionId: "s" }, null),
+          stops: () => stopCalls,
+        };
+      `)();
+      content.setLease({ pendingDialog: { type: "alert" } });
+      let dialogFailure = null;
+      try { await content.run(); } catch (error) { dialogFailure = error; }
+      if (dialogFailure?.code !== "BLOCKED_BY_DIALOG" || content.stops() !== 0) {
+        throw new Error("a content timeout under a dialog revoked the lease or misclassified");
+      }
+      content.setLease(null);
+      let unknownFailure = null;
+      try { await content.run(); } catch (error) { unknownFailure = error; }
+      if (unknownFailure?.code !== "ACTION_OUTCOME_UNKNOWN" || content.stops() !== 1) {
+        throw new Error("a dialog-free content timeout lost its outcome-unknown revocation");
+      }
+
+      // The same holds for a CDP timeout racing a dialog.
+      const debuggerCommand = extractFunction(source, "debuggerCommand");
+      const cdp = new Function(`
+        const DEBUGGER_TIMEOUT_MS = 10;
+        let controlLease = null;
+        let stopCalls = 0;
+        const chrome = { debugger: { sendCommand: () => new Promise(() => {}) } };
+        function assertLeaseAuthority() {}
+        function assertCommandActive() {}
+        function assertLeaseAuthorityAfterDispatch() {}
+        function withTimeout(_operation, _timeoutMs, method) {
+          const error = new Error("DEBUGGER_TIMEOUT: " + method + " exceeded 10ms");
+          error.code = "DEBUGGER_TIMEOUT";
+          return Promise.reject(error);
+        }
+        function stopControl() { stopCalls += 1; return Promise.resolve(); }
+        ${pendingDialogError}
+        ${debuggerCommand}
+        return {
+          setLease(lease) { controlLease = lease; },
+          run: () => debuggerCommand(9, "Runtime.evaluate", {}, { sessionId: "s" }, null),
+          stops: () => stopCalls,
+        };
+      `)();
+      cdp.setLease({ pendingDialog: { type: "beforeunload" } });
+      let cdpDialogFailure = null;
+      try { await cdp.run(); } catch (error) { cdpDialogFailure = error; }
+      if (cdpDialogFailure?.code !== "BLOCKED_BY_DIALOG" || cdp.stops() !== 0) {
+        throw new Error("a CDP timeout under a dialog revoked the lease or misclassified");
+      }
+      cdp.setLease(null);
+      let cdpUnknownFailure = null;
+      try { await cdp.run(); } catch (error) { cdpUnknownFailure = error; }
+      if (cdpUnknownFailure?.code !== "CDP_OUTCOME_UNKNOWN" || cdp.stops() !== 1) {
+        throw new Error("a dialog-free CDP timeout lost its outcome-unknown revocation");
+      }
+
+      // The heartbeat commits without the Runtime.evaluate renderer probe or
+      // the overlay refresh while the dialog is pending, and never revokes.
+      const heartbeatControl = extractFunction(source, "heartbeatControl");
+      const heartbeat = new Function(`
+        let controlLease = null;
+        let stopCalls = 0, probeCalls = 0, persistCalls = 0, showCalls = 0, verifyCalls = 0;
+        function initializeControlState() { return Promise.resolve(); }
+        function captureLeaseAuthority(lease) { return { sessionId: lease.sessionId, epoch: lease.epoch }; }
+        function verifyDocumentAuthority() { verifyCalls += 1; return Promise.resolve(); }
+        function debuggerCommand(_tabId, method) {
+          if (method === "Runtime.evaluate") probeCalls += 1;
+          return Promise.resolve({});
+        }
+        function assertLeaseAuthority() {}
+        function persistControlState() { persistCalls += 1; return Promise.resolve(); }
+        function showControlUi() { showCalls += 1; return Promise.resolve(); }
+        function stopControl() { stopCalls += 1; controlLease = null; return Promise.resolve(); }
+        ${heartbeatControl}
+        return {
+          setLease(lease) { controlLease = lease; },
+          beat: () => heartbeatControl(),
+          state: () => ({ stopCalls, probeCalls, persistCalls, showCalls, verifyCalls, lease: controlLease }),
+        };
+      `)();
+      const lease = {
+        sessionId: "lease-1", epoch: 1, tabId: 9,
+        expiresAt: Date.now() + 60_000,
+        pendingNavigation: null,
+        pendingDialog: { type: "confirm" },
+        lastHeartbeatAt: 0,
+      };
+      heartbeat.setLease(lease);
+      await heartbeat.beat();
+      let state = heartbeat.state();
+      if (state.probeCalls !== 0 || state.showCalls !== 0 || state.stopCalls !== 0
+        || state.persistCalls !== 1 || state.verifyCalls !== 1 || !state.lease.lastHeartbeatAt) {
+        throw new Error(`the dialog heartbeat touched the renderer or revoked: ${JSON.stringify(state)}`);
+      }
+      lease.pendingDialog = null;
+      await heartbeat.beat();
+      state = heartbeat.state();
+      if (state.probeCalls !== 1 || state.showCalls !== 1 || state.stopCalls !== 0) {
+        throw new Error(`the dialog-free heartbeat lost its renderer probe: ${JSON.stringify(state)}`);
+      }
+      // An authorized navigation stalled behind a beforeunload dialog is not
+      // a navigation timeout; without the dialog the stall still revokes.
+      lease.pendingNavigation = { authorizedAt: Date.now() - 20_000 };
+      lease.pendingDialog = { type: "beforeunload" };
+      await heartbeat.beat();
+      if (heartbeat.state().stopCalls !== 0) {
+        throw new Error("a dialog-stalled navigation was revoked as a timeout");
+      }
+      lease.pendingDialog = null;
+      await heartbeat.beat();
+      if (heartbeat.state().stopCalls !== 1) {
+        throw new Error("a dialog-free stalled navigation was not revoked");
+      }
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run pending-dialog guard harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node pending-dialog guard harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]

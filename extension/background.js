@@ -30,15 +30,43 @@ const AUTH_NEGOTIATION_TIMEOUT_MS = 3_000;
 const AUTH_MAX_FRAME_BYTES = 8 * 1024;
 const AUTH_MAX_INBOUND_FRAMES = 4;
 const CONTENT_TIMEOUT_MS = 6_000;
+// page.waitFor is bounded by its own clamped timeout (max 12s) plus this
+// margin, so the content call outlives the wait but stays under the server's
+// 15s command deadline.
+const WAIT_CONTENT_TIMEOUT_MARGIN_MS = 1_500;
+const WAIT_TIMEOUT_DEFAULT_MS = 5_000;
+const WAIT_TIMEOUT_MIN_MS = 100;
+const WAIT_TIMEOUT_MAX_MS = 12_000;
+const WAIT_MUTATION_QUIET_MIN_MS = 250;
+const WAIT_MUTATION_QUIET_MAX_MS = 5_000;
 const DEBUGGER_LIFECYCLE_TIMEOUT_MS = 3_000;
+// JavaScript dialog metadata is bounded before it is stored or published.
+const DIALOG_MESSAGE_MAX_CHARS = 500;
+const DIALOG_PROMPT_TEXT_MAX_CHARS = 1_000;
+// page.batch runs at most this many sub-actions, and only these snapshot
+// bound page interactions may appear inside a batch: no navigation, no
+// evaluation, and no nested batching.
+const BATCH_MAX_ACTIONS = 10;
+const BATCH_SUBMETHODS = new Set(["page.click", "page.fill", "page.select", "page.key", "page.scroll"]);
 const COMMANDS = new Set([
   "status", "browser.control.start", "browser.control.status", "browser.control.stop",
   "tabs.list", "tabs.activate", "tabs.new", "tabs.close", "page.observe", "page.navigate",
   "page.back", "page.forward", "page.reload", "page.click", "page.fill", "page.select", "page.key", "page.scroll",
-  "page.clickAt", "page.typeText", "page.evaluate",
+  "page.clickAt", "page.typeText", "page.evaluate", "page.waitFor", "page.hover",
+  "page.batch", "page.handleDialog",
 ]);
 const PAUSE_ALLOWED_COMMANDS = new Set([
-  "status", "tabs.list", "browser.control.status", "browser.control.stop",
+  "status", "tabs.list", "browser.control.status", "browser.control.stop", "page.waitFor",
+]);
+// While a JavaScript dialog is pending, the renderer main thread is frozen:
+// every content-script or Runtime call would only time out and revoke the
+// lease. Only these commands are dispatched, because each one stays off the
+// renderer (browser-process state, a best-effort overlay hide, or the
+// browser-side CDP dialog resolution itself); everything else fails fast
+// with BLOCKED_BY_DIALOG before any content or CDP call. This mirrors the
+// server's dialog gate exactly.
+const DIALOG_TOLERANT_COMMANDS = new Set([
+  "status", "tabs.list", "browser.control.status", "browser.control.stop", "page.handleDialog",
 ]);
 
 let socket = null;
@@ -142,7 +170,10 @@ function commandKey(sessionId, id, sequence) {
 }
 
 function commandUsesControl(method) {
-  return method === "browser.control.start" || method.startsWith("page.");
+  // page.waitFor is read-only and never holds the control lease, so a
+  // canceled wait must not revoke an unrelated control session.
+  return method === "browser.control.start"
+    || (method.startsWith("page.") && method !== "page.waitFor");
 }
 
 function assertNoPendingControlLifecycle() {
@@ -812,15 +843,34 @@ async function assertAllowedTab(tab) {
   return verdict;
 }
 
-async function boundedContentOperation(operation, label, authority, commandContext) {
+function pendingDialogError(boundary) {
+  const kind = controlLease?.pendingDialog?.type ?? "dialog";
+  const error = new Error(`BLOCKED_BY_DIALOG: a JavaScript ${kind} dialog is blocking the controlled page during ${boundary}; resolve it with page.handleDialog first`);
+  error.code = "BLOCKED_BY_DIALOG";
+  return error;
+}
+
+function assertNoPendingDialog(method) {
+  if (!DIALOG_TOLERANT_COMMANDS.has(method) && controlLease?.pendingDialog) {
+    throw pendingDialogError(method);
+  }
+}
+
+async function boundedContentOperation(operation, label, authority, commandContext, timeoutMs = CONTENT_TIMEOUT_MS) {
   try {
     return await withTimeout(
       withCommandCancellation(operation, commandContext, label),
-      CONTENT_TIMEOUT_MS,
+      timeoutMs,
       label,
       "CONTENT_TIMEOUT",
     );
   } catch (error) {
+    // A dialog that opened mid-request froze the renderer, so the timeout
+    // belongs to the dialog: surface the dialog instead of revoking a
+    // healthy lease over it.
+    if (error.code === "CONTENT_TIMEOUT" && controlLease?.pendingDialog) {
+      throw pendingDialogError(label);
+    }
     if ((error.code === "CONTENT_TIMEOUT" || error.code === "COMMAND_CANCELED") && authority) {
       await stopControl(`content_interrupted:${label}`, { requireExplicitStart: true });
       throw outcomeUnknownError(label, error);
@@ -829,7 +879,12 @@ async function boundedContentOperation(operation, label, authority, commandConte
   }
 }
 
-async function contentRequest(tabId, payload, { authority = null, commandContext = null } = {}) {
+async function contentRequest(tabId, payload, {
+  authority = null,
+  commandContext = null,
+  timeoutMs = CONTENT_TIMEOUT_MS,
+  retryAfterTimeout = true,
+} = {}) {
   if (authority) assertLeaseAuthority(authority, commandContext, `content ${payload.method} dispatch`);
   else assertCommandActive(commandContext, `content ${payload.method} dispatch`);
   const message = {
@@ -845,9 +900,14 @@ async function contentRequest(tabId, payload, { authority = null, commandContext
       `content ${payload.method}`,
       authority,
       commandContext,
+      timeoutMs,
     );
   } catch (firstError) {
     if (firstError.code === "ACTION_OUTCOME_UNKNOWN") throw firstError;
+    // A dialog-frozen renderer cannot be reinjected into either; the dialog
+    // itself is the actionable failure.
+    if (firstError.code === "BLOCKED_BY_DIALOG") throw firstError;
+    if (!retryAfterTimeout && firstError.code === "CONTENT_TIMEOUT") throw firstError;
     if (IRREVERSIBLE_CONTENT_METHODS.has(payload.method)) {
       await stopControl(`content_outcome_unknown:${payload.method}`, { requireExplicitStart: true });
       throw outcomeUnknownError(`content ${payload.method}`, firstError);
@@ -868,9 +928,10 @@ async function contentRequest(tabId, payload, { authority = null, commandContext
         `content ${payload.method} retry`,
         authority,
         commandContext,
+        timeoutMs,
       );
     } catch (secondError) {
-      if (secondError.code === "ACTION_OUTCOME_UNKNOWN") throw secondError;
+      if (secondError.code === "ACTION_OUTCOME_UNKNOWN" || secondError.code === "BLOCKED_BY_DIALOG") throw secondError;
       throw new Error(`PAGE_UNAVAILABLE: ${secondError.message || firstError.message}`);
     }
   }
@@ -1852,7 +1913,9 @@ async function heartbeatControl() {
     return;
   }
   if (lease.pendingNavigation) {
-    if (Date.now() - lease.pendingNavigation.authorizedAt > 15_000) {
+    // A beforeunload dialog legitimately stalls an authorized navigation, so
+    // the stall is only fatal once no dialog explains it.
+    if (!lease.pendingDialog && Date.now() - lease.pendingNavigation.authorizedAt > 15_000) {
       await stopControl("navigation_timeout", { requireExplicitStart: true });
     }
     return;
@@ -1860,6 +1923,16 @@ async function heartbeatControl() {
   try {
     const authority = captureLeaseAuthority(lease);
     await verifyDocumentAuthority(lease.tabId, authority, null, "control heartbeat");
+    if (lease.pendingDialog) {
+      // The dialog freezes the renderer: the Runtime.evaluate probe and the
+      // overlay refresh would both time out and revoke a healthy lease, so
+      // only the browser-side attachment and document identity are checked
+      // until the dialog is resolved.
+      assertLeaseAuthority(authority, null, "heartbeat commit");
+      controlLease.lastHeartbeatAt = Date.now();
+      await persistControlState();
+      return;
+    }
     await debuggerCommand(lease.tabId, "Runtime.evaluate", {
       expression: "void 0",
       silent: true,
@@ -1870,7 +1943,9 @@ async function heartbeatControl() {
     await persistControlState();
     assertLeaseAuthority(authority, null, "heartbeat UI refresh");
     await showControlUi(controlLease);
-  } catch {
+  } catch (error) {
+    // A dialog racing the heartbeat is not a failed lease.
+    if (error?.code === "BLOCKED_BY_DIALOG") return;
     await stopControl("heartbeat_failed", { requireExplicitStart: true });
   }
 }
@@ -2016,6 +2091,7 @@ async function startControl(tabId, {
     documentUrl: null,
     navigationReady: false,
     pendingNavigation: null,
+    pendingDialog: null,
     policy: controlPolicy(controlConfig, tab),
     viewport: null,
     cursor: { x: 0, y: 0, visible: false, updatedAt: now },
@@ -2155,6 +2231,9 @@ async function debuggerCommand(tabId, method, params, authority = null, commandC
     result = await withTimeout(operation, DEBUGGER_TIMEOUT_MS, method);
   } catch (error) {
     if (error.code === "DEBUGGER_TIMEOUT") {
+      // A pending dialog freezes the renderer, so a CDP timeout under it
+      // belongs to the dialog: keep the lease and report the dialog instead.
+      if (controlLease?.pendingDialog) throw pendingDialogError(`CDP ${method}`);
       await stopControl(`cdp_timeout:${method}`, { requireExplicitStart: true });
       const unknown = new Error(`CDP_OUTCOME_UNKNOWN: ${method} timed out; control was revoked and automatic retry is unsafe`);
       unknown.code = "CDP_OUTCOME_UNKNOWN";
@@ -2462,7 +2541,24 @@ async function moveVirtualCursor(tabId, targetX, targetY, commandContext = null,
   };
 }
 
-async function trustedClick(tabId, description, ref, generation, commandContext = null, existingAuthority = null) {
+const POINTER_MODIFIER_BITS = { Alt: 1, Control: 2, Meta: 4, Shift: 8 };
+
+function pointerModifierMask(modifiers) {
+  let mask = 0;
+  for (const modifier of modifiers) {
+    const bit = POINTER_MODIFIER_BITS[modifier];
+    if (!bit) throw new Error("BAD_MODIFIER: click modifiers must be a subset of Shift, Control, Alt, and Meta");
+    mask |= bit;
+  }
+  return mask;
+}
+
+async function trustedClick(tabId, description, ref, generation, pointer, commandContext = null, existingAuthority = null) {
+  const button = String(pointer?.button ?? "left");
+  const clickCount = Number(pointer?.clickCount) || 1;
+  const modifiers = Number(pointer?.modifiers) || 0;
+  if (!["left", "middle", "right"].includes(button)) throw new Error("BAD_BUTTON: button must be left, middle, or right");
+  if (!Number.isInteger(clickCount) || clickCount < 1 || clickCount > 3) throw new Error("BAD_CLICK_COUNT: clickCount must be an integer from 1 to 3");
   const authority = existingAuthority ?? captureLeaseAuthority();
   await verifyDocumentAuthority(tabId, authority, commandContext, "trusted click preparation");
   const x = description.bounds.x + description.bounds.width / 2;
@@ -2482,7 +2578,7 @@ async function trustedClick(tabId, description, ref, generation, commandContext 
     sessionId: authority.sessionId,
     epoch: authority.epoch,
     releaseMethod: "Input.dispatchMouseEvent",
-    releaseParams: { type: "mouseReleased", x, y, button: "left", clickCount: 1 },
+    releaseParams: { type: "mouseReleased", x, y, button, clickCount, modifiers },
   };
   await persistHeldInputIntent(heldMouseInputs, heldKey, held);
   try {
@@ -2491,7 +2587,7 @@ async function trustedClick(tabId, description, ref, generation, commandContext 
     await debuggerCommand(
       tabId,
       "Input.dispatchMouseEvent",
-      { type: "mousePressed", x, y, button: "left", clickCount: 1 },
+      { type: "mousePressed", x, y, button, clickCount, modifiers },
       authority,
       commandContext,
     );
@@ -2500,7 +2596,7 @@ async function trustedClick(tabId, description, ref, generation, commandContext 
     await debuggerCommand(
       tabId,
       "Input.dispatchMouseEvent",
-      { type: "mouseReleased", x, y, button: "left", clickCount: 1 },
+      { type: "mouseReleased", x, y, button, clickCount, modifiers },
       authority,
       commandContext,
     );
@@ -2509,7 +2605,20 @@ async function trustedClick(tabId, description, ref, generation, commandContext 
     await releaseHeldMouseInput(heldKey, held);
   }
   await verifyDocumentAuthorityAfterDispatch(tabId, authority, commandContext, "trusted click completion");
-  return { clicked: true, trusted: true, control: publicControlState(), motion };
+  return { clicked: true, trusted: true, button, clickCount, modifiers, control: publicControlState(), motion };
+}
+
+async function trustedHover(tabId, description, ref, generation, commandContext = null, existingAuthority = null) {
+  const authority = existingAuthority ?? captureLeaseAuthority();
+  await verifyDocumentAuthority(tabId, authority, commandContext, "trusted hover preparation");
+  const x = description.bounds.x + description.bounds.width / 2;
+  const y = description.bounds.y + description.bounds.height / 2;
+  // Hover is pointer arrival only: the trusted cursor settles on the target
+  // center and no press or release event is ever dispatched.
+  const motion = await moveVirtualCursor(tabId, x, y, commandContext, authority);
+  assertPointerArrival(motion);
+  await verifyDocumentAuthorityAfterDispatch(tabId, authority, commandContext, "trusted hover completion");
+  return { hovered: true, trusted: true, ref, generation, x, y, control: publicControlState(), motion };
 }
 
 async function trustedClickAt(tabId, x, y, button = "left", clickCount = 1, targetProof, commandContext = null, existingAuthority = null) {
@@ -2669,6 +2778,57 @@ async function queueApproval(method, params, tabId, description, risk, commandCo
   return { status: "approval_required", approvalId: pending.id, risk, label: pending.label, expiresAt: pending.expiresAt };
 }
 
+// Runs the sanitized page.batch sub-actions strictly in order, delegating
+// every step to dispatchAction so each method re-runs its full existing
+// pre-dispatch proof against the same generation. Freshness stays strict: a
+// step that invalidates the snapshot (fill, select, scroll, or any page
+// reaction to an earlier step) makes the next snapshot-bound step fail
+// STALE_SNAPSHOT, the loop stops at the first failure, and no later step is
+// ever dispatched.
+async function runBatchActions(actions, dispatchAction) {
+  const perStep = [];
+  let completed = 0;
+  let failedIndex = null;
+  let failedError = null;
+  for (let index = 0; index < actions.length; index += 1) {
+    const action = actions[index] ?? {};
+    const method = String(action.method ?? "");
+    // A dialog opened by an earlier step freezes the renderer, so the next
+    // step would only dispatch into a frozen page; the batch aborts at this
+    // exact index instead.
+    if (controlLease?.pendingDialog) {
+      failedIndex = index;
+      failedError = "BLOCKED_BY_DIALOG: a JavaScript dialog opened mid-batch; resolve it with page.handleDialog before continuing";
+      perStep.push({ method, ok: false, error: failedError });
+      break;
+    }
+    if (!BATCH_SUBMETHODS.has(method)) {
+      failedIndex = index;
+      failedError = "BAD_REQUEST: page.batch sub-actions may only use page.click, page.fill, page.select, page.key, or page.scroll";
+      perStep.push({ method, ok: false, error: failedError });
+      break;
+    }
+    const subParams = { ...action };
+    delete subParams.method;
+    try {
+      await dispatchAction(method, subParams);
+    } catch (error) {
+      failedIndex = index;
+      failedError = String(error?.message ?? error ?? "COMMAND_FAILED");
+      perStep.push({ method, ok: false, error: failedError });
+      break;
+    }
+    completed += 1;
+    perStep.push({ method, ok: true });
+  }
+  const result = { completed, total: actions.length, perStep };
+  if (failedIndex !== null) {
+    result.failedIndex = failedIndex;
+    result.failedError = failedError;
+  }
+  return result;
+}
+
 async function groupBridgeCreatedTab(tab, commandContext = null) {
   await initializeControlState();
   if (!Number.isInteger(tab?.id)) throw new Error("BAD_TAB: Chrome did not return a new tab identifier");
@@ -2685,13 +2845,17 @@ async function groupBridgeCreatedTab(tab, commandContext = null) {
   return groupId;
 }
 
-async function dispatch(method, params, approved, commandContext = null) {
+async function dispatch(method, params, approved, commandContext = null, { batched = false } = {}) {
   assertCommandActive(commandContext, "command validation");
   if (!COMMANDS.has(method)) throw new Error("UNKNOWN_COMMAND: method is not supported");
+  await initializeControlState();
   if (!PAUSE_ALLOWED_COMMANDS.has(method)) {
-    await initializeControlState();
     assertHumanControlAvailable();
   }
+  // A pending JavaScript dialog freezes the renderer main thread, so any
+  // renderer-touching command fails fast here, before any content or CDP
+  // dispatch could time out and revoke the lease.
+  assertNoPendingDialog(method);
   switch (method) {
     case "status": {
       await initializeControlState();
@@ -2862,11 +3026,38 @@ async function dispatch(method, params, approved, commandContext = null) {
       for (const element of snapshot.elements ?? []) element.risk = classifyRisk(element);
       return { snapshot, screenshot, control: publicControlState() };
     }
+    case "page.waitFor": {
+      // Read-only condition wait: the same tab permission checks as
+      // page.observe, but without a control lease, snapshot binding, or
+      // any trusted input.
+      await initializeControlState();
+      const tab = await getTab(params.tabId);
+      await assertAllowedTab(tab);
+      const timeoutMs = clamp(Number(params.timeoutMs) || WAIT_TIMEOUT_DEFAULT_MS, WAIT_TIMEOUT_MIN_MS, WAIT_TIMEOUT_MAX_MS);
+      const payload = { method: "wait", timeoutMs };
+      for (const name of ["text", "textGone", "urlPrefix"]) {
+        if (typeof params[name] === "string") payload[name] = params[name];
+      }
+      if (Number.isFinite(params.mutationQuietMs)) {
+        payload.mutationQuietMs = clamp(Number(params.mutationQuietMs), WAIT_MUTATION_QUIET_MIN_MS, WAIT_MUTATION_QUIET_MAX_MS);
+      }
+      // The content call outlives the clamped wait but never the server's
+      // 15s command deadline, and a timed-out wait is never re-dispatched.
+      return contentRequest(tab.id, payload, {
+        commandContext,
+        timeoutMs: timeoutMs + WAIT_CONTENT_TIMEOUT_MARGIN_MS,
+        retryAfterTimeout: false,
+      });
+    }
     case "page.click": {
       const tab = await getTab(params.tabId);
       await assertAllowedTab(tab);
       await requireControl(tab.id, "page.click", commandContext);
       assertControlBinding(params);
+      const button = String(params.button ?? "left");
+      const clickCount = Number(params.clickCount) || 1;
+      const modifierNames = Array.isArray(params.modifiers) ? params.modifiers.map(String) : [];
+      const modifierMask = pointerModifierMask(modifierNames);
       const authority = captureLeaseAuthority();
       await verifyDocumentAuthority(tab.id, authority, commandContext, "click target preparation");
       const description = await contentRequest(
@@ -2876,13 +3067,47 @@ async function dispatch(method, params, approved, commandContext = null) {
       );
       await verifyDocumentAuthority(tab.id, authority, commandContext, "click target prepared");
       if (description.disabled) throw new Error("ELEMENT_DISABLED: target cannot be clicked");
-      const risk = classifyRisk(description);
+      // Safe mode treats any non-default pointer verb like a risky click.
+      const pointerRisk = button !== "left" || clickCount > 1 || modifierMask !== 0
+        ? "perform a modified pointer click"
+        : null;
+      const risk = classifyRisk(description) ?? pointerRisk;
       const config = await settings();
       assertLeaseAuthority(authority, commandContext, "click authorization");
       if (!config.fullAccess && risk && !approved) {
+        if (batched) {
+          // A pending approval cannot be queued from inside page.batch: the
+          // batch fails at this step and the human runs the risky click as
+          // its own command instead.
+          throw new Error(`APPROVAL_REQUIRED: ${risk}; run this step as its own command so a human can approve it`);
+        }
         return queueApproval(method, params, tab.id, description, risk, commandContext);
       }
-      return trustedClick(tab.id, description, params.ref, params.generation, commandContext, authority);
+      return trustedClick(
+        tab.id,
+        description,
+        params.ref,
+        params.generation,
+        { button, clickCount, modifiers: modifierMask },
+        commandContext,
+        authority,
+      );
+    }
+    case "page.hover": {
+      const tab = await getTab(params.tabId);
+      await assertAllowedTab(tab);
+      await requireControl(tab.id, "page.hover", commandContext);
+      assertControlBinding(params);
+      const authority = captureLeaseAuthority();
+      await verifyDocumentAuthority(tab.id, authority, commandContext, "hover target preparation");
+      const description = await contentRequest(
+        tab.id,
+        { method: "prepareClick", ref: params.ref, generation: params.generation },
+        { authority, commandContext },
+      );
+      await verifyDocumentAuthority(tab.id, authority, commandContext, "hover target prepared");
+      if (description.disabled) throw new Error("ELEMENT_DISABLED: target cannot be hovered");
+      return trustedHover(tab.id, description, params.ref, params.generation, commandContext, authority);
     }
     case "page.fill": {
       const tab = await getTab(params.tabId);
@@ -2961,6 +3186,52 @@ async function dispatch(method, params, approved, commandContext = null) {
       );
       await verifyDocumentAuthorityAfterDispatch(tab.id, authority, commandContext, "scroll completion");
       return { ...result, control: publicControlState() };
+    }
+    case "page.batch": {
+      const tab = await getTab(params.tabId);
+      await assertAllowedTab(tab);
+      await requireControl(tab.id, "page.batch", commandContext);
+      assertControlBinding(params);
+      const actions = Array.isArray(params.actions) ? params.actions : [];
+      if (actions.length < 1 || actions.length > BATCH_MAX_ACTIONS) {
+        throw new Error(`BAD_REQUEST: page.batch needs between 1 and ${BATCH_MAX_ACTIONS} sub-actions`);
+      }
+      // Every sub-action re-enters dispatch so its full existing per-method
+      // proof (tab policy, lease, freshness, sensitivity) runs unchanged;
+      // batched mode only forbids queueing a pending approval mid-batch.
+      const batch = await runBatchActions(
+        actions,
+        (subMethod, subParams) => dispatch(subMethod, subParams, false, commandContext, { batched: true }),
+      );
+      return { ...batch, control: publicControlState() };
+    }
+    case "page.handleDialog": {
+      const tab = await getTab(params.tabId);
+      await assertAllowedTab(tab);
+      await initializeControlState();
+      if (controlLease?.tabId !== tab.id || !controlLease.pendingDialog) {
+        throw new Error("NO_PENDING_DIALOG: no JavaScript dialog is open on the controlled tab");
+      }
+      await requireControl(tab.id, "page.handleDialog", commandContext);
+      assertControlBinding(params);
+      const authority = captureLeaseAuthority();
+      const dialog = { ...controlLease.pendingDialog };
+      const accept = params.accept === true;
+      const handleParams = { accept };
+      if (accept && dialog.hasPrompt && typeof params.promptText === "string") {
+        handleParams.promptText = params.promptText.slice(0, DIALOG_PROMPT_TEXT_MAX_CHARS);
+      }
+      // No document identity precheck here: a beforeunload dialog
+      // legitimately holds the document in a pending-navigation state, so
+      // only the lease authority guards this CDP call.
+      await debuggerCommand(tab.id, "Page.handleJavaScriptDialog", handleParams, authority, commandContext);
+      if (controlLease?.sessionId === authority.sessionId && controlLease?.epoch === authority.epoch) {
+        controlLease.pendingDialog = null;
+        // The dialog was already handled, so a failed persistence must not
+        // misreport the outcome; the dialogClosed event re-clears durably.
+        await persistControlState().catch(() => {});
+      }
+      return { handled: true, accept, type: dialog.type, control: publicControlState() };
     }
     case "page.clickAt": {
       const tab = await getTab(params.tabId);
@@ -3200,6 +3471,27 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
       source: "Page.navigatedWithinDocument",
       sameDocument: true,
     });
+  }
+  // The Page domain is enabled for the whole lease, so JavaScript dialog
+  // lifecycle events arrive here for exactly the controlled tab.
+  if (method === "Page.javascriptDialogOpening") {
+    const dialogType = ["alert", "confirm", "prompt", "beforeunload"].includes(params?.type)
+      ? params.type
+      : "dialog";
+    const pendingDialog = {
+      type: dialogType,
+      message: String(params?.message ?? "").slice(0, DIALOG_MESSAGE_MAX_CHARS),
+      hasPrompt: dialogType === "prompt",
+      at: Date.now(),
+    };
+    controlLease.pendingDialog = pendingDialog;
+    void persistControlState().catch(() => {});
+    send({ type: "event", name: "page.dialogOpened", data: { tabId: source.tabId, ...pendingDialog } });
+  }
+  if (method === "Page.javascriptDialogClosed") {
+    controlLease.pendingDialog = null;
+    void persistControlState().catch(() => {});
+    send({ type: "event", name: "page.dialogClosed", data: { tabId: source.tabId, accepted: params?.result === true } });
   }
 });
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
