@@ -32,6 +32,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
 use crate::VERSION;
+use crate::computer::{COMPUTER_HELPER_ORIGIN, COMPUTER_METHODS};
 use crate::hub::{ExtensionHub, HubError};
 use crate::token::{create_token, tokens_equal};
 use crate::update::{UpdateState, UpdateStatus, check_for_update};
@@ -118,6 +119,7 @@ impl BridgeServer {
             .with_graceful_shutdown(shutdown)
             .await;
         self.state.hub.close();
+        self.state.computer_hub.close();
         result
     }
 }
@@ -126,6 +128,7 @@ impl BridgeServer {
 struct AppState {
     token: Arc<String>,
     hub: ExtensionHub,
+    computer_hub: ExtensionHub,
     data: Arc<RwLock<StateData>>,
     sessions: Arc<Mutex<HashMap<String, Session>>>,
     events: broadcast::Sender<ServerEvent>,
@@ -145,6 +148,7 @@ impl AppState {
         Self {
             token: Arc::new(token),
             hub: ExtensionHub::new(call_timeout),
+            computer_hub: ExtensionHub::computer(call_timeout),
             data: Arc::new(RwLock::new(data)),
             sessions: Arc::new(Mutex::new(HashMap::new())),
             events,
@@ -204,6 +208,22 @@ impl AppState {
                 "screenshotUrl".to_owned(),
                 if data.screenshot.is_some() {
                     Value::String(format!("/api/screenshot?revision={}", data.public.revision))
+                } else {
+                    Value::Null
+                },
+            );
+        }
+        if let Some(observation) = value
+            .get_mut("computerObservation")
+            .and_then(Value::as_object_mut)
+        {
+            observation.insert(
+                "screenshotUrl".to_owned(),
+                if data.computer_screenshot.is_some() {
+                    Value::String(format!(
+                        "/api/computer/screenshot?revision={}",
+                        data.public.revision
+                    ))
                 } else {
                     Value::Null
                 },
@@ -289,6 +309,7 @@ impl AppState {
 struct StateData {
     public: PublicState,
     screenshot: Option<Screenshot>,
+    computer_screenshot: Option<Screenshot>,
 }
 
 #[derive(Default, Clone, Serialize)]
@@ -297,9 +318,12 @@ struct PublicState {
     revision: u64,
     connected: bool,
     extension: Option<ExtensionInfo>,
+    computer_connected: bool,
+    computer: Option<ComputerInfo>,
     target_tab_id: Option<u64>,
     tabs: Vec<TabInfo>,
     observation: Option<Observation>,
+    computer_observation: Option<ComputerObservation>,
     activity: VecDeque<Activity>,
     update: UpdateStatus,
 }
@@ -312,6 +336,37 @@ struct ExtensionInfo {
     mode: String,
     capabilities: Vec<String>,
     connected_at: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ComputerInfo {
+    version: String,
+    compatible: bool,
+    platform: String,
+    architecture: String,
+    backend: String,
+    input_ready: bool,
+    capabilities: Vec<String>,
+    connected_at: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ComputerObservation {
+    frame_id: String,
+    captured_at: String,
+    display_id: String,
+    display_index: u64,
+    display_name: String,
+    image_width: u64,
+    image_height: u64,
+    screen_x: i64,
+    screen_y: i64,
+    screen_width: u64,
+    screen_height: u64,
+    scale_factor: f64,
+    rotation: f64,
 }
 
 #[derive(Clone, Serialize)]
@@ -418,10 +473,18 @@ impl ApiError {
 
 impl From<HubError> for ApiError {
     fn from(error: HubError) -> Self {
-        let status = if error.code == "EXTENSION_OFFLINE" {
-            StatusCode::SERVICE_UNAVAILABLE
-        } else {
-            StatusCode::INTERNAL_SERVER_ERROR
+        let status = match error.code.as_str() {
+            code if code.ends_with("_OFFLINE") || code.ends_with("_DISCONNECTED") => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
+            "COMMAND_TIMEOUT" => StatusCode::GATEWAY_TIMEOUT,
+            "COMPUTER_STALE_FRAME" => StatusCode::CONFLICT,
+            "COMPUTER_INVALID_REQUEST" => StatusCode::BAD_REQUEST,
+            "COMPUTER_PERMISSION_REQUIRED" => StatusCode::FORBIDDEN,
+            code if code.starts_with("COMPUTER_") || code.starts_with("EXTENSION_") => {
+                StatusCode::BAD_GATEWAY
+            }
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         Self::new(status, error.code, error.message)
     }
@@ -443,11 +506,13 @@ fn build_router(state: AppState) -> Router {
         .route("/api/session", get(api_session))
         .route("/api/state", get(api_state))
         .route("/api/screenshot", get(api_screenshot))
+        .route("/api/computer/screenshot", get(api_computer_screenshot))
         .route("/api/events", get(api_events))
         .route("/api/action", post(api_action))
         .route("/api/update/check", post(api_update_check))
         .route("/api/v1/command", post(api_command))
         .route("/bridge", get(websocket_upgrade))
+        .route("/computer", get(computer_websocket_upgrade))
         .fallback(get(static_asset))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(middleware::from_fn(loopback_and_security_headers))
@@ -490,7 +555,12 @@ fn apply_security_headers(headers: &mut HeaderMap) {
 }
 
 async fn health(State(state): State<AppState>) -> Json<Value> {
-    Json(json!({ "ok": true, "extensionConnected": state.hub.connected(), "version": VERSION }))
+    Json(json!({
+        "ok": true,
+        "extensionConnected": state.hub.connected(),
+        "computerConnected": state.computer_hub.connected(),
+        "version": VERSION,
+    }))
 }
 
 async fn api_session(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -518,6 +588,32 @@ async fn api_screenshot(State(state): State<AppState>) -> Result<Response, ApiEr
             "No screenshot has been captured",
         )
     })?;
+    let mut response = Response::new(Body::from(screenshot.bytes.clone()));
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static(screenshot.content_type),
+    );
+    response.headers_mut().insert(
+        CONTENT_LENGTH,
+        HeaderValue::from_str(&screenshot.bytes.len().to_string()).unwrap(),
+    );
+    Ok(response)
+}
+
+async fn api_computer_screenshot(State(state): State<AppState>) -> Result<Response, ApiError> {
+    let screenshot = state
+        .data
+        .read()
+        .await
+        .computer_screenshot
+        .clone()
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "NO_COMPUTER_SCREENSHOT",
+                "No computer screenshot has been captured",
+            )
+        })?;
     let mut response = Response::new(Body::from(screenshot.bytes.clone()));
     response.headers_mut().insert(
         CONTENT_TYPE,
@@ -647,6 +743,36 @@ async fn websocket_upgrade(
         .into_response())
 }
 
+async fn computer_websocket_upgrade(
+    State(state): State<AppState>,
+    Query(query): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Result<Response, ApiError> {
+    let origin = headers
+        .get(ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    if origin != COMPUTER_HELPER_ORIGIN {
+        return Err(ApiError::forbidden(
+            "ORIGIN_REJECTED",
+            "Computer helper Origin required",
+        ));
+    }
+    let supplied = query.get("token").map(String::as_str).unwrap_or("");
+    if !tokens_equal(supplied, &state.token) {
+        return Err(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "UNAUTHORIZED",
+            "Invalid computer helper token",
+        ));
+    }
+    Ok(ws
+        .max_message_size(MAX_WS_MESSAGE_BYTES)
+        .on_upgrade(move |socket| handle_computer_websocket(socket, state))
+        .into_response())
+}
+
 async fn handle_websocket(socket: WebSocket, state: AppState) {
     let (connection_id, mut outgoing) = state.hub.attach();
     {
@@ -710,6 +836,135 @@ async fn handle_websocket(socket: WebSocket, state: AppState) {
             .await;
         state.bump("connection").await;
     }
+}
+
+async fn handle_computer_websocket(socket: WebSocket, state: AppState) {
+    let (connection_id, mut outgoing) = state.computer_hub.attach();
+    state.data.write().await.public.computer_connected = true;
+    state
+        .log("computer.bridge", "ok", "Computer helper connected")
+        .await;
+    state.bump("computer-connection").await;
+
+    let (mut socket_sender, mut socket_receiver) = socket.split();
+    let writer = tokio::spawn(async move {
+        while let Some(message) = outgoing.recv().await {
+            let closing = matches!(message, Message::Close(_));
+            if socket_sender.send(message).await.is_err() || closing {
+                break;
+            }
+        }
+    });
+
+    while let Some(Ok(message)) = socket_receiver.next().await {
+        match message {
+            Message::Text(text) => {
+                let Ok(message) = serde_json::from_str::<Value>(text.as_str()) else {
+                    continue;
+                };
+                match message.get("type").and_then(Value::as_str) {
+                    Some("ping") => {
+                        let _ = state.computer_hub.send(json!({ "type": "pong" }));
+                    }
+                    Some("hello") => handle_computer_hello(&state, &message).await,
+                    _ if message.get("id").and_then(Value::as_str).is_some() => {
+                        state.computer_hub.resolve(&message);
+                    }
+                    _ => {}
+                }
+            }
+            Message::Ping(bytes) => {
+                let _ = state.computer_hub.send_message(Message::Pong(bytes));
+            }
+            Message::Close(_) => break,
+            _ => {}
+        }
+    }
+
+    writer.abort();
+    if state.computer_hub.detach(connection_id) {
+        {
+            let mut data = state.data.write().await;
+            data.public.computer_connected = false;
+            data.public.computer = None;
+            data.public.computer_observation = None;
+            data.computer_screenshot = None;
+        }
+        state
+            .log("computer.bridge", "warning", "Computer helper disconnected")
+            .await;
+        state.bump("computer-connection").await;
+    }
+}
+
+async fn handle_computer_hello(state: &AppState, message: &Value) {
+    let version = bounded(
+        message
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown"),
+        50,
+    );
+    let compatible = version == VERSION;
+    let capabilities = message
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|item| COMPUTER_METHODS.contains(item))
+                .take(COMPUTER_METHODS.len())
+                .map(|item| item.to_owned())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|_| compatible)
+        .collect();
+    let computer = ComputerInfo {
+        version: version.clone(),
+        compatible,
+        platform: bounded(
+            message
+                .get("platform")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown"),
+            50,
+        ),
+        architecture: bounded(
+            message
+                .get("architecture")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown"),
+            50,
+        ),
+        backend: bounded(
+            message
+                .get("backend")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown"),
+            100,
+        ),
+        input_ready: compatible
+            && message
+                .get("inputReady")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        capabilities,
+        connected_at: now_iso(),
+    };
+    state.data.write().await.public.computer = Some(computer);
+    if !compatible {
+        state
+            .log(
+                "computer.bridge",
+                "warning",
+                format!("Helper version {version} does not match server {VERSION}"),
+            )
+            .await;
+    }
+    state.bump("computer-hello").await;
 }
 
 async fn handle_hello(state: &AppState, message: &Value) {
@@ -839,6 +1094,9 @@ fn with_cookie(mut response: Response, cookie: Option<String>) -> Response {
 
 impl AppState {
     async fn perform_action(&self, method: &str, raw_params: Value) -> Result<Value, ApiError> {
+        if COMPUTER_METHODS.contains(&method) {
+            return self.perform_computer_action(method, raw_params).await;
+        }
         if !ACTION_METHODS.contains(&method) {
             return Err(ApiError::bad_request("Unsupported action"));
         }
@@ -919,6 +1177,120 @@ impl AppState {
         }
 
         Ok(result)
+    }
+
+    async fn perform_computer_action(
+        &self,
+        method: &str,
+        raw_params: Value,
+    ) -> Result<Value, ApiError> {
+        let _guard = self.action_lock.lock().await;
+        let params = sanitize_computer_params(method, raw_params)?;
+        let computer = self.data.read().await.public.computer.clone();
+        let Some(computer) = computer else {
+            return Err(ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "COMPUTER_HANDSHAKE_PENDING",
+                "Computer helper handshake is not complete",
+            ));
+        };
+        if !computer.compatible {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "COMPUTER_VERSION_MISMATCH",
+                format!(
+                    "Computer helper {} does not match server {VERSION}",
+                    computer.version
+                ),
+            ));
+        }
+        if !computer.capabilities.iter().any(|item| item == method) {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "COMPUTER_CAPABILITY_UNAVAILABLE",
+                format!("Computer helper did not advertise {method}"),
+            ));
+        }
+        if method == "computer.observe" {
+            return self
+                .refresh_computer_observation(params.get("displayId").and_then(Value::as_str))
+                .await;
+        }
+
+        let result = match self.computer_hub.call(method, params.clone()).await {
+            Ok(result) => result,
+            Err(error) => {
+                self.log(method, "error", &error.message).await;
+                self.bump("computer-error").await;
+                return Err(error.into());
+            }
+        };
+
+        if method == "computer.status" {
+            if let Some(input_ready) = result.get("inputReady").and_then(Value::as_bool) {
+                if let Some(computer) = self.data.write().await.public.computer.as_mut() {
+                    computer.input_ready = input_ready;
+                }
+            }
+            self.log(method, "ok", "Computer helper status refreshed")
+                .await;
+            self.bump("computer-status").await;
+            return Ok(result);
+        }
+
+        self.log(method, "ok", format!("{method} completed")).await;
+        tokio::time::sleep(computer_observation_delay(method)).await;
+        let display_id = self
+            .data
+            .read()
+            .await
+            .public
+            .computer_observation
+            .as_ref()
+            .map(|observation| observation.display_id.clone());
+        if let Err(error) = self
+            .refresh_computer_observation(display_id.as_deref())
+            .await
+        {
+            self.log("computer.observe", "warning", error.message).await;
+            self.bump("computer-warning").await;
+        }
+        Ok(result)
+    }
+
+    async fn refresh_computer_observation(
+        &self,
+        display_id: Option<&str>,
+    ) -> Result<Value, ApiError> {
+        let params = display_id
+            .map(|display_id| json!({ "displayId": display_id }))
+            .unwrap_or_else(|| json!({}));
+        let result = self
+            .computer_hub
+            .call("computer.observe", params)
+            .await
+            .map_err(ApiError::from)?;
+        let screenshot = decode_screenshot(result.get("screenshot"))?.ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                "COMPUTER_INVALID_OBSERVATION",
+                "Computer helper returned no screenshot",
+            )
+        })?;
+        let observation = sanitize_computer_observation(result.get("frame"))?;
+        {
+            let mut data = self.data.write().await;
+            data.public.computer_observation = Some(observation.clone());
+            data.computer_screenshot = Some(screenshot);
+        }
+        self.log(
+            "computer.observe",
+            "ok",
+            format!("Observed {}", observation.display_name),
+        )
+        .await;
+        self.bump("computer-observation").await;
+        Ok(serde_json::to_value(observation).unwrap_or_else(|_| json!({})))
     }
 
     async fn refresh_tabs(&self) -> Result<Value, ApiError> {
@@ -1050,6 +1422,217 @@ fn observation_delay(method: &str) -> Option<Duration> {
         "page.scroll" | "page.evaluate" => 150,
         _ => return None,
     }))
+}
+
+fn computer_observation_delay(method: &str) -> Duration {
+    Duration::from_millis(match method {
+        "computer.typeText" | "computer.key" => 120,
+        "computer.scroll" | "computer.move" => 180,
+        "computer.click" => 350,
+        "computer.drag" => 450,
+        _ => 150,
+    })
+}
+
+fn sanitize_computer_params(method: &str, input: Value) -> Result<Value, ApiError> {
+    let source = input.as_object().cloned().unwrap_or_default();
+    if !COMPUTER_METHODS.contains(&method) {
+        return Err(ApiError::bad_request("Unsupported computer action"));
+    }
+    match method {
+        "computer.status" => Ok(json!({})),
+        "computer.observe" => {
+            let Some(display_id) = source.get("displayId") else {
+                return Ok(json!({}));
+            };
+            Ok(json!({
+                "displayId": required_string(Some(display_id), "displayId", 100)?
+            }))
+        }
+        "computer.move" | "computer.click" | "computer.scroll" => {
+            let mut output = computer_frame_params(&source)?;
+            output.insert("x".to_owned(), json!(computer_coordinate(&source, "x")?));
+            output.insert("y".to_owned(), json!(computer_coordinate(&source, "y")?));
+            if method == "computer.click" {
+                let button = optional_string(source.get("button"), "left", "button", 8)?;
+                if !["left", "middle", "right"].contains(&button.as_str()) {
+                    return Err(ApiError::bad_request(
+                        "button must be left, middle, or right",
+                    ));
+                }
+                let click_count = source
+                    .get("clickCount")
+                    .map(|value| as_u64(value, "clickCount"))
+                    .transpose()?
+                    .unwrap_or(1);
+                if !(1..=3).contains(&click_count) {
+                    return Err(ApiError::bad_request("clickCount must be between 1 and 3"));
+                }
+                output.insert("button".to_owned(), json!(button));
+                output.insert("clickCount".to_owned(), json!(click_count));
+            } else if method == "computer.scroll" {
+                let delta_x = finite_number(source.get("deltaX"), 0.0, "deltaX")?
+                    .trunc()
+                    .clamp(-50.0, 50.0) as i64;
+                let delta_y = finite_number(source.get("deltaY"), 0.0, "deltaY")?
+                    .trunc()
+                    .clamp(-50.0, 50.0) as i64;
+                output.insert("deltaX".to_owned(), json!(delta_x));
+                output.insert("deltaY".to_owned(), json!(delta_y));
+            }
+            Ok(Value::Object(output))
+        }
+        "computer.drag" => {
+            let mut output = computer_frame_params(&source)?;
+            for name in ["fromX", "fromY", "toX", "toY"] {
+                output.insert(name.to_owned(), json!(computer_coordinate(&source, name)?));
+            }
+            let duration_ms = source
+                .get("durationMs")
+                .map(|value| as_u64(value, "durationMs"))
+                .transpose()?
+                .unwrap_or(500);
+            if !(50..=2_000).contains(&duration_ms) {
+                return Err(ApiError::bad_request(
+                    "durationMs must be between 50 and 2000",
+                ));
+            }
+            output.insert("durationMs".to_owned(), json!(duration_ms));
+            Ok(Value::Object(output))
+        }
+        "computer.typeText" => {
+            let mut output = computer_frame_params(&source)?;
+            output.insert(
+                "text".to_owned(),
+                Value::String(required_string(source.get("text"), "text", 100_000)?),
+            );
+            Ok(Value::Object(output))
+        }
+        "computer.key" => {
+            let mut output = computer_frame_params(&source)?;
+            output.insert(
+                "key".to_owned(),
+                Value::String(required_string(source.get("key"), "key", 200)?),
+            );
+            Ok(Value::Object(output))
+        }
+        _ => Err(ApiError::bad_request("Unsupported computer action")),
+    }
+}
+
+fn computer_frame_params(source: &Map<String, Value>) -> Result<Map<String, Value>, ApiError> {
+    Ok(Map::from_iter([(
+        "frameId".to_owned(),
+        Value::String(required_string(source.get("frameId"), "frameId", 100)?),
+    )]))
+}
+
+fn computer_coordinate(source: &Map<String, Value>, name: &str) -> Result<f64, ApiError> {
+    let value = finite_number(source.get(name), f64::NAN, name)?;
+    if !(0.0..=100_000.0).contains(&value) {
+        return Err(ApiError::bad_request(format!(
+            "{name} must be between 0 and 100000"
+        )));
+    }
+    Ok(value)
+}
+
+fn sanitize_computer_observation(value: Option<&Value>) -> Result<ComputerObservation, ApiError> {
+    let frame = value.and_then(Value::as_object).ok_or_else(|| {
+        ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "COMPUTER_INVALID_OBSERVATION",
+            "Computer helper returned invalid frame metadata",
+        )
+    })?;
+    let bounded_u64 = |name: &str, max: u64| -> Result<u64, ApiError> {
+        let value = frame.get(name).and_then(Value::as_u64).ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                "COMPUTER_INVALID_OBSERVATION",
+                format!("Computer frame {name} is invalid"),
+            )
+        })?;
+        if value == 0 || value > max {
+            return Err(ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                "COMPUTER_INVALID_OBSERVATION",
+                format!("Computer frame {name} is out of range"),
+            ));
+        }
+        Ok(value)
+    };
+    let signed = |name: &str| -> Result<i64, ApiError> {
+        let value = frame.get(name).and_then(Value::as_i64).ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                "COMPUTER_INVALID_OBSERVATION",
+                format!("Computer frame {name} is invalid"),
+            )
+        })?;
+        if !(-100_000..=100_000).contains(&value) {
+            return Err(ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                "COMPUTER_INVALID_OBSERVATION",
+                format!("Computer frame {name} is out of range"),
+            ));
+        }
+        Ok(value)
+    };
+    let finite = |name: &str, min: f64, max: f64| -> Result<f64, ApiError> {
+        let value = frame.get(name).and_then(Value::as_f64).ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                "COMPUTER_INVALID_OBSERVATION",
+                format!("Computer frame {name} is invalid"),
+            )
+        })?;
+        if !value.is_finite() || !(min..=max).contains(&value) {
+            return Err(ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                "COMPUTER_INVALID_OBSERVATION",
+                format!("Computer frame {name} is out of range"),
+            ));
+        }
+        Ok(value)
+    };
+    Ok(ComputerObservation {
+        frame_id: required_string(frame.get("id"), "frame.id", 100)?,
+        captured_at: bounded(
+            frame
+                .get("capturedAt")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown"),
+            100,
+        ),
+        display_id: required_string(frame.get("displayId"), "frame.displayId", 100)?,
+        display_index: frame
+            .get("displayIndex")
+            .and_then(Value::as_u64)
+            .filter(|value| *value < 16)
+            .ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::BAD_GATEWAY,
+                    "COMPUTER_INVALID_OBSERVATION",
+                    "Computer frame displayIndex is invalid",
+                )
+            })?,
+        display_name: bounded(
+            frame
+                .get("displayName")
+                .and_then(Value::as_str)
+                .unwrap_or("Display"),
+            200,
+        ),
+        image_width: bounded_u64("imageWidth", 16_384)?,
+        image_height: bounded_u64("imageHeight", 16_384)?,
+        screen_x: signed("screenX")?,
+        screen_y: signed("screenY")?,
+        screen_width: bounded_u64("screenWidth", 100_000)?,
+        screen_height: bounded_u64("screenHeight", 100_000)?,
+        scale_factor: finite("scaleFactor", 0.1, 16.0)?,
+        rotation: finite("rotation", 0.0, 359.0)?,
+    })
 }
 
 fn sanitize_params(

@@ -33,6 +33,8 @@ struct HubInner {
     connection: Mutex<Option<Connection>>,
     pending: Mutex<HashMap<String, PendingCall>>,
     call_timeout: Duration,
+    connector_label: &'static str,
+    error_prefix: &'static str,
 }
 
 #[derive(Clone)]
@@ -48,11 +50,25 @@ struct PendingCall {
 
 impl ExtensionHub {
     pub fn new(call_timeout: Duration) -> Self {
+        Self::connector(call_timeout, "Browser extension", "EXTENSION")
+    }
+
+    pub fn computer(call_timeout: Duration) -> Self {
+        Self::connector(call_timeout, "Computer helper", "COMPUTER")
+    }
+
+    fn connector(
+        call_timeout: Duration,
+        connector_label: &'static str,
+        error_prefix: &'static str,
+    ) -> Self {
         Self {
             inner: Arc::new(HubInner {
                 connection: Mutex::new(None),
                 pending: Mutex::new(HashMap::new()),
                 call_timeout,
+                connector_label,
+                error_prefix,
             }),
         }
     }
@@ -90,8 +106,10 @@ impl ExtensionHub {
             }
         };
 
-        let disconnected =
-            HubError::new("EXTENSION_DISCONNECTED", "Browser extension disconnected");
+        let disconnected = HubError::new(
+            format!("{}_DISCONNECTED", self.inner.error_prefix),
+            format!("{} disconnected", self.inner.connector_label),
+        );
         let pending = {
             let mut calls = self.inner.pending.lock().unwrap();
             let ids = calls
@@ -125,7 +143,13 @@ impl ExtensionHub {
                 error
                     .get("code")
                     .and_then(Value::as_str)
-                    .unwrap_or("EXTENSION_ERROR"),
+                    .unwrap_or_else(|| {
+                        if self.inner.error_prefix == "COMPUTER" {
+                            "COMPUTER_ERROR"
+                        } else {
+                            "EXTENSION_ERROR"
+                        }
+                    }),
                 error
                     .get("message")
                     .and_then(Value::as_str)
@@ -147,12 +171,17 @@ impl ExtensionHub {
             .unwrap()
             .clone()
             .ok_or_else(|| {
-                HubError::new("EXTENSION_OFFLINE", "Browser extension is not connected")
+                HubError::new(
+                    format!("{}_OFFLINE", self.inner.error_prefix),
+                    format!("{} is not connected", self.inner.connector_label),
+                )
             })?;
-        connection
-            .sender
-            .send(message)
-            .map_err(|_| HubError::new("EXTENSION_DISCONNECTED", "Browser extension disconnected"))
+        connection.sender.send(message).map_err(|_| {
+            HubError::new(
+                format!("{}_DISCONNECTED", self.inner.error_prefix),
+                format!("{} disconnected", self.inner.connector_label),
+            )
+        })
     }
 
     pub async fn call(&self, method: &str, params: Value) -> Result<Value, HubError> {
@@ -163,7 +192,10 @@ impl ExtensionHub {
             .unwrap()
             .clone()
             .ok_or_else(|| {
-                HubError::new("EXTENSION_OFFLINE", "Browser extension is not connected")
+                HubError::new(
+                    format!("{}_OFFLINE", self.inner.error_prefix),
+                    format!("{} is not connected", self.inner.connector_label),
+                )
             })?;
         let id = Uuid::new_v4().to_string();
         let (sender, receiver) = oneshot::channel();
@@ -183,22 +215,22 @@ impl ExtensionHub {
         {
             self.inner.pending.lock().unwrap().remove(&id);
             return Err(HubError::new(
-                "EXTENSION_DISCONNECTED",
-                "Browser extension disconnected",
+                format!("{}_DISCONNECTED", self.inner.error_prefix),
+                format!("{} disconnected", self.inner.connector_label),
             ));
         }
 
         match tokio::time::timeout(self.inner.call_timeout, receiver).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(HubError::new(
-                "EXTENSION_DISCONNECTED",
-                "Browser extension disconnected",
+                format!("{}_DISCONNECTED", self.inner.error_prefix),
+                format!("{} disconnected", self.inner.connector_label),
             )),
             Err(_) => {
                 self.inner.pending.lock().unwrap().remove(&id);
                 Err(HubError::new(
                     "COMMAND_TIMEOUT",
-                    format!("Extension command timed out: {method}"),
+                    format!("{} command timed out: {method}", self.inner.connector_label),
                 ))
             }
         }

@@ -2,6 +2,8 @@
 
 Research date: 2026-08-18
 
+Native desktop-agent research is documented separately in [COMPUTER_USE_RESEARCH.md](COMPUTER_USE_RESEARCH.md), including active repository comparisons, pinned code-reading revisions, academic benchmarks, community evidence, and the v0.6 helper-process decision.
+
 ## Product research
 
 OpenAI's public documentation describes the Codex Chrome extension as operating on the user's existing Chrome profile, signed-in sessions, open tabs, and extension state. Its documented features include reading and manipulating pages, adding open tabs and selected text to chat context, retrieving timestamped YouTube transcripts, site-level allow/block controls, and confirmations for sensitive actions. The built-in browser uses a separate profile and is suited to localhost previews.
@@ -93,4 +95,4 @@ Community discussions from independent Windows developers repeatedly describe un
 | ChatGPT chat/sidebar synchronization | No | The bridge is model- and chat-provider independent |
 | Network, cookie, or localStorage extraction | No | Avoid unnecessary credential-extraction surfaces |
 | Arbitrary JavaScript execution | Full Access only | Compatibility escape hatch explicitly marked high risk |
-| Desktop application control | No | Requires a separate native accessibility trust boundary |
+| Desktop application control | Pixel-first macOS/Windows helper | Separate permission-owning process; semantic AX/UIA layer deferred |

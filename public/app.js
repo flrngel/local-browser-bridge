@@ -7,6 +7,10 @@ const ui = Object.fromEntries(
     "coordinates-form", "coordinate-x", "coordinate-y", "type-text-form", "type-text", "custom-key-form", "custom-key",
     "evaluate-form", "expression", "evaluation-result",
     "release-panel", "current-version", "update-status", "update-detail", "check-update", "update-link",
+    "computer-connection", "computer-connection-text", "computer-meta", "computer-status", "computer-observe",
+    "computer-screenshot", "computer-screenshot-empty", "computer-frame-meta", "computer-click-form",
+    "computer-x", "computer-y", "computer-double-click", "computer-type-form", "computer-type-text",
+    "computer-key-form", "computer-key",
   ].map((id) => [id, document.getElementById(id)]),
 );
 
@@ -15,10 +19,12 @@ let currentState = null;
 let busy = false;
 let toastTimer = null;
 let lastObservationGeneration = "";
+let lastComputerFrame = "";
 
 function setBusy(value) {
   busy = value;
   for (const button of document.querySelectorAll("button")) button.disabled = value;
+  if (!value) syncComputerAvailability();
 }
 
 function showToast(message, tone = "normal") {
@@ -81,6 +87,61 @@ function renderConnection(state) {
   const versionLabel = versionMismatch ? `${state.extension.version} · VERSION MISMATCH` : state.extension?.version;
   const detail = state.extension ? `${state.extension.browser} · extension ${versionLabel} · ${mode}` : "handshake pending";
   ui["connection-text"].textContent = `Connected · ${detail}`;
+}
+
+function syncComputerAvailability() {
+  if (!currentState) return;
+  const connected = Boolean(currentState.computerConnected);
+  const frameReady = Boolean(currentState.computerObservation?.frameId);
+  const inputReady = Boolean(currentState.computer?.inputReady && currentState.computer?.compatible);
+  ui["computer-status"].disabled = busy || !connected;
+  ui["computer-observe"].disabled = busy || !connected;
+  for (const control of document.querySelectorAll("#computer-click-form button, .computer-scroll, #computer-type-form button, #computer-key-form button")) {
+    control.disabled = busy || !connected || !frameReady || !inputReady;
+  }
+}
+
+function renderComputer(state) {
+  const connected = Boolean(state.computerConnected);
+  const computer = state.computer;
+  const observation = state.computerObservation;
+  ui["computer-connection"].classList.toggle("online", connected);
+  ui["computer-connection"].classList.toggle("offline", !connected);
+  if (!connected) {
+    ui["computer-connection-text"].textContent = "Computer helper offline — start the separate native app";
+    ui["computer-meta"].textContent = "Start Local Computer Helper to enable desktop control.";
+  } else if (!computer) {
+    ui["computer-connection-text"].textContent = "Computer helper connected · handshake pending";
+    ui["computer-meta"].textContent = "Waiting for helper capability metadata.";
+  } else if (!computer.compatible) {
+    ui["computer-connection"].classList.remove("online");
+    ui["computer-connection"].classList.add("offline");
+    ui["computer-connection-text"].textContent = `Computer version mismatch · helper ${computer.version}`;
+    ui["computer-meta"].textContent = `Install helper ${state.update?.currentVersion ?? "matching the server"}; native actions are blocked.`;
+  } else {
+    const input = computer.inputReady ? "input ready" : "input permission required";
+    ui["computer-connection-text"].textContent = `Computer connected · ${computer.platform} ${computer.architecture} · ${input}`;
+    ui["computer-meta"].textContent = `${computer.backend} · helper ${computer.version} · ${computer.capabilities.length} bounded capabilities · ${input}`;
+  }
+
+  if (!observation) {
+    ui["computer-screenshot"].hidden = true;
+    ui["computer-screenshot-empty"].hidden = false;
+    ui["computer-frame-meta"].textContent = "No frame is available. Input stays disabled until a fresh frame is captured.";
+  } else {
+    if (lastComputerFrame !== observation.frameId) {
+      ui["computer-x"].value = String(Math.floor(observation.imageWidth / 2));
+      ui["computer-y"].value = String(Math.floor(observation.imageHeight / 2));
+      lastComputerFrame = observation.frameId;
+    }
+    ui["computer-screenshot"].src = `${observation.screenshotUrl}&cache=${Date.now()}`;
+    ui["computer-screenshot"].hidden = false;
+    ui["computer-screenshot-empty"].hidden = true;
+    ui["computer-frame-meta"].textContent = `${observation.displayName} · image ${observation.imageWidth}×${observation.imageHeight} · screen ${observation.screenWidth}×${observation.screenHeight} at ${observation.screenX},${observation.screenY} · frame ${observation.frameId}`;
+    ui["computer-x"].max = String(observation.imageWidth - 1);
+    ui["computer-y"].max = String(observation.imageHeight - 1);
+  }
+  syncComputerAvailability();
 }
 
 function renderUpdate(state) {
@@ -207,10 +268,27 @@ function renderActivity(state) {
 function render(state) {
   currentState = state;
   renderConnection(state);
+  renderComputer(state);
   renderUpdate(state);
   renderTabs(state);
   renderObservation(state);
   renderActivity(state);
+}
+
+function computerFrameParams(extra = {}) {
+  const observation = currentState?.computerObservation;
+  if (!observation?.frameId) {
+    showToast("Observe the desktop first so input can be bound to a fresh frame.", "error");
+    return null;
+  }
+  return { frameId: observation.frameId, ...extra };
+}
+
+function selectedComputerPoint() {
+  return {
+    x: Number(ui["computer-x"].value),
+    y: Number(ui["computer-y"].value),
+  };
 }
 
 async function loadState() {
@@ -262,6 +340,47 @@ async function checkForUpdate() {
 
 ui["refresh-tabs"].addEventListener("click", () => runAction("tabs.list"));
 ui["check-update"].addEventListener("click", () => void checkForUpdate());
+ui["computer-status"].addEventListener("click", () => runAction("computer.status"));
+ui["computer-observe"].addEventListener("click", () => runAction("computer.observe"));
+ui["computer-screenshot"].addEventListener("click", (event) => {
+  const observation = currentState?.computerObservation;
+  if (!observation) return;
+  const bounds = event.currentTarget.getBoundingClientRect();
+  const x = Math.max(0, Math.min(observation.imageWidth - 1, Math.floor((event.clientX - bounds.left) * observation.imageWidth / bounds.width)));
+  const y = Math.max(0, Math.min(observation.imageHeight - 1, Math.floor((event.clientY - bounds.top) * observation.imageHeight / bounds.height)));
+  ui["computer-x"].value = String(x);
+  ui["computer-y"].value = String(y);
+  showToast(`Selected desktop point ${x}, ${y}`);
+});
+ui["computer-click-form"].addEventListener("submit", (event) => {
+  event.preventDefault();
+  const params = computerFrameParams({ ...selectedComputerPoint(), button: "left", clickCount: 1 });
+  if (params) runAction("computer.click", params);
+});
+ui["computer-double-click"].addEventListener("click", () => {
+  const params = computerFrameParams({ ...selectedComputerPoint(), button: "left", clickCount: 2 });
+  if (params) runAction("computer.click", params);
+});
+for (const button of document.querySelectorAll(".computer-scroll")) {
+  button.addEventListener("click", () => {
+    const params = computerFrameParams({
+      ...selectedComputerPoint(),
+      deltaX: Number(button.dataset.x),
+      deltaY: Number(button.dataset.y),
+    });
+    if (params) runAction("computer.scroll", params);
+  });
+}
+ui["computer-type-form"].addEventListener("submit", (event) => {
+  event.preventDefault();
+  const params = computerFrameParams({ text: ui["computer-type-text"].value });
+  if (params) runAction("computer.typeText", params);
+});
+ui["computer-key-form"].addEventListener("submit", (event) => {
+  event.preventDefault();
+  const params = computerFrameParams({ key: ui["computer-key"].value.trim() });
+  if (params) runAction("computer.key", params);
+});
 ui["new-tab"].addEventListener("click", () => runAction("tabs.new"));
 ui.observe.addEventListener("click", () => runAction("page.observe"));
 ui["navigate-form"].addEventListener("submit", (event) => {
@@ -329,7 +448,7 @@ async function boot() {
     lastRefresh = now;
     void loadState();
   });
-  for (const name of ["connection", "hello", "tabs", "observation", "approval", "warning", "error", "update"]) {
+  for (const name of ["connection", "hello", "tabs", "observation", "approval", "warning", "error", "update", "computer-connection", "computer-hello", "computer-observation", "computer-status", "computer-warning", "computer-error"]) {
     events.addEventListener(name, () => {
       if (!busy) void loadState();
     });

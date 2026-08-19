@@ -14,9 +14,15 @@
         <p class="eyebrow">LOCAL CONTROL SURFACE</p>
         <h1>Browser Bridge</h1>
       </div>
-      <div class="connection" id="connection" role="status" aria-live="polite">
-        <span class="status-dot" aria-hidden="true"></span>
-        <span id="connection-text">Checking extension…</span>
+      <div class="connection-stack">
+        <div class="connection" id="connection" role="status" aria-live="polite">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="connection-text">Checking extension…</span>
+        </div>
+        <div class="connection" id="computer-connection" role="status" aria-live="polite">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="computer-connection-text">Checking computer helper…</span>
+        </div>
       </div>
     </header>
 
@@ -45,6 +51,59 @@
         <div class="release-actions">
           <button id="check-update" type="button" class="button ghost">Check again</button>
           <a id="update-link" class="button primary release-link" href="https://github.com/flrngel/local-browser-bridge/releases" target="_blank" rel="noopener noreferrer">View verified release</a>
+        </div>
+      </section>
+
+      <section class="computer-panel panel" aria-labelledby="computer-title">
+        <div class="section-heading computer-heading">
+          <div>
+            <p class="eyebrow">NATIVE COMPUTER</p>
+            <h2 id="computer-title">Desktop observation and input</h2>
+            <p id="computer-meta" class="target-meta">Start Local Computer Helper to enable desktop control.</p>
+          </div>
+          <div class="computer-actions">
+            <button id="computer-status" type="button" class="button ghost">Refresh status</button>
+            <button id="computer-observe" type="button" class="button primary">Observe desktop</button>
+          </div>
+        </div>
+        <p class="computer-boundary"><strong>Visible authority:</strong> the separate helper can capture screens and send mouse or keyboard input only while it is running. It has no shell, filesystem, process-launch, clipboard, or telemetry command.</p>
+        <div class="computer-grid">
+          <div>
+            <div class="screenshot-shell computer-screenshot-shell">
+              <img id="computer-screenshot" alt="Current desktop screenshot; select a point to fill the coordinate controls" hidden>
+              <div id="computer-screenshot-empty" class="empty-state">Connect the helper, then observe the desktop. Click a captured image to select coordinates.</div>
+            </div>
+            <p id="computer-frame-meta" class="frame-meta">No frame is available. Input stays disabled until a fresh frame is captured.</p>
+          </div>
+          <div class="computer-controls">
+            <form id="computer-click-form">
+              <label>Point in captured image</label>
+              <div class="coordinate-grid">
+                <label>X <input id="computer-x" type="number" min="0" step="any" required placeholder="420"></label>
+                <label>Y <input id="computer-y" type="number" min="0" step="any" required placeholder="300"></label>
+              </div>
+              <div class="button-grid">
+                <button class="button secondary" type="submit">Click point</button>
+                <button id="computer-double-click" class="button ghost" type="button">Double-click</button>
+              </div>
+            </form>
+            <div class="button-grid computer-scroll-grid" aria-label="Desktop scrolling controls">
+              <button type="button" class="button ghost computer-scroll" data-x="0" data-y="3">Scroll up</button>
+              <button type="button" class="button ghost computer-scroll" data-x="0" data-y="-3">Scroll down</button>
+              <button type="button" class="button ghost computer-scroll" data-x="3" data-y="0">Scroll left</button>
+              <button type="button" class="button ghost computer-scroll" data-x="-3" data-y="0">Scroll right</button>
+            </div>
+            <form id="computer-type-form">
+              <label for="computer-type-text">Type into the focused control</label>
+              <textarea id="computer-type-text" rows="3" required placeholder="Text to type"></textarea>
+              <button class="button secondary full" type="submit">Type text</button>
+            </form>
+            <form id="computer-key-form">
+              <label for="computer-key">Key or chord</label>
+              <input id="computer-key" required placeholder="Meta+L or Control+L" autocomplete="off">
+              <button class="button ghost full" type="submit">Press key</button>
+            </form>
+          </div>
         </div>
       </section>
 

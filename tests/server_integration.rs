@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
-use local_browser_bridge::{BridgeServer, ServerConfig, create_token};
+use local_browser_bridge::computer::COMPUTER_HELPER_ORIGIN;
+use local_browser_bridge::{BridgeServer, ServerConfig, VERSION, create_token};
 use reqwest::Client;
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
@@ -48,7 +49,7 @@ async fn connect_fake_extension(base_url: &str, token: &str) -> JoinHandle<()> {
         writer
             .send(Message::Text(
                 json!({
-                    "type": "hello", "version": "0.5.0-test", "browser": "Test Chrome", "mode": "full-access",
+                    "type": "hello", "version": "0.6.0-test", "browser": "Test Chrome", "mode": "full-access",
                     "capabilities": ["tabs.list", "page.observe", "page.evaluate", "page.clickAt", "page.typeText"]
                 })
                 .to_string()
@@ -91,6 +92,97 @@ async fn connect_fake_extension(base_url: &str, token: &str) -> JoinHandle<()> {
     })
 }
 
+async fn connect_fake_computer(base_url: &str, token: &str, version: &str) -> JoinHandle<()> {
+    let mut request = format!("{}/computer?token={token}", base_url.replace("http", "ws"))
+        .into_client_request()
+        .unwrap();
+    request
+        .headers_mut()
+        .insert("Origin", COMPUTER_HELPER_ORIGIN.parse().unwrap());
+    let (socket, _) = connect_async(request).await.unwrap();
+    let version = version.to_owned();
+    tokio::spawn(async move {
+        let (mut writer, mut reader) = socket.split();
+        writer
+            .send(Message::Text(
+                json!({
+                    "type": "hello",
+                    "version": version,
+                    "platform": "test-os",
+                    "architecture": "test-arch",
+                    "backend": "test-capture+test-input",
+                    "inputReady": true,
+                    "capabilities": [
+                        "computer.status", "computer.observe", "computer.move", "computer.click",
+                        "computer.drag", "computer.scroll", "computer.typeText", "computer.key",
+                        "computer.shell"
+                    ]
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let mut frame_number = 0_u64;
+        let mut current_frame = String::new();
+        while let Some(Ok(Message::Text(text))) = reader.next().await {
+            let message: Value = serde_json::from_str(text.as_str()).unwrap();
+            let Some(id) = message.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let method = message.get("method").and_then(Value::as_str).unwrap_or("");
+            let params = message.get("params").cloned().unwrap_or_else(|| json!({}));
+            let response = match method {
+                "computer.status" => json!({
+                    "id": id, "type": "result", "ok": true,
+                    "result": { "inputReady": true, "displayCount": 1, "frameReady": !current_frame.is_empty() }
+                }),
+                "computer.observe" => {
+                    frame_number += 1;
+                    current_frame = format!("frame-{frame_number}");
+                    json!({
+                        "id": id, "type": "result", "ok": true,
+                        "result": {
+                            "screenshot": PIXEL,
+                            "frame": {
+                                "id": current_frame,
+                                "capturedAt": "2026-08-18T00:00:00Z",
+                                "displayId": "display-1",
+                                "displayIndex": 0,
+                                "displayName": "Test display",
+                                "imageWidth": 1,
+                                "imageHeight": 1,
+                                "screenX": 0,
+                                "screenY": 0,
+                                "screenWidth": 1,
+                                "screenHeight": 1,
+                                "scaleFactor": 1.0,
+                                "rotation": 0.0
+                            }
+                        }
+                    })
+                }
+                "computer.click" if params["frameId"] != current_frame => json!({
+                    "id": id, "type": "result", "ok": false,
+                    "error": { "code": "COMPUTER_STALE_FRAME", "message": "Observe again" }
+                }),
+                "computer.click" => json!({
+                    "id": id, "type": "result", "ok": true,
+                    "result": { "x": params["x"], "y": params["y"], "clickCount": params["clickCount"] }
+                }),
+                _ => json!({
+                    "id": id, "type": "result", "ok": false,
+                    "error": { "code": "COMPUTER_UNSUPPORTED_ACTION", "message": "Unsupported test action" }
+                }),
+            };
+            writer
+                .send(Message::Text(response.to_string().into()))
+                .await
+                .unwrap();
+        }
+    })
+}
+
 async fn wait_for_tabs(client: &Client, base_url: &str) -> Value {
     for _ in 0..100 {
         let state: Value = client
@@ -110,6 +202,28 @@ async fn wait_for_tabs(client: &Client, base_url: &str) -> Value {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!("tabs did not arrive");
+}
+
+async fn wait_for_computer(client: &Client, base_url: &str) -> Value {
+    for _ in 0..100 {
+        let state: Value = client
+            .get(format!("{base_url}/api/state"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if state["state"]["computer"]
+            .get("version")
+            .and_then(Value::as_str)
+            .is_some()
+        {
+            return state;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("computer helper hello did not arrive");
 }
 
 #[tokio::test]
@@ -206,6 +320,133 @@ async fn relays_commands_and_serves_observations() {
 }
 
 #[tokio::test]
+async fn relays_frame_bound_computer_actions_and_serves_desktop_capture() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let fake = connect_fake_computer(&base_url, &token, VERSION).await;
+    let client = Client::new();
+    let state = wait_for_computer(&client, &base_url).await;
+    assert_eq!(state["state"]["computerConnected"], true);
+    assert_eq!(state["state"]["computer"]["inputReady"], true);
+    assert_eq!(
+        state["state"]["computer"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .len(),
+        8
+    );
+    assert!(
+        !state["state"]["computer"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("computer.shell"))
+    );
+
+    let observed: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "computer.observe", "params": {} }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(observed["result"]["frameId"], "frame-1");
+    assert_eq!(
+        observed["state"]["computerObservation"]["displayName"],
+        "Test display"
+    );
+    assert!(
+        observed["state"]["computerObservation"]["screenshotUrl"]
+            .as_str()
+            .unwrap()
+            .starts_with("/api/computer/screenshot?revision=")
+    );
+
+    let screenshot = client
+        .get(format!("{base_url}/api/computer/screenshot"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(screenshot.status(), 200);
+    assert_eq!(screenshot.headers()["content-type"], "image/png");
+    assert!(screenshot.bytes().await.unwrap().len() > 10);
+
+    let clicked: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "computer.click",
+            "params": { "frameId": "frame-1", "x": 0, "y": 0, "button": "left", "clickCount": 1 }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(clicked["result"]["clickCount"], 1);
+    assert_eq!(
+        clicked["state"]["computerObservation"]["frameId"],
+        "frame-2"
+    );
+
+    let stale = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "computer.click",
+            "params": { "frameId": "frame-1", "x": 0, "y": 0, "button": "left", "clickCount": 1 }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), 409);
+    let stale: Value = stale.json().await.unwrap();
+    assert_eq!(stale["error"]["code"], "COMPUTER_STALE_FRAME");
+
+    let shell = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "computer.shell", "params": { "command": "whoami" } }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(shell.status(), 400);
+
+    fake.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn blocks_mismatched_computer_helper_versions() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let fake = connect_fake_computer(&base_url, &token, "9.9.9").await;
+    let client = Client::new();
+    let state = wait_for_computer(&client, &base_url).await;
+    assert_eq!(state["state"]["computer"]["compatible"], false);
+    assert_eq!(state["state"]["computer"]["capabilities"], json!([]));
+
+    let response = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "computer.observe", "params": {} }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 409);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["error"]["code"], "COMPUTER_VERSION_MISMATCH");
+
+    fake.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
 async fn rejects_cross_origin_and_non_extension_clients() {
     let token = create_token();
     let (base_url, shutdown, handle) = start_server(&token).await;
@@ -243,6 +484,33 @@ async fn rejects_cross_origin_and_non_extension_clients() {
         other => panic!("unexpected websocket error: {other}"),
     };
     assert_eq!(status.as_u16(), 403);
+
+    let mut wrong_origin = format!("{}/computer?token={token}", base_url.replace("http", "ws"))
+        .into_client_request()
+        .unwrap();
+    wrong_origin.headers_mut().insert(
+        "Origin",
+        "chrome-extension://not-the-helper".parse().unwrap(),
+    );
+    let error = connect_async(wrong_origin).await.unwrap_err();
+    let status = match error {
+        tokio_tungstenite::tungstenite::Error::Http(response) => response.status(),
+        other => panic!("unexpected websocket error: {other}"),
+    };
+    assert_eq!(status.as_u16(), 403);
+
+    let mut wrong_token = format!("{}/computer?token=wrong", base_url.replace("http", "ws"))
+        .into_client_request()
+        .unwrap();
+    wrong_token
+        .headers_mut()
+        .insert("Origin", COMPUTER_HELPER_ORIGIN.parse().unwrap());
+    let error = connect_async(wrong_token).await.unwrap_err();
+    let status = match error {
+        tokio_tungstenite::tungstenite::Error::Http(response) => response.status(),
+        other => panic!("unexpected websocket error: {other}"),
+    };
+    assert_eq!(status.as_u16(), 401);
 
     let _ = shutdown.send(());
     handle.await.unwrap();

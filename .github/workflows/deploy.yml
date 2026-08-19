@@ -62,18 +62,22 @@ jobs:
         run: |
           rustup toolchain install 1.88.0 --profile minimal
           rustup default 1.88.0
-      - name: Build and verify the standalone executable
+      - name: Build and verify the standalone executables
         shell: pwsh
         run: |
-          cargo build --locked --release
+          cargo build --locked --release --bins
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"$').Matches[0].Groups[1].Value
           New-Item -ItemType Directory -Force dist | Out-Null
-          $output = "dist/local-browser-bridge-v$version-windows-x86_64.exe"
-          Copy-Item target/release/local-browser-bridge.exe $output
-          $reported = & $output --version
-          if ($reported -ne "local-browser-bridge $version") { throw "Unexpected binary version: $reported" }
-          $bytes = [System.IO.File]::ReadAllBytes($output)
-          if ($bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) { throw "Executable does not have an MZ header" }
+          $server = "dist/local-browser-bridge-v${version}-windows-x86_64.exe"
+          $helper = "dist/local-computer-helper-v${version}-windows-x86_64.exe"
+          Copy-Item target/release/local-browser-bridge.exe $server
+          Copy-Item target/release/local-computer-helper.exe $helper
+          if ((& $server --version) -ne "local-browser-bridge $version") { throw "Unexpected server version" }
+          if ((& $helper --version) -ne "local-computer-helper $version") { throw "Unexpected helper version" }
+          foreach ($output in @($server, $helper)) {
+            $bytes = [System.IO.File]::ReadAllBytes($output)
+            if ($bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) { throw "$output does not have an MZ header" }
+          }
       - name: Attest Windows build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -99,24 +103,34 @@ jobs:
           rustup toolchain install 1.88.0 --profile minimal
           rustup default 1.88.0
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
-      - name: Build and verify the universal binary
+      - name: Build and verify universal server and helper app
         shell: bash
         run: |
           version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
-          cargo build --locked --release --target aarch64-apple-darwin
-          cargo build --locked --release --target x86_64-apple-darwin
-          mkdir -p dist stage
+          cargo build --locked --release --bins --target aarch64-apple-darwin
+          cargo build --locked --release --bins --target x86_64-apple-darwin
+          mkdir -p dist stage "stage/Local Computer Helper.app/Contents/MacOS"
           lipo -create \
             target/aarch64-apple-darwin/release/local-browser-bridge \
             target/x86_64-apple-darwin/release/local-browser-bridge \
             -output stage/local-browser-bridge
-          chmod 755 stage/local-browser-bridge
-          architectures="$(lipo -archs stage/local-browser-bridge)"
-          [[ "$architectures" == *"arm64"* && "$architectures" == *"x86_64"* ]]
-          reported="$(stage/local-browser-bridge --version)"
-          test "$reported" = "local-browser-bridge $version"
-          tar -czf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" -C stage local-browser-bridge
+          lipo -create \
+            target/aarch64-apple-darwin/release/local-computer-helper \
+            target/x86_64-apple-darwin/release/local-computer-helper \
+            -output "stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"
+          sed "s/@VERSION@/$version/g" packaging/macos/Info.plist.in > "stage/Local Computer Helper.app/Contents/Info.plist"
+          chmod 755 stage/local-browser-bridge "stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"
+          for executable in stage/local-browser-bridge "stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"; do
+            architectures="$(lipo -archs "$executable")"
+            [[ "$architectures" == *"arm64"* && "$architectures" == *"x86_64"* ]]
+          done
+          test "$(stage/local-browser-bridge --version)" = "local-browser-bridge $version"
+          test "$("stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper" --version)" = "local-computer-helper $version"
+          codesign --force --deep --sign - "stage/Local Computer Helper.app"
+          codesign --verify --deep --strict "stage/Local Computer Helper.app"
+          tar -czf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" -C stage local-browser-bridge "Local Computer Helper.app"
           tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | grep -Fxq local-browser-bridge
+          tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | grep -Fxq "Local Computer Helper.app/Contents/MacOS/local-computer-helper"
       - name: Attest macOS build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -171,6 +185,7 @@ jobs:
           version="${RELEASE_TAG#v}"
           assets=(
             "local-browser-bridge-v${version}-windows-x86_64.exe"
+            "local-computer-helper-v${version}-windows-x86_64.exe"
             "local-browser-bridge-v${version}-macos-universal.tar.gz"
             "local-browser-bridge-extension-v${version}.zip"
           )
@@ -179,6 +194,7 @@ jobs:
           (cd dist && sha256sum --check SHA256SUMS.txt)
           unzip -tq "dist/local-browser-bridge-extension-v${version}.zip"
           tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | grep -Fxq local-browser-bridge
+          tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | grep -Fxq "Local Computer Helper.app/Contents/MacOS/local-computer-helper"
       - name: Attest the checksum manifest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -190,14 +206,15 @@ jobs:
         run: |
           version="${RELEASE_TAG#v}"
           cat > release-notes.md <<EOF
-          Standalone Local Browser Bridge ${version} for Windows and macOS, plus the matching Chromium extension.
+          Standalone Local Browser Bridge ${version} for Windows and macOS, its separate native computer helper, and the matching Chromium extension.
 
           ## Install
 
-          1. Download the server archive for your operating system and the extension ZIP.
-          2. Verify both files against \`SHA256SUMS.txt\` or with \`gh attestation verify <file> -R flrngel/local-browser-bridge\`.
-          3. Run the server, extract the extension ZIP, and load that folder from \`chrome://extensions\` with Developer mode enabled.
-          4. Paste the token printed by the server into the extension popup. Keep the server and extension on this same version.
+          1. Download the server and computer-helper artifacts for your operating system plus the extension ZIP.
+          2. Verify every file against \`SHA256SUMS.txt\` or with \`gh attestation verify <file> -R flrngel/local-browser-bridge\`.
+          3. Run the server. Run the separate helper only when desktop control is wanted; macOS will request Screen Recording and Accessibility.
+          4. Extract the extension ZIP, load it from \`chrome://extensions\` with Developer mode enabled, and paste the token printed by the server into its popup.
+          5. Keep the server, helper, and extension on this same version.
 
           ## Trust notice
 

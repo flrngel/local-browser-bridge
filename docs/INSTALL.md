@@ -1,17 +1,17 @@
 # Installation and update guide
 
-Local Browser Bridge has two matching components: one standalone server binary for your operating system and one Chromium extension ZIP. Always install both from the same release version.
+Local Browser Bridge has two required matching components—the standalone server and Chromium extension—and one optional matching computer helper for native desktop control. Always use every installed component from the same release version.
 
 ## 1. Download the matching files
 
 Open the [official GitHub Releases page](https://github.com/flrngel/local-browser-bridge/releases/latest) and download:
 
-- Windows: `local-browser-bridge-vVERSION-windows-x86_64.exe`
-- macOS Intel or Apple silicon: `local-browser-bridge-vVERSION-macos-universal.tar.gz`
+- Windows: `local-browser-bridge-vVERSION-windows-x86_64.exe` and, for desktop control, `local-computer-helper-vVERSION-windows-x86_64.exe`
+- macOS Intel or Apple silicon: `local-browser-bridge-vVERSION-macos-universal.tar.gz`, which contains the server and `Local Computer Helper.app`
 - Every platform: `local-browser-bridge-extension-vVERSION.zip`
 - Verification: `SHA256SUMS.txt`
 
-There is no installer, background service, browser hijack, or silent updater. The server runs only while you launch it and listens only on `127.0.0.1`.
+There is no installer, background service, browser hijack, autostart entry, or silent updater. The server and optional helper run only while you launch them. The helper opens no listening socket; it connects outbound to the loopback server.
 
 ## 2. Verify before running
 
@@ -49,7 +49,37 @@ tar -xzf local-browser-bridge-vVERSION-macos-universal.tar.gz
 
 The archive supports both Apple silicon and Intel. It is not yet signed with an Apple Developer ID or notarized. Gatekeeper may block the first launch. Keep Gatekeeper enabled. After verifying the source and artifact, macOS provides a per-app **Open Anyway** action under **System Settings → Privacy & Security**; do not disable Gatekeeper globally.
 
-## 4. Load the extension
+## 4. Start native desktop control only when wanted
+
+The helper is optional. Its console states what it can do and stays open while desktop control is available. Stop it with `Ctrl+C` or by closing its console. It shares the server's generated token file automatically, so there is no second secret to paste.
+
+### Windows 11
+
+From a second PowerShell window:
+
+```powershell
+.\local-computer-helper-vVERSION-windows-x86_64.exe
+```
+
+Run it as the signed-in user, not as a Windows service and not from Session 0. Administrator rights are not required for ordinary desktop control. The server UI should show **Computer connected**.
+
+### macOS
+
+The helper is packaged as a stable application identity so Screen Recording and Accessibility are granted to the helper rather than to an arbitrary executable path. From a second Terminal window, first request/check both permissions:
+
+```bash
+./Local\ Computer\ Helper.app/Contents/MacOS/local-computer-helper --request-permissions
+```
+
+If macOS opens System Settings, enable **Local Computer Helper** under **Privacy & Security → Screen & System Audio Recording** and **Privacy & Security → Accessibility**. Then start the long-running helper:
+
+```bash
+./Local\ Computer\ Helper.app/Contents/MacOS/local-computer-helper
+```
+
+The app bundle is ad-hoc signed for internal consistency, but it is not Developer ID-signed or notarized. A new build can require the grants again. Do not grant Accessibility to an unrelated shell or globally weaken Gatekeeper.
+
+## 5. Load the extension
 
 1. Extract `local-browser-bridge-extension-vVERSION.zip` to a stable folder.
 2. Open `chrome://extensions` in Chrome or `edge://extensions` in Edge.
@@ -58,10 +88,12 @@ The archive supports both Apple silicon and Intel. It is not yet signed with an 
 5. Open the Local Browser Bridge popup and confirm that its version matches the server version.
 6. Paste the token printed by the server, keep port `17373`, and select **Save and connect**.
 
-The extension includes no remote code, analytics, cookie API, native messaging host, downloader, or external update endpoint. Chrome does not auto-update unpacked extensions on Windows or macOS. When the local UI reports a new release, repeat the download and verification steps and replace both components together.
+The extension includes no remote code, analytics, cookie API, native messaging host, downloader, or external update endpoint. Chrome does not auto-update unpacked extensions on Windows or macOS. When the local UI reports a new release, repeat the download and verification steps and replace the server, helper, and extension together.
 
-## 5. Understand the authority granted
+## 6. Understand the authority granted
 
 Full Access mode is enabled by default and can control all regular HTTP(S) tabs in the selected Chromium profile, enter sensitive text, close tabs, send keys, click coordinates, and evaluate page JavaScript. Use a dedicated browser profile if you do not want the bridge to reach personal sessions. Turn Full Access off to use the site allowlist and one-time approvals in Safe mode.
 
-Stopping the server immediately breaks the bridge connection. You can also pause control in the extension popup or remove the extension from `chrome://extensions`.
+The computer helper can see all pixels on the selected display and can send native mouse and keyboard input to whichever application is active. It does not offer shell, filesystem, clipboard, process-launch, downloader, or telemetry commands. Stop the helper whenever desktop authority is not needed.
+
+Stopping the server immediately breaks both connections. You can also stop the helper, pause browser control in the extension popup, or remove the extension from `chrome://extensions`.

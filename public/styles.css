@@ -64,6 +64,7 @@ h2 { font-size: 1.05rem; margin-bottom: 14px; letter-spacing: -0.02em; }
 }
 
 .connection { display: inline-flex; align-items: center; gap: 9px; color: var(--muted); font-size: 0.88rem; }
+.connection-stack { display: grid; gap: 6px; justify-items: end; }
 .status-dot { width: 10px; height: 10px; border-radius: 999px; background: var(--warning); box-shadow: 0 0 15px currentColor; }
 .connection.online .status-dot { background: var(--accent); }
 .connection.offline .status-dot { background: var(--danger); }
@@ -90,6 +91,17 @@ main { width: min(1680px, 100%); margin: 0 auto; padding: 26px clamp(16px, 3vw, 
 .update-detail { margin-bottom: 0; color: var(--muted); font-size: 0.78rem; line-height: 1.45; }
 .release-actions { display: flex; gap: 9px; flex: 0 0 auto; }
 .release-link { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+.computer-panel { margin-bottom: 20px; border-left: 4px solid var(--cyan); }
+.computer-heading { align-items: center; }
+.computer-actions { display: flex; gap: 9px; flex: 0 0 auto; }
+.computer-boundary { margin: 13px 0 18px; padding: 11px 13px; border: 1px solid #36504a; border-radius: 10px; color: #bde5df; background: rgba(114, 231, 219, 0.05); font-size: 0.8rem; line-height: 1.5; }
+.computer-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(260px, 0.45fr); gap: 20px; align-items: start; }
+.computer-controls { display: grid; gap: 12px; }
+.computer-controls form { margin-top: 0; }
+.computer-scroll-grid { margin: 0; }
+.computer-screenshot-shell { min-height: 260px; }
+#computer-screenshot { width: 100%; height: auto; max-height: 68vh; object-fit: contain; object-position: top center; display: block; cursor: crosshair; }
+.frame-meta { margin: 9px 0 0; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.72rem; overflow-wrap: anywhere; }
 .workspace-grid { display: grid; grid-template-columns: minmax(270px, 340px) minmax(0, 1fr); gap: 20px; align-items: start; }
 .sidebar, .stage { display: grid; gap: 20px; }
 .sidebar { position: sticky; top: 114px; max-height: calc(100vh - 130px); overflow: auto; padding-right: 3px; }
@@ -171,6 +183,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 420px; overflo
 
 @media (max-width: 920px) {
   .workspace-grid { grid-template-columns: 1fr; }
+  .computer-grid { grid-template-columns: 1fr; }
   .sidebar { position: static; max-height: none; overflow: visible; }
   .guide { grid-template-columns: 1fr; }
   .boundary { grid-column: auto; }
@@ -182,4 +195,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 420px; overflo
   .activity-item { grid-template-columns: 1fr; gap: 3px; }
   .button-row { grid-template-columns: 1fr; }
   .release-actions { width: 100%; flex-direction: column; }
+  .connection-stack { justify-items: start; }
+  .computer-heading { align-items: flex-start; }
+  .computer-actions { width: 100%; flex-direction: column; }
 }

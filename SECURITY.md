@@ -2,7 +2,7 @@
 
 Local Browser Bridge gives an automated system access to pages in a real signed-in browser profile. Treat it like remote-control software even though every transport is local.
 
-Version 0.5.0 enables **Full Access mode by default**. This intentionally removes most action-level safety controls: the allowlist is ignored, sensitive fields can be filled, risky actions and tab closing execute without approval, arbitrary page JavaScript can run, and trusted coordinate/key input is available. Only run it for a local agent you trust. Turn Full Access off in the popup to restore Safe mode.
+Version 0.6.0 enables browser **Full Access mode by default** and adds an optional native computer helper. Full Access intentionally removes most browser action-level safety controls. The computer helper executes its bounded native input commands immediately while it is running; browser Safe mode does not govern desktop applications. Only run either capability for a local agent you trust.
 
 ## Trust boundaries
 
@@ -14,6 +14,12 @@ Version 0.5.0 enables **Full Access mode by default**. This intentionally remove
 - The bridge control page cannot be selected as a target, preventing recursive self-control.
 - The server and control UI are compiled into one Rust binary; no Node.js runtime or package installation is involved.
 - The extension contains no remote code, download API, cookie API, native messaging host, telemetry, or update endpoint.
+- The native computer helper is a separate, visibly connected process. It opens no listener and connects outbound to the server with the shared token and exact private Origin.
+- The server intersects helper-advertised capabilities with a fixed allowlist. No shell, filesystem, process-launch, clipboard, downloader, or telemetry method is accepted or implemented.
+- Every native input action is bound to the last delivered screen frame. The helper rechecks display identity and geometry immediately before input and rejects stale frames.
+- Browser and native computer actions share one serialization lock so two local callers cannot intentionally interleave physical input through this server.
+
+The random token authenticates local protocol clients; it is not a sandbox. Malware or another user process that can read the token file or operate the authenticated control page may gain the same authority. Operating-system screen-capture and Accessibility permissions remain the final native boundary.
 
 ## Release and update trust
 
@@ -21,7 +27,7 @@ Version 0.5.0 enables **Full Access mode by default**. This intentionally remove
 - `--no-update-check` or `LBB_DISABLE_UPDATE_CHECK=1` prevents that request. `--check-updates` performs the same metadata-only check and exits.
 - The extension never performs update checks. Unpacked extensions do not silently update on Windows or macOS; the control UI reports a server/extension mismatch so the user can replace both from one release.
 - Tagged release builds run on separate GitHub-hosted Windows and macOS workers. Every binary/archive and checksum manifest receives GitHub build provenance, and release immutability prevents later asset or tag replacement.
-- Version 0.5.0 artifacts are not yet Microsoft publisher-signed or Apple Developer ID-signed/notarized. Platform warnings are therefore expected for some downloads. Checksums and GitHub provenance detect release tampering but do not replace OS publisher signing or malware notarization.
+- Version 0.6.0 artifacts are not yet Microsoft publisher-signed or Apple Developer ID-signed/notarized. The macOS helper app is ad-hoc signed so its bundle is structurally valid, not to claim a verified publisher identity. Platform warnings and permission re-prompts are therefore possible. Checksums and GitHub provenance detect release tampering but do not replace OS publisher signing or malware notarization.
 
 ## Modes and human approval
 
@@ -36,8 +42,18 @@ Risk detection in Safe mode is a conservative text heuristic, not a complete pol
 - Tab URLs returned to the server omit query strings and fragments.
 - Screenshot and page text remain in server memory and are not written to disk.
 - Browser content is treated as untrusted and inserted into the control UI with `textContent`, not HTML.
+- Native desktop screenshots remain in server memory, are served only from loopback under the control page's same-origin policy, and are replaced on the next capture. They can contain content from any visible application or notification on the selected display.
 
 Full Access can run arbitrary JavaScript in the target page's main world and act with that page's signed-in session. It cannot directly read HttpOnly cookie values, but page-origin requests can still use those cookies. Treat any token holder and any agent that can operate the localhost UI as trusted browser operators.
+
+Native desktop input is pixel-first and targets whichever application currently owns the relevant screen location or keyboard focus. A frame ID prevents acting on changed monitor geometry; it does not prove application identity, detect prompt injection, or make a click harmless. Observe after every action and supervise consequential workflows.
+
+## Native permission rationale
+
+- Screen Recording is required on macOS to capture desktop pixels.
+- Accessibility is required on macOS to synthesize mouse and keyboard events.
+- Windows input must run in the signed-in interactive session; the helper is not installed as a service and requests no administrator elevation for normal use.
+- The macOS release uses a named `.app` bundle because TCC grants attach to application identity. Run that packaged helper rather than copying its inner executable to an arbitrary location.
 
 ## Permission rationale
 

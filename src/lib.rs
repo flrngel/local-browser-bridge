@@ -1,3 +1,4 @@
+pub mod computer;
 pub mod hub;
 pub mod server;
 pub mod token;
