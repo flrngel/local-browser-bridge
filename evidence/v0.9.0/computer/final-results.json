@@ -2,10 +2,35 @@
   "schemaVersion": 1,
   "productVersion": "0.9.0",
   "evidenceClass": "frozen-package-live-verification",
-  "finalReleaseVerification": false,
-  "publicationStatus": "awaiting-published-release-download-and-attestation-verification",
+  "finalReleaseVerification": true,
+  "publicationStatus": "published-release-downloaded-and-verified",
   "capturedAt": "2026-08-19T09:30:00Z",
   "codeCommit": "dc31363b9f55697fc1a5dbee2361a270cfc92bf7",
+  "publishedRelease": {
+    "tag": "v0.9.0",
+    "sourceCommit": "c790f1f9b451ce213513725b78f16887898cad9b",
+    "annotatedTagObject": "297f4b81ef3d19b4067b305115bb3d2f19e37093",
+    "url": "https://github.com/flrngel/local-browser-bridge/releases/tag/v0.9.0",
+    "workflowRun": "https://github.com/flrngel/local-browser-bridge/actions/runs/32240796679",
+    "publishedAt": "2026-08-19T10:12:12Z",
+    "immutable": true,
+    "downloadedAndChecksumVerified": true,
+    "releaseAttestationVerified": true,
+    "sourceProvenancePolicy": {
+      "repository": "flrngel/local-browser-bridge",
+      "sourceRef": "refs/tags/v0.9.0",
+      "sourceDigest": "c790f1f9b451ce213513725b78f16887898cad9b",
+      "signerWorkflow": ".github/workflows/deploy.yml",
+      "selfHostedRunnersDenied": true
+    },
+    "assets": {
+      "windowsServerSha256": "3985b650ead5a6052b12d73c7a50c97e659a694b2f19b211946f32cdcd4851cc",
+      "windowsHelperSha256": "304d031f912c76d1e25fa2a70a75cd92dcbf42dd2d9697a342e845659a2e9e38",
+      "macosUniversalSha256": "da4222194e0137032aa623ca31e61cd851aafbf149c3e7be51dde77f0d183036",
+      "extensionSha256": "1e73439722264da7fa2ef75fdeb43c9101de69c3deb0ac174111f0ea4efbfea6",
+      "checksumManifestSha256": "a69841c711013cf0fb699830abc523542ec22014c40c23a20b967c478bbc286b"
+    }
+  },
   "environment": {
     "operatingSystem": "macOS 26.5.1",
     "architecture": "arm64",
@@ -17,14 +42,18 @@
   },
   "package": {
     "archive": "local-browser-bridge-v0.9.0-macos-universal.tar.gz",
-    "archiveSha256": "69e0ea45efd36c4e72cbfab4cb4c403e141eb8de2af34ee54f64da01155a0d7c",
+    "liveTestedLocalArchiveSha256": "69e0ea45efd36c4e72cbfab4cb4c403e141eb8de2af34ee54f64da01155a0d7c",
+    "publishedArchiveSha256": "da4222194e0137032aa623ca31e61cd851aafbf149c3e7be51dde77f0d183036",
     "architectures": [
       "arm64",
       "x86_64"
     ],
-    "serverSha256": "99d0e7389c25204a29b4cc6a6de43e0a0c04ce4347852935e07a4f68bf790407",
-    "helperSha256": "8e4391a57552cd8d6d3238d2e5c672c88d9332069ce247fb233c26dc631a5237",
-    "adHocCodeSignVerification": "passed"
+    "liveTestedServerSha256": "99d0e7389c25204a29b4cc6a6de43e0a0c04ce4347852935e07a4f68bf790407",
+    "liveTestedHelperSha256": "8e4391a57552cd8d6d3238d2e5c672c88d9332069ce247fb233c26dc631a5237",
+    "publishedServerSha256": "c13c9dddd706bcadfa901214917fce9a4f19a6ab3003cc516b34bed849582e74",
+    "publishedHelperSha256": "4cabe41533337e796fb28a3c439b31281777253757fad33be80ec448e2fc6fbb",
+    "adHocCodeSignVerification": "passed",
+    "publishedArchiveVersionArchitectureAndCodeSignVerification": "passed"
   },
   "fixture": {
     "application": "BackgroundFixtureSemantic",
@@ -35,6 +64,18 @@
     "semanticMode": "macos-accessibility"
   },
   "checks": {
+    "publishedRuntimeSmoke": {
+      "publishedMacServerVersion": "0.9.0",
+      "publishedMacHelperVersion": "0.9.0",
+      "extensionConnected": true,
+      "computerHelperConnected": true,
+      "fixtureObserve": "passed"
+    },
+    "publishedUpdateCheck": {
+      "result": "Version 0.9.0 is the latest stable release.",
+      "releasePage": "https://github.com/flrngel/local-browser-bridge/releases/tag/v0.9.0",
+      "downloadsOrInstallsPerformed": false
+    },
     "move": {
       "ok": true,
       "actionId": "08643b0d-8c24-49a3-a87d-4400a54fc138",
@@ -128,6 +169,8 @@
   "limitations": [
     "Pixel actions remain Unverifiable unless an independent target-side postcondition is observed.",
     "This host verified the packaged macOS runtime; Windows was cross-compiled, linted, and test-built but not executed on a Windows host.",
-    "Background-window routing is not a separate VM, RDP seat, or isolated operating-system desktop."
+    "The full live action matrix used the frozen local macOS package; the separately built GitHub macOS asset was downloaded and passed provenance, checksum, version, architecture, code-signature, mutual-authentication, fixture-observe, and update checks.",
+    "Background-window routing is not a separate VM, RDP seat, or isolated operating-system desktop.",
+    "The released Windows and macOS binaries are not publisher or Developer ID signed, and the macOS package is not notarized."
   ]
 }

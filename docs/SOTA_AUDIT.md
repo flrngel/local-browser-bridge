@@ -65,7 +65,7 @@ These surfaces are intentionally independent. The Chrome warning proves a debugg
 
 The checked-in [version 0.8 evidence](../evidence/v0.8.0/README.md) proves the earlier exact-window macOS fixture, semantic actions, browser extension load path, and non-interruption baseline. It does not prove the new version 0.9 lease, indicator, protocol, pointer, or share behavior.
 
-The separate [version 0.9 evidence bundle](../evidence/v0.9.0/README.md) now contains both the original exploration and a frozen packaged pre-publication run. Its `final-results.json` records remain false until the published GitHub assets and attestations are downloaded and verified. The required scenario matrix is:
+The separate [version 0.9 evidence bundle](../evidence/v0.9.0/README.md) contains both the original exploration and a frozen packaged run. Its `final-results.json` records were promoted to true only after the immutable GitHub release, fresh asset downloads, checksums, package contracts, source/ref/workflow-constrained attestations, published macOS runtime smoke, and same-version update check passed. The required scenario matrix is:
 
 | Scenario | Visual evidence | Machine-readable evidence |
 |---|---|---|

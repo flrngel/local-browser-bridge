@@ -5,7 +5,7 @@ This directory contains two evidence layers captured on 2026-08-19:
 - The original sanitized exploratory run in `browser/results.json`, `computer/results.json`, and screenshots 01–10.
 - A frozen, packaged pre-publication run in both `final-results.json` files, browser screenshots 09–11, and computer screenshot 11. It is bound to code commit `dc31363`, the deterministic extension ZIP, and the packaged universal macOS server/helper archive.
 
-The frozen records deliberately keep `finalReleaseVerification` false until the tagged GitHub assets and build attestations have been published, downloaded, and verified. Windows runtime execution is also reported honestly as unavailable on this macOS host; Windows x86_64 check, strict Clippy, and all-target test builds passed.
+The frozen records were promoted to `finalReleaseVerification: true` only after the immutable [`v0.9.0` GitHub release](https://github.com/flrngel/local-browser-bridge/releases/tag/v0.9.0), all five assets, their checksums, and their build attestations were independently downloaded and verified. Windows runtime execution is still reported honestly as unavailable on this macOS host; Windows x86_64 check, strict Clippy, and all-target test builds passed.
 
 ## Frozen package verification
 
@@ -61,13 +61,20 @@ All 22 JPEGs were visually reviewed at full size. The bundle was also scanned wi
 
 No bearer token, cookie, password, API key, private key, email address, account name, Chrome profile path, browsing history, personal URL, or unrelated window was found. The unpacked extension IDs shown in browser files 01 and 09 are non-secret identifiers and do not grant access. JPEG metadata contains only basic JFIF/date and, for the native captures, color-space/pixel-dimension fields; no GPS, author, device, account, or filesystem-path metadata was found.
 
-## Remaining publication verification
+## Published release verification
 
-The frozen source and local package gates are complete: 120 local tests, 38 extension contracts, strict Rust 1.88 lint, RustSec audit, deterministic ZIP comparison, universal macOS architecture/signature checks, Windows PE/package checks, Linux Rust 1.88 check/lint/tests, Windows x86_64 check/lint/test-build, and macOS x86_64 lint all passed. The remaining publication steps are:
+The frozen source and local package gates completed with 120 local tests, 38 extension contracts, strict Rust 1.88 lint, RustSec audit, deterministic ZIP comparison, universal macOS architecture/signature checks, Windows PE/package checks, Linux Rust 1.88 check/lint/tests, Windows x86_64 check/lint/test-build, and macOS x86_64 lint. The tag workflow then rebuilt and published the assets from source commit `c790f1f9b451ce213513725b78f16887898cad9b`.
 
-- Publish the immutable `v0.9.0` GitHub release from the frozen tag.
-- Download all release assets and `SHA256SUMS.txt`, then verify package contents, hashes, release integrity, and GitHub build attestations.
-- Run the packaged server's same-version update check against the published release metadata.
-- Change both frozen records to `finalReleaseVerification: true` only after those checks pass.
+Every release file was downloaded into a fresh directory, matched `SHA256SUMS.txt`, passed the repository package verifier, passed release-level verification, and passed SLSA provenance constrained to this repository, `refs/tags/v0.9.0`, the exact source commit, `.github/workflows/deploy.yml`, and GitHub-hosted runners.
 
-Windows runtime execution remains a declared coverage limitation, not an implied success.
+| Published asset | SHA-256 |
+| --- | --- |
+| `local-browser-bridge-extension-v0.9.0.zip` | `1e73439722264da7fa2ef75fdeb43c9101de69c3deb0ac174111f0ea4efbfea6` |
+| `local-browser-bridge-v0.9.0-macos-universal.tar.gz` | `da4222194e0137032aa623ca31e61cd851aafbf149c3e7be51dde77f0d183036` |
+| `local-browser-bridge-v0.9.0-windows-x86_64.exe` | `3985b650ead5a6052b12d73c7a50c97e659a694b2f19b211946f32cdcd4851cc` |
+| `local-computer-helper-v0.9.0-windows-x86_64.exe` | `304d031f912c76d1e25fa2a70a75cd92dcbf42dd2d9697a342e845659a2e9e38` |
+| `SHA256SUMS.txt` | `a69841c711013cf0fb699830abc523542ec22014c40c23a20b967c478bbc286b` |
+
+The downloaded universal macOS server/helper both reported version 0.9.0, passed architecture and strict code-signature checks, mutually authenticated with the already-loaded release extension, and completed browser start/observe/stop plus native fixture-observe smoke checks. The published server's updater reported version 0.9.0 as the latest stable release without downloading or installing anything.
+
+Windows runtime execution remains a declared coverage limitation, not an implied success. The public binaries are not Microsoft publisher or Apple Developer ID signed, and the macOS archive is not notarized; checksums and GitHub provenance are the release trust mechanism.
