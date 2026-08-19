@@ -132,8 +132,9 @@ function renderComputer(state) {
     ui["computer-meta"].textContent = `Install helper ${state.update?.currentVersion ?? "matching the server"}; native actions are blocked.`;
   } else {
     const input = computer.inputReady ? "input ready" : "input permission required";
-    ui["computer-connection-text"].textContent = `Computer connected · ${computer.platform} ${computer.architecture} · ${input}`;
-    ui["computer-meta"].textContent = `${computer.sessionMode} · ${computer.isolation} · ${computer.backend} · helper ${computer.version} · ${input}`;
+    const semantic = computer.semanticReady ? "semantic ready" : "semantic permission required";
+    ui["computer-connection-text"].textContent = `Computer connected · ${computer.platform} ${computer.architecture} · ${input} · ${semantic}`;
+    ui["computer-meta"].textContent = `${computer.sessionMode} · ${computer.isolation} · ${computer.backend} · helper ${computer.version} · ${input} · ${semantic}`;
   }
 
   if (!observation) {
@@ -426,19 +427,19 @@ for (const button of document.querySelectorAll(".scroll-command")) {
   button.addEventListener("click", () => runAction("page.scroll", { deltaY: Number(button.dataset.y), deltaX: 0 }));
 }
 for (const button of document.querySelectorAll(".key-command")) {
-  button.addEventListener("click", () => runAction("page.key", { key: button.dataset.key }));
+  button.addEventListener("click", () => runAction("page.key", { key: button.dataset.key, generation: currentState?.observation?.generation ?? "" }));
 }
 ui["coordinates-form"].addEventListener("submit", (event) => {
   event.preventDefault();
-  runAction("page.clickAt", { x: Number(ui["coordinate-x"].value), y: Number(ui["coordinate-y"].value), button: "left", clickCount: 1 });
+  runAction("page.clickAt", { x: Number(ui["coordinate-x"].value), y: Number(ui["coordinate-y"].value), button: "left", clickCount: 1, generation: currentState?.observation?.generation ?? "" });
 });
 ui["type-text-form"].addEventListener("submit", (event) => {
   event.preventDefault();
-  runAction("page.typeText", { text: ui["type-text"].value });
+  runAction("page.typeText", { text: ui["type-text"].value, generation: currentState?.observation?.generation ?? "" });
 });
 ui["custom-key-form"].addEventListener("submit", (event) => {
   event.preventDefault();
-  runAction("page.key", { key: ui["custom-key"].value.trim() });
+  runAction("page.key", { key: ui["custom-key"].value.trim(), generation: currentState?.observation?.generation ?? "" });
 });
 ui["evaluate-form"].addEventListener("submit", async (event) => {
   event.preventDefault();

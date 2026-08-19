@@ -2,7 +2,7 @@
 
 Local Browser Bridge gives an automated system access to pages in a real signed-in browser profile. Treat it like remote-control software even though every transport is local.
 
-Version 0.7.0 enables browser **Full Access mode by default** and adds an optional native computer helper. Full Access intentionally removes most browser action-level safety controls. The computer helper executes its bounded native input commands immediately while it is running; browser Safe mode does not govern desktop applications. Only run either capability for a local agent you trust.
+Version 0.8.0 enables browser **Full Access mode by default** and adds an optional native computer helper. Full Access intentionally removes most browser action-level safety controls. The computer helper executes its bounded native input commands immediately while it is running; browser Safe mode does not govern desktop applications. Only run either capability for a local agent you trust.
 
 ## Trust boundaries
 
@@ -28,7 +28,7 @@ The random token authenticates local protocol clients; it is not a sandbox. Malw
 - `--no-update-check` or `LBB_DISABLE_UPDATE_CHECK=1` prevents that request. `--check-updates` performs the same metadata-only check and exits.
 - The extension never performs update checks. Unpacked extensions do not silently update on Windows or macOS; the control UI reports a server/extension mismatch so the user can replace both from one release.
 - Tagged release builds run on separate GitHub-hosted Windows and macOS workers. Every binary/archive and checksum manifest receives GitHub build provenance, and release immutability prevents later asset or tag replacement.
-- Version 0.7.0 artifacts are not yet Microsoft publisher-signed or Apple Developer ID-signed/notarized. The macOS helper app is ad-hoc signed so its bundle is structurally valid, not to claim a verified publisher identity. Platform warnings and permission re-prompts are therefore possible. Checksums and GitHub provenance detect release tampering but do not replace OS publisher signing or malware notarization.
+- Version 0.8.0 artifacts are not yet Microsoft publisher-signed or Apple Developer ID-signed/notarized. The macOS helper app is ad-hoc signed so its bundle is structurally valid, not to claim a verified publisher identity. Platform warnings and permission re-prompts are therefore possible. Checksums and GitHub provenance detect release tampering but do not replace OS publisher signing or malware notarization.
 
 ## Modes and human approval
 
@@ -47,12 +47,12 @@ Risk detection in Safe mode is a conservative text heuristic, not a complete pol
 
 Full Access can run arbitrary JavaScript in the target page's main world and act with that page's signed-in session. It cannot directly read HttpOnly cookie values, but page-origin requests can still use those cookies. Treat any token holder and any agent that can operate the localhost UI as trusted browser operators.
 
-Native computer input is pixel-first but bound to one exact application window. A frame ID proves fresh window ownership and geometry; it does not detect prompt injection, prove semantic intent, or make a click harmless. Background delivery is application-framework dependent and can be refused by secure input, protected content, games, Chromium/WPF/WinUI controls, or elevated Windows targets. Observe after every action and supervise consequential workflows.
+Native computer input is hybrid semantic/pixel control bound to one exact application window. Semantic refs are tied to the captured frame and re-resolved before use, but a ref still does not detect prompt injection, prove human intent, or make an action harmless. Accessibility and background pixel delivery remain application-framework dependent and can be refused by secure input, protected content, games, custom-rendered controls, or elevated Windows targets. Observe after every action and supervise consequential workflows.
 
 ## Native permission rationale
 
 - Screen Recording is required on macOS to capture desktop pixels.
-- Accessibility is required on macOS to route synthetic mouse and keyboard events to an exact process/window. The current implementation dynamically resolves undocumented SkyLight symbols; platform updates can disable input, in which case the helper reports input unavailable rather than using global HID input.
+- Accessibility is required on macOS to expose semantic elements, invoke supported actions, set control values, and help route input to an exact process/window. Pixel delivery also dynamically resolves undocumented SkyLight symbols; platform updates can disable that route, in which case the helper reports input unavailable rather than using global HID input.
 - Windows input must run in the signed-in interactive session; the helper is not installed as a service and requests no administrator elevation for normal use.
 - The macOS release uses a named `.app` bundle because TCC grants attach to application identity. Run that packaged helper rather than copying its inner executable to an arbitrary location.
 

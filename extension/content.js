@@ -23,7 +23,8 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
 
   function labelledBy(element) {
     const ids = clean(element.getAttribute("aria-labelledby"), 500).split(" ").filter(Boolean);
-    return ids.map((id) => clean(document.getElementById(id)?.textContent)).filter(Boolean).join(" ");
+    const root = element.getRootNode();
+    return ids.map((id) => clean(root.getElementById?.(id)?.textContent || document.getElementById(id)?.textContent)).filter(Boolean).join(" ");
   }
 
   function accessibleName(element) {
@@ -81,15 +82,34 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
         width: Math.round(rect.width),
         height: Math.round(rect.height),
       },
+      tree: element.getRootNode() instanceof ShadowRoot ? "shadow" : "document",
     };
+  }
+
+  function composedCandidates(root = document) {
+    const found = [];
+    const seen = new Set();
+    const visit = (scope) => {
+      for (const element of scope.querySelectorAll(candidateSelector)) {
+        if (!seen.has(element)) {
+          seen.add(element);
+          found.push(element);
+        }
+      }
+      for (const element of scope.querySelectorAll("*")) {
+        if (element.shadowRoot) visit(element.shadowRoot);
+      }
+    };
+    visit(root);
+    return found;
   }
 
   function snapshot() {
     generation = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     refs = new Map();
     const elements = [];
-    for (const element of document.querySelectorAll(candidateSelector)) {
-      if (elements.length >= 250 || !visible(element)) continue;
+    for (const element of composedCandidates()) {
+      if (elements.length >= 500 || !visible(element)) continue;
       const ref = `e${elements.length + 1}`;
       refs.set(ref, element);
       elements.push(describe(element, ref));
@@ -133,6 +153,9 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
     switch (message.method) {
       case "snapshot":
         return snapshot();
+      case "assertGeneration":
+        if (!generation || message.generation !== generation) throw new Error("STALE_SNAPSHOT: observe the page again before acting");
+        return { current: true };
       case "describe": {
         const element = resolve(message.ref, message.generation);
         return describe(element, message.ref);

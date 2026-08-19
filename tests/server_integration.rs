@@ -112,8 +112,9 @@ async fn connect_fake_computer(base_url: &str, token: &str, version: &str) -> Jo
                     "architecture": "test-arch",
                     "backend": "test-capture+test-input",
                     "inputReady": true,
+                    "semanticReady": true,
                     "capabilities": [
-                        "computer.status", "computer.observe", "computer.move", "computer.click",
+                        "computer.status", "computer.observe", "computer.move", "computer.click", "computer.invoke", "computer.setValue",
                         "computer.drag", "computer.scroll", "computer.typeText", "computer.key",
                         "computer.shell"
                     ]
@@ -328,12 +329,13 @@ async fn relays_frame_bound_computer_actions_and_serves_desktop_capture() {
     let state = wait_for_computer(&client, &base_url).await;
     assert_eq!(state["state"]["computerConnected"], true);
     assert_eq!(state["state"]["computer"]["inputReady"], true);
+    assert_eq!(state["state"]["computer"]["semanticReady"], true);
     assert_eq!(
         state["state"]["computer"]["capabilities"]
             .as_array()
             .unwrap()
             .len(),
-        8
+        10
     );
     assert!(
         !state["state"]["computer"]["capabilities"]

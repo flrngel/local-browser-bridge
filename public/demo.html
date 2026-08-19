@@ -9,7 +9,8 @@
   </head>
   <body>
     <h1>Browser Bridge demo target</h1>
-    <p>This page is a safe local target for checking observation, fill, select, click, and screenshot behavior.</p>
+    <p>This page is a deterministic local target for browser-command verification.</p>
+    <p id="route-state" role="status"></p>
     <form id="demo-form">
       <label for="name">Display name</label>
       <input id="name" name="name" placeholder="Ada" autocomplete="off">
@@ -22,5 +23,23 @@
       <button type="submit">Show greeting</button>
       <output id="result" aria-live="polite"></output>
     </form>
+    <section aria-labelledby="direct-title">
+      <h2 id="direct-title">Direct input targets</h2>
+      <label for="keyboard-target">Keyboard target</label>
+      <input id="keyboard-target" placeholder="Focus, type, and press keys" autocomplete="off">
+      <button id="coordinate-button" type="button">Coordinate target</button>
+      <a id="history-link" href="/demo?step=2">Open history step 2</a>
+      <div id="shadow-host"></div>
+    </section>
+    <section class="spacer" aria-hidden="true"></section>
+    <section id="scroll-marker" tabindex="0">
+      <h2>Scroll marker</h2>
+      <p>The bottom target is visible after a viewport scroll.</p>
+      <button id="bottom-button" type="button">Bottom action</button>
+    </section>
+    <section aria-labelledby="log-title">
+      <h2 id="log-title">Action log</h2>
+      <output id="event-log" aria-live="polite">ready</output>
+    </section>
   </body>
 </html>

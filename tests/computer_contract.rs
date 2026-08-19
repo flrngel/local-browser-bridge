@@ -14,9 +14,11 @@ fn helper_exposes_only_bounded_observation_and_input_methods() {
             "computer.click",
             "computer.drag",
             "computer.key",
+            "computer.invoke",
             "computer.move",
             "computer.observe",
             "computer.scroll",
+            "computer.setValue",
             "computer.status",
             "computer.typeText",
         ])
@@ -96,4 +98,20 @@ fn background_backend_has_no_global_or_foreground_input_fallback() {
     assert!(macos.contains("CGEventSetWindowLocation"));
     assert!(windows.contains("PostMessageW"));
     assert!(windows.contains("WS_EX_NOACTIVATE"));
+}
+
+#[test]
+fn semantic_backends_revalidate_exact_targets_and_report_effects() {
+    let macos = fs::read_to_string("src/computer/ax_macos.rs").unwrap();
+    let windows = fs::read_to_string("src/computer/uia_windows.rs").unwrap();
+    assert!(macos.contains("_AXUIElementGetWindow"));
+    assert!(macos.contains("resolve_verified"));
+    assert!(macos.contains("AXUIElementPerformAction"));
+    assert!(macos.contains("target-window-closed"));
+    assert!(macos.contains("masked-length-confirmed"));
+    assert!(windows.contains("ElementFromHandle"));
+    assert!(windows.contains("resolve_verified"));
+    assert!(windows.contains("IUIAutomationInvokePattern"));
+    assert!(windows.contains("IUIAutomationValuePattern"));
+    assert!(windows.contains("COMPUTER_POSTCONDITION_FAILED"));
 }

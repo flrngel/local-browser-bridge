@@ -4,7 +4,9 @@ use std::time::Duration;
 use image::RgbaImage;
 use xcap::Window;
 
-use super::{ComputerError, InvariantReport, TargetPoint, WindowDescriptor};
+use super::{
+    ComputerError, InvariantReport, SemanticTarget, TargetPoint, WindowDescriptor, uia_windows,
+};
 
 type Hwnd = isize;
 
@@ -67,13 +69,50 @@ const CWP_SKIPTRANSPARENT: u32 = 0x0004;
 const GA_ROOT: u32 = 2;
 
 pub fn backend_name() -> &'static str {
-    "background-window/win32-messages+wgc"
+    "background-window/uia+win32-messages+wgc"
+}
+
+pub fn semantic_backend_name() -> &'static str {
+    "windows-ui-automation"
+}
+
+pub fn semantic_ready(_prompt: bool) -> bool {
+    true
+}
+
+pub fn semantic_elements(target: &WindowDescriptor) -> Result<Vec<SemanticTarget>, ComputerError> {
+    target_hwnd(target)?;
+    uia_windows::snapshot(target)
+}
+
+pub fn invoke(
+    target: &WindowDescriptor,
+    semantic: &SemanticTarget,
+    action: &str,
+) -> Result<serde_json::Value, ComputerError> {
+    let before = DesktopSnapshot::capture()?;
+    target_hwnd(target)?;
+    let effect = uia_windows::invoke(target, semantic, action)?;
+    before.compare(&DesktopSnapshot::capture()?).assert_held()?;
+    Ok(effect)
+}
+
+pub fn set_value(
+    target: &WindowDescriptor,
+    semantic: &SemanticTarget,
+    value: &str,
+) -> Result<serde_json::Value, ComputerError> {
+    let before = DesktopSnapshot::capture()?;
+    target_hwnd(target)?;
+    let effect = uia_windows::set_value(target, semantic, value)?;
+    before.compare(&DesktopSnapshot::capture()?).assert_held()?;
+    Ok(effect)
 }
 
 pub fn limitations() -> Vec<&'static str> {
     vec![
-        "Background Win32 messages work best with native Win32 controls",
-        "Chromium, WPF, WinUI, games, elevated windows, and protected content can refuse background events",
+        "UI Automation is preferred for Chromium, WPF, WinUI, and native controls",
+        "Pixel-only events use Win32 messages; games, elevated windows, and protected content can refuse them",
         "Unsupported controls fail rather than falling back to SendInput or SetForegroundWindow",
     ]
 }

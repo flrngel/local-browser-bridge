@@ -1,0 +1,65 @@
+{
+  "version": "0.8.0",
+  "date": "2026-08-18",
+  "server": "local-browser-bridge 0.8.0",
+  "extension": {
+    "version": "0.8.0",
+    "browser": "Google Chrome",
+    "loadedVia": "chrome://extensions",
+    "mode": "full-access",
+    "connected": true,
+    "inactiveObservationPreservedForeground": true,
+    "staleCoordinateReplay": {
+      "accepted": false,
+      "code": "STALE_SNAPSHOT"
+    },
+    "methods": {
+      "status": "passed",
+      "tabs.list": "passed",
+      "tabs.activate": "passed",
+      "tabs.new": "passed",
+      "tabs.close": "passed",
+      "page.observe": "passed",
+      "page.navigate": "passed",
+      "page.back": "passed",
+      "page.forward": "passed",
+      "page.reload": "passed",
+      "page.click": "passed",
+      "page.fill": "passed",
+      "page.select": "passed",
+      "page.key": "passed",
+      "page.scroll": "passed",
+      "page.clickAt": "passed",
+      "page.typeText": "passed",
+      "page.evaluate": "passed",
+      "openShadowRoot": "passed"
+    }
+  },
+  "computer": {
+    "helperVersion": "0.8.0",
+    "platform": "macos",
+    "semanticBackend": "macos-accessibility",
+    "foregroundUnchanged": true,
+    "userFocusUnchanged": true,
+    "hardwareCursorUnchanged": true,
+    "spaceUnchanged": true,
+    "methods": {
+      "computer.status": "passed",
+      "computer.observe": "passed",
+      "computer.move": "passed",
+      "computer.click": "passed",
+      "computer.drag": "passed",
+      "computer.scroll": "passed",
+      "computer.typeText": "passed",
+      "computer.key": "passed",
+      "computer.invoke": "passed: element-state-changed",
+      "computer.setValue": "passed: value-confirmed",
+      "maskedSetValue": "passed: masked-length-confirmed"
+    }
+  },
+  "windows": {
+    "semanticBackend": "windows-ui-automation",
+    "targetCompile": "passed in isolated x86_64-pc-windows-msvc module check",
+    "runtime": "not executed on macOS host"
+  }
+}

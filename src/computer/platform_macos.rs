@@ -11,7 +11,9 @@ use image::RgbaImage;
 use libc::pid_t;
 use xcap::Window;
 
-use super::{ComputerError, InvariantReport, TargetPoint, WindowDescriptor};
+use super::{
+    ComputerError, InvariantReport, SemanticTarget, TargetPoint, WindowDescriptor, ax_macos,
+};
 
 type PostToPidFn = unsafe extern "C" fn(pid_t, *mut c_void);
 type SetWindowLocationFn = unsafe extern "C" fn(*mut c_void, f64, f64);
@@ -19,6 +21,7 @@ type SetIntegerFieldFn = unsafe extern "C" fn(*mut c_void, u32, i64);
 type PostEventRecordToFn = unsafe extern "C" fn(*const c_void, *const u8) -> i32;
 type GetFrontProcessFn = unsafe extern "C" fn(*mut c_void) -> i32;
 type GetProcessForPidFn = unsafe extern "C" fn(pid_t, *mut c_void) -> i32;
+type GetProcessPidFn = unsafe extern "C" fn(*const c_void, *mut pid_t) -> i32;
 type ConnectionIdFn = unsafe extern "C" fn() -> u32;
 type GetActiveSpaceFn = unsafe extern "C" fn(u32) -> u64;
 
@@ -35,6 +38,7 @@ struct Symbols {
     post_event_record: PostEventRecordToFn,
     get_front_process: GetFrontProcessFn,
     get_process_for_pid: GetProcessForPidFn,
+    get_process_pid: GetProcessPidFn,
     connection_id: ConnectionIdFn,
     get_active_space: GetActiveSpaceFn,
 }
@@ -44,6 +48,34 @@ unsafe impl Sync for Symbols {}
 
 pub fn backend_name() -> &'static str {
     "background-window/skylight+cgwindow"
+}
+
+pub fn semantic_backend_name() -> &'static str {
+    "macos-accessibility"
+}
+
+pub fn semantic_ready(prompt: bool) -> bool {
+    ax_macos::accessibility_ready(prompt)
+}
+
+pub fn semantic_elements(target: &WindowDescriptor) -> Result<Vec<SemanticTarget>, ComputerError> {
+    ax_macos::snapshot(target)
+}
+
+pub fn invoke(
+    target: &WindowDescriptor,
+    semantic: &SemanticTarget,
+    action: &str,
+) -> Result<serde_json::Value, ComputerError> {
+    ax_macos::invoke(target, semantic, action)
+}
+
+pub fn set_value(
+    target: &WindowDescriptor,
+    semantic: &SemanticTarget,
+    value: &str,
+) -> Result<serde_json::Value, ComputerError> {
+    ax_macos::set_value(target, semantic, value)
 }
 
 pub fn limitations() -> Vec<&'static str> {
@@ -61,9 +93,17 @@ pub fn input_ready() -> bool {
 pub fn windows(limit: usize) -> Result<Vec<WindowDescriptor>, ComputerError> {
     let current_pid = std::process::id();
     let windows = Window::all().map_err(capture_error)?;
+    let focus = DesktopSnapshot::capture().ok();
     Ok(windows
         .into_iter()
         .filter_map(|window| descriptor(&window).ok())
+        .map(|mut window| {
+            window.focused = focus.is_some_and(|focus| {
+                focus.front_pid == Some(window.pid)
+                    && focus.front_window_id == window.id.parse::<u32>().ok()
+            });
+            window
+        })
         .filter(|window| {
             window.pid != current_pid
                 && !window.minimized
@@ -309,7 +349,9 @@ fn descriptor(window: &Window) -> Result<WindowDescriptor, ComputerError> {
         width: window.width().map_err(map)?,
         height: window.height().map_err(map)?,
         minimized: window.is_minimized().unwrap_or(false),
-        focused: window.is_focused().unwrap_or(false),
+        // Corrected against the front ProcessSerialNumber and WindowServer
+        // z-order in `windows`; xcap marks every Chromium window focused.
+        focused: false,
     })
 }
 
@@ -646,12 +688,21 @@ impl DesktopSnapshot {
         let cursor = CGEvent::new(source()?)
             .map_err(|_| input_error("Could not read the hardware cursor"))?
             .location();
-        let front_window = Window::all().ok().and_then(|windows| {
-            windows
+        let mut front_pid_raw: pid_t = 0;
+        let front_pid = (unsafe {
+            (symbols.get_process_pid)(front_process.as_ptr().cast(), &mut front_pid_raw)
+        } == 0
+            && front_pid_raw > 0)
+            .then_some(front_pid_raw as u32);
+        // xcap reports every window owned by a frontmost Chromium process as
+        // focused. Resolve the true front process from the ProcessSerialNumber,
+        // then take its first WindowServer entry (front-to-back z-order).
+        let front_window = front_pid.and_then(|pid| {
+            Window::all()
+                .ok()?
                 .into_iter()
-                .find(|window| window.is_focused().unwrap_or(false))
+                .find(|window| window.pid().ok() == Some(pid))
         });
-        let front_pid = front_window.as_ref().and_then(|window| window.pid().ok());
         let front_window_id = front_window.as_ref().and_then(|window| window.id().ok());
         let active_space = unsafe { (symbols.get_active_space)((symbols.connection_id)()) };
         if active_space == 0 {
@@ -694,6 +745,7 @@ fn symbols() -> Option<&'static Symbols> {
                 post_event_record: load(b"SLPSPostEventRecordTo\0")?,
                 get_front_process: load(b"_SLPSGetFrontProcess\0")?,
                 get_process_for_pid: load(b"GetProcessForPID\0")?,
+                get_process_pid: load(b"GetProcessPID\0")?,
                 connection_id: load(b"CGSMainConnectionID\0")?,
                 get_active_space: load(b"SLSGetActiveSpace\0")
                     .or_else(|| load(b"CGSGetActiveSpace\0"))?,

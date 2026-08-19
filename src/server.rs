@@ -349,6 +349,7 @@ struct ComputerInfo {
     session_mode: String,
     isolation: String,
     input_ready: bool,
+    semantic_ready: bool,
     capabilities: Vec<String>,
     windows: Vec<ComputerWindow>,
     connected_at: String,
@@ -388,6 +389,32 @@ struct ComputerObservation {
     screen_height: u64,
     scale_factor: f64,
     rotation: f64,
+    semantic_mode: String,
+    semantic_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    semantic_error: Option<String>,
+    elements: Vec<ComputerElement>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ComputerElement {
+    #[serde(rename = "ref")]
+    reference: String,
+    role: String,
+    name: String,
+    value: Option<String>,
+    enabled: Option<bool>,
+    actions: Vec<String>,
+    bounds: Option<ComputerElementBounds>,
+}
+
+#[derive(Clone, Serialize)]
+struct ComputerElementBounds {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
 }
 
 #[derive(Clone, Serialize)]
@@ -980,6 +1007,11 @@ async fn handle_computer_hello(state: &AppState, message: &Value) {
                 .get("inputReady")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+        semantic_ready: compatible
+            && message
+                .get("semanticReady")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         capabilities,
         windows: sanitize_computer_windows(message.get("windows")),
         connected_at: now_iso(),
@@ -1266,6 +1298,9 @@ impl AppState {
                 if let Some(input_ready) = result.get("inputReady").and_then(Value::as_bool) {
                     computer.input_ready = input_ready;
                 }
+                if let Some(semantic_ready) = result.get("semanticReady").and_then(Value::as_bool) {
+                    computer.semantic_ready = semantic_ready;
+                }
                 computer.session_mode = bounded(
                     result
                         .get("sessionMode")
@@ -1483,6 +1518,7 @@ fn computer_observation_delay(method: &str) -> Duration {
         "computer.scroll" | "computer.move" => 180,
         "computer.click" => 350,
         "computer.drag" => 450,
+        "computer.invoke" | "computer.setValue" => 250,
         _ => 150,
     })
 }
@@ -1566,6 +1602,33 @@ fn sanitize_computer_params(method: &str, input: Value) -> Result<Value, ApiErro
             output.insert(
                 "key".to_owned(),
                 Value::String(required_string(source.get("key"), "key", 200)?),
+            );
+            Ok(Value::Object(output))
+        }
+        "computer.invoke" => {
+            let mut output = computer_frame_params(&source)?;
+            output.insert(
+                "elementRef".to_owned(),
+                Value::String(required_string(source.get("elementRef"), "elementRef", 40)?),
+            );
+            let action = optional_string(source.get("action"), "press", "action", 40)?;
+            if !["press", "showMenu", "pick", "confirm", "cancel", "open"]
+                .contains(&action.as_str())
+            {
+                return Err(ApiError::bad_request("Unsupported semantic action"));
+            }
+            output.insert("action".to_owned(), Value::String(action));
+            Ok(Value::Object(output))
+        }
+        "computer.setValue" => {
+            let mut output = computer_frame_params(&source)?;
+            output.insert(
+                "elementRef".to_owned(),
+                Value::String(required_string(source.get("elementRef"), "elementRef", 40)?),
+            );
+            output.insert(
+                "value".to_owned(),
+                Value::String(required_string(source.get("value"), "value", 100_000)?),
             );
             Ok(Value::Object(output))
         }
@@ -1721,7 +1784,85 @@ fn sanitize_computer_observation(value: Option<&Value>) -> Result<ComputerObserv
         screen_height: bounded_u64("screenHeight", 100_000)?,
         scale_factor: finite("scaleFactor", 0.1, 16.0)?,
         rotation: finite("rotation", 0.0, 359.0)?,
+        semantic_mode: bounded(
+            frame
+                .get("semanticMode")
+                .and_then(Value::as_str)
+                .unwrap_or("unavailable"),
+            80,
+        ),
+        semantic_available: frame
+            .get("semanticAvailable")
+            .and_then(Value::as_bool)
+            .unwrap_or_else(|| !sanitize_computer_elements(frame.get("elements")).is_empty()),
+        semantic_error: frame
+            .get("semanticError")
+            .and_then(Value::as_str)
+            .map(|message| bounded(message, 500)),
+        elements: sanitize_computer_elements(frame.get("elements")),
     })
+}
+
+fn sanitize_computer_elements(value: Option<&Value>) -> Vec<ComputerElement> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .take(500)
+                .filter_map(|item| {
+                    let item = item.as_object()?;
+                    let reference = item.get("ref")?.as_str()?;
+                    let role = item.get("role")?.as_str()?;
+                    let name = item.get("name")?.as_str()?;
+                    if reference.len() > 40 || role.len() > 120 || name.len() > 500 {
+                        return None;
+                    }
+                    let actions = item
+                        .get("actions")
+                        .and_then(Value::as_array)
+                        .map(|actions| {
+                            actions
+                                .iter()
+                                .take(16)
+                                .filter_map(Value::as_str)
+                                .filter(|action| action.len() <= 40)
+                                .map(str::to_owned)
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let bounds = item
+                        .get("bounds")
+                        .and_then(Value::as_object)
+                        .and_then(|bounds| {
+                            let finite = |name: &str| {
+                                bounds.get(name)?.as_f64().filter(|value| {
+                                    value.is_finite() && (-100_000.0..=100_000.0).contains(value)
+                                })
+                            };
+                            Some(ComputerElementBounds {
+                                x: finite("x")?,
+                                y: finite("y")?,
+                                width: finite("width")?.clamp(0.0, 100_000.0),
+                                height: finite("height")?.clamp(0.0, 100_000.0),
+                            })
+                        });
+                    Some(ComputerElement {
+                        reference: reference.to_owned(),
+                        role: role.to_owned(),
+                        name: name.to_owned(),
+                        value: item
+                            .get("value")
+                            .and_then(Value::as_str)
+                            .map(|value| bounded(value, 2_000)),
+                        enabled: item.get("enabled").and_then(Value::as_bool),
+                        actions,
+                        bounds,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn sanitize_computer_windows(value: Option<&Value>) -> Vec<ComputerWindow> {
@@ -1808,6 +1949,14 @@ fn sanitize_params(
         "page.key" => {
             let mut output = object(with_tab()?);
             output.insert(
+                "generation".to_owned(),
+                Value::String(required_string(
+                    source.get("generation"),
+                    "generation",
+                    100,
+                )?),
+            );
+            output.insert(
                 "key".to_owned(),
                 Value::String(required_string(source.get("key"), "key", 80)?),
             );
@@ -1835,6 +1984,14 @@ fn sanitize_params(
         }
         "page.clickAt" => {
             let mut output = object(with_tab()?);
+            output.insert(
+                "generation".to_owned(),
+                Value::String(required_string(
+                    source.get("generation"),
+                    "generation",
+                    100,
+                )?),
+            );
             let x = finite_number(source.get("x"), f64::NAN, "x")?;
             let y = finite_number(source.get("y"), f64::NAN, "y")?;
             if !(0.0..=100_000.0).contains(&x) || !(0.0..=100_000.0).contains(&y) {
@@ -1866,6 +2023,14 @@ fn sanitize_params(
         }
         "page.typeText" => {
             let mut output = object(with_tab()?);
+            output.insert(
+                "generation".to_owned(),
+                Value::String(required_string(
+                    source.get("generation"),
+                    "generation",
+                    100,
+                )?),
+            );
             output.insert(
                 "text".to_owned(),
                 Value::String(required_string(source.get("text"), "text", 100_000)?),
@@ -2100,7 +2265,7 @@ mod tests {
     fn validates_full_access_action_parameters() {
         let params = sanitize_params(
             "page.clickAt",
-            json!({ "tabId": 7, "x": 10.5, "y": 20, "button": "right", "clickCount": 2 }),
+            json!({ "tabId": 7, "generation": "g1", "x": 10.5, "y": 20, "button": "right", "clickCount": 2 }),
             None,
         )
         .unwrap();
@@ -2109,7 +2274,7 @@ mod tests {
         assert!(
             sanitize_params(
                 "page.clickAt",
-                json!({ "tabId": 7, "x": 10, "y": -1 }),
+                json!({ "tabId": 7, "generation": "g1", "x": 10, "y": -1 }),
                 None
             )
             .is_err()
@@ -2164,13 +2329,41 @@ mod tests {
             "screenWidth": 720,
             "screenHeight": 492,
             "scaleFactor": 1.0,
-            "rotation": 0.0
+            "rotation": 0.0,
+            "semanticMode": "macos-accessibility",
+            "semanticAvailable": true,
+            "elements": [{
+                "ref": "a1",
+                "role": "AXButton",
+                "name": "Semantic action",
+                "value": null,
+                "enabled": true,
+                "actions": ["press"],
+                "bounds": { "x": 200.0, "y": 800.0, "width": 120.0, "height": 32.0 }
+            }]
         });
         let observation = sanitize_computer_observation(Some(&frame)).unwrap();
         assert_eq!(observation.window_id, "47782");
         assert_eq!(observation.pid, 51641);
         assert_eq!(observation.session_mode, "background-window");
         assert_eq!(observation.delivery_mode, "exact-window-background");
+        assert_eq!(observation.semantic_mode, "macos-accessibility");
+        assert!(observation.semantic_available);
+        assert_eq!(observation.elements.len(), 1);
+        assert_eq!(observation.elements[0].reference, "a1");
+
+        let invoke = sanitize_computer_params(
+            "computer.invoke",
+            json!({ "frameId": "frame-1", "elementRef": "a1", "action": "press" }),
+        )
+        .unwrap();
+        assert_eq!(invoke["elementRef"], "a1");
+        let set_value = sanitize_computer_params(
+            "computer.setValue",
+            json!({ "frameId": "frame-1", "elementRef": "a2", "value": "hello" }),
+        )
+        .unwrap();
+        assert_eq!(set_value["value"], "hello");
 
         let windows = sanitize_computer_windows(Some(&json!([{
             "id": "47782",

@@ -6,13 +6,14 @@ Research snapshot: 2026-08-18
 
 Version 0.6 captured a physical display with xcap and injected global input with Enigo. A real end-to-end run proved that this was the wrong architecture: the helper moved the user's pointer and typed into whichever application currently owned focus. A frame ID protected only monitor geometry; it did not bind input to an application window. That implementation has been removed rather than retained as an automatic fallback.
 
-Version 0.7 defines a stricter product invariant:
+Version 0.8 keeps the stricter product invariant and adds semantic-first control:
 
 1. Observation is bound to one exact `(pid, native window id)` target.
 2. Input is delivered only through a target-addressed background route.
 3. The foreground process, user's focused window/control, hardware cursor, and active desktop must not change.
 4. A route that cannot prove those properties returns a structured error. It never retries through global HID input, target activation, `SetForegroundWindow`, or a desktop/Space switch.
 5. The server captures the target window again after every action so the caller can verify the result.
+6. macOS Accessibility and Windows UI Automation refs are bound to that frame, re-resolved before action, and paired with an application-owned postcondition when one is observable.
 
 ## Evidence reviewed
 
@@ -62,9 +63,9 @@ True session isolation also changes product setup. It needs a Windows edition th
 
 Apple's High Performance Screen Sharing is often described as a virtual-display solution. Apple documents that when the connection authenticates as the currently logged-in user, hardware displays are blanked and nobody else can use the Mac. It requires another Apple-silicon Mac, macOS 14 or later, high bandwidth, UDP ports, and an authenticated Screen Sharing connection. It is useful for private remote operation, but it is not a local background-control primitive and fails the user's “keep using my screen” requirement in the common same-user configuration.
 
-A separate macOS login or a Virtualization.framework guest can provide true isolation, but it does not automatically contain the user's already-installed app state. It also requires credentials or a guest OS image and a clear data-sharing policy. Version 0.7 does not create hidden users, store login credentials, or install a VM.
+A separate macOS login or a Virtualization.framework guest can provide true isolation, but it does not automatically contain the user's already-installed app state. It also requires credentials or a guest OS image and a clear data-sharing policy. Version 0.8 does not create hidden users, store login credentials, or install a VM.
 
-## Version 0.7 architecture
+## Version 0.8 architecture
 
 ```text
 browser-only agent
@@ -75,29 +76,33 @@ loopback control page/API --- Rust server --- Chromium extension ---> browser ta
                                   +--- authenticated helper process
                                              |
                                              +--- exact-window capture
+                                             +--- AX/UIA semantic snapshot and action
                                              +--- target-routed background input
                                              +--- foreground/cursor/desktop oracle
 ```
 
-The separate helper remains the permission-owning process and opens no listening socket. It authenticates outbound to the loopback server with the shared random token and the private Origin `lbb-computer-helper://local`. Its fixed command allowlist still contains only status, observe, move, click, drag, scroll, type text, and key chord. There is no shell, filesystem, process-launch, clipboard, downloader, arbitrary-code, credential, user-management, or telemetry method.
+The separate helper remains the permission-owning process and opens no listening socket. It authenticates outbound to the loopback server with the shared random token and the private Origin `lbb-computer-helper://local`. Its fixed command allowlist contains status, observe, move, click, drag, scroll, type text, key chord, semantic invoke, and semantic value write. There is no shell, filesystem, process-launch, clipboard, downloader, arbitrary-code, credential, user-management, or telemetry method.
 
 ### macOS backend
 
 - xcap enumerates shareable on-screen windows and captures one exact CGWindowID without exposing unrelated windows or notifications.
 - The frame stores the window owner PID, CGWindowID, bounds, and delivered image dimensions.
 - Before every action, the helper re-enumerates the target and rejects changed ownership or geometry.
+- The Accessibility snapshot returns actionable elements with role, name, value, enabled state, actions, and bounds. Each action re-resolves the exact-window path and verifies its captured signature before dispatch.
+- Semantic actions report value read-back, masked-value length proof, target-window closure, element disappearance/change, or whole-window semantic change. Transport success alone is not treated as effect proof.
 - Mouse and scroll events carry screen coordinates, window-local coordinates, target PID, and target window fields, then post to that PID through SkyLight.
 - Keyboard events post to the exact PID after a focus-without-raise record for the exact window. Multiple eligible windows in the same process are rejected because PID-scoped delivery would otherwise be ambiguous.
 - The helper snapshots the front process PSN, user's front window, real cursor location, and active Space before and after dispatch. Focus-without-raise is restored to the prior front window after dispatch. Any change produces `COMPUTER_BACKGROUND_CONTRACT_VIOLATION`.
-- Only non-minimized windows on the active Space are mutable in v0.7. Secure input, protected video, games, and OS/framework changes may refuse delivery.
+- Only non-minimized windows on the active Space are mutable in v0.8. Secure input, protected video, games, and OS/framework changes may refuse delivery.
 
 ### Windows backend
 
 - xcap enumerates top-level HWNDs and captures one exact HWND using its Windows capture backend.
+- UI Automation enumerates actionable descendants beneath that exact HWND. Invoke, Toggle, SelectionItem, ExpandCollapse, and Value patterns provide the semantic route and revalidate the captured signature before use.
 - Background mouse messages are routed to the deepest eligible child window at the target point; keyboard messages go to the target GUI thread's focused control only when its root is the requested top-level window.
 - A temporary `WS_EX_NOACTIVATE` guard prevents the target top-level window from activating itself while handling a message.
 - The helper verifies HWND ownership immediately before every action and snapshots `GetForegroundWindow`, the user's GUI-thread focus HWND, and `GetCursorPos` around delivery.
-- Chromium, WPF, WinUI, elevated, game, and protected surfaces may ignore Win32 messages. They fail rather than using `SendInput` or `SetForegroundWindow`.
+- Controls without a supported UIA pattern can use exact-HWND background messages. Elevated, game, protected, and custom-rendered surfaces may ignore those messages; they fail rather than using `SendInput` or `SetForegroundWindow`.
 
 ## Verification performed
 
@@ -112,13 +117,15 @@ The exercised matrix is:
 | click | Click counter incremented | Foreground, user focus, cursor, and Space unchanged |
 | drag | Drag counter incremented across 18 delivered steps | Foreground, user focus, cursor, and Space unchanged |
 | scroll | Scroll accumulator changed by the requested delta | Foreground, user focus, cursor, and Space unchanged |
-| Unicode text | State became `background-✓` | Foreground, user focus, cursor, and Space unchanged |
+| Unicode text | State became `background-input` | Foreground, user focus, cursor, and Space unchanged |
 | named key | State appended `[enter]` | Foreground, user focus, cursor, and Space unchanged |
+| semantic value | Native text field read back the requested value | Frame-bound AX path and signature revalidated |
+| semantic invoke | Native button state became `Semantic action complete` | Visible state and AX signature changed while Chrome stayed foreground |
 
-The fixture source is `tests/fixtures/macos/BackgroundFixture.swift`. Per-action screenshots are generated under ignored `target/background-e2e/` during the local run. Cross-platform CI and local verification still compile the same Rust version for Windows x86_64 and macOS arm64/x86_64.
+The fixture source is `tests/fixtures/macos/BackgroundFixture.swift`. Privacy-safe per-action screenshots and machine-readable results are checked in under `evidence/v0.8.0`; screenshots containing the user's real Chrome metadata remain only in ignored local test output. Cross-platform CI compiles the same Rust version for Windows x86_64 and macOS arm64/x86_64, while Windows UIA runtime behavior still requires a representative Windows fixture before it is called complete.
 
 ## Remaining work
 
-AX on macOS and UIA on Windows are the next reliability layer. They should expose semantic elements and verified value/action mutations before attempting another pixel route. A managed `isolated-session` backend can be added later as a separate capability with explicit credentials, OS prerequisites, visible lifecycle, and cleanup; it must not be presented as a transparent implementation detail of `background-window`.
+A managed `isolated-session` backend can be added later as a separate capability with explicit credentials, OS prerequisites, visible lifecycle, and cleanup; it must not be presented as a transparent implementation detail of `background-window`. Cross-origin browser iframe semantic merging and representative Windows UIA runtime fixtures also remain open verification boundaries.
 
 The private macOS interfaces and framework-specific Windows behavior require continued release-by-release testing. No researched model runtime, planner, or remote protocol was embedded. The implementation follows the published architecture patterns and platform behavior while keeping its own protocol and bounded authority.

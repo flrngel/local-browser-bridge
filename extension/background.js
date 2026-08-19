@@ -31,7 +31,17 @@ let socket = null;
 let pingTimer = null;
 let reconnectTimer = null;
 let reconnectDelay = 1_000;
-let lastCaptureAt = new Map();
+const DEBUGGER_TIMEOUT_MS = 6_000;
+
+function withTimeout(promise, timeoutMs, label) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`DEBUGGER_TIMEOUT: ${label} exceeded ${timeoutMs}ms`)), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
 
 async function settings() {
   const stored = await chrome.storage.local.get(DEFAULTS);
@@ -151,47 +161,52 @@ async function assertAllowedTab(tab) {
 
 async function contentRequest(tabId, payload) {
   const message = { type: "LBB_CONTENT", ...payload };
+  let response;
   try {
-    const response = await chrome.tabs.sendMessage(tabId, message);
-    if (!response?.ok) throw new Error(response?.error ?? "Content command failed");
-    return response.result;
+    response = await chrome.tabs.sendMessage(tabId, message);
   } catch (firstError) {
     try {
       await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
-      const response = await chrome.tabs.sendMessage(tabId, message);
-      if (!response?.ok) throw new Error(response?.error ?? "Content command failed");
-      return response.result;
+      response = await chrome.tabs.sendMessage(tabId, message);
     } catch (secondError) {
       throw new Error(`PAGE_UNAVAILABLE: ${secondError.message || firstError.message}`);
     }
   }
+  if (!response?.ok) throw new Error(response?.error ?? "CONTENT_COMMAND_FAILED: Content command failed");
+  return response.result;
 }
 
 async function captureTab(tab) {
-  if (!tab.active) {
-    await chrome.tabs.update(tab.id, { active: true });
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  const last = lastCaptureAt.get(tab.windowId) ?? 0;
-  const wait = 550 - (Date.now() - last);
-  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
-  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality: 78 });
-  lastCaptureAt.set(tab.windowId, Date.now());
-  return dataUrl;
+  return withDebugger(tab.id, async () => {
+    const capture = await debuggerCommand(tab.id, "Page.captureScreenshot", {
+      format: "jpeg",
+      quality: 78,
+      fromSurface: true,
+      captureBeyondViewport: false,
+    });
+    if (!capture?.data) throw new Error("SCREENSHOT_FAILED: Chrome returned no screenshot data");
+    return `data:image/jpeg;base64,${capture.data}`;
+  });
 }
 
 async function debuggerCommand(tabId, method, params) {
-  return chrome.debugger.sendCommand({ tabId }, method, params);
+  return withTimeout(
+    chrome.debugger.sendCommand({ tabId }, method, params),
+    DEBUGGER_TIMEOUT_MS,
+    method,
+  );
 }
 
 async function withDebugger(tabId, operation) {
   let attached = false;
   try {
-    await chrome.debugger.attach({ tabId }, "1.3");
+    await withTimeout(chrome.debugger.attach({ tabId }, "1.3"), DEBUGGER_TIMEOUT_MS, "attach");
     attached = true;
     return await operation();
   } finally {
-    if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
+    if (attached) {
+      await withTimeout(chrome.debugger.detach({ tabId }), DEBUGGER_TIMEOUT_MS, "detach").catch(() => {});
+    }
   }
 }
 
@@ -397,6 +412,7 @@ async function dispatch(method, params, approved) {
     case "page.key": {
       const tab = await getTab(params.tabId); await assertAllowedTab(tab);
       const config = await settings();
+      await contentRequest(tab.id, { method: "assertGeneration", generation: params.generation });
       return trustedKey(tab.id, String(params.key), config.fullAccess);
     }
     case "page.scroll": {
@@ -407,12 +423,14 @@ async function dispatch(method, params, approved) {
       const tab = await getTab(params.tabId); await assertAllowedTab(tab);
       const config = await settings();
       if (!config.fullAccess) throw new Error("FULL_ACCESS_REQUIRED: enable Full Access in the extension popup");
+      await contentRequest(tab.id, { method: "assertGeneration", generation: params.generation });
       return trustedClickAt(tab.id, Number(params.x), Number(params.y), String(params.button ?? "left"), Number(params.clickCount) || 1);
     }
     case "page.typeText": {
       const tab = await getTab(params.tabId); await assertAllowedTab(tab);
       const config = await settings();
       if (!config.fullAccess) throw new Error("FULL_ACCESS_REQUIRED: enable Full Access in the extension popup");
+      await contentRequest(tab.id, { method: "assertGeneration", generation: params.generation });
       return insertText(tab.id, String(params.text ?? ""));
     }
     case "page.evaluate": {

@@ -18,11 +18,17 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 #[cfg(target_os = "macos")]
+#[path = "computer/ax_macos.rs"]
+mod ax_macos;
+#[cfg(target_os = "macos")]
 #[path = "computer/platform_macos.rs"]
 mod platform;
 #[cfg(target_os = "windows")]
 #[path = "computer/platform_windows.rs"]
 mod platform;
+#[cfg(target_os = "windows")]
+#[path = "computer/uia_windows.rs"]
+mod uia_windows;
 
 pub const COMPUTER_HELPER_ORIGIN: &str = "lbb-computer-helper://local";
 pub const COMPUTER_METHODS: &[&str] = &[
@@ -34,6 +40,8 @@ pub const COMPUTER_METHODS: &[&str] = &[
     "computer.scroll",
     "computer.typeText",
     "computer.key",
+    "computer.invoke",
+    "computer.setValue",
 ];
 
 const MAX_CAPTURE_PIXELS: u64 = 1_000_000;
@@ -103,6 +111,35 @@ struct FrameState {
     target: WindowDescriptor,
     image_width: u32,
     image_height: u32,
+    elements: Vec<SemanticTarget>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SemanticBounds {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SemanticElement {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub role: String,
+    pub name: String,
+    pub value: Option<String>,
+    pub enabled: Option<bool>,
+    pub actions: Vec<String>,
+    pub bounds: Option<SemanticBounds>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SemanticTarget {
+    pub element: SemanticElement,
+    pub path: Vec<usize>,
 }
 
 pub struct ComputerController {
@@ -130,6 +167,7 @@ impl ComputerController {
             "backend": platform::backend_name(),
             "sessionMode": "background-window",
             "inputReady": platform::input_ready(),
+            "semanticReady": platform::semantic_ready(false),
             "capabilities": COMPUTER_METHODS,
             "windows": windows,
             "invariants": {
@@ -158,11 +196,14 @@ impl ComputerController {
             "computer.scroll" => self.scroll(params),
             "computer.typeText" => self.type_text(params),
             "computer.key" => self.key(params),
+            "computer.invoke" => self.invoke(params),
+            "computer.setValue" => self.set_value(params),
             _ => unreachable!(),
         }
     }
 
     pub fn request_permissions(&mut self) -> Value {
+        let semantic_ready = platform::semantic_ready(true);
         let windows = available_windows().unwrap_or_default();
         let capture_ready = windows
             .first()
@@ -171,6 +212,7 @@ impl ComputerController {
             "platform": std::env::consts::OS,
             "screenCaptureReady": capture_ready,
             "inputReady": platform::input_ready(),
+            "semanticReady": semantic_ready,
             "windowCount": windows.len(),
             "sessionMode": "background-window"
         })
@@ -223,6 +265,7 @@ impl ComputerController {
             "sessionMode": "background-window",
             "isolation": "foreground-and-hardware-cursor-preserved",
             "inputReady": platform::input_ready(),
+            "semanticReady": platform::semantic_ready(false),
             "windowCount": windows.len(),
             "windows": windows,
             "frameReady": self.frame.is_some(),
@@ -248,6 +291,11 @@ impl ComputerController {
                 )
             })?;
         let image = resize_for_transport(platform::capture_window(&target)?);
+        let (elements, semantic_available, semantic_error) =
+            match platform::semantic_elements(&target) {
+                Ok(elements) => (elements, true, None),
+                Err(error) => (Vec::new(), false, Some(error.message)),
+            };
         let image_width = image.width();
         let image_height = image.height();
         let mut png = Cursor::new(Vec::new());
@@ -260,6 +308,7 @@ impl ComputerController {
             target: target.clone(),
             image_width,
             image_height,
+            elements: elements.clone(),
         });
         Ok(json!({
             "screenshot": format!("data:image/png;base64,{}", BASE64_STANDARD.encode(png.into_inner())),
@@ -287,6 +336,10 @@ impl ComputerController {
                 "screenHeight": target.height,
                 "scaleFactor": 1.0,
                 "rotation": 0.0,
+                "semanticMode": platform::semantic_backend_name(),
+                "semanticAvailable": semantic_available,
+                "semanticError": semantic_error,
+                "elements": elements.into_iter().map(|target| target.element).collect::<Vec<_>>(),
             },
             "windows": windows,
         }))
@@ -385,6 +438,62 @@ impl ComputerController {
         }))
     }
 
+    fn invoke(&mut self, params: &Value) -> Result<Value, ComputerError> {
+        let frame = self.verify_frame(params)?;
+        let target = semantic_target(&frame, params)?;
+        let action = params
+            .get("action")
+            .and_then(Value::as_str)
+            .unwrap_or("press");
+        if !target
+            .element
+            .actions
+            .iter()
+            .any(|candidate| candidate == action)
+        {
+            return Err(invalid(format!(
+                "Action {action} was not advertised for {}",
+                target.element.reference
+            )));
+        }
+        let result = platform::invoke(&frame.target, &target, action)?;
+        Ok(json!({
+            "deliveryMode": "exact-window-semantic",
+            "frameId": frame.id,
+            "elementRef": target.element.reference,
+            "action": action,
+            "effect": result,
+        }))
+    }
+
+    fn set_value(&mut self, params: &Value) -> Result<Value, ComputerError> {
+        let frame = self.verify_frame(params)?;
+        let target = semantic_target(&frame, params)?;
+        let value = params
+            .get("value")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid("value must be a string"))?;
+        if !target
+            .element
+            .actions
+            .iter()
+            .any(|action| action == "setValue")
+        {
+            return Err(invalid(format!(
+                "setValue was not advertised for {}",
+                target.element.reference
+            )));
+        }
+        let result = platform::set_value(&frame.target, &target, value)?;
+        Ok(json!({
+            "deliveryMode": "exact-window-semantic",
+            "frameId": frame.id,
+            "elementRef": target.element.reference,
+            "characters": value.chars().count(),
+            "effect": result,
+        }))
+    }
+
     fn point(
         &self,
         params: &Value,
@@ -434,6 +543,24 @@ impl ComputerController {
         }
         Ok(frame.clone())
     }
+}
+
+fn semantic_target(frame: &FrameState, params: &Value) -> Result<SemanticTarget, ComputerError> {
+    let reference = params
+        .get("elementRef")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("elementRef must be a string"))?;
+    frame
+        .elements
+        .iter()
+        .find(|target| target.element.reference == reference)
+        .cloned()
+        .ok_or_else(|| {
+            ComputerError::new(
+                "COMPUTER_STALE_ELEMENT",
+                "The semantic element ref is missing or stale. Observe the exact window again.",
+            )
+        })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -598,6 +725,7 @@ mod tests {
             },
             image_width: 1_000,
             image_height: 500,
+            elements: vec![],
         }
     }
 

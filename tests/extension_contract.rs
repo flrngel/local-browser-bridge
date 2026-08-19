@@ -153,6 +153,44 @@ fn extension_allows_only_the_demo_on_the_bridge_origin() {
 }
 
 #[test]
+fn observations_are_non_activating_bounded_and_composed() {
+    let background = fs::read_to_string("extension/background.js").unwrap();
+    let content = fs::read_to_string("extension/content.js").unwrap();
+    let capture_start = background.find("async function captureTab").unwrap();
+    let capture_end = background[capture_start..]
+        .find("async function debuggerCommand")
+        .unwrap()
+        + capture_start;
+    let capture = &background[capture_start..capture_end];
+    assert!(capture.contains("Page.captureScreenshot"));
+    assert!(!capture.contains("chrome.tabs.update"));
+    assert!(background.contains("DEBUGGER_TIMEOUT"));
+    assert!(background.contains("finally"));
+    assert!(content.contains("composedCandidates"));
+    assert!(content.contains("element.shadowRoot"));
+    assert!(content.contains("tree: element.getRootNode() instanceof ShadowRoot"));
+}
+
+#[test]
+fn direct_input_requires_a_fresh_snapshot() {
+    let background = fs::read_to_string("extension/background.js").unwrap();
+    let content = fs::read_to_string("extension/content.js").unwrap();
+    for method in ["page.key", "page.clickAt", "page.typeText"] {
+        let start = background.find(&format!("case \"{method}\"")).unwrap();
+        let end = background[start + 5..]
+            .find("\n    case \"")
+            .map(|end| start + 5 + end)
+            .unwrap_or(background.len());
+        let body = &background[start..end];
+        assert!(
+            body.contains("assertGeneration"),
+            "{method} is not snapshot-bound"
+        );
+    }
+    assert!(content.contains("STALE_SNAPSHOT: observe the page again before acting"));
+}
+
+#[test]
 fn server_and_extension_command_allowlists_match() {
     let background = fs::read_to_string("extension/background.js").unwrap();
     let start = background.find("const COMMANDS = new Set([").unwrap();

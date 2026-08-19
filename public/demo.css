@@ -7,7 +7,7 @@ body {
   background: #eff8f1;
 }
 
-form {
+form, section {
   display: grid;
   gap: 12px;
   padding: 24px;
@@ -16,6 +16,10 @@ form {
   box-shadow: 0 12px 40px #b9cbbd;
 }
 
-input, select, button { padding: 12px; font: inherit; }
+section { display: grid; gap: 12px; margin-top: 22px; }
+input, select, button, a { padding: 12px; font: inherit; }
 button { background: #174c2d; color: white; border: 0; border-radius: 8px; }
 #result { min-height: 28px; font-weight: 700; }
+.spacer { min-height: 900px; background: linear-gradient(#fff, #dff0e3); }
+#scroll-marker { border: 3px solid #174c2d; }
+#event-log { font-family: ui-monospace, monospace; font-weight: 700; }

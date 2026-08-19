@@ -2,7 +2,7 @@
 
 Research date: 2026-08-18
 
-Native desktop-agent research is documented separately in [COMPUTER_USE_RESEARCH.md](COMPUTER_USE_RESEARCH.md), including active repository comparisons, pinned code-reading revisions, academic benchmarks, community evidence, and the v0.6 helper-process decision.
+Native desktop-agent research is documented separately in [COMPUTER_USE_RESEARCH.md](COMPUTER_USE_RESEARCH.md) and the current [SOTA audit](SOTA_AUDIT.md), including active repository comparisons, pinned code-reading revisions, academic benchmarks, community evidence, and the helper-process decision.
 
 ## Product research
 
@@ -29,9 +29,10 @@ Chrome's security guidance recommends minimum privileges, an explicit CSP, distr
 - [Chrome: Stay secure](https://developer.chrome.com/docs/extensions/develop/security-privacy/stay-secure)
 - [Chrome: Protect user privacy](https://developer.chrome.com/docs/extensions/develop/security-privacy/user-privacy)
 
-`captureVisibleTab` is limited to roughly two calls per second, so screenshot capture is throttled to one call every 550 milliseconds per window.
+The extension captures the requested tab through `Page.captureScreenshot` while attached to that exact target, so observing an inactive tab does not activate it. Debugger attach, command, and detach calls each have a deadline, and detach runs in a `finally` path.
 
-- [Chrome: chrome.tabs / captureVisibleTab](https://developer.chrome.com/docs/extensions/reference/api/tabs#method-captureVisibleTab)
+- [Chrome DevTools Protocol: Page.captureScreenshot](https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-captureScreenshot)
+- [Chrome: chrome.debugger](https://developer.chrome.com/docs/extensions/reference/api/debugger)
 
 ## Research literature
 
@@ -95,4 +96,4 @@ Community discussions from independent Windows developers repeatedly describe un
 | ChatGPT chat/sidebar synchronization | No | The bridge is model- and chat-provider independent |
 | Network, cookie, or localStorage extraction | No | Avoid unnecessary credential-extraction surfaces |
 | Arbitrary JavaScript execution | Full Access only | Compatibility escape hatch explicitly marked high risk |
-| Desktop application control | Pixel-first macOS/Windows helper | Separate permission-owning process; semantic AX/UIA layer deferred |
+| Desktop application control | Hybrid macOS AX/SkyLight and Windows UIA/Win32 helper | Separate permission-owning process; exact-window refs, stale-state refusal, and postcondition reporting |

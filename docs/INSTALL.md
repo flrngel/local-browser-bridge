@@ -77,6 +77,8 @@ If macOS opens System Settings, enable **Local Computer Helper** under **Privacy
 ./Local\ Computer\ Helper.app/Contents/MacOS/local-computer-helper
 ```
 
+The permission check reports `screenCaptureReady`, pixel `inputReady`, and `semanticReady` separately. If `semanticReady` is false, screenshots and supported pixel routes can still work, but semantic element refs are deliberately omitted until Accessibility is granted.
+
 The app bundle is ad-hoc signed for internal consistency, but it is not Developer ID-signed or notarized. A new build can require the grants again. Do not grant Accessibility to an unrelated shell or globally weaken Gatekeeper.
 
 ## 5. Load the extension

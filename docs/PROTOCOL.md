@@ -19,7 +19,7 @@ Extension hello:
 ```json
 {
   "type": "hello",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "browser": "Google Chrome",
   "mode": "full-access",
   "capabilities": ["tabs.list", "page.observe"]
@@ -31,12 +31,13 @@ Computer-helper hello:
 ```json
 {
   "type": "hello",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "platform": "macos",
   "architecture": "aarch64",
   "backend": "background-window/skylight+cgwindow",
   "sessionMode": "background-window",
   "inputReady": true,
+  "semanticReady": true,
   "capabilities": ["computer.status", "computer.observe", "computer.click"]
 }
 ```
@@ -101,10 +102,10 @@ Unsolicited approval event:
 | `page.click` | `tabId`, `ref`, `generation` | Trusted input when available; Safe mode asks approval for risky labels |
 | `page.fill` | `tabId`, `ref`, `generation`, `text` | Full Access permits sensitive fields; Safe mode rejects them |
 | `page.select` | `tabId`, `ref`, `generation`, `value` | Matches option value or label |
-| `page.key` | `tabId`, `key` | Full Access accepts keys/chords such as `Meta+A`; Safe mode accepts navigation keys |
+| `page.key` | `tabId`, `generation`, `key` | Snapshot-bound key/chord; Full Access accepts keys such as `Meta+A`, Safe mode accepts navigation keys |
 | `page.scroll` | `tabId`, `deltaX`, `deltaY` | Deltas clamped to ±5000 |
-| `page.clickAt` | `tabId`, `x`, `y`, optional `button`, `clickCount` | Full Access only; trusted viewport-coordinate click |
-| `page.typeText` | `tabId`, `text` | Full Access only; inserts arbitrary text into the focused control |
+| `page.clickAt` | `tabId`, `generation`, `x`, `y`, optional `button`, `clickCount` | Full Access only; snapshot-bound trusted viewport-coordinate click |
+| `page.typeText` | `tabId`, `generation`, `text` | Full Access only; snapshot-bound insertion into the focused control |
 | `page.evaluate` | `tabId`, `expression` | Full Access only; evaluates page JavaScript, awaits Promise up to 12 seconds, returns a by-value result |
 
 Refs are scoped to an observation `generation`. A page mutation or a new observation invalidates prior refs by design.
@@ -121,6 +122,8 @@ Refs are scoped to an observation `generation`. A page mutation or a new observa
 | `computer.scroll` | `frameId`, `x`, `y`, `deltaX`, `deltaY` | Sends window-local scroll events with deltas clamped to ±50 |
 | `computer.typeText` | `frameId`, `text` | Routes Unicode text to the exact target process/window |
 | `computer.key` | `frameId`, `key` | Sends one named key or a bounded chord such as `Meta+L` or `Control+L` |
+| `computer.invoke` | `frameId`, `elementRef`, optional `action` | Invokes an advertised frame-bound accessibility action and reports an observed postcondition |
+| `computer.setValue` | `frameId`, `elementRef`, `value` | Writes through the platform accessibility value pattern and requires value read-back or masked-length proof |
 
 `computer.observe` returns a private screenshot data URL to the server plus metadata shaped like:
 
@@ -140,14 +143,30 @@ Refs are scoped to an observation `generation`. A page mutation or a new observa
     "windowWidth": 720,
     "windowHeight": 492,
     "sessionMode": "background-window",
-    "deliveryMode": "exact-window-background"
+    "deliveryMode": "exact-window-background",
+    "semanticMode": "macos-accessibility",
+    "semanticAvailable": true,
+    "semanticError": null,
+    "elements": [
+      {
+        "ref": "a1",
+        "role": "AXButton",
+        "name": "Continue",
+        "value": null,
+        "enabled": true,
+        "actions": ["press"],
+        "bounds": { "x": 760, "y": 1080, "width": 92, "height": 32 }
+      }
+    ]
   }
 }
 ```
 
-Coordinates use the delivered image dimensions, not assumed physical pixels. The helper maps them into the captured window's local and screen coordinate spaces. It retains only the latest frame, re-enumerates the exact `(pid, native window id)` target immediately before input, and returns `COMPUTER_STALE_FRAME` if ownership or geometry changed. It snapshots the foreground process, user's focused window/control, hardware cursor, and active desktop around delivery and returns `COMPUTER_BACKGROUND_CONTRACT_VIOLATION` if the non-interruption invariant fails. There is no implicit global-HID or foreground fallback. The server serializes all actions and requests a new exact-window observation after every successful input action.
+Coordinates use the delivered image dimensions, not assumed physical pixels. The helper maps them into the captured window's local and screen coordinate spaces. Semantic refs are valid only for that frame. If the platform accessibility snapshot is unavailable, the screenshot still succeeds with `semanticAvailable: false`, no semantic refs, and a bounded `semanticError`.
 
-Version 0.7 still accepts `displayId` and returns legacy display-shaped aliases for compatibility with v0.6 clients. They identify the selected window, not a physical display, and are deprecated.
+The helper retains only the latest frame, re-enumerates the exact `(pid, native window id)` target immediately before input, and returns `COMPUTER_STALE_FRAME` if ownership or geometry changed. It snapshots the foreground process, user's focused window/control, hardware cursor, and active desktop around delivery and returns `COMPUTER_BACKGROUND_CONTRACT_VIOLATION` if the non-interruption invariant fails. There is no implicit global-HID or foreground fallback. The server serializes all actions and requests a new exact-window observation after every successful input action.
+
+Version 0.8 still accepts `displayId` and returns legacy display-shaped aliases for compatibility with v0.6 clients. They identify the selected window, not a physical display, and are deprecated.
 
 The native allowlist intentionally contains no shell, filesystem, process-launch, clipboard, downloader, or arbitrary-code method.
 

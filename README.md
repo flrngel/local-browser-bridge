@@ -24,6 +24,7 @@ This project does not copy any private OpenAI protocol. It independently impleme
 - Separate computer-process status and authority in the UI; no shell, filesystem, process-launch, clipboard, downloader, or telemetry command
 - Standalone Rust binary with the entire control UI embedded; Node.js is not required
 - Same-version Windows x86_64, macOS universal, and Chromium extension release assets
+- Semantic-first macOS Accessibility and Windows UI Automation actions with screenshot-bound refs and postcondition reporting
 - Transparent GitHub-only update metadata check with no telemetry, download, or installation
 - SHA-256 manifests, pinned release actions, GitHub build attestations, and immutable releases
 
@@ -158,7 +159,7 @@ cargo clippy --all-targets -- -D warnings
 cargo test --locked --all-targets
 ```
 
-The test suite covers version alignment, exact extension permissions and package files, absence of remote extension code and updater APIs, command parity, token persistence, update metadata validation, command validation, CSRF and both WebSocket Origin boundaries, browser/computer relays, screenshot serving, frame freshness, and the helper's bounded capability contract.
+The test suite covers version alignment, exact extension permissions and package files, absence of remote extension code and updater APIs, command parity, token persistence, update metadata validation, command validation, CSRF and both WebSocket Origin boundaries, browser/computer relays, screenshot serving, frame freshness, and the helper's bounded capability contract. The implementation review and sanitized live screenshots are in [docs/SOTA_AUDIT.md](docs/SOTA_AUDIT.md) and [evidence/v0.8.0](evidence/v0.8.0).
 
 ## Deployment contract
 
@@ -175,11 +176,12 @@ The canonical build is `.github/workflows/deploy.yml`, triggered by a matching `
 
 ## Limitations
 
-- Native computer control is pixel-first and exact-window scoped. It does not yet return macOS AX or Windows UIA element trees. Frameworks that reject background delivery fail closed; the helper never escalates to foreground input automatically.
-- macOS input currently relies on dynamically resolved, undocumented SkyLight symbols and is limited to non-minimized windows on the active Space. Windows uses background Win32 messages and exact-window capture; Chromium, WPF, WinUI, elevated, game, secure-input, and protected-content surfaces may refuse it.
+- Native computer control is hybrid and exact-window scoped: frame-bound macOS Accessibility or Windows UI Automation refs are preferred for supported controls, with background pixel input available for visual targets. Unsupported delivery fails closed; the helper never escalates to foreground input automatically.
+- macOS pixel input relies on dynamically resolved, undocumented SkyLight symbols and is limited to non-minimized windows on the active Space. Windows uses UI Automation plus exact-HWND background messages. Elevated, game, secure-input, protected-content, and custom-rendered surfaces can still refuse control.
 - Chromium does not allow control of `chrome://`, `edge://`, extension pages, or browser permission UI through this extension.
 - File-page control requires the user to enable Chrome's file-URL permission for the extension.
 - Element references expire when the page structure changes. Observe again before reusing them.
+- Open shadow roots are included in browser observations. Cross-origin iframe semantic merging is not implemented; use a visual/CDP action or navigate into the frame's page instead of assuming a ref exists.
 - Reference clicks use trusted Chrome DevTools Protocol input when possible and detach immediately. If DevTools is already attached, the extension falls back to a synthetic click and returns `trusted: false`.
 - Full Access can enter passwords, payment data, and OTPs and can execute page JavaScript. Treat it as remote-control authority over the signed-in browser profile.
 - Unpacked extensions are intended for development or personal installation. Organization-wide deployment requires signing, policy review, and privacy disclosures.

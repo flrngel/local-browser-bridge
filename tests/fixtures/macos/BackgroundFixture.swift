@@ -6,6 +6,7 @@ private struct FixtureState: Codable {
     var clicks = 0
     var drags = 0
     var scroll = 0
+    var semanticPresses = 0
     var text = ""
     var lastAction = "ready"
 }
@@ -17,6 +18,19 @@ private final class FixtureView: NSView {
     init(frame: NSRect, stateURL: URL) {
         self.stateURL = stateURL
         super.init(frame: frame)
+        let semanticField = NSTextField(frame: NSRect(x: 28, y: 150, width: 410, height: 34))
+        semanticField.placeholderString = "Semantic text"
+        semanticField.setAccessibilityLabel("Semantic text")
+        addSubview(semanticField)
+
+        let semanticButton = NSButton(
+            title: "Semantic action",
+            target: self,
+            action: #selector(semanticAction(_:))
+        )
+        semanticButton.frame = NSRect(x: 452, y: 150, width: 220, height: 34)
+        semanticButton.setAccessibilityLabel("Semantic action")
+        addSubview(semanticButton)
         writeState()
     }
 
@@ -62,7 +76,7 @@ private final class FixtureView: NSView {
         dirtyRect.fill()
 
         let title = "Local Browser Bridge — Background Input Fixture"
-        let status = "clicks=\(state.clicks)  drags=\(state.drags)  scroll=\(state.scroll)"
+        let status = "clicks=\(state.clicks)  drags=\(state.drags)  scroll=\(state.scroll)  semantic=\(state.semanticPresses)"
         let text = "text=\(state.text)"
         let action = "last=\(state.lastAction)"
         let attributes: [NSAttributedString.Key: Any] = [
@@ -86,6 +100,14 @@ private final class FixtureView: NSView {
         writeState()
         needsDisplay = true
         displayIfNeeded()
+    }
+
+    @objc private func semanticAction(_ sender: NSButton) {
+        state.semanticPresses += 1
+        state.lastAction = "semantic"
+        sender.title = "Semantic action complete"
+        sender.setAccessibilityLabel("Semantic action complete")
+        persistAndRedraw()
     }
 
     private func writeState() {
