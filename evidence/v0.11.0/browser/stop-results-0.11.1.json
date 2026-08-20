@@ -1,0 +1,109 @@
+{
+  "recordedAt": "2026-08-20T07:40:21.727Z",
+  "scenario": "in-page Stop button clicked with a dispatched input event",
+  "passed": 11,
+  "total": 11,
+  "results": [
+    {
+      "name": "extension.loaded",
+      "ok": true,
+      "detail": {
+        "version": "0.11.1"
+      },
+      "at": "2026-08-20T07:40:14.389Z"
+    },
+    {
+      "name": "extension.connected",
+      "ok": true,
+      "detail": {
+        "version": "0.11.1"
+      },
+      "at": "2026-08-20T07:40:15.150Z"
+    },
+    {
+      "name": "browser.control.start",
+      "ok": true,
+      "detail": {
+        "active": true
+      },
+      "at": "2026-08-20T07:40:17.720Z"
+    },
+    {
+      "name": "bridge.refuses-to-click-its-own-stop",
+      "ok": true,
+      "detail": {
+        "code": "CONTROL_UI_OCCLUSION",
+        "message": "CONTROL_UI_OCCLUSION: release control with the visible Stop button or choose another point"
+      },
+      "at": "2026-08-20T07:40:18.792Z"
+    },
+    {
+      "name": "stop.pill-located",
+      "ok": true,
+      "detail": {
+        "found": true,
+        "x": 851.015625,
+        "y": 12,
+        "width": 416.984375,
+        "height": 37,
+        "right": 1268,
+        "bottom": 49
+      },
+      "at": "2026-08-20T07:40:18.797Z"
+    },
+    {
+      "name": "stop.click-dispatched",
+      "ok": true,
+      "detail": {
+        "x": 1242,
+        "y": 31,
+        "note": "real Input.dispatchMouseEvent, not a DOM .click()"
+      },
+      "at": "2026-08-20T07:40:19.111Z"
+    },
+    {
+      "name": "stop.lease-revoked",
+      "ok": true,
+      "detail": {
+        "active": false,
+        "reason": "released_by_user"
+      },
+      "at": "2026-08-20T07:40:21.722Z"
+    },
+    {
+      "name": "stop.human-pause-latched",
+      "ok": true,
+      "detail": {
+        "humanPaused": true
+      },
+      "at": "2026-08-20T07:40:21.722Z"
+    },
+    {
+      "name": "stop.remote-restart-refused",
+      "ok": true,
+      "detail": {
+        "status": 423,
+        "code": "HUMAN_CONTROL_PAUSED",
+        "taxonomy": "needs_user"
+      },
+      "at": "2026-08-20T07:40:21.724Z"
+    },
+    {
+      "name": "stop.remote-mutation-refused",
+      "ok": true,
+      "detail": {
+        "status": 423,
+        "code": "HUMAN_CONTROL_PAUSED"
+      },
+      "at": "2026-08-20T07:40:21.726Z"
+    },
+    {
+      "name": "stop.page-overlay-removed",
+      "ok": true,
+      "detail": {
+        "overlayAbsent": "true"
+      },
+      "at": "2026-08-20T07:40:21.727Z"
+    }
+  ]
+}

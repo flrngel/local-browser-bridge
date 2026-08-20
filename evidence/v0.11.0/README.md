@@ -122,6 +122,13 @@ a human input event stops the bridge, and the bridge's own input events cannot.
 
 ### A defect this run found: the HTTP status of a human pause
 
+Confirmed fixed on the packaged **0.11.1** build by re-running the same rig:
+both refusals now answer **`423 Locked`** with taxonomy `needs_user`, and all
+11 checks still pass ([`browser/stop-results-0.11.1.json`](browser/stop-results-0.11.1.json)).
+The original `stop-results.json` keeps its `500`s verbatim as the record of the
+defect rather than being edited to match the repaired code.
+
+
 Both refusals above came back as **HTTP 500** with `HUMAN_CONTROL_PAUSED`
 (visible in `stop-results.json`), which tells a REST client the local server
 faulted and invites a retry, when the only thing that resolves the state is a
