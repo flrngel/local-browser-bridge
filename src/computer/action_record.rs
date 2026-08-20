@@ -219,7 +219,7 @@ pub(crate) fn invariant_evidence(report: &InvariantReport) -> Vec<ActionEvidence
         (
             "userFocusUnchanged",
             report.user_focus_unchanged,
-            "Keyboard focus was unchanged across background delivery",
+            "The platform-specific front-window or focused-window oracle was unchanged across background delivery",
         ),
         (
             "hardwareCursorUnchanged",
@@ -376,5 +376,43 @@ mod tests {
         }));
         assert_eq!(effect, ActionEffect::SuspectedNoop);
         assert!(evidence.iter().all(|item| !item.supports_confirmation));
+    }
+
+    #[test]
+    fn semantic_confirmation_keeps_platform_invariants_as_nonconfirming_evidence() {
+        let (effect, mut evidence) = semantic_evidence(&serde_json::json!({
+            "delivered": true,
+            "effectObserved": true,
+            "postcondition": "value-confirmed"
+        }));
+        let invariants = InvariantReport {
+            foreground_unchanged: true,
+            user_focus_unchanged: true,
+            cursor_unchanged: true,
+            space_unchanged: true,
+        };
+        evidence.extend(invariant_evidence(&invariants));
+
+        let record = ActionRecord::new("action-1".to_owned(), effect, evidence, timings()).unwrap();
+        assert_eq!(record.effect, ActionEffect::Confirmed);
+        let invariant_evidence = record
+            .evidence
+            .iter()
+            .filter(|item| item.kind == EvidenceKind::DeliveryInvariant)
+            .collect::<Vec<_>>();
+        assert_eq!(invariant_evidence.len(), 4);
+        assert!(
+            invariant_evidence
+                .iter()
+                .all(|item| item.observed && !item.supports_confirmation)
+        );
+        let focus = invariant_evidence
+            .iter()
+            .find(|item| item.claim == "userFocusUnchanged")
+            .unwrap();
+        assert_eq!(
+            focus.detail,
+            "The platform-specific front-window or focused-window oracle was unchanged across background delivery"
+        );
     }
 }

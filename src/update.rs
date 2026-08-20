@@ -18,6 +18,7 @@ const MAX_RESPONSE_BYTES: usize = 512 * 1024;
 pub enum UpdateState {
     Checking,
     UpToDate,
+    Development,
     Available,
     Error,
     Disabled,
@@ -174,24 +175,32 @@ fn parse_release(bytes: &[u8], current_version: &str) -> Result<UpdateStatus, St
         .map_err(|_| "The installed version is not valid semantic versioning.".to_owned())?;
     let latest = Version::parse(latest_text)
         .map_err(|_| "GitHub returned an invalid release version; it was rejected.".to_owned())?;
-    let available = latest > current;
+    let (status, message) = match current.cmp(&latest) {
+        std::cmp::Ordering::Less => (
+            UpdateState::Available,
+            format!(
+                "Version {latest} is available. Review and download it from the official GitHub release."
+            ),
+        ),
+        std::cmp::Ordering::Equal => (
+            UpdateState::UpToDate,
+            format!("Version {current} is the latest stable release."),
+        ),
+        std::cmp::Ordering::Greater => (
+            UpdateState::Development,
+            format!(
+                "Version {current} is a development build ahead of the latest public stable release, version {latest}. Review the public release at {}.",
+                release.html_url
+            ),
+        ),
+    };
     Ok(UpdateStatus {
-        status: if available {
-            UpdateState::Available
-        } else {
-            UpdateState::UpToDate
-        },
+        status,
         current_version: current.to_string(),
         latest_version: Some(latest.to_string()),
         release_url: Some(release.html_url),
         checked_at: Some(now_iso()),
-        message: if available {
-            format!(
-                "Version {latest} is available. Review and download it from the official GitHub release."
-            )
-        } else {
-            format!("Version {current} is the latest stable release.")
-        },
+        message,
     })
 }
 
@@ -216,7 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn identifies_newer_and_current_releases() {
+    fn identifies_newer_release_as_available() {
         let newer = parse_release(
             &release(
                 "v0.6.0",
@@ -227,7 +236,10 @@ mod tests {
         .unwrap();
         assert_eq!(newer.status, UpdateState::Available);
         assert_eq!(newer.latest_version.as_deref(), Some("0.6.0"));
+    }
 
+    #[test]
+    fn identifies_equal_release_as_up_to_date() {
         let current = parse_release(
             &release(
                 "v0.5.0",
@@ -237,6 +249,48 @@ mod tests {
         )
         .unwrap();
         assert_eq!(current.status, UpdateState::UpToDate);
+    }
+
+    #[test]
+    fn identifies_current_ahead_of_release_as_development() {
+        let development = parse_release(
+            &release(
+                "v0.11.1",
+                "https://github.com/flrngel/local-browser-bridge/releases/tag/v0.11.1",
+            ),
+            "0.12.0",
+        )
+        .unwrap();
+
+        assert_eq!(development.status, UpdateState::Development);
+        assert_eq!(development.latest_version.as_deref(), Some("0.11.1"));
+        assert_eq!(
+            development.release_url.as_deref(),
+            Some("https://github.com/flrngel/local-browser-bridge/releases/tag/v0.11.1")
+        );
+        assert!(development.message.contains("development build"));
+        assert!(development.message.contains("latest public stable release"));
+        assert!(
+            development
+                .message
+                .contains("https://github.com/flrngel/local-browser-bridge/releases/tag/v0.11.1")
+        );
+    }
+
+    #[test]
+    fn serializes_update_states_as_stable_wire_values() {
+        let cases = [
+            (UpdateState::Checking, "checking"),
+            (UpdateState::UpToDate, "up_to_date"),
+            (UpdateState::Development, "development"),
+            (UpdateState::Available, "available"),
+            (UpdateState::Error, "error"),
+            (UpdateState::Disabled, "disabled"),
+        ];
+
+        for (state, expected) in cases {
+            assert_eq!(serde_json::to_value(state).unwrap(), expected);
+        }
     }
 
     #[test]

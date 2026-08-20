@@ -11,6 +11,10 @@ pub const COMPUTER_HELPER_ORIGIN: &str = "lbb-computer-helper://local";
 /// server-acknowledged share-frame pacing. It is a feature flag, never a
 /// dispatchable command method.
 pub const COMPUTER_SHARE_ACK_CAPABILITY: &str = "computer.share.ack";
+/// Capability string indicating that `computer.share.start` creates one
+/// persistent OS exact-window capture stream instead of polling snapshot APIs.
+/// It is metadata, not a dispatchable command method.
+pub const COMPUTER_NATIVE_SHARE_CAPABILITY: &str = "computer.capture.native-stream.v1";
 pub const COMPUTER_METHODS: &[&str] = &[
     "computer.status",
     "computer.share.start",
@@ -26,6 +30,16 @@ pub const COMPUTER_METHODS: &[&str] = &[
     "computer.invoke",
     "computer.setValue",
 ];
+
+/// Identity-bound acknowledgement for one emitted native share frame.
+///
+/// Transport sequences restart for each share lease, so the share ID is part
+/// of the acknowledgement identity rather than optional metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShareFrameAck {
+    pub share_id: String,
+    pub sequence: u64,
+}
 
 #[derive(Debug, Clone, Error)]
 #[error("{message}")]
@@ -74,8 +88,9 @@ impl CommandCancellation {
         }
     }
 
-    #[cfg(any(target_os = "macos", target_os = "windows", test))]
-    pub(crate) fn begin_side_effect(&self, boundary: &str) -> Result<(), ComputerError> {
+    /// Marks the first side-effect boundary so cancellation can distinguish a
+    /// retry-safe refusal from an outcome that may already have changed state.
+    pub fn begin_side_effect(&self, boundary: &str) -> Result<(), ComputerError> {
         self.check(boundary)?;
         self.dispatched.store(true, Ordering::Release);
         self.check(boundary)

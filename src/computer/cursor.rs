@@ -671,6 +671,8 @@ mod tests {
             image_height: 300,
             elements: vec![],
             captured_at: std::time::Instant::now(),
+            share_id: None,
+            source_sequence: None,
         }
     }
 

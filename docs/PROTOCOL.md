@@ -103,7 +103,7 @@ The connector must validate `protocolVersion`, `serverVersion`, `sessionId`, and
   "controllerSequence": 81,
   "controllerId": "38a72d1f-d124-4335-8f1e-9cb85777df14",
   "connectionId": "2f9ad9af-5bb7-42b3-a77d-a0c83a625792",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "browser": "Google Chrome",
   "mode": "full-access",
   "capabilities": ["tabs.list", "page.observe", "browser.control.start"]
@@ -122,14 +122,17 @@ The computer helper uses the same negotiated envelope and reports its bounded na
   "version": "0.11.0",
   "platform": "macos",
   "architecture": "aarch64",
-  "backend": "background-window/skylight+cgwindow",
+  "backend": "background-window/ax+skylight+screencapturekit-stream",
   "sessionMode": "background-window",
+  "isolation": "shared-user-session/target-routed",
   "inputReady": true,
   "semanticReady": true,
   "capabilities": [
     "computer.status",
     "computer.observe",
     "computer.share.start",
+    "computer.share.ack",
+    "computer.capture.native-stream.v1",
     "computer.click"
   ]
 }
@@ -395,8 +398,8 @@ A dialog can also open *after* a command has passed both gates, while an observa
 | Method | Parameters | Notes |
 |---|---|---|
 | `computer.status` | none | Platform, backend, target windows, permission/input readiness, pointer state, share state, and current-frame status |
-| `computer.share.start` | `windowId`, optional `fps` | Starts a bounded exact-window frame feed; default 4 FPS, accepted range 1–10 |
-| `computer.share.status` | none | Returns share ID, window ID, frame sequence, FPS, capture scope, and backpressure policy |
+| `computer.share.start` | `windowId`, optional `fps` | Starts one persistent OS exact-window capture stream; default maximum cadence 4 FPS, accepted range 1–10 |
+| `computer.share.status` | none | Returns the capture backend/OS-indication policy, source and transport sequences/drop counts, exact target, requested FPS cap, and backpressure policy |
 | `computer.share.stop` | none | Stops the active share and returns its ID |
 | `computer.observe` | optional `windowId` | Captures one exact application window without including unrelated desktop windows |
 | `computer.move` | `frameId`, `x`, `y`, optional `durationMs`, `coordinateSpace` | Routes a bounded synthetic trajectory to the exact window; never moves the hardware cursor |
@@ -474,9 +477,13 @@ Coordinate commands accept an optional `coordinateSpace`. The default is the exi
 
 Native password elements are always emitted with `sensitive: true`, `valueRedacted: true`, no `value`, and no `setValue` action. macOS classifies secure AX roles and subroles before reading `AXValue`; Windows reads `CurrentIsPassword` before acquiring a value pattern and treats an unreadable password state as sensitive. The server repeats this redaction when sanitizing helper payloads.
 
-The synthetic pointer is helper-session state, not the hardware cursor. Its bounded cubic Bézier/minimum-jerk trajectory is delivered to the exact window, and its final state is composited into subsequent exact-window PNGs. It is not a native click-through desktop overlay in version 0.11.
+The synthetic pointer is helper-session state, not the hardware cursor. Its bounded cubic Bézier/minimum-jerk trajectory is delivered to the exact window, and its final state is composited into subsequent exact-window PNGs. It is not a native click-through desktop overlay.
 
-`computer.share.frame` events carry the same observation shape with a monotonically increasing share sequence. Frame pacing is negotiated at hello time: a helper that advertises the `computer.share.ack` capability (a feature flag, not a dispatchable method) receives `"shareAck": true` in the server's `helloAck` and switches to ack-paced, latest-frame-wins delivery. The helper then keeps a single-slot mailbox: a newer capture replaces an unemitted frame and increments the share's monotonic `droppedFrames` counter, and the next frame is emitted only after the server acknowledges the previous one. After sanitizing and storing each share frame, the server sends an acknowledgement bound to the session and the exact share sequence:
+`computer.share.start` creates one persistent native source bound to the selected `(pid, native window id)`: ScreenCaptureKit `SCStream` on macOS or a free-threaded Windows Graphics Capture session on Windows. The helper advertises `computer.capture.native-stream.v1` for this implementation. The system cursor is excluded, and the bridge uses each platform's default capture-indication behavior without requesting a borderless or hidden mode. `systemIndicator: true` means indication was not suppressed by the helper; it is not runtime proof that a particular banner or border was visible. Selection is programmatic from the authenticated control page; there is no native system content picker.
+
+The native callback owns a capacity-one latest-frame slot. Each accepted source frame has a monotonic `sourceSequence` and callback timestamp; replacement increments `sourceDroppedFrames`. The helper converts only the newest available native image into the regular observation shape, caps it at 1,000,000 pixels, composites its synthetic pointer, and PNG-encodes it. The requested 1–10 FPS value is a maximum cadence rather than a guaranteed rate. Source capture continues while an input command owns the controller, although protocol conversion and publication resume only after that command releases the controller; returned frames promise settled synthetic-pointer state, not every intermediate animation sample.
+
+`computer.share.frame` events carry the observation with a separate monotonically increasing transport `sequence`. Frame pacing is negotiated at hello time: a helper that advertises `computer.share.ack` (also a feature flag, not a dispatchable method) receives `"shareAck": true` in the server's `helloAck` and switches to ack-paced, latest-frame-wins delivery. The encoded transport keeps its own single-slot mailbox: a newer converted frame replaces an unemitted frame and increments `transportDroppedFrames` (also retained as the compatibility field `droppedFrames`), and the next frame is emitted only after the server acknowledges the previous one. After sanitizing and storing each share frame, the server sends an acknowledgement bound to the session, exact share lease, and transport sequence:
 
 ```json
 {
@@ -484,15 +491,16 @@ The synthetic pointer is helper-session state, not the hardware cursor. Its boun
   "protocolVersion": 1,
   "sessionId": "d559c7b3-56fb-49e6-b661-801cfcb8807f",
   "name": "computer.share.frame",
+  "shareId": "3c10ac31-ce03-4db2-93c4-f4ec0b152ec0",
   "sequence": 12
 }
 ```
 
-Stale, duplicate, and unknown ack sequences are ignored, and share sequences stay strictly increasing across dropped frames. Share status and the `share` block inside observations report `droppedFrames`, `ackPaced`, `lastAckedSequence`, and `backpressure`: `latest-frame-wins` when pacing is negotiated, `producer-blocking` when either side lacks the capability—in which case behavior is exactly the pre-0.10 timer feed and a legacy helper is never sent a message type it cannot parse. A replaced WebSocket session must renegotiate pacing.
+Stale, duplicate, unknown, and wrong-share acknowledgements are ignored, and both sequence domains stay strictly increasing across dropped frames within one share lease. Share status and the `share` block report `captureBackend`, `nativeStream`, `systemIndicator`, `selectionMode`, `sourceSequence`, `sourceDroppedFrames`, `sequence`, `transportDroppedFrames`, `ackPaced`, `lastAckedSequence`, and `backpressure`. `latest-frame-wins` is used when pacing is negotiated; a helper without the acknowledgement feature retains producer-timed transport and is never sent an unknown message. A replaced WebSocket session must start a new native stream and renegotiate pacing.
 
-To avoid a 1–10 FPS render/action race, the helper keeps a bounded recent-frame lease: a rendered `frameId` remains usable for at most three seconds only while the current share, PID, native window ID, and complete window geometry still match. Everything else is stale. This feed is repeated exact-window capture, not an OS virtual display, remote-desktop stream, or isolated input session.
+To avoid a live-share render/action race, the helper keeps a bounded recent-frame lease: a rendered `frameId` remains usable for at most three seconds only while the current share ID, PID, native window ID, and complete window geometry still match. Everything else is stale. A native exact-window stream still shares the user's login and input environment; it is not an OS virtual display, remote-desktop session, VM, sandbox, or independent input seat.
 
-The helper re-enumerates the exact `(pid, native window id)` target before input and returns `COMPUTER_STALE_FRAME` if identity or geometry changed. It snapshots foreground process, user focus, hardware cursor, and active desktop around delivery and returns `COMPUTER_BACKGROUND_CONTRACT_VIOLATION` if the non-interruption invariant fails. There is no implicit global-HID or foreground fallback. The server serializes actions and requests a new exact-window observation after successful input.
+The helper re-enumerates the exact `(pid, native window id)` target before input and returns `COMPUTER_STALE_FRAME` if identity or geometry changed. On macOS it compares frontmost process/window identity, hardware cursor, and active Space before and after delivery; Windows additionally compares foreground and focused HWND identities plus the input desktop. It returns `COMPUTER_BACKGROUND_CONTRACT_VIOLATION` if that non-interruption oracle changes. These post-dispatch samples are not transactional rollback and cannot prove no shorter transient change occurred. There is no implicit global-HID or foreground fallback. The server serializes actions and requests a new exact-window observation after successful input.
 
 Legacy `displayId` and display-shaped aliases identify the selected window, not a physical display, and remain deprecated compatibility fields.
 

@@ -7,7 +7,7 @@ use std::time::Duration;
 use futures_util::{SinkExt as _, StreamExt as _};
 use local_browser_bridge::computer::{
     COMPUTER_HELPER_ORIGIN, CommandCancellation, ComputerController, ComputerError,
-    NATIVE_COMPUTER_SUPPORTED, command_parts, result_envelope,
+    NATIVE_COMPUTER_SUPPORTED, ShareFrameAck, command_parts, result_envelope,
 };
 use local_browser_bridge::ws_auth::{
     AUTH_TIMEOUT, COMPUTER_CONNECTOR, ClientHello, MAX_AUTH_MESSAGE_BYTES, MAX_AUTH_MESSAGES,
@@ -321,10 +321,8 @@ async fn run_authenticated_session(
                             // Acks are queued instead of locking the controller
                             // here so the reader stays responsive while a
                             // command holds the controller lock.
-                            if let Some(sequence) =
-                                message.get("sequence").and_then(Value::as_u64)
-                            {
-                                queue_share_ack(&mut pending_share_acks, sequence);
+                            if let Some(ack) = share_frame_ack(&message) {
+                                queue_share_ack(&mut pending_share_acks, ack);
                             }
                             continue;
                         }
@@ -394,20 +392,22 @@ async fn run_authenticated_session(
                         "Computer worker returned a mismatched command identity",
                     ).into());
                 }
-                completion.result = finished.cancellation.finish(completion.result);
-                if finished.method == "computer.share.start"
-                    && finished.cancellation.was_dispatched()
-                    && finished.cancellation.is_canceled()
-                {
-                    // The canceled share start may or may not have committed,
-                    // so its share authority is revoked; the transport session
-                    // itself continues, so the hello-negotiated ack pacing
-                    // must survive for later shares in this session.
-                    controller
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .revoke_command_authority();
-                }
+                completion.result = finish_worker_result(
+                    &finished.cancellation,
+                    completion.result,
+                    || {
+                        // Cancellation can arrive after the blocking worker has
+                        // returned but before its result is serialized. If that
+                        // changes the result to outcome-unknown, revoke the same
+                        // authority the controller revokes for an unknown result
+                        // detected inside the worker. Ack negotiation belongs to
+                        // the still-live transport session and is retained.
+                        controller
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .revoke_command_authority();
+                    },
+                );
                 authority.retire(&completion.key);
                 let mut response = result_envelope(&completion.key.id, completion.result);
                 bind_result_envelope(&mut response, &session_id, completion.key.sequence);
@@ -425,7 +425,6 @@ async fn run_authenticated_session(
                 let emissions = collect_share_emissions(
                     &controller,
                     &mut pending_share_acks,
-                    active.is_some() || !pending.is_empty(),
                 );
                 for (name, data) in emissions {
                     event_sequence = event_sequence.saturating_add(1);
@@ -458,7 +457,6 @@ struct QueuedCommand {
 
 struct ActiveCommand {
     key: CommandKey,
-    method: String,
     cancellation: CommandCancellation,
 }
 
@@ -470,6 +468,20 @@ struct CommandCompletion {
 fn command_key(message: &Value) -> Option<CommandKey> {
     Some(CommandKey {
         id: message.get("id")?.as_str()?.to_owned(),
+        sequence: message.get("sequence")?.as_u64()?,
+    })
+}
+
+fn share_frame_ack(message: &Value) -> Option<ShareFrameAck> {
+    if message.get("name").and_then(Value::as_str) != Some("computer.share.frame") {
+        return None;
+    }
+    let share_id = message.get("shareId")?.as_str()?;
+    if share_id.is_empty() || share_id.len() > 100 {
+        return None;
+    }
+    Some(ShareFrameAck {
+        share_id: share_id.to_owned(),
         sequence: message.get("sequence")?.as_u64()?,
     })
 }
@@ -526,31 +538,44 @@ impl Drop for SessionAuthorityGuard {
 /// even a misbehaving bridge without growing an unbounded queue.
 const MAX_PENDING_SHARE_ACKS: usize = 8;
 
-fn queue_share_ack(pending_share_acks: &mut VecDeque<u64>, sequence: u64) {
+fn queue_share_ack(pending_share_acks: &mut VecDeque<ShareFrameAck>, ack: ShareFrameAck) {
     if pending_share_acks.len() >= MAX_PENDING_SHARE_ACKS {
         pending_share_acks.pop_front();
     }
-    pending_share_acks.push_back(sequence);
+    pending_share_acks.push_back(ack);
+}
+
+fn finish_worker_result(
+    cancellation: &CommandCancellation,
+    result: Result<Value, ComputerError>,
+    revoke_authority: impl FnOnce(),
+) -> Result<Value, ComputerError> {
+    let result = cancellation.finish(result);
+    if result
+        .as_ref()
+        .err()
+        .is_some_and(|error| error.code == "COMPUTER_OUTCOME_UNKNOWN")
+    {
+        revoke_authority();
+    }
+    result
 }
 
 /// Applies queued share acknowledgements, then drains at most one parked
 /// frame and one capture error for emission.
 ///
-/// Command activity suppresses emissions entirely (command-priority), and a
-/// busy controller lock defers everything to the next tick without blocking.
+/// A busy controller lock defers protocol conversion to the next tick without
+/// blocking. The platform capture callback continues replacing its native
+/// latest-frame slot while an input command owns the controller.
 fn collect_share_emissions(
     controller: &Arc<Mutex<ComputerController>>,
-    pending_share_acks: &mut VecDeque<u64>,
-    command_active: bool,
+    pending_share_acks: &mut VecDeque<ShareFrameAck>,
 ) -> Vec<(&'static str, Value)> {
     let Ok(mut controller) = controller.try_lock() else {
         return Vec::new();
     };
-    while let Some(sequence) = pending_share_acks.pop_front() {
-        controller.acknowledge_share_frame(sequence);
-    }
-    if command_active {
-        return Vec::new();
+    while let Some(ack) = pending_share_acks.pop_front() {
+        controller.acknowledge_share_frame(&ack.share_id, ack.sequence);
     }
     let capture_error = controller.pump_share_capture();
     let mut emissions = Vec::new();
@@ -580,7 +605,6 @@ fn dispatch_next_command(
     };
     *active = Some(ActiveCommand {
         key: command.key.clone(),
-        method: command.method.clone(),
         cancellation: command.cancellation.clone(),
     });
     let controller = Arc::clone(controller);
@@ -675,28 +699,91 @@ mod tests {
     use tokio_tungstenite::accept_hdr_async;
 
     #[test]
-    fn share_tick_drains_queued_acks_even_while_commands_are_active() {
+    fn share_tick_drains_queued_acks_when_no_share_is_active() {
         let controller = Arc::new(Mutex::new(ComputerController::new()));
-        let mut pending_share_acks = VecDeque::from([3_u64, 4]);
-        assert!(collect_share_emissions(&controller, &mut pending_share_acks, true).is_empty());
+        let mut pending_share_acks = VecDeque::from([
+            ShareFrameAck {
+                share_id: "share-old".to_owned(),
+                sequence: 3,
+            },
+            ShareFrameAck {
+                share_id: "share-current".to_owned(),
+                sequence: 4,
+            },
+        ]);
+        assert!(collect_share_emissions(&controller, &mut pending_share_acks).is_empty());
         assert!(
             pending_share_acks.is_empty(),
-            "acks must apply even while a command is queued or active"
+            "queued acknowledgements must always be drained when the controller is available"
         );
-        assert!(collect_share_emissions(&controller, &mut pending_share_acks, false).is_empty());
+        assert!(collect_share_emissions(&controller, &mut pending_share_acks).is_empty());
     }
 
     #[test]
     fn queued_share_acks_stay_bounded_and_keep_the_newest_entries() {
         let mut pending_share_acks = VecDeque::new();
         for sequence in 0..(MAX_PENDING_SHARE_ACKS as u64 + 4) {
-            queue_share_ack(&mut pending_share_acks, sequence);
+            queue_share_ack(
+                &mut pending_share_acks,
+                ShareFrameAck {
+                    share_id: format!("share-{sequence}"),
+                    sequence,
+                },
+            );
         }
         assert_eq!(pending_share_acks.len(), MAX_PENDING_SHARE_ACKS);
-        assert_eq!(pending_share_acks.front(), Some(&4));
+        assert_eq!(pending_share_acks.front().map(|ack| ack.sequence), Some(4));
         assert_eq!(
-            pending_share_acks.back(),
-            Some(&(MAX_PENDING_SHARE_ACKS as u64 + 3))
+            pending_share_acks.back().map(|ack| ack.sequence),
+            Some(MAX_PENDING_SHARE_ACKS as u64 + 3)
+        );
+    }
+
+    #[test]
+    fn share_frame_ack_requires_the_exact_event_name_share_id_and_sequence() {
+        let ack = share_frame_ack(&json!({
+            "name": "computer.share.frame",
+            "shareId": "share-1",
+            "sequence": 7,
+        }))
+        .expect("valid share acknowledgement");
+        assert_eq!(ack.share_id, "share-1");
+        assert_eq!(ack.sequence, 7);
+        assert!(
+            share_frame_ack(&json!({
+                "name": "computer.share.frame",
+                "sequence": 7,
+            }))
+            .is_none()
+        );
+        assert!(
+            share_frame_ack(&json!({
+                "name": "computer.share.error",
+                "shareId": "share-1",
+                "sequence": 7,
+            }))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn cancellation_after_worker_return_revokes_authority_before_result_serialization() {
+        let cancellation = CommandCancellation::new();
+        cancellation
+            .begin_side_effect("fixture worker dispatch")
+            .expect("fixture dispatch should begin");
+        cancellation.cancel();
+        let mut revoked = false;
+
+        let error = finish_worker_result(&cancellation, Ok(json!({ "ok": true })), || {
+            revoked = true;
+        })
+        .expect_err("late cancellation must make the outcome unknown");
+
+        assert_eq!(error.code, "COMPUTER_OUTCOME_UNKNOWN");
+        assert!(
+            revoked,
+            "authority must be revoked before returning the error"
         );
     }
 

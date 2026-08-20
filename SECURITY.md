@@ -2,7 +2,7 @@
 
 Local Browser Bridge gives an automated system access to pages in a real signed-in browser profile. Treat it like remote-control software even though every transport is local.
 
-Version 0.9.0 enables browser **Full Access mode by default** and includes an optional native computer helper. Full Access intentionally removes most browser action-level safety controls. The computer helper executes its bounded native input commands immediately while it is running; browser Safe mode does not govern desktop applications. Only run either capability for a local agent you trust.
+Browser **Full Access mode is enabled by default**, and the native computer helper is optional. Full Access intentionally removes most browser action-level safety controls. The computer helper executes its bounded native input commands immediately while it is running; browser Safe mode does not govern desktop applications. Only run either capability for a local agent you trust.
 
 ## Trust boundaries
 
@@ -16,12 +16,14 @@ Version 0.9.0 enables browser **Full Access mode by default** and includes an op
 - The server and control UI are compiled into one Rust binary; no Node.js runtime or package installation is involved.
 - The extension contains no remote code, download API, cookie API, native messaging host, telemetry, or update endpoint.
 - The native computer helper is a separate, visibly connected process. It opens no listener and connects outbound to the server with token-free mutual authentication and an exact private Origin.
+- One-shot native observation and live sharing are separate. Live sharing binds a persistent ScreenCaptureKit stream on macOS or Windows Graphics Capture session on Windows to one exact `(process, native window)` target, disables the system cursor, and forwards bounded PNG frames through a single latest-frame slot under a requested 1–10 FPS cap.
+- The operating system owns native capture indication and stopping behavior. The helper does not suppress macOS capture UI or request borderless WGC, but it also does not present either platform's system content picker; window selection occurs in the authenticated bridge control page.
 - The server intersects helper-advertised capabilities with a fixed allowlist. No shell, filesystem, process-launch, clipboard, downloader, or telemetry method is accepted or implemented.
-- Every native input action is bound to an exact-window frame. During an active 1–10 FPS share, the helper accepts a rendered frame for at most three seconds only while `(pid, native window id, geometry)` still exactly matches the current frame; all other stale frames fail closed.
-- The helper does not post global HID input, move the hardware cursor, leave the user's focused window changed, activate the target application, change the active desktop, or silently fall back to foreground control. It snapshots those invariants around every action and fails closed if they change.
+- Every native input action is bound to an exact-window frame. A share-derived frame remains usable for at most three seconds only while `(share id, pid, native window id, geometry)` still exactly matches the current share; a current one-shot observation has the same age and exact-window checks without borrowing share authority. All other stale frames fail closed.
+- The helper does not post global HID input, move the hardware cursor, leave the platform's foreground/window-focus oracle changed, activate the target application, change the active desktop, or silently fall back to foreground control. It snapshots those invariants around every action and fails closed if they change. On macOS the focus oracle is the foreground process plus front window; on Windows it also includes the GUI-thread focus window. This before/after evidence is not an atomic rollback guarantee or proof that no shorter transient change occurred.
 - Browser and native computer actions share one serialization lock so two local callers cannot intentionally interleave mutations through this server.
 
-The random token authenticates local protocol clients; it is not a sandbox. Malware or another user process that can read the token file or operate the authenticated control page may gain the same authority. Operating-system screen-capture and Accessibility permissions remain the final native boundary.
+The random token authenticates local protocol clients; it is not a sandbox. Malware or another user process that can read the token file or operate the authenticated control page may gain the same authority. Operating-system screen-capture and Accessibility permissions remain the final native boundary. Exact-window capture and best-effort target-routed input still run inside the user's current login session and do not create a separate security principal or input seat.
 
 ## Release and update trust
 
@@ -29,7 +31,7 @@ The random token authenticates local protocol clients; it is not a sandbox. Malw
 - `--no-update-check` or `LBB_DISABLE_UPDATE_CHECK=1` prevents that request. `--check-updates` performs the same metadata-only check and exits.
 - The extension never performs update checks. Unpacked extensions do not silently update on Windows or macOS; the control UI reports a server/extension mismatch so the user can replace both from one release.
 - Tagged release builds run on separate GitHub-hosted Windows and macOS workers. Every binary/archive and checksum manifest receives GitHub build provenance, and release immutability prevents later asset or tag replacement.
-- Version 0.9.0 artifacts are not Microsoft publisher-signed or Apple Developer ID-signed/notarized. The macOS helper app is ad-hoc signed so its bundle is structurally valid, not to claim a verified publisher identity. Platform warnings and permission re-prompts are therefore possible. Checksums and GitHub provenance detect release tampering but do not replace OS publisher signing or malware notarization.
+- Unless a release explicitly states otherwise, artifacts are not Microsoft publisher-signed or Apple Developer ID-signed/notarized. The macOS helper app is ad-hoc signed so its bundle is structurally valid, not to claim a verified publisher identity. Platform warnings and permission re-prompts are therefore possible. Checksums and GitHub provenance detect release tampering but do not replace OS publisher signing or malware notarization.
 
 ## Modes and human approval
 
@@ -44,16 +46,18 @@ Risk detection in Safe mode is a conservative text heuristic, not a complete pol
 - Tab URLs returned to the server omit query strings and fragments.
 - Screenshot and page text remain in server memory and are not written to disk. Their HTTP endpoints require an authenticated dashboard session or bearer token.
 - Browser content is treated as untrusted and inserted into the control UI with `textContent`, not HTML.
-- Native exact-window screenshots remain in server memory, are served only from loopback under the control page's same-origin policy, and are replaced on the next capture. They exclude unrelated windows and notifications, although the selected target can itself contain sensitive content.
+- Native exact-window screenshots and the latest live-share frame remain in server memory, are served only from loopback under the control page's same-origin policy, and are replaced by newer observations. Exact-window filters avoid unrelated covering windows, although a selected target can itself contain sensitive content and protected surfaces can be blank.
 - Native accessibility password values are never read or writable through semantic control. They are marked `sensitive` and `valueRedacted`, and the server independently removes any value or `setValue` action supplied for such an element.
 
 Full Access can run arbitrary JavaScript in the target page's main world and act with that page's signed-in session. It cannot directly read HttpOnly cookie values, but page-origin requests can still use those cookies. Treat any token holder and any agent that can operate the localhost UI as trusted browser operators.
 
 Native computer input is hybrid semantic/pixel control bound to one exact application window. Semantic refs are tied to the captured frame and re-resolved before use, but a ref still does not detect prompt injection, prove human intent, or make an action harmless. Accessibility and background pixel delivery remain application-framework dependent and can be refused by secure input, protected content, games, custom-rendered controls, or elevated Windows targets. Observe after every action and supervise consequential workflows.
 
+For the current on-screen, minimized-window, cross-Space, keyboard-routing, and isolation boundaries, see [Limitations](docs/LIMITATIONS.md).
+
 ## Native permission rationale
 
-- Screen Recording is required on macOS to capture desktop pixels.
+- Screen Recording is required on macOS 13 or later to capture desktop pixels and start the ScreenCaptureKit live stream.
 - Accessibility is required on macOS to expose semantic elements, invoke supported actions, set control values, and help route input to an exact process/window. Pixel delivery also dynamically resolves undocumented SkyLight symbols; platform updates can disable that route, in which case the helper reports input unavailable rather than using global HID input.
 - Windows input must run in the signed-in interactive session; the helper is not installed as a service and requests no administrator elevation for normal use.
 - The macOS release uses a named `.app` bundle because TCC grants attach to application identity. Run that packaged helper rather than copying its inner executable to an arbitrary location.

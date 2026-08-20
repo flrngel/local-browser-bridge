@@ -536,6 +536,7 @@ async fn connect_fake_computer_with_share_ack(
         "computer.share.start",
         "computer.share.status",
         "computer.share.stop",
+        "computer.capture.native-stream.v1",
         "computer.shell",
     ];
     if advertise_share_ack {
@@ -667,6 +668,13 @@ async fn connect_fake_computer_with_share_ack(
                         "expectedPointerRevision": params["expectedPointerRevision"]
                     }
                 }),
+                "computer.move" => json!({
+                    "id": id, "type": "result", "ok": false,
+                    "error": {
+                        "code": "COMPUTER_OUTCOME_UNKNOWN",
+                        "message": "Fixture lost authority after dispatch"
+                    }
+                }),
                 _ => json!({
                     "id": id, "type": "result", "ok": false,
                     "error": { "code": "COMPUTER_UNSUPPORTED_ACTION", "message": "Unsupported test action" }
@@ -780,6 +788,25 @@ async fn wait_for_computer_frame(
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!("share frame {frame_id} was not stored");
+}
+
+async fn wait_for_computer_share_error(client: &Client, base_url: &str, token: &str) -> Value {
+    for _ in 0..100 {
+        let state: Value = client
+            .get(format!("{base_url}/api/state"))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if state["state"]["computer"]["share"]["reason"] == "capture-error" {
+            return state;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("computer share error did not revoke published frame state");
 }
 
 async fn wait_for_tabs(client: &Client, base_url: &str, token: &str) -> Value {
@@ -1055,7 +1082,13 @@ async fn relays_frame_bound_computer_actions_and_serves_desktop_capture() {
             .as_array()
             .unwrap()
             .len(),
-        13
+        14
+    );
+    assert!(
+        state["state"]["computer"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("computer.capture.native-stream.v1"))
     );
     assert!(
         !state["state"]["computer"]["capabilities"]
@@ -1212,6 +1245,13 @@ async fn paces_negotiated_share_frames_with_event_acks_and_drop_metrics() {
             .contains(&json!("computer.share.ack")),
         "the negotiated capability must survive the server-side allowlist"
     );
+    assert!(
+        state["state"]["computer"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("computer.capture.native-stream.v1")),
+        "native exact-window streaming must survive the capability allowlist"
+    );
     let session_id = state["state"]["computer"]["sessionId"]
         .as_str()
         .unwrap()
@@ -1268,6 +1308,7 @@ async fn paces_negotiated_share_frames_with_event_acks_and_drop_metrics() {
     )
     .await;
     assert_eq!(ack["name"], "computer.share.frame");
+    assert_eq!(ack["shareId"], "share-fixture");
     assert_eq!(ack["protocolVersion"], PROTOCOL_VERSION);
     assert_eq!(ack["sessionId"].as_str(), Some(session_id.as_str()));
 
@@ -1300,6 +1341,97 @@ async fn paces_negotiated_share_frames_with_event_acks_and_drop_metrics() {
         "eventAck for share sequence 6",
     )
     .await;
+
+    fake.events
+        .send((
+            "computer.share.error".to_owned(),
+            json!({
+                "code": "COMPUTER_CAPTURE_FAILED",
+                "message": "fixture native stream ended"
+            }),
+        ))
+        .unwrap();
+    let failed = wait_for_computer_share_error(&client, &base_url, &token).await;
+    assert_eq!(failed["state"]["computer"]["share"]["active"], false);
+    assert_eq!(
+        failed["state"]["computer"]["share"]["code"],
+        "COMPUTER_CAPTURE_FAILED"
+    );
+    assert!(failed["state"]["computerObservation"].is_null());
+
+    fake.handle.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn outcome_unknown_native_action_clears_published_share_and_frame_authority() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let fake = connect_fake_computer_with_share_ack(&base_url, &token, VERSION, true).await;
+    let client = Client::new();
+    wait_for_computer(&client, &base_url, &token).await;
+
+    fake.events
+        .send((
+            "computer.share.frame".to_owned(),
+            computer_share_frame_data(
+                "frame-outcome-unknown",
+                json!({
+                    "active": true,
+                    "id": "share-outcome-unknown",
+                    "windowId": "window-9",
+                    "fps": 4,
+                    "sequence": 1,
+                    "startedAt": "2026-08-19T00:00:00Z",
+                    "captureScope": "exact-window",
+                    "cursorComposited": true,
+                    "ackPaced": true,
+                    "lastAckedSequence": 0,
+                    "backpressure": "latest-frame-wins"
+                }),
+            ),
+        ))
+        .unwrap();
+    wait_for_computer_frame(&client, &base_url, &token, "frame-outcome-unknown").await;
+
+    let response = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "computer.move",
+            "params": {
+                "frameId": "frame-outcome-unknown",
+                "x": 100,
+                "y": 100
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 504);
+    let failure: Value = response.json().await.unwrap();
+    assert_eq!(failure["error"]["code"], "COMPUTER_OUTCOME_UNKNOWN");
+
+    let state: Value = client
+        .get(format!("{base_url}/api/state"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(state["state"]["computer"]["share"]["active"], false);
+    assert_eq!(
+        state["state"]["computer"]["share"]["reason"],
+        "outcome-unknown"
+    );
+    assert_eq!(
+        state["state"]["computer"]["share"]["code"],
+        "COMPUTER_OUTCOME_UNKNOWN"
+    );
+    assert!(state["state"]["computerObservation"].is_null());
 
     fake.handle.abort();
     let _ = shutdown.send(());

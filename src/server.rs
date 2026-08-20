@@ -32,8 +32,11 @@ use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore, broadcast};
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
-use crate::computer::{COMPUTER_HELPER_ORIGIN, COMPUTER_METHODS, COMPUTER_SHARE_ACK_CAPABILITY};
-use crate::error_taxonomy::classify;
+use crate::computer::{
+    COMPUTER_HELPER_ORIGIN, COMPUTER_METHODS, COMPUTER_NATIVE_SHARE_CAPABILITY,
+    COMPUTER_SHARE_ACK_CAPABILITY, ShareFrameAck,
+};
+use crate::error_taxonomy::{TaxonomyCode, classify};
 use crate::hub::{ExtensionHub, HubError};
 use crate::token::{create_token, token_is_valid, tokens_equal};
 use crate::update::{UpdateState, UpdateStatus, check_for_update};
@@ -540,6 +543,11 @@ struct ComputerWindow {
 struct ComputerObservation {
     frame_id: String,
     captured_at: String,
+    capture_age_ms: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    share_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_sequence: Option<u64>,
     window_id: String,
     pid: u64,
     app_name: String,
@@ -1871,9 +1879,11 @@ async fn handle_computer_hello(state: &AppState, connection_id: Uuid, message: &
                 .iter()
                 .filter_map(Value::as_str)
                 .filter(|item| {
-                    COMPUTER_METHODS.contains(item) || *item == COMPUTER_SHARE_ACK_CAPABILITY
+                    COMPUTER_METHODS.contains(item)
+                        || *item == COMPUTER_SHARE_ACK_CAPABILITY
+                        || *item == COMPUTER_NATIVE_SHARE_CAPABILITY
                 })
-                .take(COMPUTER_METHODS.len() + 1)
+                .take(COMPUTER_METHODS.len() + 2)
                 .map(|item| item.to_owned())
                 .collect::<Vec<_>>()
         })
@@ -1917,7 +1927,13 @@ async fn handle_computer_hello(state: &AppState, connection_id: Uuid, message: &
                 .unwrap_or("unknown"),
             80,
         ),
-        isolation: "foreground-and-hardware-cursor-preserved".to_owned(),
+        isolation: bounded(
+            message
+                .get("isolation")
+                .and_then(Value::as_str)
+                .unwrap_or("shared-user-session/target-routed"),
+            80,
+        ),
         input_ready: compatible
             && message
                 .get("inputReady")
@@ -2194,12 +2210,34 @@ async fn handle_computer_event(state: &AppState, connection_id: Uuid, message: &
                 .await;
         }
         "computer.share.error" => {
+            let code = bounded(
+                data.get("code")
+                    .and_then(Value::as_str)
+                    .unwrap_or("COMPUTER_CAPTURE_FAILED"),
+                80,
+            );
             let detail = bounded(
                 data.get("message")
                     .and_then(Value::as_str)
                     .unwrap_or("Computer share capture failed"),
                 500,
             );
+            {
+                let mut state_data = state.data.write().await;
+                if !state.computer_hub.is_current_ready(connection_id) {
+                    return;
+                }
+                if let Some(computer) = state_data.public.computer.as_mut() {
+                    computer.share = json!({
+                        "active": false,
+                        "stopped": true,
+                        "reason": "capture-error",
+                        "code": code,
+                    });
+                }
+                state_data.public.computer_observation = None;
+                state_data.computer_screenshot = None;
+            }
             if state
                 .log_for_connection(&state.computer_hub, connection_id, name, "warning", detail)
                 .await
@@ -2213,11 +2251,20 @@ async fn handle_computer_event(state: &AppState, connection_id: Uuid, message: &
     }
 }
 
-/// Share sequence a frame event is acknowledged under, read from the raw
+/// Share identity a frame event is acknowledged under, read from the raw
 /// payload so even a frame the server could not store still unblocks the
-/// helper's ack-paced mailbox.
-fn share_frame_ack_sequence(data: &Value) -> Option<u64> {
-    data.get("frame")?.get("share")?.get("sequence")?.as_u64()
+/// helper's ack-paced mailbox. The share ID is mandatory because transport
+/// sequences restart for every share lease.
+fn share_frame_ack(data: &Value) -> Option<ShareFrameAck> {
+    let share = data.get("frame")?.get("share")?;
+    let share_id = share.get("id")?.as_str()?;
+    if share_id.is_empty() || share_id.len() > 100 {
+        return None;
+    }
+    Some(ShareFrameAck {
+        share_id: share_id.to_owned(),
+        sequence: share.get("sequence")?.as_u64()?,
+    })
 }
 
 /// Sends the `eventAck` for one processed `computer.share.frame` event.
@@ -2226,7 +2273,7 @@ fn share_frame_ack_sequence(data: &Value) -> Option<u64> {
 /// only a helper that advertised `computer.share.ack` ever receives one, so a
 /// legacy helper keeps its timer behavior and never sees an unknown message.
 async fn acknowledge_computer_share_frame(state: &AppState, connection_id: Uuid, data: &Value) {
-    let Some(sequence) = share_frame_ack_sequence(data) else {
+    let Some(ack) = share_frame_ack(data) else {
         return;
     };
     let negotiated = state
@@ -2252,7 +2299,8 @@ async fn acknowledge_computer_share_frame(state: &AppState, connection_id: Uuid,
             "protocolVersion": PROTOCOL_VERSION,
             "sessionId": connection_id.to_string(),
             "name": "computer.share.frame",
-            "sequence": sequence,
+            "shareId": ack.share_id,
+            "sequence": ack.sequence,
         }),
     );
 }
@@ -2804,6 +2852,12 @@ impl AppState {
             match self.computer_hub.call_scoped(method, params.clone()).await {
                 Ok(result) => result,
                 Err(error) => {
+                    self.clear_published_computer_authority_after_unknown(
+                        &computer.session_id,
+                        method,
+                        &error,
+                    )
+                    .await;
                     self.log(method, "error", &error.message).await;
                     self.bump("computer-error").await;
                     return Err(error.into());
@@ -2861,6 +2915,10 @@ impl AppState {
             if let Some(computer) = data.public.computer.as_mut() {
                 computer.share = sanitize_share_status(Some(&result));
             }
+            if method == "computer.share.stop" {
+                data.public.computer_observation = None;
+                data.computer_screenshot = None;
+            }
             drop(data);
             if !self
                 .log_for_connection(
@@ -2917,6 +2975,45 @@ impl AppState {
             self.bump("computer-warning").await;
         }
         Ok(result)
+    }
+
+    /// Mirrors the helper's fail-closed outcome-unknown boundary in public
+    /// state. The helper has already revoked its share, frame, and pointer
+    /// authority, so retaining the previous frame here would make the
+    /// dashboard look active even though no subsequent action can use it.
+    /// The connector session check prevents a late result from an old helper
+    /// from clearing a replacement helper's newly published state.
+    async fn clear_published_computer_authority_after_unknown(
+        &self,
+        expected_session_id: &str,
+        method: &str,
+        error: &HubError,
+    ) {
+        if matches!(
+            method,
+            "computer.status" | "computer.observe" | "computer.share.status"
+        ) || classify(&error.code).code != TaxonomyCode::OutcomeUnknown
+        {
+            return;
+        }
+
+        let mut data = self.data.write().await;
+        let Some(computer) = data
+            .public
+            .computer
+            .as_mut()
+            .filter(|computer| computer.session_id == expected_session_id)
+        else {
+            return;
+        };
+        computer.share = json!({
+            "active": false,
+            "stopped": true,
+            "reason": "outcome-unknown",
+            "code": bounded(&error.code, 80),
+        });
+        data.public.computer_observation = None;
+        data.computer_screenshot = None;
     }
 
     async fn refresh_computer_observation(
@@ -3552,6 +3649,16 @@ fn sanitize_computer_observation(value: Option<&Value>) -> Result<ComputerObserv
                 .unwrap_or("unknown"),
             100,
         ),
+        capture_age_ms: frame
+            .get("captureAgeMs")
+            .and_then(Value::as_f64)
+            .filter(|value| value.is_finite() && (0.0..=60_000.0).contains(value))
+            .unwrap_or(0.0),
+        share_id: frame
+            .get("shareId")
+            .and_then(Value::as_str)
+            .map(|value| bounded(value, 100)),
+        source_sequence: frame.get("sourceSequence").and_then(Value::as_u64),
         window_id: window_id.clone(),
         pid: frame.get("pid").and_then(Value::as_u64).unwrap_or(0),
         app_name: bounded(
@@ -3868,12 +3975,23 @@ fn sanitize_share_status(value: Option<&Value>) -> Value {
         "active": true,
         "id": bounded(share.get("id").and_then(Value::as_str).unwrap_or("unknown"), 100),
         "windowId": bounded(share.get("windowId").and_then(Value::as_str).unwrap_or("unknown"), 100),
+        "pid": share.get("pid").and_then(Value::as_u64).unwrap_or(0),
         "fps": share.get("fps").and_then(Value::as_u64).unwrap_or(1).clamp(1, 10),
         "sequence": share.get("sequence").and_then(Value::as_u64).unwrap_or(0),
+        "sourceSequence": share.get("sourceSequence").and_then(Value::as_u64).unwrap_or(0),
         "startedAt": bounded(share.get("startedAt").and_then(Value::as_str).unwrap_or("unknown"), 100),
         "captureScope": "exact-window",
+        "captureMode": bounded(share.get("captureMode").and_then(Value::as_str).unwrap_or("unknown"), 50),
+        "captureBackend": bounded(share.get("captureBackend").and_then(Value::as_str).unwrap_or("unknown"), 100),
+        "nativeStream": share.get("nativeStream").and_then(Value::as_bool).unwrap_or(false),
+        "systemIndicator": share.get("systemIndicator").and_then(Value::as_bool).unwrap_or(false),
+        "selectionMode": bounded(share.get("selectionMode").and_then(Value::as_str).unwrap_or("unknown"), 60),
+        "isolation": bounded(share.get("isolation").and_then(Value::as_str).unwrap_or("shared-user-session"), 60),
+        "createsSeparateDesktop": false,
         "cursorComposited": share.get("cursorComposited").and_then(Value::as_bool).unwrap_or(true),
         "droppedFrames": share.get("droppedFrames").and_then(Value::as_u64).unwrap_or(0),
+        "transportDroppedFrames": share.get("transportDroppedFrames").and_then(Value::as_u64).unwrap_or_else(|| share.get("droppedFrames").and_then(Value::as_u64).unwrap_or(0)),
+        "sourceDroppedFrames": share.get("sourceDroppedFrames").and_then(Value::as_u64).unwrap_or(0),
         "ackPaced": share.get("ackPaced").and_then(Value::as_bool).unwrap_or(false),
         "lastAckedSequence": share.get("lastAckedSequence").and_then(Value::as_u64).unwrap_or(0),
         "backpressure": bounded(share.get("backpressure").and_then(Value::as_str).unwrap_or("producer-blocking"), 40),
@@ -6459,13 +6577,30 @@ mod tests {
             "windowId": "window-9",
             "fps": 4,
             "sequence": 12,
+            "sourceSequence": 19,
             "startedAt": "2026-08-19T00:00:00Z",
             "droppedFrames": 3,
+            "sourceDroppedFrames": 7,
+            "captureMode": "persistent-native-stream",
+            "captureBackend": "macos-screencapturekit-scstream",
+            "nativeStream": true,
+            "systemIndicator": true,
+            "selectionMode": "programmatic-exact-window",
             "ackPaced": true,
             "lastAckedSequence": 11,
             "backpressure": "latest-frame-wins"
         })));
         assert_eq!(sanitized["droppedFrames"], 3);
+        assert_eq!(sanitized["transportDroppedFrames"], 3);
+        assert_eq!(sanitized["sourceDroppedFrames"], 7);
+        assert_eq!(sanitized["sourceSequence"], 19);
+        assert_eq!(sanitized["nativeStream"], true);
+        assert_eq!(sanitized["systemIndicator"], true);
+        assert_eq!(sanitized["createsSeparateDesktop"], false);
+        assert_eq!(
+            sanitized["captureBackend"],
+            "macos-screencapturekit-scstream"
+        );
         assert_eq!(sanitized["ackPaced"], true);
         assert_eq!(sanitized["lastAckedSequence"], 11);
         assert_eq!(sanitized["backpressure"], "latest-frame-wins");
@@ -6484,14 +6619,25 @@ mod tests {
         assert_eq!(legacy["backpressure"], "producer-blocking");
 
         assert_eq!(
-            share_frame_ack_sequence(&json!({ "frame": { "share": { "sequence": 9 } } })),
-            Some(9)
+            share_frame_ack(&json!({
+                "frame": { "share": { "id": "share-1", "sequence": 9 } }
+            })),
+            Some(ShareFrameAck {
+                share_id: "share-1".to_owned(),
+                sequence: 9,
+            })
         );
         assert_eq!(
-            share_frame_ack_sequence(&json!({ "frame": { "share": { "sequence": "9" } } })),
+            share_frame_ack(&json!({
+                "frame": { "share": { "id": "share-1", "sequence": "9" } }
+            })),
             None
         );
-        assert_eq!(share_frame_ack_sequence(&json!({ "frame": {} })), None);
+        assert_eq!(
+            share_frame_ack(&json!({ "frame": { "share": { "sequence": 9 } } })),
+            None
+        );
+        assert_eq!(share_frame_ack(&json!({ "frame": {} })), None);
     }
 
     #[test]

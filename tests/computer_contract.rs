@@ -140,6 +140,8 @@ fn background_backend_has_no_global_or_foreground_input_fallback() {
 fn semantic_backends_revalidate_exact_targets_and_report_effects() {
     let macos = fs::read_to_string("src/computer/ax_macos.rs").unwrap();
     let windows = fs::read_to_string("src/computer/uia_windows.rs").unwrap();
+    let macos_platform = fs::read_to_string("src/computer/platform_macos.rs").unwrap();
+    let windows_platform = fs::read_to_string("src/computer/platform_windows.rs").unwrap();
     let computer = fs::read_to_string("src/computer.rs").unwrap();
     let server = fs::read_to_string("src/server.rs").unwrap();
     assert!(macos.contains("_AXUIElementGetWindow"));
@@ -164,6 +166,25 @@ fn semantic_backends_revalidate_exact_targets_and_report_effects() {
     assert!(computer.contains("pub sensitive: bool"));
     assert!(computer.contains("pub value_redacted: bool"));
     assert!(server.contains("let value_redacted = sensitive"));
+
+    for platform in [&macos_platform, &windows_platform] {
+        let invoke = platform.split("pub fn invoke(").nth(1).unwrap();
+        let invoke = invoke.split("pub fn set_value(").next().unwrap();
+        assert!(invoke.contains("Result<(serde_json::Value, InvariantReport), ComputerError>"));
+        let set_value = platform.split("pub fn set_value(").nth(1).unwrap();
+        let set_value = set_value.split("pub fn limitations(").next().unwrap();
+        assert!(set_value.contains("Result<(serde_json::Value, InvariantReport), ComputerError>"));
+        assert!(platform.contains("Ok((backend_effect, report))"));
+    }
+
+    let invoke = computer.split("    fn invoke(").nth(1).unwrap();
+    let invoke = invoke.split("    fn set_value(").next().unwrap();
+    assert!(invoke.contains("evidence.extend(invariant_evidence(&invariants))"));
+    assert!(invoke.contains("\"invariants\": invariants"));
+    let set_value = computer.split("    fn set_value(").nth(1).unwrap();
+    let set_value = set_value.split("    fn point(").next().unwrap();
+    assert!(set_value.contains("evidence.extend(invariant_evidence(&invariants))"));
+    assert!(set_value.contains("\"invariants\": invariants"));
 
     let signature = windows.split("unsafe fn signature").nth(1).unwrap();
     assert!(

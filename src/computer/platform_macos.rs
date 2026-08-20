@@ -48,7 +48,7 @@ unsafe impl Send for Symbols {}
 unsafe impl Sync for Symbols {}
 
 pub fn backend_name() -> &'static str {
-    "background-window/skylight+cgwindow"
+    "background-window/ax+skylight+screencapturekit-stream"
 }
 
 pub fn semantic_backend_name() -> &'static str {
@@ -68,7 +68,7 @@ pub fn invoke(
     semantic: &SemanticTarget,
     action: &str,
     cancellation: &CommandCancellation,
-) -> Result<serde_json::Value, ComputerError> {
+) -> Result<(serde_json::Value, InvariantReport), ComputerError> {
     guarded_semantic(target, cancellation, || {
         ax_macos::invoke(target, semantic, action, cancellation)
     })
@@ -79,7 +79,7 @@ pub fn set_value(
     semantic: &SemanticTarget,
     value: &str,
     cancellation: &CommandCancellation,
-) -> Result<serde_json::Value, ComputerError> {
+) -> Result<(serde_json::Value, InvariantReport), ComputerError> {
     guarded_semantic(target, cancellation, || {
         ax_macos::set_value(target, semantic, value, cancellation)
     })
@@ -87,7 +87,7 @@ pub fn set_value(
 
 pub fn limitations() -> Vec<&'static str> {
     vec![
-        "Only non-minimized windows on the active macOS Space are mutable",
+        "Native ScreenCaptureKit sharing is exact-window; input remains limited to non-minimized windows on the active macOS Space",
         "Secure input, protected content, games, and some GPU surfaces can refuse background events",
         "Private SkyLight event routing may require updates after a macOS release",
     ]
@@ -469,14 +469,15 @@ fn guarded_semantic<T>(
     target: &WindowDescriptor,
     cancellation: &CommandCancellation,
     action: impl FnOnce() -> Result<T, ComputerError>,
-) -> Result<T, ComputerError> {
+) -> Result<(T, InvariantReport), ComputerError> {
     let before = DesktopSnapshot::capture()?;
     exact_window(target)?;
     cancellation.check("semantic resolution")?;
     let action_result = action();
     thread::sleep(Duration::from_millis(35));
-    before.compare(&DesktopSnapshot::capture()?).assert_held()?;
-    action_result
+    let report = before.compare(&DesktopSnapshot::capture()?).assert_held()?;
+    let backend_effect = action_result?;
+    Ok((backend_effect, report))
 }
 
 fn post_mouse(

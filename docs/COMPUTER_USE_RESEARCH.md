@@ -1,15 +1,15 @@
 # Session-visible browser control and non-interrupting computer use
 
-Research snapshot: 2026-08-18. Implementation target: version 0.9.0.
+Research snapshot: 2026-08-20. Historical version references below identify when a design property entered the project. [Capabilities](CAPABILITIES.md) and [Limitations](LIMITATIONS.md) are authoritative for the current implementation boundary.
 
 ## The corrected target
 
 Version 0.6 captured a physical display and injected global input. A live end-to-end run proved that architecture wrong for concurrent use: it moved the person's hardware pointer and typed into whichever application owned focus. Version 0.8 replaced it with exact-window capture, semantic-first action, target-routed background input, and foreground/cursor/desktop invariants.
 
-Version 0.9 adds two properties that must not be conflated:
+The corrected design separates two properties that must not be conflated:
 
 1. **Session visibility:** a person can tell when browser or helper control is active, see a synthetic pointer in the agent's image stream, and stop control through a trusted surface.
-2. **Non-interruption:** desktop input is routed to one observed window while the foreground, focused control, hardware cursor, and active desktop remain unchanged.
+2. **Non-interruption:** desktop input is routed to one observed window while the platform-specific foreground/window-focus oracle, hardware cursor, and active desktop remain unchanged.
 
 Neither property creates an isolated operating-system session. A shared image of a background window is not a VM, remote desktop, virtual display, sandbox, or separate input seat.
 
@@ -20,21 +20,25 @@ The review used pinned source code, vendor source/documentation, primary papers,
 | Source | Pinned snapshot | Focus relevant to this bridge |
 |---|---:|---|
 | [Chrome `debugger` API](https://developer.chrome.com/docs/extensions/reference/api/debugger) and [Chromium implementation](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/chrome/browser/extensions/api/debugger/debugger_api.cc) | Chromium main reviewed 2026-08-18 | A held extension debugger attachment creates Chrome's warning UI, keeps the MV3 worker alive on supported Chrome versions, exposes `canceled_by_user`, and fails pending debugger calls when the warning is canceled |
+| [OpenAI Computer Use documentation](https://learn.chatgpt.com/docs/computer-use) and [Codex announcement](https://openai.com/index/codex-for-almost-everything/) | official pages reviewed 2026-08-20 | Documents macOS background behavior, Screen Recording and Accessibility prerequisites, and Windows foreground behavior; it does not disclose the native API implementation, so ScreenCaptureKit or SkyLight attribution remains inference |
 | Public ChatGPT Chrome extension package | `1.2.27259.19709`; ID `hehggadaopoacecdllhhajmbjkdcmajg`; SHA-256 `f9ba06c44525b53a0189d0ad97cf1d457987970063aea0609dec31b1d6782c96` | Empirical benchmark: held debugger sessions, exclusive tab ownership, managed tab group, serialized target work, session/turn/move state, and acknowledged synthetic-cursor arrival |
 | Public Claude Chrome extension package | `1.0.85`; ID `fcoeoabgfenejglbffodgkkbkcdhcgfn`; SHA-256 `5c1c1318acf10bb4638be129ae34f9dfe728b867a70c603382f89e66a5d08be3` | Empirical benchmark: clear page indicator, trusted Stop path, heartbeat, page glow, and a simpler CSS synthetic cursor |
-| [Cua Driver](https://github.com/trycua/cua/tree/c43f10243856658fe706c08c155a95628fc81248/libs/cua-driver/rust) | `c43f10243856658fe706c08c155a95628fc81248` | Rust exact-window backends plus a session-owned native cursor overlay with Dubins paths, velocity profile, spring settling, click state, themes, click-through windows, and platform-specific rendering |
+| [Cua Driver](https://github.com/trycua/cua/tree/9a61050e3474fc9488d7adc85184299f02514d0e/libs/cua-driver/rust) and [macOS internals review](https://github.com/trycua/cua/blob/9a61050e3474fc9488d7adc85184299f02514d0e/blog/inside-macos-window-internals.md) | `9a61050e3474fc9488d7adc85184299f02514d0e` | ScreenCaptureKit exact-window capture, semantic-first actions, private SkyLight process routing, focus-without-raise, Space discovery, and native cursor/overlay work; also records Chromium and HID-only application limits |
+| [Apple ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit) and [exact-window session](https://developer.apple.com/videos/play/wwdc2022/10155/) | official documentation reviewed 2026-08-20 | Desktop-independent exact-window streams, occlusion/offscreen behavior, minimized-stream pause, child-window boundary, frame metadata, and bounded surface queues; capture does not supply a second input seat |
+| [Windows Graphics Capture `CreateForWindow`](https://learn.microsoft.com/en-us/windows/win32/api/windows.graphics.capture.interop/nf-windows-graphics-capture-interop-igraphicscaptureiteminterop-createforwindow) | official documentation reviewed 2026-08-20 | Exact-HWND capture item and OS-owned capture indication; this is capture, not universal background input |
 | [agent-browser](https://github.com/vercel-labs/agent-browser/tree/548b159b30eef119ccf6846c8bc807d0eaa3f6f8) | `548b159b30eef119ccf6846c8bc807d0eaa3f6f8` | Persistent browser sessions, serialized CDP interaction, live screencast input, monotonic frame IDs, latest-frame-wins delivery, and optional renderer acknowledgements |
 | [pi-computer-use](https://github.com/injaneity/pi-computer-use/tree/de725835d3b0e3bd13aa8885d6c3f3a9dc23bcdc) | `de725835d3b0e3bd13aa8885d6c3f3a9dc23bcdc` | Immutable state-scoped observations, resource epochs, per-resource serialization, successor state/diffs, checked action outcomes, and an optional non-blocking native ghost cursor on macOS |
 | [OSWorld](https://arxiv.org/abs/2404.07972) | 2024 paper | Long-horizon desktop evaluation and environment diversity; its reference execution path uses the physical desktop/cursor and is not a concurrent-user isolation design |
 | [Microsoft UFO](https://github.com/microsoft/UFO/tree/96983c73ed09e884a5f1d7ff8936c953b234b684) and [UFO²](https://arxiv.org/abs/2504.14603) | source `96983c7`; 2025 paper / 2026 TMLR | UIA/Win32 automation in shipped source; the paper's RDP-loopback Picture-in-Picture architecture is the strongest reviewed separate-input-session design, but the reviewed public repository still described PiP Desktop as coming soon |
 | [UI-TARS](https://github.com/bytedance/UI-TARS/tree/582f3a7ea5d285ee8ed9e2e84048d1ab01453c49) | `582f3a7ea5d285ee8ed9e2e84048d1ab01453c49` | Vision-language grounding and screenshot/action history; this improves the planner/model, while its normal desktop operator remains physical screen input rather than a non-interrupting transport |
 | [Temporal UI State Inconsistency / PUSV](https://arxiv.org/abs/2604.18860) | 2026 paper | Formalizes observation-to-action TOCTOU and rechecks local pixels, the global frame, and window identity immediately before action; also shows that visual checks alone miss zero-visual-footprint DOM replacement |
+| [CaMeLs Can Use Computers Too](https://arxiv.org/abs/2601.09923) | 2026 v3 | Shows why continuous UI observation and prompt-injection isolation are separate system-design problems |
 | [Apple High Performance Screen Sharing](https://support.apple.com/guide/mac-help/screen-sharing-type-options-mchl1883115d/mac) | macOS 14+ documentation | Can create virtual displays, but same-user use blanks hardware displays and prevents simultaneous local use; capture or sharing alone does not imply an independent input seat |
 | [Power Automate PiP](https://learn.microsoft.com/power-automate/desktop-flows/run-desktop-flows-pip) and [unattended sessions](https://learn.microsoft.com/power-automate/desktop-flows/run-unattended-desktop-flows) | current documentation | Real Windows child/RDP sessions with credential, policy, lifecycle, and cleanup requirements |
 
-Community signals included [real-session bridge discussion on Reddit](https://www.reddit.com/r/ClaudeAI/comments/1v5fz09/browser_bridge_an_mcp_server_that_drives_your/) and issue reports in agent-browser and other automation projects about stale transports, frame/viewport scaling, and pointer offsets. They informed test cases; they are not cited as proof of Chrome or OS behavior.
+Community signals included [real-session bridge discussion on Reddit](https://www.reddit.com/r/ClaudeAI/comments/1v5fz09/browser_bridge_an_mcp_server_that_drives_your/), [macOS exact-window capture expectations](https://www.reddit.com/r/macapps/comments/1f5hraj/screen_recording_software_with_possibility_to/), and issue reports in agent-browser and other automation projects about stale transports, frame/viewport scaling, and pointer offsets. [Cua issue #1467](https://github.com/trycua/cua/issues/1467) records a physical macOS 26.4.1 ScreenCaptureKit failure despite both permissions, while current [Apple developer reports](https://developer.apple.com/forums/tags/screencapturekit) include signing-identity permission resets, display-sleep failures, and stream regressions. These reports informed failure and recovery tests; they are not cited as platform guarantees.
 
-The ChatGPT and Claude rows are black-box observations of publicly distributed Chrome packages on the date above, not claims about an unpublished server protocol or future versions. Their exact version, extension ID, and hash are recorded so findings are not silently generalized to another package. Both reviewed manifests requested `debugger` and `tabGroups`; neither requested `tabCapture`.
+The ChatGPT and Claude package rows are black-box observations of publicly distributed Chrome packages on the date above, not claims about an unpublished server protocol or future versions. Their exact version, extension ID, and hash are recorded so findings are not silently generalized to another package. Both reviewed manifests requested `debugger` and `tabGroups`; neither requested `tabCapture`. OpenAI's official product behavior is cited separately and does not confirm a particular native implementation.
 
 ## Three different visibility surfaces
 
@@ -44,7 +48,7 @@ The ChatGPT and Claude rows are black-box observations of publicly distributed C
 
 Chromium's Cancel path marks the detach reason `canceled_by_user`, fails pending debugger requests, sends `chrome.debugger.onDetach`, and closes the attachment. The infobar delegate is extension-scoped, so canceling it terminates that extension's attached debugger clients. Local Browser Bridge uses one attachment at a time, making the effective boundary one controlled tab.
 
-Attaching only around a click and immediately detaching makes the warning flash or disappear and removes the person's reliable indication of ongoing authority. Version 0.9 therefore holds the attachment for an explicit, expiring lease. Unexpected detach is a hard revocation; there is no synthetic DOM-click fallback.
+Attaching only around a click and immediately detaching makes the warning flash or disappear and removes the person's reliable indication of ongoing authority. The bridge therefore holds the attachment for an explicit, expiring lease. Unexpected detach is a hard revocation; there is no synthetic DOM-click fallback.
 
 ### 2. The extension's page overlay
 
@@ -52,13 +56,13 @@ The page pill and pointer are content injected by the extension. They communicat
 
 This is independently stoppable. The Stop button sends an extension-internal message whose sender and tab are validated before the service worker releases the lease. A hostile page cannot call that privileged handler as the extension. Conversely, the pill cannot override Chrome's Cancel action; `onDetach` remains authoritative.
 
-The reviewed Claude package emphasizes this human-facing layer: a persistent status pill, clear Stop action, heartbeat, and visual attention treatment. The reviewed ChatGPT package goes further on controller state and pointer arrival. Version 0.9 combines those product lessons without copying either package's private protocol or source.
+The reviewed Claude package emphasizes this human-facing layer: a persistent status pill, clear Stop action, heartbeat, and visual attention treatment. The reviewed ChatGPT package goes further on controller state and pointer arrival. The bridge combines those product lessons without copying either package's private protocol or source.
 
 ### 3. The computer helper's synthetic pointer
 
 The helper pointer is Rust state owned by one helper process. Pixel actions plan a bounded cubic Bézier path with minimum-jerk timing, deliver intermediate window-local moves through the existing exact-window background route, and record an arrival sequence. The last state is composited into exact-window observations and share frames, with an outline, session-derived color, action/ring state, and explicit image/screen coordinates.
 
-It is not the hardware cursor and version 0.9 does not create a native click-through desktop overlay. Consequently, a person looking only at the physical desktop does not see this helper pointer; a person or model looking at the returned exact-window frames does. The current helper's action loop completes the path before it can emit the next captured frame, so shared frames reliably show the settled pointer but are not claimed to reproduce every intermediate animation sample.
+It is not the hardware cursor, and the helper does not create a native click-through desktop overlay. Consequently, a person looking only at the physical desktop does not see this helper pointer; a person or model looking at the returned exact-window frames does. The current helper's action loop completes the path before it can emit the next captured frame, so shared frames reliably show the settled pointer but are not claimed to reproduce every intermediate animation sample.
 
 The separately observed ChatGPT desktop **using your computer / Esc to cancel** treatment is also not Chrome's debugger warning. It is an operating-system/app-level computer-use surface. Reproducing its semantics would require a native overlay and global trusted cancel integration, which this release does not claim.
 
@@ -68,13 +72,13 @@ The separately observed ChatGPT desktop **using your computer / Esc to cancel** 
 
 Cua is the strongest open-source pointer-rendering reference reviewed. Its cursor core preserves position, heading, press state, theme, session label, idle fade, and target window. Its path planner chooses a minimum-turning-radius Dubins arc/straight/arc route; motion adds speed floors and spring settling. Platform code renders transparent click-through overlay windows (`NSWindow`, layered/no-activate Win32, or X11 input shaping) and keeps those windows out of input ownership.
 
-Version 0.9 adopts the durable product properties—session ownership, bounded motion, stable style, press/action state, explicit coordinate spaces, and screenshot compositing—but not Cua's overlay implementation or Dubins planner. Local Browser Bridge uses its own bounded cubic candidates and minimum-jerk timing. It must therefore be described as benchmark-informed, not equivalent to Cua's native overlay.
+Local Browser Bridge adopts the durable product properties—session ownership, bounded motion, stable style, press/action state, explicit coordinate spaces, and screenshot compositing—but not Cua's overlay implementation or Dubins planner. It uses its own bounded cubic candidates and minimum-jerk timing and must therefore be described as benchmark-informed, not equivalent to Cua's native overlay.
 
 ### agent-browser: fresh live transport under backpressure
 
 agent-browser's streaming path distinguishes browser/session lifetime from client lifetime. It assigns monotonically increasing frames, keeps the newest frame instead of building an unbounded backlog, dispatches input independently from frame writes, and optionally permits one in-flight frame until the renderer acknowledges it. Its public issue history also demonstrates why screenshot dimensions and input coordinate metadata must come from the actual frame rather than a configured viewport.
 
-Local Browser Bridge uses a smaller bounded share contract: one exact window, 1–10 FPS, monotonic share sequence, explicit image dimensions and X/Y transport scales, and producer-blocking capture. It does not yet implement renderer acknowledgements or latest-frame replacement. Those are valid future improvements if remote or slow viewers become a supported use case.
+Local Browser Bridge uses a smaller bounded share contract: one exact window, a requested 1–10 FPS maximum cadence, monotonic share sequence, explicit image dimensions and X/Y transport scales, and PNG events capped at 1,000,000 pixels. Persistent ScreenCaptureKit and Windows Graphics Capture callbacks park only the latest native frame. When the connector negotiates acknowledgement pacing, one encoded frame remains in flight and newer pending frames replace older ones with an explicit dropped-frame count. This bounds memory without claiming a guaranteed frame rate, video-stream latency, or fan-out.
 
 ### pi-computer-use: immutable state and resource ownership
 
@@ -88,7 +92,7 @@ UI-TARS focuses on vision-language grounding, action vocabulary, and prior scree
 
 ### PUSV: observe-then-act is a security gap
 
-PUSV demonstrates that an apparently correct screenshot can become unsafe before dispatch. Version 0.9 reduces that gap in complementary ways:
+PUSV demonstrates that an apparently correct screenshot can become unsafe before dispatch. The bridge reduces that gap in complementary ways:
 
 - browser mutations, scroll, and resize invalidate the generation;
 - click targets revalidate signature, bounds, connectivity, visibility, and hit-test immediately before CDP dispatch;
@@ -96,9 +100,9 @@ PUSV demonstrates that an apparently correct screenshot can become unsafe before
 - desktop actions re-enumerate PID/native-window ownership and geometry immediately before delivery;
 - semantic actions re-resolve the exact frame-bound accessibility path and verify an application-owned postcondition when available.
 
-This is partial PUSV coverage. Version 0.9 does not calculate target-patch SSIM or a fresh full-frame visual diff immediately before every action. DOM revalidation catches attacks that pure pixels miss, while a visually identical custom/canvas surface can still change meaning without a semantic signal. The correct claim is defense in depth, not visual atomicity.
+This is partial PUSV coverage. The bridge does not calculate target-patch SSIM or a fresh full-frame visual diff immediately before every action. DOM revalidation catches attacks that pure pixels miss, while a visually identical custom/canvas surface can still change meaning without a semantic signal. The correct claim is defense in depth, not visual atomicity.
 
-## Version 0.9 architecture
+## Current architecture
 
 ```text
 browser-only agent
@@ -119,8 +123,9 @@ Rust server -- version + protocol + session + sequence handshake
              +-- one exact-window frame authority
              +-- AX/UIA semantic snapshot and action
              +-- target-routed background input
-             +-- foreground/focus/hardware-cursor/desktop oracle
-             +-- bounded exact-window frame feed
+             +-- platform foreground/window-focus + cursor/desktop oracle
+             +-- persistent native exact-window frame source
+             +-- bounded PNG event transport
              +-- pointer composited into returned frames
 ```
 
@@ -137,8 +142,9 @@ The helper opens no listening socket. It authenticates outbound to loopback and 
 
 ### Computer share and pointer lifecycle
 
-- `computer.share.start` binds one share ID to one non-minimized native window and a requested 1–10 FPS rate.
-- The helper repeatedly invokes the same bounded exact-window observation path and emits unsolicited `computer.share.frame` events with monotonic sequence metadata.
+- `computer.share.start` binds one share ID to one non-minimized native window and a requested 1–10 FPS maximum cadence.
+- The live-share path starts a persistent ScreenCaptureKit `SCStream` on macOS or free-threaded Windows Graphics Capture session on Windows. One-shot `computer.observe` remains a separate snapshot path.
+- Native callbacks keep only the newest accepted exact-window frame; the helper composites its pointer and emits bounded `computer.share.frame` PNG events with monotonic sequence metadata.
 - The server keeps the latest sanitized computer observation and screenshot. It does not queue an unbounded video history.
 - Pointer state is owned by the helper session and remains window-specific. A move to another window reseeds it rather than implying a global desktop location.
 - All model-facing pointer/element coordinates use delivered image pixels. OS screen bounds remain separately labeled diagnostic data.
@@ -152,10 +158,14 @@ The macOS and Windows backends retain the version 0.8 refusal contract:
 2. The helper re-enumerates that identity immediately before input.
 3. Semantic AX/UIA is preferred where the platform exposes a reliable action and postcondition.
 4. Pixel input is target-routed to the exact window, never posted as global HID.
-5. Foreground process, user focus, hardware cursor, and active desktop are checked around delivery.
+5. The platform-specific foreground/window-focus oracle, hardware cursor, and active desktop are checked before and after delivery.
 6. Unknown or unsupported delivery fails; it never silently activates the app or changes input mode.
 
-macOS uses window capture plus dynamically resolved private SkyLight routing. Only non-minimized windows on the active Space are mutable, and OS changes can break private symbols. Windows uses exact-HWND capture/UIA and background window messages. Elevated, game, secure-input, protected, and custom-rendered surfaces may reject either backend.
+macOS one-shot observation uses the snapshot backend, while live sharing uses a persistent desktop-independent ScreenCaptureKit exact-window stream. The pinned [`screencapturekit` 8.0.1 bridge](https://github.com/doom-fish/screencapturekit-rs/blob/2a9f13bcbeadb0aabc5596f0ff3d2ba71da8c1d0/swift-bridge/Sources/CoreMedia/CoreMedia.swift#L26-L38) casts Apple's numeric frame-status attachment directly to a Swift enum, whereas [Apple's canonical sample](https://developer.apple.com/documentation/screencapturekit/capturing-screen-content-in-macos) decodes the raw integer first. The helper therefore reads the raw CFNumber as a compatibility fallback and accepts only `Complete`, retaining a fail-closed status gate. Input uses Accessibility plus dynamically resolved private SkyLight routing. The current selector requires an on-screen, non-minimized target, only active-Space windows are mutable, process-targeted keyboard input is refused when multiple eligible windows make delivery ambiguous, and OS changes can break private symbols. ScreenCaptureKit's capture reach must not be generalized into cross-Space input.
+
+The macOS non-interruption oracle compares the frontmost process and front window rather than the exact focused Accessibility control. Windows additionally compares the foreground and focused HWNDs. Those before/after checks cannot prove that no shorter transient change occurred or roll back an event the target already processed.
+
+Windows live sharing uses a persistent exact-HWND WGC session, while input uses UIA and background window messages. A successfully queued window message does not prove the application acted. Minimized, elevated, game, secure-input, protected, and custom-rendered surfaces may reject either backend. Neither platform silently falls back to foreground/global input.
 
 ## Isolation boundary
 
@@ -171,7 +181,7 @@ UFO²'s RDP-loopback PiP design is the closest reviewed architecture, but its pa
 
 ## Release acceptance criteria
 
-Version 0.9 evidence must independently prove:
+Release evidence must independently prove:
 
 - real Chrome loaded from `chrome://extensions`, with the extension package actually selected;
 - native Chrome debugger warning remains visible throughout the lease;
@@ -180,7 +190,7 @@ Version 0.9 evidence must independently prove:
 - stale WebSocket session/sequence, browser turn/generation/move sequence, and computer frame IDs fail closed;
 - each browser command class and each helper action has a machine-readable result plus a screenshot where visual evidence is meaningful;
 - exact-window live frames carry monotonic sequence, correct dimensions/scales, share state, and the settled synthetic pointer;
-- macOS foreground/focus/hardware-cursor/Space invariants remain unchanged for supported background actions;
+- macOS frontmost-process/window, hardware-cursor, and Space invariants remain unchanged for supported background actions;
 - Windows compiles and runs the shared contracts, while representative Windows UIA/background runtime coverage remains explicitly identified if it is not executed on a real Windows host.
 
 Transport success alone is diagnostic evidence. A platform/action combination is supported only after a representative application-owned outcome and the advertised non-interruption invariants are observed.

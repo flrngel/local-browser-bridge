@@ -95,29 +95,29 @@
           </div>
           <div class="computer-actions">
             <button id="computer-status" type="button" class="button ghost">Refresh status</button>
-            <button id="computer-observe" type="button" class="button primary">Observe window</button>
+            <button id="computer-observe" type="button" class="button primary">One-shot observe</button>
           </div>
         </div>
-        <p class="computer-boundary"><strong>Non-interruption contract:</strong> exact-window background delivery preserves the foreground, keyboard focus, active desktop, and hardware pointer on supported targets. Unsupported delivery fails closed. The stream below is a captured target-window feed, not a separate OS session or virtual desktop.</p>
+        <p class="computer-boundary"><strong>Two capture modes:</strong> Observe takes one exact-window snapshot. Share keeps a persistent operating-system exact-window stream open. Supported input compares the platform's foreground/window-focus oracle, active desktop, and physical pointer before and after delivery and fails if those samples differ; matching samples cannot rule out a shorter transient change. Both modes use your shared login session, not a VM or separate desktop.</p>
         <div class="share-toolbar">
           <label class="share-target" for="computer-window">Target application window
             <select id="computer-window"></select>
           </label>
           <form id="computer-share-form" class="share-form">
-            <label for="computer-share-fps">Share rate
+            <label for="computer-share-fps">Maximum share rate
               <select id="computer-share-fps">
-                <option value="1">1 FPS</option>
-                <option value="2">2 FPS</option>
-                <option value="4" selected>4 FPS</option>
-                <option value="6">6 FPS</option>
-                <option value="10">10 FPS</option>
+                <option value="1">1 FPS max</option>
+                <option value="2">2 FPS max</option>
+                <option value="4" selected>4 FPS max</option>
+                <option value="6">6 FPS max</option>
+                <option value="10">10 FPS max</option>
               </select>
             </label>
-            <button id="computer-share-start" type="submit" class="button secondary">Start share</button>
+            <button id="computer-share-start" type="submit" class="button secondary">Start persistent share</button>
             <button id="computer-share-stop" type="button" class="button danger">Stop share</button>
           </form>
         </div>
-        <p id="computer-share-status" class="share-status" role="status" aria-live="polite">Exact-window share is inactive.</p>
+        <p id="computer-share-status" class="share-status" role="status" aria-live="polite">Persistent exact-window share is inactive.</p>
         <div class="computer-grid">
           <div>
             <div class="screenshot-shell computer-screenshot-shell">
@@ -234,7 +234,7 @@
           <p id="computer-action-summary" class="evidence-summary">Run a native action to inspect its delivery invariants and any verified target-side postcondition.</p>
           <dl id="computer-action-details" class="metadata-list evidence-details"></dl>
           <ul id="computer-action-evidence" class="evidence-list"></ul>
-          <p class="evidence-note"><strong>Evidence rule:</strong> unchanged foreground and hardware pointer prove non-interrupting delivery only. A target effect is confirmed only when a semantic postcondition is observed.</p>
+          <p class="evidence-note"><strong>Evidence rule:</strong> matching before/after foreground, focus, desktop, and hardware-pointer samples support the delivery invariant, but do not prove zero interruption or rule out a shorter transient change. A target effect is confirmed only when a semantic postcondition is observed.</p>
         </section>
       </section>
 

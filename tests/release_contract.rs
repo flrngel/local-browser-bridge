@@ -33,6 +33,8 @@ fn mac_helper_bundle_has_a_stable_visible_identity() {
         "<string>local-computer-helper</string>",
         "<string>Local Computer Helper</string>",
         "<string>@VERSION@</string>",
+        "<key>LSMinimumSystemVersion</key>\n  <string>13.0</string>",
+        "<key>NSScreenCaptureUsageDescription</key>",
     ] {
         assert!(plist.contains(required), "Info.plist is missing {required}");
     }
@@ -64,12 +66,32 @@ fn native_desktop_dependencies_are_not_built_on_unsupported_hosts() {
         .split("[dev-dependencies]")
         .next()
         .unwrap();
-    for dependency in ["core-graphics", "foreign-types", "libc"] {
+    for dependency in [
+        "core-graphics",
+        "foreign-types",
+        "libc",
+        "screencapturekit = { version = \"=8.0.1\", features = [\"macos_14_2\"] }",
+    ] {
         assert!(
             mac_section.contains(dependency),
             "{dependency} must stay macOS-gated"
         );
     }
+    let windows_section = cargo
+        .split("[target.'cfg(target_os = \"windows\")'.dependencies]")
+        .nth(1)
+        .unwrap()
+        .split("[dev-dependencies]")
+        .next()
+        .unwrap();
+    assert!(windows_section.contains("windows-capture = \"=2.0.1\""));
+
+    let cargo_config = fs::read_to_string(".cargo/config.toml").unwrap();
+    assert!(cargo_config.contains("MACOSX_DEPLOYMENT_TARGET"));
+    assert!(cargo_config.contains("value = \"13.0\""));
+    let build_script = fs::read_to_string("build.rs").unwrap();
+    assert!(build_script.contains("xcrun"));
+    assert!(build_script.contains("lib/swift/macosx"));
 
     let library = fs::read_to_string("src/lib.rs").unwrap();
     assert!(library.contains("cfg(any(target_os = \"macos\", target_os = \"windows\"))"));

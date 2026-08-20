@@ -453,7 +453,7 @@ function renderComputer(state) {
     setTextIfChanged(ui["computer-connection-text"], `Computer version mismatch · helper ${computer.version}`);
     ui["computer-meta"].textContent = `Install helper ${state.update?.currentVersion ?? "matching the server"}; native actions are blocked.`;
   } else {
-    const input = computer.inputReady ? "input ready" : "input permission required";
+    const input = computer.inputReady ? "input ready" : "native input route unavailable";
     const semantic = computer.semanticReady ? "semantic ready" : "semantic permission required";
     setTextIfChanged(ui["computer-connection-text"], `Computer connected · ${computer.platform} ${computer.architecture} · ${input} · ${semantic}`);
     ui["computer-meta"].textContent = `${computer.sessionMode} · ${computer.isolation} · ${computer.backend} · helper ${computer.version} · ${input} · ${semantic}`;
@@ -462,12 +462,13 @@ function renderComputer(state) {
   const share = computer?.share ?? {};
   if (share.active) {
     ui["computer-share-fps"].value = String(share.fps);
-    setTextIfChanged(ui["computer-share-status"], `Sharing exact window ${shortId(share.windowId)} at ${share.fps} FPS with a composited synthetic pointer and bounded backpressure.`);
-    ui["computer-share-start"].textContent = "Share active";
+    const indicator = share.systemIndicator ? " The operating system controls capture indication." : "";
+    setTextIfChanged(ui["computer-share-status"], `Persistent exact-window stream ${shortId(share.windowId)} · ${share.fps} FPS maximum. Input checks compare foreground, focus, desktop, and pointer before and after each action; matching samples cannot rule out a shorter transient change.${indicator}`);
+    ui["computer-share-start"].textContent = "Persistent share active";
   } else {
     const stopped = share.stopped ? ` Last stop: ${titleCase(share.reason)}.` : "";
-    setTextIfChanged(ui["computer-share-status"], `Exact-window share is inactive.${stopped}`);
-    ui["computer-share-start"].textContent = "Start share";
+    setTextIfChanged(ui["computer-share-status"], `Persistent exact-window share is inactive.${stopped}`);
+    ui["computer-share-start"].textContent = "Start persistent share";
   }
 
   renderMetadata(ui["computer-session-details"], [
@@ -475,7 +476,9 @@ function renderComputer(state) {
     ["Protocol", computer ? `v${computer.protocolVersion} · helper ${computer.version}` : "—"],
     ["Backend", computer ? `${computer.platform} ${computer.architecture} · ${computer.backend}` : "—"],
     ["Delivery", observation?.deliveryMode || computer?.sessionMode || "—"],
-    ["Share", share.active ? `${shortId(share.id)} · ${share.fps} FPS · seq ${share.sequence ?? 0} · ${share.droppedFrames ?? 0} dropped` : "Inactive"],
+    ["Share", share.active ? `${shortId(share.id)} · ${share.captureBackend || "native stream"} · ${share.fps} FPS max · source ${share.sourceSequence ?? 0} / transport ${share.sequence ?? 0}` : "Inactive"],
+    ["Isolation", share.active ? "Shared login session · exact-window capture and target-routed input · not a VM" : "—"],
+    ["Dropped", share.active ? `${share.sourceDroppedFrames ?? 0} source · ${share.transportDroppedFrames ?? share.droppedFrames ?? 0} transport` : "—"],
   ]);
 
   if (!observation) {
@@ -646,7 +649,22 @@ function renderComputerActionEvidence() {
     ui["computer-action-summary"].textContent = "Run a native action to inspect its delivery invariants and any verified target-side postcondition.";
     return;
   }
-  const { method, result } = lastComputerAction;
+  const { method } = lastComputerAction;
+  if (lastComputerAction.failed) {
+    const error = lastComputerAction.error ?? {};
+    const code = error.code || "REQUEST_FAILED";
+    const message = error.message || "No error detail was returned.";
+    setStateBadge(ui["computer-action-effect"], "Failed", "danger-state");
+    ui["computer-action-summary"].textContent = `${method} failed · ${code}: ${message}`;
+    renderMetadata(ui["computer-action-details"], [
+      ["Outcome", "Failed before a successful native result was returned"],
+      ["Error code", code],
+      ["Previous result", "Cleared"],
+    ]);
+    ui["computer-action-evidence"].append(text("li", "No successful native result or target-side evidence is being shown for this failed request.", "evidence-missing"));
+    return;
+  }
+  const result = lastComputerAction.result ?? {};
   const effect = result.effect || "Unreported";
   const tone = effect === "Confirmed" ? "active" : effect === "Refused" || effect === "SuspectedNoop" ? "danger-state" : "warning-state";
   setStateBadge(ui["computer-action-effect"], titleCase(effect), tone);
@@ -680,6 +698,7 @@ function renderUpdate(state) {
   const labels = {
     checking: "Checking official release metadata…",
     up_to_date: "Up to date",
+    development: `Development build ahead of stable ${update.latestVersion ?? "release"}`,
     available: `Update available: ${update.latestVersion ?? "new version"}`,
     error: "Update status unavailable",
     disabled: "Automatic check disabled",
@@ -690,7 +709,10 @@ function renderUpdate(state) {
     ? `${update.message} The checker never downloads or installs files and sends no telemetry.`
     : "The checker contacts only GitHub release metadata. It never downloads or installs files and sends no telemetry.";
   ui["release-panel"].className = `release-panel panel update-${update.status ?? "error"}`;
-  ui["check-update"].textContent = update.status === "checking" ? "Checking…" : "Check again";
+  ui["check-update"].textContent = update.status === "checking"
+    ? "Checking…"
+    : update.status === "development" ? "Recheck stable release" : "Check again";
+  ui["update-link"].textContent = update.status === "development" ? "View latest stable release" : "View verified release";
   ui["update-link"].href = update.releaseUrl || "https://github.com/flrngel/local-browser-bridge/releases";
 }
 
@@ -861,11 +883,13 @@ async function loadState() {
 async function runAction(method, params = {}) {
   if (busy) return;
   setBusy(true);
+  let responseReceived = false;
   try {
     const payload = await request("/api/action", {
       method: "POST",
       body: JSON.stringify({ method, params }),
     });
+    responseReceived = true;
     if (COMPUTER_MUTATION_METHODS.has(method)) {
       lastComputerAction = { method, result: payload.result ?? {} };
     }
@@ -877,7 +901,20 @@ async function runAction(method, params = {}) {
     }
     return payload.result;
   } catch (error) {
-    showToast(`${error.code ? `${error.code}: ` : ""}${error.message}`, "error");
+    const errorCode = error?.code || "REQUEST_FAILED";
+    const errorMessage = error?.message || "The request failed without an error detail.";
+    if (COMPUTER_MUTATION_METHODS.has(method) && !responseReceived) {
+      lastComputerAction = {
+        method,
+        failed: true,
+        error: {
+          code: errorCode,
+          message: errorMessage,
+        },
+      };
+      renderComputerActionEvidence();
+    }
+    showToast(`${errorCode}: ${errorMessage}`, "error");
     await loadState();
     return null;
   } finally {

@@ -2,6 +2,8 @@
 
 Local Browser Bridge has two required matching components—the standalone server and Chromium extension—and one optional matching computer helper for native desktop control. Always use every installed component from the same release version.
 
+Core browser control requires Chrome or Edge 118 or later. Recursive cross-origin iframe control requires Chrome or Edge 125 or later. The complete macOS archive requires macOS 13 or later; native Windows support is intended for Windows 11 in the signed-in interactive session.
+
 ## 1. Download the matching files
 
 Open the [official GitHub Releases page](https://github.com/flrngel/local-browser-bridge/releases/latest) and download:
@@ -79,6 +81,8 @@ If macOS opens System Settings, enable **Local Computer Helper** under **Privacy
 
 The permission check reports `screenCaptureReady`, pixel `inputReady`, and `semanticReady` separately. If `semanticReady` is false, screenshots and supported pixel routes can still work, but semantic element refs are deliberately omitted until Accessibility is granted.
 
+Live sharing uses a ScreenCaptureKit stream for the exact window chosen in the bridge control page. The operating system can show its current capture indicator and Stop affordance, but the helper does not present Apple's system content picker. The target must be on screen, non-minimized, and have a nonzero area when the share starts.
+
 The app bundle is ad-hoc signed for internal consistency, but it is not Developer ID-signed or notarized. A new build can require the grants again. Do not grant Accessibility to an unrelated shell or globally weaken Gatekeeper.
 
 ## 5. Load the extension
@@ -90,12 +94,16 @@ The app bundle is ad-hoc signed for internal consistency, but it is not Develope
 5. Open the Local Browser Bridge popup and confirm that its version matches the server version.
 6. Paste the token printed by the server, keep port `17373`, and select **Save and connect**.
 
+Chrome and Edge 118–124 support the core tab and top-level-page features. Use version 125 or later when the task must observe or click through cross-origin iframes.
+
 The extension includes no remote code, analytics, cookie API, native messaging host, downloader, or external update endpoint. Chrome does not auto-update unpacked extensions on Windows or macOS. When the local UI reports a new release, repeat the download and verification steps and replace the server, helper, and extension together.
 
 ## 6. Understand the authority granted
 
 Full Access mode is enabled by default and can control all regular HTTP(S) tabs in the selected Chromium profile, enter sensitive text, close tabs, send keys, click coordinates, and evaluate page JavaScript. Use a dedicated browser profile if you do not want the bridge to reach personal sessions. Turn Full Access off to use the site allowlist and one-time approvals in Safe mode.
 
-The computer helper can capture the exact application window selected in the control page and route background mouse or keyboard events only to that `(process, window)` target. It does not use global HID input, move the hardware cursor, activate the target app, change the active desktop, or silently fall back to foreground control. It also offers no shell, filesystem, clipboard, process-launch, downloader, or telemetry commands. Stop the helper whenever native application authority is not needed.
+The computer helper can take one-shot observations and start a persistent native stream with a requested 1–10 FPS cap for the exact application window selected in the control page. macOS uses ScreenCaptureKit; Windows uses Windows Graphics Capture and leaves capture indication under operating-system control. The helper routes supported background mouse or keyboard events only to that `(process, window)` target. It does not use global HID input, move the hardware cursor, activate the target app, change the active desktop, or silently fall back to foreground control. It also offers no shell, filesystem, clipboard, process-launch, downloader, or telemetry commands.
+
+Exact-window capture and target-routed input still share the user's login session; they are not a VM, remote desktop, or separate input seat. Stop the helper whenever native application authority is not needed. Review the current [capability matrix](CAPABILITIES.md) and [limitations](LIMITATIONS.md) before using desktop control with consequential applications.
 
 Stopping the server immediately breaks both connections. You can also stop the helper, pause browser control in the extension popup, or remove the extension from `chrome://extensions`.

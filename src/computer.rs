@@ -18,8 +18,9 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 pub use crate::computer_protocol::{
-    COMPUTER_HELPER_ORIGIN, COMPUTER_METHODS, COMPUTER_SHARE_ACK_CAPABILITY, CommandCancellation,
-    ComputerError, ShareMailbox, command_parts, result_envelope,
+    COMPUTER_HELPER_ORIGIN, COMPUTER_METHODS, COMPUTER_NATIVE_SHARE_CAPABILITY,
+    COMPUTER_SHARE_ACK_CAPABILITY, CommandCancellation, ComputerError, ShareFrameAck, ShareMailbox,
+    command_parts, result_envelope,
 };
 
 mod action_record;
@@ -32,6 +33,12 @@ use cursor::SyntheticCursor;
 #[cfg(target_os = "macos")]
 #[path = "computer/ax_macos.rs"]
 mod ax_macos;
+#[cfg(target_os = "macos")]
+#[path = "computer/share_macos.rs"]
+mod native_share;
+#[cfg(target_os = "windows")]
+#[path = "computer/share_windows.rs"]
+mod native_share;
 #[cfg(target_os = "macos")]
 #[path = "computer/platform_macos.rs"]
 mod platform;
@@ -100,6 +107,8 @@ pub(crate) struct FrameState {
     image_height: u32,
     elements: Vec<SemanticTarget>,
     captured_at: Instant,
+    share_id: Option<String>,
+    source_sequence: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -143,14 +152,16 @@ pub struct ComputerController {
     share_ack_paced: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct ShareSession {
     id: String,
     window_id: String,
+    target_pid: u32,
     fps: u64,
     sequence: u64,
+    source_sequence: u64,
     started_at: String,
-    last_capture: Option<Instant>,
+    capture: Option<native_share::NativeShareCapture>,
     mailbox: ShareMailbox,
 }
 
@@ -180,6 +191,7 @@ impl ComputerController {
             "architecture": std::env::consts::ARCH,
             "backend": platform::backend_name(),
             "sessionMode": "background-window",
+            "isolation": "shared-user-session/target-routed",
             "inputReady": platform::input_ready(),
             "semanticReady": platform::semantic_ready(false),
             "capabilities": advertised_capabilities(),
@@ -193,9 +205,11 @@ impl ComputerController {
             },
             "pointer": self.cursor.snapshot(self.frame.as_ref()),
             "capture": {
-                "mode": "exact-window-share",
+                "mode": "native-exact-window-stream",
                 "transport": "request-response+bounded-live-frames",
-                "cursorComposited": true
+                "cursorComposited": true,
+                "nativeStream": true,
+                "createsSeparateDesktop": false
             },
             "share": self.share_status_value(),
         })
@@ -218,7 +232,6 @@ impl ComputerController {
                 format!("Unsupported computer action: {method}"),
             ));
         }
-        let previous_share = (method == "computer.share.start").then(|| self.share.clone());
         let result = match method {
             "computer.status" => self.status(),
             "computer.share.start" => self.share_start(params, cancellation),
@@ -235,9 +248,28 @@ impl ComputerController {
             "computer.setValue" => self.set_value(params, cancellation),
             _ => unreachable!(),
         };
+        self.finish_command_result(cancellation, result)
+    }
+
+    /// Finalizes a controller command and revokes every observation-derived
+    /// authority if an operating-system side effect has an unknown outcome.
+    ///
+    /// This is deliberately inside the controller rather than left to the
+    /// caller's retry discipline: an outcome-unknown response requires a fresh
+    /// observation, so the frame and pointer that authorized the ambiguous
+    /// mutation must stop working synchronously.
+    fn finish_command_result<T>(
+        &mut self,
+        cancellation: &CommandCancellation,
+        result: Result<T, ComputerError>,
+    ) -> Result<T, ComputerError> {
         let result = cancellation.finish(result);
-        if method == "computer.share.start" && result.is_err() {
-            self.share = previous_share.flatten();
+        if result
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.code == "COMPUTER_OUTCOME_UNKNOWN")
+        {
+            self.revoke_command_authority();
         }
         result
     }
@@ -247,8 +279,12 @@ impl ComputerController {
     /// A replacement WebSocket session must explicitly start sharing and observe
     /// a fresh frame before it can issue an action.
     pub fn reset_transport_session(&mut self) {
-        self.share = None;
+        self.stop_share_best_effort();
         self.share_ack_paced = false;
+        self.clear_frame_authority();
+    }
+
+    fn clear_frame_authority(&mut self) {
         self.frame = None;
         self.recent_frames.clear();
         self.cursor = SyntheticCursor::new(Uuid::new_v4().to_string());
@@ -335,7 +371,7 @@ impl ComputerController {
             "architecture": std::env::consts::ARCH,
             "backend": platform::backend_name(),
             "sessionMode": "background-window",
-            "isolation": "foreground-and-hardware-cursor-preserved",
+            "isolation": "shared-user-session/target-routed",
             "inputReady": platform::input_ready(),
             "semanticReady": platform::semantic_ready(false),
             "windowCount": windows.len(),
@@ -353,18 +389,48 @@ impl ComputerController {
             .or_else(|| params.get("displayId"))
             .and_then(Value::as_str);
         let windows = available_windows()?;
-        let target = requested_id
-            .and_then(|id| windows.iter().find(|window| window.id == id))
-            .or_else(|| windows.iter().find(|window| !window.focused))
-            .or_else(|| windows.first())
-            .cloned()
-            .ok_or_else(|| {
-                ComputerError::new(
-                    "COMPUTER_NO_WINDOW",
-                    "No capturable application window is available on the active desktop",
-                )
-            })?;
-        let mut image = resize_for_transport(platform::capture_window(&target)?);
+        let target = match requested_id {
+            Some(id) => windows
+                .iter()
+                .find(|window| window.id == id)
+                .cloned()
+                .ok_or_else(|| {
+                    ComputerError::new(
+                        "COMPUTER_NO_WINDOW",
+                        "The requested exact window is not available; no other window was captured",
+                    )
+                })?,
+            None => windows
+                .iter()
+                .find(|window| !window.focused)
+                .or_else(|| windows.first())
+                .cloned()
+                .ok_or_else(|| {
+                    ComputerError::new(
+                        "COMPUTER_NO_WINDOW",
+                        "No capturable application window is available on the active desktop",
+                    )
+                })?,
+        };
+        let image = platform::capture_window(&target)?;
+        self.build_observation(target, windows, image, Instant::now(), None)
+    }
+
+    fn build_observation(
+        &mut self,
+        target: WindowDescriptor,
+        windows: Vec<WindowDescriptor>,
+        image: image::RgbaImage,
+        captured_at: Instant,
+        source_sequence: Option<u64>,
+    ) -> Result<Value, ComputerError> {
+        if captured_at.elapsed() > MAX_FRAME_AGE {
+            return Err(ComputerError::new(
+                "COMPUTER_STALE_FRAME",
+                "The native exact-window stream did not provide a fresh frame",
+            ));
+        }
+        let mut image = resize_for_transport(image);
         let (elements, semantic_available, semantic_error) =
             match platform::semantic_elements(&target) {
                 Ok(elements) => (elements, true, None),
@@ -373,13 +439,21 @@ impl ComputerController {
         let image_width = image.width();
         let image_height = image.height();
         let frame_id = Uuid::new_v4().to_string();
+        let share_id = source_sequence.and_then(|_| {
+            self.share
+                .as_ref()
+                .filter(|share| share.window_id == target.id && share.target_pid == target.pid)
+                .map(|share| share.id.clone())
+        });
         let frame = FrameState {
             id: frame_id.clone(),
             target: target.clone(),
             image_width,
             image_height,
             elements: elements.clone(),
-            captured_at: Instant::now(),
+            captured_at,
+            share_id: share_id.clone(),
+            source_sequence,
         };
         let transport_elements = elements
             .iter()
@@ -396,27 +470,35 @@ impl ComputerController {
             .collect::<Vec<_>>();
         self.cursor.composite(&mut image, &target);
         let pointer = self.cursor.snapshot(Some(&frame));
-        // A capture of the shared exact window advances the share sequence
-        // before the frame embeds the share block, so every emitted frame
-        // carries the strictly increasing sequence it was captured under.
-        if let Some(share) = self.share.as_mut()
-            && share.window_id == target.id
-        {
-            share.sequence = share.sequence.saturating_add(1);
-        }
         let mut png = Cursor::new(Vec::new());
         image
             .write_to(&mut png, image::ImageFormat::Png)
             .map_err(|error| ComputerError::new("COMPUTER_CAPTURE_FAILED", error.to_string()))?;
+        if let Some(source_sequence) = source_sequence {
+            let share = self
+                .share
+                .as_mut()
+                .filter(|share| share.window_id == target.id && share.target_pid == target.pid)
+                .ok_or_else(|| {
+                    ComputerError::new(
+                        "COMPUTER_CAPTURE_FAILED",
+                        "The native capture frame no longer belongs to the active share lease",
+                    )
+                })?;
+            share.source_sequence = source_sequence;
+            share.sequence = share.sequence.saturating_add(1);
+        }
         if let Some(previous) = self.frame.replace(frame) {
             self.recent_frames.push_front(previous);
             self.recent_frames.truncate(32);
         }
+        let capture_age_ms = captured_at.elapsed().as_secs_f64() * 1_000.0;
         let result = json!({
             "screenshot": format!("data:image/png;base64,{}", BASE64_STANDARD.encode(png.into_inner())),
             "frame": {
                 "id": frame_id,
                 "capturedAt": now_iso(),
+                "captureAgeMs": capture_age_ms,
                 "windowId": target.id,
                 "pid": target.pid,
                 "appName": target.app_name,
@@ -445,6 +527,8 @@ impl ComputerController {
                 "semanticError": semantic_error,
                 "elements": transport_elements.into_iter().map(|target| target.element).collect::<Vec<_>>(),
                 "pointer": pointer,
+                "sourceSequence": source_sequence,
+                "shareId": share_id,
                 "share": self.share_frame_value(),
             },
             "windows": windows,
@@ -467,57 +551,121 @@ impl ComputerController {
                 "fps must be between 1 and {MAX_SHARE_FPS}"
             )));
         }
-        let target_exists = available_windows()?
+        let target = available_windows()?
             .into_iter()
-            .any(|window| window.id == window_id && !window.minimized);
-        if !target_exists {
-            return Err(ComputerError::new(
-                "COMPUTER_NO_WINDOW",
-                "The requested exact window is not available for sharing",
-            ));
+            .find(|window| window.id == window_id && !window.minimized)
+            .ok_or_else(|| {
+                ComputerError::new(
+                    "COMPUTER_NO_WINDOW",
+                    "The requested exact window is not available for sharing",
+                )
+            })?;
+
+        cancellation.check("native share startup")?;
+        let mut capture = native_share::NativeShareCapture::start(&target, fps)?;
+        if let Err(error) = cancellation.check("native share first-frame readiness") {
+            let _ = capture.stop();
+            return Err(error);
         }
-        cancellation.begin_side_effect("share start")?;
-        self.share = Some(ShareSession {
+        cancellation.begin_side_effect("native share lease commit")?;
+        let replacement = ShareSession {
             id: Uuid::new_v4().to_string(),
             window_id: window_id.to_owned(),
+            target_pid: target.pid,
             fps,
             sequence: 0,
+            source_sequence: 0,
             started_at: now_iso(),
-            last_capture: None,
+            capture: Some(capture),
             mailbox: ShareMailbox::new(self.share_ack_paced),
-        });
-        if let Err(error) = cancellation.check("share start commit") {
-            self.share = None;
+        };
+        self.commit_share_replacement(replacement);
+        if let Err(error) = cancellation.check("native share lease committed") {
+            self.stop_share_best_effort();
+            self.clear_frame_authority();
             return Err(error);
         }
         Ok(self.share_status_value())
     }
 
+    fn commit_share_replacement(&mut self, replacement: ShareSession) {
+        let previous = self.share.replace(replacement);
+        drop(previous);
+        // A share ID is an authority epoch. Frames rendered under the previous
+        // share (or before sharing began) must not remain current after the new
+        // lease commits, even during the short gap before its first protocol
+        // frame is converted.
+        self.clear_frame_authority();
+    }
+
     fn share_stop(&mut self, cancellation: &CommandCancellation) -> Result<Value, ComputerError> {
-        cancellation.begin_side_effect("share stop")?;
-        let stopped = self.share.take();
+        if self.share.is_none() {
+            return Ok(json!({
+                "active": false,
+                "stopped": false,
+                "reason": "not-active",
+            }));
+        }
+        cancellation.begin_side_effect("native share stop")?;
+        let mut stopped = self.share.take().expect("share presence checked");
+        let stop_result = stopped
+            .capture
+            .take()
+            .map_or(Ok(()), |mut capture| capture.stop());
+        self.clear_frame_authority();
+        stop_result?;
         Ok(json!({
             "active": false,
-            "stopped": stopped.is_some(),
-            "id": stopped.as_ref().map(|share| share.id.clone()),
+            "stopped": true,
+            "id": stopped.id,
             "reason": "requested",
         }))
+    }
+
+    fn stop_share_best_effort(&mut self) {
+        if let Some(mut share) = self.share.take()
+            && let Some(mut capture) = share.capture.take()
+        {
+            let _ = capture.stop();
+        }
+    }
+
+    fn fail_share_capture(&mut self, error: ComputerError) -> ComputerError {
+        self.stop_share_best_effort();
+        self.clear_frame_authority();
+        error
     }
 
     fn share_status_value(&self) -> Value {
         self.share
             .as_ref()
             .map(|share| {
+                let metadata = share.capture.as_ref().map(|capture| capture.metadata());
+                let source_dropped_frames = share
+                    .capture
+                    .as_ref()
+                    .map_or(0, native_share::NativeShareCapture::dropped_frames);
                 json!({
                     "active": true,
                     "id": share.id,
                     "windowId": share.window_id,
+                    "pid": share.target_pid,
                     "fps": share.fps,
                     "sequence": share.sequence,
+                    "sourceSequence": share.source_sequence,
                     "startedAt": share.started_at,
                     "captureScope": "exact-window",
+                    "captureMode": "persistent-native-stream",
+                    "captureBackend": metadata.map(|metadata| metadata.backend).unwrap_or("test-no-native-stream"),
+                    "nativeStream": metadata.is_some_and(|metadata| metadata.native_stream),
+                    "systemIndicator": metadata.is_some_and(|metadata| metadata.system_indicator),
+                    "selectionMode": metadata.map(|metadata| metadata.selection_mode).unwrap_or("test"),
+                    "isolation": "shared-user-session",
+                    "createsSeparateDesktop": false,
                     "cursorComposited": true,
                     "droppedFrames": share.mailbox.dropped_frames(),
+                    "transportDroppedFrames": share.mailbox.dropped_frames(),
+                    "sourceDroppedFrames": source_dropped_frames,
                     "ackPaced": share.mailbox.ack_paced(),
                     "lastAckedSequence": share.mailbox.last_acked_sequence(),
                     "backpressure": if share.mailbox.ack_paced() {
@@ -534,32 +682,69 @@ impl ComputerController {
         self.share_status_value()
     }
 
-    /// Captures a due share frame into the single-slot mailbox.
+    /// Converts the newest frame from the persistent native capture stream into
+    /// a protocol observation and parks it in the transport mailbox.
     ///
     /// A capture failure surfaces immediately for a `computer.share.error`
     /// emission; a successful capture is parked latest-frame-wins until
-    /// `take_share_emission` releases it. A capture whose share sequence did
-    /// not advance (the shared exact window vanished and observation fell back
-    /// to another window) is discarded instead of being emitted as the share.
+    /// `take_share_emission` releases it. The native producer and transport
+    /// each retain only one latest frame, so neither a slow server nor an input
+    /// command can create an unbounded image queue.
     pub fn pump_share_capture(&mut self) -> Option<ComputerError> {
-        let share = self.share.as_mut()?;
-        let interval = Duration::from_secs_f64(1.0 / share.fps as f64);
-        if share
-            .last_capture
-            .is_some_and(|last_capture| last_capture.elapsed() < interval)
-        {
-            return None;
-        }
-        share.last_capture = Some(Instant::now());
-        let window_id = share.window_id.clone();
-        match self.observe(&json!({ "windowId": window_id })) {
+        let (window_id, target_pid, last_source_sequence, native_frame) = {
+            let share = self.share.as_ref()?;
+            let capture = match share.capture.as_ref() {
+                Some(capture) => capture,
+                None => {
+                    let error = ComputerError::new(
+                        "COMPUTER_CAPTURE_FAILED",
+                        "The active share has no native capture stream",
+                    );
+                    return Some(self.fail_share_capture(error));
+                }
+            };
+            (
+                share.window_id.clone(),
+                share.target_pid,
+                share.source_sequence,
+                capture.latest_after(share.source_sequence),
+            )
+        };
+        let native_frame = match native_frame {
+            Ok(Some(frame)) => frame,
+            Ok(None) => return None,
+            Err(error) => return Some(self.fail_share_capture(error)),
+        };
+        let windows = match available_windows() {
+            Ok(windows) => windows,
+            Err(error) => return Some(self.fail_share_capture(error)),
+        };
+        let Some(target) = windows
+            .iter()
+            .find(|window| window.id == window_id && window.pid == target_pid && !window.minimized)
+            .cloned()
+        else {
+            let error = ComputerError::new(
+                "COMPUTER_NO_WINDOW",
+                "The exact shared (process, window) pair is no longer available",
+            );
+            return Some(self.fail_share_capture(error));
+        };
+        debug_assert!(native_frame.source_sequence > last_source_sequence);
+        match self.build_observation(
+            target,
+            windows,
+            native_frame.image,
+            native_frame.captured_at,
+            Some(native_frame.source_sequence),
+        ) {
             Ok(frame) => {
                 let share = self.share.as_mut()?;
                 let sequence = share.sequence;
                 share.mailbox.produce(sequence, frame);
                 None
             }
-            Err(error) => Some(error),
+            Err(error) => Some(self.fail_share_capture(error)),
         }
     }
 
@@ -568,11 +753,12 @@ impl ComputerController {
         self.share.as_mut()?.mailbox.emit()
     }
 
-    /// Applies a bridge share-frame acknowledgement; stale sequences are ignored.
-    pub fn acknowledge_share_frame(&mut self, sequence: u64) -> bool {
+    /// Applies a bridge share-frame acknowledgement; wrong-share and stale
+    /// sequence identities are ignored.
+    pub fn acknowledge_share_frame(&mut self, share_id: &str, sequence: u64) -> bool {
         self.share
             .as_mut()
-            .is_some_and(|share| share.mailbox.acknowledge(sequence))
+            .is_some_and(|share| share.id == share_id && share.mailbox.acknowledge(sequence))
     }
 
     fn move_pointer(
@@ -873,16 +1059,19 @@ impl ComputerController {
             )));
         }
         timer.resolved();
-        let backend_effect = platform::invoke(&frame.target, &target, action, cancellation)?;
+        let (backend_effect, invariants) =
+            platform::invoke(&frame.target, &target, action, cancellation)?;
         cancellation.check("semantic invoke result commit")?;
         timer.dispatched();
-        let (effect, evidence) = semantic_evidence(&backend_effect);
+        let (effect, mut evidence) = semantic_evidence(&backend_effect);
+        evidence.extend(invariant_evidence(&invariants));
         let result = json!({
             "deliveryMode": "exact-window-semantic",
             "frameId": frame.id,
             "elementRef": target.element.reference,
             "action": action,
             "backendEffect": backend_effect,
+            "invariants": invariants,
         });
         finish_action_record(timer, effect, evidence, result)
     }
@@ -917,16 +1106,19 @@ impl ComputerController {
             )));
         }
         timer.resolved();
-        let backend_effect = platform::set_value(&frame.target, &target, value, cancellation)?;
+        let (backend_effect, invariants) =
+            platform::set_value(&frame.target, &target, value, cancellation)?;
         cancellation.check("semantic value result commit")?;
         timer.dispatched();
-        let (effect, evidence) = semantic_evidence(&backend_effect);
+        let (effect, mut evidence) = semantic_evidence(&backend_effect);
+        evidence.extend(invariant_evidence(&invariants));
         let result = json!({
             "deliveryMode": "exact-window-semantic",
             "frameId": frame.id,
             "elementRef": target.element.reference,
             "characters": value.chars().count(),
             "backendEffect": backend_effect,
+            "invariants": invariants,
         });
         finish_action_record(timer, effect, evidence, result)
     }
@@ -995,12 +1187,30 @@ impl ComputerController {
     fn requested_frame_at(&self, supplied: &str, now: Instant) -> Option<&FrameState> {
         let current = self.frame.as_ref()?;
         let frame = if supplied == current.id {
-            frame_is_fresh(current, now).then_some(current)?
+            if !frame_is_fresh(current, now) {
+                return None;
+            }
+            match (current.share_id.as_deref(), current.source_sequence) {
+                (None, None) => current,
+                (Some(frame_share_id), Some(_)) => {
+                    let share = self.share.as_ref()?;
+                    if frame_share_id != share.id
+                        || current.target.id != share.window_id
+                        || current.target.pid != share.target_pid
+                    {
+                        return None;
+                    }
+                    current
+                }
+                // A partially populated provenance tuple is never valid.
+                _ => return None,
+            }
         } else {
             let share = self.share.as_ref()?;
             self.recent_frames.iter().find(|candidate| {
                 candidate.id == supplied
                     && frame_is_fresh(candidate, now)
+                    && candidate.share_id.as_deref() == Some(share.id.as_str())
                     && candidate.target.id == share.window_id
                     && candidate.target.id == current.target.id
                     && candidate.target.pid == current.target.pid
@@ -1053,6 +1263,8 @@ fn action_result(
     let mut result = json!({
         "deliveryMode": "exact-window-background",
         "frameId": frame.id,
+        "shareId": frame.share_id,
+        "sourceSequence": frame.source_sequence,
         "x": point.local_x,
         "y": point.local_y,
         "invariants": invariants,
@@ -1099,6 +1311,7 @@ fn available_windows() -> Result<Vec<WindowDescriptor>, ComputerError> {
 fn advertised_capabilities() -> Vec<&'static str> {
     let mut capabilities = COMPUTER_METHODS.to_vec();
     capabilities.push(COMPUTER_SHARE_ACK_CAPABILITY);
+    capabilities.push(COMPUTER_NATIVE_SHARE_CAPABILITY);
     capabilities
 }
 
@@ -1260,6 +1473,22 @@ mod tests {
             image_height: 500,
             elements: vec![],
             captured_at: Instant::now(),
+            share_id: None,
+            source_sequence: None,
+        }
+    }
+
+    fn test_share(ack_paced: bool) -> ShareSession {
+        ShareSession {
+            id: "share-1".to_owned(),
+            window_id: "window-1".to_owned(),
+            target_pid: 42,
+            fps: 4,
+            sequence: 0,
+            source_sequence: 0,
+            started_at: now_iso(),
+            capture: None,
+            mailbox: ShareMailbox::new(ack_paced),
         }
     }
 
@@ -1310,15 +1539,9 @@ mod tests {
         controller.set_share_ack_pacing(true);
         controller.frame = Some(frame());
         controller.recent_frames.push_back(frame());
-        controller.share = Some(ShareSession {
-            id: "share-1".to_owned(),
-            window_id: "window-1".to_owned(),
-            fps: 4,
-            sequence: 9,
-            started_at: now_iso(),
-            last_capture: Some(Instant::now()),
-            mailbox: ShareMailbox::new(true),
-        });
+        let mut share = test_share(true);
+        share.sequence = 9;
+        controller.share = Some(share);
 
         controller.reset_transport_session();
 
@@ -1338,15 +1561,9 @@ mod tests {
         controller.set_share_ack_pacing(true);
         controller.frame = Some(frame());
         controller.recent_frames.push_back(frame());
-        controller.share = Some(ShareSession {
-            id: "share-1".to_owned(),
-            window_id: "window-1".to_owned(),
-            fps: 4,
-            sequence: 9,
-            started_at: now_iso(),
-            last_capture: Some(Instant::now()),
-            mailbox: ShareMailbox::new(true),
-        });
+        let mut share = test_share(true);
+        share.sequence = 9;
+        controller.share = Some(share);
 
         controller.revoke_command_authority();
 
@@ -1366,17 +1583,38 @@ mod tests {
     }
 
     #[test]
+    fn outcome_unknown_synchronously_revokes_share_frame_and_pointer_authority() {
+        let mut controller = ComputerController::new();
+        controller.set_share_ack_pacing(true);
+        controller.frame = Some(frame());
+        controller.recent_frames.push_back(frame());
+        controller.share = Some(test_share(true));
+        let previous_cursor_id = controller.cursor.snapshot(None).id;
+        let cancellation = CommandCancellation::new();
+        cancellation
+            .begin_side_effect("fixture native dispatch")
+            .expect("fixture dispatch should begin");
+        cancellation.cancel();
+
+        let error = controller
+            .finish_command_result(&cancellation, Ok(json!({ "dispatched": true })))
+            .expect_err("a canceled dispatched effect has an unknown outcome");
+
+        assert_eq!(error.code, "COMPUTER_OUTCOME_UNKNOWN");
+        assert!(controller.share.is_none());
+        assert!(controller.frame.is_none());
+        assert!(controller.recent_frames.is_empty());
+        assert_ne!(controller.cursor.snapshot(None).id, previous_cursor_id);
+        assert!(
+            controller.share_ack_paced,
+            "revocation must retain the transport session's negotiated pacing"
+        );
+    }
+
+    #[test]
     fn share_status_reports_ack_pacing_and_drop_metrics_from_the_mailbox() {
         let mut controller = ComputerController::new();
-        controller.share = Some(ShareSession {
-            id: "share-1".to_owned(),
-            window_id: "window-1".to_owned(),
-            fps: 4,
-            sequence: 0,
-            started_at: now_iso(),
-            last_capture: None,
-            mailbox: ShareMailbox::new(true),
-        });
+        controller.share = Some(test_share(true));
         {
             let mailbox = &mut controller.share.as_mut().unwrap().mailbox;
             assert!(mailbox.produce(1, json!({ "capture": 1 })));
@@ -1395,8 +1633,11 @@ mod tests {
             controller.take_share_emission().is_none(),
             "the next emission waits for the ack"
         );
-        assert!(!controller.acknowledge_share_frame(1), "stale ack ignored");
-        assert!(controller.acknowledge_share_frame(2));
+        assert!(
+            !controller.acknowledge_share_frame("share-1", 1),
+            "stale ack ignored"
+        );
+        assert!(controller.acknowledge_share_frame("share-1", 2));
         assert_eq!(controller.take_share_emission().unwrap().0, 3);
 
         let status = controller.share_status_value();
@@ -1408,10 +1649,54 @@ mod tests {
     }
 
     #[test]
+    fn acknowledgement_from_a_replaced_share_cannot_release_current_backpressure() {
+        let mut controller = ComputerController::new();
+        controller.share = Some(test_share(true));
+        let mailbox = &mut controller.share.as_mut().unwrap().mailbox;
+        assert!(mailbox.produce(1, json!({ "capture": 1 })));
+        assert_eq!(controller.take_share_emission().unwrap().0, 1);
+        assert!(
+            !controller.acknowledge_share_frame("replaced-share", 1),
+            "an equal sequence from another share epoch is stale"
+        );
+        controller
+            .share
+            .as_mut()
+            .unwrap()
+            .mailbox
+            .produce(2, json!({ "capture": 2 }));
+        assert!(
+            controller.take_share_emission().is_none(),
+            "the current share must remain paced until its own ack arrives"
+        );
+        assert!(controller.acknowledge_share_frame("share-1", 1));
+        assert_eq!(controller.take_share_emission().unwrap().0, 2);
+    }
+
+    #[test]
+    fn missing_native_stream_revokes_share_and_frame_authority() {
+        let mut controller = ComputerController::new();
+        controller.frame = Some(frame());
+        controller.recent_frames.push_back(frame());
+        controller.share = Some(test_share(true));
+
+        let error = controller
+            .pump_share_capture()
+            .expect("missing native source must fail closed");
+
+        assert_eq!(error.code, "COMPUTER_CAPTURE_FAILED");
+        assert!(controller.share.is_none());
+        assert!(controller.frame.is_none());
+        assert!(controller.recent_frames.is_empty());
+    }
+
+    #[test]
     fn hello_advertises_share_ack_pacing_as_a_capability_not_a_method() {
         let capabilities = advertised_capabilities();
         assert!(capabilities.contains(&COMPUTER_SHARE_ACK_CAPABILITY));
+        assert!(capabilities.contains(&COMPUTER_NATIVE_SHARE_CAPABILITY));
         assert!(!COMPUTER_METHODS.contains(&COMPUTER_SHARE_ACK_CAPABILITY));
+        assert!(!COMPUTER_METHODS.contains(&COMPUTER_NATIVE_SHARE_CAPABILITY));
         let error = ComputerController::new()
             .execute(COMPUTER_SHARE_ACK_CAPABILITY, &json!({}))
             .unwrap_err();
@@ -1517,9 +1802,12 @@ mod tests {
         let mut current = frame();
         current.id = "frame-current".to_owned();
         current.captured_at = now;
+        current.share_id = Some("share-1".to_owned());
+        current.source_sequence = Some(2);
         let mut recent = current.clone();
         recent.id = "frame-rendered".to_owned();
         recent.captured_at = now - MAX_FRAME_AGE;
+        recent.source_sequence = Some(1);
         controller.frame = Some(current);
         controller.recent_frames.push_front(recent);
 
@@ -1528,15 +1816,10 @@ mod tests {
                 .requested_frame_at("frame-rendered", now)
                 .is_none()
         );
-        controller.share = Some(ShareSession {
-            id: "share-1".to_owned(),
-            window_id: "window-1".to_owned(),
-            fps: 10,
-            sequence: 2,
-            started_at: now_iso(),
-            last_capture: None,
-            mailbox: ShareMailbox::new(false),
-        });
+        let mut share = test_share(false);
+        share.fps = 10;
+        share.sequence = 2;
+        controller.share = Some(share);
 
         assert!(
             controller
@@ -1559,6 +1842,56 @@ mod tests {
                 .requested_frame_at("frame-rendered", now)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn current_share_frame_requires_the_active_share_identity_but_one_shot_does_not() {
+        let mut controller = ComputerController::new();
+        let now = Instant::now();
+        let mut current = frame();
+        current.id = "current-share-frame".to_owned();
+        current.share_id = Some("old-share".to_owned());
+        current.source_sequence = Some(7);
+        controller.frame = Some(current);
+        controller.share = Some(test_share(false));
+
+        assert!(
+            controller
+                .requested_frame_at("current-share-frame", now)
+                .is_none(),
+            "a current frame from a replaced share must lose authority"
+        );
+
+        controller.frame.as_mut().unwrap().share_id = Some("share-1".to_owned());
+        assert!(
+            controller
+                .requested_frame_at("current-share-frame", now)
+                .is_some(),
+            "a current frame from the active exact-window share remains usable"
+        );
+
+        controller.frame.as_mut().unwrap().share_id = None;
+        controller.frame.as_mut().unwrap().source_sequence = None;
+        assert!(
+            controller
+                .requested_frame_at("current-share-frame", now)
+                .is_some(),
+            "one-shot observations remain valid even while a share is active"
+        );
+    }
+
+    #[test]
+    fn share_commit_clears_frames_from_the_previous_authority_epoch() {
+        let mut controller = ComputerController::new();
+        controller.frame = Some(frame());
+        controller.recent_frames.push_back(frame());
+        let previous_cursor_id = controller.cursor.snapshot(None).id;
+
+        controller.commit_share_replacement(test_share(false));
+
+        assert!(controller.frame.is_none());
+        assert!(controller.recent_frames.is_empty());
+        assert_ne!(controller.cursor.snapshot(None).id, previous_cursor_id);
     }
 
     #[test]
