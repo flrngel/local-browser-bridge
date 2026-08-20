@@ -12,7 +12,7 @@ output_dir="$(cd "$(dirname "$output")" && pwd -P)"
 output="$output_dir/$(basename "$output")"
 rm -f "$output"
 
-files=(background.js content.js lib.js manifest.json popup.css popup.html popup.js)
+files=(background.js content.js dom-core.js frame-agent.js lib.js manifest.json popup.css popup.html popup.js)
 for file in "${files[@]}"; do
   if [[ ! -f "extension/$file" || -L "extension/$file" ]]; then
     echo "Missing extension package file: $file" >&2

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Cross-origin child</title>
+    <style>
+      body { font: 15px system-ui, sans-serif; margin: 16px; background: #fff7ec; }
+      button { font: 15px system-ui, sans-serif; padding: 10px 16px; }
+      #child-log { display: block; margin-top: 12px; font-family: ui-monospace, monospace; }
+    </style>
+  </head>
+  <body>
+    <h2>Child document</h2>
+    <button id="child-button" type="button">Cross origin child button</button>
+    <input id="child-input" placeholder="child field" autocomplete="off">
+    <output id="child-log">child-ready</output>
+    <script>
+      document.getElementById('child-button').addEventListener('click', (event) => {
+        document.getElementById('child-log').textContent = 'child-click:' + event.isTrusted;
+        document.body.dataset.lastAction = 'child-click:' + event.isTrusted;
+      });
+    </script>
+  </body>
+</html>

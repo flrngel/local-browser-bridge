@@ -1,6 +1,6 @@
 # Bridge protocol
 
-Protocol version: `1`. Package version examples below use `0.10.0`.
+Protocol version: `1`. Package version examples below use `0.11.0`.
 
 ## Transport and trust boundary
 
@@ -87,7 +87,7 @@ After mutual authentication succeeds, the server sends the normal welcome for th
   "type": "welcome",
   "protocolVersion": 1,
   "sessionId": "82b6b311-f71d-4a88-ae07-0b5e7a897815",
-  "serverVersion": "0.10.0",
+  "serverVersion": "0.11.0",
   "connector": "browser-extension"
 }
 ```
@@ -103,7 +103,7 @@ The connector must validate `protocolVersion`, `serverVersion`, `sessionId`, and
   "controllerSequence": 81,
   "controllerId": "38a72d1f-d124-4335-8f1e-9cb85777df14",
   "connectionId": "2f9ad9af-5bb7-42b3-a77d-a0c83a625792",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "browser": "Google Chrome",
   "mode": "full-access",
   "capabilities": ["tabs.list", "page.observe", "browser.control.start"]
@@ -119,7 +119,7 @@ The computer helper uses the same negotiated envelope and reports its bounded na
   "type": "hello",
   "protocolVersion": 1,
   "sessionId": "d559c7b3-56fb-49e6-b661-801cfcb8807f",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "platform": "macos",
   "architecture": "aarch64",
   "backend": "background-window/skylight+cgwindow",
@@ -249,7 +249,7 @@ Chrome's Cancel action produces `chrome.debugger.onDetach` with `canceled_by_use
 
 Strong clients include `controlSessionId`, `turn`, and `moveSequence` returned by the last observation/control status in each action. The content-script `generation` remains mandatory for snapshot-bound DOM and direct-coordinate operations.
 
-Element references embed the observation generation: `page.observe` returns refs shaped like `<generation>.e12`. Acting with a ref whose embedded generation has been superseded fails with a coaching `STALE_REF` error before any element lookup, so a stale ref can never silently resolve against a newer snapshot. Legacy bare `e12` refs are still accepted and resolve against the current generation; the explicit `generation` parameter remains authoritative either way. Malformed refs are rejected by the server without being relayed.
+Element references embed the observation generation: `page.observe` returns refs shaped like `<generation>.e12`, or `<generation>.f2.e12` for an element inside a merged cross-origin frame. Acting with a ref whose embedded generation has been superseded fails with a coaching `STALE_REF` error before any element lookup, so a stale ref can never silently resolve against a newer snapshot. Legacy bare `e12` refs are still accepted and resolve against the current generation; the explicit `generation` parameter remains authoritative either way. Malformed refs are rejected by the server without being relayed.
 
 ## Browser commands
 
@@ -279,9 +279,92 @@ Element references embed the observation generation: `page.observe` returns refs
 | `page.typeText` | `tabId`, `generation`, `text`, optional lease bindings | Full Access only; inserts text into the focused control |
 | `page.evaluate` | `tabId`, `expression`, optional lease bindings | Full Access only; awaits a Promise for up to 12 seconds and returns a by-value result |
 
-Open-shadow-root elements participate in observations. A mutation observer invalidates existing refs for page-owned DOM changes; mutations made only by the bridge control overlay are excluded. Cross-origin iframe semantic merging is not implemented.
+Open-shadow-root elements participate in observations. A mutation observer invalidates existing refs for page-owned DOM changes; mutations made only by the bridge control overlay are excluded. Cross-origin iframe elements are merged into the same observation; see [Cross-origin frames](#cross-origin-frames).
 
 In Safe mode, a `page.click` that uses a non-left button, a click count above one, or any modifier routes through the existing risky-click approval path; Full Access executes it directly.
+
+### Cross-origin frames
+
+Elements inside a cross-origin (out-of-process) iframe are merged into the same `page.observe` result as the top document, with top-level coordinates, and can be clicked and hovered by ref.
+
+**Ref grammar.** The published element-reference grammar is:
+
+```
+top-frame ref ::= [ generation "." ] element
+frame ref     ::= generation "." frame "." element
+generation    ::= [a-z0-9-]{1,64}
+frame         ::= "f" ( [1-9] | 1[0-6] )      ; f1 .. f16
+element       ::= "e" [1-9][0-9]{0,3}         ; e1 .. e9999
+```
+
+`<generation>` is always the **top** observation generation, so the existing `generation` request parameter and every existing lease binding keep working across the merged observation. A two-segment ref is always `<generation>.<element>`, never `<frame>.<element>` — a generation string that happens to look like `f2` is still a generation. Frame indexes outside `f1`..`f16` are rejected by the server before relay with HTTP 400 and taxonomy `invalid_request`.
+
+**Element provenance.** An element that came from a frame carries four extra keys; a top-document element carries none of them:
+
+| Field | Meaning |
+|---|---|
+| `frameRef` | The frame's `f<k>` key within this observation |
+| `frameId` | Chrome's frame id for that document |
+| `frameUrlOrigin` | The frame document's origin |
+| `crossOrigin` | Always `true`; the server drops the flag on any element without a valid `frameRef`, so a page cannot forge cross-origin provenance onto a top element |
+
+**Observation additions.** Two fields appear only when the page has something to report about frames — an owner element, an attached target, a merged frame, or a skip. A page with no iframes at all produces an observation byte-identical to one from before frame support:
+
+```jsonc
+{
+  "frames": [
+    {
+      "ref": "f1",
+      "frameId": "6A1B...",
+      "urlOrigin": "https://pay.example.test",
+      "crossOrigin": true,
+      "depth": 1,
+      "offset": { "x": 120, "y": 64 },
+      "size": { "width": 380, "height": 220 },
+      "elementCount": 12,
+      "truncated": false
+    }
+  ],
+  "frameSummary": {
+    "supported": true,
+    "mode": "cdp-auto-attach",
+    "reason": "",
+    "ownersSeen": 3,
+    "attached": 1,
+    "merged": 1,
+    "elementsDropped": 0,
+    "skipped": [{ "urlOrigin": "https://ads.example.test", "reason": "blank_document" }]
+  }
+}
+```
+
+`elementsTruncated: true` is added whenever the 250-element publication cap dropped an element that survived sanitization. That cap reserves 50 of its 250 slots for elements that came from a merged frame, mirroring the extension's own 400/100 reservation, because the extension appends frame elements *after* the top document's: a flat cap would publish a `frames` list whose `<generation>.f<k>.e<n>` refs appear nowhere in `elements`. Whichever class runs out of entries first hands its unused slots to the other, so the cap is always filled. `frames[].elementCount` is restated as the number of that frame's elements that actually reached `elements`, and `frames[].truncated` is set whenever the extension merged more than that.
+
+`frameSummary.skipped` uses a closed vocabulary: `budget_frames`, `budget_elements`, `budget_time`, `blank_document`, `zero_size`, `offscreen`, `depth_exceeded`, `owner_unresolved`, `agent_install_failed`, `session_probe_failed`, `frame_timeout`, `same_process_frame`, `navigated_during_observation`. Every iframe owner in the top document that never produced its own frame target is reported as `same_process_frame`, so a frame the bridge cannot merge is always visible rather than silently missing.
+
+**Coordinate translation.** `frameOffset(root)` is `(0, 0)` and `frameOffset(F) = frameOffset(parent(F)) + ownerContentTopLeft(F)`, where `ownerContentTopLeft(F)` is the top-left of the content box of `F`'s owner `<iframe>` measured in the parent frame's own viewport. Published element bounds are `frameLocal(element) + frameOffset(frame)`, so the pointer planner, the cursor overlay, and `page.clickAt` keep working in one top-level coordinate space. An element counts as in-viewport only when it is inside its own frame's viewport, inside the frame's visible box on the page, and inside the top-level viewport.
+
+**Supported and refused actions.** `page.click` and `page.hover` accept a frame ref. `page.fill` and `page.select` take a `ref` but refuse a frame-scoped one with `FRAME_ACTION_UNSUPPORTED` (taxonomy `invalid_request`, non-retriable), because it is a stated capability boundary and not a malformed request. `page.key`, `page.scroll`, `page.typeText`, and `page.clickAt` accept no `ref` parameter at all — the server's per-method sanitizer drops any that is sent — so they can only ever act on the focused element or on top-level coordinates, and there is no frame-scoped form of them to refuse. `page.batch` may contain a `page.click` on a frame ref; that step re-runs the full frame proof like any other step, and a frame that navigates mid-batch fails that step with `FRAME_DETACHED` rather than `STALE_SNAPSHOT`.
+
+**Proof.** A frame-scoped click re-runs the same two-phase proof the top document gets, plus a frame proof before and after the pointer moves: the frame's own loader identity; every ancestor frame's loader identity *and* a re-measurement of every ancestor's owner box, because an ancestor that moves shifts the target by the same delta while the target's own owner — measured inside that ancestor — does not move at all; a re-measurement of the frame's own owner box; and an exact hit test proving the owner `<iframe>` is the top element at the translated point. Every re-measurement is a 2 px tolerance on the *same* quantity: the accumulated offset comes from content-box origins, while the hit-test probe's `getBoundingClientRect()` is compared only against the border quad of the same box model, so a bordered or padded iframe is never mistaken for a moved one. Trusted input is always dispatched on the page target at the translated top-level point; nothing is ever dispatched into a child session and the in-frame agent never synthesizes an event.
+
+**New error codes.**
+
+| Code | Taxonomy | Retriable |
+|---|---|---|
+| `FRAME_DETACHED` | `document_changed` | yes, after a fresh observation |
+| `STALE_FRAME_TREE` | `stale_snapshot` | yes, after a fresh observation |
+| `FRAME_AGENT_STALE` | `stale_snapshot` | yes, after a fresh observation |
+| `FRAME_AGENT_UNAVAILABLE` | `unavailable` | yes |
+| `FRAME_AGENT_FAILED` | `unknown` | no |
+| `FRAME_ACTION_UNSUPPORTED` | `invalid_request` | no |
+| `FRAME_REF_MISROUTED` | `invalid_request` | no |
+
+**Limits.** At most 16 attached frame targets per lease, at most 5 levels of nesting, at most 120 elements per frame, 500 elements total per observation with 400 reserved for the top document when at least one frame merged, 250 of those published with 50 reserved for frame elements, and at most 32 reported skips. A page with more than 400 interactive top-document elements *and* at least one merged frame therefore publishes fewer top elements than it did before frame support; `elementsTruncated` and `frameSummary.elementsDropped` report exactly that.
+
+**Latency.** Observing frames is read-only — no input, no navigation, no value write — so it is bounded rather than trusted: the whole frame pass shares a 4 s budget, every CDP command inside it is bounded by what is left of that budget, and running out costs the frames that did not fit (`frame_timeout` for a frame that stopped answering, `budget_time` for a frame the pass never reached) instead of the lease. A slow third-party iframe can therefore never revoke browser control or fail an observation. A change to the lease itself — the top document navigating, a dialog opening, control being canceled — still fails the observation, because it invalidates all of it and not just one frame's contribution.
+
+**What is and is not proven.** The ref grammar, the sanitizers, the coordinate translation, the merge and budget arithmetic, the fail-closed staleness paths, and the in-frame agent's proofs are covered by the Rust and Node contract suites. Five behaviours are proven only against those harnesses and still require a live-Chrome run before cross-origin merging should be relied on: that `Target.attachedToTarget` reaches the extension for OOPIFs with a populated `sessionId`; that `chrome.debugger.sendCommand({tabId, sessionId})` routes to the child session; that `DOM.getBoxModel`'s content quad is in the parent frame's viewport space; that `Input.dispatchMouseEvent` on the page target hit-tests into the OOPIF renderer; and that the isolated world survives a frame's same-document navigations. Each degrades to a refusal rather than a wrong click. In particular, the first child command of every lease is a discriminating routing probe: the child session must return its own frame id, and a Chrome whose `chrome.debugger` ignores the `sessionId` key answers for the root frame instead, at which point frame support is disabled for the lease (`frameSummary.supported: false`, `reason: "session_routing_unverified"`), every attached record is dropped, and the observation is exactly what it would have been without frame support. `minimum_chrome_version` stays `118`.
 
 ### Condition waits
 
@@ -293,7 +376,11 @@ In Safe mode, a `page.click` that uses a non-left button, a click count above on
 
 ### JavaScript dialogs
 
-When a controlled page opens an `alert`, `confirm`, `prompt`, or `beforeunload` dialog, the extension records it on the lease and the server publishes `pendingDialog {type, message, hasPrompt, at, tabId}` in `/api/state` (`null` when absent). An open dialog freezes the renderer main thread, so any content-script or `Runtime` call against that page would only time out. While a dialog is pending, only `status`, `tabs.list`, `browser.control.status`, `browser.control.stop`, and `page.handleDialog` proceed—each stays off the renderer—and every other browser command, including the read-only `page.observe` and `page.waitFor` and the delayed automatic post-action observation, fails fast with HTTP 409 `BLOCKED_BY_DIALOG` (taxonomy `blocked_by_dialog`) before anything is relayed. The extension enforces the same gate before any content or CDP dispatch, a `page.batch` checks the pending dialog before each sub-step and aborts at that index, a content or CDP timeout that races a dialog opening resolves as `BLOCKED_BY_DIALOG` instead of revoking control, and the heartbeat suspends its `Runtime.evaluate` renderer probe (keeping the browser-side attachment and document checks) while the dialog is pending—so a dialog can never revoke the lease by timeout. `page.handleDialog` requires the held lease and a recorded dialog (`NO_PENDING_DIALOG` otherwise); `promptText` (up to 1000 characters) is forwarded only when accepting a prompt, and `accept: false` is the safe default for `beforeunload`. Dialog close, lease start or revocation, and connector reconnect all clear the pending state.
+When a controlled page opens an `alert`, `confirm`, `prompt`, or `beforeunload` dialog, the extension records it on the lease and the server publishes `pendingDialog {type, message, hasPrompt, at, tabId}` in `/api/state` (`null` when absent). An open dialog freezes the renderer main thread, so any content-script or `Runtime` call against that page would only time out. While a dialog is pending, only `status`, `tabs.list`, `browser.control.status`, `browser.control.stop`, and `page.handleDialog` proceed—each stays off the renderer—and every other browser command, including the read-only `page.observe` and `page.waitFor` and the delayed automatic post-action observation, fails fast with HTTP 409 `BLOCKED_BY_DIALOG` (taxonomy `blocked_by_dialog`) before anything is relayed. The extension enforces the same gate before any content or CDP dispatch, a `page.batch` checks the pending dialog before each sub-step and aborts at that index, a content or CDP timeout that races a dialog opening resolves as `BLOCKED_BY_DIALOG` instead of revoking control, and the heartbeat suspends its `Runtime.evaluate` renderer probe (keeping the browser-side attachment and document checks) while the dialog is pending.
+
+A dialog can also open *after* a command has passed both gates, while an observation is already in flight, or inside the click handler of the very element the agent just acted on. Every boundary that would revoke the lease—document-identity verification at each preparation, dispatch, and completion point, screenshot completion included, the control-indicator boundary, and the held mouse-button or key release that every trusted click and key press runs in its `finally`—rereads the pending-dialog record immediately before revoking: under a dialog the failure resolves as `BLOCKED_BY_DIALOG` and the lease survives, and only a failure observed with no dialog pending still revokes. The observation path rereads it at its start and again after the capture, so a snapshot taken across a dialog is discarded rather than published. A service-worker restart recovers such a lease rather than revoking it: `pendingDialog` is persisted with the lease, the document identity is verified from the browser process, and only the overlay repaint is deferred to the first heartbeat after the dialog is resolved. **No renderer-blocked probe, dispatch, input release, or recovery can therefore revoke the browser-control lease while a dialog is pending, by timeout or by document identity.** The restart's own fail-closed rules are unchanged and still run first: a recovered candidate carrying an unfinished navigation, an unreleased held input, or a document that cannot be verified at all is dropped, dialog or not. What else still ends a lease is what the dialog does not cause: an explicit stop, a human pause, the lease's own TTL expiring, and any failure observed with no dialog pending. Nothing is forgiven permanently: the record is cleared unconditionally once the dialog is resolved, so a document that really did change while the dialog was open is caught by the very next check and revokes then, and a release the dialog blocked is re-dispatched the moment the dialog closes—by `page.handleDialog` or by the user—and revokes then if it is still unacknowledged. Server-side, a relayed observation that comes back `BLOCKED_BY_DIALOG` is logged as a skipped observation and changes no published state.
+
+`page.handleDialog` requires the held lease and a recorded dialog (`NO_PENDING_DIALOG` otherwise); `promptText` (up to 1000 characters) is forwarded only when accepting a prompt, and `accept: false` is the safe default for `beforeunload`. It is bound to the control session but, uniquely, not to an observation `turn` or `moveSequence`: refreshing those needs an observation the dialog itself forbids, and a discarded observation can leave the extension a turn ahead of the published state. Dialog close, lease start or revocation, and connector reconnect all clear the pending state.
 
 ### Key chord grammar
 
@@ -383,7 +470,7 @@ Coordinate commands accept an optional `coordinateSpace`. The default is the exi
 
 Native password elements are always emitted with `sensitive: true`, `valueRedacted: true`, no `value`, and no `setValue` action. macOS classifies secure AX roles and subroles before reading `AXValue`; Windows reads `CurrentIsPassword` before acquiring a value pattern and treats an unreadable password state as sensitive. The server repeats this redaction when sanitizing helper payloads.
 
-The synthetic pointer is helper-session state, not the hardware cursor. Its bounded cubic Bézier/minimum-jerk trajectory is delivered to the exact window, and its final state is composited into subsequent exact-window PNGs. It is not a native click-through desktop overlay in version 0.10.
+The synthetic pointer is helper-session state, not the hardware cursor. Its bounded cubic Bézier/minimum-jerk trajectory is delivered to the exact window, and its final state is composited into subsequent exact-window PNGs. It is not a native click-through desktop overlay in version 0.11.
 
 `computer.share.frame` events carry the same observation shape with a monotonically increasing share sequence. Frame pacing is negotiated at hello time: a helper that advertises the `computer.share.ack` capability (a feature flag, not a dispatchable method) receives `"shareAck": true` in the server's `helloAck` and switches to ack-paced, latest-frame-wins delivery. The helper then keeps a single-slot mailbox: a newer capture replaces an unemitted frame and increments the share's monotonic `droppedFrames` counter, and the next frame is emitted only after the server acknowledges the previous one. After sanitizing and storing each share frame, the server sends an acknowledgement bound to the session and the exact share sequence:
 

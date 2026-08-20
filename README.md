@@ -10,13 +10,14 @@ This project does not copy any private OpenAI protocol. It independently impleme
 - Navigate URLs, go back or forward, reload, create tabs, and close tabs
 - Capture the current viewport, rendered text, selected text, and structured interactive-element references
 - Click, fill, and select by element reference
+- Merge cross-origin iframe elements into the same observation, with top-level coordinates, frame provenance, and `<generation>.f2.e5` refs that `page.click` and `page.hover` accept
 - Hover elements and send right/middle, multi-click, and Shift/Control/Alt/Meta-modified clicks
 - Click viewport coordinates, type into the focused control, and send arbitrary key chords
 - Accept both `Meta+L` and `ctrl+shift+t` key-chord dialects, normalized server-side for browser and desktop keys
 - Execute arbitrary JavaScript, including Promises, in the current page's main world
 - Wait for page conditions—text appearing or disappearing, a URL prefix, or DOM quiescence—instead of polling observations
 - Run up to ten epoch-bound click/fill/select/key/scroll actions as one batch that stops at the first failure
-- Intercept JavaScript dialogs: renderer-touching commands fail fast while a dialog is pending—without revoking the control lease—until `page.handleDialog` accepts or dismisses it
+- Intercept JavaScript dialogs: renderer-touching commands fail fast while a dialog is pending—without revoking the control lease, even when the dialog opens mid-action or inside the handler of the element just clicked—until `page.handleDialog` accepts or dismisses it
 - Address browser and desktop frames with `normalized1000` coordinates converted server-side against the exact observed frame
 - Hold one explicit, expiring browser-control lease on one tab, with `sessionId`, observation `turn`, and pointer `moveSequence` bindings
 - Keep Chrome's native **Local Browser Bridge started debugging this browser** warning visible for the full trusted-control lease
@@ -185,7 +186,7 @@ cargo clippy --all-targets -- -D warnings
 cargo test --locked --all-targets
 ```
 
-The test suite covers version alignment, exact extension permissions and package files, absence of remote extension code and updater APIs, command parity, token persistence, update metadata validation, command validation, CSRF and both WebSocket Origin boundaries, protocol/session mismatch rejection, browser/computer relays, screenshot serving, frame freshness, debugger-revocation contracts, and the helper's bounded capability contract. The implementation review and release-specific evidence index are in [docs/SOTA_AUDIT.md](docs/SOTA_AUDIT.md).
+The test suite covers version alignment, exact extension permissions and package files, absence of remote extension code and updater APIs, command parity, token persistence, update metadata validation, command validation, CSRF and both WebSocket Origin boundaries, protocol/session mismatch rejection, browser/computer relays, screenshot serving, frame freshness, debugger-revocation contracts, the cross-origin frame ref grammar, coordinate translation, and budget arithmetic, the dialog gate's non-revocation boundaries, and the helper's bounded capability contract. The implementation review and release-specific evidence index are in [docs/SOTA_AUDIT.md](docs/SOTA_AUDIT.md).
 
 ## Deployment contract
 
@@ -204,12 +205,13 @@ The canonical build is `.github/workflows/deploy.yml`, triggered by a matching `
 
 - Native computer control is hybrid and exact-window scoped: frame-bound macOS Accessibility or Windows UI Automation refs are preferred for supported controls, with background pixel input available for visual targets. Unsupported delivery fails closed; the helper never escalates to foreground input automatically.
 - The helper's exact-window live feed is repeated, bounded capture from one selected window. It is not an OS screen-sharing session, virtual display, remote desktop, VM, or separate input seat. It preserves the foreground and hardware cursor but does not isolate untrusted work from the user's login session.
-- The helper pointer is synthetic state composited into returned exact-window images. Version 0.10 does not install a native click-through desktop cursor overlay, and the hardware cursor never represents agent state.
+- The helper pointer is synthetic state composited into returned exact-window images. Version 0.11 does not install a native click-through desktop cursor overlay, and the hardware cursor never represents agent state.
 - macOS pixel input relies on dynamically resolved, undocumented SkyLight symbols and is limited to non-minimized windows on the active Space. Windows uses UI Automation plus exact-HWND background messages. Elevated, game, secure-input, protected-content, and custom-rendered surfaces can still refuse control.
 - Chromium does not allow control of `chrome://`, `edge://`, extension pages, or browser permission UI through this extension.
 - File-page control requires the user to enable Chrome's file-URL permission for the extension.
 - Element references expire when the page structure changes. Observe again before reusing them.
-- Open shadow roots are included in browser observations. Cross-origin iframe semantic merging is not implemented; use a visual/CDP action or navigate into the frame's page instead of assuming a ref exists.
+- Open shadow roots are included in browser observations, and cross-origin iframe elements are merged into the same observation with top-level coordinates and `<generation>.f2.e5` refs that `page.click` and `page.hover` accept; every unmerged frame is reported in `frameSummary.skipped`. Same-process iframes and frame-scoped fill/select/key/scroll/typeText are still deferred, and cross-origin merging itself is proven only by the contract suites until a live-Chrome run is recorded (see `docs/PROTOCOL.md`).
+- A pending JavaScript dialog blocks renderer-touching commands but no longer revokes the lease: version 0.10 shipped this gate and a live run proved it was still defeated by an in-flight observation (see [evidence/v0.10.0/README.md](evidence/v0.10.0/README.md)), and version 0.11 closes that path. An explicit stop, a human pause, the lease TTL, and any failure seen with no dialog pending still revoke.
 - Trusted browser control holds one `chrome.debugger` attachment for the lease. Chrome therefore keeps its native warning visible, and another debugger cannot attach to that tab at the same time. There is no DOM `.click()` fallback: debugger loss or user cancellation revokes authority and the pending action fails closed.
 - One extension-controlled tab lease is active at a time. Switching the controlled target ends the old lease before attaching to the new tab.
 - The Chrome warning, page control pill, and helper pointer are different surfaces. The warning is browser chrome, the pill/cursor are page content, and the helper pointer exists only in returned exact-window frames.

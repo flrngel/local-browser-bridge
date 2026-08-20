@@ -2,7 +2,6 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
   globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__ = true;
 
   const CONTROL_HOST_ID = "__local_browser_bridge_control__";
-  const GEOMETRY_TOLERANCE_PX = 2;
   const CONTROL_LAST_SEEN_GRACE_MS = 35_000;
   const CONTROL_WATCHDOG_INTERVAL_MS = 2_500;
   const CAPTURE_STALE_MS = 15_000;
@@ -11,12 +10,13 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
   const WAIT_TIMEOUT_DEFAULT_MS = 5_000;
   const WAIT_TIMEOUT_MIN_MS = 100;
   const WAIT_TIMEOUT_MAX_MS = 12_000;
+  // Frame owners are reported so an observation can state how many iframes
+  // the top document holds versus how many the background actually merged.
+  const FRAME_OWNER_REPORT_MAX = 32;
   let generation = "";
   let refs = new Map();
   let pointRefs = new Map();
-  let documentRevision = 0;
   let snapshotRevision = -1;
-  let invalidationReason = "the page has not been observed";
   let controlUi = null;
   let lastControlState = null;
   let activeControlSessionId = "";
@@ -36,205 +36,48 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
   globalThis.__LOCAL_BROWSER_BRIDGE_CAPTURE_DEPTH__ = captureDepth;
   const revokedControlSessions = new Set();
 
-  const candidateSelector = [
-    "a[href]", "button", "input", "textarea", "select", "summary", "details", "[contenteditable='true']",
-    "[role='button']", "[role='link']", "[role='checkbox']", "[role='radio']", "[role='switch']", "[role='tab']",
-    "[role='menuitem']", "[role='option']", "[tabindex]:not([tabindex='-1'])", "[onclick]",
-  ].join(",");
-
-  function clean(value, max = 300) {
-    return String(value ?? "").replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
-  }
-
-  function normalizedFieldIdentifier(value) {
-    return String(value ?? "")
-      .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "");
-  }
-
-  function isSensitiveFieldMetadata({ type = "", autocomplete = "", name = "" } = {}) {
-    if (String(type).toLowerCase() === "password") return true;
-    const autocompleteTokens = String(autocomplete).toLowerCase().split(/\s+/).filter(Boolean);
-    if (autocompleteTokens.some((token) => token === "current-password"
-      || token === "new-password"
-      || token === "one-time-code"
-      || token.startsWith("cc-"))) return true;
-    const identifier = normalizedFieldIdentifier(name);
-    return /(?:^|-)(?:password|passwd|one-time-(?:code|password)|otp|passcode|verification-code|cc-(?:name|given-name|additional-name|family-name|number|exp|exp-month|exp-year|csc|type)|card-number|credit-card-number|payment-card-number|cardholder(?:-name)?|card-name|card-type|card-exp(?:iry|iration)?|card-exp-(?:month|year)|exp-(?:month|year)|cvv2?|cvc2?|card-security-code|security-code)(?:$|-)/.test(identifier);
-  }
-
   function isControlNode(node) {
     if (!(node instanceof Element)) return false;
     return node.id === CONTROL_HOST_ID || Boolean(node.closest?.(`#${CONTROL_HOST_ID}`));
   }
 
-  function isOnlyControlUiMutation(mutation) {
-    if (isControlNode(mutation.target)) return true;
-    const changed = [...mutation.addedNodes, ...mutation.removedNodes];
-    return changed.length > 0 && changed.every((node) => isControlNode(node));
-  }
-
-  function invalidate(reason) {
-    documentRevision += 1;
-    if (generation) invalidationReason = reason;
-  }
-
-  const mutationObserver = new MutationObserver((mutations) => {
+  function reinsertControlUiWhenLost() {
     if (controlUi?.host && !controlUi.host.isConnected && lastControlState) {
       controlUi = null;
       queueMicrotask(() => {
         if (lastControlState) void showControl(lastControlState).catch(() => {});
       });
     }
-    if (mutations.some((mutation) => !isOnlyControlUiMutation(mutation))) invalidate("the document mutated");
+  }
+
+  // The observation and target-proof core is shared verbatim with the
+  // cross-origin frame agent; the only host-specific input is which nodes are
+  // the bridge's own control overlay and therefore never observable targets.
+  if (typeof globalThis.__LBB_DOM_CORE__ !== "function") {
+    throw new Error("DOM_CORE_MISSING: extension/dom-core.js must load before extension/content.js");
+  }
+  const core = globalThis.__LBB_DOM_CORE__({ isExcludedNode: isControlNode });
+  const {
+    clean,
+    visible,
+    boundsOf,
+    describe,
+    targetSignature,
+    pointTarget,
+    validateRecord,
+    compareProof,
+    composedCandidates,
+  } = core;
+  const revisions = core.createRevisionTracker({
+    isExcludedNode: isControlNode,
+    onMutationBatch: reinsertControlUiWhenLost,
+    isTracking: () => Boolean(generation),
   });
-  mutationObserver.observe(document, {
-    subtree: true,
-    childList: true,
-    attributes: true,
-    characterData: true,
-  });
-  addEventListener("scroll", () => invalidate("the page scrolled"), { capture: true, passive: true });
-  addEventListener("resize", () => invalidate("the viewport resized"), { passive: true });
-
-  function visible(element) {
-    if (!(element instanceof Element)) return false;
-    const style = getComputedStyle(element);
-    const rect = element.getBoundingClientRect();
-    return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity) !== 0 && rect.width > 1 && rect.height > 1;
-  }
-
-  function labelledBy(element) {
-    const ids = clean(element.getAttribute("aria-labelledby"), 500).split(" ").filter(Boolean);
-    const root = element.getRootNode();
-    return ids.map((id) => clean(root.getElementById?.(id)?.textContent || document.getElementById(id)?.textContent)).filter(Boolean).join(" ");
-  }
-
-  function accessibleName(element) {
-    const direct = clean(element.getAttribute("aria-label"));
-    if (direct) return direct;
-    const referenced = labelledBy(element);
-    if (referenced) return referenced;
-    if (element.labels?.length) {
-      const label = clean([...element.labels].map((item) => item.innerText || item.textContent).join(" "));
-      if (label) return label;
-    }
-    const safeInputValue = element instanceof HTMLInputElement
-      && ["button", "submit", "reset"].includes(element.type)
-      ? element.value
-      : "";
-    const safeElementText = element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
-      ? ""
-      : element.innerText || element.textContent;
-    return clean(
-      element.alt || element.title || element.placeholder ||
-      safeInputValue ||
-      safeElementText || element.getAttribute("name") || element.id,
-    );
-  }
-
-  function roleOf(element) {
-    const explicit = clean(element.getAttribute("role"), 60);
-    if (explicit) return explicit;
-    const tag = element.tagName.toLowerCase();
-    if (tag === "a") return "link";
-    if (tag === "button" || tag === "summary") return "button";
-    if (tag === "select") return "select";
-    if (tag === "textarea") return "textbox";
-    if (tag === "input") {
-      if (["checkbox", "radio", "button", "submit", "reset"].includes(element.type)) return element.type;
-      return "textbox";
-    }
-    return tag;
-  }
-
-  function boundsOf(element) {
-    const rect = element.getBoundingClientRect();
-    return {
-      x: Math.round(rect.x),
-      y: Math.round(rect.y),
-      width: Math.round(rect.width),
-      height: Math.round(rect.height),
-    };
-  }
-
-  function describe(element, ref) {
-    const rect = element.getBoundingClientRect();
-    const type = clean(element.getAttribute("type"), 60).toLowerCase();
-    const autocomplete = clean(element.getAttribute("autocomplete"), 100).toLowerCase();
-    const fieldName = clean(element.getAttribute("name"), 100);
-    const sensitive = isSensitiveFieldMetadata({ type, autocomplete, name: fieldName });
-    return {
-      ref,
-      role: roleOf(element),
-      name: accessibleName(element),
-      type,
-      autocomplete,
-      fieldName,
-      disabled: Boolean(element.disabled) || element.getAttribute("aria-disabled") === "true",
-      checked: "checked" in element ? Boolean(element.checked) : undefined,
-      selected: "selected" in element ? Boolean(element.selected) : undefined,
-      sensitive,
-      inViewport: rect.bottom > 0 && rect.right > 0 && rect.top < innerHeight && rect.left < innerWidth,
-      bounds: boundsOf(element),
-      tree: element.getRootNode() instanceof ShadowRoot ? "shadow" : "document",
-    };
-  }
-
-  function targetSignature(element) {
-    const href = element instanceof HTMLAnchorElement ? clean(element.href, 500) : "";
-    return [
-      element.tagName.toLowerCase(), roleOf(element), accessibleName(element),
-      clean(element.getAttribute("type"), 60).toLowerCase(),
-      clean(element.getAttribute("name"), 100),
-      clean(element.getAttribute("aria-disabled"), 10),
-      clean(element.getAttribute("aria-checked"), 10),
-      href,
-    ].join("\u001f");
-  }
-
-  function sameBounds(left, right) {
-    return ["x", "y", "width", "height"].every((key) => Math.abs(Number(left[key]) - Number(right[key])) <= GEOMETRY_TOLERANCE_PX);
-  }
-
-  function composedContains(ancestor, candidate) {
-    let current = candidate;
-    while (current) {
-      if (current === ancestor) return true;
-      current = current.assignedSlot || current.parentElement || current.getRootNode?.().host || null;
-    }
-    return false;
-  }
-
-  function deepElementFromPoint(x, y) {
-    let element = document.elementFromPoint(x, y);
-    while (element?.shadowRoot) {
-      const deeper = element.shadowRoot.elementFromPoint(x, y);
-      if (!deeper || deeper === element) break;
-      element = deeper;
-    }
-    return element;
-  }
-
-  function pointTarget(x, y) {
-    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) {
-      throw new Error("BAD_COORDINATES: target point is outside the current viewport");
-    }
-    const surface = document.elementsFromPoint(x, y);
-    if (surface.some((element, index) => index === 0 && isControlNode(element))) {
-      throw new Error("CONTROL_UI_OCCLUSION: release control with the visible Stop button or choose another point");
-    }
-    const element = deepElementFromPoint(x, y);
-    if (!(element instanceof Element) || isControlNode(element)) throw new Error("TARGET_MISSING: no page element is available at that point");
-    return element;
-  }
 
   function assertFresh(requestedGeneration) {
     if (!generation || requestedGeneration !== generation) throw new Error("STALE_SNAPSHOT: observe the page again before acting");
-    if (snapshotRevision !== documentRevision) {
-      throw new Error(`STALE_SNAPSHOT: ${invalidationReason}; observe the page again before acting`);
+    if (snapshotRevision !== revisions.read()) {
+      throw new Error(`STALE_SNAPSHOT: ${revisions.reason()}; observe the page again before acting`);
     }
   }
 
@@ -249,6 +92,12 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
 
   function parseElementRef(ref) {
     const value = String(ref ?? "");
+    // A frame-scoped ref (<generation>.f2.e5) is resolved by the background
+    // against a subframe agent and must never reach the ref map of the top
+    // document, where its element key would collide with another element.
+    if (/\.f[1-9][0-9]?\.e[1-9][0-9]{0,3}$/.test(value)) {
+      throw new Error("FRAME_REF_MISROUTED: this ref belongs to a subframe; the background routes frame refs");
+    }
     const separator = value.lastIndexOf(".");
     if (separator < 0) return { embeddedGeneration: "", key: value };
     return { embeddedGeneration: value.slice(0, separator), key: value.slice(separator + 1) };
@@ -272,53 +121,6 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
     return record;
   }
 
-  function validateRecord(record, { requireHitTest = false } = {}) {
-    const { element } = record;
-    if (!visible(element)) throw new Error("TARGET_CHANGED: target is no longer visible; observe again");
-    const currentSignature = targetSignature(element);
-    const currentBounds = boundsOf(element);
-    if (currentSignature !== record.signature) throw new Error("TARGET_CHANGED: target identity changed; observe again");
-    if (!sameBounds(currentBounds, record.bounds)) throw new Error("TARGET_CHANGED: target geometry changed; observe again");
-    const description = describe(element, record.ref);
-    if (requireHitTest) {
-      const x = currentBounds.x + currentBounds.width / 2;
-      const y = currentBounds.y + currentBounds.height / 2;
-      if (!description.inViewport) throw new Error("TARGET_OUT_OF_VIEWPORT: scroll, then observe the page again");
-      const hit = deepElementFromPoint(x, y);
-      if (!hit || (!composedContains(element, hit) && !composedContains(hit, element))) {
-        throw new Error("TARGET_OCCLUDED: another element covers the observed target; observe again");
-      }
-    }
-    return {
-      description,
-      proof: { signature: record.signature, bounds: record.bounds },
-    };
-  }
-
-  function compareProof(actual, expected) {
-    if (!expected || actual.signature !== expected.signature || !sameBounds(actual.bounds, expected.bounds)) {
-      throw new Error("TARGET_CHANGED: target proof no longer matches; observe again");
-    }
-  }
-
-  function composedCandidates(root = document) {
-    const found = [];
-    const seen = new Set();
-    const visit = (scope) => {
-      for (const element of scope.querySelectorAll(candidateSelector)) {
-        if (!seen.has(element) && !isControlNode(element)) {
-          seen.add(element);
-          found.push(element);
-        }
-      }
-      for (const element of scope.querySelectorAll("*")) {
-        if (element.shadowRoot && !isControlNode(element)) visit(element.shadowRoot);
-      }
-    };
-    visit(root);
-    return found;
-  }
-
   function snapshot() {
     generation = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     refs = new Map();
@@ -332,8 +134,8 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
       refs.set(key, { element, ref, signature: targetSignature(element), bounds: description.bounds });
       elements.push(description);
     }
-    snapshotRevision = documentRevision;
-    invalidationReason = "";
+    snapshotRevision = revisions.read();
+    revisions.clearReason();
     return {
       generation,
       revision: snapshotRevision,
@@ -344,7 +146,31 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
       selectedText: clean(window.getSelection()?.toString(), 5_000),
       bodyText: clean(document.body?.innerText, 20_000),
       elements,
+      frameOwners: frameOwners(),
     };
+  }
+
+  // Every iframe/frame owner element the top document holds, whether or not
+  // the background can attach to it. The background compares this list with
+  // the frame targets it actually merged, so an unmerged frame is reported
+  // as skipped instead of silently disappearing from the observation.
+  function frameOwners() {
+    return [...document.querySelectorAll("iframe,frame")]
+      .slice(0, FRAME_OWNER_REPORT_MAX)
+      .map((owner, index) => {
+        let origin = "";
+        try {
+          origin = new URL(owner.getAttribute("src") || "", location.href).origin;
+        } catch {}
+        return {
+          index,
+          tagName: owner.tagName.toLowerCase(),
+          origin: clean(origin, 300),
+          sameOrigin: origin === location.origin,
+          bounds: boundsOf(owner),
+          visible: visible(owner),
+        };
+      });
   }
 
   function pageContainsText(needle) {
@@ -379,11 +205,11 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
       WAIT_TIMEOUT_MAX_MS,
     );
     const startedAt = Date.now();
-    let lastRevision = documentRevision;
+    let lastRevision = revisions.read();
     let lastRevisionChangeAt = startedAt;
     for (;;) {
-      if (documentRevision !== lastRevision) {
-        lastRevision = documentRevision;
+      if (revisions.read() !== lastRevision) {
+        lastRevision = revisions.read();
         lastRevisionChangeAt = Date.now();
       }
       const evaluated = evaluateWaitConditions(conditions, Date.now() - lastRevisionChangeAt);
@@ -800,7 +626,7 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
         assertActiveControl(message.controlSessionId, message.controlEpoch);
         assertFresh(message.generation);
         window.scrollBy({ left: Number(message.deltaX) || 0, top: Number(message.deltaY) || 0, behavior: "instant" });
-        invalidate("the page scrolled");
+        revisions.invalidate("the page scrolled");
         return { x: Math.round(scrollX), y: Math.round(scrollY), snapshotInvalidated: true };
       case "control.show":
         return showControl(message);

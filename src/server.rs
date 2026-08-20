@@ -51,6 +51,18 @@ const CALL_ID_MAX_CHARS: usize = 128;
 const REPLAY_CACHE_ENTRIES: usize = 256;
 const REPLAY_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
 const NORMALIZED_COORDINATE_MAX: f64 = 1_000.0;
+/// Cross-origin frame bounds. `MAX_FRAME_INDEX` mirrors the extension's
+/// 16-frame attachment cap, so a `f<k>` the extension can never mint is
+/// rejected before relay.
+const MAX_FRAME_INDEX: u32 = 16;
+const MAX_OBSERVED_FRAMES: usize = 16;
+const MAX_OBSERVED_FRAME_SKIPS: usize = 32;
+const MAX_OBSERVED_FRAME_DEPTH: u64 = 5;
+/// Publication cap for one observation's element list, and the share of it
+/// reserved for elements that came from a merged cross-origin frame.
+const MAX_PUBLISHED_ELEMENTS: usize = 250;
+const MAX_PUBLISHED_FRAME_ELEMENTS: usize = 50;
+const FRAME_SUMMARY_COUNTER_MAX: u64 = 10_000;
 const PUBLIC_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/public");
 
 pub const ACTION_METHODS: &[&str] = &[
@@ -624,6 +636,15 @@ struct Observation {
     selected_text: String,
     body_text: String,
     elements: Vec<ElementInfo>,
+    /// Cross-origin frames merged into `elements`. Absent (not empty) when
+    /// the observation carries no frame provenance at all, so a frameless
+    /// observation serializes exactly as it did before frame support.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frames: Option<Vec<FrameInfo>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frame_summary: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    elements_truncated: Option<bool>,
 }
 
 #[derive(Clone, Serialize)]
@@ -644,6 +665,47 @@ struct ElementInfo {
     in_viewport: bool,
     risk: Option<String>,
     bounds: Option<Bounds>,
+    /// Frame provenance, present only on elements that came from a merged
+    /// cross-origin frame. `cross_origin` is never set without a `frame_ref`,
+    /// so a page cannot forge cross-origin provenance onto a top element.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frame_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frame_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frame_url_origin: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cross_origin: Option<bool>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FrameInfo {
+    #[serde(rename = "ref")]
+    reference: String,
+    frame_id: String,
+    url_origin: String,
+    cross_origin: bool,
+    depth: u64,
+    offset: Offset,
+    /// The owner iframe's size only. A `Bounds` here would publish an
+    /// `x`/`y` pair of its own next to `offset`, which is the frame's actual
+    /// position: two origins for one frame, one of them always zero.
+    size: Size,
+    element_count: u64,
+    truncated: bool,
+}
+
+#[derive(Clone, Serialize)]
+struct Offset {
+    x: i64,
+    y: i64,
+}
+
+#[derive(Clone, Serialize)]
+struct Size {
+    width: i64,
+    height: i64,
 }
 
 #[derive(Clone, Serialize)]
@@ -2529,7 +2591,15 @@ impl AppState {
         // page.waitFor is read-only and runs without a control lease, so it
         // never carries control bindings.
         if method.starts_with("page.") && !matches!(method, "page.observe" | "page.waitFor") {
-            bind_browser_control(&mut params, &browser_control);
+            // page.handleDialog is the only way out of a blocking dialog, and
+            // the only way to refresh an observation turn is an observation
+            // the dialog itself forbids. An observation discarded mid-flight
+            // leaves the extension a turn ahead of the published state, so
+            // binding the escape hatch to a turn would deadlock exactly the
+            // situation it exists for. It keeps the session binding, which is
+            // what actually proves the dialog belongs to this lease.
+            let bind_freshness = method != "page.handleDialog";
+            bind_browser_control(&mut params, &browser_control, bind_freshness);
         }
 
         if method == "tabs.list" {
@@ -2646,8 +2716,25 @@ impl AppState {
                     .refresh_observation_for(tab_id, Some(connection_id))
                     .await
             {
-                self.log("page.observe", "warning", &error.message).await;
-                self.bump("warning").await;
+                // The dialog can also open in the gap between the check above
+                // and the extension receiving the relayed observation. The
+                // extension then refuses it with BLOCKED_BY_DIALOG, which is a
+                // skipped observation and nothing more: the published
+                // observation, the screenshot, and the lease all stay exactly
+                // as they were, and the client resumes after
+                // page.handleDialog.
+                if error.code == "BLOCKED_BY_DIALOG" {
+                    self.log(
+                        "page.observe",
+                        "warning",
+                        "Automatic observation skipped: a JavaScript dialog opened while it was in flight; resolve it with page.handleDialog",
+                    )
+                    .await;
+                    self.bump("dialog").await;
+                } else {
+                    self.log("page.observe", "warning", &error.message).await;
+                    self.bump("warning").await;
+                }
             }
         }
 
@@ -2993,6 +3080,30 @@ impl AppState {
         let mut screenshot = decode_screenshot(result.get("screenshot"))?;
         let browser_control = result.get("control").map(sanitize_browser_control);
         let snapshot = result.get("snapshot").and_then(Value::as_object);
+        let raw_elements = snapshot
+            .and_then(|item| item.get("elements"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let (elements, elements_truncated) = publish_elements(&raw_elements);
+        // Frame provenance is additive: a frameless observation leaves all
+        // three fields absent and serializes byte-identically to 0.10.
+        let frames = snapshot
+            .and_then(|item| item.get("frames"))
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(sanitize_frame)
+                    .take(MAX_OBSERVED_FRAMES)
+                    .collect::<Vec<FrameInfo>>()
+            })
+            .map(|frames| reconcile_frame_counts(frames, &elements))
+            .filter(|frames| !frames.is_empty());
+        let frame_summary = snapshot
+            .and_then(|item| item.get("frameSummary"))
+            .map(sanitize_frame_summary)
+            .filter(|summary| !summary.is_null());
         let observation = Observation {
             tab_id,
             captured_at: now_iso(),
@@ -3039,17 +3150,10 @@ impl AppState {
                     .unwrap_or(""),
                 20_000,
             ),
-            elements: snapshot
-                .and_then(|item| item.get("elements"))
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(sanitize_element)
-                        .take(250)
-                        .collect()
-                })
-                .unwrap_or_default(),
+            elements,
+            frames,
+            frame_summary,
+            elements_truncated: elements_truncated.then_some(true),
         };
         if let Some(screenshot) = screenshot.as_mut() {
             screenshot.bind(
@@ -4130,7 +4234,11 @@ fn sanitize_params(
     Ok(sanitized)
 }
 
-fn bind_browser_control(params: &mut Value, control: &Value) {
+/// Binds the action to the browser-control lease. `bind_freshness` also binds
+/// the observation `turn` and the pointer `moveSequence`, which force the
+/// caller to observe before acting; it is dropped only for `page.handleDialog`
+/// — see the call site.
+fn bind_browser_control(params: &mut Value, control: &Value, bind_freshness: bool) {
     if control.get("active").and_then(Value::as_bool) != Some(true) {
         return;
     }
@@ -4146,6 +4254,9 @@ fn bind_browser_control(params: &mut Value, control: &Value) {
             Value::String(session_id.to_owned()),
         );
     }
+    if !bind_freshness {
+        return;
+    }
     for name in ["turn", "moveSequence"] {
         if !output.contains_key(name)
             && let Some(value) = control.get(name).and_then(Value::as_u64)
@@ -4155,25 +4266,52 @@ fn bind_browser_control(params: &mut Value, control: &Value) {
     }
 }
 
-/// Accepts exactly the two published element-reference formats: a legacy
-/// bare ref such as `e12`, or an epoch-embedded ref such as
-/// `<generation>.e12` where the generation charset is `[a-z0-9-]`. This is
-/// the strict pattern `^([a-z0-9-]{1,64}\.)?e[1-9][0-9]{0,3}$`.
+/// Accepts exactly the three published element-reference formats: a legacy
+/// bare ref such as `e12`, an epoch-embedded top-frame ref such as
+/// `<generation>.e12`, and a frame-scoped ref such as `<generation>.f2.e12`.
+/// A two-segment ref is always `<generation>.<element>`, never
+/// `<frame>.<element>`, so the grammar stays unambiguous:
+/// `^([a-z0-9-]{1,64}\.((f([1-9]|1[0-6]))\.)?)?e[1-9][0-9]{0,3}$`.
 fn valid_element_ref(reference: &str) -> bool {
-    let (generation, key) = match reference.rsplit_once('.') {
-        Some((generation, key)) => (Some(generation), key),
-        None => (None, reference),
+    let parts: Vec<&str> = reference.split('.').collect();
+    match parts.as_slice() {
+        [element] => valid_element_key(element),
+        [generation, element] => valid_generation(generation) && valid_element_key(element),
+        [generation, frame, element] => {
+            valid_generation(generation) && valid_frame_key(frame) && valid_element_key(element)
+        }
+        _ => false,
+    }
+}
+
+fn valid_generation(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'-'))
+}
+
+/// `f1` through `f16`, no leading zero: the extension can never mint a frame
+/// key outside its own attachment cap, so anything else is malformed input.
+fn valid_frame_key(value: &str) -> bool {
+    let Some(digits) = value.strip_prefix('f') else {
+        return false;
     };
-    if let Some(generation) = generation
-        && (generation.is_empty()
-            || generation.len() > 64
-            || !generation
-                .bytes()
-                .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'-')))
+    if digits.is_empty()
+        || digits.len() > 2
+        || digits.starts_with('0')
+        || !digits.bytes().all(|byte| byte.is_ascii_digit())
     {
         return false;
     }
-    let Some(digits) = key.strip_prefix('e') else {
+    digits
+        .parse::<u32>()
+        .is_ok_and(|index| (1..=MAX_FRAME_INDEX).contains(&index))
+}
+
+fn valid_element_key(value: &str) -> bool {
+    let Some(digits) = value.strip_prefix('e') else {
         return false;
     };
     !digits.is_empty()
@@ -4438,7 +4576,7 @@ fn ref_params(
     let reference = required_string(source.get("ref"), "ref", 80)?;
     if !valid_element_ref(&reference) {
         return Err(ApiError::bad_request(
-            "ref must be an element reference such as e12 or <generation>.e12",
+            "ref must be an element reference such as e12, <generation>.e12, or <generation>.f2.e12",
         ));
     }
     output.insert("ref".to_owned(), Value::String(reference));
@@ -4606,11 +4744,83 @@ fn sanitize_tab(value: &Value) -> Option<TabInfo> {
     })
 }
 
+/// One observation's published element list, plus whether the cap dropped
+/// anything. The cap is applied per class, not flat: the extension already
+/// reserves a fifth of its own 500-slot merge budget for frame elements and
+/// appends them AFTER the top document's, so a flat `take` would publish
+/// nothing but top elements on any page with 250 of them — while `frames`
+/// and `frameSummary` still advertised merged frames whose `<gen>.f<k>.e<n>`
+/// refs appeared nowhere in `elements`. The same 4:1 reservation is applied
+/// here, and whichever class runs out first hands its unused slots to the
+/// other, so the cap is always filled.
+fn publish_elements(raw_elements: &[Value]) -> (Vec<ElementInfo>, bool) {
+    let sanitized: Vec<ElementInfo> = raw_elements.iter().filter_map(sanitize_element).collect();
+    if sanitized.len() <= MAX_PUBLISHED_ELEMENTS {
+        return (sanitized, false);
+    }
+    let total = sanitized.len();
+    let frame_total = sanitized
+        .iter()
+        .filter(|element| element.frame_ref.is_some())
+        .count();
+    let top_total = total - frame_total;
+    let frame_slots = frame_total
+        .min(MAX_PUBLISHED_FRAME_ELEMENTS.max(MAX_PUBLISHED_ELEMENTS.saturating_sub(top_total)));
+    let top_slots = top_total.min(MAX_PUBLISHED_ELEMENTS - frame_slots);
+    let mut frames_taken = 0;
+    let mut top_taken = 0;
+    let mut published = Vec::with_capacity(MAX_PUBLISHED_ELEMENTS);
+    for element in sanitized {
+        let (taken, limit) = if element.frame_ref.is_some() {
+            (&mut frames_taken, frame_slots)
+        } else {
+            (&mut top_taken, top_slots)
+        };
+        if *taken >= limit {
+            continue;
+        }
+        *taken += 1;
+        published.push(element);
+    }
+    let truncated = published.len() < total;
+    (published, truncated)
+}
+
+/// Restates every frame's `elementCount` as what actually reached `elements`.
+/// The extension counts what it merged; the publication cap above may drop
+/// some of that, and a frame advertising a count no ref backs is a frame the
+/// caller cannot act on.
+fn reconcile_frame_counts(frames: Vec<FrameInfo>, published: &[ElementInfo]) -> Vec<FrameInfo> {
+    let mut counts: HashMap<&str, u64> = HashMap::new();
+    for element in published {
+        if let Some(frame_ref) = element.frame_ref.as_deref() {
+            *counts.entry(frame_ref).or_default() += 1;
+        }
+    }
+    frames
+        .into_iter()
+        .map(|mut frame| {
+            let published_count = counts
+                .get(frame.reference.as_str())
+                .copied()
+                .unwrap_or_default();
+            frame.truncated = frame.truncated || published_count < frame.element_count;
+            frame.element_count = published_count;
+            frame
+        })
+        .collect()
+}
+
 fn sanitize_element(value: &Value) -> Option<ElementInfo> {
     let reference = bounded(value.get("ref")?.as_str()?, 80);
     if reference.is_empty() {
         return None;
     }
+    let frame_reference = value
+        .get("frameRef")
+        .and_then(Value::as_str)
+        .map(|frame_ref| bounded(frame_ref, 8))
+        .filter(|frame_ref| valid_frame_key(frame_ref));
     Some(ElementInfo {
         reference,
         role: bounded(value.get("role").and_then(Value::as_str).unwrap_or(""), 80),
@@ -4643,6 +4853,128 @@ fn sanitize_element(value: &Value) -> Option<ElementInfo> {
                 width: rounded(bounds.get("width")),
                 height: rounded(bounds.get("height")),
             }),
+        frame_ref: frame_reference.clone(),
+        frame_id: frame_reference.as_ref().map(|_| {
+            bounded(
+                value.get("frameId").and_then(Value::as_str).unwrap_or(""),
+                100,
+            )
+        }),
+        frame_url_origin: frame_reference.as_ref().map(|_| {
+            bounded(
+                value
+                    .get("frameUrlOrigin")
+                    .and_then(Value::as_str)
+                    .unwrap_or(""),
+                300,
+            )
+        }),
+        // Cross-origin provenance requires a frame ref: a payload that claims
+        // `crossOrigin` on a top-frame element is claiming something the
+        // extension never mints, so the claim is dropped.
+        cross_origin: match (
+            frame_reference.is_some(),
+            value.get("crossOrigin").and_then(Value::as_bool),
+        ) {
+            (true, Some(flag)) => Some(flag),
+            (true, None) => Some(true),
+            (false, _) => None,
+        },
+    })
+}
+
+/// One merged cross-origin frame. A frame whose `ref` is outside the
+/// published `f1`..`f16` grammar, or that carries no frame id, is dropped
+/// rather than published with an unusable reference.
+fn sanitize_frame(value: &Value) -> Option<FrameInfo> {
+    let reference = bounded(value.get("ref")?.as_str()?, 8);
+    if !valid_frame_key(&reference) {
+        return None;
+    }
+    let frame_id = bounded(
+        value.get("frameId").and_then(Value::as_str).unwrap_or(""),
+        100,
+    );
+    if frame_id.is_empty() {
+        return None;
+    }
+    let offset = value.get("offset").and_then(Value::as_object);
+    let size = value.get("size").and_then(Value::as_object);
+    Some(FrameInfo {
+        reference,
+        frame_id,
+        url_origin: bounded(
+            value.get("urlOrigin").and_then(Value::as_str).unwrap_or(""),
+            300,
+        ),
+        cross_origin: value
+            .get("crossOrigin")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        depth: value
+            .get("depth")
+            .and_then(Value::as_u64)
+            .unwrap_or(1)
+            .clamp(1, MAX_OBSERVED_FRAME_DEPTH),
+        offset: Offset {
+            x: rounded(offset.and_then(|item| item.get("x"))),
+            y: rounded(offset.and_then(|item| item.get("y"))),
+        },
+        size: Size {
+            width: rounded(size.and_then(|item| item.get("width"))),
+            height: rounded(size.and_then(|item| item.get("height"))),
+        },
+        element_count: value
+            .get("elementCount")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(FRAME_SUMMARY_COUNTER_MAX),
+        truncated: value
+            .get("truncated")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
+/// Bounded honesty report about frames the extension saw but did not merge.
+/// Every counter is clamped and the skip list is capped, so a hostile page
+/// cannot inflate `/api/state` through its own iframe count.
+fn sanitize_frame_summary(value: &Value) -> Value {
+    if !value.is_object() {
+        return Value::Null;
+    }
+    let counter = |name: &str| {
+        value
+            .get(name)
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(FRAME_SUMMARY_COUNTER_MAX)
+    };
+    let skipped = value
+        .get("skipped")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .take(MAX_OBSERVED_FRAME_SKIPS)
+                .map(|item| {
+                    json!({
+                        "urlOrigin": bounded(item.get("urlOrigin").and_then(Value::as_str).unwrap_or(""), 300),
+                        "reason": bounded(item.get("reason").and_then(Value::as_str).unwrap_or("unknown"), 40)
+                    })
+                })
+                .collect::<Vec<Value>>()
+        })
+        .unwrap_or_default();
+    json!({
+        "supported": value.get("supported").and_then(Value::as_bool).unwrap_or(false),
+        "mode": bounded(value.get("mode").and_then(Value::as_str).unwrap_or("cdp-auto-attach"), 40),
+        "reason": bounded(value.get("reason").and_then(Value::as_str).unwrap_or(""), 40),
+        "ownersSeen": counter("ownersSeen"),
+        "attached": counter("attached"),
+        "merged": counter("merged"),
+        "elementsDropped": counter("elementsDropped"),
+        "skipped": skipped
     })
 }
 
@@ -4877,6 +5209,287 @@ mod tests {
     }
 
     #[test]
+    fn frame_scoped_refs_parse_and_bound_the_frame_index() {
+        for valid in [
+            "e12",
+            "g1.e12",
+            "g1.f1.e1",
+            "g1.f16.e9999",
+            "mfz3k2ab-a1b2c3d4.f16.e9999",
+        ] {
+            assert!(valid_element_ref(valid), "rejected {valid}");
+        }
+        for invalid in [
+            "g1.f0.e1",
+            "g1.f17.e1",
+            "g1.f01.e1",
+            "g1.f99.e1",
+            "g1.f2.e0",
+            "g1.f2.f3.e1",
+            "g1.f2.x1",
+            "g1..e1",
+            "g1.f2.e1.",
+            "G1.f2.e1",
+            "g1.f2.e12345",
+            "g1.F2.e1",
+            "g1.f.e1",
+        ] {
+            assert!(!valid_element_ref(invalid), "accepted {invalid}");
+        }
+
+        // A two-segment ref is always <generation>.<element>. "f2" is a legal
+        // generation string, so "f2.e1" stays the legacy top-frame shape and
+        // is never reinterpreted as a frame-scoped ref; only the three-segment
+        // form addresses a frame.
+        assert!(valid_element_ref("f2.e1"));
+
+        let frame_scoped = sanitize_params(
+            "page.click",
+            json!({ "tabId": 7, "ref": "mfz3k2ab-a1b2c3d4.f2.e5", "generation": "mfz3k2ab-a1b2c3d4" }),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(frame_scoped["ref"], "mfz3k2ab-a1b2c3d4.f2.e5");
+        let hover = sanitize_params(
+            "page.hover",
+            json!({ "tabId": 7, "ref": "g1.f16.e9999", "generation": "g1" }),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(hover["ref"], "g1.f16.e9999");
+        assert!(
+            sanitize_params(
+                "page.click",
+                json!({ "tabId": 7, "ref": "g1.f17.e5", "generation": "g1" }),
+                None,
+                None
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn sanitize_element_carries_bounded_frame_provenance() {
+        let framed = sanitize_element(&json!({
+            "ref": "g1.f2.e5",
+            "role": "button",
+            "name": "Pay",
+            "frameRef": "f2",
+            "frameId": "F".repeat(400),
+            "frameUrlOrigin": "https://pay.example.test/".to_owned() + &"x".repeat(600),
+            "crossOrigin": true
+        }))
+        .unwrap();
+        assert_eq!(framed.frame_ref.as_deref(), Some("f2"));
+        assert_eq!(framed.frame_id.as_deref().unwrap().len(), 100);
+        assert_eq!(framed.frame_url_origin.as_deref().unwrap().len(), 300);
+        assert_eq!(framed.cross_origin, Some(true));
+
+        // A forged frame key outside f1..f16 loses every provenance field.
+        let forged_key = sanitize_element(&json!({
+            "ref": "e5", "frameRef": "f99", "frameId": "abc", "crossOrigin": true
+        }))
+        .unwrap();
+        assert_eq!(forged_key.frame_ref, None);
+        assert_eq!(forged_key.frame_id, None);
+        assert_eq!(forged_key.frame_url_origin, None);
+        assert_eq!(forged_key.cross_origin, None);
+
+        // A top-frame element cannot claim cross-origin provenance.
+        let forged_flag = sanitize_element(&json!({ "ref": "e5", "crossOrigin": true })).unwrap();
+        assert_eq!(forged_flag.cross_origin, None);
+        let serialized = serde_json::to_value(&forged_flag).unwrap();
+        for absent in ["frameRef", "frameId", "frameUrlOrigin", "crossOrigin"] {
+            assert!(serialized.get(absent).is_none(), "leaked {absent}");
+        }
+    }
+
+    #[test]
+    fn sanitize_frame_bounds_the_frame_list_and_skip_report() {
+        let frame = sanitize_frame(&json!({
+            "ref": "f3",
+            "frameId": "6A1B",
+            "urlOrigin": "https://pay.example.test",
+            "crossOrigin": true,
+            "depth": 99,
+            "offset": { "x": 120.4, "y": 64.6 },
+            "size": { "width": 380, "height": 220 },
+            "elementCount": 12,
+            "truncated": true
+        }))
+        .unwrap();
+        assert_eq!(frame.reference, "f3");
+        assert_eq!(frame.depth, MAX_OBSERVED_FRAME_DEPTH);
+        assert_eq!(frame.offset.x, 120);
+        assert_eq!(frame.offset.y, 65);
+        assert!(frame.truncated);
+
+        assert!(sanitize_frame(&json!({ "ref": "f17", "frameId": "a" })).is_none());
+        assert!(sanitize_frame(&json!({ "ref": "e1", "frameId": "a" })).is_none());
+        assert!(sanitize_frame(&json!({ "ref": "f1", "frameId": "" })).is_none());
+
+        let frames: Vec<_> = (1..=20)
+            .map(|index| json!({ "ref": format!("f{index}"), "frameId": format!("id{index}") }))
+            .collect();
+        let kept: Vec<_> = frames
+            .iter()
+            .filter_map(sanitize_frame)
+            .take(MAX_OBSERVED_FRAMES)
+            .collect();
+        assert_eq!(kept.len(), MAX_OBSERVED_FRAMES);
+
+        let skipped: Vec<_> = (0..40)
+            .map(|index| {
+                json!({ "urlOrigin": format!("https://ad{index}.example.test"), "reason": "x".repeat(80) })
+            })
+            .collect();
+        let summary = sanitize_frame_summary(&json!({
+            "supported": true,
+            "mode": "cdp-auto-attach",
+            "ownersSeen": 99_999_999_u64,
+            "attached": 3,
+            "merged": 2,
+            "elementsDropped": 7,
+            "skipped": skipped
+        }));
+        assert_eq!(summary["supported"], true);
+        assert_eq!(summary["ownersSeen"], json!(FRAME_SUMMARY_COUNTER_MAX));
+        assert_eq!(
+            summary["skipped"].as_array().unwrap().len(),
+            MAX_OBSERVED_FRAME_SKIPS
+        );
+        assert_eq!(summary["skipped"][0]["reason"].as_str().unwrap().len(), 40);
+        assert!(sanitize_frame_summary(&json!("not an object")).is_null());
+    }
+
+    #[test]
+    fn publication_cap_reserves_a_share_for_frame_elements() {
+        let top = |count: usize| {
+            (1..=count)
+                .map(|index| json!({ "ref": format!("g1.e{index}"), "role": "link" }))
+                .collect::<Vec<Value>>()
+        };
+        let framed = |count: usize| {
+            (1..=count)
+                .map(|index| {
+                    json!({ "ref": format!("g1.f1.e{index}"), "role": "link", "frameRef": "f1" })
+                })
+                .collect::<Vec<Value>>()
+        };
+
+        // Under the cap nothing is dropped and nothing is reported.
+        let (published, truncated) = publish_elements(&[top(10), framed(5)].concat());
+        assert_eq!(published.len(), 15);
+        assert!(!truncated);
+
+        // The extension appends frame elements last; a flat cap would publish
+        // none of them on a page with 300 top-document elements.
+        let (published, truncated) = publish_elements(&[top(300), framed(60)].concat());
+        assert!(truncated);
+        assert_eq!(published.len(), MAX_PUBLISHED_ELEMENTS);
+        let kept_frame_elements = published
+            .iter()
+            .filter(|element| element.frame_ref.is_some())
+            .count();
+        assert_eq!(kept_frame_elements, MAX_PUBLISHED_FRAME_ELEMENTS);
+        assert_eq!(published[0].reference, "g1.e1");
+
+        // Whichever class runs out first hands its slots to the other, so the
+        // cap is always filled.
+        let (published, _) = publish_elements(&[top(10), framed(300)].concat());
+        assert_eq!(published.len(), MAX_PUBLISHED_ELEMENTS);
+        assert_eq!(
+            published
+                .iter()
+                .filter(|element| element.frame_ref.is_some())
+                .count(),
+            240
+        );
+        let (published, _) = publish_elements(&[top(300), framed(20)].concat());
+        assert_eq!(
+            published
+                .iter()
+                .filter(|element| element.frame_ref.is_some())
+                .count(),
+            20
+        );
+
+        // Truncation reports the publication cap, not the raw array: an
+        // observation whose refless entries were dropped by the sanitizer is
+        // not truncated.
+        let mut refless = top(240);
+        refless.extend((0..40).map(|_| json!({ "role": "link" })));
+        let (published, truncated) = publish_elements(&refless);
+        assert_eq!(published.len(), 240);
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn frame_element_counts_restate_what_was_published() {
+        let frames = vec![
+            sanitize_frame(&json!({ "ref": "f1", "frameId": "a", "elementCount": 12 })).unwrap(),
+            sanitize_frame(&json!({ "ref": "f2", "frameId": "b", "elementCount": 4 })).unwrap(),
+        ];
+        let published: Vec<ElementInfo> = ["g1.f1.e1", "g1.f1.e2", "g1.e1"]
+            .iter()
+            .zip(["f1", "f1", ""])
+            .filter_map(|(reference, frame_ref)| {
+                let mut value = json!({ "ref": reference });
+                if !frame_ref.is_empty() {
+                    value["frameRef"] = json!(frame_ref);
+                }
+                sanitize_element(&value)
+            })
+            .collect();
+        let reconciled = reconcile_frame_counts(frames, &published);
+        assert_eq!(reconciled[0].element_count, 2);
+        assert!(reconciled[0].truncated);
+        // A frame whose elements all fell outside the cap stays visible, and
+        // says so, instead of advertising refs that are not there.
+        assert_eq!(reconciled[1].element_count, 0);
+        assert!(reconciled[1].truncated);
+    }
+
+    #[test]
+    fn frameless_observations_serialize_exactly_as_before_frame_support() {
+        let observation = Observation {
+            tab_id: 7,
+            captured_at: "now".to_owned(),
+            title: "Test tab".to_owned(),
+            url: "https://example.test/".to_owned(),
+            generation: "g1".to_owned(),
+            viewport: Value::Null,
+            scroll: Value::Null,
+            selected_text: String::new(),
+            body_text: String::new(),
+            elements: Vec::new(),
+            frames: None,
+            frame_summary: None,
+            elements_truncated: None,
+        };
+        let serialized = serde_json::to_value(&observation).unwrap();
+        for absent in ["frames", "frameSummary", "elementsTruncated"] {
+            assert!(serialized.get(absent).is_none(), "leaked {absent}");
+        }
+
+        let framed = Observation {
+            frames: Some(vec![
+                sanitize_frame(&json!({ "ref": "f1", "frameId": "abc" })).unwrap(),
+            ]),
+            frame_summary: Some(sanitize_frame_summary(&json!({ "supported": true }))),
+            elements_truncated: Some(true),
+            ..observation
+        };
+        let serialized = serde_json::to_value(&framed).unwrap();
+        assert_eq!(serialized["frames"][0]["ref"], "f1");
+        assert_eq!(serialized["frames"][0]["crossOrigin"], true);
+        assert_eq!(serialized["frameSummary"]["mode"], "cdp-auto-attach");
+        assert_eq!(serialized["elementsTruncated"], true);
+    }
+
+    #[test]
     fn validates_click_pointer_options() {
         let defaults = sanitize_params(
             "page.click",
@@ -5089,6 +5702,7 @@ mod tests {
         bind_browser_control(
             &mut params,
             &json!({ "active": true, "sessionId": "control-2", "turn": 4, "moveSequence": 9 }),
+            true,
         );
         assert_eq!(params["controlSessionId"], "control-1");
         assert_eq!(params["turn"], 4);
@@ -5410,6 +6024,7 @@ mod tests {
                 "turn": 4,
                 "moveSequence": 10
             }),
+            true,
         );
         assert_eq!(params["moveSequence"], 10);
         assert_eq!(params["turn"], 4);

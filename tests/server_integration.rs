@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -93,6 +94,26 @@ async fn connect_fake_extension(
     Arc<Mutex<Vec<String>>>,
     mpsc::UnboundedSender<(String, Value)>,
 ) {
+    let (handle, relayed, events, _) =
+        connect_fake_extension_with_dialog_race(base_url, token).await;
+    (handle, relayed, events)
+}
+
+/// The same fixture plus the switch that reproduces the live 0.10.0 race: a
+/// dialog that opens after the server already decided to observe, so the
+/// relayed `page.observe` comes back `BLOCKED_BY_DIALOG` instead of a
+/// snapshot. Flipping the returned flag arms it.
+async fn connect_fake_extension_with_dialog_race(
+    base_url: &str,
+    token: &str,
+) -> (
+    JoinHandle<()>,
+    Arc<Mutex<Vec<String>>>,
+    mpsc::UnboundedSender<(String, Value)>,
+    Arc<AtomicBool>,
+) {
+    let observe_blocked = Arc::new(AtomicBool::new(false));
+    let observe_blocked_fixture = observe_blocked.clone();
     let mut request = format!("{}/bridge", base_url.replace("http", "ws"))
         .into_client_request()
         .unwrap();
@@ -174,6 +195,94 @@ async fn connect_fake_extension(
                     "id": id, "type": "result", "ok": true,
                     "result": { "tabId": 7, "active": true }
                 }),
+                // The extension refuses the observation itself when the
+                // dialog opened after the server passed its own gate: the
+                // renderer is frozen and the lease is intact, so the answer
+                // is the non-fatal BLOCKED_BY_DIALOG, not a revocation.
+                "page.observe" if observe_blocked_fixture.load(Ordering::SeqCst) => json!({
+                    "id": id, "type": "result", "ok": false,
+                    "error": {
+                        "code": "BLOCKED_BY_DIALOG",
+                        "message": "a JavaScript confirm dialog is blocking the controlled page during observation completion; resolve it with page.handleDialog first"
+                    }
+                }),
+                // Tab 8 stands in for a page with a merged cross-origin frame:
+                // same observation shape plus frame provenance, and a raw
+                // element array over the server's 250-element publication
+                // cap. The frame's elements come LAST, exactly as the
+                // extension appends them after the top document.
+                "page.observe" if message["params"]["tabId"] == json!(8) => {
+                    let mut elements = vec![
+                        json!({
+                            "ref": "g2.e1", "role": "button", "name": "Top", "type": "submit",
+                            "disabled": false, "inViewport": true,
+                            "bounds": { "x": 1, "y": 2, "width": 3, "height": 4 }
+                        }),
+                        // A page cannot forge cross-origin provenance onto a
+                        // top-document element.
+                        json!({
+                            "ref": "g2.e999", "role": "link", "name": "Forged",
+                            "disabled": false, "inViewport": true, "crossOrigin": true
+                        }),
+                    ];
+                    for index in 2..=300 {
+                        elements.push(json!({
+                            "ref": format!("g2.e{index}"), "role": "link", "name": format!("Top {index}"),
+                            "disabled": false, "inViewport": true
+                        }));
+                    }
+                    elements.push(json!({
+                        "ref": "g2.f1.e1", "role": "button", "name": "Pay", "type": "submit",
+                        "disabled": false, "inViewport": true,
+                        "bounds": { "x": 125, "y": 69, "width": 40, "height": 20 },
+                        "frameRef": "f1", "frameId": "6A1B",
+                        "frameUrlOrigin": "https://pay.example.test", "crossOrigin": true
+                    }));
+                    for index in 2..=60 {
+                        elements.push(json!({
+                            "ref": format!("g2.f1.e{index}"), "role": "link", "name": format!("Pay {index}"),
+                            "disabled": false, "inViewport": true,
+                            "frameRef": "f1", "frameId": "6A1B",
+                            "frameUrlOrigin": "https://pay.example.test", "crossOrigin": true
+                        }));
+                    }
+                    json!({
+                        "id": id, "type": "result", "ok": true,
+                        "result": {
+                            "screenshot": PIXEL,
+                            "control": {
+                                "active": true, "sessionId": "control-fixture", "tabId": 8,
+                                "startedAt": 1, "expiresAt": 9999999999999_u64, "lastHeartbeatAt": 2,
+                                "turn": 3, "moveSequence": 5,
+                                "cursor": { "x": 10, "y": 20, "visible": true, "updatedAt": 2 }
+                            },
+                            "snapshot": {
+                                "generation": "g2", "title": "Framed tab", "url": "https://example.test/framed",
+                                "bodyText": "Checkout", "viewport": { "width": 800, "height": 600 },
+                                "scroll": { "x": 0, "y": 0, "maxY": 0 },
+                                "elements": elements,
+                                "frames": [
+                                    {
+                                        "ref": "f1", "frameId": "6A1B", "urlOrigin": "https://pay.example.test",
+                                        "crossOrigin": true, "depth": 1,
+                                        "offset": { "x": 120, "y": 64 },
+                                        "size": { "width": 380, "height": 220 },
+                                        "elementCount": 60, "truncated": false
+                                    },
+                                    { "ref": "f99", "frameId": "bogus" }
+                                ],
+                                "frameSummary": {
+                                    "supported": true, "mode": "cdp-auto-attach",
+                                    "ownersSeen": 3, "attached": 1, "merged": 1, "elementsDropped": 0,
+                                    "skipped": [
+                                        { "urlOrigin": "https://ads.example.test", "reason": "blank_document" },
+                                        { "urlOrigin": "https://same.example.test", "reason": "same_process_frame" }
+                                    ]
+                                }
+                            }
+                        }
+                    })
+                }
                 "page.observe" => json!({
                     "id": id, "type": "result", "ok": true,
                     "result": {
@@ -221,6 +330,29 @@ async fn connect_fake_extension(
                             "receivedClickCount": message["params"]["clickCount"],
                             "receivedModifiers": message["params"]["modifiers"]
                         }
+                    })
+                }
+                // Frame-scoped refs relay verbatim and report the frame
+                // taxonomy the extension would produce for that frame state.
+                "page.click"
+                    if message["params"]["ref"]
+                        .as_str()
+                        .is_some_and(|reference| reference.contains(".f")) =>
+                {
+                    let reference = message["params"]["ref"].as_str().unwrap_or("");
+                    let (code, detail) = if reference.ends_with(".e2") {
+                        ("STALE_FRAME_TREE", "the frame owner element moved")
+                    } else if reference.ends_with(".e3") {
+                        (
+                            "FRAME_ACTION_UNSUPPORTED",
+                            "page.click cannot act inside this frame",
+                        )
+                    } else {
+                        ("FRAME_DETACHED", "the frame that holds the target changed")
+                    };
+                    json!({
+                        "id": id, "type": "result", "ok": false,
+                        "error": { "code": code, "message": format!("{detail} (ref {reference})") }
                     })
                 }
                 "page.click" => json!({
@@ -280,7 +412,9 @@ async fn connect_fake_extension(
                         "handled": true,
                         "receivedAccept": message["params"]["accept"],
                         "receivedPromptText": message["params"]["promptText"],
-                        "receivedControlSessionId": message["params"]["controlSessionId"]
+                        "receivedControlSessionId": message["params"]["controlSessionId"],
+                        "receivedTurn": message["params"]["turn"],
+                        "receivedMoveSequence": message["params"]["moveSequence"]
                     }
                 }),
                 "page.typeText" => {
@@ -311,7 +445,7 @@ async fn connect_fake_extension(
                 .unwrap();
         }
     });
-    (handle, relayed_methods, event_tx)
+    (handle, relayed_methods, event_tx, observe_blocked)
 }
 
 async fn connect_incompatible_extension(base_url: &str, token: &str) -> JoinHandle<()> {
@@ -2362,6 +2496,10 @@ async fn gates_mutations_behind_pending_dialogs_until_handled_or_closed() {
     assert_eq!(handled["result"]["receivedAccept"], true);
     assert_eq!(handled["result"]["receivedPromptText"], "confirmed");
     assert!(handled["state"]["pendingDialog"].is_null());
+    // The escape hatch is bound to the lease but never to an observation
+    // turn: refreshing a turn needs an observation the dialog forbids.
+    assert!(handled["result"]["receivedTurn"].is_null());
+    assert!(handled["result"]["receivedMoveSequence"].is_null());
 
     // With the gate lifted, page.click relays again (the fixture answers it
     // with STALE_SNAPSHOT, proving the envelope reached the extension).
@@ -2473,6 +2611,453 @@ async fn suppresses_the_auto_observe_when_a_dialog_opens_mid_action() {
         observe_relays, 0,
         "the pending dialog must suppress the automatic observation"
     );
+
+    fake.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+/// The pre-observe gate cannot close the whole window: the dialog can open
+/// between the gate and the extension receiving the relayed observation. The
+/// live 0.10.0 run hit exactly that, and the extension then answered
+/// `BLOCKED_BY_DIALOG`. That answer is a skipped observation, nothing more —
+/// the published observation, the screenshot, and the lease all survive it.
+#[tokio::test]
+async fn an_auto_observe_refused_by_a_dialog_is_a_skip_not_a_lost_observation() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let (fake, relayed_methods, _events, observe_blocked) =
+        connect_fake_extension_with_dialog_race(&base_url, &token).await;
+    let client = Client::new();
+    wait_for_tabs(&client, &base_url, &token).await;
+
+    // A first, clean observation publishes state the race must not destroy.
+    let observed: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "page.observe", "params": { "tabId": 7 } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(observed["ok"], true);
+    assert_eq!(observed["state"]["observation"]["generation"], "g1");
+
+    // The dialog opens after the server has already passed its own gate, so
+    // the auto-observe is relayed and the extension refuses it.
+    observe_blocked.store(true, Ordering::SeqCst);
+    let relayed_before = relayed_methods
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|method| method.as_str() == "page.observe")
+        .count();
+    let clicked: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.clickAt",
+            "params": { "tabId": 7, "generation": "g1", "x": 10, "y": 10 }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    // The action itself succeeded; the refused observation never turns it
+    // into a failure.
+    assert_eq!(clicked["ok"], true);
+    assert_eq!(
+        relayed_methods
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|method| method.as_str() == "page.observe")
+            .count(),
+        relayed_before + 1,
+        "the auto-observe must be relayed to reproduce the race"
+    );
+
+    let state: Value = client
+        .get(format!("{base_url}/api/state"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    // Nothing was cleared: the earlier observation, its screenshot binding,
+    // and the browser-control lease are all exactly as they were.
+    assert_eq!(state["state"]["observation"]["generation"], "g1");
+    assert_eq!(state["state"]["observation"]["tabId"], 7);
+    assert_eq!(state["state"]["browserControl"]["active"], true);
+    assert_eq!(
+        state["state"]["browserControl"]["sessionId"],
+        "control-fixture"
+    );
+
+    // It is logged as a skip, not as an error.
+    let skipped = state["state"]["activity"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| {
+            entry["method"] == "page.observe"
+                && entry["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("skipped"))
+        })
+        .cloned()
+        .expect("the refused auto-observe must be logged");
+    assert_ne!(skipped["status"], "error");
+    assert!(
+        skipped["message"]
+            .as_str()
+            .unwrap()
+            .contains("page.handleDialog")
+    );
+
+    // page.handleDialog stays usable in exactly this situation, and the very
+    // next observation publishes again once the dialog is gone.
+    let handled: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.handleDialog",
+            "params": { "tabId": 7, "accept": false }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(handled["ok"], true);
+    assert_eq!(handled["result"]["receivedAccept"], false);
+    // The discarded observation left the extension a turn ahead of the
+    // published state, so a turn-bound escape hatch would be unusable here.
+    assert!(handled["result"]["receivedTurn"].is_null());
+    assert_eq!(
+        handled["result"]["receivedControlSessionId"],
+        "control-fixture"
+    );
+    observe_blocked.store(false, Ordering::SeqCst);
+    let reobserved: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "page.observe", "params": { "tabId": 7 } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(reobserved["ok"], true);
+    assert_eq!(reobserved["state"]["observation"]["generation"], "g1");
+    assert_eq!(reobserved["state"]["browserControl"]["active"], true);
+
+    fake.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn frame_scoped_refs_relay_unchanged_and_malformed_ones_never_relay() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let (fake, relayed_methods, _events) = connect_fake_extension(&base_url, &token).await;
+    let client = Client::new();
+    wait_for_tabs(&client, &base_url, &token).await;
+
+    // A well-formed frame ref reaches the extension byte for byte.
+    let framed: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.click",
+            "params": { "tabId": 7, "ref": "g1.f2.e5", "generation": "g1" }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(framed["ok"], false);
+    assert_eq!(framed["error"]["code"], "FRAME_DETACHED");
+    assert!(
+        framed["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("ref g1.f2.e5"),
+        "the frame ref was not relayed verbatim: {}",
+        framed["error"]["message"]
+    );
+
+    let relayed_before = relayed_methods.lock().unwrap().len();
+    // Everything outside the published grammar is rejected before relay.
+    for malformed in [
+        "g1.f17.e5",
+        "g1.f0.e5",
+        "g1.f01.e5",
+        "g1.f2.f3.e5",
+        "g1.f2.e0",
+        "G1.f2.e5",
+    ] {
+        let rejected = client
+            .post(format!("{base_url}/api/v1/command"))
+            .bearer_auth(&token)
+            .json(&json!({
+                "method": "page.click",
+                "params": { "tabId": 7, "ref": malformed, "generation": "g1" }
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            rejected.status(),
+            reqwest::StatusCode::BAD_REQUEST,
+            "{malformed} was not rejected"
+        );
+        let body: Value = rejected.json().await.unwrap();
+        assert_eq!(body["taxonomy"]["code"], "invalid_request");
+    }
+    assert_eq!(
+        relayed_methods.lock().unwrap().len(),
+        relayed_before,
+        "a malformed frame ref was relayed to the extension"
+    );
+
+    // page.hover accepts the same grammar; page.batch sub-steps do too.
+    let hovered: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.hover",
+            "params": { "tabId": 7, "ref": "mfz3k2ab-a1b2c3d4.f16.e9999", "generation": "mfz3k2ab-a1b2c3d4" }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(hovered["ok"], true);
+    assert_eq!(
+        hovered["result"]["receivedRef"],
+        "mfz3k2ab-a1b2c3d4.f16.e9999"
+    );
+
+    fake.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn observation_publishes_frame_provenance_and_summary() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let (fake, _relayed_methods, _events) = connect_fake_extension(&base_url, &token).await;
+    let client = Client::new();
+    wait_for_tabs(&client, &base_url, &token).await;
+
+    let observed: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "page.observe", "params": { "tabId": 8 } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(observed["ok"], true);
+    let observation = &observed["state"]["observation"];
+    assert_eq!(observation["generation"], "g2");
+
+    // The element list stays bounded and reports that it was cut.
+    let elements = observation["elements"].as_array().unwrap();
+    assert_eq!(elements.len(), 250);
+    assert_eq!(observation["elementsTruncated"], true);
+
+    // The cap reserves a share for frame elements even though the extension
+    // appends them after 300 top-document ones: an observation that
+    // advertises a merged frame must publish refs the caller can act on.
+    let published_frame_elements = elements
+        .iter()
+        .filter(|element| element["frameRef"] == "f1")
+        .count();
+    assert_eq!(published_frame_elements, 50);
+    assert_eq!(elements.len() - published_frame_elements, 200);
+
+    // Frame provenance rides along on the frame's own elements only.
+    let framed = elements
+        .iter()
+        .find(|element| element["ref"] == "g2.f1.e1")
+        .expect("the frame element was not published");
+    assert_eq!(framed["frameRef"], "f1");
+    assert_eq!(framed["frameId"], "6A1B");
+    assert_eq!(framed["frameUrlOrigin"], "https://pay.example.test");
+    assert_eq!(framed["crossOrigin"], true);
+    assert_eq!(framed["bounds"]["x"], 125);
+    assert_eq!(framed["bounds"]["y"], 69);
+    let top = &elements[0];
+    assert_eq!(top["ref"], "g2.e1");
+    for absent in ["frameRef", "frameId", "frameUrlOrigin", "crossOrigin"] {
+        assert!(
+            top.get(absent).is_none(),
+            "a top-document element published {absent}"
+        );
+    }
+
+    // The frame list is sanitized: the malformed second entry is dropped.
+    let frames = observation["frames"].as_array().unwrap();
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0]["ref"], "f1");
+    assert_eq!(frames[0]["urlOrigin"], "https://pay.example.test");
+    assert_eq!(frames[0]["crossOrigin"], true);
+    assert_eq!(frames[0]["depth"], 1);
+    assert_eq!(frames[0]["offset"], json!({ "x": 120, "y": 64 }));
+    // A size is a size: no second origin next to `offset`.
+    assert_eq!(frames[0]["size"], json!({ "width": 380, "height": 220 }));
+    // The advertised count is what actually reached `elements`, not what the
+    // extension merged before the publication cap.
+    assert_eq!(frames[0]["elementCount"], 50);
+    assert_eq!(frames[0]["truncated"], true);
+
+    let summary = &observation["frameSummary"];
+    assert_eq!(summary["supported"], true);
+    assert_eq!(summary["mode"], "cdp-auto-attach");
+    assert_eq!(summary["ownersSeen"], 3);
+    assert_eq!(summary["attached"], 1);
+    assert_eq!(summary["merged"], 1);
+    let skipped = summary["skipped"].as_array().unwrap();
+    assert_eq!(skipped.len(), 2);
+    assert_eq!(skipped[1]["reason"], "same_process_frame");
+
+    // /api/state republishes the same bounded observation.
+    let state: Value = client
+        .get(format!("{base_url}/api/state"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let published = &state["state"]["observation"];
+    assert_eq!(published["frames"][0]["ref"], "f1");
+    assert_eq!(published["frameSummary"]["merged"], 1);
+    assert_eq!(published["elementsTruncated"], true);
+    let forged = published["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|element| element["ref"] == "g2.e999");
+    if let Some(forged) = forged {
+        assert!(
+            forged.get("crossOrigin").is_none(),
+            "a top-document element forged cross-origin provenance"
+        );
+    }
+
+    // A frameless observation is byte-identical to a pre-frame observation.
+    let plain: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "page.observe", "params": { "tabId": 7 } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let plain_observation = &plain["state"]["observation"];
+    for absent in ["frames", "frameSummary", "elementsTruncated"] {
+        assert!(
+            plain_observation.get(absent).is_none(),
+            "a frameless observation published {absent}"
+        );
+    }
+    assert!(
+        plain_observation["elements"][0]
+            .get("crossOrigin")
+            .is_none(),
+        "a frameless observation published cross-origin provenance"
+    );
+
+    fake.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn frame_failures_carry_the_frame_taxonomy() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let (fake, _relayed_methods, _events) = connect_fake_extension(&base_url, &token).await;
+    let client = Client::new();
+    wait_for_tabs(&client, &base_url, &token).await;
+
+    // A frame that changed under the action is a document change: retry after
+    // a fresh observation.
+    let detached: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.click",
+            "params": { "tabId": 7, "ref": "g1.f1.e1", "generation": "g1" }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(detached["error"]["code"], "FRAME_DETACHED");
+    assert_eq!(detached["taxonomy"]["code"], "document_changed");
+    assert_eq!(detached["taxonomy"]["retriable"], true);
+    assert_eq!(detached["taxonomy"]["recoveryHint"], "reobserve");
+
+    // A frame tree that moved is snapshot staleness.
+    let stale: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.click",
+            "params": { "tabId": 7, "ref": "g1.f1.e2", "generation": "g1" }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(stale["error"]["code"], "STALE_FRAME_TREE");
+    assert_eq!(stale["taxonomy"]["code"], "stale_snapshot");
+    assert_eq!(stale["taxonomy"]["retriable"], true);
+
+    // A refused capability is a request problem and must never be retried.
+    let unsupported: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.click",
+            "params": { "tabId": 7, "ref": "g1.f1.e3", "generation": "g1" }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(unsupported["error"]["code"], "FRAME_ACTION_UNSUPPORTED");
+    assert_eq!(unsupported["taxonomy"]["code"], "invalid_request");
+    assert_eq!(unsupported["taxonomy"]["retriable"], false);
 
     fake.abort();
     let _ = shutdown.send(());

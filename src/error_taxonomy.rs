@@ -239,6 +239,8 @@ impl Taxonomy {
 pub fn classify(legacy_code: &str) -> Taxonomy {
     let code = match legacy_code {
         "STALE_SNAPSHOT"
+        | "STALE_FRAME_TREE"
+        | "FRAME_AGENT_STALE"
         | "STALE_SCREENSHOT"
         | "COMPUTER_STALE_FRAME"
         | "COMPUTER_STALE_POINTER"
@@ -249,7 +251,9 @@ pub fn classify(legacy_code: &str) -> Taxonomy {
         "BAD_COORDINATES" | "TARGET_OUT_OF_VIEWPORT" => TaxonomyCode::OutOfBounds,
         "ELEMENT_DISABLED" | "POINTER_NOT_ARRIVED" => TaxonomyCode::NotInteractable,
         "TARGET_OCCLUDED" | "CONTROL_UI_OCCLUSION" => TaxonomyCode::Obscured,
-        "DOCUMENT_CHANGED" | "NAVIGATION_PENDING" => TaxonomyCode::DocumentChanged,
+        "DOCUMENT_CHANGED" | "NAVIGATION_PENDING" | "FRAME_DETACHED" => {
+            TaxonomyCode::DocumentChanged
+        }
         "CONTROL_REQUIRED"
         | "CONTROL_REVOKED"
         | "CONTROL_CANCELED"
@@ -289,12 +293,15 @@ pub fn classify(legacy_code: &str) -> Taxonomy {
         | "EXTENSION_CAPABILITY_UNAVAILABLE"
         | "COMPUTER_CAPABILITY_UNAVAILABLE"
         | "COMPUTER_INVALID_OBSERVATION" => TaxonomyCode::ProtocolMismatch,
-        "COMPUTER_UNSUPPORTED_PLATFORM"
+        "FRAME_AGENT_UNAVAILABLE"
+        | "COMPUTER_UNSUPPORTED_PLATFORM"
         | "COMPUTER_BACKGROUND_UNAVAILABLE"
         | "COMPUTER_SEMANTIC_UNAVAILABLE"
         | "NO_SCREENSHOT"
         | "NO_COMPUTER_SCREENSHOT" => TaxonomyCode::Unavailable,
-        "BAD_REQUEST"
+        "FRAME_ACTION_UNSUPPORTED"
+        | "FRAME_REF_MISROUTED"
+        | "BAD_REQUEST"
         | "BAD_TAB"
         | "BAD_URL"
         | "BAD_BUTTON"
@@ -347,6 +354,15 @@ mod tests {
         ("POINTER_NOT_ARRIVED", TaxonomyCode::NotInteractable),
         ("DOCUMENT_CHANGED", TaxonomyCode::DocumentChanged),
         ("NAVIGATION_PENDING", TaxonomyCode::DocumentChanged),
+        // Cross-origin frame merging and frame-scoped actions (background.js,
+        // frame-agent.js, content.js).
+        ("FRAME_DETACHED", TaxonomyCode::DocumentChanged),
+        ("STALE_FRAME_TREE", TaxonomyCode::StaleSnapshot),
+        ("FRAME_AGENT_STALE", TaxonomyCode::StaleSnapshot),
+        ("FRAME_AGENT_FAILED", TaxonomyCode::Unknown),
+        ("FRAME_AGENT_UNAVAILABLE", TaxonomyCode::Unavailable),
+        ("FRAME_ACTION_UNSUPPORTED", TaxonomyCode::InvalidRequest),
+        ("FRAME_REF_MISROUTED", TaxonomyCode::InvalidRequest),
         // Browser control lease (background.js, content.js).
         ("CONTROL_REQUIRED", TaxonomyCode::LeaseLost),
         ("CONTROL_REVOKED", TaxonomyCode::LeaseLost),

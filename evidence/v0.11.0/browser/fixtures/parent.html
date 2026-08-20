@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Cross-origin frame parent</title>
+    <style>
+      body { font: 16px system-ui, sans-serif; margin: 24px; background: #eef4f0; }
+      h1 { font-size: 22px; }
+      iframe { width: 520px; height: 220px; border: 6px solid #2f5d45; border-radius: 8px; margin-top: 16px; }
+      #parent-log { font-family: ui-monospace, monospace; }
+    </style>
+  </head>
+  <body>
+    <h1>Cross-origin frame parent</h1>
+    <p>The frame below is served from a different origin, so Chrome puts it in its own process.</p>
+    <button id="parent-button" type="button">Parent button</button>
+    <output id="parent-log">parent-ready</output>
+    <iframe src="http://127.0.0.1:8100/child.html" title="Cross origin child"></iframe>
+    <script>
+      document.getElementById('parent-button').addEventListener('click', (event) => {
+        document.getElementById('parent-log').textContent = 'parent-click:' + event.isTrusted;
+      });
+    </script>
+  </body>
+</html>

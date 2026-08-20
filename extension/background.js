@@ -9,6 +9,11 @@ import {
   normalizeAllowedHost,
   safeUrlForDisplay,
 } from "./lib.js";
+// The shared DOM core and the frame agent are imported for their source, not
+// their behaviour: the worker never runs them, it evaluates the exact same
+// text into each cross-origin frame's isolated world.
+import "./dom-core.js";
+import "./frame-agent.js";
 
 const DEFAULTS = {
   token: "",
@@ -88,6 +93,43 @@ const HUMAN_CONTROL_PAUSE_UNCERTAIN_KEY = "browserControlHumanPauseUncertain";
 const HUMAN_PAUSE_REASONS = new Set(["released_by_user", "canceled_by_user"]);
 const SECURITY_SETTING_KEYS = new Set(["token", "port", "enabled", "fullAccess", "allowedHosts"]);
 const IRREVERSIBLE_CONTENT_METHODS = new Set(["fill", "select", "scroll"]);
+// Cross-origin (out-of-process) iframe support. Every one of these budgets is
+// a hard ceiling on what a page can make the bridge attach to, evaluate in,
+// or publish; anything past a ceiling is reported as a skip instead of being
+// silently dropped.
+const FRAME_MAX_ATTACHED = 16;
+const FRAME_MAX_DEPTH = 5;
+const FRAME_ELEMENT_CAP_TOTAL = 500;
+const FRAME_TOP_ELEMENT_CAP = 400;
+const FRAME_PER_FRAME_ELEMENT_CAP = 120;
+const FRAME_OFFSET_TOLERANCE_PX = 2;
+const FRAME_SKIP_REPORT_MAX = 32;
+const FRAME_AGENT_WORLD_NAME = "__lbb_frame_agent__";
+// Observing a frame is read-only, so a third-party iframe that stops
+// answering may cost that frame's contribution and nothing else: never the
+// lease, and never an unbounded observation. The whole frame pass shares one
+// deadline and every command inside it is bounded by what is left of it.
+const FRAME_OBSERVE_BUDGET_MS = 4_000;
+const FRAME_OBSERVE_MIN_TIMEOUT_MS = 100;
+const CONTENT_SCRIPT_FILES = ["dom-core.js", "content.js"];
+// Session id -> frame record for every OOPIF target auto-attached under the
+// current lease. Cleared only by synchronouslyTakeControlLease, so no frame
+// session can outlive the lease that attached it.
+const attachedFrames = new Map();
+// Frame id -> parent frame id, learned from Page.frameAttached on whichever
+// session owns the parent document.
+const frameParents = new Map();
+const frameSkips = [];
+let frameSupport = { supported: false, probed: false, reason: "no_lease" };
+let frameAgentSource = null;
+// Frame state is deliberately worker-local and never persisted with the
+// lease: a service-worker restart loses every child session, so the next
+// frame-scoped action must fail STALE_SNAPSHOT rather than resolve a ref
+// against sessions that no longer exist.
+let frameTreeRevision = 0;
+let frameInvalidationReason = "";
+let frameSnapshot = null;
+let rootWorldContextId = null;
 let controlLease = null;
 let controlEpoch = 0;
 let lastControlRevocation = null;
@@ -856,6 +898,18 @@ function assertNoPendingDialog(method) {
   }
 }
 
+// Consulted by every boundary that is about to revoke the lease, immediately
+// before it revokes. A pending JavaScript dialog freezes the renderer, so a
+// probe taken under one proves nothing about the document: it can fail on the
+// frozen renderer, on a stale tab record, or on the dialog itself racing an
+// in-flight observation. The dialog is the actionable failure, so it resolves
+// as the non-fatal BLOCKED_BY_DIALOG and the healthy lease survives. Only a
+// failure observed with NO dialog pending may still revoke, which keeps the
+// fail-closed guarantee for a genuine document change intact.
+function assertDialogNotBlocking(boundary) {
+  if (controlLease?.pendingDialog) throw pendingDialogError(boundary);
+}
+
 async function boundedContentOperation(operation, label, authority, commandContext, timeoutMs = CONTENT_TIMEOUT_MS) {
   try {
     return await withTimeout(
@@ -916,7 +970,7 @@ async function contentRequest(tabId, payload, {
       if (authority) assertLeaseAuthority(authority, commandContext, `content ${payload.method} reinjection`);
       else assertCommandActive(commandContext, `content ${payload.method} reinjection`);
       await boundedContentOperation(
-        chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] }),
+        chrome.scripting.executeScript({ target: { tabId }, files: CONTENT_SCRIPT_FILES }),
         `content ${payload.method} reinjection`,
         authority,
         commandContext,
@@ -1027,6 +1081,14 @@ function acceptTopLevelNavigationSignal({ tabId, url = "", loaderId = "", frameI
     lease.pendingNavigation = null;
     lease.lastNavigationCommit = { url: lease.documentUrl, at: Date.now() };
     lease.viewport = null;
+    // Every isolated world, frame agent, and child session dies with the old
+    // document; the next observation re-arms auto-attach from scratch.
+    attachedFrames.clear();
+    frameParents.clear();
+    frameSnapshot = null;
+    rootWorldContextId = null;
+    frameSupport = { supported: false, probed: false, reason: "top_level_navigation" };
+    markFrameTreeChanged("top_level_navigation");
     lease.cursor = { ...lease.cursor, visible: false, updatedAt: Date.now() };
     void persistControlState().catch(() => revokeUnexpectedNavigation("navigation_state_persist_failed"));
   } else if (sameDocument) {
@@ -1059,6 +1121,9 @@ async function authorizeTopLevelNavigation(lease, authority, kind, expectedUrl, 
 }
 
 async function failChangedDocument(lease, boundary, cause) {
+  // Checked here, at the last possible moment before the revocation, so a
+  // dialog that opened AFTER this boundary started is still caught.
+  assertDialogNotBlocking(boundary);
   if (lease
     && controlLease?.sessionId === lease.sessionId
     && controlLease?.epoch === lease.epoch) {
@@ -1109,7 +1174,7 @@ async function verifyDocumentAuthority(tabId, authority, commandContext, boundar
       url: lease.documentUrl,
     };
   } catch (error) {
-    if (["DOCUMENT_CHANGED", "CONTROL_CANCELED", "COMMAND_CANCELED"].includes(error.code)) throw error;
+    if (["DOCUMENT_CHANGED", "CONTROL_CANCELED", "COMMAND_CANCELED", "BLOCKED_BY_DIALOG"].includes(error.code)) throw error;
     return failChangedDocument(lease, boundary, error);
   }
 }
@@ -1118,7 +1183,9 @@ async function verifyDocumentAuthorityAfterDispatch(tabId, authority, commandCon
   try {
     return await verifyDocumentAuthority(tabId, authority, commandContext, boundary);
   } catch (error) {
-    if (["ACTION_OUTCOME_UNKNOWN", "CDP_OUTCOME_UNKNOWN"].includes(error.code)) throw error;
+    // BLOCKED_BY_DIALOG is a non-fatal, retriable refusal, not an unknown
+    // outcome: the dialog is what the caller has to resolve.
+    if (["ACTION_OUTCOME_UNKNOWN", "CDP_OUTCOME_UNKNOWN", "BLOCKED_BY_DIALOG"].includes(error.code)) throw error;
     throw outcomeUnknownError(boundary, error);
   }
 }
@@ -1261,6 +1328,9 @@ function controlUiAcknowledged(state, expectedCaptureIds, expectedCursorVisible)
 }
 
 async function failControlUiClosed(lease, phase, cause) {
+  // A dialog-frozen renderer cannot repaint or acknowledge the overlay, so an
+  // unacknowledged indicator under a dialog is the dialog, not a lost lease.
+  assertDialogNotBlocking(phase);
   if (lease
     && controlLease?.sessionId === lease.sessionId
     && controlLease?.epoch === lease.epoch) {
@@ -1570,16 +1640,36 @@ async function initializeControlState() {
       policy: controlPolicy(recoveryConfig, recoveryTab),
     };
     controlEpoch = Math.max(controlEpoch, candidate.epoch);
-    try {
-      await initializeLeaseDocument(controlLease, recoveryTab, recoveryConfig);
-      await persistControlState();
-      scheduleHeartbeat();
-      await showControlUi();
-    } catch {
-      await stopControl("recovered_document_unverified", { requireExplicitStart: true });
-    }
+    await finishRecoveredLease(recoveryTab, recoveryConfig);
   })();
   return controlStatePromise;
+}
+
+// The tail of a worker-restart recovery, kept as its own function so the
+// restart-under-a-dialog path can be driven directly. pendingDialog is
+// persisted with the lease, so a restart can land here with the controlled
+// page still frozen behind a dialog: the document identity is answered by the
+// browser process and is still verified, but the overlay repaint that ends
+// recovery can never be acknowledged. That refusal is the dialog, not a lost
+// lease, so the recovered lease is kept and the first heartbeat after the
+// dialog is resolved repaints the indicator. A recovery that could not verify
+// the document at all keeps the fail-closed revocation, dialog or not.
+async function finishRecoveredLease(recoveryTab, recoveryConfig) {
+  try {
+    await initializeLeaseDocument(controlLease, recoveryTab, recoveryConfig);
+    await persistControlState();
+    scheduleHeartbeat();
+    await showControlUi();
+    return true;
+  } catch (error) {
+    if (error?.code === "BLOCKED_BY_DIALOG" && controlLease?.navigationReady) {
+      await persistControlState().catch(() => {});
+      scheduleHeartbeat();
+      return true;
+    }
+    await stopControl("recovered_document_unverified", { requireExplicitStart: true });
+    return false;
+  }
 }
 
 function synchronouslyTakeControlLease(reason, requireExplicitStart) {
@@ -1587,6 +1677,10 @@ function synchronouslyTakeControlLease(reason, requireExplicitStart) {
   const lease = controlLease;
   controlLease = null;
   activeControlCaptures.clear();
+  // Single choke point for frame teardown too. The verified
+  // chrome.debugger.detach that follows tears the child sessions down with
+  // the page target, so no second unverified detach path is added here.
+  clearFrameSessions();
   stopHeartbeat();
   if (!lease) return null;
   lastControlRevocation = {
@@ -1627,6 +1721,14 @@ async function releaseHeldMouseInput(key, record, { revokeOnFailure = true } = {
     }
   }
   if (revokeOnFailure) {
+    // The commonest real dialog opens inside the handler of the very element
+    // the agent clicked, so the press and its release both stall on the
+    // frozen renderer and this cleanup runs under the dialog. A release the
+    // dialog is holding proves nothing about the lease, so it resolves as the
+    // non-fatal BLOCKED_BY_DIALOG: the durable intent stays recorded and
+    // retryDialogBlockedInputRelease repeats the idempotent release the
+    // moment the dialog is resolved.
+    assertDialogNotBlocking("mouse release cleanup");
     await stopControl("mouse_release_failed", { requireExplicitStart: true });
     const error = new Error("INPUT_RELEASE_FAILED: mouse release was not acknowledged; control was revoked");
     error.code = "INPUT_RELEASE_FAILED";
@@ -1652,12 +1754,31 @@ async function releaseHeldKeyInput(key, record, { revokeOnFailure = true } = {})
     }
   }
   if (revokeOnFailure) {
+    // Same shape as the mouse release above: a key held down behind a dialog
+    // opened by its own keydown handler cannot be acknowledged, so the dialog
+    // is reported and the durable intent waits for the post-dialog retry.
+    assertDialogNotBlocking("key release cleanup");
     await stopControl("key_release_failed", { requireExplicitStart: true });
     const error = new Error("INPUT_RELEASE_FAILED: key release was not acknowledged; control was revoked");
     error.code = "INPUT_RELEASE_FAILED";
     throw error;
   }
   return false;
+}
+
+// The other half of the dialog-blocked release above: nothing is forgiven
+// permanently. Once the dialog is provably gone the renderer answers again,
+// so every intent still held for that tab repeats its idempotent release, and
+// a release that is still unacknowledged with NO dialog pending revokes
+// exactly as it always did. Safe to run twice: a cleared intent short-circuits.
+async function retryDialogBlockedInputRelease(tabId) {
+  if (!Number.isInteger(tabId) || controlLease?.tabId !== tabId || controlLease.pendingDialog) return;
+  for (const [key, record] of [...heldMouseInputs]) {
+    if (record.tabId === tabId) await releaseHeldMouseInput(key, record);
+  }
+  for (const [key, record] of [...heldKeyInputs]) {
+    if (record.tabId === tabId) await releaseHeldKeyInput(key, record);
+  }
 }
 
 async function releaseHeldInputs(tabId) {
@@ -2101,6 +2222,12 @@ async function startControl(tabId, {
     await debuggerCommand(tab.id, "Page.enable", {}, authority, commandContext);
     await debuggerCommand(tab.id, "Runtime.enable", {}, authority, commandContext);
     await initializeLeaseDocument(controlLease, tab, controlConfig, commandContext);
+    // Cross-origin frame support is opportunistic: a Chrome that refuses
+    // auto-attach or an isolated world reports frameSummary.supported false
+    // and the lease starts exactly as it did before frames existed. It is
+    // bounded by the frame budget too, so an unresponsive frame domain can
+    // cost frame support but never the start of the lease itself.
+    await enableFrameAutoAttach(tab.id, authority, commandContext, frameObserveOptions(Date.now() + FRAME_OBSERVE_BUDGET_MS));
   } catch (error) {
     await stopControl("initialization_failed", { requireExplicitStart: true });
     throw error;
@@ -2196,21 +2323,29 @@ async function captureTab(tab, commandContext = null, existingAuthority = null) 
   } finally {
     const remainingCaptureIds = endControlCapture(tab.id, captureId);
     let restored = false;
-    try {
-      const endState = await contentRequest(tab.id, {
-        method: "control.capture.end",
-        captureId,
-        activeCaptureIds: remainingCaptureIds,
-        controlSessionId: authority.sessionId,
-        controlEpoch: authority.epoch,
-      }, { authority, commandContext });
-      restored = controlUiAcknowledged(endState, remainingCaptureIds, lease.cursor.visible);
-    } catch {
-      restored = false;
+    // A dialog that opened during the capture freezes the renderer: neither
+    // the capture-end message nor the overlay repaint can be answered, so
+    // both would only burn their content timeout. The overlay is repainted by
+    // the next heartbeat or observation once the dialog is resolved, and the
+    // capture itself is discarded as BLOCKED_BY_DIALOG by the caller.
+    const dialogBlocked = Boolean(controlLease?.pendingDialog);
+    if (!dialogBlocked) {
+      try {
+        const endState = await contentRequest(tab.id, {
+          method: "control.capture.end",
+          captureId,
+          activeCaptureIds: remainingCaptureIds,
+          controlSessionId: authority.sessionId,
+          controlEpoch: authority.epoch,
+        }, { authority, commandContext });
+        restored = controlUiAcknowledged(endState, remainingCaptureIds, lease.cursor.visible);
+      } catch {
+        restored = false;
+      }
     }
     const leaseStillActive = controlLease?.sessionId === authority.sessionId
       && controlLease?.epoch === authority.epoch;
-    if (leaseStillActive && !restored) {
+    if (leaseStillActive && !restored && !dialogBlocked) {
       try {
         await showControlUi(controlLease);
         restored = true;
@@ -2221,19 +2356,40 @@ async function captureTab(tab, commandContext = null, existingAuthority = null) 
   }
 }
 
-async function debuggerCommand(tabId, method, params, authority = null, commandContext = null) {
+// One CDP command's timeout. The default is the lease-fatal
+// DEBUGGER_TIMEOUT_MS; a caller that carries a `deadlineAt` (only the
+// read-only frame-observation pass does) is bounded by what is left of that
+// shared deadline instead, so a page full of slow iframes cannot stretch one
+// observation past its budget one command at a time.
+function commandTimeoutMs(options) {
+  const deadlineAt = Number(options?.deadlineAt);
+  if (!Number.isFinite(deadlineAt)) return DEBUGGER_TIMEOUT_MS;
+  const remaining = deadlineAt - Date.now();
+  return Math.min(DEBUGGER_TIMEOUT_MS, Math.max(FRAME_OBSERVE_MIN_TIMEOUT_MS, remaining));
+}
+
+// `sessionId` is the one optional trailing argument that makes this the
+// single CDP call site for both the page target and every auto-attached
+// cross-origin frame target, so the lease, cancellation, timeout, and
+// CDP_OUTCOME_UNKNOWN guards below apply to child sessions unchanged.
+async function debuggerCommand(tabId, method, params, authority = null, commandContext = null, sessionId = null, options = null) {
   if (authority) assertLeaseAuthority(authority, commandContext, `CDP ${method} dispatch`);
   else assertCommandActive(commandContext, `CDP ${method} dispatch`);
-  const operation = chrome.debugger.sendCommand({ tabId }, method, params);
+  const target = sessionId ? { tabId, sessionId } : { tabId };
+  const operation = chrome.debugger.sendCommand(target, method, params);
   operation.catch(() => {});
   let result;
   try {
-    result = await withTimeout(operation, DEBUGGER_TIMEOUT_MS, method);
+    result = await withTimeout(operation, commandTimeoutMs(options), method);
   } catch (error) {
     if (error.code === "DEBUGGER_TIMEOUT") {
       // A pending dialog freezes the renderer, so a CDP timeout under it
       // belongs to the dialog: keep the lease and report the dialog instead.
       if (controlLease?.pendingDialog) throw pendingDialogError(`CDP ${method}`);
+      // A read-only frame observation dispatches no input, navigates nothing,
+      // and writes no value, so its outcome is never in doubt: a frame that
+      // stops answering is skipped, not paid for with the whole lease.
+      if (options?.timeoutIsFatal === false) throw frameObserveTimeoutError(method, error);
       await stopControl(`cdp_timeout:${method}`, { requireExplicitStart: true });
       const unknown = new Error(`CDP_OUTCOME_UNKNOWN: ${method} timed out; control was revoked and automatic retry is unsafe`);
       unknown.code = "CDP_OUTCOME_UNKNOWN";
@@ -2245,6 +2401,972 @@ async function debuggerCommand(tabId, method, params, authority = null, commandC
   if (authority) assertLeaseAuthorityAfterDispatch(authority, commandContext, `CDP ${method}`);
   else assertCommandActive(commandContext, `CDP ${method} completion`);
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Cross-origin (out-of-process) iframe support
+// ---------------------------------------------------------------------------
+//
+// Only `page.click` and `page.hover` act inside a frame. Everything else
+// refuses a frame-scoped ref with FRAME_ACTION_UNSUPPORTED rather than
+// silently acting on the wrong document.
+//
+// Every geometry helper below is pure and Node-testable; every CDP helper
+// routes through debuggerCommand with a child `sessionId`, so the lease,
+// cancellation, and timeout guards apply unchanged.
+
+function frameOriginOf(rawUrl) {
+  try {
+    return new URL(String(rawUrl || "")).origin;
+  } catch {
+    return "";
+  }
+}
+
+function frameDetachedError(boundary) {
+  const error = new Error(`FRAME_DETACHED: the frame that holds the target changed during ${boundary}; observe the page again`);
+  error.code = "FRAME_DETACHED";
+  return error;
+}
+
+function staleFrameTreeError(detail) {
+  const error = new Error(`STALE_FRAME_TREE: ${detail}; observe the page again before acting`);
+  error.code = "STALE_FRAME_TREE";
+  return error;
+}
+
+// A read-only frame-observation command that ran out of the observation's
+// shared deadline. It is deliberately NOT in rethrowLeaseFatalFrameError's
+// list: it becomes one `frame_timeout` skip, never a revoked lease.
+function frameObserveTimeoutError(method, cause) {
+  const error = new Error(`FRAME_OBSERVE_TIMEOUT: ${method} did not answer within the frame observation budget`);
+  error.code = "FRAME_OBSERVE_TIMEOUT";
+  error.cause = cause;
+  return error;
+}
+
+// The frame-observation call options: bounded by the pass's shared deadline
+// and never lease-fatal on timeout.
+function frameObserveOptions(deadlineAt) {
+  return { deadlineAt, timeoutIsFatal: false };
+}
+
+// Timeouts are reported as themselves; anything else keeps the caller's own
+// diagnosis, so a skip never mislabels why a frame was dropped.
+function frameSkipReasonFor(error, fallback) {
+  return error?.code === "FRAME_OBSERVE_TIMEOUT" ? "frame_timeout" : fallback;
+}
+
+// A lease-fatal CDP failure must keep its own identity: swallowing it into a
+// frame skip would report a healthy observation over a revoked lease.
+function rethrowLeaseFatalFrameError(error) {
+  if (["CONTROL_CANCELED", "COMMAND_CANCELED", "DOCUMENT_CHANGED", "ACTION_OUTCOME_UNKNOWN", "CDP_OUTCOME_UNKNOWN", "BLOCKED_BY_DIALOG"].includes(error?.code)) {
+    throw error;
+  }
+}
+
+function recordFrameSkip(entry) {
+  if (frameSkips.length >= FRAME_SKIP_REPORT_MAX) return;
+  frameSkips.push({
+    urlOrigin: String(entry?.urlOrigin ?? "").slice(0, 300),
+    reason: String(entry?.reason ?? "unknown").slice(0, 40),
+  });
+}
+
+function markFrameTreeChanged(reason) {
+  frameTreeRevision += 1;
+  frameInvalidationReason = `the frame tree changed: ${reason}`;
+}
+
+function clearFrameSessions() {
+  attachedFrames.clear();
+  frameParents.clear();
+  frameSkips.length = 0;
+  frameSnapshot = null;
+  rootWorldContextId = null;
+  frameSupport = { supported: false, probed: false, reason: "no_lease" };
+}
+
+// Mirrors content.js's assertFresh exactly: same STALE_SNAPSHOT code, same
+// coaching sentence, so a frame-tree change invalidates a snapshot the same
+// way a document mutation does.
+function assertFrameSnapshotFresh(generation) {
+  if (!frameSnapshot || frameSnapshot.generation !== generation) {
+    throw new Error("STALE_SNAPSHOT: observe the page again before acting");
+  }
+  if (frameSnapshot.frameTreeRevision !== frameTreeRevision) {
+    throw new Error(`STALE_SNAPSHOT: ${frameInvalidationReason}; observe the page again before acting`);
+  }
+}
+
+// The three-segment frame ref grammar, parsed only here. `<generation>` is
+// always the top observation generation, so a two-segment ref stays exactly
+// the legacy `<generation>.<element>` shape with no ambiguity.
+function parseFrameRef(ref) {
+  const parts = String(ref ?? "").split(".");
+  if (parts.length !== 3) return null;
+  const [embeddedGeneration, frameKey, elementKey] = parts;
+  if (!/^[a-z0-9-]{1,64}$/.test(embeddedGeneration)) return null;
+  if (!/^f([1-9]|1[0-6])$/.test(frameKey)) return null;
+  if (!/^e[1-9][0-9]{0,3}$/.test(elementKey)) return null;
+  return { embeddedGeneration, frameKey, elementKey };
+}
+
+function assertTopLevelRef(ref, method) {
+  if (parseFrameRef(ref)) {
+    throw new Error(`FRAME_ACTION_UNSUPPORTED: ${method} cannot act inside a cross-origin frame; only page.click and page.hover accept frame-scoped refs`);
+  }
+}
+
+// A superseded generation fails with coaching before any frame map lookup,
+// exactly like the top document's epoch-embedded refs.
+function resolveFrameRecord(ref, requestedGeneration) {
+  const parsed = parseFrameRef(ref);
+  if (!parsed) {
+    throw new Error("FRAME_REF_MISROUTED: this ref is not a frame-scoped element reference");
+  }
+  const currentGeneration = frameSnapshot?.generation ?? "";
+  if (parsed.embeddedGeneration !== currentGeneration) {
+    throw new Error(`STALE_REF: snapshot ${parsed.embeddedGeneration} superseded by ${currentGeneration}; observe the page again and use fresh refs`);
+  }
+  assertFrameSnapshotFresh(requestedGeneration);
+  const record = frameSnapshot.frames.get(parsed.frameKey);
+  if (!record || record.detached || record.navigated) {
+    throw frameDetachedError("frame reference resolution");
+  }
+  return { record, key: parsed.elementKey };
+}
+
+// Axis-aligned rectangle of one CDP box-model quad. `null` for any quad that
+// is not eight finite numbers, so a bad measurement can never be mistaken for
+// the rectangle at (0, 0).
+function quadRect(quad) {
+  if (!Array.isArray(quad) || quad.length !== 8) return null;
+  const xs = [Number(quad[0]), Number(quad[2]), Number(quad[4]), Number(quad[6])];
+  const ys = [Number(quad[1]), Number(quad[3]), Number(quad[5]), Number(quad[7])];
+  if (xs.some((value) => !Number.isFinite(value))) return null;
+  if (ys.some((value) => !Number.isFinite(value))) return null;
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
+}
+
+// Top-left of the owner iframe's content quad, in the parent frame's own
+// viewport space, which is the only origin coordinate translation may use.
+// `border` carries the owner's BORDER box from the same measurement, because
+// that — not the content box — is what getBoundingClientRect() reports: the
+// verification probe must compare like with like, or a bordered or padded
+// iframe reads as permanently moved.
+function ownerContentOrigin(boxModel) {
+  const content = quadRect(boxModel?.model?.content);
+  if (!content) return null;
+  return {
+    x: content.x,
+    y: content.y,
+    width: Number(boxModel.model.width) || 0,
+    height: Number(boxModel.model.height) || 0,
+    border: quadRect(boxModel.model.border),
+  };
+}
+
+// True when a freshly measured owner box differs from the remembered one by
+// more than the tolerance in any dimension, and true for any missing or
+// non-finite measurement, so an unmeasurable owner always fails closed.
+function frameOwnerBoxShifted(measured, remembered) {
+  if (!measured || !remembered) return true;
+  for (const key of ["x", "y", "width", "height"]) {
+    const left = Number(measured[key]);
+    const right = Number(remembered[key]);
+    if (!Number.isFinite(left) || !Number.isFinite(right)) return true;
+    if (Math.abs(left - right) > FRAME_OFFSET_TOLERANCE_PX) return true;
+  }
+  return false;
+}
+
+// frameOffset(F) = frameOffset(parent(F)) + ownerContentTopLeft(F), one
+// addition per out-of-process boundary. In-process frames contribute nothing
+// because they are never attached as their own target.
+function accumulateFrameOffset(record, records) {
+  let offset = { x: 0, y: 0 };
+  let current = record;
+  for (let depth = 0; current; depth += 1) {
+    if (depth > FRAME_MAX_DEPTH) throw staleFrameTreeError("frame nesting exceeded the supported depth");
+    if (!current.ownerOrigin) throw staleFrameTreeError("a frame owner element is unresolved");
+    offset = { x: offset.x + current.ownerOrigin.x, y: offset.y + current.ownerOrigin.y };
+    current = current.parentSessionId ? records.get(current.parentSessionId) : null;
+  }
+  return offset;
+}
+
+function translateBounds(bounds, offset) {
+  return {
+    x: Math.round(Number(bounds?.x ?? 0) + Number(offset?.x ?? 0)),
+    y: Math.round(Number(bounds?.y ?? 0) + Number(offset?.y ?? 0)),
+    width: Math.round(Number(bounds?.width ?? 0)),
+    height: Math.round(Number(bounds?.height ?? 0)),
+  };
+}
+
+function intersects(left, right) {
+  return left.x < right.x + right.width
+    && left.x + left.width > right.x
+    && left.y < right.y + right.height
+    && left.y + left.height > right.y;
+}
+
+// A frame element counts as reachable only when all three hold: it is inside
+// its own frame's viewport, inside the frame's visible box on the page, and
+// inside the top-level viewport.
+function frameElementInViewport(translated, frameLocalInViewport, frameBox, viewport) {
+  return Boolean(frameLocalInViewport)
+    && intersects(translated, frameBox)
+    && intersects(translated, { x: 0, y: 0, width: Number(viewport?.width) || 0, height: Number(viewport?.height) || 0 });
+}
+
+function frameBoxOf(record) {
+  return {
+    x: Number(record?.offset?.x) || 0,
+    y: Number(record?.offset?.y) || 0,
+    width: Number(record?.ownerOrigin?.width) || 0,
+    height: Number(record?.ownerOrigin?.height) || 0,
+  };
+}
+
+function frameAncestors(record) {
+  const ancestors = [];
+  let current = record?.parentSessionId ? attachedFrames.get(record.parentSessionId) : null;
+  for (let depth = 0; current && depth <= FRAME_MAX_DEPTH; depth += 1) {
+    ancestors.push(current);
+    current = current.parentSessionId ? attachedFrames.get(current.parentSessionId) : null;
+  }
+  return ancestors;
+}
+
+// The isolated world that owns the <iframe> element itself. That is not
+// always the session's main frame: a cross-origin frame can be embedded by an
+// in-process iframe, whose document needs its own world before the owner can
+// be resolved and hit-tested.
+function frameOwnerWorldContextId(record) {
+  return Number.isInteger(record?.ownerWorldContextId) ? record.ownerWorldContextId : null;
+}
+
+function frameDepthOf(record, records) {
+  let depth = 1;
+  let current = record?.parentSessionId ? records.get(record.parentSessionId) : null;
+  while (current) {
+    depth += 1;
+    if (depth > FRAME_MAX_DEPTH + 1) return depth;
+    current = current.parentSessionId ? records.get(current.parentSessionId) : null;
+  }
+  return depth;
+}
+
+function collectTreeFrames(node, sessionId, into) {
+  if (!node?.frame?.id) return;
+  into.set(node.frame.id, sessionId);
+  for (const child of node.childFrames ?? []) collectTreeFrames(child, sessionId, into);
+}
+
+// Depth-first over the frame trees, which is owner-element document order:
+// the same page observed twice assigns the same f<k> to the same frame.
+function orderFrameRecords(rootTree, records, treesBySession) {
+  const byFrameId = new Map();
+  for (const record of records) {
+    if (record.frameId) byFrameId.set(record.frameId, record);
+  }
+  const ordered = [];
+  const seen = new Set();
+  const visit = (node) => {
+    for (const child of node?.childFrames ?? []) {
+      const record = byFrameId.get(child.frame?.id);
+      if (record && !seen.has(record)) {
+        seen.add(record);
+        ordered.push(record);
+        visit(treesBySession.get(record.sessionId));
+      }
+      visit(child);
+    }
+  };
+  visit(rootTree);
+  for (const record of records) {
+    if (!seen.has(record)) {
+      seen.add(record);
+      ordered.push(record);
+    }
+  }
+  return ordered;
+}
+
+// Pure merge of the top-document snapshot with the per-frame observations.
+// Budgets are enforced here and every dropped frame or element is reported.
+function mergeFrameObservations(topSnapshot, frameResults, sessionSkips = [], support = {}) {
+  const generation = String(topSnapshot?.generation ?? "");
+  const topElements = Array.isArray(topSnapshot?.elements) ? topSnapshot.elements : [];
+  const owners = Array.isArray(topSnapshot?.frameOwners) ? topSnapshot.frameOwners : [];
+  const results = Array.isArray(frameResults) ? frameResults : [];
+  const skipped = [...sessionSkips];
+  const pushSkip = (urlOrigin, reason) => {
+    if (skipped.length >= FRAME_SKIP_REPORT_MAX) return;
+    skipped.push({ urlOrigin: String(urlOrigin ?? "").slice(0, 300), reason });
+  };
+
+  const accepted = [];
+  for (const result of results) {
+    if (accepted.length >= FRAME_MAX_ATTACHED) {
+      pushSkip(result?.urlOrigin, "budget_frames");
+      continue;
+    }
+    accepted.push(result);
+  }
+
+  const topCap = accepted.length > 0 ? FRAME_TOP_ELEMENT_CAP : FRAME_ELEMENT_CAP_TOTAL;
+  const elements = topElements.slice(0, topCap);
+  let elementsDropped = Math.max(0, topElements.length - elements.length);
+  let remaining = Math.max(0, FRAME_ELEMENT_CAP_TOTAL - elements.length);
+  const frames = [];
+  for (const result of accepted) {
+    const local = Array.isArray(result?.elements) ? result.elements : [];
+    if (remaining <= 0) {
+      pushSkip(result?.urlOrigin, "budget_elements");
+      elementsDropped += local.length;
+      continue;
+    }
+    const take = Math.min(FRAME_PER_FRAME_ELEMENT_CAP, remaining, local.length);
+    const reference = `f${frames.length + 1}`;
+    for (let index = 0; index < take; index += 1) {
+      // The frame-local key never leaves the extension: the published ref is
+      // the only address, and a merged element carries exactly the shape a
+      // top-document element does plus its frame provenance.
+      const { key, proof, ...published } = local[index];
+      elements.push({
+        ...published,
+        ref: `${generation}.${reference}.${key}`,
+        frameRef: reference,
+        frameId: String(result.frameId ?? ""),
+        frameUrlOrigin: String(result.urlOrigin ?? ""),
+        crossOrigin: true,
+      });
+    }
+    const truncated = Boolean(result?.truncated) || local.length > take;
+    elementsDropped += Math.max(0, local.length - take);
+    remaining -= take;
+    frames.push({
+      ref: reference,
+      frameId: String(result.frameId ?? ""),
+      urlOrigin: String(result.urlOrigin ?? ""),
+      crossOrigin: true,
+      depth: Number(result.depth) || 1,
+      offset: { x: Math.round(Number(result?.offset?.x) || 0), y: Math.round(Number(result?.offset?.y) || 0) },
+      size: {
+        width: Math.round(Number(result?.size?.width) || 0),
+        height: Math.round(Number(result?.size?.height) || 0),
+      },
+      elementCount: take,
+      truncated,
+    });
+    if (result.record) result.record.ref = reference;
+  }
+
+  // Every owner element the top document reported that never produced its own
+  // attached target is named, so the deferred same-process case stays visible.
+  const unmatched = new Map();
+  for (const result of results) {
+    const origin = String(result?.urlOrigin ?? "");
+    unmatched.set(origin, (unmatched.get(origin) ?? 0) + 1);
+  }
+  for (const owner of owners) {
+    const origin = String(owner?.origin ?? "");
+    const available = unmatched.get(origin) ?? 0;
+    if (available > 0) {
+      unmatched.set(origin, available - 1);
+      continue;
+    }
+    pushSkip(origin, "same_process_frame");
+  }
+
+  return {
+    elements,
+    frames,
+    frameSummary: {
+      supported: support.supported !== false,
+      mode: "cdp-auto-attach",
+      reason: String(support.reason ?? ""),
+      ownersSeen: owners.length,
+      attached: Number(support.attached) || 0,
+      merged: frames.length,
+      elementsDropped,
+      skipped: skipped.slice(0, FRAME_SKIP_REPORT_MAX),
+    },
+  };
+}
+
+// True when an observation has nothing whatsoever to report about frames:
+// no owner element in the top document, nothing attached, nothing merged, and
+// nothing skipped.
+function frameObservationIsSilent(merged) {
+  const summary = merged?.frameSummary;
+  return Boolean(summary)
+    && merged.frames.length === 0
+    && summary.ownersSeen === 0
+    && summary.attached === 0
+    && summary.skipped.length === 0;
+}
+
+// The installable frame-agent source, built once per worker lifetime from the
+// packaged modules. Nothing is fetched and neither file is web accessible.
+function loadFrameAgentSource() {
+  if (frameAgentSource) return frameAgentSource;
+  frameAgentSource = `${globalThis.__LBB_DOM_CORE_SOURCE__()}\n${globalThis.__LBB_FRAME_AGENT_SOURCE__()}`;
+  return frameAgentSource;
+}
+
+async function detachFrameTarget(tabId, sessionId, reason) {
+  await bestEffortDebuggerRelease(
+    tabId,
+    "Target.detachFromTarget",
+    { sessionId },
+    `frame target detach:${reason}`,
+  );
+  return null;
+}
+
+// Auto-attached targets are filtered the moment they arrive: anything that is
+// not an iframe of the leased tab is detached immediately, so the lease never
+// silently widens past what SECURITY.md documents.
+async function recordAttachedTarget(tabId, sessionId, targetInfo) {
+  if (!sessionId || !targetInfo) return null;
+  if (!controlLease || controlLease.tabId !== tabId) return detachFrameTarget(tabId, sessionId, "no_lease");
+  if (targetInfo.type !== "iframe") return detachFrameTarget(tabId, sessionId, "non_iframe_target");
+  const url = String(targetInfo.url ?? "");
+  const urlOrigin = frameOriginOf(url);
+  if (attachedFrames.size >= FRAME_MAX_ATTACHED) {
+    recordFrameSkip({ urlOrigin, reason: "budget_frames" });
+    return detachFrameTarget(tabId, sessionId, "budget_frames");
+  }
+  if (!url || url === "about:blank") {
+    recordFrameSkip({ urlOrigin, reason: "blank_document" });
+    return detachFrameTarget(tabId, sessionId, "blank_document");
+  }
+  const record = {
+    sessionId: String(sessionId),
+    targetId: String(targetInfo.targetId ?? ""),
+    tabId,
+    url,
+    urlOrigin,
+    frameId: "",
+    loaderId: "",
+    parentFrameId: "",
+    parentSessionId: null,
+    depth: 1,
+    ref: "",
+    ownerOrigin: null,
+    ownerBackendNodeId: null,
+    offset: null,
+    worldContextId: null,
+    ownerWorldContextId: null,
+    agentNonce: "",
+    agentGeneration: "",
+    probed: false,
+    detached: false,
+    navigated: false,
+    tree: null,
+  };
+  attachedFrames.set(record.sessionId, record);
+  markFrameTreeChanged("frame_attached");
+  return record;
+}
+
+// Never fails the lease: a Chrome that refuses auto-attach or an isolated
+// world just reports frameSummary.supported === false, and a Chrome that is
+// merely slow to answer runs out of the frame budget the same way.
+async function enableFrameAutoAttach(tabId, authority, commandContext, options) {
+  try {
+    await debuggerCommand(
+      tabId,
+      "Target.setAutoAttach",
+      { autoAttach: true, waitForDebuggerOnStart: false, flatten: true },
+      authority,
+      commandContext,
+      null,
+      options,
+    );
+    await debuggerCommand(tabId, "DOM.enable", {}, authority, commandContext, null, options);
+    await debuggerCommand(tabId, "DOM.getDocument", { depth: 0 }, authority, commandContext, null, options);
+    const world = await debuggerCommand(
+      tabId,
+      "Page.createIsolatedWorld",
+      { frameId: controlLease?.frameId, worldName: FRAME_AGENT_WORLD_NAME, grantUniveralAccess: false },
+      authority,
+      commandContext,
+      null,
+      options,
+    );
+    const contextId = Number(world?.executionContextId);
+    if (!Number.isInteger(contextId)) throw new Error("FRAME_AGENT_UNAVAILABLE: the top document refused a dedicated isolated world");
+    rootWorldContextId = contextId;
+    frameSupport = { supported: true, probed: true, reason: "" };
+    return true;
+  } catch (error) {
+    rethrowLeaseFatalFrameError(error);
+    rootWorldContextId = null;
+    frameSupport = { supported: false, probed: true, reason: "auto_attach_unavailable" };
+    return false;
+  }
+}
+
+// The discriminating routing probe. A Chrome whose chrome.debugger ignores an
+// unknown `sessionId` key answers with the ROOT frame tree, which would be
+// merged as if it were the iframe's; requiring the child's own target id back
+// is the only thing that tells the two apart. Never weaken this to a
+// truthiness check.
+async function probeFrameSession(tabId, record, authority, commandContext, options) {
+  await debuggerCommand(tabId, "Page.enable", {}, authority, commandContext, record.sessionId, options);
+  const tree = await debuggerCommand(tabId, "Page.getFrameTree", {}, authority, commandContext, record.sessionId, options);
+  const frame = tree?.frameTree?.frame;
+  if (!frame?.id || frame.id !== record.targetId) return null;
+  record.frameId = frame.id;
+  record.loaderId = String(frame.loaderId ?? "");
+  record.url = String(frame.url ?? record.url);
+  record.urlOrigin = frameOriginOf(record.url);
+  record.parentFrameId = String(frame.parentId ?? frameParents.get(frame.id) ?? "");
+  record.probed = true;
+  record.tree = tree.frameTree;
+  return tree.frameTree;
+}
+
+async function prepareOwnerSession(tabId, sessionId, authority, commandContext, prepared, options) {
+  const key = sessionId ?? "";
+  if (prepared.has(key)) return;
+  await debuggerCommand(tabId, "DOM.enable", {}, authority, commandContext, sessionId, options);
+  await debuggerCommand(tabId, "DOM.getDocument", { depth: 0 }, authority, commandContext, sessionId, options);
+  prepared.add(key);
+}
+
+async function resolveOwnerWorld(tabId, record, authority, commandContext, options) {
+  if (!record.parentSessionId && record.parentFrameId === controlLease?.frameId) return rootWorldContextId;
+  const parent = record.parentSessionId ? attachedFrames.get(record.parentSessionId) : null;
+  if (parent?.frameId === record.parentFrameId && Number.isInteger(parent.worldContextId)) {
+    return parent.worldContextId;
+  }
+  const world = await debuggerCommand(
+    tabId,
+    "Page.createIsolatedWorld",
+    { frameId: record.parentFrameId, worldName: FRAME_AGENT_WORLD_NAME, grantUniveralAccess: false },
+    authority,
+    commandContext,
+    record.parentSessionId,
+    options,
+  );
+  const contextId = Number(world?.executionContextId);
+  return Number.isInteger(contextId) ? contextId : null;
+}
+
+// `options` is null on the action path, where a CDP timeout keeps its
+// lease-fatal meaning, and carries the observation deadline on the read-only
+// path, where it does not.
+async function measureFrameOwner(tabId, record, authority, commandContext, options = null) {
+  const owner = await debuggerCommand(
+    tabId,
+    "DOM.getFrameOwner",
+    { frameId: record.frameId },
+    authority,
+    commandContext,
+    record.parentSessionId,
+    options,
+  );
+  const backendNodeId = Number(owner?.backendNodeId);
+  if (!Number.isInteger(backendNodeId)) return null;
+  record.ownerBackendNodeId = backendNodeId;
+  const boxModel = await debuggerCommand(
+    tabId,
+    "DOM.getBoxModel",
+    { backendNodeId },
+    authority,
+    commandContext,
+    record.parentSessionId,
+    options,
+  );
+  return ownerContentOrigin(boxModel);
+}
+
+async function installFrameAgent(tabId, record, authority, commandContext, options) {
+  const world = await debuggerCommand(
+    tabId,
+    "Page.createIsolatedWorld",
+    { frameId: record.frameId, worldName: FRAME_AGENT_WORLD_NAME, grantUniveralAccess: false },
+    authority,
+    commandContext,
+    record.sessionId,
+    options,
+  );
+  const contextId = Number(world?.executionContextId);
+  if (!Number.isInteger(contextId)) throw new Error("FRAME_AGENT_UNAVAILABLE: the frame refused a dedicated isolated world");
+  record.worldContextId = contextId;
+  const source = loadFrameAgentSource();
+  const evaluated = await debuggerCommand(
+    tabId,
+    "Runtime.evaluate",
+    {
+      contextId,
+      returnByValue: true,
+      awaitPromise: false,
+      expression: `${source}\n;globalThis.__LBB_FRAME_AGENT__.call({ method: "install" });`,
+    },
+    authority,
+    commandContext,
+    record.sessionId,
+    options,
+  );
+  const response = evaluated?.result?.value;
+  if (!response?.ok || !response.result?.nonce) {
+    throw new Error(`FRAME_AGENT_UNAVAILABLE: the frame agent did not install (${String(response?.error ?? "no result")})`);
+  }
+  record.agentNonce = String(response.result.nonce);
+  record.agentGeneration = "";
+  return record.agentNonce;
+}
+
+// The child-session analogue of contentRequest, deliberately without the
+// reinjection retry: a missing agent is FRAME_DETACHED, never a silent
+// reinstall in the middle of an action.
+async function frameContentRequest(tabId, record, payload, { authority = null, commandContext = null, options = null } = {}) {
+  if (!record?.worldContextId || !record.agentNonce) throw frameDetachedError(`frame ${payload.method}`);
+  if (record.detached || record.navigated) throw frameDetachedError(`frame ${payload.method}`);
+  const request = { ...payload, nonce: record.agentNonce };
+  const evaluated = await debuggerCommand(
+    tabId,
+    "Runtime.evaluate",
+    {
+      contextId: record.worldContextId,
+      returnByValue: true,
+      awaitPromise: false,
+      expression: `globalThis.__LBB_FRAME_AGENT__.call(${JSON.stringify(request)});`,
+    },
+    authority,
+    commandContext,
+    record.sessionId,
+    options,
+  );
+  if (evaluated?.exceptionDetails) throw new Error("FRAME_AGENT_FAILED: the frame agent threw while answering");
+  const response = evaluated?.result?.value;
+  if (!response) throw new Error("FRAME_AGENT_UNAVAILABLE: the frame agent did not answer");
+  if (!response.ok) throw new Error(String(response.error || "FRAME_AGENT_FAILED: the frame agent refused the request"));
+  return response.result;
+}
+
+// The frame analogue of verifyDocumentAuthority, run before and after every
+// frame-scoped side effect. Step 5's owner hit test is what makes the whole
+// coordinate chain self-verifying: a wrong coordinate-space assumption fails
+// closed here instead of clicking the wrong thing.
+async function verifyFrameAuthority(tabId, record, authority, commandContext, boundary, point = null) {
+  assertLeaseAuthority(authority, commandContext, `${boundary} frame precheck`);
+  if (!record || record.detached || record.navigated) throw frameDetachedError(boundary);
+  const tree = await debuggerCommand(tabId, "Page.getFrameTree", {}, authority, commandContext, record.sessionId);
+  const frame = tree?.frameTree?.frame;
+  if (frame?.id !== record.frameId
+    || frame?.loaderId !== record.loaderId
+    || !sameDocumentUrl(frame?.url, record.url)) {
+    throw frameDetachedError(boundary);
+  }
+  for (const ancestor of frameAncestors(record)) {
+    if (ancestor.detached || ancestor.navigated) throw staleFrameTreeError(`${boundary}: an ancestor frame changed`);
+    const ancestorTree = await debuggerCommand(tabId, "Page.getFrameTree", {}, authority, commandContext, ancestor.sessionId);
+    if (ancestorTree?.frameTree?.frame?.loaderId !== ancestor.loaderId) {
+      throw staleFrameTreeError(`${boundary}: an ancestor frame navigated`);
+    }
+    // An ancestor that moves shifts every descendant by the same delta, and
+    // the re-measurement of the target frame below cannot see it: that
+    // measurement is taken INSIDE the ancestor, whose local layout did not
+    // change at all. Every ancestor owner is therefore re-measured too, or a
+    // click at depth 2 or deeper lands at a stale top-level point instead of
+    // being refused.
+    const ancestorOrigin = await measureFrameOwner(tabId, ancestor, authority, commandContext);
+    if (!ancestorOrigin) throw staleFrameTreeError(`${boundary}: an ancestor frame owner element is unresolved`);
+    if (frameOwnerBoxShifted(ancestorOrigin, ancestor.ownerOrigin)) {
+      throw staleFrameTreeError(`${boundary}: an ancestor frame owner element moved`);
+    }
+  }
+  const origin = await measureFrameOwner(tabId, record, authority, commandContext);
+  if (!origin) throw staleFrameTreeError(`${boundary}: the frame owner element is unresolved`);
+  if (Math.abs(origin.width - (record.ownerOrigin?.width ?? -1)) > FRAME_OFFSET_TOLERANCE_PX
+    || Math.abs(origin.height - (record.ownerOrigin?.height ?? -1)) > FRAME_OFFSET_TOLERANCE_PX) {
+    throw staleFrameTreeError(`${boundary}: the frame owner element resized`);
+  }
+  const offset = accumulateFrameOffset({ ...record, ownerOrigin: origin }, attachedFrames);
+  if (Math.abs(offset.x - (record.offset?.x ?? Number.NaN)) > FRAME_OFFSET_TOLERANCE_PX
+    || Math.abs(offset.y - (record.offset?.y ?? Number.NaN)) > FRAME_OFFSET_TOLERANCE_PX) {
+    throw staleFrameTreeError(`${boundary}: the frame owner element moved`);
+  }
+  await verifyFrameOwnerHitTest(tabId, record, origin, offset, authority, commandContext, boundary, point);
+  return { offset, ownerOrigin: origin };
+}
+
+async function verifyFrameOwnerHitTest(tabId, record, origin, offset, authority, commandContext, boundary, point) {
+  const contextId = frameOwnerWorldContextId(record);
+  if (!Number.isInteger(contextId)) throw staleFrameTreeError(`${boundary}: no isolated world can verify the frame owner element`);
+  if (!origin?.border) throw staleFrameTreeError(`${boundary}: the frame owner element reported no border box to verify`);
+  const parentOffsetX = offset.x - origin.x;
+  const parentOffsetY = offset.y - origin.y;
+  const localX = point ? Number(point.x) - parentOffsetX : origin.x + origin.width / 2;
+  const localY = point ? Number(point.y) - parentOffsetY : origin.y + origin.height / 2;
+  const resolved = await debuggerCommand(
+    tabId,
+    "DOM.resolveNode",
+    { backendNodeId: record.ownerBackendNodeId, executionContextId: contextId },
+    authority,
+    commandContext,
+    record.parentSessionId,
+  );
+  const objectId = resolved?.object?.objectId;
+  if (!objectId) throw staleFrameTreeError(`${boundary}: the frame owner element could not be resolved for verification`);
+  const evaluated = await debuggerCommand(
+    tabId,
+    "Runtime.callFunctionOn",
+    {
+      objectId,
+      returnByValue: true,
+      awaitPromise: false,
+      functionDeclaration: "function (x, y) { const rect = this.getBoundingClientRect(); return { hit: document.elementFromPoint(x, y) === this, x: rect.x, y: rect.y, width: rect.width, height: rect.height }; }",
+      arguments: [{ value: localX }, { value: localY }],
+    },
+    authority,
+    commandContext,
+    record.parentSessionId,
+  );
+  const measured = evaluated?.result?.value;
+  if (!measured) throw staleFrameTreeError(`${boundary}: the frame owner element did not answer the verification probe`);
+  if (measured.hit === false) {
+    throw new Error(`TARGET_OCCLUDED: another element covers the frame that holds the target during ${boundary}; observe again`);
+  }
+  // getBoundingClientRect() reports the BORDER box, so it is only ever
+  // compared against the border quad from the same box model. Comparing it to
+  // the content origin would read a constant border and padding inset as
+  // movement and refuse every click on any iframe whose border plus padding
+  // is wider than the tolerance — the Chrome UA default border of 2px sits
+  // exactly on that boundary and would pass only by luck.
+  if (frameOwnerBoxShifted(measured, origin.border)) {
+    throw staleFrameTreeError(`${boundary}: the frame owner element moved between measurements`);
+  }
+}
+
+// One frame's contribution to an observation. Any failure records a skip and
+// never fails the observation.
+async function observeFrame(tabId, record, authority, commandContext, prepared, options) {
+  await prepareOwnerSession(tabId, record.parentSessionId, authority, commandContext, prepared, options);
+  record.ownerWorldContextId = await resolveOwnerWorld(tabId, record, authority, commandContext, options);
+  if (!Number.isInteger(record.ownerWorldContextId)) return { skip: "owner_unresolved" };
+  const origin = await measureFrameOwner(tabId, record, authority, commandContext, options);
+  if (!origin) return { skip: "owner_unresolved" };
+  record.ownerOrigin = origin;
+  if (origin.width < 1 || origin.height < 1) return { skip: "zero_size" };
+  try {
+    record.offset = accumulateFrameOffset(record, attachedFrames);
+  } catch (error) {
+    return { skip: /depth/.test(String(error.message)) ? "depth_exceeded" : "owner_unresolved" };
+  }
+  const viewport = controlLease?.viewport ?? { width: 0, height: 0 };
+  const frameBox = frameBoxOf(record);
+  if (Number(viewport.width) > 0
+    && Number(viewport.height) > 0
+    && !intersects(frameBox, { x: 0, y: 0, width: Number(viewport.width), height: Number(viewport.height) })) {
+    return { skip: "offscreen" };
+  }
+  await installFrameAgent(tabId, record, authority, commandContext, options);
+  const observed = await frameContentRequest(
+    tabId,
+    record,
+    { method: "snapshot", limit: FRAME_PER_FRAME_ELEMENT_CAP },
+    { authority, commandContext, options },
+  );
+  if (record.detached || record.navigated) return { skip: "navigated_during_observation" };
+  record.agentGeneration = String(observed?.agentGeneration ?? "");
+  const elements = (Array.isArray(observed?.elements) ? observed.elements : []).map((element) => {
+    const bounds = translateBounds(element.bounds, record.offset);
+    return {
+      ...element,
+      bounds,
+      inViewport: frameElementInViewport(bounds, element.inViewport, frameBox, viewport),
+    };
+  });
+  return {
+    result: {
+      record,
+      frameId: record.frameId,
+      urlOrigin: record.urlOrigin,
+      crossOrigin: true,
+      depth: record.depth,
+      offset: record.offset,
+      size: { width: origin.width, height: origin.height },
+      truncated: Boolean(observed?.truncated),
+      elements,
+    },
+  };
+}
+
+async function collectFrameObservations(tabId, topSnapshot, authority, commandContext) {
+  // Skips recorded between observations (a target refused at attach time)
+  // belong to this observation, not to the previous one that never saw them.
+  const pendingSkips = frameSkips.splice(0, frameSkips.length);
+  // Draining, not reading: a skip recorded DURING this observation belongs to
+  // this observation only. Leaving it behind would report it again in the
+  // next one, and sixteen frames of duplicates saturate the skip report.
+  // Every return below calls this exactly once.
+  const reportedSkips = () => [...pendingSkips, ...frameSkips.splice(0, frameSkips.length)];
+  const options = frameObserveOptions(Date.now() + FRAME_OBSERVE_BUDGET_MS);
+  // A frame keeps its f<k> only for as long as the observation that assigned
+  // it; a frame that is not merged this turn must not answer an old ref.
+  for (const record of attachedFrames.values()) record.ref = "";
+  if (!frameSupport.supported || !Number.isInteger(rootWorldContextId)) {
+    await enableFrameAutoAttach(tabId, authority, commandContext, options);
+  }
+  if (!frameSupport.supported) {
+    return mergeFrameObservations(topSnapshot, [], reportedSkips(), { supported: false, attached: 0, reason: frameSupport.reason });
+  }
+  for (const [sessionId, record] of [...attachedFrames]) {
+    if (record.detached) attachedFrames.delete(sessionId);
+  }
+  const candidates = [...attachedFrames.values()];
+  const probed = [];
+  for (const record of candidates) {
+    let tree = null;
+    try {
+      tree = await probeFrameSession(tabId, record, authority, commandContext, options);
+    } catch (error) {
+      rethrowLeaseFatalFrameError(error);
+      recordFrameSkip({ urlOrigin: record.urlOrigin, reason: frameSkipReasonFor(error, "session_probe_failed") });
+      attachedFrames.delete(record.sessionId);
+      continue;
+    }
+    if (!tree) {
+      // The key was ignored and the child answered for the root frame: every
+      // record is dropped and the observation stays exactly what it is today.
+      attachedFrames.clear();
+      frameSupport = { supported: false, probed: true, reason: "session_routing_unverified" };
+      markFrameTreeChanged("session_routing_unverified");
+      return mergeFrameObservations(topSnapshot, [], reportedSkips(), { supported: false, attached: 0, reason: frameSupport.reason });
+    }
+    probed.push(record);
+  }
+  const attached = probed.length;
+  if (attached === 0) {
+    return mergeFrameObservations(topSnapshot, [], reportedSkips(), { supported: true, attached: 0 });
+  }
+  const rootTree = await debuggerCommand(tabId, "Page.getFrameTree", {}, authority, commandContext, null, options);
+  const documentSession = new Map();
+  collectTreeFrames(rootTree?.frameTree, null, documentSession);
+  for (const record of probed) collectTreeFrames(record.tree, record.sessionId, documentSession);
+  for (const record of probed) documentSession.set(record.frameId, record.sessionId);
+  const treesBySession = new Map(probed.map((record) => [record.sessionId, record.tree]));
+  const ordered = orderFrameRecords(rootTree?.frameTree, probed, treesBySession);
+  const prepared = new Set();
+  const results = [];
+  for (const record of ordered) {
+    if (!documentSession.has(record.parentFrameId)) {
+      recordFrameSkip({ urlOrigin: record.urlOrigin, reason: "owner_unresolved" });
+      continue;
+    }
+    record.parentSessionId = documentSession.get(record.parentFrameId);
+    record.depth = frameDepthOf(record, attachedFrames);
+    if (record.depth > FRAME_MAX_DEPTH) {
+      recordFrameSkip({ urlOrigin: record.urlOrigin, reason: "depth_exceeded" });
+      continue;
+    }
+    // The budget is spent, not merely per command: whatever is left of the
+    // observation belongs to the screenshot and the response, so the frames
+    // that did not fit are reported instead of being waited on.
+    if (Date.now() >= options.deadlineAt) {
+      recordFrameSkip({ urlOrigin: record.urlOrigin, reason: "budget_time" });
+      continue;
+    }
+    let observation;
+    try {
+      observation = await observeFrame(tabId, record, authority, commandContext, prepared, options);
+    } catch (error) {
+      rethrowLeaseFatalFrameError(error);
+      recordFrameSkip({ urlOrigin: record.urlOrigin, reason: frameSkipReasonFor(error, "agent_install_failed") });
+      continue;
+    }
+    if (observation.skip) {
+      recordFrameSkip({ urlOrigin: record.urlOrigin, reason: observation.skip });
+      continue;
+    }
+    results.push(observation.result);
+  }
+  return mergeFrameObservations(topSnapshot, results, reportedSkips(), { supported: true, attached });
+}
+
+// Resolves a frame-scoped ref into a target description whose bounds are
+// already top-level, so every downstream pointer path stays unchanged.
+async function prepareFrameTarget(tabId, ref, generation, authority, commandContext, boundary) {
+  assertLeaseAuthority(authority, commandContext, `${boundary} frame lookup`);
+  const { record, key } = resolveFrameRecord(ref, generation);
+  await contentRequest(tabId, { method: "assertGeneration", generation }, { authority, commandContext });
+  await verifyDocumentAuthority(tabId, authority, commandContext, boundary);
+  await verifyFrameAuthority(tabId, record, authority, commandContext, boundary);
+  const prepared = await frameContentRequest(
+    tabId,
+    record,
+    { method: "prepareClick", key, agentGeneration: record.agentGeneration },
+    { authority, commandContext },
+  );
+  const bounds = translateBounds(prepared?.bounds, record.offset);
+  const viewport = controlLease?.viewport ?? { width: 0, height: 0 };
+  if (!frameElementInViewport(bounds, prepared?.inViewport, frameBoxOf(record), viewport)) {
+    throw new Error("TARGET_OUT_OF_VIEWPORT: scroll, then observe the page again");
+  }
+  return {
+    record,
+    key,
+    description: {
+      ...prepared,
+      ref,
+      bounds,
+      inViewport: true,
+      frameRef: record.ref,
+      frameId: record.frameId,
+      frameUrlOrigin: record.urlOrigin,
+      crossOrigin: true,
+    },
+  };
+}
+
+function frameClickHooks(tabId, record, key, description, authority, commandContext) {
+  return {
+    // Re-measures the owner box at the exact translated point before the
+    // frame agent is allowed to confirm the target.
+    beforeCommit: (point) => verifyFrameAuthority(tabId, record, authority, commandContext, "frame click commit", point),
+    commit: () => frameContentRequest(
+      tabId,
+      record,
+      { method: "commitClick", key, agentGeneration: record.agentGeneration, proof: description.proof },
+      { authority, commandContext },
+    ),
+  };
+}
+
+function handleFrameSessionEvent(source, method, params) {
+  const record = attachedFrames.get(source.sessionId);
+  if (!record) return;
+  if (method === "Page.frameNavigated") {
+    const frame = params?.frame;
+    if (!frame?.id) return;
+    if (frame.id !== record.frameId && frame.id !== record.targetId) return;
+    record.navigated = true;
+    record.worldContextId = null;
+    record.agentNonce = "";
+    record.agentGeneration = "";
+    markFrameTreeChanged("frame_navigated");
+    return;
+  }
+  if (method === "Page.frameDetached") {
+    if (params?.frameId === record.frameId || params?.frameId === record.targetId) record.detached = true;
+    markFrameTreeChanged("frame_detached");
+    return;
+  }
+  if (method === "Page.frameAttached") {
+    if (params?.frameId && params?.parentFrameId) frameParents.set(params.frameId, params.parentFrameId);
+    markFrameTreeChanged("frame_attached");
+  }
 }
 
 const POINTER_CANDIDATE_COUNT = 20;
@@ -2553,7 +3675,12 @@ function pointerModifierMask(modifiers) {
   return mask;
 }
 
-async function trustedClick(tabId, description, ref, generation, pointer, commandContext = null, existingAuthority = null) {
+// `hooks` is the one seam that lets a frame-scoped click reuse this exact
+// dispatch body: the top-frame path commits through the content script, the
+// frame path re-verifies the owner box and commits through the frame agent,
+// and both share one moveVirtualCursor -> assertPointerArrival -> mousePressed
+// ordering.
+async function trustedClick(tabId, description, ref, generation, pointer, commandContext = null, existingAuthority = null, hooks = {}) {
   const button = String(pointer?.button ?? "left");
   const clickCount = Number(pointer?.clickCount) || 1;
   const modifiers = Number(pointer?.modifiers) || 0;
@@ -2566,11 +3693,16 @@ async function trustedClick(tabId, description, ref, generation, pointer, comman
   const motion = await moveVirtualCursor(tabId, x, y, commandContext, authority);
   assertPointerArrival(motion);
   assertLeaseAuthority(authority, commandContext, "click target commit");
-  await contentRequest(
-    tabId,
-    { method: "commitClick", ref, generation, proof: description.proof },
-    { authority, commandContext },
-  );
+  if (hooks.beforeCommit) await hooks.beforeCommit({ x, y });
+  if (hooks.commit) {
+    await hooks.commit({ x, y });
+  } else {
+    await contentRequest(
+      tabId,
+      { method: "commitClick", ref, generation, proof: description.proof },
+      { authority, commandContext },
+    );
+  }
   await verifyDocumentAuthority(tabId, authority, commandContext, "trusted click commit");
   const heldKey = crypto.randomUUID();
   const held = {
@@ -2845,6 +3977,98 @@ async function groupBridgeCreatedTab(tab, commandContext = null) {
   return groupId;
 }
 
+// Drops the pending-dialog record once the dialog is provably gone. The gate
+// lifts in full: the very next document-identity boundary runs unforgiven, so
+// a document that really did change while the dialog was open is caught and
+// revokes then, instead of being excused forever by a dialog that no longer
+// exists.
+async function clearPendingDialog(authority) {
+  if (controlLease?.sessionId !== authority.sessionId || controlLease?.epoch !== authority.epoch) {
+    return false;
+  }
+  const tabId = controlLease.tabId;
+  controlLease.pendingDialog = null;
+  // The dialog was already handled, so a failed persistence must not
+  // misreport the outcome; the dialogClosed event re-clears durably.
+  await persistControlState().catch(() => {});
+  // A press or key whose release the dialog blocked is released before the
+  // caller is told the dialog is gone. The dialog was handled either way, so
+  // a release that fails here revokes inside the retry and is reported by the
+  // control state on the result, not by failing page.handleDialog itself.
+  await retryDialogBlockedInputRelease(tabId).catch(() => {});
+  return true;
+}
+
+// The observation is the one command that stays in flight long enough for a
+// JavaScript dialog to open in the MIDDLE of it. The dispatch-level gate only
+// proves no dialog was pending when the command started, so this path reads
+// the dialog record again at its own start and once more before the
+// observation is published: a snapshot captured across a dialog is discarded
+// as the non-fatal BLOCKED_BY_DIALOG rather than published or paid for with
+// the lease. The revocation-time check lives in failChangedDocument, which
+// every document-identity boundary below funnels into, screenshot completion
+// included.
+async function observeControlledPage(tab, commandContext) {
+  assertDialogNotBlocking("observation start");
+  const lease = await requireControl(tab.id, "page.observe", commandContext);
+  const authority = captureLeaseAuthority(lease);
+  assertLeaseAuthority(authority, commandContext, "observation turn");
+  await verifyDocumentAuthority(tab.id, authority, commandContext, "observation snapshot");
+  lease.turn += 1;
+  await showControlUi(lease);
+  assertLeaseAuthority(authority, commandContext, "page snapshot");
+  const snapshot = await contentRequest(
+    tab.id,
+    { method: "snapshot" },
+    { authority, commandContext },
+  );
+  await verifyDocumentAuthority(tab.id, authority, commandContext, "observation snapshot completion");
+  lease.viewport = snapshot.viewport;
+  await persistControlState();
+  // Cross-origin frames are merged into the same element list with top-level
+  // bounds. A frame that cannot be reached, that is too slow, or that spends
+  // the frame budget is reported in frameSummary.skipped: frame latency alone
+  // can neither fail this observation nor revoke the lease. Only a change to
+  // the LEASE itself — the top document navigating, a dialog opening, the
+  // control being canceled — still propagates, because it invalidates the
+  // whole observation and not just the contribution of one frame.
+  const owners = Array.isArray(snapshot.frameOwners) ? snapshot.frameOwners : [];
+  delete snapshot.frameOwners;
+  let merged;
+  try {
+    merged = await collectFrameObservations(tab.id, { ...snapshot, frameOwners: owners }, authority, commandContext);
+  } catch (error) {
+    rethrowLeaseFatalFrameError(error);
+    merged = mergeFrameObservations(
+      { ...snapshot, frameOwners: owners },
+      [],
+      frameSkips.splice(0, frameSkips.length),
+      { supported: false, attached: 0, reason: "frame_observation_failed" },
+    );
+  }
+  snapshot.elements = merged.elements;
+  // A page with no frame owners and nothing attached has nothing to say about
+  // frames, so its observation stays byte-identical to a pre-frame
+  // observation. Anything else is reported, including refusals.
+  if (!frameObservationIsSilent(merged)) {
+    if (merged.frames.length > 0) snapshot.frames = merged.frames;
+    snapshot.frameSummary = merged.frameSummary;
+  }
+  const frameRecords = new Map();
+  for (const record of attachedFrames.values()) {
+    if (record.ref) frameRecords.set(record.ref, record);
+  }
+  frameSnapshot = { generation: snapshot.generation, frameTreeRevision, frames: frameRecords };
+  assertLeaseAuthority(authority, commandContext, "screenshot preparation");
+  const screenshot = await captureTab(tab, commandContext, authority);
+  // A dialog that opened anywhere inside the capture makes the whole
+  // observation unpublishable: it describes a page that is now frozen behind
+  // the dialog, so it is discarded rather than reported as the current state.
+  assertDialogNotBlocking("observation completion");
+  for (const element of snapshot.elements ?? []) element.risk = classifyRisk(element);
+  return { snapshot, screenshot, control: publicControlState() };
+}
+
 async function dispatch(method, params, approved, commandContext = null, { batched = false } = {}) {
   assertCommandActive(commandContext, "command validation");
   if (!COMMANDS.has(method)) throw new Error("UNKNOWN_COMMAND: method is not supported");
@@ -3006,25 +4230,7 @@ async function dispatch(method, params, approved, commandContext = null, { batch
     case "page.observe": {
       const tab = await getTab(params.tabId);
       await assertAllowedTab(tab);
-      const lease = await requireControl(tab.id, "page.observe", commandContext);
-      const authority = captureLeaseAuthority(lease);
-      assertLeaseAuthority(authority, commandContext, "observation turn");
-      await verifyDocumentAuthority(tab.id, authority, commandContext, "observation snapshot");
-      lease.turn += 1;
-      await showControlUi(lease);
-      assertLeaseAuthority(authority, commandContext, "page snapshot");
-      const snapshot = await contentRequest(
-        tab.id,
-        { method: "snapshot" },
-        { authority, commandContext },
-      );
-      await verifyDocumentAuthority(tab.id, authority, commandContext, "observation snapshot completion");
-      lease.viewport = snapshot.viewport;
-      await persistControlState();
-      assertLeaseAuthority(authority, commandContext, "screenshot preparation");
-      const screenshot = await captureTab(tab, commandContext, authority);
-      for (const element of snapshot.elements ?? []) element.risk = classifyRisk(element);
-      return { snapshot, screenshot, control: publicControlState() };
+      return observeControlledPage(tab, commandContext);
     }
     case "page.waitFor": {
       // Read-only condition wait: the same tab permission checks as
@@ -3059,13 +4265,21 @@ async function dispatch(method, params, approved, commandContext = null, { batch
       const modifierNames = Array.isArray(params.modifiers) ? params.modifiers.map(String) : [];
       const modifierMask = pointerModifierMask(modifierNames);
       const authority = captureLeaseAuthority();
-      await verifyDocumentAuthority(tab.id, authority, commandContext, "click target preparation");
-      const description = await contentRequest(
-        tab.id,
-        { method: "prepareClick", ref: params.ref, generation: params.generation },
-        { authority, commandContext },
-      );
-      await verifyDocumentAuthority(tab.id, authority, commandContext, "click target prepared");
+      const frameTarget = parseFrameRef(params.ref)
+        ? await prepareFrameTarget(tab.id, params.ref, params.generation, authority, commandContext, "frame click preparation")
+        : null;
+      let description;
+      if (frameTarget) {
+        description = frameTarget.description;
+      } else {
+        await verifyDocumentAuthority(tab.id, authority, commandContext, "click target preparation");
+        description = await contentRequest(
+          tab.id,
+          { method: "prepareClick", ref: params.ref, generation: params.generation },
+          { authority, commandContext },
+        );
+        await verifyDocumentAuthority(tab.id, authority, commandContext, "click target prepared");
+      }
       if (description.disabled) throw new Error("ELEMENT_DISABLED: target cannot be clicked");
       // Safe mode treats any non-default pointer verb like a risky click.
       const pointerRisk = button !== "left" || clickCount > 1 || modifierMask !== 0
@@ -3091,6 +4305,9 @@ async function dispatch(method, params, approved, commandContext = null, { batch
         { button, clickCount, modifiers: modifierMask },
         commandContext,
         authority,
+        frameTarget
+          ? frameClickHooks(tab.id, frameTarget.record, frameTarget.key, description, authority, commandContext)
+          : {},
       );
     }
     case "page.hover": {
@@ -3099,13 +4316,19 @@ async function dispatch(method, params, approved, commandContext = null, { batch
       await requireControl(tab.id, "page.hover", commandContext);
       assertControlBinding(params);
       const authority = captureLeaseAuthority();
-      await verifyDocumentAuthority(tab.id, authority, commandContext, "hover target preparation");
-      const description = await contentRequest(
-        tab.id,
-        { method: "prepareClick", ref: params.ref, generation: params.generation },
-        { authority, commandContext },
-      );
-      await verifyDocumentAuthority(tab.id, authority, commandContext, "hover target prepared");
+      let description;
+      if (parseFrameRef(params.ref)) {
+        const frameTarget = await prepareFrameTarget(tab.id, params.ref, params.generation, authority, commandContext, "frame hover preparation");
+        description = frameTarget.description;
+      } else {
+        await verifyDocumentAuthority(tab.id, authority, commandContext, "hover target preparation");
+        description = await contentRequest(
+          tab.id,
+          { method: "prepareClick", ref: params.ref, generation: params.generation },
+          { authority, commandContext },
+        );
+        await verifyDocumentAuthority(tab.id, authority, commandContext, "hover target prepared");
+      }
       if (description.disabled) throw new Error("ELEMENT_DISABLED: target cannot be hovered");
       return trustedHover(tab.id, description, params.ref, params.generation, commandContext, authority);
     }
@@ -3114,6 +4337,7 @@ async function dispatch(method, params, approved, commandContext = null, { batch
       await assertAllowedTab(tab);
       await requireControl(tab.id, "page.fill", commandContext);
       assertControlBinding(params);
+      assertTopLevelRef(params.ref, "page.fill");
       const authority = captureLeaseAuthority();
       await verifyDocumentAuthority(tab.id, authority, commandContext, "fill target preparation");
       const description = await contentRequest(
@@ -3134,6 +4358,7 @@ async function dispatch(method, params, approved, commandContext = null, { batch
       await assertAllowedTab(tab);
       await requireControl(tab.id, "page.select", commandContext);
       assertControlBinding(params);
+      assertTopLevelRef(params.ref, "page.select");
       const authority = captureLeaseAuthority();
       await verifyDocumentAuthority(tab.id, authority, commandContext, "select preparation");
       const description = await contentRequest(
@@ -3225,12 +4450,7 @@ async function dispatch(method, params, approved, commandContext = null, { batch
       // legitimately holds the document in a pending-navigation state, so
       // only the lease authority guards this CDP call.
       await debuggerCommand(tab.id, "Page.handleJavaScriptDialog", handleParams, authority, commandContext);
-      if (controlLease?.sessionId === authority.sessionId && controlLease?.epoch === authority.epoch) {
-        controlLease.pendingDialog = null;
-        // The dialog was already handled, so a failed persistence must not
-        // misreport the outcome; the dialogClosed event re-clears durably.
-        await persistControlState().catch(() => {});
-      }
+      await clearPendingDialog(authority);
       return { handled: true, accept, type: dialog.type, control: publicControlState() };
     }
     case "page.clickAt": {
@@ -3453,6 +4673,32 @@ chrome.debugger.onDetach.addListener((source, reason) => {
 });
 chrome.debugger.onEvent.addListener((source, method, params) => {
   if (!Number.isInteger(source.tabId) || controlLease?.tabId !== source.tabId) return;
+  // With flatten: true a child frame session delivers events with the SAME
+  // source.tabId, and an out-of-process iframe's own Page.frameNavigated has
+  // no parentId because it is that target's main frame. Without this gate an
+  // ad iframe navigating would be read as a top-level navigation and would
+  // corrupt lease.loaderId or revoke the lease outright.
+  if (source.sessionId) {
+    handleFrameSessionEvent(source, method, params);
+    return;
+  }
+  if (method === "Target.attachedToTarget") {
+    void recordAttachedTarget(source.tabId, params?.sessionId, params?.targetInfo).catch(() => {});
+  }
+  if (method === "Target.detachedFromTarget" && attachedFrames.delete(params?.sessionId)) {
+    markFrameTreeChanged("frame_target_detached");
+  }
+  if (method === "Page.frameAttached") {
+    if (params?.frameId && params?.parentFrameId) frameParents.set(params.frameId, params.parentFrameId);
+    markFrameTreeChanged("frame_attached");
+  }
+  if (method === "Page.frameDetached" && params?.frameId) {
+    for (const record of attachedFrames.values()) {
+      if (record.frameId === params.frameId || record.targetId === params.frameId) record.detached = true;
+    }
+    markFrameTreeChanged("frame_detached");
+  }
+  if (method === "Page.frameResized") markFrameTreeChanged("frame_resized");
   if (method === "Page.frameNavigated" && params?.frame && !params.frame.parentId) {
     acceptTopLevelNavigationSignal({
       tabId: source.tabId,
@@ -3492,6 +4738,10 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     controlLease.pendingDialog = null;
     void persistControlState().catch(() => {});
     send({ type: "event", name: "page.dialogClosed", data: { tabId: source.tabId, accepted: params?.result === true } });
+    // Covers the dialog a human dismissed too, not just page.handleDialog: an
+    // input release the dialog blocked is retried as soon as the renderer can
+    // acknowledge it again.
+    void retryDialogBlockedInputRelease(source.tabId).catch(() => {});
   }
 });
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {

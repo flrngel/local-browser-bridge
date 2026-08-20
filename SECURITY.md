@@ -67,6 +67,17 @@ Native computer input is hybrid semantic/pixel control bound to one exact applic
 - `tabGroups`: visibly group only tabs created by the bridge; grouping never grants authority.
 - `debugger`: hold one explicit controlled-tab lease so Chrome shows its native debugging warning, then dispatch trusted mouse/key input, insert text, or evaluate page JavaScript. Chrome Cancel, timeout, disconnect, Stop, expiry, target loss, or explicit release detaches and revokes authority.
 
+### Cross-origin frame attachment
+
+The controlled-tab lease enables `Target.setAutoAttach` on the page target, so the debugger attachment extends to that tab's out-of-process iframe targets as well as the page itself. The blast radius is bounded deliberately:
+
+- Any auto-attached target whose `targetInfo.type` is not `iframe` — workers and every other relative — is `Target.detachFromTarget`ed immediately, as is any target arriving without a matching lease, past the 16-frame cap, or for a blank document.
+- Child sessions never get their own debugger attachment. They live under the single `chrome.debugger.attach` for the leased tab, and the existing verified `chrome.debugger.detach` plus its confirmation tears every one of them down. No second, unverified teardown path was added.
+- Child-session events are separated from page-target events before any handler runs. An out-of-process iframe's own `Page.frameNavigated` has no parent frame, so without that separation a third-party iframe navigating would be read as a top-level navigation of the controlled tab.
+- The in-frame agent runs in a dedicated isolated world created with `Page.createIsolatedWorld` and `grantUniveralAccess: false`, never the page's main world, so a hostile frame cannot redefine `getBoundingClientRect` or `elementFromPoint` under the target proofs. The agent is read-only: it contains no click, focus, event dispatch, value write, or extension messaging surface, and it never synthesizes input. Trusted input is always dispatched on the page target at a translated top-level point.
+- The agent is keyed by a nonce minted per lease, and every frame session is cleared at the same choke point that releases the lease, so an agent left over from an older lease refuses every request. Exactly one agent is ever built per isolated world: re-evaluating the source into a world that already has one re-keys it instead of registering a second document observer.
+- Frame observation is read-only and bounded, so a third-party iframe cannot spend the lease. The whole frame pass shares a 4 s budget, each of its CDP commands is bounded by what is left of it, and exhausting it skips the affected frames (`frame_timeout`, `budget_time`) instead of revoking browser control. Only a change to the lease itself still fails the observation.
+
 ## Reporting
 
 Do not include real tokens, screenshots, page text, or authenticated URLs in a public report. Reproduce with the included `/demo` page or mock extension.

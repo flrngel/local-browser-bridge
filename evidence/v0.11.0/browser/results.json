@@ -1,0 +1,245 @@
+{
+  "recordedAt": "2026-08-20T05:52:00.075Z",
+  "target": "packaged v0.11.0 release artifacts",
+  "chrome": "Google Chrome for Testing 152.0.7977.54 (isolated profile)",
+  "crossOriginSetup": "parent http://localhost:8099 embeds child http://127.0.0.1:8100 (separate sites => out-of-process iframe)",
+  "extension": {
+    "version": "0.11.0",
+    "mode": "full-access"
+  },
+  "passed": 21,
+  "total": 21,
+  "results": [
+    {
+      "name": "extension.loaded",
+      "ok": true,
+      "detail": {
+        "version": "0.11.0"
+      },
+      "at": "2026-08-20T05:51:36.023Z"
+    },
+    {
+      "name": "extension.connected",
+      "ok": true,
+      "detail": {
+        "version": "0.11.0"
+      },
+      "at": "2026-08-20T05:51:36.784Z"
+    },
+    {
+      "name": "tabs.list.cross-origin-parent",
+      "ok": true,
+      "detail": {
+        "url": "http://localhost:8099/parent.html",
+        "title": "Cross-origin frame parent"
+      },
+      "at": "2026-08-20T05:51:39.827Z"
+    },
+    {
+      "name": "browser.control.start",
+      "ok": true,
+      "detail": {
+        "active": true
+      },
+      "at": "2026-08-20T05:51:39.872Z"
+    },
+    {
+      "name": "frames.observed",
+      "ok": true,
+      "detail": {
+        "frames": [
+          {
+            "crossOrigin": true,
+            "depth": 1,
+            "elementCount": 2,
+            "frameId": "01A1224E61EB7CCD35BF066EC2E4DBFA",
+            "offset": {
+              "x": 250,
+              "y": 123
+            },
+            "ref": "f1",
+            "size": {
+              "height": 232,
+              "width": 532
+            },
+            "truncated": false,
+            "urlOrigin": "http://127.0.0.1:8100"
+          }
+        ],
+        "frameSummary": {
+          "attached": 1,
+          "elementsDropped": 0,
+          "merged": 1,
+          "mode": "cdp-auto-attach",
+          "ownersSeen": 1,
+          "reason": "",
+          "skipped": [],
+          "supported": true
+        }
+      },
+      "at": "2026-08-20T05:51:41.189Z"
+    },
+    {
+      "name": "frames.elements-merged",
+      "ok": true,
+      "detail": {
+        "count": 2,
+        "sample": [
+          "mt13rtpc-an67xf77.f1.e1=button:Cross origin child button origin=http://127.0.0.1:8100",
+          "mt13rtpc-an67xf77.f1.e2=textbox:child field origin=http://127.0.0.1:8100"
+        ]
+      },
+      "at": "2026-08-20T05:51:41.189Z"
+    },
+    {
+      "name": "frames.child-button-visible",
+      "ok": true,
+      "detail": {
+        "ref": "mt13rtpc-an67xf77.f1.e1",
+        "bounds": {
+          "height": 42,
+          "width": 204,
+          "x": 266,
+          "y": 187
+        },
+        "crossOrigin": true,
+        "frameUrlOrigin": "http://127.0.0.1:8100"
+      },
+      "at": "2026-08-20T05:51:41.189Z"
+    },
+    {
+      "name": "frames.ref-grammar",
+      "ok": true,
+      "detail": "mt13rtpc-an67xf77.f1.e1",
+      "at": "2026-08-20T05:51:41.190Z"
+    },
+    {
+      "name": "evidence.frames-screenshot",
+      "ok": true,
+      "detail": "10-cross-origin-frames.png",
+      "at": "2026-08-20T05:51:41.302Z"
+    },
+    {
+      "name": "frames.click-in-cross-origin-frame",
+      "ok": true,
+      "detail": true,
+      "at": "2026-08-20T05:51:41.954Z"
+    },
+    {
+      "name": "frames.click-evaluate-ran",
+      "ok": true,
+      "detail": "{\"control\":{\"active\":true,\"activeCaptureIds\":[],\"captureDepth\":0,\"cleanup\":null,\"cleanups\":[],\"cursor\":{\"updatedAt\":1787",
+      "at": "2026-08-20T05:51:42.755Z"
+    },
+    {
+      "name": "frames.trusted-click-landed-in-child",
+      "ok": true,
+      "detail": "child-click:true",
+      "at": "2026-08-20T05:51:42.758Z"
+    },
+    {
+      "name": "evidence.frames-click-screenshot",
+      "ok": true,
+      "detail": "11-cross-origin-click.png",
+      "at": "2026-08-20T05:51:42.851Z"
+    },
+    {
+      "name": "dialog.pending-state-visible",
+      "ok": true,
+      "detail": {
+        "at": 1787205103111,
+        "hasPrompt": false,
+        "message": "bridge dialog regression",
+        "tabId": 1965021347,
+        "type": "confirm"
+      },
+      "at": "2026-08-20T05:51:57.630Z"
+    },
+    {
+      "name": "dialog.blocks-with-blocked_by_dialog",
+      "ok": true,
+      "detail": {
+        "status": 409,
+        "code": "BLOCKED_BY_DIALOG",
+        "taxonomy": "blocked_by_dialog"
+      },
+      "at": "2026-08-20T05:51:57.632Z"
+    },
+    {
+      "name": "dialog.lease-survives-open-dialog",
+      "ok": true,
+      "detail": {
+        "active": true
+      },
+      "at": "2026-08-20T05:51:57.634Z"
+    },
+    {
+      "name": "evidence.dialog-screenshot",
+      "ok": true,
+      "detail": "12-dialog-open-lease-alive.png",
+      "at": "2026-08-20T05:51:57.763Z"
+    },
+    {
+      "name": "page.handleDialog",
+      "ok": true,
+      "detail": {
+        "accept": false,
+        "control": {
+          "active": true,
+          "activeCaptureIds": [],
+          "captureDepth": 0,
+          "cleanup": null,
+          "cleanups": [],
+          "cursor": {
+            "updatedAt": 1787205101459,
+            "visible": true,
+            "x": 368,
+            "y": 208
+          },
+          "documentEpoch": 1,
+          "documentUrl": "http://localhost:8099/parent.html",
+          "epoch": 9,
+          "expiresAt": 1787205699834,
+          "humanPause": null,
+          "humanPaused": false,
+          "lastHeartbeatAt": 1787205099834,
+          "moveSequence": 1,
+          "navigationPending": false,
+          "owner": "server",
+          "pausePersistenceUncertain": false,
+          "revocationPending": false,
+          "sessionId": "459b3c57-765e-4d85-acad-47ab94508ad6",
+          "startedAt": 1787205099834,
+          "tabId": 1965021347,
+          "turn": 4
+        },
+        "handled": true,
+        "type": "confirm"
+      },
+      "at": "2026-08-20T05:51:58.205Z"
+    },
+    {
+      "name": "dialog.observe-works-after-handling",
+      "ok": true,
+      "detail": {
+        "turn": 6,
+        "elements": 3
+      },
+      "at": "2026-08-20T05:51:59.256Z"
+    },
+    {
+      "name": "dialog.lease-still-active-after-handling",
+      "ok": true,
+      "detail": {
+        "active": true
+      },
+      "at": "2026-08-20T05:51:59.259Z"
+    },
+    {
+      "name": "navigation.authorized-still-works",
+      "ok": true,
+      "detail": "navigated",
+      "at": "2026-08-20T05:52:00.072Z"
+    }
+  ]
+}

@@ -10,6 +10,8 @@ use serde_json::Value;
 const EXTENSION_FILES: &[&str] = &[
     "background.js",
     "content.js",
+    "dom-core.js",
+    "frame-agent.js",
     "lib.js",
     "manifest.json",
     "popup.css",
@@ -124,6 +126,31 @@ fn package_contains_only_declared_local_assets() {
     let popup = fs::read_to_string("extension/popup.html").unwrap();
     assert!(popup.contains("href=\"popup.css\""));
     assert!(popup.contains("src=\"popup.js\""));
+
+    // Both release scripts hardcode the packaged file list. Pinning them to
+    // the same set here is what stops a new extension file from shipping in a
+    // zip that silently omits it.
+    let declared = EXTENSION_FILES.join(" ");
+    let package = fs::read_to_string("scripts/package-extension.sh").unwrap();
+    let verify = fs::read_to_string("scripts/verify-release-assets.sh").unwrap();
+    assert!(
+        package.contains(&format!("files=({declared})")),
+        "scripts/package-extension.sh does not package exactly: {declared}"
+    );
+    assert!(
+        verify.contains(&format!("expected_extension_files=({declared})")),
+        "scripts/verify-release-assets.sh does not verify exactly: {declared}"
+    );
+
+    // The content script loads the shared DOM core first; the frame agent is
+    // never a content script and never web accessible.
+    assert_eq!(
+        strings(&manifest["content_scripts"][0]["js"]),
+        BTreeSet::from_iter(["content.js", "dom-core.js"].map(str::to_owned))
+    );
+    assert_eq!(manifest["content_scripts"][0]["js"][0], "dom-core.js");
+    assert_eq!(manifest["content_scripts"][0]["js"][1], "content.js");
+    assert!(manifest.get("web_accessible_resources").is_none());
 }
 
 #[test]
@@ -165,6 +192,7 @@ fn extension_allows_only_the_demo_on_the_bridge_origin() {
 fn observations_are_non_activating_bounded_and_composed() {
     let background = fs::read_to_string("extension/background.js").unwrap();
     let content = fs::read_to_string("extension/content.js").unwrap();
+    let core = fs::read_to_string("extension/dom-core.js").unwrap();
     let capture_start = background.find("async function captureTab").unwrap();
     let capture_end = background[capture_start..]
         .find("async function debuggerCommand")
@@ -179,8 +207,8 @@ fn observations_are_non_activating_bounded_and_composed() {
     assert!(background.contains("DEBUGGER_TIMEOUT"));
     assert!(background.contains("finally"));
     assert!(content.contains("composedCandidates"));
-    assert!(content.contains("element.shadowRoot"));
-    assert!(content.contains("tree: element.getRootNode() instanceof ShadowRoot"));
+    assert!(core.contains("element.shadowRoot"));
+    assert!(core.contains("tree: element.getRootNode() instanceof ShadowRoot"));
 }
 
 #[test]
@@ -308,6 +336,7 @@ fn control_lease_is_owned_by_the_authenticated_server_session() {
 fn trusted_pointer_has_dynamic_motion_and_two_phase_target_validation() {
     let background = fs::read_to_string("extension/background.js").unwrap();
     let content = fs::read_to_string("extension/content.js").unwrap();
+    let core = fs::read_to_string("extension/dom-core.js").unwrap();
 
     assert!(background.contains("boundedBezierSpringPath"));
     assert!(background.contains("POINTER_CANDIDATE_COUNT = 20"));
@@ -329,10 +358,10 @@ fn trusted_pointer_has_dynamic_motion_and_two_phase_target_validation() {
     assert!(content.contains("preparePoint"));
     assert!(content.contains("commitPoint"));
     assert!(content.contains("targetSignature"));
-    assert!(content.contains("sameBounds"));
-    assert!(content.contains("deepElementFromPoint"));
-    assert!(content.contains("TARGET_OCCLUDED"));
-    assert!(content.contains("TARGET_CHANGED"));
+    assert!(core.contains("sameBounds"));
+    assert!(core.contains("deepElementFromPoint"));
+    assert!(core.contains("TARGET_OCCLUDED"));
+    assert!(core.contains("TARGET_CHANGED"));
 }
 
 #[test]
@@ -669,27 +698,30 @@ fn background_pointer_teleports_once_without_focus_or_animation_latency() {
 #[test]
 fn snapshots_invalidate_on_mutation_scroll_and_resize() {
     let content = fs::read_to_string("extension/content.js").unwrap();
-    assert!(content.contains("new MutationObserver"));
-    assert!(content.contains("the document mutated"));
-    assert!(content.contains("the page scrolled"));
-    assert!(content.contains("the viewport resized"));
-    assert!(content.contains("snapshotRevision !== documentRevision"));
+    let core = fs::read_to_string("extension/dom-core.js").unwrap();
+    assert!(core.contains("new MutationObserver"));
+    assert!(core.contains("the document mutated"));
+    assert!(core.contains("the page scrolled"));
+    assert!(core.contains("the viewport resized"));
+    assert!(content.contains("snapshotRevision !== revisions.read()"));
     assert!(content.contains("snapshotInvalidated: true"));
 }
 
 #[test]
 fn snapshots_and_target_proofs_never_embed_live_text_input_values() {
     let content = fs::read_to_string("extension/content.js").unwrap();
+    let core = fs::read_to_string("extension/dom-core.js").unwrap();
     let background = fs::read_to_string("extension/background.js").unwrap();
-    assert!(content.contains("const safeInputValue = element instanceof HTMLInputElement"));
-    assert!(content.contains("[\"button\", \"submit\", \"reset\"].includes(element.type)"));
+    assert!(core.contains("const safeInputValue = element instanceof HTMLInputElement"));
+    assert!(core.contains("[\"button\", \"submit\", \"reset\"].includes(element.type)"));
     assert!(
-        content.contains(
+        core.contains(
             "element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement"
         )
     );
-    assert!(content.contains("isSensitiveFieldMetadata({ type, autocomplete, name: fieldName })"));
-    assert!(!content.contains("![\"password\", \"hidden\"].includes(element.type)"));
+    assert!(core.contains("isSensitiveFieldMetadata({ type, autocomplete, name: fieldName })"));
+    assert!(!core.contains("![\"password\", \"hidden\"].includes(element.type)"));
+    assert!(!content.contains("safeInputValue"));
     assert!(background.contains("isSensitiveField(description) || description.sensitive"));
 
     let script = r#"
@@ -713,7 +745,7 @@ fn snapshots_and_target_proofs_never_embed_live_text_input_values() {
         }
         throw new Error(`unterminated ${name}`);
       }
-      const source = fs.readFileSync("extension/content.js", "utf8");
+      const source = fs.readFileSync("extension/dom-core.js", "utf8");
       const functions = [
         "clean", "normalizedFieldIdentifier", "isSensitiveFieldMetadata",
         "accessibleName", "targetSignature",
@@ -2199,6 +2231,7 @@ fn start_then_stop_records_explicit_revocation_without_runtime_reference_errors(
         let lastControlRevocation = null;
         const activeControlCaptures = new Map();
         function stopHeartbeat() {}
+        function clearFrameSessions() {}
         ${fn}
         return {
           start() {
@@ -2364,8 +2397,22 @@ fn document_epoch_revokes_unexpected_navigation_before_capture_or_input() {
           return Promise.resolve();
         }
         function persistControlState() { return Promise.resolve(); }
+        const attachedFrames = new Map();
+        const frameParents = new Map();
+        let frameSnapshot = { generation: "g1" };
+        let rootWorldContextId = 11;
+        let frameSupport = { supported: true, probed: true, reason: "" };
+        const frameInvalidations = [];
+        function markFrameTreeChanged(reason) { frameInvalidations.push(reason); }
         ${functions}
         return {
+          frameInvalidations: () => [...frameInvalidations],
+          frameState: () => ({
+            attached: attachedFrames.size,
+            snapshot: frameSnapshot,
+            rootWorldContextId,
+            supported: frameSupport.supported,
+          }),
           setLease(pendingNavigation = null) {
             controlLease = {
               tabId: 9, navigationReady: true, pendingNavigation,
@@ -2404,6 +2451,17 @@ fn document_epoch_revokes_unexpected_navigation_before_capture_or_input() {
       const intended = bridge.state().lease;
       if (!intended || intended.pendingNavigation || intended.loaderId !== "loader-d") {
         throw new Error("explicit intended navigation was not committed to the new loader");
+      }
+      // A committed top-level navigation destroys every isolated world, frame
+      // agent, and child session, so frame support must be re-armed before the
+      // next observation instead of reusing dead handles.
+      const frames = bridge.frameState();
+      if (frames.attached !== 0 || frames.snapshot !== null
+        || frames.rootWorldContextId !== null || frames.supported !== false) {
+        throw new Error(`frame sessions survived a top-level navigation: ${JSON.stringify(frames)}`);
+      }
+      if (!bridge.frameInvalidations().includes("top_level_navigation")) {
+        throw new Error("a committed navigation did not invalidate the frame snapshot");
       }
     "#;
     let output = match Command::new("node")
@@ -2720,7 +2778,7 @@ fn wait_for_is_read_only_pause_allowed_and_time_bounded() {
     let wait_end = content.find("function setNativeValue").unwrap();
     let wait_body = &content[wait_start..wait_end];
     assert!(wait_body.contains("WAIT_POLL_INTERVAL_MS"));
-    assert!(wait_body.contains("documentRevision"));
+    assert!(wait_body.contains("revisions.read()"));
     assert!(wait_body.contains("WAIT_TIMEOUT:"));
     assert!(!wait_body.contains("dispatchEvent"));
     assert!(!wait_body.contains("Input.dispatch"));
@@ -2756,6 +2814,7 @@ fn wait_for_is_read_only_pause_allowed_and_time_bounded() {
         const WAIT_TIMEOUT_MAX_MS = 12_000;
         let clock = 0;
         let documentRevision = 0;
+        const revisions = { read: () => documentRevision };
         let pageText = "Loading spinner";
         let inputDispatches = 0;
         const scheduled = [];
@@ -3365,8 +3424,20 @@ fn dialog_interception_records_events_and_handles_dialogs_lease_bound() {
     assert!(case_body.contains("Page.handleJavaScriptDialog"));
     assert!(case_body.contains("params.accept === true"));
     assert!(case_body.contains("DIALOG_PROMPT_TEXT_MAX_CHARS"));
-    assert!(case_body.contains("controlLease.pendingDialog = null"));
+    assert!(case_body.contains("await clearPendingDialog(authority)"));
     assert!(!case_body.contains("verifyDocumentAuthority"));
+
+    // Clearing the record is lease-bound and unconditional: nothing about the
+    // resolved dialog is remembered, so the next document-identity boundary
+    // runs unforgiven.
+    let clear_start = background
+        .find("async function clearPendingDialog")
+        .unwrap();
+    let clear_end = background[clear_start..].find("\n}\n").unwrap() + clear_start;
+    let clear = &background[clear_start..clear_end];
+    assert!(clear.contains("controlLease?.sessionId !== authority.sessionId"));
+    assert!(clear.contains("controlLease.pendingDialog = null"));
+    assert!(!clear.contains("assertDialogNotBlocking"));
 
     // Lease revocation drops the lease object, and the pending dialog record
     // lives on the lease, so revocation clears it on the extension side too.
@@ -3462,6 +3533,20 @@ fn pending_dialogs_fail_fast_and_never_revoke_the_lease_by_timeout() {
     let cdp_end = background[cdp_start..].find("\n}\n").unwrap() + cdp_start;
     let cdp = &background[cdp_start..cdp_end];
     assert!(cdp.find("controlLease?.pendingDialog").unwrap() < cdp.find("stopControl").unwrap());
+
+    // The 0.10 gate hardened only the TIMEOUT routes, and the live 0.10.0
+    // browser run then lost a lease through the document-identity route
+    // instead. So the shared revocation boundary carries the same guard: a
+    // document-authority failure taken under a pending dialog can never
+    // revoke, whichever boundary funnelled into it.
+    let fail_start = background
+        .find("async function failChangedDocument")
+        .unwrap();
+    let fail_end = background[fail_start..].find("\n}\n").unwrap() + fail_start;
+    let fail = &background[fail_start..fail_end];
+    assert!(
+        fail.find("assertDialogNotBlocking(boundary)").unwrap() < fail.find("stopControl").unwrap()
+    );
 
     let script = r#"
       import fs from "node:fs";
@@ -3563,26 +3648,34 @@ fn pending_dialogs_fail_fast_and_never_revoke_the_lease_by_timeout() {
 
       // The same holds for a CDP timeout racing a dialog.
       const debuggerCommand = extractFunction(source, "debuggerCommand");
+      const commandTimeoutMs = extractFunction(source, "commandTimeoutMs");
+      const frameObserveTimeoutError = extractFunction(source, "frameObserveTimeoutError");
       const cdp = new Function(`
-        const DEBUGGER_TIMEOUT_MS = 10;
+        const DEBUGGER_TIMEOUT_MS = 10_000;
+        const FRAME_OBSERVE_MIN_TIMEOUT_MS = 100;
         let controlLease = null;
         let stopCalls = 0;
+        const timeouts = [];
         const chrome = { debugger: { sendCommand: () => new Promise(() => {}) } };
         function assertLeaseAuthority() {}
         function assertCommandActive() {}
         function assertLeaseAuthorityAfterDispatch() {}
-        function withTimeout(_operation, _timeoutMs, method) {
+        function withTimeout(_operation, timeoutMs, method) {
+          timeouts.push(timeoutMs);
           const error = new Error("DEBUGGER_TIMEOUT: " + method + " exceeded 10ms");
           error.code = "DEBUGGER_TIMEOUT";
           return Promise.reject(error);
         }
         function stopControl() { stopCalls += 1; return Promise.resolve(); }
         ${pendingDialogError}
+        ${commandTimeoutMs}
+        ${frameObserveTimeoutError}
         ${debuggerCommand}
         return {
           setLease(lease) { controlLease = lease; },
-          run: () => debuggerCommand(9, "Runtime.evaluate", {}, { sessionId: "s" }, null),
+          run: (options) => debuggerCommand(9, "Runtime.evaluate", {}, { sessionId: "s" }, null, null, options),
           stops: () => stopCalls,
+          timeouts: () => [...timeouts],
         };
       `)();
       cdp.setLease({ pendingDialog: { type: "beforeunload" } });
@@ -3596,6 +3689,29 @@ fn pending_dialogs_fail_fast_and_never_revoke_the_lease_by_timeout() {
       try { await cdp.run(); } catch (error) { cdpUnknownFailure = error; }
       if (cdpUnknownFailure?.code !== "CDP_OUTCOME_UNKNOWN" || cdp.stops() !== 1) {
         throw new Error("a dialog-free CDP timeout lost its outcome-unknown revocation");
+      }
+
+      // A read-only frame-observation command carries the observation
+      // deadline and is never lease-fatal: a slow third-party iframe costs
+      // that frame, not the lease.
+      let observeFailure = null;
+      try { await cdp.run({ deadlineAt: Date.now() + 5_000, timeoutIsFatal: false }); }
+      catch (error) { observeFailure = error; }
+      if (observeFailure?.code !== "FRAME_OBSERVE_TIMEOUT" || cdp.stops() !== 1) {
+        throw new Error(`a frame observation timeout revoked the lease: ${observeFailure && observeFailure.code}`);
+      }
+      // Every command is bounded by what is left of the shared deadline, so
+      // sixteen slow frames cannot stretch one observation command by command.
+      const spentDeadline = cdp.timeouts().at(-1);
+      if (!(spentDeadline > 4_000) || spentDeadline > 5_000) {
+        throw new Error(`a frame observation command ignored the shared deadline: ${spentDeadline}`);
+      }
+      await cdp.run({ deadlineAt: Date.now() - 5_000, timeoutIsFatal: false }).catch(() => {});
+      if (cdp.timeouts().at(-1) !== 100) {
+        throw new Error(`an expired deadline did not fall back to the floor: ${cdp.timeouts().at(-1)}`);
+      }
+      if (cdp.timeouts()[0] !== 10_000) {
+        throw new Error("a deadline-free command lost the lease-fatal timeout");
       }
 
       // The heartbeat commits without the Runtime.evaluate renderer probe or
@@ -3672,6 +3788,566 @@ fn pending_dialogs_fail_fast_and_never_revoke_the_lease_by_timeout() {
     );
 }
 
+/// Regression for the defect the live packaged 0.10.0 run exposed: a
+/// `confirm()` scheduled by `page.evaluate` opened WHILE the post-action
+/// auto-observe was already in flight, the document-identity check at the
+/// screenshot-completion boundary failed against the dialog-frozen renderer,
+/// and the lease was hard-revoked with `document_changed:screenshot
+/// completion`. The 0.10 contract tests missed it because they injected
+/// `pendingDialog` before exercising the gate; these harnesses instead open
+/// the dialog mid-flight, between the capture call and the completion check.
+#[test]
+fn a_dialog_that_opens_mid_observation_is_never_paid_for_with_the_lease() {
+    let background = fs::read_to_string("extension/background.js").unwrap();
+
+    // The observation reads the dialog record at its own start, because the
+    // dispatch gate only proves the state at command entry, and again after
+    // the capture, so a snapshot taken across a dialog is discarded instead
+    // of published.
+    let observe_start = background
+        .find("async function observeControlledPage")
+        .unwrap();
+    let observe_end = background[observe_start..].find("\n}\n").unwrap() + observe_start;
+    let observe = &background[observe_start..observe_end];
+    assert!(
+        observe
+            .find("assertDialogNotBlocking(\"observation start\")")
+            .unwrap()
+            < observe.find("requireControl").unwrap()
+    );
+    assert!(
+        observe.find("captureTab(").unwrap()
+            < observe
+                .find("assertDialogNotBlocking(\"observation completion\")")
+                .unwrap()
+    );
+    assert!(
+        observe
+            .find("assertDialogNotBlocking(\"observation completion\")")
+            .unwrap()
+            < observe.find("return { snapshot, screenshot").unwrap()
+    );
+
+    // The overlay boundary revokes too, so it carries the same guard, and the
+    // capture teardown does not spend two content timeouts against a frozen
+    // renderer before reaching it.
+    let ui_start = background
+        .find("async function failControlUiClosed")
+        .unwrap();
+    let ui_end = background[ui_start..].find("\n}\n").unwrap() + ui_start;
+    let ui = &background[ui_start..ui_end];
+    assert!(ui.find("assertDialogNotBlocking(phase)").unwrap() < ui.find("stopControl").unwrap());
+    let capture_start = background.find("async function captureTab").unwrap();
+    let capture_end = background[capture_start..].find("\n}\n").unwrap() + capture_start;
+    let capture = &background[capture_start..capture_end];
+    assert!(capture.contains("const dialogBlocked = Boolean(controlLease?.pendingDialog)"));
+    assert!(capture.contains("if (!dialogBlocked) {"));
+    assert!(capture.contains("leaseStillActive && !restored && !dialogBlocked"));
+
+    // A dialog-caused refusal is a plain retriable refusal, never laundered
+    // into ACTION_OUTCOME_UNKNOWN by the after-dispatch wrapper.
+    let after_start = background
+        .find("async function verifyDocumentAuthorityAfterDispatch")
+        .unwrap();
+    let after_end = background[after_start..].find("\n}\n").unwrap() + after_start;
+    assert!(background[after_start..after_end].contains("\"BLOCKED_BY_DIALOG\""));
+
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const signatureEnd = source.indexOf(") {", start);
+        const brace = signatureEnd + 2;
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const pendingDialogError = extractFunction(source, "pendingDialogError");
+      const assertDialogNotBlocking = extractFunction(source, "assertDialogNotBlocking");
+      const failChangedDocument = extractFunction(source, "failChangedDocument");
+      const verifyDocumentAuthority = extractFunction(source, "verifyDocumentAuthority");
+      const failControlUiClosed = extractFunction(source, "failControlUiClosed");
+      const captureTab = extractFunction(source, "captureTab");
+      const clearPendingDialog = extractFunction(source, "clearPendingDialog");
+
+      // The real screenshot boundary, driven exactly the way the live run
+      // drove it: the capture succeeds, the dialog opens while it is in
+      // flight, and the document-identity probe that follows fails against
+      // the frozen renderer.
+      function newLease() {
+        return {
+          tabId: 9, sessionId: "lease-1", epoch: 1, documentEpoch: 4,
+          loaderId: "L1", frameId: "F1", documentUrl: "https://example.test/",
+          navigationReady: true, pendingNavigation: null, pendingDialog: null,
+          cursor: { visible: false },
+          policy: { allowedHosts: ["example.test"], port: 17373, fullAccess: true },
+        };
+      }
+      const boundary = new Function(`
+        const crypto = { randomUUID: () => "capture-1" };
+        let controlLease = null;
+        let stopCalls = 0, contentCalls = 0, reportedLoaderId = "L1", releaseRetries = 0;
+        function retryDialogBlockedInputRelease() { releaseRetries += 1; return Promise.resolve(); }
+        let onScreenshot = () => {};
+        function requireControl() { return Promise.resolve(controlLease); }
+        function captureLeaseAuthority(lease = controlLease) {
+          return { tabId: lease.tabId, sessionId: lease.sessionId, epoch: lease.epoch, documentEpoch: lease.documentEpoch };
+        }
+        function assertLeaseAuthority() {}
+        function assertLeaseAuthorityAfterDispatch() {}
+        function beginControlCapture() { return ["capture-1"]; }
+        function endControlCapture() { return []; }
+        function controlUiAcknowledged() { return true; }
+        function contentRequest() { contentCalls += 1; return Promise.resolve({}); }
+        function showControlUi() { return Promise.resolve({}); }
+        function persistControlState() { return Promise.resolve(); }
+        function getTab() { return Promise.resolve({ id: 9, url: "https://example.test/" }); }
+        function effectiveTabUrl(tab) { return tab.url; }
+        function allowedTabVerdict() { return { allowed: true, reason: "" }; }
+        function policyUrlVerdict() { return { allowed: true, reason: "" }; }
+        function sameDocumentUrl(left, right) { return String(left) === String(right); }
+        function stopControl() { stopCalls += 1; controlLease = null; return Promise.resolve(); }
+        function debuggerCommand(_tabId, method) {
+          if (method === "Page.getFrameTree") {
+            return Promise.resolve({ frameTree: { frame: { id: "F1", loaderId: reportedLoaderId, url: "https://example.test/" } } });
+          }
+          if (method === "Page.captureScreenshot") {
+            onScreenshot();
+            return Promise.resolve({ data: "AAAA" });
+          }
+          return Promise.resolve({});
+        }
+        ${pendingDialogError}
+        ${assertDialogNotBlocking}
+        ${failChangedDocument}
+        ${verifyDocumentAuthority}
+        ${failControlUiClosed}
+        ${captureTab}
+        ${clearPendingDialog}
+        return {
+          reset(lease) { controlLease = lease; stopCalls = 0; contentCalls = 0; reportedLoaderId = "L1"; releaseRetries = 0; onScreenshot = () => {}; },
+          duringScreenshot(hook) { onScreenshot = hook; },
+          navigateAway() { reportedLoaderId = "L2"; },
+          openDialog(type) { controlLease.pendingDialog = { type }; },
+          capture: () => captureTab({ id: 9, url: "https://example.test/" }, null, null),
+          verify: (label) => verifyDocumentAuthority(9, captureLeaseAuthority(), null, label),
+          clear: () => clearPendingDialog(captureLeaseAuthority()),
+          lease: () => controlLease,
+          stops: () => stopCalls,
+          contents: () => contentCalls,
+          releaseRetries: () => releaseRetries,
+        };
+      `)();
+
+      // 1. The live ordering. The dialog opens AFTER the capture began, so
+      //    the completion check is the first boundary that sees it.
+      const raced = newLease();
+      boundary.reset(raced);
+      boundary.duringScreenshot(() => {
+        boundary.openDialog("confirm");
+        boundary.navigateAway();
+      });
+      let racedFailure = null;
+      try { await boundary.capture(); } catch (error) { racedFailure = error; }
+      if (racedFailure?.code !== "BLOCKED_BY_DIALOG") {
+        throw new Error(`a dialog opened mid-capture was misreported as ${racedFailure && racedFailure.code}`);
+      }
+      if (boundary.stops() !== 0 || boundary.lease() !== raced || !raced.pendingDialog) {
+        throw new Error("a dialog opened mid-capture revoked the lease");
+      }
+      // The frozen renderer is not asked to acknowledge the teardown either:
+      // only the capture-begin message was ever sent.
+      if (boundary.contents() !== 1) {
+        throw new Error(`the capture teardown talked to a dialog-frozen renderer ${boundary.contents()} times`);
+      }
+
+      // 2. The same identity failure with NO dialog still revokes: the
+      //    fail-closed guarantee is untouched.
+      const changed = newLease();
+      boundary.reset(changed);
+      boundary.duringScreenshot(() => boundary.navigateAway());
+      let changedFailure = null;
+      try { await boundary.capture(); } catch (error) { changedFailure = error; }
+      if (changedFailure?.code !== "DOCUMENT_CHANGED" || boundary.stops() !== 1 || boundary.lease() !== null) {
+        throw new Error(`a real document change stopped revoking: ${changedFailure && changedFailure.code}`);
+      }
+
+      // 3. A document that really changed while the dialog was open is not
+      //    forgiven: once the dialog is resolved the next check runs in full
+      //    and revokes.
+      const forgiven = newLease();
+      boundary.reset(forgiven);
+      boundary.openDialog("confirm");
+      boundary.navigateAway();
+      let blockedCheck = null;
+      try { await boundary.verify("observation snapshot"); } catch (error) { blockedCheck = error; }
+      if (blockedCheck?.code !== "BLOCKED_BY_DIALOG" || boundary.stops() !== 0 || boundary.lease() !== forgiven) {
+        throw new Error("a document check under a dialog revoked the lease");
+      }
+      if (await boundary.clear() !== true || forgiven.pendingDialog !== null) {
+        throw new Error("page.handleDialog did not clear the pending dialog record");
+      }
+      // Clearing the record is also the moment a release the dialog blocked
+      // becomes possible again, so the retry runs from this one choke point.
+      if (boundary.releaseRetries() !== 1) {
+        throw new Error("clearing a dialog did not retry the input release it blocked");
+      }
+      let afterDialog = null;
+      try { await boundary.verify("observation snapshot"); } catch (error) { afterDialog = error; }
+      if (afterDialog?.code !== "DOCUMENT_CHANGED" || boundary.stops() !== 1 || boundary.lease() !== null) {
+        throw new Error(`a navigation hidden by a dialog was forgiven after it closed: ${afterDialog && afterDialog.code}`);
+      }
+
+      // 4. The observation path itself: a dialog at the start refuses before
+      //    touching the renderer, a dialog that opens inside the capture
+      //    discards the observation, and a dialog-free run still publishes.
+      const observeControlledPage = extractFunction(source, "observeControlledPage");
+      const observation = new Function(`
+        let controlLease = null;
+        let frameSnapshot = null, frameTreeRevision = 0;
+        const frameSkips = [];
+        const attachedFrames = new Map();
+        let stopCalls = 0, requireCalls = 0, snapshotCalls = 0, captureCalls = 0;
+        let onCapture = () => {};
+        function requireControl() { requireCalls += 1; return Promise.resolve(controlLease); }
+        function captureLeaseAuthority(lease = controlLease) {
+          return { tabId: lease.tabId, sessionId: lease.sessionId, epoch: lease.epoch, documentEpoch: lease.documentEpoch };
+        }
+        function assertLeaseAuthority() {}
+        function verifyDocumentAuthority() { return Promise.resolve({}); }
+        function showControlUi() { return Promise.resolve({}); }
+        function persistControlState() { return Promise.resolve(); }
+        function contentRequest() {
+          snapshotCalls += 1;
+          return Promise.resolve({ generation: "g1", viewport: { width: 800, height: 600 }, elements: [{ ref: "g1.e1" }], frameOwners: [] });
+        }
+        function collectFrameObservations(_tabId, snapshot) {
+          return Promise.resolve({ elements: snapshot.elements, frames: [], frameSummary: { supported: false } });
+        }
+        function mergeFrameObservations(snapshot) { return { elements: snapshot.elements, frames: [], frameSummary: { supported: false } }; }
+        function frameObservationIsSilent() { return true; }
+        function rethrowLeaseFatalFrameError() {}
+        function classifyRisk() { return "low"; }
+        function publicControlState() { return { active: true }; }
+        function stopControl() { stopCalls += 1; controlLease = null; return Promise.resolve(); }
+        function captureTab() { captureCalls += 1; onCapture(); return Promise.resolve("data:image/jpeg;base64,AAAA"); }
+        ${pendingDialogError}
+        ${assertDialogNotBlocking}
+        ${observeControlledPage}
+        return {
+          reset(lease) { controlLease = lease; stopCalls = 0; requireCalls = 0; snapshotCalls = 0; captureCalls = 0; onCapture = () => {}; },
+          duringCapture(hook) { onCapture = hook; },
+          openDialog(type) { controlLease.pendingDialog = { type }; },
+          observe: () => observeControlledPage({ id: 9, url: "https://example.test/" }, null),
+          lease: () => controlLease,
+          state: () => ({ stopCalls, requireCalls, snapshotCalls, captureCalls }),
+        };
+      `)();
+
+      const midObservation = newLease();
+      observation.reset(midObservation);
+      observation.duringCapture(() => observation.openDialog("confirm"));
+      let discarded = null;
+      try { await observation.observe(); } catch (error) { discarded = error; }
+      if (discarded?.code !== "BLOCKED_BY_DIALOG") {
+        throw new Error(`an observation raced by a dialog was published or misreported: ${discarded && discarded.code}`);
+      }
+      if (observation.state().stopCalls !== 0 || observation.lease() !== midObservation) {
+        throw new Error("an observation raced by a dialog revoked the lease");
+      }
+
+      const alreadyOpen = newLease();
+      alreadyOpen.pendingDialog = { type: "alert" };
+      observation.reset(alreadyOpen);
+      let refusedEarly = null;
+      try { await observation.observe(); } catch (error) { refusedEarly = error; }
+      const earlyState = observation.state();
+      if (refusedEarly?.code !== "BLOCKED_BY_DIALOG"
+        || earlyState.requireCalls !== 0 || earlyState.snapshotCalls !== 0 || earlyState.captureCalls !== 0) {
+        throw new Error(`an observation under an open dialog touched the renderer: ${JSON.stringify(earlyState)}`);
+      }
+
+      const healthy = newLease();
+      observation.reset(healthy);
+      const published = await observation.observe();
+      if (!published?.snapshot || !published.screenshot || published.snapshot.elements[0].risk !== "low") {
+        throw new Error("the dialog guards broke the ordinary observation");
+      }
+      if (observation.state().stopCalls !== 0 || observation.lease() !== healthy) {
+        throw new Error("an ordinary observation revoked the lease");
+      }
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run mid-observation dialog harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node mid-observation dialog harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// The two revocation routes the 0.11 dialog guard did not cover, both of
+/// them reachable on the commonest real dialog of all: `alert()` or
+/// `confirm()` inside the handler of the element the agent just clicked.
+/// One is the held-input cleanup that runs in `trustedClick`'s `finally`
+/// against the dialog-frozen renderer; the other is the worker-restart
+/// recovery, whose catch-all used to swallow the guard's own
+/// `BLOCKED_BY_DIALOG` and revoke anyway.
+#[test]
+fn a_dialog_revokes_the_lease_through_neither_input_release_nor_worker_recovery() {
+    let background = fs::read_to_string("extension/background.js").unwrap();
+
+    // Both release cleanups consult the dialog record immediately before
+    // revoking, exactly like every other revocation boundary.
+    for (function, reason) in [
+        (
+            "async function releaseHeldMouseInput",
+            "mouse_release_failed",
+        ),
+        ("async function releaseHeldKeyInput", "key_release_failed"),
+    ] {
+        let start = background.find(function).unwrap();
+        let end = background[start..].find("\n}\n").unwrap() + start;
+        let body = &background[start..end];
+        assert!(
+            body.find("assertDialogNotBlocking").unwrap()
+                < body.find(&format!("stopControl(\"{reason}\"")).unwrap(),
+            "{function} can still revoke a lease under a pending dialog"
+        );
+    }
+
+    // A deferred release is not forgiven permanently: both places a dialog
+    // can end retry it the moment the renderer can answer again.
+    let clear_start = background
+        .find("async function clearPendingDialog")
+        .unwrap();
+    let clear_end = background[clear_start..].find("\n}\n").unwrap() + clear_start;
+    assert!(background[clear_start..clear_end].contains("retryDialogBlockedInputRelease"));
+    let closed_start = background
+        .find("if (method === \"Page.javascriptDialogClosed\")")
+        .unwrap();
+    let closed_end = background[closed_start..].find("\n  }\n").unwrap() + closed_start;
+    assert!(background[closed_start..closed_end].contains("retryDialogBlockedInputRelease"));
+
+    // The worker-restart recovery no longer swallows BLOCKED_BY_DIALOG into
+    // its catch-all revocation.
+    let recovery_start = background
+        .find("async function finishRecoveredLease")
+        .unwrap();
+    let recovery_end = background[recovery_start..].find("\n}\n").unwrap() + recovery_start;
+    let recovery = &background[recovery_start..recovery_end];
+    assert!(
+        recovery
+            .find("error?.code === \"BLOCKED_BY_DIALOG\"")
+            .unwrap()
+            < recovery
+                .find("stopControl(\"recovered_document_unverified\"")
+                .unwrap()
+    );
+
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const signatureEnd = source.indexOf(") {", start);
+        const brace = signatureEnd + 2;
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const pendingDialogError = extractFunction(source, "pendingDialogError");
+      const assertDialogNotBlocking = extractFunction(source, "assertDialogNotBlocking");
+      const releaseHeldMouseInput = extractFunction(source, "releaseHeldMouseInput");
+      const releaseHeldKeyInput = extractFunction(source, "releaseHeldKeyInput");
+      const retryDialogBlockedInputRelease = extractFunction(source, "retryDialogBlockedInputRelease");
+
+      // The real cleanup functions, driven the way trustedClick's finally
+      // drives them: the renderer is frozen, so the release command is never
+      // acknowledged.
+      const release = new Function(`
+        let controlLease = null;
+        let stopCalls = 0, dispatched = 0, frozen = false;
+        const heldMouseInputs = new Map();
+        const heldKeyInputs = new Map();
+        function bestEffortDebuggerRelease() {
+          dispatched += 1;
+          return Promise.resolve(!controlLease?.pendingDialog && !frozen);
+        }
+        function clearHeldInputIntent(map, key) { map.delete(key); return Promise.resolve(); }
+        function stopControl() { stopCalls += 1; controlLease = null; return Promise.resolve(); }
+        ${pendingDialogError}
+        ${assertDialogNotBlocking}
+        ${releaseHeldMouseInput}
+        ${releaseHeldKeyInput}
+        ${retryDialogBlockedInputRelease}
+        return {
+          setLease(lease) { controlLease = lease; },
+          freeze(value) { frozen = value; },
+          hold(mouseKey, keyKey) {
+            heldMouseInputs.set(mouseKey, { tabId: 9, releaseMethod: "Input.dispatchMouseEvent", releaseParams: { type: "mouseReleased" } });
+            heldKeyInputs.set(keyKey, { tabId: 9, releaseMethod: "Input.dispatchKeyEvent", releaseParams: { type: "keyUp" } });
+          },
+          releaseMouse: (key) => releaseHeldMouseInput(key, heldMouseInputs.get(key)),
+          releaseKey: (key) => releaseHeldKeyInput(key, heldKeyInputs.get(key)),
+          retry: (tabId) => retryDialogBlockedInputRelease(tabId),
+          held: () => heldMouseInputs.size + heldKeyInputs.size,
+          stops: () => stopCalls,
+          dispatches: () => dispatched,
+          lease: () => controlLease,
+        };
+      `)();
+
+      // 1. alert() inside the click handler: the press and its release both
+      //    stall on the frozen renderer, so the finally cleanup runs under
+      //    the dialog. It reports the dialog and keeps the lease.
+      const clicked = { tabId: 9, sessionId: "lease-1", epoch: 1, pendingDialog: { type: "confirm" } };
+      release.setLease(clicked);
+      release.hold("mouse-1", "key-1");
+      let mouseBlocked = null;
+      try { await release.releaseMouse("mouse-1"); } catch (error) { mouseBlocked = error; }
+      let keyBlocked = null;
+      try { await release.releaseKey("key-1"); } catch (error) { keyBlocked = error; }
+      if (mouseBlocked?.code !== "BLOCKED_BY_DIALOG" || keyBlocked?.code !== "BLOCKED_BY_DIALOG") {
+        throw new Error(`a dialog-blocked release was misreported as ${mouseBlocked && mouseBlocked.code}/${keyBlocked && keyBlocked.code}`);
+      }
+      if (release.stops() !== 0 || release.lease() !== clicked) {
+        throw new Error("a dialog-blocked input release revoked the lease");
+      }
+      if (release.held() !== 2) {
+        throw new Error("a dialog-blocked release dropped the durable intent it still owes");
+      }
+
+      // 2. Nothing is retried while the dialog is still up: the deferred
+      //    release waits instead of burning the frozen renderer.
+      const dispatchedBeforeRetry = release.dispatches();
+      await release.retry(9);
+      if (release.dispatches() !== dispatchedBeforeRetry || release.held() !== 2) {
+        throw new Error("a retry ran against a renderer that was still frozen");
+      }
+
+      // 3. The dialog is resolved, so the owed releases go out and settle.
+      clicked.pendingDialog = null;
+      await release.retry(9);
+      if (release.held() !== 0 || release.stops() !== 0 || release.lease() !== clicked) {
+        throw new Error("the post-dialog retry did not release the inputs it deferred");
+      }
+
+      // 4. The fail-closed rule is untouched: a release that stays
+      //    unacknowledged with NO dialog pending still revokes.
+      release.hold("mouse-2", "key-2");
+      release.freeze(true);
+      let unacknowledged = null;
+      try { await release.releaseMouse("mouse-2"); } catch (error) { unacknowledged = error; }
+      if (unacknowledged?.code !== "INPUT_RELEASE_FAILED" || release.stops() !== 1 || release.lease() !== null) {
+        throw new Error(`a dialog-free release failure stopped revoking: ${unacknowledged && unacknowledged.code}`);
+      }
+
+      // The worker-restart recovery: the persisted lease carries its
+      // pendingDialog, the browser-side document identity still verifies, and
+      // only the overlay repaint is impossible.
+      const failControlUiClosed = extractFunction(source, "failControlUiClosed");
+      const finishRecoveredLease = extractFunction(source, "finishRecoveredLease");
+      const recovery = new Function(`
+        let controlLease = null;
+        let stopCalls = 0, persistCalls = 0, heartbeatCalls = 0, identityBlocked = false;
+        function initializeLeaseDocument(lease) {
+          if (identityBlocked) return Promise.reject(pendingDialogError("recovered document identity"));
+          lease.navigationReady = true;
+          return Promise.resolve({});
+        }
+        function persistControlState() { persistCalls += 1; return Promise.resolve(); }
+        function scheduleHeartbeat() { heartbeatCalls += 1; }
+        function stopControl() { stopCalls += 1; controlLease = null; return Promise.resolve(); }
+        function showControlUi() {
+          return failControlUiClosed(controlLease, "show", new Error("the page did not confirm a painted control indicator"));
+        }
+        ${pendingDialogError}
+        ${assertDialogNotBlocking}
+        ${failControlUiClosed}
+        ${finishRecoveredLease}
+        return {
+          reset(lease, blocked) { controlLease = lease; stopCalls = 0; persistCalls = 0; heartbeatCalls = 0; identityBlocked = blocked === true; },
+          finish: () => finishRecoveredLease({ id: 9 }, { allowedHosts: [], port: 17373, fullAccess: true }),
+          lease: () => controlLease,
+          state: () => ({ stopCalls, persistCalls, heartbeatCalls }),
+        };
+      `)();
+
+      // 5. Restart with the dialog still open: the lease survives and keeps
+      //    its heartbeat, and the indicator is repainted after the dialog.
+      const restarted = { tabId: 9, sessionId: "lease-2", epoch: 2, navigationReady: false, pendingDialog: { type: "alert" } };
+      recovery.reset(restarted, false);
+      if (await recovery.finish() !== true || recovery.lease() !== restarted) {
+        throw new Error("a worker restart under a dialog revoked the recovered lease");
+      }
+      if (recovery.state().stopCalls !== 0 || recovery.state().heartbeatCalls < 1) {
+        throw new Error(`the dialog-blocked recovery revoked or stopped watching: ${JSON.stringify(recovery.state())}`);
+      }
+
+      // 6. The same unacknowledged indicator with no dialog still revokes.
+      const dark = { tabId: 9, sessionId: "lease-3", epoch: 3, navigationReady: false, pendingDialog: null };
+      recovery.reset(dark, false);
+      if (await recovery.finish() !== false || recovery.lease() !== null || recovery.state().stopCalls < 1) {
+        throw new Error("a dialog-free unacknowledged indicator survived a recovery");
+      }
+
+      // 7. And a recovery that could not verify the document at all is the
+      //    stated boundary: it still revokes, dialog or not.
+      const unverified = { tabId: 9, sessionId: "lease-4", epoch: 4, navigationReady: false, pendingDialog: { type: "prompt" } };
+      recovery.reset(unverified, true);
+      if (await recovery.finish() !== false || recovery.lease() !== null || recovery.state().stopCalls !== 1) {
+        throw new Error("an unverifiable recovered document was kept behind a dialog");
+      }
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run dialog release/recovery harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node dialog release/recovery harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn server_and_extension_command_allowlists_match() {
     let background = fs::read_to_string("extension/background.js").unwrap();
@@ -3721,5 +4397,1881 @@ fn inspect_file(path: &Path) {
         }),
         "Hangul found in {}",
         path.display()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// v0.11 cross-origin frame (OOPIF) contracts
+// ---------------------------------------------------------------------------
+
+/// The only failures a frame may carry out of a read-only observation: each
+/// one invalidates the whole observation, not just one frame's contribution.
+/// Frame latency is deliberately absent.
+const FRAME_LEASE_FATAL_CODES: &[&str] = &[
+    "CONTROL_CANCELED",
+    "COMMAND_CANCELED",
+    "DOCUMENT_CHANGED",
+    "ACTION_OUTCOME_UNKNOWN",
+    "CDP_OUTCOME_UNKNOWN",
+    "BLOCKED_BY_DIALOG",
+];
+
+#[test]
+fn frame_targets_auto_attach_is_flat_bounded_and_iframe_only() {
+    let background = fs::read_to_string("extension/background.js").unwrap();
+    assert!(background.contains("const FRAME_MAX_ATTACHED = 16"));
+    assert!(background.contains("const FRAME_MAX_DEPTH = 5"));
+    assert!(background.contains("const FRAME_PER_FRAME_ELEMENT_CAP = 120"));
+    assert!(background.contains("const FRAME_TOP_ELEMENT_CAP = 400"));
+    assert!(background.contains("const FRAME_ELEMENT_CAP_TOTAL = 500"));
+    assert!(background.contains("const FRAME_SKIP_REPORT_MAX = 32"));
+    assert!(background.contains("const FRAME_OFFSET_TOLERANCE_PX = 2"));
+    assert!(background.contains("const FRAME_OBSERVE_BUDGET_MS = 4_000"));
+    assert!(background.contains("const FRAME_OBSERVE_MIN_TIMEOUT_MS = 100"));
+
+    // Read-only frame observation may cost the frame, never the lease: the
+    // non-fatal timeout branch has to sit ahead of the revocation.
+    let non_fatal = background
+        .find("if (options?.timeoutIsFatal === false) throw frameObserveTimeoutError")
+        .expect("frame observation timeouts are lease-fatal again");
+    let revocation = background
+        .find("await stopControl(`cdp_timeout:${method}`")
+        .unwrap();
+    assert!(
+        non_fatal < revocation,
+        "a frame observation timeout can still revoke the lease"
+    );
+    assert!(!FRAME_LEASE_FATAL_CODES.contains(&"FRAME_OBSERVE_TIMEOUT"));
+    let fatal_start = background
+        .find("function rethrowLeaseFatalFrameError")
+        .unwrap();
+    let fatal_end = background[fatal_start..].find("\n}\n").unwrap() + fatal_start;
+    for code in FRAME_LEASE_FATAL_CODES {
+        assert!(
+            background[fatal_start..fatal_end].contains(code),
+            "{code} no longer propagates out of the frame pass"
+        );
+    }
+    assert!(!background[fatal_start..fatal_end].contains("FRAME_OBSERVE_TIMEOUT"));
+
+    let enable_start = background
+        .find("async function enableFrameAutoAttach")
+        .unwrap();
+    let enable_end = background[enable_start..]
+        .find("\nasync function probeFrameSession")
+        .unwrap()
+        + enable_start;
+    let enable = &background[enable_start..enable_end];
+    assert!(enable.contains("\"Target.setAutoAttach\""));
+    assert!(enable.contains("autoAttach: true"));
+    assert!(enable.contains("waitForDebuggerOnStart: false"));
+    assert!(enable.contains("flatten: true"));
+
+    // Any auto-attached relative that is not an iframe of the leased tab is
+    // detached immediately, so the lease never widens past the page target
+    // plus its own frames.
+    let record_start = background
+        .find("async function recordAttachedTarget")
+        .unwrap();
+    let record_end = background[record_start..]
+        .find("\n// Never fails the lease")
+        .unwrap()
+        + record_start;
+    let record = &background[record_start..record_end];
+    assert!(record.contains("targetInfo.type !== \"iframe\""));
+    assert!(record.contains("detachFrameTarget(tabId, sessionId, \"non_iframe_target\")"));
+    assert!(record.contains("detachFrameTarget(tabId, sessionId, \"no_lease\")"));
+    assert!(record.contains("attachedFrames.size >= FRAME_MAX_ATTACHED"));
+    assert!(record.contains("\"budget_frames\""));
+    assert!(record.contains("\"blank_document\""));
+    assert!(background.contains("\"Target.detachFromTarget\""));
+
+    // The routing probe must stay discriminating: a truthiness check would
+    // accept the ROOT frame tree from a Chrome that ignores sessionId.
+    let probe_start = background.find("async function probeFrameSession").unwrap();
+    let probe_end = background[probe_start..]
+        .find("\nasync function prepareOwnerSession")
+        .unwrap()
+        + probe_start;
+    let probe = &background[probe_start..probe_end];
+    assert!(probe.contains("frame.id !== record.targetId"));
+    assert!(background.contains("session_routing_unverified"));
+    assert_eq!(manifest()["minimum_chrome_version"], "118");
+}
+
+#[test]
+fn root_debugger_events_ignore_child_sessions() {
+    let background = fs::read_to_string("extension/background.js").unwrap();
+    let listener_start = background
+        .find("chrome.debugger.onEvent.addListener(")
+        .unwrap();
+    let listener_end = background[listener_start..]
+        .find("chrome.tabs.onUpdated.addListener(")
+        .unwrap()
+        + listener_start;
+    let listener = &background[listener_start..listener_end];
+    let gate = listener.find("if (source.sessionId) {").unwrap();
+    assert!(listener[gate..].contains("handleFrameSessionEvent(source, method, params);"));
+    // Every existing root-only branch must sit after the gate: an
+    // out-of-process iframe's own Page.frameNavigated carries no parentId and
+    // would otherwise be read as a top-level navigation.
+    for branch in [
+        "method === \"Page.frameNavigated\"",
+        "method === \"Page.navigatedWithinDocument\"",
+        "method === \"Page.javascriptDialogOpening\"",
+        "method === \"Page.javascriptDialogClosed\"",
+    ] {
+        let at = listener
+            .find(branch)
+            .unwrap_or_else(|| panic!("missing {branch}"));
+        assert!(
+            at > gate,
+            "{branch} is not gated behind the child-session return"
+        );
+    }
+    assert_eq!(listener.matches("handleFrameSessionEvent").count(), 1);
+    assert!(listener.contains("method === \"Target.attachedToTarget\""));
+    assert!(listener.contains("method === \"Target.detachedFromTarget\""));
+}
+
+#[test]
+fn frame_sessions_are_cleared_on_every_lease_teardown() {
+    let background = fs::read_to_string("extension/background.js").unwrap();
+    // One choke point: stopControl and hardRevokeDetached both pass through
+    // synchronouslyTakeControlLease, and only clearFrameSessions empties the
+    // session map for a teardown.
+    assert_eq!(background.matches("clearFrameSessions()").count(), 2);
+    let take_start = background
+        .find("function synchronouslyTakeControlLease")
+        .unwrap();
+    let take_end = background[take_start..]
+        .find("\nasync function bestEffortDebuggerRelease")
+        .unwrap()
+        + take_start;
+    assert!(background[take_start..take_end].contains("clearFrameSessions()"));
+
+    let clear_start = background.find("function clearFrameSessions()").unwrap();
+    let clear_end = background[clear_start..].find("\n}\n").unwrap() + clear_start;
+    let clear = &background[clear_start..clear_end];
+    for cleared in [
+        "attachedFrames.clear()",
+        "frameParents.clear()",
+        "frameSkips.length = 0",
+        "frameSnapshot = null",
+        "rootWorldContextId = null",
+        "reason: \"no_lease\"",
+    ] {
+        assert!(clear.contains(cleared), "teardown does not clear {cleared}");
+    }
+    // No second, unverified debugger teardown path was added.
+    assert_eq!(background.matches("chrome.debugger.detach(").count(), 1);
+}
+
+#[test]
+fn frame_agent_is_read_only_and_isolated() {
+    let agent = fs::read_to_string("extension/frame-agent.js").unwrap();
+    let core = fs::read_to_string("extension/dom-core.js").unwrap();
+    let background = fs::read_to_string("extension/background.js").unwrap();
+    for forbidden in [
+        ".click(",
+        ".focus(",
+        "dispatchEvent",
+        "Input.",
+        "chrome.",
+        "setNativeValue",
+        "innerHTML",
+    ] {
+        assert!(
+            !agent.contains(forbidden),
+            "frame agent contains {forbidden}"
+        );
+        assert!(!core.contains(forbidden), "dom core contains {forbidden}");
+    }
+    // The agent only ever runs in a dedicated isolated world, never the main
+    // world where a page could redefine the proof primitives.
+    assert_eq!(
+        background.matches("\"Page.createIsolatedWorld\"").count(),
+        3
+    );
+    assert_eq!(background.matches("grantUniveralAccess: false").count(), 3);
+    assert!(background.contains("worldName: FRAME_AGENT_WORLD_NAME"));
+    assert!(background.contains("const FRAME_AGENT_WORLD_NAME = \"__lbb_frame_agent__\""));
+    assert!(!background.contains("grantUniveralAccess: true"));
+
+    // Lease-keyed: a leftover agent from an older lease refuses everything.
+    assert!(
+        agent.contains("FRAME_AGENT_STALE: this frame agent belongs to an older control lease")
+    );
+    assert!(agent.contains("function call(request)"));
+    assert!(agent.contains("return { ok: true, result: run(request ?? {}) };"));
+}
+
+#[test]
+fn frame_agent_and_content_share_one_dom_core() {
+    let core = fs::read_to_string("extension/dom-core.js").unwrap();
+    let sources = [
+        (
+            "extension/background.js",
+            fs::read_to_string("extension/background.js").unwrap(),
+        ),
+        (
+            "extension/content.js",
+            fs::read_to_string("extension/content.js").unwrap(),
+        ),
+        ("extension/dom-core.js", core.clone()),
+        (
+            "extension/frame-agent.js",
+            fs::read_to_string("extension/frame-agent.js").unwrap(),
+        ),
+    ];
+    for name in [
+        "clean",
+        "normalizedFieldIdentifier",
+        "isSensitiveFieldMetadata",
+        "visible",
+        "labelledBy",
+        "accessibleName",
+        "roleOf",
+        "boundsOf",
+        "describe",
+        "targetSignature",
+        "sameBounds",
+        "composedContains",
+        "deepElementFromPoint",
+        "composedCandidates",
+        "pointTarget",
+        "validateRecord",
+        "compareProof",
+        "createRevisionTracker",
+    ] {
+        let declaration = format!("function {name}(");
+        let total: usize = sources
+            .iter()
+            .map(|(_, source)| source.matches(&declaration).count())
+            .sum();
+        assert_eq!(total, 1, "{name} is not declared exactly once");
+        assert_eq!(
+            core.matches(&declaration).count(),
+            1,
+            "{name} is not declared in extension/dom-core.js"
+        );
+    }
+    // The content script consumes the core instead of re-implementing it.
+    let content = &sources[1].1;
+    assert!(content.contains("globalThis.__LBB_DOM_CORE__({ isExcludedNode: isControlNode })"));
+    assert!(content.contains("core.createRevisionTracker({"));
+    // The content script no longer owns any of the moved core constants.
+    assert!(!content.contains("GEOMETRY_TOLERANCE_PX"));
+    assert!(!content.contains("candidateSelector"));
+    let background = &sources[0].1;
+    assert!(background.contains("const CONTENT_SCRIPT_FILES = [\"dom-core.js\", \"content.js\"]"));
+    assert!(background.contains("files: CONTENT_SCRIPT_FILES"));
+    assert!(!background.contains("files: [\"content.js\"]"));
+    // The evaluated frame source is rebuilt from the packaged core, so there
+    // is no second transcription of these bodies anywhere.
+    assert!(core.contains("globalThis.__LBB_DOM_CORE_SOURCE__"));
+    assert!(
+        sources[3]
+            .1
+            .contains("globalThis.__LBB_FRAME_AGENT_SOURCE__")
+    );
+    assert!(background.contains("globalThis.__LBB_DOM_CORE_SOURCE__()"));
+}
+
+#[test]
+fn frame_refs_are_refused_by_every_action_except_click_and_hover() {
+    let background = fs::read_to_string("extension/background.js").unwrap();
+    let content = fs::read_to_string("extension/content.js").unwrap();
+    for method in ["page.fill", "page.select"] {
+        let start = background.find(&format!("case \"{method}\"")).unwrap();
+        let end = background[start + 5..]
+            .find("\n    case \"")
+            .map(|end| start + 5 + end)
+            .unwrap_or(background.len());
+        let body = &background[start..end];
+        let guard = body
+            .find(&format!("assertTopLevelRef(params.ref, \"{method}\")"))
+            .unwrap_or_else(|| panic!("{method} does not refuse frame refs"));
+        assert!(
+            guard < body.find("contentRequest(").unwrap(),
+            "{method} refuses a frame ref only after a content request"
+        );
+    }
+    assert!(background.contains("FRAME_ACTION_UNSUPPORTED:"));
+    assert!(background.contains("only page.click and page.hover accept frame-scoped refs"));
+    // A frame ref that somehow reaches the top document fails loudly instead
+    // of resolving against a colliding top-frame element key.
+    assert!(content.contains("FRAME_REF_MISROUTED: this ref belongs to a subframe"));
+    // Only the pointer paths route into a frame.
+    assert_eq!(background.matches("prepareFrameTarget(").count(), 3);
+
+    // A page with no frames at all publishes no frame keys, so its
+    // observation stays byte-identical to a pre-frame observation.
+    assert!(background.contains("if (!frameObservationIsSilent(merged)) {"));
+    let silent_start = background
+        .find("function frameObservationIsSilent(merged)")
+        .unwrap();
+    let silent_end = background[silent_start..].find("\n}\n").unwrap() + silent_start;
+    let silent = &background[silent_start..silent_end];
+    for condition in [
+        "merged.frames.length === 0",
+        "summary.ownersSeen === 0",
+        "summary.attached === 0",
+        "summary.skipped.length === 0",
+    ] {
+        assert!(silent.contains(condition), "silence ignores {condition}");
+    }
+}
+
+/// Shared Node harness that runs the real frame functions extracted from
+/// `extension/background.js` against a stubbed Chrome DevTools Protocol.
+const FRAME_HARNESS_PRELUDE: &str = r##"      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const signatureEnd = source.indexOf(") {", source.indexOf(marker));
+        const brace = signatureEnd + 2;
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      const background = fs.readFileSync("extension/background.js", "utf8");
+      const frameFunctions = [
+        "frameOriginOf", "frameDetachedError", "staleFrameTreeError",
+        "frameObserveTimeoutError", "frameObserveOptions", "frameSkipReasonFor",
+        "rethrowLeaseFatalFrameError", "recordFrameSkip", "markFrameTreeChanged",
+        "clearFrameSessions", "assertFrameSnapshotFresh", "parseFrameRef",
+        "assertTopLevelRef", "resolveFrameRecord", "quadRect", "ownerContentOrigin",
+        "frameOwnerBoxShifted",
+        "accumulateFrameOffset", "translateBounds", "intersects",
+        "frameElementInViewport", "frameBoxOf", "frameAncestors",
+        "frameOwnerWorldContextId", "frameDepthOf", "collectTreeFrames",
+        "orderFrameRecords", "mergeFrameObservations", "loadFrameAgentSource",
+        "detachFrameTarget", "recordAttachedTarget", "enableFrameAutoAttach",
+        "probeFrameSession", "prepareOwnerSession", "measureFrameOwner",
+        "installFrameAgent", "frameContentRequest", "verifyFrameAuthority", "resolveOwnerWorld",
+        "verifyFrameOwnerHitTest", "observeFrame", "collectFrameObservations",
+        "prepareFrameTarget", "frameClickHooks", "handleFrameSessionEvent",
+        "assertPointerArrival", "trustedClick",
+      ].map((name) => extractFunction(background, name)).join("\n");
+
+      // One frame-local rectangle per frame, so a translated bound is only
+      // ever the frame agent's own measurement plus the accumulated offset.
+      function defaultWorld(overrides = {}) {
+        return {
+          routeIgnoresSession: false,
+          ownerHit: true,
+          rootTree: {
+            frame: { id: "ROOT", loaderId: "L0", url: "https://top.example/" },
+            childFrames: [{ frame: { id: "F1", parentId: "ROOT", url: "https://pay.example/" } }],
+          },
+          frames: {
+            "child-1": {
+              targetId: "F1",
+              parentSession: null,
+              tree: { frame: { id: "F1", parentId: "ROOT", loaderId: "L1", url: "https://pay.example/" } },
+              owner: { backendNodeId: 501, x: 120, y: 64, width: 380, height: 220 },
+              elements: [{
+                key: "e1", role: "button", name: "Pay", type: "submit", disabled: false,
+                sensitive: false, inViewport: true, bounds: { x: 5, y: 5, width: 40, height: 20 },
+                proof: { signature: "sig-1", bounds: { x: 5, y: 5, width: 40, height: 20 } },
+              }],
+            },
+          },
+          ...overrides,
+        };
+      }
+
+      function makeFrameBridge(world = defaultWorld(), options = {}) {
+        const calls = [];
+        const sessionByFrameId = () => {
+          const map = new Map();
+          for (const [sessionId, frame] of Object.entries(world.frames)) map.set(frame.targetId, sessionId);
+          return map;
+        };
+        const frameForOwner = (frameId) => {
+          for (const frame of Object.values(world.frames)) {
+            if (frame.targetId === frameId) return frame;
+          }
+          return null;
+        };
+        function agentAnswer(sessionId, expression) {
+          const frame = world.frames[sessionId];
+          if (!frame) return { result: { value: { ok: false, error: "FRAME_AGENT_UNAVAILABLE: no agent" } } };
+          if (expression.includes('method: "install"')) {
+            return { result: { value: { ok: true, result: { nonce: `nonce-${sessionId}` } } } };
+          }
+          const payload = JSON.parse(expression.slice(expression.indexOf("call(") + 5, expression.lastIndexOf(")")));
+          calls.push({ agent: payload, sessionId });
+          if (payload.nonce !== `nonce-${sessionId}`) {
+            return { result: { value: { ok: false, error: "FRAME_AGENT_STALE: this frame agent belongs to an older control lease" } } };
+          }
+          if (payload.method === "snapshot") {
+            return { result: { value: { ok: true, result: {
+              agentGeneration: `agen-${sessionId}`,
+              revision: 1,
+              total: frame.elements.length,
+              truncated: Boolean(frame.truncated),
+              origin: "https://pay.example",
+              elements: frame.elements,
+            } } } };
+          }
+          const element = frame.elements.find((item) => item.key === payload.key);
+          if (!element) return { result: { value: { ok: false, error: "STALE_REF: the element changed; observe the page again" } } };
+          if (payload.method === "prepareClick") {
+            return { result: { value: { ok: true, result: { ...element, key: element.key } } } };
+          }
+          if (payload.method === "commitClick") {
+            return { result: { value: { ok: true, result: { validated: true, key: element.key, bounds: element.bounds } } } };
+          }
+          return { result: { value: { ok: false, error: "FRAME_AGENT_FAILED: unknown frame agent request" } } };
+        }
+        async function cdp(method, params, sessionId) {
+          if (options.fail && options.fail(method, params, sessionId, calls)) {
+            const code = options.failCode ?? "CDP_REJECTED";
+            const error = new Error(`${code}: ${method}`);
+            if (options.failCode) error.code = code;
+            throw error;
+          }
+          switch (method) {
+            case "Target.setAutoAttach":
+            case "Target.detachFromTarget":
+            case "DOM.enable":
+            case "Page.enable":
+            case "Input.dispatchMouseEvent":
+              return {};
+            case "DOM.getDocument":
+              return { root: { nodeId: 1 } };
+            case "Page.createIsolatedWorld":
+              return { executionContextId: sessionId ? 200 + Object.keys(world.frames).indexOf(sessionId) : 11 };
+            case "Page.getFrameTree": {
+              if (!sessionId) return { frameTree: world.rootTree };
+              if (world.routeIgnoresSession) return { frameTree: world.rootTree };
+              return { frameTree: world.frames[sessionId].tree };
+            }
+            case "DOM.getFrameOwner": {
+              const frame = frameForOwner(params.frameId);
+              if (!frame?.owner) return {};
+              return { backendNodeId: frame.owner.backendNodeId };
+            }
+            // Chrome answers with every quad; `border` models a real iframe
+            // border, which is what getBoundingClientRect() below reports and
+            // what the content quad deliberately does not include.
+            case "DOM.getBoxModel": {
+              const frame = Object.values(world.frames).find((item) => item.owner?.backendNodeId === params.backendNodeId);
+              if (!frame?.owner) return {};
+              const { x, y, width, height } = frame.owner;
+              if (frame.owner.malformed) return { model: { content: [x, y, x + width], width, height } };
+              const quad = (left, top, right, bottom) => [left, top, right, top, right, bottom, left, bottom];
+              const content = quad(x, y, x + width, y + height);
+              if (frame.owner.noBorderQuad) return { model: { content, width, height } };
+              const edge = Number(frame.owner.border) || 0;
+              return {
+                model: {
+                  content,
+                  border: quad(x - edge, y - edge, x + width + edge, y + height + edge),
+                  width,
+                  height,
+                },
+              };
+            }
+            case "DOM.resolveNode":
+              return { object: { objectId: `obj-${params.backendNodeId}` } };
+            // getBoundingClientRect() reports the border box, so a bordered
+            // iframe answers with a rect that is offset from its content quad
+            // by exactly the border on every side.
+            case "Runtime.callFunctionOn": {
+              const frame = Object.values(world.frames).find((item) => `obj-${item.owner?.backendNodeId}` === params.objectId);
+              const owner = frame?.owner ?? {};
+              const edge = Number(owner.border) || 0;
+              return { result: { value: {
+                hit: world.ownerHit !== false,
+                x: (owner.measuredX ?? owner.x) - edge,
+                y: (owner.measuredY ?? owner.y) - edge,
+                width: owner.width + 2 * edge,
+                height: owner.height + 2 * edge,
+              } } };
+            }
+            case "Runtime.evaluate":
+              return agentAnswer(sessionId, params.expression);
+            default:
+              return {};
+          }
+        }
+        const bridge = new Function("world", "calls", "cdp", "options", `
+          const FRAME_MAX_ATTACHED = 16;
+          const FRAME_MAX_DEPTH = 5;
+          const FRAME_ELEMENT_CAP_TOTAL = 500;
+          const FRAME_TOP_ELEMENT_CAP = 400;
+          const FRAME_PER_FRAME_ELEMENT_CAP = 120;
+          const FRAME_OFFSET_TOLERANCE_PX = 2;
+          const FRAME_SKIP_REPORT_MAX = 32;
+          const FRAME_AGENT_WORLD_NAME = "__lbb_frame_agent__";
+          const FRAME_OBSERVE_BUDGET_MS = options.frameBudgetMs ?? 4_000;
+          const attachedFrames = new Map();
+          const frameParents = new Map();
+          const frameSkips = [];
+          const heldMouseInputs = new Map();
+          let frameSupport = { supported: true, probed: true, reason: "" };
+          let frameAgentSource = null;
+          let frameTreeRevision = 0;
+          let frameInvalidationReason = "";
+          let frameSnapshot = null;
+          let rootWorldContextId = 11;
+          let controlLease = { tabId: 7, frameId: "ROOT", viewport: { width: 800, height: 600 } };
+          globalThis.__LBB_DOM_CORE_SOURCE__ = () => "/* core */";
+          globalThis.__LBB_FRAME_AGENT_SOURCE__ = () => "/* agent */";
+          const authority = { tabId: 7, sessionId: "lease", epoch: 1, documentEpoch: 1 };
+          const order = [];
+          function assertLeaseAuthority(_authority, _context, boundary) { order.push(\`lease:\${boundary}\`); }
+          function assertLeaseAuthorityAfterDispatch() {}
+          function assertCommandActive() {}
+          function sameDocumentUrl(left, right) { return String(left) === String(right); }
+          function outcomeUnknownError(boundary, cause) {
+            const error = new Error(\`ACTION_OUTCOME_UNKNOWN: control changed after \${boundary}; do not retry automatically\`);
+            error.code = "ACTION_OUTCOME_UNKNOWN";
+            error.cause = cause;
+            return error;
+          }
+          function publicControlState() { return { active: true }; }
+          function captureLeaseAuthority() { return authority; }
+          async function debuggerCommand(tabId, method, params, _authority, _context, sessionId = null) {
+            calls.push({ method, params, sessionId });
+            if (method === "Input.dispatchMouseEvent") order.push(\`input:\${params.type}\`);
+            if (options.afterCall) await options.afterCall(method, params, sessionId, api);
+            return cdp(method, params, sessionId);
+          }
+          async function bestEffortDebuggerRelease(tabId, method, params, label) {
+            calls.push({ method, params, label });
+            return true;
+          }
+          async function contentRequest(tabId, payload) {
+            calls.push({ content: payload.method });
+            order.push(\`content:\${payload.method}\`);
+            if (options.contentFails) throw new Error(options.contentFails);
+            return { current: true };
+          }
+          async function verifyDocumentAuthority(tabId, _authority, _context, boundary) {
+            order.push(\`document:\${boundary}\`);
+            return { documentEpoch: 1 };
+          }
+          async function verifyDocumentAuthorityAfterDispatch(tabId, a, c, boundary) {
+            if (options.documentFailsAfter === boundary) {
+              throw outcomeUnknownError(boundary, new Error("the frame detached after dispatch"));
+            }
+            return verifyDocumentAuthority(tabId, a, c, boundary);
+          }
+          async function moveVirtualCursor(tabId, x, y) {
+            order.push(\`pointer:\${x},\${y}\`);
+            return { arrival: "arrived", moveSequence: 1, points: 4 };
+          }
+          async function persistHeldInputIntent(map, key, record) { map.set(key, record); order.push("held:persist"); }
+          async function clearHeldInputIntent(map, key) { map.delete(key); order.push("held:clear"); }
+          async function releaseHeldMouseInput(key, record) {
+            if (heldMouseInputs.has(key)) order.push("held:release");
+            heldMouseInputs.delete(key);
+            return true;
+          }
+          const crypto = { randomUUID: () => "held-key" };
+          ${frameFunctions}
+          const api = {
+            calls,
+            order: () => [...order],
+            attach: (sessionId, targetInfo) => recordAttachedTarget(7, sessionId, targetInfo),
+            event: (sessionId, method, params) => handleFrameSessionEvent({ tabId: 7, sessionId }, method, params),
+            rootEvent: (method, params) => {
+              if (method === "Target.detachedFromTarget" && attachedFrames.delete(params.sessionId)) {
+                markFrameTreeChanged("frame_target_detached");
+              }
+              if (method === "Page.frameResized") markFrameTreeChanged("frame_resized");
+            },
+            observe: (snapshot) => collectFrameObservations(7, snapshot, authority, null),
+            merge: (top, results, skips, support) => mergeFrameObservations(top, results, skips, support),
+            offset: (record, records) => accumulateFrameOffset(record, records),
+            ownerOrigin: (boxModel) => ownerContentOrigin(boxModel),
+            translate: (bounds, offset) => translateBounds(bounds, offset),
+            inViewport: (translated, local, box, viewport) => frameElementInViewport(translated, local, box, viewport),
+            parseRef: (ref) => parseFrameRef(ref),
+            refuse: (ref, method) => assertTopLevelRef(ref, method),
+            resolve: (ref, generation) => resolveFrameRecord(ref, generation),
+            fresh: (generation) => assertFrameSnapshotFresh(generation),
+            markChanged: (reason) => markFrameTreeChanged(reason),
+            clear: () => clearFrameSessions(),
+            records: () => [...attachedFrames.values()],
+            recordFor: (ref) => [...attachedFrames.values()].find((record) => record.ref === ref),
+            support: () => ({ ...frameSupport }),
+            revision: () => frameTreeRevision,
+            invalidation: () => frameInvalidationReason,
+            snapshot: () => frameSnapshot,
+            publish: (generation) => {
+              const frames = new Map();
+              for (const record of attachedFrames.values()) {
+                if (record.ref) frames.set(record.ref, record);
+              }
+              frameSnapshot = { generation, frameTreeRevision, frames };
+              return frameSnapshot;
+            },
+            lookups: () => [...lookups],
+            publishWatched: (generation) => {
+              const real = new Map();
+              for (const record of attachedFrames.values()) {
+                if (record.ref) real.set(record.ref, record);
+              }
+              frameSnapshot = {
+                generation,
+                frameTreeRevision,
+                frames: { get(key) { lookups.push(key); return real.get(key); } },
+              };
+              return frameSnapshot;
+            },
+            click: async (ref, generation) => {
+              const target = await prepareFrameTarget(7, ref, generation, authority, null, "frame click preparation");
+              return trustedClick(
+                7, target.description, ref, generation, { button: "left", clickCount: 1, modifiers: 0 },
+                null, authority,
+                frameClickHooks(7, target.record, target.key, target.description, authority, null),
+              );
+            },
+          };
+          const lookups = [];
+          return api;
+        `)(world, calls, cdp, options);
+        return bridge;
+      }
+"##;
+
+/// Shared Node harness that runs the real shared DOM core and the real
+/// frame agent against a stubbed frame document.
+const FRAME_AGENT_HARNESS_PRELUDE: &str = r##"      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const signatureEnd = source.indexOf(") {", source.indexOf(marker));
+        const brace = signatureEnd + 2;
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      const coreSource = fs.readFileSync("extension/dom-core.js", "utf8");
+      const agentSource = fs.readFileSync("extension/frame-agent.js", "utf8");
+      const domCore = [
+        extractFunction(coreSource, "createRevisionTracker"),
+        extractFunction(coreSource, "createDomCore"),
+      ].join("\n");
+      const frameAgent = extractFunction(agentSource, "createFrameAgent");
+
+      // A deliberately minimal frame: every rectangle below is frame-local,
+      // so any top-level coordinate leaking into the agent would be visible.
+      function makeAgent(specs) {
+        const hitTests = [];
+        const mutationCallbacks = [];
+        const listeners = [];
+        return new Function("specs", "hitTests", "mutationCallbacks", "listeners", `
+          class Element {}
+          class HTMLInputElement extends Element {}
+          class HTMLTextAreaElement extends Element {}
+          class HTMLAnchorElement extends Element {}
+          class ShadowRoot {}
+          class StubElement extends Element {
+            constructor(spec) {
+              super();
+              this.tagName = spec.tagName ?? "BUTTON";
+              this.attributes = { ...(spec.attributes ?? {}) };
+              this.rect = { ...spec.rect };
+              this.innerText = spec.text ?? "";
+              this.textContent = spec.text ?? "";
+              this.alt = ""; this.title = ""; this.placeholder = ""; this.id = "";
+              this.isConnected = true;
+              this.shadowRoot = null;
+            }
+            getAttribute(name) { return this.attributes[name] ?? null; }
+            getBoundingClientRect() {
+              const rect = this.rect;
+              return {
+                x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+                top: rect.y, left: rect.x, right: rect.x + rect.width, bottom: rect.y + rect.height,
+              };
+            }
+            getRootNode() { return document; }
+          }
+          const elements = specs.map((spec) => new StubElement(spec));
+          const innerWidth = 400;
+          const innerHeight = 300;
+          const scrollX = 0;
+          const scrollY = 0;
+          const devicePixelRatio = 1;
+          const location = { origin: "https://pay.example", pathname: "/checkout" };
+          const document = {
+            documentElement: { scrollHeight: 300 },
+            title: "Frame",
+            querySelectorAll(selector) { return selector === "*" ? [] : elements.filter((element) => !element.hidden); },
+            getElementById() { return null; },
+            elementFromPoint(x, y) {
+              hitTests.push({ x, y });
+              return elements.find((element) => {
+                const rect = element.getBoundingClientRect();
+                return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+              }) ?? null;
+            },
+          };
+          function getComputedStyle(element) {
+            return element.hiddenStyle
+              ? { display: "none", visibility: "hidden", opacity: "0" }
+              : { display: "block", visibility: "visible", opacity: "1" };
+          }
+          class MutationObserver {
+            constructor(callback) { mutationCallbacks.push(callback); }
+            observe() {}
+          }
+          function addEventListener(name, handler) { listeners.push({ name, handler }); }
+          ${domCore}
+          ${frameAgent}
+          const agent = createFrameAgent(createDomCore({}));
+          return {
+            call: (request) => agent.call(request),
+            elements,
+            hitTests: () => [...hitTests],
+            mutate: (records) => {
+              for (const callback of mutationCallbacks) callback(records ?? [{ target: null, addedNodes: [], removedNodes: [] }]);
+            },
+            scroll: () => {
+              for (const listener of listeners) {
+                if (listener.name === "scroll") listener.handler();
+              }
+            },
+          };
+        `)(specs, hitTests, mutationCallbacks, listeners);
+      }
+
+      // The real installable body the service worker evaluates into a frame
+      // world, run against a stubbed document. `globalThis` is shadowed, so
+      // the world it publishes into is this harness and not the Node global.
+      function makeInstaller() {
+        const installOnce = extractFunction(agentSource, "installFrameAgentOnce");
+        const mutationCallbacks = [];
+        const listeners = [];
+        return new Function("mutationCallbacks", "listeners", `
+          const globalThis = {};
+          const innerWidth = 400;
+          const innerHeight = 300;
+          const scrollX = 0;
+          const scrollY = 0;
+          const devicePixelRatio = 1;
+          const location = { origin: "https://pay.example", pathname: "/checkout" };
+          const document = {
+            documentElement: { scrollHeight: 300 },
+            title: "Frame",
+            querySelectorAll() { return []; },
+            getElementById() { return null; },
+            elementFromPoint() { return null; },
+          };
+          class MutationObserver {
+            constructor(callback) { mutationCallbacks.push(callback); }
+            observe() {}
+          }
+          function addEventListener(name, handler) { listeners.push({ name, handler }); }
+          ${domCore}
+          globalThis.__LBB_DOM_CORE__ = createDomCore;
+          ${frameAgent}
+          ${installOnce}
+          return {
+            install: () => installFrameAgentOnce(),
+            agent: () => globalThis.__LBB_FRAME_AGENT__,
+            observers: () => mutationCallbacks.length,
+            listeners: () => listeners.map((listener) => listener.name),
+          };
+        `)(mutationCallbacks, listeners);
+      }
+"##;
+
+fn run_frame_harness(label: &str, script: &str) {
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run {label}: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node {label} failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn frame_session_routing_probe_fails_closed_on_legacy_chrome() {
+    run_frame_harness(
+        "frame routing probe harness",
+        &format!(
+            "{FRAME_HARNESS_PRELUDE}{}",
+            r##"      // Chrome >= 125: the child session answers with its OWN frame tree.
+      const routed = makeFrameBridge(defaultWorld());
+      await routed.attach("child-1", { type: "iframe", targetId: "F1", url: "https://pay.example/" });
+      const merged = await routed.observe({
+        generation: "g1",
+        elements: [{ ref: "g1.e1", role: "link", name: "Top" }],
+        frameOwners: [{ origin: "https://pay.example" }],
+      });
+      if (merged.frameSummary.supported !== true || merged.frames.length !== 1) {
+        throw new Error(`routed session did not merge: ${JSON.stringify(merged.frameSummary)}`);
+      }
+      if (merged.elements.length !== 2 || merged.elements[1].ref !== "g1.f1.e1") {
+        throw new Error(`frame element ref is wrong: ${JSON.stringify(merged.elements[1])}`);
+      }
+      if (merged.elements[1].crossOrigin !== true || merged.elements[1].frameRef !== "f1") {
+        throw new Error("merged element lost its frame provenance");
+      }
+      if ("key" in merged.elements[1] || "proof" in merged.elements[1]) {
+        throw new Error("a merged element leaked its frame-local key or proof");
+      }
+      if (merged.elements[0].frameRef !== undefined || merged.elements[0].crossOrigin !== undefined) {
+        throw new Error("a top-document element gained frame provenance");
+      }
+
+      // Legacy Chrome: the sessionId key is ignored and the child answers with
+      // the ROOT frame tree. Nothing may be merged from that answer.
+      const legacy = makeFrameBridge(defaultWorld({ routeIgnoresSession: true }));
+      await legacy.attach("child-1", { type: "iframe", targetId: "F1", url: "https://pay.example/" });
+      const fallback = await legacy.observe({
+        generation: "g1",
+        elements: [{ ref: "g1.e1", role: "link", name: "Top" }],
+        frameOwners: [{ origin: "https://pay.example" }],
+      });
+      if (fallback.frameSummary.supported !== false
+        || fallback.frameSummary.reason !== "session_routing_unverified") {
+        throw new Error(`legacy Chrome was not refused: ${JSON.stringify(fallback.frameSummary)}`);
+      }
+      if (fallback.frames.length !== 0 || legacy.records().length !== 0) {
+        throw new Error("an unverified session left records behind");
+      }
+      if (fallback.elements.length !== 1 || fallback.elements[0].ref !== "g1.e1") {
+        throw new Error("the fallback observation was not exactly the top document");
+      }
+      const childCalls = legacy.calls.filter((call) => call.sessionId === "child-1").map((call) => call.method);
+      if (childCalls.join(",") !== "Page.enable,Page.getFrameTree") {
+        throw new Error(`an unverified session received more commands: ${childCalls.join(",")}`);
+      }
+      if (fallback.frameSummary.skipped.some((skip) => skip.reason !== "same_process_frame")) {
+        throw new Error("unexpected skip reasons after a failed routing probe");
+      }
+
+      // Targets refused at attach time are detached immediately and their
+      // reason survives into the next observation.
+      const filtered = makeFrameBridge(defaultWorld());
+      await filtered.attach("worker-1", { type: "service_worker", targetId: "W1", url: "https://pay.example/sw.js" });
+      await filtered.attach("blank-1", { type: "iframe", targetId: "B1", url: "about:blank" });
+      await filtered.attach("child-1", { type: "iframe", targetId: "F1", url: "https://pay.example/" });
+      if (filtered.records().length !== 1) {
+        throw new Error(`a non-iframe or blank target stayed attached: ${filtered.records().length}`);
+      }
+      const detaches = filtered.calls.filter((call) => call.method === "Target.detachFromTarget");
+      if (detaches.length !== 2) {
+        throw new Error(`refused targets were not detached immediately: ${detaches.length}`);
+      }
+      const withSkips = await filtered.observe({ generation: "g1", elements: [], frameOwners: [] });
+      if (!withSkips.frameSummary.skipped.some((skip) => skip.reason === "blank_document")) {
+        throw new Error(`an attach-time skip was lost: ${JSON.stringify(withSkips.frameSummary.skipped)}`);
+      }
+      const again = await filtered.observe({ generation: "g1", elements: [], frameOwners: [] });
+      if (again.frameSummary.skipped.some((skip) => skip.reason === "blank_document")) {
+        throw new Error("an attach-time skip was reported twice");
+      }
+"##
+        ),
+    );
+}
+
+/// Frame latency and frame refusals are reported, never charged to the lease
+/// and never charged twice to the next observation.
+#[test]
+fn frame_latency_and_skips_are_reported_once_and_never_revoke_the_lease() {
+    run_frame_harness(
+        "frame latency harness",
+        &format!(
+            "{FRAME_HARNESS_PRELUDE}{}",
+            r##"      const countReasons = (merged, reason) =>
+        merged.frameSummary.skipped.filter((skip) => skip.reason === reason).length;
+
+      // A skip recorded DURING an observation belongs to that observation
+      // only. Leaving it in the pending list would report it again next turn,
+      // and sixteen frames of duplicates saturate the 32-entry skip report.
+      const unresolved = defaultWorld();
+      delete unresolved.frames["child-1"].owner;
+      const repeating = makeFrameBridge(unresolved);
+      await repeating.attach("child-1", { type: "iframe", targetId: "F1", url: "https://pay.example/" });
+      const first = await repeating.observe({ generation: "g1", elements: [], frameOwners: [] });
+      if (countReasons(first, "owner_unresolved") !== 1) {
+        throw new Error(`an in-observation skip was not reported once: ${JSON.stringify(first.frameSummary.skipped)}`);
+      }
+      const second = await repeating.observe({ generation: "g2", elements: [], frameOwners: [] });
+      if (countReasons(second, "owner_unresolved") !== 1) {
+        throw new Error(`an in-observation skip was reported twice: ${JSON.stringify(second.frameSummary.skipped)}`);
+      }
+
+      // A frame that stops answering is one frame_timeout skip on a healthy
+      // observation: the read-only frame pass never revokes the lease over
+      // third-party latency.
+      const slow = makeFrameBridge(defaultWorld(), {
+        fail: (method) => method === "Runtime.evaluate",
+        failCode: "FRAME_OBSERVE_TIMEOUT",
+      });
+      await slow.attach("child-1", { type: "iframe", targetId: "F1", url: "https://pay.example/" });
+      const timedOut = await slow.observe({ generation: "g1", elements: [], frameOwners: [] });
+      if (timedOut.frameSummary.supported !== true || timedOut.frames.length !== 0) {
+        throw new Error(`a slow frame broke the observation: ${JSON.stringify(timedOut.frameSummary)}`);
+      }
+      if (countReasons(timedOut, "frame_timeout") !== 1) {
+        throw new Error(`a frame timeout was not reported as itself: ${JSON.stringify(timedOut.frameSummary.skipped)}`);
+      }
+
+      // Any other CDP refusal keeps its own diagnosis.
+      const refusing = makeFrameBridge(defaultWorld(), { fail: (method) => method === "Runtime.evaluate" });
+      await refusing.attach("child-1", { type: "iframe", targetId: "F1", url: "https://pay.example/" });
+      const refused = await refusing.observe({ generation: "g1", elements: [], frameOwners: [] });
+      if (countReasons(refused, "agent_install_failed") !== 1) {
+        throw new Error(`a refused frame agent lost its reason: ${JSON.stringify(refused.frameSummary.skipped)}`);
+      }
+
+      // The pass as a whole is bounded, not just each command inside it: a
+      // spent budget reports the remaining frames instead of waiting on them.
+      const spent = makeFrameBridge(defaultWorld(), { frameBudgetMs: 0 });
+      await spent.attach("child-1", { type: "iframe", targetId: "F1", url: "https://pay.example/" });
+      const bounded = await spent.observe({ generation: "g1", elements: [], frameOwners: [] });
+      if (bounded.frames.length !== 0 || countReasons(bounded, "budget_time") !== 1) {
+        throw new Error(`a spent frame budget was not reported: ${JSON.stringify(bounded.frameSummary)}`);
+      }
+"##
+        ),
+    );
+}
+
+#[test]
+fn frame_offsets_accumulate_through_nested_frames() {
+    run_frame_harness(
+        "frame offset harness",
+        &format!(
+            "{FRAME_HARNESS_PRELUDE}{}",
+            r##"      const bridge = makeFrameBridge();
+      const records = new Map([
+        ["s1", { sessionId: "s1", parentSessionId: null, ownerOrigin: { x: 120, y: 64, width: 380, height: 220 } }],
+        ["s2", { sessionId: "s2", parentSessionId: "s1", ownerOrigin: { x: 10, y: 10, width: 200, height: 120 } }],
+      ]);
+      const offset = bridge.offset(records.get("s2"), records);
+      if (offset.x !== 130 || offset.y !== 74) {
+        throw new Error(`nested offsets did not accumulate: ${JSON.stringify(offset)}`);
+      }
+      const translated = bridge.translate({ x: 5, y: 5, width: 40, height: 20 }, offset);
+      if (JSON.stringify(translated) !== JSON.stringify({ x: 135, y: 79, width: 40, height: 20 })) {
+        throw new Error(`translation is wrong: ${JSON.stringify(translated)}`);
+      }
+
+      const deep = new Map();
+      let parent = null;
+      for (let index = 1; index <= 7; index += 1) {
+        const sessionId = `d${index}`;
+        deep.set(sessionId, { sessionId, parentSessionId: parent, ownerOrigin: { x: 1, y: 1, width: 10, height: 10 } });
+        parent = sessionId;
+      }
+      let depthError = null;
+      try { bridge.offset(deep.get("d7"), deep); } catch (error) { depthError = error; }
+      if (depthError?.code !== "STALE_FRAME_TREE" || !/nesting exceeded/.test(depthError.message)) {
+        throw new Error(`over-deep nesting was not refused: ${depthError && depthError.message}`);
+      }
+      const shallow = new Map([...deep].slice(0, 5));
+      shallow.get("d1").parentSessionId = null;
+      if (bridge.offset(shallow.get("d5"), shallow).x !== 5) {
+        throw new Error("a legal five-deep chain was refused");
+      }
+
+      let unresolved = null;
+      try {
+        bridge.offset({ sessionId: "x", parentSessionId: null, ownerOrigin: null }, new Map());
+      } catch (error) { unresolved = error; }
+      if (!/owner element is unresolved/.test(unresolved?.message ?? "")) {
+        throw new Error("an unresolved owner did not fail closed");
+      }
+
+      if (bridge.ownerOrigin({ model: { content: [1, 2, 3], width: 4, height: 5 } }) !== null) {
+        throw new Error("a malformed content quad was accepted");
+      }
+      if (bridge.ownerOrigin(undefined) !== null) throw new Error("a missing box model was accepted");
+      const origin = bridge.ownerOrigin({
+        model: { content: [500, 284, 120, 284, 120, 64, 500, 64], width: 380, height: 220 },
+      });
+      if (origin.x !== 120 || origin.y !== 64) {
+        throw new Error(`quad corner selection is wrong: ${JSON.stringify(origin)}`);
+      }
+
+      // An element that is inside its own frame's viewport but scrolled past
+      // the frame's visible box on the page is not reachable.
+      const frameBox = { x: 130, y: 74, width: 200, height: 120 };
+      const viewport = { width: 800, height: 600 };
+      if (bridge.inViewport({ x: 135, y: 79, width: 40, height: 20 }, true, frameBox, viewport) !== true) {
+        throw new Error("a visible frame element was reported out of viewport");
+      }
+      if (bridge.inViewport({ x: 135, y: 400, width: 40, height: 20 }, true, frameBox, viewport) !== false) {
+        throw new Error("an element below the frame box was reported in viewport");
+      }
+      if (bridge.inViewport({ x: 135, y: 79, width: 40, height: 20 }, false, frameBox, viewport) !== false) {
+        throw new Error("a frame-local out-of-viewport element was reported in viewport");
+      }
+      if (bridge.inViewport({ x: 900, y: 79, width: 40, height: 20 }, true, { x: 900, y: 74, width: 200, height: 120 }, viewport) !== false) {
+        throw new Error("an element outside the top viewport was reported in viewport");
+      }
+
+      // End to end through two out-of-process boundaries: the published
+      // bounds are frame-local plus the accumulated offset, and the frames are
+      // numbered depth-first in owner-element document order.
+      const nested = makeFrameBridge({
+        routeIgnoresSession: false,
+        ownerHit: true,
+        rootTree: {
+          frame: { id: "ROOT", loaderId: "L0", url: "https://top.example/" },
+          childFrames: [{ frame: { id: "F1", parentId: "ROOT", url: "https://pay.example/" } }],
+        },
+        frames: {
+          "child-1": {
+            targetId: "F1",
+            tree: {
+              frame: { id: "F1", parentId: "ROOT", loaderId: "L1", url: "https://pay.example/" },
+              childFrames: [{ frame: { id: "F2", parentId: "F1", url: "https://deep.example/" } }],
+            },
+            owner: { backendNodeId: 501, x: 120, y: 64, width: 380, height: 220 },
+            elements: [{
+              key: "e1", role: "button", name: "Outer", inViewport: true,
+              bounds: { x: 3, y: 3, width: 30, height: 15 },
+            }],
+          },
+          "child-2": {
+            targetId: "F2",
+            tree: { frame: { id: "F2", parentId: "F1", loaderId: "L2", url: "https://deep.example/" } },
+            owner: { backendNodeId: 502, x: 10, y: 10, width: 200, height: 120 },
+            elements: [{
+              key: "e1", role: "button", name: "Inner", inViewport: true,
+              bounds: { x: 5, y: 5, width: 40, height: 20 },
+            }],
+          },
+        },
+      });
+      await nested.attach("child-2", { type: "iframe", targetId: "F2", url: "https://deep.example/" });
+      await nested.attach("child-1", { type: "iframe", targetId: "F1", url: "https://pay.example/" });
+      const observed = await nested.observe({ generation: "g1", elements: [], frameOwners: [] });
+      if (observed.frames.length !== 2) {
+        throw new Error(`nested frames were not both merged: ${JSON.stringify(observed.frameSummary)}`);
+      }
+      if (observed.frames[0].frameId !== "F1" || observed.frames[1].frameId !== "F2") {
+        throw new Error("frames were not numbered depth-first in owner document order");
+      }
+      if (observed.frames[1].depth !== 2) throw new Error("nested frame depth is wrong");
+      if (JSON.stringify(observed.frames[1].offset) !== JSON.stringify({ x: 130, y: 74 })) {
+        throw new Error(`nested frame offset is wrong: ${JSON.stringify(observed.frames[1].offset)}`);
+      }
+      const inner = observed.elements.find((element) => element.ref === "g1.f2.e1");
+      if (!inner) throw new Error("the deeply nested element was not published");
+      if (JSON.stringify(inner.bounds) !== JSON.stringify({ x: 135, y: 79, width: 40, height: 20 })) {
+        throw new Error(`nested element bounds are wrong: ${JSON.stringify(inner.bounds)}`);
+      }
+      if (inner.frameUrlOrigin !== "https://deep.example") {
+        throw new Error("the nested element lost its own origin");
+      }
+      const outer = observed.elements.find((element) => element.ref === "g1.f1.e1");
+      if (JSON.stringify(outer.bounds) !== JSON.stringify({ x: 123, y: 67, width: 30, height: 15 })) {
+        throw new Error(`outer element bounds are wrong: ${JSON.stringify(outer.bounds)}`);
+      }
+"##
+        ),
+    );
+}
+
+#[test]
+fn frame_observation_merges_within_the_element_budget() {
+    run_frame_harness(
+        "frame merge harness",
+        &format!(
+            "{FRAME_HARNESS_PRELUDE}{}",
+            r##"      const bridge = makeFrameBridge();
+      const elementsFor = (count, prefix) => Array.from({ length: count }, (_, index) => ({
+        key: `e${index + 1}`, ref: `${prefix}${index + 1}`, role: "button", name: `${prefix}${index + 1}`,
+      }));
+      const frameResult = (index, count) => ({
+        frameId: `F${index}`,
+        urlOrigin: `https://f${index}.example`,
+        depth: 1,
+        offset: { x: 10 * index, y: 10 * index },
+        size: { width: 100, height: 100 },
+        truncated: false,
+        elements: elementsFor(count, `f${index}-`),
+      });
+
+      const crowded = bridge.merge(
+        { generation: "g1", elements: elementsFor(450, "t"), frameOwners: [] },
+        [frameResult(1, 200), frameResult(2, 200), frameResult(3, 200)],
+        [],
+        { supported: true, attached: 3 },
+      );
+      if (crowded.elements.length !== 500) {
+        throw new Error(`total element budget was not 500: ${crowded.elements.length}`);
+      }
+      const topKept = crowded.elements.filter((element) => !element.frameRef).length;
+      if (topKept !== 400) throw new Error(`top elements were not reserved at 400: ${topKept}`);
+      if (crowded.frames.length !== 1 || crowded.frames[0].ref !== "f1") {
+        throw new Error(`only the first frame should fit: ${JSON.stringify(crowded.frames)}`);
+      }
+      if (crowded.frames[0].elementCount !== 100 || crowded.frames[0].truncated !== true) {
+        throw new Error(`frame truncation was not reported: ${JSON.stringify(crowded.frames[0])}`);
+      }
+      const budgetSkips = crowded.frameSummary.skipped.filter((skip) => skip.reason === "budget_elements");
+      if (budgetSkips.length !== 2) {
+        throw new Error(`budget_elements was not reported twice: ${JSON.stringify(crowded.frameSummary.skipped)}`);
+      }
+      if (crowded.frameSummary.elementsDropped !== 50 + 100 + 200 + 200) {
+        throw new Error(`elementsDropped is wrong: ${crowded.frameSummary.elementsDropped}`);
+      }
+      const refs = crowded.elements.map((element) => element.ref);
+      if (new Set(refs).size !== refs.length) throw new Error("merged refs contain a duplicate");
+      if (crowded.elements[400].ref !== "g1.f1.e1") {
+        throw new Error(`frame refs are not <generation>.<frame>.<element>: ${crowded.elements[400].ref}`);
+      }
+
+      // Frame count budget.
+      const many = bridge.merge(
+        { generation: "g1", elements: [], frameOwners: [] },
+        Array.from({ length: 20 }, (_, index) => frameResult(index + 1, 2)),
+        [],
+        { supported: true, attached: 20 },
+      );
+      if (many.frames.length !== 16) throw new Error(`frame budget is not 16: ${many.frames.length}`);
+      if (many.frames[15].ref !== "f16") throw new Error("frame refs are not contiguous f1..f16");
+      if (many.frameSummary.skipped.filter((skip) => skip.reason === "budget_frames").length !== 4) {
+        throw new Error("budget_frames was not reported for the four dropped frames");
+      }
+
+      // A frameless page keeps the full 500-element budget and publishes no
+      // frame provenance at all.
+      const plain = bridge.merge(
+        { generation: "g1", elements: elementsFor(450, "t"), frameOwners: [] },
+        [],
+        [],
+        { supported: true, attached: 0 },
+      );
+      if (plain.elements.length !== 450 || plain.frames.length !== 0) {
+        throw new Error("a frameless observation lost elements to the frame reservation");
+      }
+      if (plain.elements.some((element) => element.frameRef)) {
+        throw new Error("a frameless observation gained frame provenance");
+      }
+
+      // An owner element that never produced its own target stays visible.
+      const sameProcess = bridge.merge(
+        {
+          generation: "g1",
+          elements: [],
+          frameOwners: [
+            { origin: "https://pay.example" },
+            { origin: "https://top.example" },
+            { origin: "https://ads.example" },
+          ],
+        },
+        [{ ...frameResult(1, 1), urlOrigin: "https://pay.example" }],
+        [{ urlOrigin: "https://blank.example", reason: "blank_document" }],
+        { supported: true, attached: 1 },
+      );
+      const reasons = sameProcess.frameSummary.skipped.map((skip) => `${skip.urlOrigin}:${skip.reason}`);
+      if (!reasons.includes("https://top.example:same_process_frame")
+        || !reasons.includes("https://ads.example:same_process_frame")
+        || reasons.includes("https://pay.example:same_process_frame")) {
+        throw new Error(`same_process_frame reporting is wrong: ${JSON.stringify(reasons)}`);
+      }
+      if (!reasons.includes("https://blank.example:blank_document")) {
+        throw new Error("session skips were dropped from the summary");
+      }
+      if (sameProcess.frameSummary.ownersSeen !== 3 || sameProcess.frameSummary.merged !== 1) {
+        throw new Error("owner/merged counters are wrong");
+      }
+
+      // The skip report itself is bounded.
+      const noisy = bridge.merge(
+        {
+          generation: "g1",
+          elements: [],
+          frameOwners: Array.from({ length: 40 }, (_, index) => ({ origin: `https://ad${index}.example` })),
+        },
+        [],
+        [],
+        { supported: true, attached: 0 },
+      );
+      if (noisy.frameSummary.skipped.length !== 32) {
+        throw new Error(`skip report is unbounded: ${noisy.frameSummary.skipped.length}`);
+      }
+"##
+        ),
+    );
+}
+
+#[test]
+fn frame_refs_fail_stale_with_coaching_before_any_lookup() {
+    run_frame_harness(
+        "frame ref harness",
+        &format!(
+            "{FRAME_HARNESS_PRELUDE}{}",
+            r##"      const bridge = makeFrameBridge();
+      await bridge.attach("child-1", { type: "iframe", targetId: "F1", url: "https://pay.example/" });
+      await bridge.observe({ generation: "gen-b1", elements: [], frameOwners: [] });
+      bridge.publishWatched("gen-b1");
+
+      let staleMessage = null;
+      try { bridge.resolve("gen-a0.f1.e1", "gen-b1"); }
+      catch (error) { staleMessage = error.message; }
+      if (staleMessage !== "STALE_REF: snapshot gen-a0 superseded by gen-b1; observe the page again and use fresh refs") {
+        throw new Error(`a superseded frame ref lacked coaching: ${staleMessage}`);
+      }
+      if (bridge.lookups().length !== 0) {
+        throw new Error("a superseded frame ref touched the frames map");
+      }
+
+      const resolved = bridge.resolve("gen-b1.f1.e1", "gen-b1");
+      if (resolved.key !== "e1" || resolved.record.frameId !== "F1") {
+        throw new Error("a fresh frame ref did not resolve to its own frame session");
+      }
+      if (bridge.lookups().join() !== "f1") {
+        throw new Error(`a fresh frame ref did the wrong lookup: ${bridge.lookups().join()}`);
+      }
+
+      // A ref that is not the three-segment frame grammar never reaches a
+      // frame session at all.
+      for (const junk of ["e1", "gen-b1.e1", "gen-b1.f17.e1", "gen-b1.f1.e0"]) {
+        if (bridge.parseRef(junk) !== null) throw new Error(`parsed a non-frame ref: ${junk}`);
+      }
+      if (bridge.parseRef("gen-b1.f16.e9999") === null) throw new Error("rejected a legal frame ref");
+
+      // Non-pointer actions refuse a frame ref as a capability statement.
+      let refusal = null;
+      try { bridge.refuse("gen-b1.f1.e1", "page.fill"); } catch (error) { refusal = error.message; }
+      if (!refusal?.startsWith("FRAME_ACTION_UNSUPPORTED: page.fill")) {
+        throw new Error(`page.fill did not refuse a frame ref: ${refusal}`);
+      }
+      bridge.refuse("gen-b1.e1", "page.fill");
+"##
+        ),
+    );
+}
+
+#[test]
+fn frame_click_reruns_the_frame_proof_and_dispatches_translated_input() {
+    run_frame_harness(
+        "frame click harness",
+        &format!(
+            "{FRAME_HARNESS_PRELUDE}{}",
+            r##"      const bridge = makeFrameBridge();
+      await bridge.attach("child-1", { type: "iframe", targetId: "F1", url: "https://pay.example/" });
+      await bridge.observe({ generation: "g1", elements: [], frameOwners: [] });
+      bridge.publish("g1");
+
+      const result = await bridge.click("g1.f1.e1", "g1");
+      if (result.clicked !== true || result.trusted !== true) {
+        throw new Error(`frame click did not complete: ${JSON.stringify(result)}`);
+      }
+      const order = bridge.order();
+      const at = (needle) => {
+        const index = order.findIndex((entry) => entry.includes(needle));
+        if (index < 0) throw new Error(`missing step ${needle}: ${order.join(" | ")}`);
+        return index;
+      };
+      const sequence = [
+        "content:assertGeneration",
+        "document:frame click preparation",
+        "lease:frame click preparation frame precheck",
+        "pointer:",
+        "lease:click target commit",
+        "lease:frame click commit frame precheck",
+        "document:trusted click commit",
+        "held:persist",
+        "input:mousePressed",
+        "input:mouseReleased",
+        "held:clear",
+        "document:trusted click completion",
+      ];
+      for (let index = 1; index < sequence.length; index += 1) {
+        if (at(sequence[index - 1]) >= at(sequence[index])) {
+          throw new Error(`step ${sequence[index]} did not follow ${sequence[index - 1]}: ${order.join(" | ")}`);
+        }
+      }
+
+      // The frame proof runs twice: once to prepare and once immediately
+      // before the agent is allowed to commit.
+      const agentCalls = bridge.calls.filter((call) => call.agent).map((call) => call.agent.method);
+      if (agentCalls.join(",") !== "snapshot,prepareClick,commitClick") {
+        throw new Error(`frame agent call order is wrong: ${agentCalls.join(",")}`);
+      }
+      const ownerProbes = bridge.calls.filter((call) => call.method === "Runtime.callFunctionOn").length;
+      if (ownerProbes !== 2) {
+        throw new Error(`the owner hit test did not run exactly at prepare and commit: ${ownerProbes}`);
+      }
+
+      // Input is dispatched on the ROOT session at the translated centre.
+      const dispatched = bridge.calls.filter((call) => call.method === "Input.dispatchMouseEvent");
+      if (dispatched.length !== 2) throw new Error("frame click dispatched the wrong number of pointer events");
+      for (const call of dispatched) {
+        if (call.sessionId !== null && call.sessionId !== undefined) {
+          throw new Error("pointer input was dispatched on a child session");
+        }
+        if (call.params.x !== 145 || call.params.y !== 79) {
+          throw new Error(`pointer input was not at the translated centre: ${JSON.stringify(call.params)}`);
+        }
+      }
+      if (!order.includes("pointer:145,79")) {
+        throw new Error(`the virtual cursor did not move to the translated centre: ${order.join(" | ")}`);
+      }
+
+      // No request the frame agent ever receives carries a top-level
+      // coordinate: it only ever sees its own frame-local geometry.
+      for (const call of bridge.calls.filter((entry) => entry.agent)) {
+        const payload = JSON.stringify(call.agent);
+        for (const topLevel of ["125", "145", "69", "79"]) {
+          if (payload.includes(topLevel)) {
+            throw new Error(`a frame agent request carried a top-level coordinate: ${payload}`);
+          }
+        }
+        for (const key of Object.keys(call.agent)) {
+          if (!["method", "nonce", "key", "agentGeneration", "limit", "proof"].includes(key)) {
+            throw new Error(`unexpected frame agent request field: ${key}`);
+          }
+        }
+      }
+"##
+        ),
+    );
+}
+
+#[test]
+fn frame_staleness_fails_closed_before_and_after_dispatch() {
+    run_frame_harness(
+        "frame staleness harness",
+        &format!(
+            "{FRAME_HARNESS_PRELUDE}{}",
+            r##"      async function armedBridge(world, options = {}) {
+        const bridge = makeFrameBridge(world, options);
+        await bridge.attach("child-1", { type: "iframe", targetId: "F1", url: "https://pay.example/" });
+        await bridge.observe({ generation: "g1", elements: [], frameOwners: [] });
+        bridge.publish("g1");
+        return bridge;
+      }
+      const afterPrepare = (mutate) => (method, params, sessionId, api) => {
+        if (method === "Runtime.evaluate" && String(params.expression).includes('"prepareClick"')) {
+          mutate(api);
+        }
+      };
+      async function failedClick(world, options) {
+        const bridge = await armedBridge(world, options);
+        let failure = null;
+        try { await bridge.click("g1.f1.e1", "g1"); }
+        catch (error) { failure = error; }
+        if (!failure) throw new Error("a stale frame click was allowed to complete");
+        return { bridge, failure };
+      }
+
+      // (a) The frame detaches between prepare and commit.
+      {
+        const { bridge, failure } = await failedClick(
+          defaultWorld(),
+          { afterCall: afterPrepare((api) => { api.records()[0].detached = true; }) },
+        );
+        if (failure.code !== "FRAME_DETACHED") throw new Error(`detach was not FRAME_DETACHED: ${failure.message}`);
+        if (bridge.order().some((step) => step.startsWith("input:"))) {
+          throw new Error("a detached frame still dispatched pointer input");
+        }
+      }
+
+      // (b) The frame navigated: same frame id, new loader.
+      {
+        const world = defaultWorld();
+        const { bridge, failure } = await failedClick(world, {
+          afterCall: afterPrepare(() => { world.frames["child-1"].tree.frame.loaderId = "L2"; }),
+        });
+        if (failure.code !== "FRAME_DETACHED") throw new Error(`loader change was not FRAME_DETACHED: ${failure.message}`);
+        if (bridge.order().some((step) => step.startsWith("input:"))) {
+          throw new Error("a renavigated frame still dispatched pointer input");
+        }
+      }
+
+      // (c) The owner box moved further than the geometry tolerance.
+      {
+        const world = defaultWorld();
+        const { bridge, failure } = await failedClick(world, {
+          afterCall: afterPrepare(() => { world.frames["child-1"].owner.x = 126; }),
+        });
+        if (failure.code !== "STALE_FRAME_TREE") throw new Error(`owner movement was not STALE_FRAME_TREE: ${failure.message}`);
+        if (bridge.order().some((step) => step.startsWith("input:"))) {
+          throw new Error("a moved frame owner still dispatched pointer input");
+        }
+      }
+
+      // (d) The owner element is no longer the top hit at the translated point.
+      {
+        const world = defaultWorld();
+        const { bridge, failure } = await failedClick(world, {
+          afterCall: afterPrepare(() => { world.ownerHit = false; }),
+        });
+        if (!failure.message.startsWith("TARGET_OCCLUDED:")) {
+          throw new Error(`an occluded frame owner was not refused: ${failure.message}`);
+        }
+        if (bridge.order().some((step) => step.startsWith("input:"))) {
+          throw new Error("an occluded frame owner still dispatched pointer input");
+        }
+      }
+
+      // A movement inside the tolerance is still allowed: the check is a
+      // geometry bound, not an exact-equality trap.
+      {
+        const world = defaultWorld();
+        const bridge = await armedBridge(world, {
+          afterCall: afterPrepare(() => {
+            world.frames["child-1"].owner.x = 121;
+            world.frames["child-1"].owner.measuredX = 121;
+          }),
+        });
+        const tolerated = await bridge.click("g1.f1.e1", "g1");
+        if (tolerated.clicked !== true) throw new Error("a sub-tolerance owner shift blocked a legitimate click");
+      }
+
+      // (e) The document changes after mousePressed: the outcome is unknown
+      // and the held release still fires.
+      {
+        const { bridge, failure } = await failedClick(
+          defaultWorld(),
+          { documentFailsAfter: "mouse release" },
+        );
+        if (failure.code !== "ACTION_OUTCOME_UNKNOWN") {
+          throw new Error(`a post-press change was not ACTION_OUTCOME_UNKNOWN: ${failure.message}`);
+        }
+        const order = bridge.order();
+        if (!order.includes("input:mousePressed")) throw new Error("the press never happened in case (e)");
+        if (!order.includes("held:release")) throw new Error("the held mouse release was not fired after an unknown outcome");
+      }
+
+      // A frame that navigated before the action is refused before any CDP
+      // work at all.
+      {
+        const bridge = await armedBridge(defaultWorld());
+        bridge.event("child-1", "Page.frameNavigated", { frame: { id: "F1" } });
+        let failure = null;
+        try { await bridge.click("g1.f1.e1", "g1"); } catch (error) { failure = error; }
+        if (failure?.message !== "STALE_SNAPSHOT: the frame tree changed: frame_navigated; observe the page again before acting") {
+          throw new Error(`a navigated frame was not refused with coaching: ${failure && failure.message}`);
+        }
+      }
+
+      // (f) Depth 2: the ANCESTOR frame moves between prepare and commit.
+      // The target owner is measured inside that ancestor and does not move
+      // at all, and the accumulated offset is built from remembered ancestor
+      // origins, so only re-measuring the ancestor can catch the shift. This
+      // is the difference between a refusal and a click at a stale point.
+      function nestedWorld() {
+        return {
+          routeIgnoresSession: false,
+          ownerHit: true,
+          rootTree: {
+            frame: { id: "ROOT", loaderId: "L0", url: "https://top.example/" },
+            childFrames: [{ frame: { id: "F1", parentId: "ROOT", url: "https://pay.example/" } }],
+          },
+          frames: {
+            "child-1": {
+              targetId: "F1",
+              tree: {
+                frame: { id: "F1", parentId: "ROOT", loaderId: "L1", url: "https://pay.example/" },
+                childFrames: [{ frame: { id: "F2", parentId: "F1", url: "https://deep.example/" } }],
+              },
+              owner: { backendNodeId: 501, x: 120, y: 64, width: 380, height: 220 },
+              elements: [],
+            },
+            "child-2": {
+              targetId: "F2",
+              tree: { frame: { id: "F2", parentId: "F1", loaderId: "L2", url: "https://deep.example/" } },
+              owner: { backendNodeId: 502, x: 10, y: 10, width: 200, height: 120 },
+              elements: [{
+                key: "e1", role: "button", name: "Inner", type: "submit", disabled: false,
+                sensitive: false, inViewport: true, bounds: { x: 5, y: 5, width: 40, height: 20 },
+                proof: { signature: "sig-2", bounds: { x: 5, y: 5, width: 40, height: 20 } },
+              }],
+            },
+          },
+        };
+      }
+      async function armedNested(world, options = {}) {
+        const bridge = makeFrameBridge(world, options);
+        await bridge.attach("child-2", { type: "iframe", targetId: "F2", url: "https://deep.example/" });
+        await bridge.attach("child-1", { type: "iframe", targetId: "F1", url: "https://pay.example/" });
+        await bridge.observe({ generation: "g1", elements: [], frameOwners: [] });
+        bridge.publish("g1");
+        return bridge;
+      }
+      {
+        const world = nestedWorld();
+        const bridge = await armedNested(world, {
+          afterCall: afterPrepare(() => { world.frames["child-1"].owner.y = 164; }),
+        });
+        let failure = null;
+        try { await bridge.click("g1.f2.e1", "g1"); } catch (error) { failure = error; }
+        if (failure?.code !== "STALE_FRAME_TREE" || !/an ancestor frame owner element moved/.test(failure.message)) {
+          throw new Error(`a moved ancestor frame was not refused: ${failure && failure.message}`);
+        }
+        if (bridge.order().some((step) => step.startsWith("input:"))) {
+          throw new Error("a moved ancestor frame still dispatched pointer input");
+        }
+      }
+      {
+        // The same depth-2 click with nothing moving still completes, at the
+        // point accumulated through both boundaries: 120+64 plus 10+10 plus
+        // the frame-local centre of the target.
+        const bridge = await armedNested(nestedWorld());
+        const clicked = await bridge.click("g1.f2.e1", "g1");
+        if (clicked.clicked !== true) throw new Error("a healthy depth-2 frame click was refused");
+        const dispatched = bridge.calls.filter((call) => call.method === "Input.dispatchMouseEvent");
+        for (const call of dispatched) {
+          if (call.params.x !== 155 || call.params.y !== 89) {
+            throw new Error(`a depth-2 click was dispatched at the wrong point: ${JSON.stringify(call.params)}`);
+          }
+        }
+        // The ancestor owner is re-measured on every proof, not only the
+        // target owner: two frames times prepare and commit.
+        const ownerMeasurements = bridge.calls.filter((call) => call.method === "DOM.getBoxModel").length;
+        if (ownerMeasurements < 6) {
+          throw new Error(`the ancestor owner was not re-measured on every proof: ${ownerMeasurements}`);
+        }
+      }
+
+      // A real iframe has a border, and getBoundingClientRect reports the
+      // border box while the coordinate chain uses the content box. The proof
+      // compares like with like, so a border wider than the 2px tolerance is
+      // not mistaken for movement and the click still happens at the
+      // content-box centre.
+      {
+        const world = defaultWorld();
+        world.frames["child-1"].owner.border = 6;
+        const bridge = await armedBridge(world);
+        const clicked = await bridge.click("g1.f1.e1", "g1");
+        if (clicked.clicked !== true) throw new Error("a bordered iframe refused a legitimate frame click");
+        for (const call of bridge.calls.filter((entry) => entry.method === "Input.dispatchMouseEvent")) {
+          if (call.params.x !== 145 || call.params.y !== 79) {
+            throw new Error(`a bordered iframe moved the click point: ${JSON.stringify(call.params)}`);
+          }
+        }
+      }
+
+      // An owner whose box model carries no border quad cannot be verified
+      // against a border-box rect at all, so it fails closed instead of
+      // being compared against the wrong box.
+      {
+        const world = defaultWorld();
+        world.frames["child-1"].owner.noBorderQuad = true;
+        const bridge = await armedBridge(world);
+        let failure = null;
+        try { await bridge.click("g1.f1.e1", "g1"); } catch (error) { failure = error; }
+        if (failure?.code !== "STALE_FRAME_TREE" || !/no border box to verify/.test(failure.message)) {
+          throw new Error(`an unmeasurable owner border box was not refused: ${failure && failure.message}`);
+        }
+        if (bridge.order().some((step) => step.startsWith("input:"))) {
+          throw new Error("an unverifiable frame owner still dispatched pointer input");
+        }
+      }
+"##
+        ),
+    );
+}
+
+#[test]
+fn frame_tree_changes_invalidate_the_snapshot_like_a_mutation() {
+    run_frame_harness(
+        "frame invalidation harness",
+        &format!(
+            "{FRAME_HARNESS_PRELUDE}{}",
+            r##"      async function armed() {
+        const bridge = makeFrameBridge();
+        await bridge.attach("child-1", { type: "iframe", targetId: "F1", url: "https://pay.example/" });
+        await bridge.observe({ generation: "g1", elements: [], frameOwners: [] });
+        bridge.publish("g1");
+        bridge.fresh("g1");
+        return bridge;
+      }
+
+      const cases = [
+        ["frame_attached", async (bridge) => {
+          await bridge.attach("child-2", { type: "iframe", targetId: "F2", url: "https://ads.example/" });
+        }],
+        ["frame_detached", async (bridge) => {
+          bridge.event("child-1", "Page.frameDetached", { frameId: "F1" });
+        }],
+        ["frame_navigated", async (bridge) => {
+          bridge.event("child-1", "Page.frameNavigated", { frame: { id: "F1", url: "https://evil.example/" } });
+        }],
+        ["frame_target_detached", async (bridge) => {
+          bridge.rootEvent("Target.detachedFromTarget", { sessionId: "child-1" });
+        }],
+        ["frame_resized", async (bridge) => {
+          bridge.rootEvent("Page.frameResized", {});
+        }],
+      ];
+      for (const [reason, mutate] of cases) {
+        const bridge = await armed();
+        const before = bridge.revision();
+        await mutate(bridge);
+        if (bridge.revision() !== before + 1) {
+          throw new Error(`${reason} did not bump the frame tree revision`);
+        }
+        let message = null;
+        try { bridge.fresh("g1"); } catch (error) { message = error.message; }
+        if (message !== `STALE_SNAPSHOT: the frame tree changed: ${reason}; observe the page again before acting`) {
+          throw new Error(`${reason} did not coach the next action: ${message}`);
+        }
+      }
+
+      // A navigated frame drops its agent handles, so nothing can be sent into
+      // the old document even if the revision check were bypassed.
+      const navigated = await armed();
+      navigated.event("child-1", "Page.frameNavigated", { frame: { id: "F1" } });
+      const record = navigated.records()[0];
+      if (!record.navigated || record.worldContextId !== null || record.agentNonce !== "") {
+        throw new Error("a navigated frame kept its isolated world or nonce");
+      }
+
+      // An unrelated child session's navigation never touches the lease.
+      const unrelated = await armed();
+      const revisionBefore = unrelated.revision();
+      unrelated.event("child-unknown", "Page.frameNavigated", { frame: { id: "F9" } });
+      if (unrelated.revision() !== revisionBefore) {
+        throw new Error("an unknown child session invalidated the snapshot");
+      }
+
+      // Teardown clears every frame session at the single choke point.
+      const torn = await armed();
+      torn.clear();
+      if (torn.records().length !== 0 || torn.snapshot() !== null || torn.support().supported !== false) {
+        throw new Error("lease teardown left frame state behind");
+      }
+      let afterTeardown = null;
+      try { torn.fresh("g1"); } catch (error) { afterTeardown = error.message; }
+      if (afterTeardown !== "STALE_SNAPSHOT: observe the page again before acting") {
+        throw new Error(`teardown did not fail closed: ${afterTeardown}`);
+      }
+"##
+        ),
+    );
+}
+
+#[test]
+fn frame_agent_proofs_run_in_frame_local_coordinates() {
+    run_frame_harness(
+        "frame agent proof harness",
+        &format!(
+            "{FRAME_AGENT_HARNESS_PRELUDE}{}",
+            r##"      const agent = makeAgent([
+        { tagName: "BUTTON", text: "Pay now", rect: { x: 5, y: 5, width: 40, height: 20 } },
+        { tagName: "A", text: "Terms", attributes: { href: "https://pay.example/terms" }, rect: { x: 5, y: 40, width: 60, height: 18 } },
+      ]);
+
+      if (agent.call({ method: "snapshot" }).error !== "FRAME_AGENT_STALE: this frame agent belongs to an older control lease") {
+        throw new Error("an uninstalled agent answered a snapshot");
+      }
+      const installed = agent.call({ method: "install" });
+      if (installed.ok !== true || !installed.result.nonce) throw new Error("install did not mint a lease nonce");
+      const nonce = installed.result.nonce;
+
+      const snapshot = agent.call({ method: "snapshot", nonce, limit: 120 });
+      if (snapshot.ok !== true) throw new Error(`snapshot failed: ${snapshot.error}`);
+      const first = snapshot.result.elements[0];
+      if (JSON.stringify(first.bounds) !== JSON.stringify({ x: 5, y: 5, width: 40, height: 20 })) {
+        throw new Error(`snapshot bounds are not frame-local: ${JSON.stringify(first.bounds)}`);
+      }
+      if (first.key !== "e1" || first.ref !== "e1") {
+        throw new Error("the frame agent minted a ref instead of a frame-local key");
+      }
+      if (snapshot.result.total !== 2 || snapshot.result.truncated !== false) {
+        throw new Error("snapshot totals are wrong");
+      }
+      const agentGeneration = snapshot.result.agentGeneration;
+
+      const prepared = agent.call({ method: "prepareClick", nonce, key: "e1", agentGeneration });
+      if (prepared.ok !== true) throw new Error(`prepareClick failed: ${prepared.error}`);
+      const lastHit = agent.hitTests().at(-1);
+      if (lastHit.x !== 25 || lastHit.y !== 15) {
+        throw new Error(`the hit test did not use the frame-local centre: ${JSON.stringify(lastHit)}`);
+      }
+      if (JSON.stringify(prepared.result.proof.bounds) !== JSON.stringify({ x: 5, y: 5, width: 40, height: 20 })) {
+        throw new Error("the proof is not frame-local");
+      }
+
+      // A stale lease nonce refuses everything.
+      const stale = agent.call({ method: "prepareClick", nonce: "other", key: "e1", agentGeneration });
+      if (stale.ok !== false || stale.error !== "FRAME_AGENT_STALE: this frame agent belongs to an older control lease") {
+        throw new Error(`a stale nonce was accepted: ${JSON.stringify(stale)}`);
+      }
+
+      // A stale agent generation refuses before any element lookup.
+      const staleGeneration = agent.call({ method: "prepareClick", nonce, key: "e1", agentGeneration: "older" });
+      if (staleGeneration.error !== "STALE_SNAPSHOT: observe the page again before acting") {
+        throw new Error(`a stale agent generation was accepted: ${JSON.stringify(staleGeneration)}`);
+      }
+
+      // Identity change.
+      agent.elements[0].attributes.name = "renamed";
+      const renamed = agent.call({ method: "prepareClick", nonce, key: "e1", agentGeneration });
+      if (renamed.error !== "TARGET_CHANGED: target identity changed; observe again") {
+        throw new Error(`a renamed target was accepted: ${JSON.stringify(renamed)}`);
+      }
+      delete agent.elements[0].attributes.name;
+
+      // Geometry change.
+      agent.elements[0].rect = { x: 5, y: 60, width: 40, height: 20 };
+      const moved = agent.call({ method: "prepareClick", nonce, key: "e1", agentGeneration });
+      if (moved.error !== "TARGET_CHANGED: target geometry changed; observe again") {
+        throw new Error(`a moved target was accepted: ${JSON.stringify(moved)}`);
+      }
+      agent.elements[0].rect = { x: 5, y: 5, width: 40, height: 20 };
+
+      // A commit whose proof does not match the live element is refused.
+      const forged = agent.call({
+        method: "commitClick", nonce, key: "e1", agentGeneration,
+        proof: { signature: "forged", bounds: { x: 5, y: 5, width: 40, height: 20 } },
+      });
+      if (forged.error !== "TARGET_CHANGED: target proof no longer matches; observe again") {
+        throw new Error(`a forged commit proof was accepted: ${JSON.stringify(forged)}`);
+      }
+      const committed = agent.call({ method: "commitClick", nonce, key: "e1", agentGeneration, proof: prepared.result.proof });
+      if (committed.ok !== true || committed.result.validated !== true) {
+        throw new Error(`a matching commit proof was refused: ${JSON.stringify(committed)}`);
+      }
+
+      // Unknown methods and disconnected elements answer, never throw.
+      if (agent.call({ method: "nonsense", nonce }).error !== "FRAME_AGENT_FAILED: unknown frame agent request") {
+        throw new Error("an unknown method did not fail closed");
+      }
+      agent.elements[0].isConnected = false;
+      if (agent.call({ method: "describe", nonce, key: "e1", agentGeneration }).error !== "STALE_REF: the element changed; observe the page again") {
+        throw new Error("a disconnected element did not fail closed");
+      }
+      if (agent.call(undefined).ok !== false) throw new Error("an empty request threw instead of answering");
+
+      // Reinstalling re-keys the agent and drops every ref.
+      const reinstalled = agent.call({ method: "install" });
+      if (reinstalled.result.nonce === nonce) throw new Error("install reused the previous lease nonce");
+      if (agent.call({ method: "prepareClick", nonce: reinstalled.result.nonce, key: "e1", agentGeneration }).error
+        !== "STALE_SNAPSHOT: observe the page again before acting") {
+        throw new Error("a reinstalled agent still answered an old snapshot generation");
+      }
+"##
+        ),
+    );
+}
+
+/// Every observation re-evaluates the agent source into the SAME isolated
+/// world, so building a second agent would leak a whole-document
+/// MutationObserver plus a scroll and a resize listener per observation, on
+/// exactly the third-party iframes this feature targets.
+#[test]
+fn frame_agent_installs_exactly_one_observer_per_isolated_world() {
+    let agent = fs::read_to_string("extension/frame-agent.js").unwrap();
+    let builder = agent
+        .find("globalThis.__LBB_FRAME_AGENT_SOURCE__ = () =>")
+        .expect("the installable frame source builder is gone");
+    let line_end = agent[builder..].find('\n').unwrap() + builder;
+    assert!(
+        agent[builder..line_end].contains("${installFrameAgentOnce}\\ninstallFrameAgentOnce();"),
+        "the evaluated frame source no longer installs through the once guard"
+    );
+    assert!(agent.contains("if (!globalThis.__LBB_FRAME_AGENT__) {"));
+
+    run_frame_harness(
+        "frame agent install harness",
+        &format!(
+            "{FRAME_AGENT_HARNESS_PRELUDE}{}",
+            r##"      const world = makeInstaller();
+      const first = world.install();
+      if (!first || typeof first.call !== "function") throw new Error("the frame agent did not install");
+      if (world.observers() !== 1 || world.listeners().join(",") !== "scroll,resize") {
+        throw new Error(`the first install did not register exactly one tracker: ${world.observers()} ${world.listeners()}`);
+      }
+      for (let index = 0; index < 30; index += 1) world.install();
+      if (world.observers() !== 1) {
+        throw new Error(`re-evaluating the frame source leaked observers: ${world.observers()}`);
+      }
+      if (world.listeners().length !== 2) {
+        throw new Error(`re-evaluating the frame source leaked listeners: ${world.listeners().join(",")}`);
+      }
+      if (world.agent() !== first) throw new Error("a second agent replaced the installed one");
+
+      // Re-keying per lease stays the job of the install request, which the
+      // worker sends right after evaluating the source.
+      const before = first.call({ method: "install" }).result.nonce;
+      const after = first.call({ method: "install" }).result.nonce;
+      if (!before || !after || before === after) {
+        throw new Error("the reused agent stopped re-keying per lease");
+      }
+"##
+        ),
+    );
+}
+
+#[test]
+fn frame_agent_refuses_after_its_own_document_mutates() {
+    run_frame_harness(
+        "frame agent freshness harness",
+        &format!(
+            "{FRAME_AGENT_HARNESS_PRELUDE}{}",
+            r##"      const agent = makeAgent([
+        { tagName: "BUTTON", text: "Pay now", rect: { x: 5, y: 5, width: 40, height: 20 } },
+      ]);
+      const nonce = agent.call({ method: "install" }).result.nonce;
+      const agentGeneration = agent.call({ method: "snapshot", nonce }).result.agentGeneration;
+      if (agent.call({ method: "prepareClick", nonce, key: "e1", agentGeneration }).ok !== true) {
+        throw new Error("a fresh frame snapshot was refused");
+      }
+
+      agent.mutate();
+      const afterMutation = agent.call({ method: "prepareClick", nonce, key: "e1", agentGeneration });
+      if (afterMutation.error !== "STALE_SNAPSHOT: the document mutated; observe the page again before acting") {
+        throw new Error(`a mutated frame document was not refused: ${JSON.stringify(afterMutation)}`);
+      }
+      const commitAfterMutation = agent.call({
+        method: "commitClick", nonce, key: "e1", agentGeneration,
+        proof: { signature: "x", bounds: { x: 5, y: 5, width: 40, height: 20 } },
+      });
+      if (commitAfterMutation.error !== "STALE_SNAPSHOT: the document mutated; observe the page again before acting") {
+        throw new Error("a mutated frame document still accepted a commit");
+      }
+
+      // A scroll inside the frame invalidates the frame snapshot too.
+      const rescanned = agent.call({ method: "snapshot", nonce }).result.agentGeneration;
+      agent.scroll();
+      const afterScroll = agent.call({ method: "prepareClick", nonce, key: "e1", agentGeneration: rescanned });
+      if (afterScroll.error !== "STALE_SNAPSHOT: the page scrolled; observe the page again before acting") {
+        throw new Error(`a scrolled frame was not refused: ${JSON.stringify(afterScroll)}`);
+      }
+"##
+        ),
     );
 }

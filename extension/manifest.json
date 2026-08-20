@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Local Browser Bridge",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Connects browser tabs to a loopback-only control surface for local browser agents.",
   "minimum_chrome_version": "118",
   "permissions": [
@@ -24,7 +24,7 @@
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*", "file://*/*"],
-      "js": ["content.js"],
+      "js": ["dom-core.js", "content.js"],
       "run_at": "document_idle"
     }
   ],
