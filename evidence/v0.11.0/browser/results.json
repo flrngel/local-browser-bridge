@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-08-20T05:52:00.075Z",
+  "recordedAt": "2026-08-20T06:04:32.477Z",
   "target": "packaged v0.11.0 release artifacts",
   "chrome": "Google Chrome for Testing 152.0.7977.54 (isolated profile)",
   "crossOriginSetup": "parent http://localhost:8099 embeds child http://127.0.0.1:8100 (separate sites => out-of-process iframe)",
@@ -16,7 +16,7 @@
       "detail": {
         "version": "0.11.0"
       },
-      "at": "2026-08-20T05:51:36.023Z"
+      "at": "2026-08-20T06:04:20.439Z"
     },
     {
       "name": "extension.connected",
@@ -24,7 +24,7 @@
       "detail": {
         "version": "0.11.0"
       },
-      "at": "2026-08-20T05:51:36.784Z"
+      "at": "2026-08-20T06:04:21.200Z"
     },
     {
       "name": "tabs.list.cross-origin-parent",
@@ -33,7 +33,7 @@
         "url": "http://localhost:8099/parent.html",
         "title": "Cross-origin frame parent"
       },
-      "at": "2026-08-20T05:51:39.827Z"
+      "at": "2026-08-20T06:04:24.238Z"
     },
     {
       "name": "browser.control.start",
@@ -41,7 +41,7 @@
       "detail": {
         "active": true
       },
-      "at": "2026-08-20T05:51:39.872Z"
+      "at": "2026-08-20T06:04:24.275Z"
     },
     {
       "name": "frames.observed",
@@ -52,7 +52,7 @@
             "crossOrigin": true,
             "depth": 1,
             "elementCount": 2,
-            "frameId": "01A1224E61EB7CCD35BF066EC2E4DBFA",
+            "frameId": "8C315FE156B504FC5447EF465D9CCC1B",
             "offset": {
               "x": 250,
               "y": 123
@@ -77,7 +77,7 @@
           "supported": true
         }
       },
-      "at": "2026-08-20T05:51:41.189Z"
+      "at": "2026-08-20T06:04:25.609Z"
     },
     {
       "name": "frames.elements-merged",
@@ -85,17 +85,17 @@
       "detail": {
         "count": 2,
         "sample": [
-          "mt13rtpc-an67xf77.f1.e1=button:Cross origin child button origin=http://127.0.0.1:8100",
-          "mt13rtpc-an67xf77.f1.e2=textbox:child field origin=http://127.0.0.1:8100"
+          "mt1487ip-940w0uxx.f1.e1=button:Cross origin child button origin=http://127.0.0.1:8100",
+          "mt1487ip-940w0uxx.f1.e2=textbox:child field origin=http://127.0.0.1:8100"
         ]
       },
-      "at": "2026-08-20T05:51:41.189Z"
+      "at": "2026-08-20T06:04:25.609Z"
     },
     {
       "name": "frames.child-button-visible",
       "ok": true,
       "detail": {
-        "ref": "mt13rtpc-an67xf77.f1.e1",
+        "ref": "mt1487ip-940w0uxx.f1.e1",
         "bounds": {
           "height": 42,
           "width": 204,
@@ -105,55 +105,55 @@
         "crossOrigin": true,
         "frameUrlOrigin": "http://127.0.0.1:8100"
       },
-      "at": "2026-08-20T05:51:41.189Z"
+      "at": "2026-08-20T06:04:25.610Z"
     },
     {
       "name": "frames.ref-grammar",
       "ok": true,
-      "detail": "mt13rtpc-an67xf77.f1.e1",
-      "at": "2026-08-20T05:51:41.190Z"
+      "detail": "mt1487ip-940w0uxx.f1.e1",
+      "at": "2026-08-20T06:04:25.610Z"
     },
     {
       "name": "evidence.frames-screenshot",
       "ok": true,
       "detail": "10-cross-origin-frames.png",
-      "at": "2026-08-20T05:51:41.302Z"
+      "at": "2026-08-20T06:04:25.704Z"
     },
     {
       "name": "frames.click-in-cross-origin-frame",
       "ok": true,
       "detail": true,
-      "at": "2026-08-20T05:51:41.954Z"
+      "at": "2026-08-20T06:04:26.357Z"
     },
     {
       "name": "frames.click-evaluate-ran",
       "ok": true,
       "detail": "{\"control\":{\"active\":true,\"activeCaptureIds\":[],\"captureDepth\":0,\"cleanup\":null,\"cleanups\":[],\"cursor\":{\"updatedAt\":1787",
-      "at": "2026-08-20T05:51:42.755Z"
+      "at": "2026-08-20T06:04:27.158Z"
     },
     {
       "name": "frames.trusted-click-landed-in-child",
       "ok": true,
       "detail": "child-click:true",
-      "at": "2026-08-20T05:51:42.758Z"
+      "at": "2026-08-20T06:04:27.161Z"
     },
     {
       "name": "evidence.frames-click-screenshot",
       "ok": true,
       "detail": "11-cross-origin-click.png",
-      "at": "2026-08-20T05:51:42.851Z"
+      "at": "2026-08-20T06:04:27.261Z"
     },
     {
       "name": "dialog.pending-state-visible",
       "ok": true,
       "detail": {
-        "at": 1787205103111,
+        "at": 1787205867517,
         "hasPrompt": false,
         "message": "bridge dialog regression",
-        "tabId": 1965021347,
+        "tabId": 134353923,
         "type": "confirm"
       },
-      "at": "2026-08-20T05:51:57.630Z"
+      "at": "2026-08-20T06:04:30.014Z"
     },
     {
       "name": "dialog.blocks-with-blocked_by_dialog",
@@ -163,7 +163,7 @@
         "code": "BLOCKED_BY_DIALOG",
         "taxonomy": "blocked_by_dialog"
       },
-      "at": "2026-08-20T05:51:57.632Z"
+      "at": "2026-08-20T06:04:30.018Z"
     },
     {
       "name": "dialog.lease-survives-open-dialog",
@@ -171,13 +171,13 @@
       "detail": {
         "active": true
       },
-      "at": "2026-08-20T05:51:57.634Z"
+      "at": "2026-08-20T06:04:30.021Z"
     },
     {
       "name": "evidence.dialog-screenshot",
       "ok": true,
       "detail": "12-dialog-open-lease-alive.png",
-      "at": "2026-08-20T05:51:57.763Z"
+      "at": "2026-08-20T06:04:30.142Z"
     },
     {
       "name": "page.handleDialog",
@@ -191,7 +191,7 @@
           "cleanup": null,
           "cleanups": [],
           "cursor": {
-            "updatedAt": 1787205101459,
+            "updatedAt": 1787205865890,
             "visible": true,
             "x": 368,
             "y": 208
@@ -199,24 +199,24 @@
           "documentEpoch": 1,
           "documentUrl": "http://localhost:8099/parent.html",
           "epoch": 9,
-          "expiresAt": 1787205699834,
+          "expiresAt": 1787206464244,
           "humanPause": null,
           "humanPaused": false,
-          "lastHeartbeatAt": 1787205099834,
+          "lastHeartbeatAt": 1787205864244,
           "moveSequence": 1,
           "navigationPending": false,
           "owner": "server",
           "pausePersistenceUncertain": false,
           "revocationPending": false,
-          "sessionId": "459b3c57-765e-4d85-acad-47ab94508ad6",
-          "startedAt": 1787205099834,
-          "tabId": 1965021347,
+          "sessionId": "be3719fc-53c2-4b4e-ac89-3afc5ee94862",
+          "startedAt": 1787205864244,
+          "tabId": 134353923,
           "turn": 4
         },
         "handled": true,
         "type": "confirm"
       },
-      "at": "2026-08-20T05:51:58.205Z"
+      "at": "2026-08-20T06:04:30.575Z"
     },
     {
       "name": "dialog.observe-works-after-handling",
@@ -225,7 +225,7 @@
         "turn": 6,
         "elements": 3
       },
-      "at": "2026-08-20T05:51:59.256Z"
+      "at": "2026-08-20T06:04:31.629Z"
     },
     {
       "name": "dialog.lease-still-active-after-handling",
@@ -233,13 +233,13 @@
       "detail": {
         "active": true
       },
-      "at": "2026-08-20T05:51:59.259Z"
+      "at": "2026-08-20T06:04:31.631Z"
     },
     {
       "name": "navigation.authorized-still-works",
       "ok": true,
       "detail": "navigated",
-      "at": "2026-08-20T05:52:00.072Z"
+      "at": "2026-08-20T06:04:32.475Z"
     }
   ]
 }

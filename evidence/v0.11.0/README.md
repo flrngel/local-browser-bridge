@@ -1,6 +1,6 @@
 # Version 0.11.0 evidence
 
-Recorded 2026-08-20 in a real browser. **21 of 21 live checks passed**
+Recorded 2026-08-20 in a real browser, against the **published v0.11.0 release artifacts** downloaded from the immutable GitHub release, checksum-verified against `SHA256SUMS.txt` and verified with `gh attestation verify` (exit 0 for all four assets). **21 of 21 live checks passed**
 ([`browser/results.json`](browser/results.json),
 [`browser/rig.log`](browser/rig.log), driver
 [`browser/evidence-rig.mjs`](browser/evidence-rig.mjs)).
@@ -13,8 +13,8 @@ frame support works outside its test harness.
 
 | Item | Value |
 |---|---|
-| Server | `local-browser-bridge 0.11.0`, release build |
-| Extension | `Local Browser Bridge 0.11.0`, from `scripts/package-extension.sh` output, loaded unpacked |
+| Server | packaged `local-browser-bridge 0.11.0` from `local-browser-bridge-v0.11.0-macos-universal.tar.gz` |
+| Extension | packaged `Local Browser Bridge 0.11.0` from `local-browser-bridge-extension-v0.11.0.zip`, loaded unpacked |
 | Browser | Google Chrome for Testing 152.0.7977.54, disposable profile |
 | Parent page | `http://localhost:8099/parent.html` ([fixture](browser/fixtures/parent.html)) |
 | Child frame | `http://127.0.0.1:8100/child.html` ([fixture](browser/fixtures/child.html)) |
@@ -32,7 +32,7 @@ run exercises all of them together in a live browser.
 |---|---|
 | OOPIFs are discovered and merged | `frames.observed`: one frame, `crossOrigin: true`, `urlOrigin http://127.0.0.1:8100`, `depth 1`, `offset {x:250, y:123}`, `mode cdp-auto-attach` |
 | Frame elements join the observation | `frames.elements-merged`: the child's button and text field appear as `…f1.e1` and `…f1.e2` with their own origin |
-| Frame ref grammar | `frames.ref-grammar`: `mt13rtpc-an67xf77.f1.e1` |
+| Frame ref grammar | `frames.ref-grammar`: `mt1487ip-940w0uxx.f1.e1` |
 | Coordinates are translated into the top-level viewport | the child button reports `bounds {x:266, y:187}`, its frame-local position plus the frame offset |
 | **A trusted click really lands inside the cross-origin frame** | `frames.trusted-click-landed-in-child`: the child document recorded **`child-click:true`**, i.e. `event.isTrusted === true` inside the OOPIF |
 
