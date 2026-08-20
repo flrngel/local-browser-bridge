@@ -1,0 +1,37 @@
+starting packaged server
+launching isolated Chrome for Testing with the packaged extension
+PASS extension.loaded :: {"id":"jmmkmlcmlcakdoheceomeoolcbcpokja","version":"0.10.0"}
+PASS extension.connected :: {"version":"0.10.0","browser":"Google Chrome","mode":"full-access"}
+PASS tabs.list :: {"id":1387314491,"url":"http://127.0.0.1:17373/demo","title":"Bridge Demo Target"}
+PASS browser.control.start :: {"active":true,"expiresAt":1787197557978}
+PASS evidence.native-warning-screenshot :: 01-native-debugger-warning.png
+PASS page.observe :: {"generation":"mt0yxbi2-fip667jr","elementCount":9,"title":"Bridge Demo Target"}
+PASS refs.epoch-embedded :: {"sample":["mt0yxbi2-fip667jr.e1=textbox:Display name","mt0yxbi2-fip667jr.e2=select:Favorite color","mt0yxbi2-fip667jr.e3=button:Show greeting","mt0yxbi2-fip667jr.e4=textbox:Keyboard target"]}
+PASS observation.screenshot-metadata :: {"file":"02-observe.jpg","bytes":99049,"contentHash":"717f89e3c5e172549cad021dbe76c7c55092f8bf7242a57876e764c04e2afd61","width":2560,"height":1434}
+PASS page.waitFor.satisfied :: {"conditions":{"text":true},"elapsedMs":0,"satisfied":true}
+PASS page.waitFor.timeout-is-structured :: {"status":409,"code":"WAIT_TIMEOUT","taxonomy":"wait_timeout","hint":"reobserve"}
+PASS page.waitFor.timeout-keeps-lease :: lease still active after wait timeout
+PASS page.scroll.brings-target-into-view :: {"inViewport":true,"bounds":{"height":46,"width":672,"x":304,"y":120}}
+PASS page.hover :: {"control":{"active":true,"activeCaptureIds":[],"captureDepth":0,"cleanup":null,"cleanups":[],"cursor":{"updatedAt":1787196961853,"visible":true,"x":640,"y":143},"documentEpoch":1,"documentUrl":"http://127.0.0.1:17373/demo","epoch":9,"expiresAt":1787197557978,"humanPause":null,"humanPaused":false,"l
+PASS page.hover.no-click-dispatched :: {"control":{"active":true,"activeCaptureIds":[],"captureDepth":0,"cleanup":null,"cleanups":[],"cursor":{"updatedAt":1787196961853,"visible":true,"x":640,"y":143},"documentEpoch":1,"documentUrl":"http://127.0.0.1:17373/demo","epoch":9,"expiresAt":1787197557978,"humanPause":null,"humanPaused":false,"lastHeartbeatAt":1787196957978,"moveSequence":1,"navigationPending":false,"owner":"server","pausePersistenceUncertain":false,"revocationPending":false,"sessionId":"ae195252-d42c-44e2-9b32-6aa1c9637d73","startedAt":1787196957978,"tabId":1387314491,"turn":5},"type":"string","value":"none"}
+PASS page.click.modifiers :: {"button":"left","clickCount":1,"clicked":true,"control":{"active":true,"activeCaptureIds":[],"captureDepth":0,"cleanup":null,"cleanups":[],"cursor":{"updatedAt":1787196962603,"visible":true,"x":640,"y":143},"documentEpoch":1,"documentUrl":"http://127.0.0.1:17373/demo","epoch":9,"expiresAt":17871975
+PASS page.click.trusted-event-observed :: {"control":{"active":true,"activeCaptureIds":[],"captureDepth":0,"cleanup":null,"cleanups":[],"cursor":{"updatedAt":1787196962603,"visible":true,"x":640,"y":143},"documentEpoch":1,"documentUrl":"http://127.0.0.1:17373/demo","epoch":9,"expiresAt":1787197557978,"humanPause":null,"humanPaused":false,"lastHeartbeatAt":1787196957978,"moveSequence":2,"navigationPending":false,"owner":"server","pausePersistenceUncertain":false,"revocationPending":false,"sessionId":"ae195252-d42c-44e2-9b32-6aa1c9637d73","startedAt":1787196957978,"tabId":1387314491,"turn":8},"type":"string","value":"coordinate:true"}
+PASS page.batch :: {"completed":2,"control":{"active":true,"activeCaptureIds":[],"captureDepth":0,"cleanup":null,"cleanups":[],"cursor":{"updatedAt":1787196962603,"visible":true,"x":640,"y":143},"documentEpoch":1,"documentUrl":"http://127.0.0.1:17373/demo","epoch":9,"expiresAt":1787197557978,"humanPause":null,"humanPa
+PASS page.batch.applied-both-steps :: {"control":{"active":true,"activeCaptureIds":[],"captureDepth":0,"cleanup":null,"cleanups":[],"cursor":{"updatedAt":1787196962603,"visible":true,"x":640,"y":143},"documentEpoch":1,"documentUrl":"http://127.0.0.1:17373/demo","epoch":9,"expiresAt":1787197557978,"humanPause":null,"humanPaused":false,"lastHeartbeatAt":1787196957978,"moveSequence":2,"navigationPending":false,"owner":"server","pausePersistenceUncertain":false,"revocationPending":false,"sessionId":"ae195252-d42c-44e2-9b32-6aa1c9637d73","startedAt":1787196957978,"tabId":1387314491,"turn":13},"type":"string","value":"{\"name\":\"Ada\",\"color\":\"blue\"}"}
+PASS page.batch.screenshot :: {"file":"03-batch.jpg","bytes":104882,"contentHash":"05d422ef5bc41a281af87c787c72361f5c0bbae43982110142192883b6d95026","width":2560,"height":1434}
+PASS coordinates.normalized1000 :: {"button":"left","clickCount":1,"clicked":true,"control":{"active":true,"activeCaptureIds":[],"captureDepth":0,"cleanup":null,"cleanups":[],"cursor":{"updatedAt":1787196965520,"visible":true,"x":640,"y":358.5},"documentEpoch":1,"documentUrl":"http://127.0.0.1:17373/demo","epoch":9,"expiresAt":178719
+PASS callId.replay :: {"firstStatus":200,"replayed":true,"identical":true}
+PASS callId.reuse-refused :: {"status":409,"code":"CALL_ID_REUSED"}
+PASS error.taxonomy :: {"legacy":"STALE_REF","taxonomy":{"code":"stale_ref","prose":"That element reference no longer resolves; observe again and use a ref from the new observation.","recoveryHint":"reobserve","retriable":true}}
+PASS security.host-guard :: {"statusLine":"HTTP/1.1 403 Forbidden"}
+PASS security.loopback-host-allowed :: {"statusLine":"HTTP/1.1 200 OK"}
+FAIL dialog.pending-state :: pendingDialog stayed null
+FAIL dialog.blocks-with-blocked_by_dialog :: {"status":409,"code":"CONTROL_REVOKED","taxonomy":"lease_lost"}
+PASS evidence.dialog-screenshot :: 04-dialog-open.png
+FAIL dialog.lease-survives-open-dialog :: {"active":false,"revocation":"document_changed:screenshot completion"}
+FAIL page.handleDialog :: {"code":"NO_PENDING_DIALOG","message":"NO_PENDING_DIALOG: no JavaScript dialog is open on the controlled tab"}
+FAIL dialog.observe-works-after-handling :: observe after dialog handling
+PASS browser.control.stop :: {"active":false,"activeCaptureIds":[],"cleanup":null,"cleanups":[],"humanPause":null,"humanPaused":false,"pausePersistenceUncertain":false,"revocation":{"at":1787196972560,"cleanupCompletedAt":1787196972563,"cleanupPending":false,"reason":"document_changed:screenshot completion","requiresExplicitSta
+PASS evidence.after-stop-screenshot :: 05-after-stop.png
+
+28/33 checks passed

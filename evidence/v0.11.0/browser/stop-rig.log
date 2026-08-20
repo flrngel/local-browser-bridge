@@ -1,0 +1,13 @@
+PASS extension.loaded :: {"version":"0.11.0"}
+PASS extension.connected :: {"version":"0.11.0"}
+PASS browser.control.start :: {"active":true}
+PASS bridge.refuses-to-click-its-own-stop :: {"code":"CONTROL_UI_OCCLUSION","message":"CONTROL_UI_OCCLUSION: release control with the visible Stop button or choose another point"}
+PASS stop.pill-located :: {"found":true,"x":851.015625,"y":12,"width":416.984375,"height":37,"right":1268,"bottom":49}
+PASS stop.click-dispatched :: {"x":1242,"y":31,"note":"real Input.dispatchMouseEvent, not a DOM .click()"}
+PASS stop.lease-revoked :: {"active":false,"reason":"released_by_user"}
+PASS stop.human-pause-latched :: {"humanPaused":true}
+PASS stop.remote-restart-refused :: {"status":500,"code":"HUMAN_CONTROL_PAUSED","taxonomy":"needs_user"}
+PASS stop.remote-mutation-refused :: {"status":500,"code":"HUMAN_CONTROL_PAUSED"}
+PASS stop.page-overlay-removed :: {"overlayAbsent":"true"}
+
+11/11 checks passed

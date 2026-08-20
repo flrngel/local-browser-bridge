@@ -4,3 +4,5 @@ node_modules/
 coverage/
 dist/
 *.log
+# Evidence bundles cite their rig logs, so those logs must reach the repository.
+!evidence/**/*.log

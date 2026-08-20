@@ -195,6 +195,16 @@ async fn connect_fake_extension_with_dialog_race(
                     "id": id, "type": "result", "ok": true,
                     "result": { "tabId": 7, "active": true }
                 }),
+                // Tab 9 stands in for a tab a human paused with the in-page
+                // Stop button: the extension refuses control until the human
+                // resumes it, and no retry by the caller can change that.
+                "browser.control.start" if message["params"]["tabId"] == json!(9) => json!({
+                    "id": id, "type": "result", "ok": false,
+                    "error": {
+                        "code": "HUMAN_CONTROL_PAUSED",
+                        "message": "a human paused agent control on this tab; ask them to resume it"
+                    }
+                }),
                 // The extension refuses the observation itself when the
                 // dialog opened after the server passed its own gate: the
                 // renderer is frozen and the lease is intact, so the answer
@@ -1674,6 +1684,41 @@ async fn attaches_recovery_taxonomy_to_failed_commands() {
     assert_eq!(body["taxonomy"]["code"], "stale_snapshot");
     assert_eq!(body["taxonomy"]["retriable"], true);
     assert_eq!(body["taxonomy"]["recoveryHint"], "reobserve");
+    assert!(!body["taxonomy"]["prose"].as_str().unwrap().is_empty());
+
+    fake.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+/// The live 0.11.0 defect: a human clicked the in-page Stop button, and the
+/// commands that came back `HUMAN_CONTROL_PAUSED` were reported to REST
+/// clients as HTTP 500 "server error" — telling them to retry or alert when
+/// the only thing that resolves it is a human resuming control.
+#[tokio::test]
+async fn a_human_paused_command_is_locked_rather_than_a_server_error() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let (fake, _relayed_methods, _events) = connect_fake_extension(&base_url, &token).await;
+    let client = Client::new();
+    wait_for_tabs(&client, &base_url, &token).await;
+
+    let response = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "browser.control.start", "params": { "tabId": 9 } }))
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    assert_ne!(status, 500, "a human pause was reported as a server fault");
+    assert_eq!(status, 423, "a held human pause is a lock, not a fault");
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["ok"], false);
+    assert_eq!(body["error"]["code"], "HUMAN_CONTROL_PAUSED");
+    assert_eq!(body["taxonomy"]["code"], "needs_user");
+    assert_eq!(body["taxonomy"]["retriable"], false);
+    assert_eq!(body["taxonomy"]["recoveryHint"], "handback");
     assert!(!body["taxonomy"]["prose"].as_str().unwrap().is_empty());
 
     fake.abort();

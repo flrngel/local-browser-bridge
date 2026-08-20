@@ -830,47 +830,40 @@ impl ApiError {
     }
 }
 
+/// The few connector codes whose HTTP status is deliberately narrower than
+/// their taxonomy class would give. Everything else takes the class status,
+/// so this list is the entire set of exceptions and each one states why.
+///
+/// A code that agrees with its class must not be listed here: the unit tests
+/// prove every entry really does differ from its class default, so a
+/// reclassification cannot leave a stale override behind.
+fn connector_status_override(code: &str) -> Option<StatusCode> {
+    match code {
+        // The caller sent a coordinate the connector proved is outside the
+        // surface. Unlike the rest of `out_of_bounds`, the number itself is
+        // wrong and a fresh observation is not what fixes it.
+        "BAD_COORDINATES" => Some(StatusCode::BAD_REQUEST),
+        // A missing operating-system permission is a standing refusal, not a
+        // lock a human is holding for the length of one action: no handback
+        // resumes it, so it stays a policy 403 rather than 423.
+        "COMPUTER_PERMISSION_REQUIRED" => Some(StatusCode::FORBIDDEN),
+        // page.handleDialog with no dialog recorded is well formed; it is the
+        // page state, not the request, that does not match, and the identical
+        // request becomes valid the moment a dialog opens.
+        "NO_PENDING_DIALOG" => Some(StatusCode::CONFLICT),
+        _ => None,
+    }
+}
+
 impl From<HubError> for ApiError {
+    /// Every failure a connector hands back takes its HTTP status from the
+    /// taxonomy class the code already classifies into, so the status and the
+    /// published `taxonomy` object can never disagree and no code can fall
+    /// through to a 500 that blames the local server for a connector's state.
+    /// The only exceptions are the narrower statuses listed above.
     fn from(error: HubError) -> Self {
-        let status = match error.code.as_str() {
-            code if code.ends_with("_OFFLINE")
-                || code.ends_with("_DISCONNECTED")
-                || code.ends_with("_OVERLOADED") =>
-            {
-                StatusCode::SERVICE_UNAVAILABLE
-            }
-            "COMMAND_TIMEOUT" | "COMMAND_OUTCOME_UNKNOWN" => StatusCode::GATEWAY_TIMEOUT,
-            "COMPUTER_STALE_FRAME"
-            | "COMPUTER_STALE_POINTER"
-            | "CONTROL_REQUIRED"
-            | "CONTROL_REVOKED"
-            | "STALE_CONTROL_SESSION"
-            | "STALE_CONTROL_TURN"
-            | "STALE_MOVE_SEQUENCE"
-            | "STALE_SNAPSHOT"
-            | "STALE_REF"
-            | "TARGET_CHANGED"
-            | "TARGET_MISSING"
-            | "TARGET_OCCLUDED"
-            | "NO_PENDING_DIALOG"
-            | "WAIT_TIMEOUT" => StatusCode::CONFLICT,
-            "COMPUTER_INVALID_REQUEST"
-            | "BAD_TAB"
-            | "BAD_URL"
-            | "BAD_BUTTON"
-            | "BAD_CLICK_COUNT"
-            | "BAD_COORDINATES"
-            | "BAD_KEY"
-            | "BAD_MODIFIER" => StatusCode::BAD_REQUEST,
-            "COMPUTER_PERMISSION_REQUIRED"
-            | "SITE_BLOCKED"
-            | "FULL_ACCESS_REQUIRED"
-            | "SENSITIVE_FIELD" => StatusCode::FORBIDDEN,
-            code if code.starts_with("COMPUTER_") || code.starts_with("EXTENSION_") => {
-                StatusCode::BAD_GATEWAY
-            }
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
-        };
+        let status = connector_status_override(&error.code)
+            .unwrap_or_else(|| classify(&error.code).code.http_status());
         Self::new(status, error.code, error.message)
     }
 }
@@ -6521,5 +6514,215 @@ mod tests {
         assert!(sensitive.value.is_none());
         assert!(!sensitive.actions.iter().any(|action| action == "setValue"));
         assert!(sensitive.actions.iter().any(|action| action == "press"));
+    }
+
+    /// The exact path a connector failure takes: the hub hands back the code
+    /// the extension or helper reported, and the REST layer turns it into a
+    /// status and a body.
+    fn connector_error(code: &str) -> ApiError {
+        ApiError::from(HubError::new(code, "connector reported a failure"))
+    }
+
+    fn connector_status(code: &str) -> StatusCode {
+        connector_error(code).status
+    }
+
+    #[test]
+    fn every_registered_connector_code_reports_the_status_of_its_taxonomy_class() {
+        for (legacy, expected_class) in crate::error_taxonomy::LEGACY_CODES {
+            let error = connector_error(legacy);
+            let class = classify(legacy).code;
+            assert_eq!(
+                class,
+                *expected_class,
+                "{legacy} no longer classifies as {}",
+                expected_class.as_str()
+            );
+            assert_ne!(
+                error.status,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "{legacy} ({}) is reported to clients as a local server fault",
+                class.as_str()
+            );
+            let expected = connector_status_override(legacy).unwrap_or_else(|| class.http_status());
+            assert_eq!(
+                error.status,
+                expected,
+                "{legacy} ({}) reports {} instead of {expected}",
+                class.as_str(),
+                error.status
+            );
+            // The published body must explain the status it arrives with.
+            let body = error.body();
+            assert_eq!(body["error"]["code"], *legacy);
+            assert_eq!(body["taxonomy"]["code"], class.as_str());
+        }
+    }
+
+    #[test]
+    fn unclassified_connector_codes_blame_the_connector_not_the_bridge() {
+        // An unrecognized code still came from a connector, so it is a bad
+        // gateway rather than a fault of this server.
+        for unknown in [
+            "SOMETHING_BRAND_NEW",
+            "COMPUTER_ERROR",
+            "EXTENSION_ERROR",
+            "COMPUTER_HELPER_FAILED",
+            "EVALUATION_FAILED",
+            "SCREENSHOT_FAILED",
+        ] {
+            assert_eq!(
+                connector_status(unknown),
+                StatusCode::BAD_GATEWAY,
+                "{unknown} did not report a connector fault"
+            );
+        }
+    }
+
+    #[test]
+    fn a_human_pause_is_locked_and_never_a_server_error() {
+        // The live 0.11.0 regression: a human clicked the in-page Stop
+        // button, and browser.control.start and page.observe both answered
+        // HTTP 500. A held human pause is a lock only a human can release.
+        let paused = connector_error("HUMAN_CONTROL_PAUSED");
+        assert_eq!(paused.status, StatusCode::LOCKED);
+        assert_eq!(paused.status.as_u16(), 423);
+        let body = paused.body();
+        assert_eq!(body["error"]["code"], "HUMAN_CONTROL_PAUSED");
+        assert_eq!(body["taxonomy"]["code"], "needs_user");
+        assert_eq!(body["taxonomy"]["retriable"], false);
+        assert_eq!(body["taxonomy"]["recoveryHint"], "handback");
+
+        let dialoged = connector_error("BLOCKED_BY_DIALOG");
+        assert_eq!(dialoged.status, StatusCode::CONFLICT);
+        assert_eq!(dialoged.body()["taxonomy"]["code"], "blocked_by_dialog");
+    }
+
+    #[test]
+    fn every_deliberate_connector_status_override_is_still_narrower_than_its_class() {
+        // A stale override would silently re-introduce a hand-maintained
+        // second source of truth, so each one must still disagree with the
+        // class it overrides.
+        for (legacy, _) in crate::error_taxonomy::LEGACY_CODES {
+            let Some(override_status) = connector_status_override(legacy) else {
+                continue;
+            };
+            assert_ne!(
+                override_status,
+                classify(legacy).code.http_status(),
+                "{legacy} overrides its taxonomy class with the same status"
+            );
+        }
+        for (code, expected) in [
+            ("BAD_COORDINATES", StatusCode::BAD_REQUEST),
+            ("COMPUTER_PERMISSION_REQUIRED", StatusCode::FORBIDDEN),
+            ("NO_PENDING_DIALOG", StatusCode::CONFLICT),
+        ] {
+            assert_eq!(connector_status_override(code), Some(expected));
+            assert_eq!(connector_status(code), expected);
+        }
+    }
+
+    #[test]
+    fn connector_statuses_that_predate_the_taxonomy_contract_are_unchanged() {
+        // Every status the hand-maintained match already answered correctly,
+        // pinned so the taxonomy-derived rewrite cannot regress one.
+        for timeout in ["COMMAND_TIMEOUT", "COMMAND_OUTCOME_UNKNOWN"] {
+            assert_eq!(connector_status(timeout), StatusCode::GATEWAY_TIMEOUT);
+        }
+        for conflict in [
+            "COMPUTER_STALE_FRAME",
+            "COMPUTER_STALE_POINTER",
+            "CONTROL_REQUIRED",
+            "CONTROL_REVOKED",
+            "STALE_CONTROL_SESSION",
+            "STALE_CONTROL_TURN",
+            "STALE_MOVE_SEQUENCE",
+            "STALE_SNAPSHOT",
+            "STALE_REF",
+            "TARGET_CHANGED",
+            "TARGET_MISSING",
+            "TARGET_OCCLUDED",
+            "NO_PENDING_DIALOG",
+            "WAIT_TIMEOUT",
+        ] {
+            assert_eq!(
+                connector_status(conflict),
+                StatusCode::CONFLICT,
+                "{conflict}"
+            );
+        }
+        for bad_request in [
+            "COMPUTER_INVALID_REQUEST",
+            "BAD_TAB",
+            "BAD_URL",
+            "BAD_BUTTON",
+            "BAD_CLICK_COUNT",
+            "BAD_COORDINATES",
+            "BAD_KEY",
+            "BAD_MODIFIER",
+        ] {
+            assert_eq!(
+                connector_status(bad_request),
+                StatusCode::BAD_REQUEST,
+                "{bad_request}"
+            );
+        }
+        for forbidden in [
+            "COMPUTER_PERMISSION_REQUIRED",
+            "SITE_BLOCKED",
+            "FULL_ACCESS_REQUIRED",
+            "SENSITIVE_FIELD",
+        ] {
+            assert_eq!(
+                connector_status(forbidden),
+                StatusCode::FORBIDDEN,
+                "{forbidden}"
+            );
+        }
+        for unavailable in [
+            "EXTENSION_OFFLINE",
+            "EXTENSION_DISCONNECTED",
+            "EXTENSION_OVERLOADED",
+            "COMPUTER_OFFLINE",
+            "COMPUTER_DISCONNECTED",
+            "COMPUTER_OVERLOADED",
+        ] {
+            assert_eq!(
+                connector_status(unavailable),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "{unavailable}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_server_still_owns_the_status_of_the_errors_it_builds_itself() {
+        // The connector path must not have moved any status the server
+        // constructs for its own refusals.
+        assert_eq!(
+            ApiError::bad_request("junk").status,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            ApiError::forbidden("HOST_REJECTED", "loopback only").status,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            ApiError::forbidden("CSRF_REJECTED", "bad session").status,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(interrupted_call_error().status, StatusCode::GATEWAY_TIMEOUT);
+        for (status, code) in [
+            (StatusCode::UNAUTHORIZED, "UNAUTHORIZED"),
+            (StatusCode::CONFLICT, "CALL_ID_REUSED"),
+            (StatusCode::CONFLICT, "CALL_IN_PROGRESS"),
+            (StatusCode::NOT_FOUND, "NOT_FOUND"),
+            (StatusCode::UNSUPPORTED_MEDIA_TYPE, "UNSUPPORTED_MEDIA_TYPE"),
+            (StatusCode::PAYLOAD_TOO_LARGE, "BODY_TOO_LARGE"),
+            (StatusCode::TOO_MANY_REQUESTS, "AUTH_BUSY"),
+        ] {
+            assert_eq!(ApiError::new(status, code, "server refusal").status, status);
+        }
     }
 }

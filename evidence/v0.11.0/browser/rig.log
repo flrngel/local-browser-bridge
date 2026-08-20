@@ -1,0 +1,24 @@
+starting packaged server
+PASS extension.loaded :: {"version":"0.11.0"}
+PASS extension.connected :: {"version":"0.11.0"}
+PASS tabs.list.cross-origin-parent :: {"url":"http://localhost:8099/parent.html","title":"Cross-origin frame parent"}
+PASS browser.control.start :: {"active":true}
+PASS frames.observed :: {"frames":[{"crossOrigin":true,"depth":1,"elementCount":2,"frameId":"8C315FE156B504FC5447EF465D9CCC1B","offset":{"x":250,"y":123},"ref":"f1","size":{"height":232,"width":532},"truncated":false,"urlOrigin":"http://127.0.0.1:8100"}],"frameSummary":{"attached":1,"elementsDropped":0,"merged":1,"mode":"cdp-auto-attach","own
+PASS frames.elements-merged :: {"count":2,"sample":["mt1487ip-940w0uxx.f1.e1=button:Cross origin child button origin=http://127.0.0.1:8100","mt1487ip-940w0uxx.f1.e2=textbox:child field origin=http://127.0.0.1:8100"]}
+PASS frames.child-button-visible :: {"ref":"mt1487ip-940w0uxx.f1.e1","bounds":{"height":42,"width":204,"x":266,"y":187},"crossOrigin":true,"frameUrlOrigin":"http://127.0.0.1:8100"}
+PASS frames.ref-grammar :: mt1487ip-940w0uxx.f1.e1
+PASS evidence.frames-screenshot :: 10-cross-origin-frames.png
+PASS frames.click-in-cross-origin-frame :: true
+PASS frames.click-evaluate-ran :: {"control":{"active":true,"activeCaptureIds":[],"captureDepth":0,"cleanup":null,"cleanups":[],"cursor":{"updatedAt":1787
+PASS frames.trusted-click-landed-in-child :: child-click:true
+PASS evidence.frames-click-screenshot :: 11-cross-origin-click.png
+PASS dialog.pending-state-visible :: {"at":1787205867517,"hasPrompt":false,"message":"bridge dialog regression","tabId":134353923,"type":"confirm"}
+PASS dialog.blocks-with-blocked_by_dialog :: {"status":409,"code":"BLOCKED_BY_DIALOG","taxonomy":"blocked_by_dialog"}
+PASS dialog.lease-survives-open-dialog :: {"active":true}
+PASS evidence.dialog-screenshot :: 12-dialog-open-lease-alive.png
+PASS page.handleDialog :: {"accept":false,"control":{"active":true,"activeCaptureIds":[],"captureDepth":0,"cleanup":null,"cleanups":[],"cursor":{"updatedAt":1787205865890,"visible":true,"x":368,"y":208},"documentEpoch":1,"documentUrl":"http://localhost:8099/parent.html","epoch":9,"expiresAt":1787206464244,"humanPause":null,"humanPaused":false,"
+PASS dialog.observe-works-after-handling :: {"turn":6,"elements":3}
+PASS dialog.lease-still-active-after-handling :: {"active":true}
+PASS navigation.authorized-still-works :: navigated
+
+21/21 checks passed

@@ -521,4 +521,24 @@ Every failed JSON API response carries a `taxonomy` object next to the untouched
 
 The canonical codes are `stale_snapshot`, `stale_ref`, `target_changed`, `out_of_bounds`, `not_interactable`, `obscured`, `document_changed`, `lease_lost`, `needs_user`, `blocked_by_policy`, `blocked_by_dialog`, `sensitive_field`, `outcome_unknown`, `timeout`, `wait_timeout`, `overloaded`, `protocol_mismatch`, `unavailable`, `invalid_request`, and `unknown`. Recovery hints stay within `reobserve`, `wait`, `resume`, `handback`, `reconnect`, and `none`. Every legacy code the server, extension, and helper emit is classified; an unmapped code collapses to `unknown` and is never marked retriable. `wait_timeout` is deliberately non-retriable with a `reobserve` hint. Classification happens only in the server: the connector WebSocket error envelope still carries just `{code, message}`, and `/api/state` activity entries carry human messages without taxonomy.
 
+#### HTTP status of a connector failure
+
+When a failure comes back from a connector—the browser extension or the computer helper—its HTTP status is **derived from its taxonomy class**, so the status and the `taxonomy` object can never disagree and no connector state is ever reported as a local server fault. The class table:
+
+| Taxonomy class | HTTP status | What the status tells the client |
+| --- | --- | --- |
+| `invalid_request` | 400 Bad Request | The request itself is wrong; fix the parameters |
+| `blocked_by_policy`, `sensitive_field` | 403 Forbidden | A standing refusal; do not retry the same request |
+| `stale_snapshot`, `stale_ref`, `target_changed`, `out_of_bounds`, `not_interactable`, `obscured`, `document_changed`, `lease_lost`, `blocked_by_dialog`, `wait_timeout` | 409 Conflict | The world moved under the request; observe again (or resolve the dialog) and retry |
+| `needs_user` | 423 Locked | A human holds the lock and only a human can release it; hand back instead of retrying |
+| `protocol_mismatch`, `unknown` | 502 Bad Gateway | The connector answered with something the server cannot trust or read |
+| `overloaded`, `unavailable` | 503 Service Unavailable | The connector is missing or shedding load; reconnect or wait |
+| `timeout`, `outcome_unknown` | 504 Gateway Timeout | The connector never delivered an outcome; observe before acting again |
+
+A connector failure therefore never answers 500: an unclassified code is the connector's fault (502), not the bridge's. So a human pressing the in-page Stop button makes commands answer **423 `HUMAN_CONTROL_PAUSED` with taxonomy `needs_user`** and hint `handback`, not a 500 that would read as a retriable server error.
+
+Three connector codes deliberately answer a narrower status than their class, because the class is right about the recovery and the status is more precise about the cause: `BAD_COORDINATES` answers 400 (the number itself is wrong, not the observation), `COMPUTER_PERMISSION_REQUIRED` answers 403 (a missing operating-system permission is a standing refusal, not a lock a handback resumes), and `NO_PENDING_DIALOG` answers 409 (the request is well formed; only the page state does not match). There are no other exceptions.
+
+Statuses the server produces for its **own** refusals are unaffected by this contract and unchanged: 400 `BAD_REQUEST`, 401 `UNAUTHORIZED`, 403 `HOST_REJECTED`/`CSRF_REJECTED`/`ORIGIN_REJECTED`, 404 `NOT_FOUND`/`NO_SCREENSHOT`/`NO_COMPUTER_SCREENSHOT`, 409 `CALL_IN_PROGRESS`/`CALL_ID_REUSED`/`EXTENSION_PROTOCOL_MISMATCH`/`EXTENSION_CAPABILITY_UNAVAILABLE`/`COMPUTER_PROTOCOL_MISMATCH`/`COMPUTER_CAPABILITY_UNAVAILABLE`/`BLOCKED_BY_DIALOG`/`STALE_SCREENSHOT`/`NO_COMPUTER_FRAME`/`NO_BROWSER_OBSERVATION`, 413 `BODY_TOO_LARGE`, 415 `UNSUPPORTED_MEDIA_TYPE`, 429 `AUTH_BUSY`, 502 `COMPUTER_INVALID_OBSERVATION`, 503 `EXTENSION_HANDSHAKE_PENDING`/`COMPUTER_HANDSHAKE_PENDING`/`EXTENSION_DISCONNECTED`/`COMPUTER_DISCONNECTED`, and the 504 `COMMAND_OUTCOME_UNKNOWN` cached for an interrupted `callId`. The only 500 the API can still answer is `INVALID_SANITIZER_STATE`, a broken internal invariant of the server itself, which is exactly what a 500 should mean.
+
 The native allowlist intentionally contains no shell, filesystem, process-launch, clipboard, downloader, arbitrary-code, credential-store, user-management, or telemetry method.

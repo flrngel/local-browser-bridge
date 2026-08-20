@@ -33,7 +33,7 @@ This project does not copy any private OpenAI protocol. It independently impleme
 - Accessible agent-facing DOM, activity log, and live SSE state updates
 - Bearer-token REST command API and a Rust mock extension for testing
 - Idempotent commands: an optional `callId` deduplicates in-flight calls and replays completed results verbatim
-- Structured error taxonomy with retriability and a recovery hint on every failed API response
+- Structured error taxonomy with retriability and a recovery hint on every failed API response, and an HTTP status derived from that taxonomy rather than from where the failure happened
 - Optional standalone Rust computer helper for macOS and Windows exact-window capture, background-routed mouse input, Unicode text, and key chords
 - Optional exact-window live frame feed at 1–10 FPS, with a session-owned synthetic pointer composited into observations and shared frames
 - Ack-paced latest-frame-wins share delivery with an honest dropped-frame counter when server and helper both negotiate it
@@ -121,6 +121,8 @@ Load the extension in the target browser:
 
 When trusted control starts, Chrome itself displays **Local Browser Bridge started debugging this browser**. The controlled page separately displays **Local Browser Bridge is using this tab** with a **Stop** button. They are intentionally independent: Chrome owns the first warning and the extension owns the second. Choosing Chrome's Cancel action, the in-page Stop button, **Release control** in the extension popup, lease expiry, tab closure, or bridge disconnection revokes the lease. Chrome Cancel and either human Stop control also persist a global pause across browser and service-worker restarts: remote commands cannot resume on any tab until a person selects **Resume** in the extension popup and then starts a new lease. The extension never falls back to an untrusted DOM click.
 
+A live run against the packaged 0.11.0 build proved the in-page Stop button end to end with a genuine dispatched mouse event: the lease was released, the global pause latched, remote start and observe were both refused with `HUMAN_CONTROL_PAUSED`, the page overlay was removed, and the bridge refused to click its own Stop button (`CONTROL_UI_OCCLUSION`) — 11 of 11 checks in [evidence/v0.11.0/README.md](evidence/v0.11.0/README.md). Chrome's own Cancel button is browser chrome that no dispatched page input can press, so it stays covered by the 0.9 bundle and the contract suite rather than by a dispatched live click.
+
 For M365 Copilot Cowork running with the local Edge browser, use a prompt such as:
 
 ```text
@@ -178,6 +180,24 @@ curl http://127.0.0.1:17373/api/v1/command \
 
 See [docs/PROTOCOL.md](docs/PROTOCOL.md) for the supported commands and WebSocket envelopes.
 
+### 0.11.1: HTTP status comes from the error taxonomy
+
+A live run against the packaged 0.11.0 build found this defect, not the test suite. After a person pressed the in-page **Stop** button, the commands that were correctly refused with `HUMAN_CONTROL_PAUSED` were reported to REST clients as **HTTP 500** — a local server fault, the one status that tells a client to retry or raise an alert, when the only thing that resolves the state is that same person pressing **Resume** ([evidence/v0.11.0/README.md](evidence/v0.11.0/README.md)).
+
+Since 0.11.1, the status of a failure that came back from a connector — the browser extension or the computer helper — is derived from its taxonomy class, so the status and the `taxonomy` object can never disagree:
+
+| Taxonomy class | Status |
+|---|---|
+| `invalid_request` | 400 Bad Request |
+| `blocked_by_policy`, `sensitive_field` | 403 Forbidden |
+| `stale_snapshot`, `stale_ref`, `target_changed`, `out_of_bounds`, `not_interactable`, `obscured`, `document_changed`, `lease_lost`, `blocked_by_dialog`, `wait_timeout` | 409 Conflict |
+| `needs_user` | 423 Locked |
+| `protocol_mismatch`, `unknown` | 502 Bad Gateway |
+| `overloaded`, `unavailable` | 503 Service Unavailable |
+| `timeout`, `outcome_unknown` | 504 Gateway Timeout |
+
+A human pause is therefore **423 Locked**, not 500. Statuses the server produces for its own refusals are unchanged, and the only 500 the API can still answer is `INVALID_SANITIZER_STATE`, a broken internal invariant of the server itself. Clients that treated 500 as "retry or alert" should branch on `taxonomy.code` and `taxonomy.recoveryHint` instead. The full table, including the three codes that deliberately answer a narrower status than their class, is in [docs/PROTOCOL.md](docs/PROTOCOL.md).
+
 ## Verification
 
 ```bash
@@ -186,7 +206,7 @@ cargo clippy --all-targets -- -D warnings
 cargo test --locked --all-targets
 ```
 
-The test suite covers version alignment, exact extension permissions and package files, absence of remote extension code and updater APIs, command parity, token persistence, update metadata validation, command validation, CSRF and both WebSocket Origin boundaries, protocol/session mismatch rejection, browser/computer relays, screenshot serving, frame freshness, debugger-revocation contracts, the cross-origin frame ref grammar, coordinate translation, and budget arithmetic, the dialog gate's non-revocation boundaries, and the helper's bounded capability contract. The implementation review and release-specific evidence index are in [docs/SOTA_AUDIT.md](docs/SOTA_AUDIT.md).
+The test suite covers version alignment, exact extension permissions and package files, absence of remote extension code and updater APIs, command parity, token persistence, update metadata validation, command validation, CSRF and both WebSocket Origin boundaries, protocol/session mismatch rejection, browser/computer relays, screenshot serving, frame freshness, debugger-revocation contracts, the cross-origin frame ref grammar, coordinate translation, and budget arithmetic, the dialog gate's non-revocation boundaries, the taxonomy-derived HTTP status of every connector failure, and the helper's bounded capability contract. The implementation review and release-specific evidence index are in [docs/SOTA_AUDIT.md](docs/SOTA_AUDIT.md).
 
 ## Deployment contract
 
