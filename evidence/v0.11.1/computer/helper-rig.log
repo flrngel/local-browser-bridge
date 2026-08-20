@@ -1,0 +1,37 @@
+2026-08-20T17:49:55.845Z PASS server version: 0.11.1
+2026-08-20T17:49:55.851Z PASS helper version: 0.11.1
+2026-08-20T17:49:55.873Z PASS server universal architecture: arm64,x86_64
+2026-08-20T17:49:55.873Z PASS helper universal architecture: arm64,x86_64
+2026-08-20T17:49:55.893Z PASS strict code-signature verification: server and helper passed codesign --verify --strict
+2026-08-20T17:49:55.896Z PASS published archive checksum: 83bbb5b8408dabc8fe7a407941ff6c43c6a846a3e74bc1c06b6502860d29ebd5
+2026-08-20T17:49:56.683Z PASS screen-capture permission preflight: permission was already granted; no request was made
+2026-08-20T17:49:56.683Z PASS accessibility permission preflight: permission was already granted; no request was made
+2026-08-20T17:49:57.315Z PASS packaged helper compatible: protocol-compatible helper 0.11.1
+2026-08-20T17:49:57.315Z PASS acknowledged share advertised: computer.share.ack present
+2026-08-20T17:49:57.547Z PASS helper status backend: background-window/skylight+cgwindow
+2026-08-20T17:49:57.547Z PASS semantic backend ready: macos-accessibility is ready without prompting
+2026-08-20T17:49:57.547Z PASS fixture exact window discovered: helper-evidence-fixture — LBB v0.11.1 Helper Evidence
+2026-08-20T17:49:57.855Z PASS exact fixture window observed: 1209x826
+2026-08-20T17:49:57.855Z PASS semantic snapshot available: 4 elements
+2026-08-20T17:49:57.859Z PASS semantic value element discovered: AXTextField
+2026-08-20T17:49:58.902Z PASS semantic setValue confirmed: Confirmed/value-confirmed
+2026-08-20T17:49:58.902Z PASS semantic action element discovered: AXButton
+2026-08-20T17:50:00.033Z PASS semantic invoke fixture effect: fixture semantic counter advanced to 1
+2026-08-20T17:50:00.033Z PASS semantic invoke confirmed: Confirmed/element-state-changed
+2026-08-20T17:50:00.956Z PASS live share started: 10 fps exact-window
+2026-08-20T17:50:00.956Z PASS live share ack pacing: latest-frame-wins, ackPaced=true
+2026-08-20T17:50:03.390Z PASS pixel click delivered to fixture: fixture click counter advanced to 1
+2026-08-20T17:50:03.390Z PASS pixel click conservatively classified: Unverifiable
+2026-08-20T17:50:03.390Z PASS pixel delivery invariants held: foreground, focus, hardware cursor, and Space remained unchanged
+2026-08-20T17:50:03.618Z PASS live share sequence advanced: sequence=9, ack=6
+2026-08-20T17:50:03.618Z PASS live share remained ack paced: latest-frame-wins, dropped=3
+2026-08-20T17:50:03.838Z PASS live share stopped: requested
+2026-08-20T17:50:03.838Z PASS fixture final state: {"clicks":1,"semanticPresses":1,"semanticValue":"packaged-helper-408"}
+2026-08-20T17:50:03.905Z PASS independent foreground unchanged: Google Chrome -> Google Chrome
+2026-08-20T17:50:03.905Z PASS independent hardware cursor unchanged: 878.796875,1135.00390625 -> 878.796875,1135.00390625
+2026-08-20T17:50:03.908Z helper stopped
+2026-08-20T17:50:03.908Z PASS helper transport disconnected cleanly: published helper session and observation were revoked
+2026-08-20T17:50:03.923Z 32/32 checks passed
+2026-08-20T17:50:03.925Z server stopped
+2026-08-20T17:50:03.929Z fixture stopped
+2026-08-20T17:50:03.929Z scratch directory removed

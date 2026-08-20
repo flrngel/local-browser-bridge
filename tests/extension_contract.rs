@@ -4482,12 +4482,29 @@ fn frame_targets_auto_attach_is_flat_bounded_and_iframe_only() {
     assert!(record.contains("detachFrameTarget(tabId, sessionId, \"non_iframe_target\")"));
     assert!(record.contains("detachFrameTarget(tabId, sessionId, \"no_lease\")"));
     assert!(record.contains("attachedFrames.size >= FRAME_MAX_ATTACHED"));
+    assert!(record.contains("parentKey === String(sessionId)"));
+    assert!(record.contains("parent.depth + 1"));
+    assert!(record.contains("depth > FRAME_MAX_DEPTH"));
+    assert!(record.contains("descendantAutoAttachEnabled: false"));
     assert!(record.contains("\"budget_frames\""));
     assert!(record.contains("\"blank_document\""));
     assert!(background.contains("\"Target.detachFromTarget\""));
 
+    let recursive_start = background
+        .find("async function enableDescendantFrameAutoAttach")
+        .unwrap();
+    let recursive_end = background[recursive_start..]
+        .find("\n// Never fails the lease")
+        .unwrap()
+        + recursive_start;
+    let recursive = &background[recursive_start..recursive_end];
+    assert!(recursive.contains("record.depth > FRAME_MAX_DEPTH"));
+    assert!(recursive.contains("\"Target.setAutoAttach\""));
+    assert!(recursive.contains("record.sessionId"));
+    assert!(recursive.contains("options"));
+
     // The routing probe must stay discriminating: a truthiness check would
-    // accept the ROOT frame tree from a Chrome that ignores sessionId.
+    // accept the ROOT frame tree from a route that strips sessionId.
     let probe_start = background.find("async function probeFrameSession").unwrap();
     let probe_end = background[probe_start..]
         .find("\nasync function prepareOwnerSession")
@@ -4495,12 +4512,20 @@ fn frame_targets_auto_attach_is_flat_bounded_and_iframe_only() {
         + probe_start;
     let probe = &background[probe_start..probe_end];
     assert!(probe.contains("frame.id !== record.targetId"));
+    assert!(probe.contains("enableDescendantFrameAutoAttach"));
+    assert!(probe.contains("rethrowLeaseFatalFrameError(error)"));
+    assert!(probe.contains("frameSkipReasonFor(error, \"session_probe_failed\")"));
+    assert!(probe.contains("attachedFrames.get(record.sessionId) !== record"));
+    assert!(probe.contains("throw frameDetachedError(\"frame session probing\")"));
+    assert!(background.contains("while (true) {"));
+    assert!(background.contains("!visited.has(candidate.sessionId)"));
+    assert!(background.contains("Date.now() >= options.deadlineAt"));
     assert!(background.contains("session_routing_unverified"));
     assert_eq!(manifest()["minimum_chrome_version"], "118");
 }
 
 #[test]
-fn root_debugger_events_ignore_child_sessions() {
+fn child_debugger_events_route_only_nested_target_lifecycle() {
     let background = fs::read_to_string("extension/background.js").unwrap();
     let listener_start = background
         .find("chrome.debugger.onEvent.addListener(")
@@ -4532,6 +4557,28 @@ fn root_debugger_events_ignore_child_sessions() {
     assert_eq!(listener.matches("handleFrameSessionEvent").count(), 1);
     assert!(listener.contains("method === \"Target.attachedToTarget\""));
     assert!(listener.contains("method === \"Target.detachedFromTarget\""));
+
+    let handler_start = background.find("function handleFrameSessionEvent").unwrap();
+    let handler_end = background[handler_start..]
+        .find("\nconst POINTER_CANDIDATE_COUNT")
+        .unwrap()
+        + handler_start;
+    let handler = &background[handler_start..handler_end];
+    let nested_attach = handler
+        .find("method === \"Target.attachedToTarget\"")
+        .unwrap();
+    let nested_detach = handler
+        .find("method === \"Target.detachedFromTarget\"")
+        .unwrap();
+    let parent_lookup = handler
+        .find("const record = attachedFrames.get(source.sessionId)")
+        .unwrap();
+    assert!(nested_attach < parent_lookup);
+    assert!(nested_detach < parent_lookup);
+    assert!(handler.contains(
+        "recordAttachedTarget(source.tabId, params?.sessionId, params?.targetInfo, source.sessionId)"
+    ));
+    assert!(handler.contains("dropFrameTargetTree(params?.sessionId)"));
 }
 
 #[test]
@@ -4750,7 +4797,7 @@ const FRAME_HARNESS_PRELUDE: &str = r##"      import fs from "node:fs";
       const frameFunctions = [
         "frameOriginOf", "frameDetachedError", "staleFrameTreeError",
         "frameObserveTimeoutError", "frameObserveOptions", "frameSkipReasonFor",
-        "rethrowLeaseFatalFrameError", "recordFrameSkip", "markFrameTreeChanged",
+        "rethrowLeaseFatalFrameError", "recordFrameSkip", "markFrameTreeChanged", "dropFrameTargetTree",
         "clearFrameSessions", "assertFrameSnapshotFresh", "parseFrameRef",
         "assertTopLevelRef", "resolveFrameRecord", "quadRect", "ownerContentOrigin",
         "frameOwnerBoxShifted",
@@ -4758,7 +4805,7 @@ const FRAME_HARNESS_PRELUDE: &str = r##"      import fs from "node:fs";
         "frameElementInViewport", "frameBoxOf", "frameAncestors",
         "frameOwnerWorldContextId", "frameDepthOf", "collectTreeFrames",
         "orderFrameRecords", "mergeFrameObservations", "loadFrameAgentSource",
-        "detachFrameTarget", "recordAttachedTarget", "enableFrameAutoAttach",
+        "detachFrameTarget", "recordAttachedTarget", "enableDescendantFrameAutoAttach", "enableFrameAutoAttach",
         "probeFrameSession", "prepareOwnerSession", "measureFrameOwner",
         "installFrameAgent", "frameContentRequest", "verifyFrameAuthority", "resolveOwnerWorld",
         "verifyFrameOwnerHitTest", "observeFrame", "collectFrameObservations",
@@ -4770,7 +4817,7 @@ const FRAME_HARNESS_PRELUDE: &str = r##"      import fs from "node:fs";
       // ever the frame agent's own measurement plus the accumulated offset.
       function defaultWorld(overrides = {}) {
         return {
-          routeIgnoresSession: false,
+          routeStripsSession: false,
           ownerHit: true,
           rootTree: {
             frame: { id: "ROOT", loaderId: "L0", url: "https://top.example/" },
@@ -4857,7 +4904,7 @@ const FRAME_HARNESS_PRELUDE: &str = r##"      import fs from "node:fs";
               return { executionContextId: sessionId ? 200 + Object.keys(world.frames).indexOf(sessionId) : 11 };
             case "Page.getFrameTree": {
               if (!sessionId) return { frameTree: world.rootTree };
-              if (world.routeIgnoresSession) return { frameTree: world.rootTree };
+              if (world.routeStripsSession) return { frameTree: world.rootTree };
               return { frameTree: world.frames[sessionId].tree };
             }
             case "DOM.getFrameOwner": {
@@ -4988,10 +5035,11 @@ const FRAME_HARNESS_PRELUDE: &str = r##"      import fs from "node:fs";
           const api = {
             calls,
             order: () => [...order],
-            attach: (sessionId, targetInfo) => recordAttachedTarget(7, sessionId, targetInfo),
+            attach: (sessionId, targetInfo, parentSessionId = null) =>
+              recordAttachedTarget(7, sessionId, targetInfo, parentSessionId),
             event: (sessionId, method, params) => handleFrameSessionEvent({ tabId: 7, sessionId }, method, params),
             rootEvent: (method, params) => {
-              if (method === "Target.detachedFromTarget" && attachedFrames.delete(params.sessionId)) {
+              if (method === "Target.detachedFromTarget" && dropFrameTargetTree(params.sessionId)) {
                 markFrameTreeChanged("frame_target_detached");
               }
               if (method === "Page.frameResized") markFrameTreeChanged("frame_resized");
@@ -5011,6 +5059,10 @@ const FRAME_HARNESS_PRELUDE: &str = r##"      import fs from "node:fs";
             records: () => [...attachedFrames.values()],
             recordFor: (ref) => [...attachedFrames.values()].find((record) => record.ref === ref),
             support: () => ({ ...frameSupport }),
+            setSupport: (support, contextId = null) => {
+              frameSupport = { ...support };
+              rootWorldContextId = contextId;
+            },
             revision: () => frameTreeRevision,
             invalidation: () => frameInvalidationReason,
             snapshot: () => frameSnapshot,
@@ -5224,7 +5276,7 @@ fn run_frame_harness(label: &str, script: &str) {
 }
 
 #[test]
-fn frame_session_routing_probe_fails_closed_on_legacy_chrome() {
+fn frame_session_routing_probe_fails_closed_when_session_is_stripped() {
     run_frame_harness(
         "frame routing probe harness",
         &format!(
@@ -5253,31 +5305,53 @@ fn frame_session_routing_probe_fails_closed_on_legacy_chrome() {
         throw new Error("a top-document element gained frame provenance");
       }
 
-      // Legacy Chrome: the sessionId key is ignored and the child answers with
-      // the ROOT frame tree. Nothing may be merged from that answer.
-      const legacy = makeFrameBridge(defaultWorld({ routeIgnoresSession: true }));
-      await legacy.attach("child-1", { type: "iframe", targetId: "F1", url: "https://pay.example/" });
-      const fallback = await legacy.observe({
+      // Counterfactual faulty route: sessionId is stripped and the child call
+      // answers with the ROOT frame tree. Nothing may be merged from it.
+      const stripped = makeFrameBridge(defaultWorld({ routeStripsSession: true }));
+      await stripped.attach("child-1", { type: "iframe", targetId: "F1", url: "https://pay.example/" });
+      const fallback = await stripped.observe({
         generation: "g1",
         elements: [{ ref: "g1.e1", role: "link", name: "Top" }],
         frameOwners: [{ origin: "https://pay.example" }],
       });
       if (fallback.frameSummary.supported !== false
         || fallback.frameSummary.reason !== "session_routing_unverified") {
-        throw new Error(`legacy Chrome was not refused: ${JSON.stringify(fallback.frameSummary)}`);
+        throw new Error(`a stripped child session was not refused: ${JSON.stringify(fallback.frameSummary)}`);
       }
-      if (fallback.frames.length !== 0 || legacy.records().length !== 0) {
+      if (fallback.frames.length !== 0 || stripped.records().length !== 0) {
         throw new Error("an unverified session left records behind");
       }
       if (fallback.elements.length !== 1 || fallback.elements[0].ref !== "g1.e1") {
         throw new Error("the fallback observation was not exactly the top document");
       }
-      const childCalls = legacy.calls.filter((call) => call.sessionId === "child-1").map((call) => call.method);
+      const childCalls = stripped.calls.filter((call) => call.sessionId === "child-1").map((call) => call.method);
       if (childCalls.join(",") !== "Page.enable,Page.getFrameTree") {
         throw new Error(`an unverified session received more commands: ${childCalls.join(",")}`);
       }
       if (fallback.frameSummary.skipped.some((skip) => skip.reason !== "same_process_frame")) {
         throw new Error("unexpected skip reasons after a failed routing probe");
+      }
+      const callsAfterRefusal = stripped.calls.length;
+      const refusedAgain = await stripped.observe({
+        generation: "g2",
+        elements: [{ ref: "g2.e1", role: "link", name: "Top again" }],
+        frameOwners: [{ origin: "https://pay.example" }],
+      });
+      if (refusedAgain.frameSummary.supported !== false
+        || refusedAgain.frameSummary.reason !== "session_routing_unverified"
+        || refusedAgain.frames.length !== 0) {
+        throw new Error(`a routing refusal was not sticky for the lease: ${JSON.stringify(refusedAgain.frameSummary)}`);
+      }
+      if (stripped.calls.length !== callsAfterRefusal) {
+        throw new Error(`a completed negative routing probe was retried: ${JSON.stringify(stripped.calls.slice(callsAfterRefusal))}`);
+      }
+
+      const transient = makeFrameBridge(defaultWorld());
+      transient.setSupport({ supported: false, probed: true, reason: "auto_attach_unavailable" });
+      const retried = await transient.observe({ generation: "g1", elements: [], frameOwners: [] });
+      if (retried.frameSummary.supported !== true
+        || !transient.calls.some((call) => call.method === "Target.setAutoAttach" && call.sessionId === null)) {
+        throw new Error(`a transient root auto-attach failure was not retried: ${JSON.stringify(retried.frameSummary)}`);
       }
 
       // Targets refused at attach time are detached immediately and their
@@ -5300,6 +5374,224 @@ fn frame_session_routing_probe_fails_closed_on_legacy_chrome() {
       const again = await filtered.observe({ generation: "g1", elements: [], frameOwners: [] });
       if (again.frameSummary.skipped.some((skip) => skip.reason === "blank_document")) {
         throw new Error("an attach-time skip was reported twice");
+      }
+"##
+        ),
+    );
+}
+
+#[test]
+fn frame_auto_attach_recurses_through_verified_child_sessions() {
+    run_frame_harness(
+        "recursive frame auto-attach harness",
+        &format!(
+            "{FRAME_HARNESS_PRELUDE}{}",
+            r##"      const world = {
+        routeStripsSession: false,
+        ownerHit: true,
+        rootTree: {
+          frame: { id: "ROOT", loaderId: "L0", url: "https://top.example/" },
+          childFrames: [{ frame: { id: "F1", parentId: "ROOT", url: "https://pay.example/" } }],
+        },
+        frames: {
+          "child-1": {
+            targetId: "F1",
+            tree: {
+              frame: { id: "F1", parentId: "ROOT", loaderId: "L1", url: "https://pay.example/" },
+              childFrames: [{ frame: { id: "F2", parentId: "F1", url: "https://deep.example/" } }],
+            },
+            owner: { backendNodeId: 501, x: 120, y: 64, width: 380, height: 220 },
+            elements: [{
+              key: "e1", role: "button", name: "Outer", inViewport: true,
+              bounds: { x: 3, y: 3, width: 30, height: 15 },
+            }],
+          },
+          "child-2": {
+            targetId: "F2",
+            tree: { frame: { id: "F2", parentId: "F1", loaderId: "L2", url: "https://deep.example/" } },
+            owner: { backendNodeId: 502, x: 10, y: 10, width: 200, height: 120 },
+            elements: [{
+              key: "e1", role: "button", name: "Inner", inViewport: true,
+              bounds: { x: 5, y: 5, width: 40, height: 20 },
+            }],
+          },
+        },
+      };
+      let emittedGrandchild = false;
+      const bridge = makeFrameBridge(world, {
+        afterCall: async (method, params, sessionId, api) => {
+          if (method === "Target.setAutoAttach" && sessionId === "child-1" && !emittedGrandchild) {
+            emittedGrandchild = true;
+            api.event("child-1", "Target.attachedToTarget", {
+              sessionId: "child-2",
+              targetInfo: { type: "iframe", targetId: "F2", url: "https://deep.example/" },
+            });
+          }
+        },
+      });
+      await bridge.attach("child-1", {
+        type: "iframe", targetId: "F1", url: "https://pay.example/",
+      });
+      const observed = await bridge.observe({ generation: "g1", elements: [], frameOwners: [] });
+      if (observed.frames.length !== 2 || observed.frames[1].depth !== 2) {
+        throw new Error(`recursive discovery did not merge depth two: ${JSON.stringify(observed.frameSummary)}`);
+      }
+      const inner = observed.elements.find((element) => element.name === "Inner");
+      if (!inner || JSON.stringify(inner.bounds) !== JSON.stringify({ x: 135, y: 79, width: 40, height: 20 })) {
+        throw new Error(`recursive discovery published wrong bounds: ${JSON.stringify(inner)}`);
+      }
+      const armed = bridge.calls.filter((call) => call.method === "Target.setAutoAttach");
+      if (armed.map((call) => call.sessionId).join(",") !== "child-1,child-2") {
+        throw new Error(`child sessions were not recursively armed: ${JSON.stringify(armed)}`);
+      }
+      for (const call of armed) {
+        const expected = { autoAttach: true, waitForDebuggerOnStart: false, flatten: true };
+        if (JSON.stringify(call.params) !== JSON.stringify(expected)) {
+          throw new Error(`recursive auto-attach params drifted: ${JSON.stringify(call.params)}`);
+        }
+      }
+      await bridge.observe({ generation: "g2", elements: [], frameOwners: [] });
+      const armedAgain = bridge.calls.filter((call) => call.method === "Target.setAutoAttach");
+      if (armedAgain.length !== armed.length) {
+        throw new Error(`an already armed child was re-armed: ${JSON.stringify(armedAgain)}`);
+      }
+
+      bridge.publish("g1");
+      world.frames["child-2"].tree.childFrames = [
+        { frame: { id: "F3", parentId: "F2", url: "https://later.example/" } },
+      ];
+      world.frames["child-3"] = {
+        targetId: "F3",
+        tree: { frame: { id: "F3", parentId: "F2", loaderId: "L3", url: "https://later.example/" } },
+        owner: { backendNodeId: 503, x: 8, y: 8, width: 100, height: 60 },
+        elements: [{
+          key: "e1", role: "button", name: "Later", inViewport: true,
+          bounds: { x: 2, y: 2, width: 20, height: 10 },
+        }],
+      };
+      const beforeAttach = bridge.revision();
+      bridge.event("child-2", "Target.attachedToTarget", {
+        sessionId: "child-3",
+        targetInfo: { type: "iframe", targetId: "F3", url: "https://later.example/" },
+      });
+      if (bridge.revision() !== beforeAttach + 1 || !bridge.records().some((record) => record.sessionId === "child-3")) {
+        throw new Error("a late nested attachment was not admitted and invalidated");
+      }
+      let stale = null;
+      try { bridge.fresh("g1"); } catch (error) { stale = error; }
+      if (!/frame_attached/.test(stale?.message ?? "")) {
+        throw new Error(`a late nested attachment left the snapshot actionable: ${stale?.message}`);
+      }
+      const later = await bridge.observe({ generation: "g3", elements: [], frameOwners: [] });
+      if (later.frames.length !== 3 || later.frames[2].depth !== 3
+        || !later.elements.some((element) => element.name === "Later")) {
+        throw new Error(`a late nested attachment was not merged on the next observation: ${JSON.stringify(later.frameSummary)}`);
+      }
+      const lateArm = bridge.calls.filter((call) => call.method === "Target.setAutoAttach" && call.sessionId === "child-3");
+      if (lateArm.length !== 1) throw new Error(`a late child was not armed exactly once: ${lateArm.length}`);
+      bridge.event("child-3", "Target.attachedToTarget", {
+        sessionId: "child-4",
+        targetInfo: { type: "iframe", targetId: "F4", url: "https://deeper.example/" },
+      });
+      if (!bridge.records().some((record) => record.sessionId === "child-4")) {
+        throw new Error("a deeper nested attachment was not admitted");
+      }
+      const beforeDetach = bridge.revision();
+      bridge.event("child-2", "Target.detachedFromTarget", { sessionId: "child-3" });
+      if (bridge.revision() !== beforeDetach + 1
+        || bridge.records().some((record) => ["child-3", "child-4"].includes(record.sessionId))) {
+        throw new Error("a nested detach event left its subtree actionable");
+      }
+
+      const unknown = makeFrameBridge(defaultWorld());
+      unknown.event("missing-parent", "Target.attachedToTarget", {
+        sessionId: "orphan",
+        targetInfo: { type: "iframe", targetId: "ORPHAN", url: "https://orphan.example/" },
+      });
+      if (unknown.records().length !== 0
+        || !unknown.calls.some((call) => call.method === "Target.detachFromTarget" && call.params.sessionId === "orphan")) {
+        throw new Error("a nested target from an unknown parent was not detached");
+      }
+
+      const chainFrames = {};
+      for (let depth = 1; depth <= 5; depth += 1) {
+        const frameId = `D${depth}`;
+        const parentId = depth === 1 ? "ROOT" : `D${depth - 1}`;
+        chainFrames[`depth-${depth}`] = {
+          targetId: frameId,
+          tree: {
+            frame: { id: frameId, parentId, loaderId: `LD${depth}`, url: `https://d${depth}.example/` },
+            ...(depth < 5 ? { childFrames: [{ frame: {
+              id: `D${depth + 1}`, parentId: frameId, url: `https://d${depth + 1}.example/`,
+            } }] } : {}),
+          },
+          owner: { backendNodeId: 600 + depth, x: 1, y: 1, width: 100, height: 80 },
+          elements: [],
+        };
+      }
+      const chainWorld = {
+        routeStripsSession: false,
+        ownerHit: true,
+        rootTree: {
+          frame: { id: "ROOT", loaderId: "L0", url: "https://top.example/" },
+          childFrames: [{ frame: { id: "D1", parentId: "ROOT", url: "https://d1.example/" } }],
+        },
+        frames: chainFrames,
+      };
+      const emittedDepths = new Set();
+      const bounded = makeFrameBridge(chainWorld, {
+        afterCall: async (method, params, sessionId, api) => {
+          const depth = Number(String(sessionId ?? "").replace("depth-", ""));
+          if (method !== "Target.setAutoAttach" || !Number.isInteger(depth) || emittedDepths.has(depth)) return;
+          emittedDepths.add(depth);
+          api.event(sessionId, "Target.attachedToTarget", {
+            sessionId: `depth-${depth + 1}`,
+            targetInfo: {
+              type: "iframe", targetId: `D${depth + 1}`, url: `https://d${depth + 1}.example/`,
+            },
+          });
+        },
+      });
+      await bounded.attach("depth-1", {
+        type: "iframe", targetId: "D1", url: "https://d1.example/",
+      });
+      const depthBound = await bounded.observe({ generation: "g1", elements: [], frameOwners: [] });
+      const depthArms = bounded.calls.filter((call) => call.method === "Target.setAutoAttach");
+      if (bounded.records().length !== 5 || depthArms.length !== 5
+        || !bounded.calls.some((call) => call.method === "Target.detachFromTarget" && call.params.sessionId === "depth-6")
+        || !depthBound.frameSummary.skipped.some((skip) => skip.reason === "depth_exceeded")) {
+        throw new Error(`recursive attachment did not report and detach depth six: ${JSON.stringify(depthBound.frameSummary)}`);
+      }
+
+      for (const failCode of [null, "FRAME_OBSERVE_TIMEOUT"]) {
+        const failed = makeFrameBridge(defaultWorld(), {
+          fail: (method, params, sessionId) => method === "Target.setAutoAttach" && sessionId === "child-1",
+          ...(failCode ? { failCode } : {}),
+        });
+        await failed.attach("child-1", {
+          type: "iframe", targetId: "F1", url: "https://pay.example/",
+        });
+        const partial = await failed.observe({ generation: "g1", elements: [], frameOwners: [] });
+        const expectedReason = failCode ? "frame_timeout" : "session_probe_failed";
+        if (partial.frameSummary.supported !== true || partial.frames.length !== 1
+          || !partial.frameSummary.skipped.some((skip) => skip.reason === expectedReason)) {
+          throw new Error(`a recursive arm failure was not branch-local (${expectedReason}): ${JSON.stringify(partial.frameSummary)}`);
+        }
+      }
+
+      const canceled = makeFrameBridge(defaultWorld(), {
+        fail: (method, params, sessionId) => method === "Target.setAutoAttach" && sessionId === "child-1",
+        failCode: "CONTROL_CANCELED",
+      });
+      await canceled.attach("child-1", {
+        type: "iframe", targetId: "F1", url: "https://pay.example/",
+      });
+      let cancellation = null;
+      try {
+        await canceled.observe({ generation: "g1", elements: [], frameOwners: [] });
+      } catch (error) { cancellation = error; }
+      if (cancellation?.code !== "CONTROL_CANCELED") {
+        throw new Error(`a lease-fatal recursive arm failure was swallowed: ${cancellation?.message}`);
       }
 "##
         ),
@@ -5364,6 +5656,9 @@ fn frame_latency_and_skips_are_reported_once_and_never_revoke_the_lease() {
       const bounded = await spent.observe({ generation: "g1", elements: [], frameOwners: [] });
       if (bounded.frames.length !== 0 || countReasons(bounded, "budget_time") !== 1) {
         throw new Error(`a spent frame budget was not reported: ${JSON.stringify(bounded.frameSummary)}`);
+      }
+      if (spent.calls.some((call) => call.method === "Target.setAutoAttach" && call.sessionId)) {
+        throw new Error("a spent frame budget still armed a descendant session");
       }
 "##
         ),
@@ -5448,7 +5743,7 @@ fn frame_offsets_accumulate_through_nested_frames() {
       // bounds are frame-local plus the accumulated offset, and the frames are
       // numbered depth-first in owner-element document order.
       const nested = makeFrameBridge({
-        routeIgnoresSession: false,
+        routeStripsSession: false,
         ownerHit: true,
         rootTree: {
           frame: { id: "ROOT", loaderId: "L0", url: "https://top.example/" },
@@ -5893,7 +6188,7 @@ fn frame_staleness_fails_closed_before_and_after_dispatch() {
       // is the difference between a refusal and a click at a stale point.
       function nestedWorld() {
         return {
-          routeIgnoresSession: false,
+          routeStripsSession: false,
           ownerHit: true,
           rootTree: {
             frame: { id: "ROOT", loaderId: "L0", url: "https://top.example/" },

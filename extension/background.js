@@ -2478,6 +2478,28 @@ function markFrameTreeChanged(reason) {
   frameInvalidationReason = `the frame tree changed: ${reason}`;
 }
 
+function dropFrameTargetTree(sessionId) {
+  const pending = [String(sessionId ?? "")];
+  const removed = new Set();
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current || removed.has(current)) continue;
+    removed.add(current);
+    for (const record of attachedFrames.values()) {
+      if (record.parentSessionId === current) pending.push(record.sessionId);
+    }
+  }
+  let changed = false;
+  for (const current of removed) {
+    const record = attachedFrames.get(current);
+    if (!record) continue;
+    record.detached = true;
+    attachedFrames.delete(current);
+    changed = true;
+  }
+  return changed;
+}
+
 function clearFrameSessions() {
   attachedFrames.clear();
   frameParents.clear();
@@ -2833,12 +2855,22 @@ async function detachFrameTarget(tabId, sessionId, reason) {
 // Auto-attached targets are filtered the moment they arrive: anything that is
 // not an iframe of the leased tab is detached immediately, so the lease never
 // silently widens past what SECURITY.md documents.
-async function recordAttachedTarget(tabId, sessionId, targetInfo) {
+async function recordAttachedTarget(tabId, sessionId, targetInfo, parentSessionId = null) {
   if (!sessionId || !targetInfo) return null;
   if (!controlLease || controlLease.tabId !== tabId) return detachFrameTarget(tabId, sessionId, "no_lease");
   if (targetInfo.type !== "iframe") return detachFrameTarget(tabId, sessionId, "non_iframe_target");
   const url = String(targetInfo.url ?? "");
   const urlOrigin = frameOriginOf(url);
+  const parentKey = parentSessionId ? String(parentSessionId) : null;
+  const parent = parentKey ? attachedFrames.get(parentKey) : null;
+  if (parentKey && (parentKey === String(sessionId) || !parent || parent.detached || parent.navigated)) {
+    return detachFrameTarget(tabId, sessionId, "unknown_parent");
+  }
+  const depth = parent ? parent.depth + 1 : 1;
+  if (depth > FRAME_MAX_DEPTH) {
+    recordFrameSkip({ urlOrigin, reason: "depth_exceeded" });
+    return detachFrameTarget(tabId, sessionId, "depth_exceeded");
+  }
   if (attachedFrames.size >= FRAME_MAX_ATTACHED) {
     recordFrameSkip({ urlOrigin, reason: "budget_frames" });
     return detachFrameTarget(tabId, sessionId, "budget_frames");
@@ -2856,8 +2888,8 @@ async function recordAttachedTarget(tabId, sessionId, targetInfo) {
     frameId: "",
     loaderId: "",
     parentFrameId: "",
-    parentSessionId: null,
-    depth: 1,
+    parentSessionId: parentKey,
+    depth,
     ref: "",
     ownerOrigin: null,
     ownerBackendNodeId: null,
@@ -2866,6 +2898,7 @@ async function recordAttachedTarget(tabId, sessionId, targetInfo) {
     ownerWorldContextId: null,
     agentNonce: "",
     agentGeneration: "",
+    descendantAutoAttachEnabled: false,
     probed: false,
     detached: false,
     navigated: false,
@@ -2874,6 +2907,24 @@ async function recordAttachedTarget(tabId, sessionId, targetInfo) {
   attachedFrames.set(record.sessionId, record);
   markFrameTreeChanged("frame_attached");
   return record;
+}
+
+// Target.setAutoAttach is deliberately non-recursive. Arm a child only after
+// the routing probe proved that chrome.debugger really addresses that child,
+// including the last supported depth so its direct children can be reported
+// and detached as depth_exceeded. Only accepted records reach this helper, so
+// an over-depth target is never armed itself.
+async function enableDescendantFrameAutoAttach(tabId, record, authority, commandContext, options) {
+  if (record.depth > FRAME_MAX_DEPTH) return;
+  await debuggerCommand(
+    tabId,
+    "Target.setAutoAttach",
+    { autoAttach: true, waitForDebuggerOnStart: false, flatten: true },
+    authority,
+    commandContext,
+    record.sessionId,
+    options,
+  );
 }
 
 // Never fails the lease: a Chrome that refuses auto-attach or an isolated
@@ -2914,11 +2965,10 @@ async function enableFrameAutoAttach(tabId, authority, commandContext, options) 
   }
 }
 
-// The discriminating routing probe. A Chrome whose chrome.debugger ignores an
-// unknown `sessionId` key answers with the ROOT frame tree, which would be
-// merged as if it were the iframe's; requiring the child's own target id back
-// is the only thing that tells the two apart. Never weaken this to a
-// truthiness check.
+// The discriminating routing probe. If a browser or intermediary strips the
+// `sessionId` key, the ROOT frame tree would otherwise be merged as if it were
+// the iframe's; requiring the child's own target id back is the only thing
+// that tells the two apart. Never weaken this to a truthiness check.
 async function probeFrameSession(tabId, record, authority, commandContext, options) {
   await debuggerCommand(tabId, "Page.enable", {}, authority, commandContext, record.sessionId, options);
   const tree = await debuggerCommand(tabId, "Page.getFrameTree", {}, authority, commandContext, record.sessionId, options);
@@ -2931,6 +2981,23 @@ async function probeFrameSession(tabId, record, authority, commandContext, optio
   record.parentFrameId = String(frame.parentId ?? frameParents.get(frame.id) ?? "");
   record.probed = true;
   record.tree = tree.frameTree;
+  if (!record.descendantAutoAttachEnabled) {
+    try {
+      await enableDescendantFrameAutoAttach(tabId, record, authority, commandContext, options);
+      if (attachedFrames.get(record.sessionId) === record && !record.detached && !record.navigated) {
+        record.descendantAutoAttachEnabled = true;
+      }
+    } catch (error) {
+      rethrowLeaseFatalFrameError(error);
+      // The verified frame itself remains safe to observe; only its descendant
+      // discovery is unavailable. Surface the branch failure instead of
+      // disabling frame support or silently claiming the subtree is complete.
+      recordFrameSkip({ urlOrigin: record.urlOrigin, reason: frameSkipReasonFor(error, "session_probe_failed") });
+    }
+  }
+  if (attachedFrames.get(record.sessionId) !== record || record.detached || record.navigated) {
+    throw frameDetachedError("frame session probing");
+  }
   return tree.frameTree;
 }
 
@@ -3216,7 +3283,12 @@ async function collectFrameObservations(tabId, topSnapshot, authority, commandCo
   // A frame keeps its f<k> only for as long as the observation that assigned
   // it; a frame that is not merged this turn must not answer an old ref.
   for (const record of attachedFrames.values()) record.ref = "";
-  if (!frameSupport.supported || !Number.isInteger(rootWorldContextId)) {
+  // A completed negative routing probe is lease-sticky. Retrying that exact
+  // state could relabel the same OOPIF as an ordinary same-process skip after
+  // its attach event was consumed. Other support failures remain retryable;
+  // navigation and lease teardown clear this reason as well.
+  const routingUnverified = frameSupport.probed && frameSupport.reason === "session_routing_unverified";
+  if (!routingUnverified && (!frameSupport.supported || !Number.isInteger(rootWorldContextId))) {
     await enableFrameAutoAttach(tabId, authority, commandContext, options);
   }
   if (!frameSupport.supported) {
@@ -3225,9 +3297,22 @@ async function collectFrameObservations(tabId, topSnapshot, authority, commandCo
   for (const [sessionId, record] of [...attachedFrames]) {
     if (record.detached) attachedFrames.delete(sessionId);
   }
-  const candidates = [...attachedFrames.values()];
+  // Arming one verified child can synchronously deliver another
+  // Target.attachedToTarget event from that child. Drain the bounded map until
+  // no unprobed session remains instead of snapshotting only the direct root
+  // children. FRAME_MAX_ATTACHED bounds this loop independently of the page.
+  const visited = new Set();
   const probed = [];
-  for (const record of candidates) {
+  while (true) {
+    const record = [...attachedFrames.values()].find((candidate) => !visited.has(candidate.sessionId));
+    if (!record) break;
+    if (Date.now() >= options.deadlineAt) {
+      for (const pending of attachedFrames.values()) {
+        if (!visited.has(pending.sessionId)) recordFrameSkip({ urlOrigin: pending.urlOrigin, reason: "budget_time" });
+      }
+      break;
+    }
+    visited.add(record.sessionId);
     let tree = null;
     try {
       tree = await probeFrameSession(tabId, record, authority, commandContext, options);
@@ -3345,6 +3430,18 @@ function frameClickHooks(tabId, record, key, description, authority, commandCont
 }
 
 function handleFrameSessionEvent(source, method, params) {
+  // Auto-attach is not recursive: events for a grandchild arrive on its
+  // flattened parent child session and must be admitted through the same
+  // iframe/depth/count filter as direct children. Nested detach events arrive
+  // on that path too, so process them before looking up the parent record.
+  if (method === "Target.detachedFromTarget") {
+    if (dropFrameTargetTree(params?.sessionId)) markFrameTreeChanged("frame_target_detached");
+    return;
+  }
+  if (method === "Target.attachedToTarget") {
+    void recordAttachedTarget(source.tabId, params?.sessionId, params?.targetInfo, source.sessionId).catch(() => {});
+    return;
+  }
   const record = attachedFrames.get(source.sessionId);
   if (!record) return;
   if (method === "Page.frameNavigated") {
@@ -3355,11 +3452,14 @@ function handleFrameSessionEvent(source, method, params) {
     record.worldContextId = null;
     record.agentNonce = "";
     record.agentGeneration = "";
+    record.descendantAutoAttachEnabled = false;
     markFrameTreeChanged("frame_navigated");
     return;
   }
   if (method === "Page.frameDetached") {
-    if (params?.frameId === record.frameId || params?.frameId === record.targetId) record.detached = true;
+    if (params?.frameId === record.frameId || params?.frameId === record.targetId) {
+      dropFrameTargetTree(record.sessionId);
+    }
     markFrameTreeChanged("frame_detached");
     return;
   }
@@ -4685,7 +4785,7 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
   if (method === "Target.attachedToTarget") {
     void recordAttachedTarget(source.tabId, params?.sessionId, params?.targetInfo).catch(() => {});
   }
-  if (method === "Target.detachedFromTarget" && attachedFrames.delete(params?.sessionId)) {
+  if (method === "Target.detachedFromTarget" && dropFrameTargetTree(params?.sessionId)) {
     markFrameTreeChanged("frame_target_detached");
   }
   if (method === "Page.frameAttached") {
@@ -4693,8 +4793,11 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     markFrameTreeChanged("frame_attached");
   }
   if (method === "Page.frameDetached" && params?.frameId) {
-    for (const record of attachedFrames.values()) {
-      if (record.frameId === params.frameId || record.targetId === params.frameId) record.detached = true;
+    const detached = [...attachedFrames.values()]
+      .filter((record) => record.frameId === params.frameId || record.targetId === params.frameId)
+      .map((record) => record.sessionId);
+    for (const sessionId of detached) {
+      dropFrameTargetTree(sessionId);
     }
     markFrameTreeChanged("frame_detached");
   }

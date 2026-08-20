@@ -1,0 +1,24 @@
+PASS candidate.extension-loaded :: {"version":"0.11.2","faultInjection":false}
+PASS candidate.extension-connected :: {"version":"0.11.2","mode":"full-access"}
+PASS candidate.fixture-tab-found :: {"id":915975752,"url":"http://localhost:18100/root.html","title":"Frame boundary root"}
+PASS candidate.control-started :: {"status":200,"active":true}
+PASS candidate.observation-succeeded :: {"status":200,"frameSummary":{"attached":2,"elementsDropped":0,"merged":2,"mode":"cdp-auto-attach","ownersSeen":2,"reason":"","skipped":[{"reason":"same_process_frame","urlOrigin":"http://localhost:18100"}],"supported":true},"frames":[{"crossOrigin":true,"depth":1,"elementCount":2,"frameId":"65AA426441BD689685B44248C2A0E5A7","offset":{"x":25,"y":95},"ref":"f1","size":{"height":440,"width":770},"truncated":false,"urlOrigin":"http://127.0.0.1:18101"},{"crossOrigin":true,"depth":2,"elementCount":1,
+PASS candidate.observation-screenshot-captured :: 00-candidate-frame-observation.png
+PASS candidate.same-process-frame-reported :: [{"reason":"same_process_frame","urlOrigin":"http://localhost:18100"}]
+PASS candidate.depth-one-frame-merged :: {"crossOrigin":true,"depth":1,"elementCount":2,"frameId":"65AA426441BD689685B44248C2A0E5A7","offset":{"x":25,"y":95},"ref":"f1","size":{"height":440,"width":770},"truncated":false,"urlOrigin":"http://127.0.0.1:18101"}
+PASS candidate.depth-two-frame-merged :: {"crossOrigin":true,"depth":2,"elementCount":1,"frameId":"30BB7A4B225657C5EA87F04014712907","offset":{"x":48,"y":154},"ref":"f2","size":{"height":244,"width":574},"truncated":false,"urlOrigin":"http://[::1]:18102"}
+PASS candidate.depth-one-input-visible :: {"ref":"mt1uh7a2-f4nebwal.f1.e2","bounds":{"height":22,"width":147,"x":163,"y":111}}
+PASS candidate.frame-fill-refused :: {"status":400,"code":"FRAME_ACTION_UNSUPPORTED","taxonomy":{"code":"invalid_request","prose":"The request itself is invalid; fix the parameters instead of retrying.","recoveryHint":"none","retriable":false}}
+PASS candidate.depth-two-button-visible :: {"ref":"mt1uh7a2-f4nebwal.f2.e1","bounds":{"height":40,"width":202,"x":64,"y":170},"frameRef":"f2"}
+PASS candidate.depth-two-click-dispatched :: {"status":200,"result":true}
+PASS candidate.depth-two-trusted-click-landed :: grandchild-click:true
+PASS candidate.depth-two-screenshot-captured :: 10-depth-two-click.png
+PASS routing-stub.extension-loaded :: {"version":"0.11.2","faultInjection":true}
+PASS routing-stub.extension-connected :: {"version":"0.11.2","mode":"full-access"}
+PASS routing-stub.fixture-tab-found :: {"id":81517767,"url":"http://localhost:18100/root.html","title":"Frame boundary root"}
+PASS routing-stub.control-started :: {"status":200,"active":true}
+PASS routing-stub.observation-succeeded :: {"status":200,"frameSummary":{"attached":0,"elementsDropped":0,"merged":0,"mode":"cdp-auto-attach","ownersSeen":2,"reason":"session_routing_unverified","skipped":[{"reason":"same_process_frame","urlOrigin":"http://127.0.0.1:18101"},{"reason":"same_process_frame","urlOrigin":"http://localhost:18100"}],"supported":false}}
+PASS routing-stub.routing-probe-failed-closed :: {"frameSummary":{"attached":0,"elementsDropped":0,"merged":0,"mode":"cdp-auto-attach","ownersSeen":2,"reason":"session_routing_unverified","skipped":[{"reason":"same_process_frame","urlOrigin":"http://127.0.0.1:18101"},{"reason":"same_process_frame","urlOrigin":"http://localhost:18100"}],"supported":false},"frameElementCount":0}
+PASS routing-stub.routing-refusal-kept-lease :: {"status":200,"active":true}
+
+22/22 checks passed

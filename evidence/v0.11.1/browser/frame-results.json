@@ -1,0 +1,360 @@
+{
+  "recordedAt": "2026-08-20T17:41:34.664Z",
+  "release": "v0.11.1",
+  "chrome": "Google Chrome for Testing 152.0.7977.54",
+  "extensionZip": {
+    "file": "local-browser-bridge-extension-v0.11.1.zip",
+    "sha256": "9beaf8635115a9cfe672767d675106e1b826e274780d0cfc9e9be60ede3c75f0"
+  },
+  "positiveExtension": {
+    "source": "exact unpacked published extension ZIP",
+    "backgroundSha256": "83060fc8242cf487d7f6f760daffc7d9052557da1c5c9f5585d1ec4f90e34e9c"
+  },
+  "routingStub": {
+    "source": "copy of the published extension with exactly one evidence-only target-construction replacement",
+    "replacement": {
+      "before": "const target = sessionId ? { tabId, sessionId } : { tabId };",
+      "after": "const target = sessionId ? { tabId } : { tabId }; // evidence-only session-routing fault injection"
+    },
+    "backgroundSha256": "6202648365f8f46a3f6a27cb52969e6c9964742ace4c9add128b31238f365c4d"
+  },
+  "positive": {
+    "chromeTargets": [
+      {
+        "type": "page",
+        "url": "http://localhost:18100/root.html"
+      },
+      {
+        "type": "iframe",
+        "url": "http://127.0.0.1:18101/child.html"
+      },
+      {
+        "type": "iframe",
+        "url": "http://[::1]:18102/grandchild.html"
+      },
+      {
+        "type": "page",
+        "url": "about:blank"
+      }
+    ]
+  },
+  "routingStubRun": {
+    "chromeTargets": [
+      {
+        "type": "page",
+        "url": "http://localhost:18100/root.html"
+      },
+      {
+        "type": "iframe",
+        "url": "http://127.0.0.1:18101/child.html"
+      },
+      {
+        "type": "iframe",
+        "url": "http://[::1]:18102/grandchild.html"
+      },
+      {
+        "type": "page",
+        "url": "about:blank"
+      }
+    ]
+  },
+  "passed": 17,
+  "total": 19,
+  "results": [
+    {
+      "run": "published",
+      "name": "extension-loaded",
+      "ok": true,
+      "detail": {
+        "version": "0.11.1",
+        "faultInjection": false
+      },
+      "at": "2026-08-20T17:41:35.552Z"
+    },
+    {
+      "run": "published",
+      "name": "extension-connected",
+      "ok": true,
+      "detail": {
+        "version": "0.11.1",
+        "mode": "full-access"
+      },
+      "at": "2026-08-20T17:41:35.811Z"
+    },
+    {
+      "run": "published",
+      "name": "fixture-tab-found",
+      "ok": true,
+      "detail": {
+        "id": 504274300,
+        "url": "http://localhost:18100/root.html",
+        "title": "Frame boundary root"
+      },
+      "at": "2026-08-20T17:41:37.835Z"
+    },
+    {
+      "run": "published",
+      "name": "control-started",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "active": true
+      },
+      "at": "2026-08-20T17:41:37.849Z"
+    },
+    {
+      "run": "published",
+      "name": "observation-succeeded",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "frameSummary": {
+          "attached": 1,
+          "elementsDropped": 0,
+          "merged": 1,
+          "mode": "cdp-auto-attach",
+          "ownersSeen": 2,
+          "reason": "",
+          "skipped": [
+            {
+              "reason": "same_process_frame",
+              "urlOrigin": "http://localhost:18100"
+            }
+          ],
+          "supported": true
+        },
+        "frames": [
+          {
+            "crossOrigin": true,
+            "depth": 1,
+            "elementCount": 2,
+            "frameId": "30AC51F4467FCA29C5074B2DC23D9CB2",
+            "offset": {
+              "x": 25,
+              "y": 95
+            },
+            "ref": "f1",
+            "size": {
+              "height": 440,
+              "width": 770
+            },
+            "truncated": false,
+            "urlOrigin": "http://127.0.0.1:18101"
+          }
+        ]
+      },
+      "at": "2026-08-20T17:41:38.698Z"
+    },
+    {
+      "run": "published",
+      "name": "observation-screenshot-captured",
+      "ok": true,
+      "detail": "00-published-frame-observation.png",
+      "at": "2026-08-20T17:41:38.805Z"
+    },
+    {
+      "run": "published",
+      "name": "same-process-frame-reported",
+      "ok": true,
+      "detail": [
+        {
+          "reason": "same_process_frame",
+          "urlOrigin": "http://localhost:18100"
+        }
+      ],
+      "at": "2026-08-20T17:41:38.805Z"
+    },
+    {
+      "run": "published",
+      "name": "depth-one-frame-merged",
+      "ok": true,
+      "detail": {
+        "crossOrigin": true,
+        "depth": 1,
+        "elementCount": 2,
+        "frameId": "30AC51F4467FCA29C5074B2DC23D9CB2",
+        "offset": {
+          "x": 25,
+          "y": 95
+        },
+        "ref": "f1",
+        "size": {
+          "height": 440,
+          "width": 770
+        },
+        "truncated": false,
+        "urlOrigin": "http://127.0.0.1:18101"
+      },
+      "at": "2026-08-20T17:41:38.805Z"
+    },
+    {
+      "run": "published",
+      "name": "depth-two-frame-merged",
+      "ok": false,
+      "detail": [
+        {
+          "crossOrigin": true,
+          "depth": 1,
+          "elementCount": 2,
+          "frameId": "30AC51F4467FCA29C5074B2DC23D9CB2",
+          "offset": {
+            "x": 25,
+            "y": 95
+          },
+          "ref": "f1",
+          "size": {
+            "height": 440,
+            "width": 770
+          },
+          "truncated": false,
+          "urlOrigin": "http://127.0.0.1:18101"
+        }
+      ],
+      "at": "2026-08-20T17:41:38.805Z"
+    },
+    {
+      "run": "published",
+      "name": "depth-one-input-visible",
+      "ok": true,
+      "detail": {
+        "ref": "mt1t4u5y-5auwbat9.f1.e2",
+        "bounds": {
+          "height": 22,
+          "width": 147,
+          "x": 163,
+          "y": 111
+        }
+      },
+      "at": "2026-08-20T17:41:38.805Z"
+    },
+    {
+      "run": "published",
+      "name": "frame-fill-refused",
+      "ok": true,
+      "detail": {
+        "status": 400,
+        "code": "FRAME_ACTION_UNSUPPORTED",
+        "taxonomy": {
+          "code": "invalid_request",
+          "prose": "The request itself is invalid; fix the parameters instead of retrying.",
+          "recoveryHint": "none",
+          "retriable": false
+        }
+      },
+      "at": "2026-08-20T17:41:38.808Z"
+    },
+    {
+      "run": "published",
+      "name": "depth-two-button-visible",
+      "ok": false,
+      "at": "2026-08-20T17:41:38.808Z"
+    },
+    {
+      "run": "routing-stub",
+      "name": "extension-loaded",
+      "ok": true,
+      "detail": {
+        "version": "0.11.1",
+        "faultInjection": true
+      },
+      "at": "2026-08-20T17:41:40.236Z"
+    },
+    {
+      "run": "routing-stub",
+      "name": "extension-connected",
+      "ok": true,
+      "detail": {
+        "version": "0.11.1",
+        "mode": "full-access"
+      },
+      "at": "2026-08-20T17:41:40.493Z"
+    },
+    {
+      "run": "routing-stub",
+      "name": "fixture-tab-found",
+      "ok": true,
+      "detail": {
+        "id": 1664258616,
+        "url": "http://localhost:18100/root.html",
+        "title": "Frame boundary root"
+      },
+      "at": "2026-08-20T17:41:42.518Z"
+    },
+    {
+      "run": "routing-stub",
+      "name": "control-started",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "active": true
+      },
+      "at": "2026-08-20T17:41:42.532Z"
+    },
+    {
+      "run": "routing-stub",
+      "name": "observation-succeeded",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "frameSummary": {
+          "attached": 0,
+          "elementsDropped": 0,
+          "merged": 0,
+          "mode": "cdp-auto-attach",
+          "ownersSeen": 2,
+          "reason": "session_routing_unverified",
+          "skipped": [
+            {
+              "reason": "same_process_frame",
+              "urlOrigin": "http://127.0.0.1:18101"
+            },
+            {
+              "reason": "same_process_frame",
+              "urlOrigin": "http://localhost:18100"
+            }
+          ],
+          "supported": false
+        }
+      },
+      "at": "2026-08-20T17:41:43.415Z"
+    },
+    {
+      "run": "routing-stub",
+      "name": "routing-probe-failed-closed",
+      "ok": true,
+      "detail": {
+        "frameSummary": {
+          "attached": 0,
+          "elementsDropped": 0,
+          "merged": 0,
+          "mode": "cdp-auto-attach",
+          "ownersSeen": 2,
+          "reason": "session_routing_unverified",
+          "skipped": [
+            {
+              "reason": "same_process_frame",
+              "urlOrigin": "http://127.0.0.1:18101"
+            },
+            {
+              "reason": "same_process_frame",
+              "urlOrigin": "http://localhost:18100"
+            }
+          ],
+          "supported": false
+        },
+        "frameElementCount": 0
+      },
+      "at": "2026-08-20T17:41:43.415Z"
+    },
+    {
+      "run": "routing-stub",
+      "name": "routing-refusal-kept-lease",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "active": true
+      },
+      "at": "2026-08-20T17:41:43.417Z"
+    }
+  ]
+}

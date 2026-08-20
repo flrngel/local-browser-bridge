@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Frame boundary root</title>
+    <style>
+      body { font: 16px system-ui, sans-serif; margin: 20px; background: #eef4f0; }
+      h1 { font-size: 22px; margin: 0 0 8px; }
+      iframe { display: block; border: 5px solid #2f5d45; border-radius: 8px; }
+      #cross-frame { width: 760px; height: 430px; margin-top: 14px; }
+      #same-frame { width: 360px; height: 110px; margin-top: 14px; border-color: #4b568c; }
+    </style>
+  </head>
+  <body>
+    <h1>Frame boundary root</h1>
+    <button id="root-button" type="button">Root button</button>
+    <iframe id="cross-frame" src="http://127.0.0.1:18101/child.html" title="Cross-origin child"></iframe>
+    <iframe id="same-frame" src="/same.html" title="Same-origin child"></iframe>
+  </body>
+</html>

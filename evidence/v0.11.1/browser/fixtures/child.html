@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Cross-origin child</title>
+    <style>
+      body { font: 15px system-ui, sans-serif; margin: 16px; background: #fff7ec; }
+      iframe { width: 560px; height: 230px; border: 7px solid #9b5b28; border-radius: 8px; margin-top: 14px; }
+    </style>
+  </head>
+  <body>
+    <button id="child-button" type="button">Depth one button</button>
+    <input id="child-input" placeholder="depth one field" autocomplete="off">
+    <iframe src="http://[::1]:18102/grandchild.html" title="Nested cross-origin grandchild"></iframe>
+  </body>
+</html>

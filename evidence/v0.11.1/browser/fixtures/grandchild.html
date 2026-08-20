@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Nested cross-origin grandchild</title>
+    <style>
+      body { font: 15px system-ui, sans-serif; margin: 16px; background: #fff1f4; }
+      button { padding: 10px 16px; }
+      output { display: block; margin-top: 12px; font-family: ui-monospace, monospace; }
+    </style>
+  </head>
+  <body>
+    <button id="grandchild-button" type="button">Depth two grandchild button</button>
+    <output id="grandchild-log">grandchild-ready</output>
+    <script>
+      document.getElementById('grandchild-button').addEventListener('click', (event) => {
+        document.getElementById('grandchild-log').textContent = 'grandchild-click:' + event.isTrusted;
+      });
+    </script>
+  </body>
+</html>

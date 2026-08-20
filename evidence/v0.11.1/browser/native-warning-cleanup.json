@@ -1,0 +1,45 @@
+{
+  "recordedAt": "2026-08-20T18:16:24Z",
+  "scenario": "post-run restoration and disposable-resource cleanup",
+  "before": {
+    "foregroundApplication": {
+      "bundleIdentifier": "com.google.Chrome",
+      "pid": 12929
+    },
+    "hardwareCursor": {
+      "x": 878,
+      "y": 1135
+    }
+  },
+  "after": {
+    "foregroundApplication": {
+      "bundleIdentifier": "com.google.Chrome",
+      "pid": 12929
+    },
+    "hardwareCursor": {
+      "x": 878,
+      "y": 1135
+    }
+  },
+  "checks": {
+    "previousForegroundRestoredAfterDisposableChromeExit": true,
+    "hardwareCursorRestored": true,
+    "disposableProfileAbsent": true,
+    "cdpEndpointStopped": true,
+    "bridgeEndpointStopped": true,
+    "dedicatedChromeProcessAbsent": true,
+    "dedicatedBridgeProcessAbsent": true
+  },
+  "details": {
+    "disposableChromePid": 96357,
+    "disposableProfile": "/tmp/lbb-408.WoutsC/native-warning-v0.11.1-profile",
+    "cdpEndpoint": "http://127.0.0.1:9342/json/version",
+    "bridgeEndpoint": "http://127.0.0.1:17409/health",
+    "processScanPatterns": [
+      "native-warning-v0.11.1-profile",
+      "--remote-debugging-port=9342",
+      "LBB_PORT=17409"
+    ],
+    "note": "The disposable Chrome stayed foreground through the two exact-window screenshots. Closing that dedicated process restored the pre-run user Chrome process; the user profile and tabs were never used by the rig."
+  }
+}

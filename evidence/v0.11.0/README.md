@@ -147,9 +147,10 @@ taxonomy instead, so this exact response is now **423 Locked** with taxonomy
 - **The extension popup's Release control button**, the other human release
   surface, which this run did not press. Only the in-page Stop button was
   clicked here.
-- **Chrome's native debugger infobar** is suppressed by Chrome for Testing. It
-  was captured separately against stock Chrome 151 for 0.10 and the attachment
-  logic is unchanged in 0.11; see
+- **Chrome's native debugger infobar** is absent from this Chrome for Testing
+  run. That is not proof that Chrome for Testing intrinsically suppresses the
+  warning. It was captured separately against stock Chrome 151 for 0.10 and the
+  attachment logic is unchanged in 0.11; see
   [../v0.10.0/browser/01-stock-chrome-native-warning-and-page-pill.png](../v0.10.0/browser/01-stock-chrome-native-warning-and-page-pill.png).
 - **Nested and same-process frames**, and fill/select inside a frame, which 0.11
   deliberately refuses with `FRAME_ACTION_UNSUPPORTED`.

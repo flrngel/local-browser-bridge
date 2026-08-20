@@ -1,0 +1,382 @@
+{
+  "schemaVersion": 1,
+  "productVersion": "0.11.1",
+  "evidenceClass": "exact-published-package-live-observation",
+  "capturedAt": "2026-08-20T17:50:03.908Z",
+  "environment": {
+    "operatingSystem": "26.5.1",
+    "architecture": "arm64",
+    "backend": "background-window/skylight+cgwindow",
+    "semanticMode": "macos-accessibility",
+    "sessionMode": "background-window",
+    "screenCapturePermissionPreexisting": true,
+    "accessibilityPermissionPreexisting": true,
+    "permissionRequestPerformed": false
+  },
+  "package": {
+    "archive": {
+      "file": "local-browser-bridge-v0.11.1-macos-universal.tar.gz",
+      "sha256": "83bbb5b8408dabc8fe7a407941ff6c43c6a846a3e74bc1c06b6502860d29ebd5",
+      "checksumManifestMatched": true
+    },
+    "serverVersion": "0.11.1",
+    "helperVersion": "0.11.1",
+    "serverSha256": "40248cce317963d9b5d8092ed18d3e36abfdf10eb369d03b8e156f57371b36e5",
+    "helperSha256": "541990a6483beb7f7c86d15c5074794594bf1e64f8a8d61435175c8b5fc286c0",
+    "serverArchitectures": [
+      "arm64",
+      "x86_64"
+    ],
+    "helperArchitectures": [
+      "arm64",
+      "x86_64"
+    ],
+    "strictCodeSignatureVerification": "passed"
+  },
+  "fixture": {
+    "application": "helper-evidence-fixture",
+    "windowTitle": "LBB v0.11.1 Helper Evidence",
+    "windowId": "57579",
+    "imageWidth": 1209,
+    "imageHeight": 826,
+    "semanticElementsObserved": 4,
+    "finalState": {
+      "clicks": 1,
+      "semanticPresses": 1,
+      "semanticValue": "packaged-helper-408",
+      "lastAction": "click"
+    }
+  },
+  "checks": {
+    "helperHandshake": {
+      "compatible": true,
+      "version": "0.11.1",
+      "protocolVersion": 1,
+      "shareAckAdvertised": true
+    },
+    "exactWindowObserve": {
+      "passed": true,
+      "semanticAvailable": true,
+      "semanticElementCount": 4
+    },
+    "semanticSetValue": {
+      "ok": true,
+      "actionId": "8c9259be-5006-4617-ba36-cf6de37cbf17",
+      "effect": "Confirmed",
+      "deliveryMode": "exact-window-semantic",
+      "frameId": "0403f4b2-845e-4255-917d-8ab14cc0a1e9",
+      "evidence": [
+        {
+          "claim": "semanticDispatchReturned",
+          "detail": "The semantic backend returned after dispatch; this is not target-effect proof",
+          "kind": "dispatchAcknowledgement",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "value-confirmed",
+          "detail": "The semantic backend observed this target-side postcondition",
+          "kind": "postcondition",
+          "observed": true,
+          "supportsConfirmation": true
+        }
+      ],
+      "backendEffect": {
+        "delivered": true,
+        "effectObserved": true,
+        "postcondition": "value-confirmed"
+      }
+    },
+    "semanticInvoke": {
+      "ok": true,
+      "actionId": "7d6cb6bf-2ae6-4817-afb9-7f739261771c",
+      "effect": "Confirmed",
+      "deliveryMode": "exact-window-semantic",
+      "frameId": "c6ba5529-bcb0-4087-b897-dacf37a43b4c",
+      "evidence": [
+        {
+          "claim": "semanticDispatchReturned",
+          "detail": "The semantic backend returned after dispatch; this is not target-effect proof",
+          "kind": "dispatchAcknowledgement",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "element-state-changed",
+          "detail": "The semantic backend observed this target-side postcondition",
+          "kind": "postcondition",
+          "observed": true,
+          "supportsConfirmation": true
+        }
+      ],
+      "backendEffect": {
+        "delivered": true,
+        "effectObserved": true,
+        "postcondition": "element-state-changed"
+      }
+    },
+    "pixelClick": {
+      "ok": true,
+      "actionId": "b05ecf03-830a-490b-a8e3-18e4995359ec",
+      "effect": "Unverifiable",
+      "deliveryMode": "exact-window-background",
+      "frameId": "b0e0f3fa-688c-4793-b175-e754c673712e",
+      "invariants": {
+        "cursorUnchanged": true,
+        "foregroundUnchanged": true,
+        "spaceUnchanged": true,
+        "userFocusUnchanged": true
+      },
+      "evidence": [
+        {
+          "claim": "foregroundUnchanged",
+          "detail": "The foreground application was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "userFocusUnchanged",
+          "detail": "Keyboard focus was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "hardwareCursorUnchanged",
+          "detail": "The hardware cursor was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "desktopSpaceUnchanged",
+          "detail": "The active desktop or Space was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        }
+      ]
+    },
+    "liveShare": {
+      "started": true,
+      "fps": 10,
+      "captureScope": "exact-window",
+      "cursorComposited": true,
+      "ackPaced": true,
+      "backpressure": "latest-frame-wins",
+      "observedSequence": 9,
+      "lastAckedSequence": 6,
+      "droppedFrames": 3,
+      "stopped": true,
+      "stopReason": "requested"
+    },
+    "independentNonInterruptionSample": {
+      "foregroundBefore": "Google Chrome",
+      "foregroundAfter": "Google Chrome",
+      "hardwareCursorBefore": [
+        878.796875,
+        1135.00390625
+      ],
+      "hardwareCursorAfter": [
+        878.796875,
+        1135.00390625
+      ]
+    },
+    "transportTeardown": {
+      "computerConnected": false,
+      "computerStateCleared": true,
+      "observationCleared": true
+    }
+  },
+  "screenshots": [
+    {
+      "file": "computer-01-packaged-observe.png",
+      "sha256": "06ba12664492717213eae59b19c66043bb067e117d00981ea0e28bece446f366",
+      "bytes": 801808,
+      "width": 1209,
+      "height": 826
+    },
+    {
+      "file": "computer-02-share-action.png",
+      "sha256": "05b56ca491a3afbc67f53fad82355b1947c4eea24660d7c5fd513f00c5a1b743",
+      "bytes": 794785,
+      "width": 1209,
+      "height": 826
+    }
+  ],
+  "assertions": {
+    "passed": 32,
+    "failed": 0,
+    "total": 32,
+    "details": [
+      {
+        "name": "server version",
+        "passed": true,
+        "detail": "0.11.1"
+      },
+      {
+        "name": "helper version",
+        "passed": true,
+        "detail": "0.11.1"
+      },
+      {
+        "name": "server universal architecture",
+        "passed": true,
+        "detail": "arm64,x86_64"
+      },
+      {
+        "name": "helper universal architecture",
+        "passed": true,
+        "detail": "arm64,x86_64"
+      },
+      {
+        "name": "strict code-signature verification",
+        "passed": true,
+        "detail": "server and helper passed codesign --verify --strict"
+      },
+      {
+        "name": "published archive checksum",
+        "passed": true,
+        "detail": "83bbb5b8408dabc8fe7a407941ff6c43c6a846a3e74bc1c06b6502860d29ebd5"
+      },
+      {
+        "name": "screen-capture permission preflight",
+        "passed": true,
+        "detail": "permission was already granted; no request was made"
+      },
+      {
+        "name": "accessibility permission preflight",
+        "passed": true,
+        "detail": "permission was already granted; no request was made"
+      },
+      {
+        "name": "packaged helper compatible",
+        "passed": true,
+        "detail": "protocol-compatible helper 0.11.1"
+      },
+      {
+        "name": "acknowledged share advertised",
+        "passed": true,
+        "detail": "computer.share.ack present"
+      },
+      {
+        "name": "helper status backend",
+        "passed": true,
+        "detail": "background-window/skylight+cgwindow"
+      },
+      {
+        "name": "semantic backend ready",
+        "passed": true,
+        "detail": "macos-accessibility is ready without prompting"
+      },
+      {
+        "name": "fixture exact window discovered",
+        "passed": true,
+        "detail": "helper-evidence-fixture — LBB v0.11.1 Helper Evidence"
+      },
+      {
+        "name": "exact fixture window observed",
+        "passed": true,
+        "detail": "1209x826"
+      },
+      {
+        "name": "semantic snapshot available",
+        "passed": true,
+        "detail": "4 elements"
+      },
+      {
+        "name": "semantic value element discovered",
+        "passed": true,
+        "detail": "AXTextField"
+      },
+      {
+        "name": "semantic setValue confirmed",
+        "passed": true,
+        "detail": "Confirmed/value-confirmed"
+      },
+      {
+        "name": "semantic action element discovered",
+        "passed": true,
+        "detail": "AXButton"
+      },
+      {
+        "name": "semantic invoke fixture effect",
+        "passed": true,
+        "detail": "fixture semantic counter advanced to 1"
+      },
+      {
+        "name": "semantic invoke confirmed",
+        "passed": true,
+        "detail": "Confirmed/element-state-changed"
+      },
+      {
+        "name": "live share started",
+        "passed": true,
+        "detail": "10 fps exact-window"
+      },
+      {
+        "name": "live share ack pacing",
+        "passed": true,
+        "detail": "latest-frame-wins, ackPaced=true"
+      },
+      {
+        "name": "pixel click delivered to fixture",
+        "passed": true,
+        "detail": "fixture click counter advanced to 1"
+      },
+      {
+        "name": "pixel click conservatively classified",
+        "passed": true,
+        "detail": "Unverifiable"
+      },
+      {
+        "name": "pixel delivery invariants held",
+        "passed": true,
+        "detail": "foreground, focus, hardware cursor, and Space remained unchanged"
+      },
+      {
+        "name": "live share sequence advanced",
+        "passed": true,
+        "detail": "sequence=9, ack=6"
+      },
+      {
+        "name": "live share remained ack paced",
+        "passed": true,
+        "detail": "latest-frame-wins, dropped=3"
+      },
+      {
+        "name": "live share stopped",
+        "passed": true,
+        "detail": "requested"
+      },
+      {
+        "name": "fixture final state",
+        "passed": true,
+        "detail": "{\"clicks\":1,\"semanticPresses\":1,\"semanticValue\":\"packaged-helper-408\"}"
+      },
+      {
+        "name": "independent foreground unchanged",
+        "passed": true,
+        "detail": "Google Chrome -> Google Chrome"
+      },
+      {
+        "name": "independent hardware cursor unchanged",
+        "passed": true,
+        "detail": "878.796875,1135.00390625 -> 878.796875,1135.00390625"
+      },
+      {
+        "name": "helper transport disconnected cleanly",
+        "passed": true,
+        "detail": "published helper session and observation were revoked"
+      }
+    ]
+  },
+  "limitations": [
+    "This run covers the packaged macOS helper on the active macOS Space; it is not Windows UI Automation runtime evidence.",
+    "The helper uses background-window routing on the active desktop, not a separate VM, RDP seat, or isolated operating-system desktop.",
+    "The pixel action remains classified Unverifiable by the product; the fixture-side click counter is independent evidence for this deterministic target only.",
+    "Screen Recording and Accessibility permissions were already present. The rig did not request, approve, or modify macOS permissions.",
+    "The rig verifies the supplied archive checksum when SHA256SUMS.txt is provided, but GitHub attestation verification is an external release-verification step."
+  ]
+}

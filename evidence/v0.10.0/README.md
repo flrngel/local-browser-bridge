@@ -26,9 +26,13 @@ below, that only a live browser could expose.**
 
 Two browsers were used deliberately. Stock Chrome 151 no longer honours
 `--load-extension`, so the feature matrix ran in Chrome for Testing, which does
-accept it. Chrome for Testing suppresses Chrome's own debugger infobar, so the
-indicator evidence was captured separately in stock Chrome, where the packaged
-extension was installed through the real **Load unpacked** flow.
+accept it. The feature-matrix screenshots did not contain Chrome's debugger
+infobar, so the indicator evidence was captured separately in stock Chrome,
+where the packaged extension was installed through the real **Load unpacked**
+flow. That absence is an observation, not proof that Chrome for Testing
+intrinsically suppresses a button-bearing debugger warning; Chromium documents
+explicit suppression for the silent-debugger flag and policy-installed
+extensions, neither of which is established by those screenshots.
 
 Every profile was disposable and empty. No personal tab, account, or window
 appears in any image.

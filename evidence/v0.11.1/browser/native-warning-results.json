@@ -1,0 +1,199 @@
+{
+  "recordedAt": "2026-08-20T18:16:14.258Z",
+  "scenario": "stock Chrome native debugger warning Cancel",
+  "release": {
+    "version": "0.11.1",
+    "serverPath": "/tmp/lbb-408.WoutsC/macos/local-browser-bridge",
+    "serverSha256": "40248cce317963d9b5d8092ed18d3e36abfdf10eb369d03b8e156f57371b36e5",
+    "extensionDirectory": "/tmp/lbb-408.WoutsC/extension",
+    "extensionZip": "/tmp/lbb-408.WoutsC/release/local-browser-bridge-extension-v0.11.1.zip",
+    "extensionZipSha256": "9beaf8635115a9cfe672767d675106e1b826e274780d0cfc9e9be60ede3c75f0"
+  },
+  "environment": {
+    "browserVersion": "Google Chrome 151.0.7922.138",
+    "operatingSystem": "darwin 25.5.0",
+    "architecture": "arm64",
+    "browserProfile": "fresh disposable profile removed after the run",
+    "extensionInstallSurface": "browser-target CDP Extensions.loadUnpacked",
+    "serverPort": 17409,
+    "cdpPort": 9342
+  },
+  "hygiene": {
+    "bearerTokenPersistedInEvidence": false,
+    "disposableProfileRemoved": true,
+    "dedicatedChromeProcessStopped": true,
+    "serverStopped": true
+  },
+  "passed": 11,
+  "total": 11,
+  "results": [
+    {
+      "name": "release.server",
+      "ok": true,
+      "detail": {
+        "version": "local-browser-bridge 0.11.1",
+        "path": "/tmp/lbb-408.WoutsC/macos/local-browser-bridge"
+      },
+      "at": "2026-08-20T18:15:03.469Z"
+    },
+    {
+      "name": "browser.stock-chrome",
+      "ok": true,
+      "detail": {
+        "browser": "Chrome/151.0.7922.138",
+        "executable": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+      },
+      "at": "2026-08-20T18:15:04.047Z"
+    },
+    {
+      "name": "extension.loaded-through-browser-cdp",
+      "ok": true,
+      "detail": {
+        "protocolMethod": "Extensions.loadUnpacked",
+        "id": "klmeklfnabpdiiclbfngblcejchgnmne",
+        "name": "Local Browser Bridge",
+        "version": "0.11.1",
+        "path": "/private/tmp/lbb-408.WoutsC/extension",
+        "enabled": true
+      },
+      "at": "2026-08-20T18:15:04.062Z"
+    },
+    {
+      "name": "extension.connected",
+      "ok": true,
+      "detail": {
+        "version": "0.11.1",
+        "browser": "Google Chrome",
+        "mode": "full-access"
+      },
+      "at": "2026-08-20T18:15:04.822Z"
+    },
+    {
+      "name": "fixture.opened",
+      "ok": true,
+      "detail": {
+        "tabId": 1043474971,
+        "title": "127.0.0.1:17409/demo",
+        "url": "http://127.0.0.1:17409/demo"
+      },
+      "at": "2026-08-20T18:15:04.906Z"
+    },
+    {
+      "name": "control.start",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "active": true,
+        "tabId": 1043474971,
+        "turn": 0
+      },
+      "at": "2026-08-20T18:15:04.949Z"
+    },
+    {
+      "name": "page.pill-visible",
+      "ok": true,
+      "detail": {
+        "pill": true,
+        "text": "Browser Bridge demo target\n\nThis page is a deterministic local target for browser-command verification.\n\nRoute: /demo\n\nDisplay name\nFavorite color\nGreen\nBlue\nOrange\nShow greeting\nDirect input targets\n"
+      },
+      "at": "2026-08-20T18:15:05.119Z"
+    },
+    {
+      "name": "native-cancel.revoked",
+      "ok": true,
+      "detail": {
+        "active": false,
+        "reason": "canceled_by_user"
+      },
+      "at": "2026-08-20T18:15:43.375Z"
+    },
+    {
+      "name": "native-cancel.human-pause",
+      "ok": true,
+      "detail": {
+        "humanPaused": true,
+        "reason": "canceled_by_user"
+      },
+      "at": "2026-08-20T18:15:43.375Z"
+    },
+    {
+      "name": "native-cancel.remote-restart-refused",
+      "ok": true,
+      "detail": {
+        "status": 423,
+        "code": "HUMAN_CONTROL_PAUSED",
+        "taxonomy": "needs_user"
+      },
+      "at": "2026-08-20T18:15:43.377Z"
+    },
+    {
+      "name": "native-cancel.page-overlay-removed",
+      "ok": true,
+      "detail": {
+        "overlayPresent": "false"
+      },
+      "at": "2026-08-20T18:15:43.379Z"
+    }
+  ],
+  "processEvents": [
+    {
+      "event": "chrome.launched",
+      "launch": 1,
+      "pid": 96357,
+      "argv": [
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "--user-data-dir=/tmp/lbb-408.WoutsC/native-warning-v0.11.1-profile",
+        "--remote-debugging-port=9342",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-background-networking",
+        "--window-position=0,0",
+        "--window-size=1280,860",
+        "about:blank"
+      ],
+      "browser": "Chrome/151.0.7922.138",
+      "protocolVersion": "1.3",
+      "at": "2026-08-20T18:15:04.047Z"
+    },
+    {
+      "event": "chrome.stopped",
+      "launch": 1,
+      "pid": 96357,
+      "at": "2026-08-20T18:16:13.707Z"
+    }
+  ],
+  "nativeUiInteraction": {
+    "button": {
+      "description": "Cancel",
+      "height": 32,
+      "role": "AXButton",
+      "title": "",
+      "value": "",
+      "width": 68,
+      "x": 784,
+      "y": 129
+    },
+    "clickCenterX": 818,
+    "clickCenterY": 145,
+    "cursorXAfterClick": 878,
+    "cursorYAfterClick": 1135,
+    "exactButtonMatches": 1,
+    "foregroundPidAfterClick": 96357,
+    "foregroundRestorationDeferredUntilDisposableChromeExit": true,
+    "query": "Cancel",
+    "requestedCursorXAfterClick": 878,
+    "requestedCursorYAfterClick": 1135,
+    "requestedForegroundPidAfterClick": 96357,
+    "targetPid": 96357
+  },
+  "screenshots": [
+    {
+      "file": "10-native-warning-and-page-pill.png",
+      "sha256": "b77bd9b37c579e688c1f5579007ef7bc3f2f7db241ea4cb27a04c7ab887fcccd"
+    },
+    {
+      "file": "11-native-after-cancel.png",
+      "sha256": "228d72cc029caedf57a85d7f4cdb772a5d9815561cd8c28b5049434b3855e137"
+    }
+  ]
+}
