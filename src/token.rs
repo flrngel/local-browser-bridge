@@ -6,8 +6,9 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use rand::RngCore as _;
 use subtle::ConstantTimeEq as _;
 use tokio::fs;
-#[cfg(any(unix, target_os = "windows"))]
+#[cfg(target_os = "windows")]
 use tokio::io::AsyncReadExt as _;
+#[cfg(not(unix))]
 use tokio::io::AsyncWriteExt as _;
 
 #[cfg(target_os = "windows")]
@@ -18,6 +19,13 @@ const TOKEN_BYTES: usize = 32;
 const TOKEN_ENCODED_BYTES: usize = 43;
 const MIN_DISTINCT_TOKEN_BYTES: usize = 16;
 const MANAGED_TOKEN_DIRECTORY: &str = ".local-browser-bridge";
+
+#[cfg(unix)]
+type TokenDirectory = std::fs::File;
+#[cfg(target_os = "windows")]
+type TokenDirectory = windows_security::TokenDirectory;
+#[cfg(not(any(unix, target_os = "windows")))]
+struct TokenDirectory;
 
 pub fn create_token() -> String {
     loop {
@@ -69,9 +77,9 @@ async fn load_or_create_token_with_managed_path(
     path: &Path,
     managed_token_path: &Path,
 ) -> io::Result<String> {
-    prepare_token_parent(path, managed_token_path).await?;
+    let directory = prepare_token_parent(path, managed_token_path).await?;
 
-    match load_valid_persisted_token(path).await {
+    match load_valid_persisted_token(&directory, path).await {
         Ok(Some(token)) => return Ok(token),
         Ok(None) => {}
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -79,11 +87,14 @@ async fn load_or_create_token_with_managed_path(
     }
 
     let token = create_token();
-    replace_token_file(path, &token).await?;
+    replace_token_file(&directory, path, &token).await?;
     Ok(token)
 }
 
-async fn prepare_token_parent(path: &Path, managed_token_path: &Path) -> io::Result<()> {
+async fn prepare_token_parent(
+    path: &Path,
+    managed_token_path: &Path,
+) -> io::Result<TokenDirectory> {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -106,7 +117,7 @@ fn custom_parent_error(error: io::Error) -> io::Error {
     )
 }
 
-async fn prepare_managed_token_directory(path: &Path) -> io::Result<()> {
+async fn prepare_managed_token_directory(path: &Path) -> io::Result<TokenDirectory> {
     match fs::symlink_metadata(path).await {
         Ok(_) => harden_managed_token_directory(path).await,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -117,15 +128,24 @@ async fn prepare_managed_token_directory(path: &Path) -> io::Result<()> {
 }
 
 #[cfg(unix)]
-async fn load_valid_persisted_token(path: &Path) -> io::Result<Option<String>> {
-    let mut options = fs::OpenOptions::new();
-    options.read(true).custom_flags(libc::O_NOFOLLOW);
-    let mut file = match options.open(path).await {
+async fn load_valid_persisted_token(
+    directory: &TokenDirectory,
+    path: &Path,
+) -> io::Result<Option<String>> {
+    use std::io::Read as _;
+
+    let token_name = unix_child_name(path)?;
+    let mut file = match unix_openat(
+        directory,
+        &token_name,
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        None,
+    ) {
         Ok(file) => file,
         Err(error) if error.raw_os_error() == Some(libc::ELOOP) => return Ok(None),
         Err(error) => return Err(error),
     };
-    let metadata = file.metadata().await?;
+    let metadata = file.metadata()?;
     if !metadata.file_type().is_file() {
         return Ok(None);
     }
@@ -144,7 +164,7 @@ async fn load_valid_persisted_token(path: &Path) -> io::Result<Option<String>> {
     }
 
     let mut contents = String::new();
-    file.read_to_string(&mut contents).await?;
+    file.read_to_string(&mut contents)?;
     let value = contents.strip_suffix('\n').unwrap_or(&contents);
     if value.contains(['\r', '\n']) || !token_is_valid(value) {
         return Ok(None);
@@ -153,7 +173,10 @@ async fn load_valid_persisted_token(path: &Path) -> io::Result<Option<String>> {
 }
 
 #[cfg(not(any(unix, target_os = "windows")))]
-async fn load_valid_persisted_token(path: &Path) -> io::Result<Option<String>> {
+async fn load_valid_persisted_token(
+    _directory: &TokenDirectory,
+    path: &Path,
+) -> io::Result<Option<String>> {
     let metadata = fs::symlink_metadata(path).await?;
     if !metadata.file_type().is_file() || !private_file_permissions_are_valid(&metadata) {
         return Ok(None);
@@ -171,13 +194,17 @@ async fn load_valid_persisted_token(path: &Path) -> io::Result<Option<String>> {
 }
 
 #[cfg(target_os = "windows")]
-async fn load_valid_persisted_token(path: &Path) -> io::Result<Option<String>> {
-    let Some(file) = windows_security::open_private_token_file(path)? else {
+async fn load_valid_persisted_token(
+    directory: &TokenDirectory,
+    path: &Path,
+) -> io::Result<Option<String>> {
+    let Some(file) = windows_security::open_private_token_file(directory, path)? else {
         return Ok(None);
     };
     let mut file = fs::File::from_std(file);
     let mut contents = String::new();
     file.read_to_string(&mut contents).await?;
+    windows_security::ensure_token_directory_bound(directory)?;
     let value = contents.strip_suffix('\n').unwrap_or(&contents);
     if value.contains(['\r', '\n']) || !token_is_valid(value) {
         return Ok(None);
@@ -185,63 +212,109 @@ async fn load_valid_persisted_token(path: &Path) -> io::Result<Option<String>> {
     Ok(Some(value.to_owned()))
 }
 
-async fn replace_token_file(path: &Path, token: &str) -> io::Result<()> {
+#[cfg(unix)]
+async fn replace_token_file(
+    directory: &TokenDirectory,
+    path: &Path,
+    token: &str,
+) -> io::Result<()> {
+    use std::io::Write as _;
+
+    let token_name = unix_child_name(path)?;
+    let temporary_name = std::ffi::CString::new(format!(".lbb-token-{}.tmp", create_token()))
+        .expect("generated token temporary name contains no NUL");
+    let mut temporary_created = false;
+
+    let result = (|| {
+        let mut file = unix_openat(
+            directory,
+            &temporary_name,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            Some(0o600),
+        )?;
+        temporary_created = true;
+        file.write_all(format!("{token}\n").as_bytes())?;
+        file.flush()?;
+        file.sync_all()?;
+        drop(file);
+        unix_renameat(directory, &temporary_name, &token_name)?;
+        temporary_created = false;
+        directory.sync_all()?;
+        verify_replaced_unix_token_file(directory, &token_name)
+    })();
+    if result.is_err() && temporary_created {
+        let _ = unix_unlinkat(directory, &temporary_name);
+    }
+    result
+}
+
+#[cfg(target_os = "windows")]
+async fn replace_token_file(
+    directory: &TokenDirectory,
+    path: &Path,
+    token: &str,
+) -> io::Result<()> {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     let temporary_path = parent.join(format!(".lbb-token-{}.tmp", create_token()));
+    let mut temporary_created = false;
 
     let result = async {
-        let mut file = open_private_temporary_file(&temporary_path).await?;
+        let mut file = fs::File::from_std(windows_security::create_private_token_file(
+            directory,
+            &temporary_path,
+        )?);
+        temporary_created = true;
         file.write_all(format!("{token}\n").as_bytes()).await?;
         file.flush().await?;
         file.sync_all().await?;
         drop(file);
-        replace_path(&temporary_path, path).await?;
-        verify_replaced_token_file(path)
+        windows_security::replace_token_file(directory, &temporary_path, path)?;
+        temporary_created = false;
+        if windows_security::token_path_has_private_permissions(directory, path)? {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "the replaced token file did not retain a private Windows DACL",
+            ))
+        }
+    }
+    .await;
+    if result.is_err() && temporary_created {
+        let _ = windows_security::remove_private_temporary_file(directory, &temporary_path);
+    }
+    result
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+async fn replace_token_file(
+    _directory: &TokenDirectory,
+    path: &Path,
+    token: &str,
+) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let temporary_path = parent.join(format!(".lbb-token-{}.tmp", create_token()));
+    let result = async {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        let mut file = options.open(&temporary_path).await?;
+        file.write_all(format!("{token}\n").as_bytes()).await?;
+        file.flush().await?;
+        file.sync_all().await?;
+        drop(file);
+        fs::rename(&temporary_path, path).await
     }
     .await;
     if result.is_err() {
         let _ = fs::remove_file(&temporary_path).await;
     }
     result
-}
-
-#[cfg(unix)]
-async fn open_private_temporary_file(path: &Path) -> io::Result<fs::File> {
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true).mode(0o600);
-    options.open(path).await
-}
-
-#[cfg(target_os = "windows")]
-async fn open_private_temporary_file(path: &Path) -> io::Result<fs::File> {
-    windows_security::create_private_token_file(path).map(fs::File::from_std)
-}
-
-#[cfg(not(any(unix, target_os = "windows")))]
-async fn open_private_temporary_file(path: &Path) -> io::Result<fs::File> {
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    options.open(path).await
-}
-
-#[cfg(target_os = "windows")]
-fn verify_replaced_token_file(path: &Path) -> io::Result<()> {
-    if windows_security::token_path_has_private_permissions(path)? {
-        Ok(())
-    } else {
-        Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "the replaced token file did not retain a private Windows DACL",
-        ))
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-fn verify_replaced_token_file(_path: &Path) -> io::Result<()> {
-    Ok(())
 }
 
 pub fn tokens_equal(actual: &str, expected: &str) -> bool {
@@ -251,22 +324,7 @@ pub fn tokens_equal(actual: &str, expected: &str) -> bool {
 }
 
 #[cfg(unix)]
-async fn replace_path(source: &Path, destination: &Path) -> io::Result<()> {
-    fs::rename(source, destination).await
-}
-
-#[cfg(target_os = "windows")]
-async fn replace_path(source: &Path, destination: &Path) -> io::Result<()> {
-    windows_security::replace_token_file(source, destination)
-}
-
-#[cfg(not(any(unix, target_os = "windows")))]
-async fn replace_path(source: &Path, destination: &Path) -> io::Result<()> {
-    fs::rename(source, destination).await
-}
-
-#[cfg(unix)]
-async fn create_private_token_directory(path: &Path) -> io::Result<()> {
+async fn create_private_token_directory(path: &Path) -> io::Result<TokenDirectory> {
     use std::os::unix::fs::DirBuilderExt as _;
 
     let mut builder = std::fs::DirBuilder::new();
@@ -275,23 +333,25 @@ async fn create_private_token_directory(path: &Path) -> io::Result<()> {
 }
 
 #[cfg(target_os = "windows")]
-async fn create_private_token_directory(path: &Path) -> io::Result<()> {
+async fn create_private_token_directory(path: &Path) -> io::Result<TokenDirectory> {
     windows_security::create_private_token_directory(path)
 }
 
 #[cfg(not(any(unix, target_os = "windows")))]
-async fn create_private_token_directory(path: &Path) -> io::Result<()> {
-    fs::create_dir(path).await
+async fn create_private_token_directory(path: &Path) -> io::Result<TokenDirectory> {
+    fs::create_dir(path).await?;
+    Ok(TokenDirectory)
 }
 
 #[cfg(unix)]
-async fn harden_managed_token_directory(path: &Path) -> io::Result<()> {
+async fn harden_managed_token_directory(path: &Path) -> io::Result<TokenDirectory> {
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
     let directory = open_owned_unix_token_directory(path)?;
     let existing_mode = directory.metadata()?.mode() & 0o777;
     if existing_mode == 0o700 {
-        return validate_private_unix_directory_metadata(&directory.metadata()?);
+        validate_private_unix_directory_metadata(&directory.metadata()?)?;
+        return Ok(directory);
     }
     if existing_mode & 0o700 != 0o700 {
         return Err(io::Error::new(
@@ -300,32 +360,34 @@ async fn harden_managed_token_directory(path: &Path) -> io::Result<()> {
         ));
     }
     directory.set_permissions(std::fs::Permissions::from_mode(0o700))?;
-    validate_private_unix_directory_metadata(&directory.metadata()?)
+    validate_private_unix_directory_metadata(&directory.metadata()?)?;
+    Ok(directory)
 }
 
 #[cfg(target_os = "windows")]
-async fn harden_managed_token_directory(path: &Path) -> io::Result<()> {
+async fn harden_managed_token_directory(path: &Path) -> io::Result<TokenDirectory> {
     windows_security::harden_token_directory(path)
 }
 
 #[cfg(not(any(unix, target_os = "windows")))]
-async fn harden_managed_token_directory(path: &Path) -> io::Result<()> {
+async fn harden_managed_token_directory(path: &Path) -> io::Result<TokenDirectory> {
     validate_private_token_directory(path).await
 }
 
 #[cfg(unix)]
-async fn validate_private_token_directory(path: &Path) -> io::Result<()> {
+async fn validate_private_token_directory(path: &Path) -> io::Result<TokenDirectory> {
     let directory = open_owned_unix_token_directory(path)?;
-    validate_private_unix_directory_metadata(&directory.metadata()?)
+    validate_private_unix_directory_metadata(&directory.metadata()?)?;
+    Ok(directory)
 }
 
 #[cfg(target_os = "windows")]
-async fn validate_private_token_directory(path: &Path) -> io::Result<()> {
+async fn validate_private_token_directory(path: &Path) -> io::Result<TokenDirectory> {
     windows_security::validate_private_token_directory(path)
 }
 
 #[cfg(not(any(unix, target_os = "windows")))]
-async fn validate_private_token_directory(path: &Path) -> io::Result<()> {
+async fn validate_private_token_directory(path: &Path) -> io::Result<TokenDirectory> {
     let metadata = fs::symlink_metadata(path).await?;
     if !metadata.file_type().is_dir() {
         return Err(io::Error::new(
@@ -333,7 +395,7 @@ async fn validate_private_token_directory(path: &Path) -> io::Result<()> {
             "the custom token parent is not an ordinary directory",
         ));
     }
-    Ok(())
+    Ok(TokenDirectory)
 }
 
 #[cfg(unix)]
@@ -390,6 +452,120 @@ fn validate_private_unix_directory_metadata(metadata: &std::fs::Metadata) -> io:
         Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "the token parent must already be owned by the current user with mode 0700",
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn unix_child_name(path: &Path) -> io::Result<std::ffi::CString> {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let name = path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the token path must end with an ordinary file name",
+        )
+    })?;
+    if name.as_bytes() == b"." || name.as_bytes() == b".." {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the token file name cannot be dot or dot-dot",
+        ));
+    }
+    std::ffi::CString::new(name.as_bytes()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a Unix token file name cannot contain NUL",
+        )
+    })
+}
+
+#[cfg(unix)]
+fn unix_openat(
+    directory: &TokenDirectory,
+    name: &std::ffi::CStr,
+    flags: libc::c_int,
+    mode: Option<libc::mode_t>,
+) -> io::Result<std::fs::File> {
+    use std::os::fd::{AsRawFd as _, FromRawFd as _};
+
+    let descriptor = match mode {
+        Some(mode) => unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                flags,
+                libc::c_uint::from(mode),
+            )
+        },
+        None => unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) },
+    };
+    if descriptor < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(unsafe { std::fs::File::from_raw_fd(descriptor) })
+    }
+}
+
+#[cfg(unix)]
+fn unix_renameat(
+    directory: &TokenDirectory,
+    source: &std::ffi::CStr,
+    destination: &std::ffi::CStr,
+) -> io::Result<()> {
+    use std::os::fd::AsRawFd as _;
+
+    let result = unsafe {
+        libc::renameat(
+            directory.as_raw_fd(),
+            source.as_ptr(),
+            directory.as_raw_fd(),
+            destination.as_ptr(),
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(unix)]
+fn unix_unlinkat(directory: &TokenDirectory, name: &std::ffi::CStr) -> io::Result<()> {
+    use std::os::fd::AsRawFd as _;
+
+    let result = unsafe { libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), 0) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(unix)]
+fn verify_replaced_unix_token_file(
+    directory: &TokenDirectory,
+    name: &std::ffi::CStr,
+) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let file = unix_openat(
+        directory,
+        name,
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        None,
+    )?;
+    let metadata = file.metadata()?;
+    if metadata.is_file()
+        && metadata.nlink() == 1
+        && metadata.len() <= 128
+        && private_file_permissions_are_valid(&metadata)
+    {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the replaced Unix token file did not retain a private single-link identity",
         ))
     }
 }
@@ -771,6 +947,67 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn unix_token_transaction_stays_bound_to_the_validated_parent_after_a_path_swap() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = tempfile::tempdir().expect("temp directory");
+        let parent = private_test_parent(directory.path()).await;
+        let path = parent.join("token");
+        let original = load_or_create_token(&path).await.expect("create token");
+        let capability = prepare_token_parent(&path, &default_token_path())
+            .await
+            .expect("retain validated parent directory");
+
+        let moved_parent = directory.path().join("validated-parent");
+        std::fs::rename(&parent, &moved_parent).expect("move validated parent");
+        std::fs::create_dir(&parent).expect("install replacement parent");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700))
+            .expect("make replacement parent private");
+        let decoy = create_token();
+        std::fs::write(&path, format!("{decoy}\n")).expect("write replacement-parent decoy");
+        set_private_test_permissions(&path);
+
+        assert_eq!(
+            load_valid_persisted_token(&capability, &path)
+                .await
+                .expect("read through retained directory descriptor"),
+            Some(original)
+        );
+
+        let replacement = create_token();
+        replace_token_file(&capability, &path, &replacement)
+            .await
+            .expect("replace through retained directory descriptor");
+
+        assert_eq!(
+            std::fs::read_to_string(moved_parent.join("token"))
+                .expect("read capability-bound replacement")
+                .trim(),
+            replacement
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path)
+                .expect("read replacement-parent decoy")
+                .trim(),
+            decoy,
+            "the substituted pathname must not redirect token replacement"
+        );
+        for token_parent in [&parent, &moved_parent] {
+            assert!(
+                std::fs::read_dir(token_parent)
+                    .expect("list token parent")
+                    .all(|entry| !entry
+                        .expect("directory entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".lbb-token-")),
+                "temporary token files must be cleaned up in the capability-bound directory"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn rejects_a_custom_parent_symlink_without_chmodding_its_target() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
 
@@ -899,6 +1136,46 @@ mod tests {
                 .is_symlink()
         );
         assert!(!target.join("token").exists());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn windows_token_transaction_holds_no_delete_parent_and_ancestor_leases() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let replaceable_ancestor = directory.path().join("replaceable-ancestor");
+        std::fs::create_dir(&replaceable_ancestor).expect("create replaceable ancestor");
+        let parent = private_test_parent(&replaceable_ancestor).await;
+        let path = parent.join("token");
+        let capability = prepare_token_parent(&path, &default_token_path())
+            .await
+            .expect("retain validated parent directory");
+        let moved_parent = directory.path().join("moved-parent");
+
+        std::fs::rename(&parent, &moved_parent)
+            .expect_err("a live no-delete directory handle must block parent replacement");
+        assert!(parent.is_dir());
+        assert!(!moved_parent.exists());
+
+        let moved_ancestor = directory.path().join("moved-ancestor");
+        std::fs::rename(&replaceable_ancestor, &moved_ancestor)
+            .expect_err("a live ancestor lease must block ancestor-path replacement");
+        assert!(replaceable_ancestor.is_dir());
+        assert!(!moved_ancestor.exists());
+
+        let token = create_token();
+        replace_token_file(&capability, &path, &token)
+            .await
+            .expect("write while the directory lease is held");
+        assert_eq!(
+            load_valid_persisted_token(&capability, &path)
+                .await
+                .expect("read while the directory lease is held"),
+            Some(token)
+        );
+
+        drop(capability);
+        std::fs::rename(&replaceable_ancestor, &moved_ancestor)
+            .expect("ancestor can move after every directory lease is released");
     }
 
     async fn private_test_parent(root: &Path) -> std::path::PathBuf {

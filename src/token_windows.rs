@@ -5,7 +5,7 @@ use std::mem::{offset_of, size_of};
 use std::os::windows::ffi::OsStrExt as _;
 use std::os::windows::fs::OpenOptionsExt as _;
 use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr;
 
 use windows::Win32::Foundation::{BOOL, CloseHandle, ERROR_SUCCESS, HANDLE};
@@ -23,11 +23,11 @@ use windows::Win32::Security::{
 use windows::Win32::Storage::FileSystem::{
     CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL,
     FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS,
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAGS_AND_ATTRIBUTES, FILE_GENERIC_WRITE,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAGS_AND_ATTRIBUTES, FILE_GENERIC_WRITE, FILE_ID_INFO,
     FILE_INFO_BY_HANDLE_CLASS, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_MODE,
-    FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO, FileAttributeTagInfo, FileStandardInfo,
-    GetFileInformationByHandleEx, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
-    READ_CONTROL, WRITE_DAC,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO, FileAttributeTagInfo, FileIdInfo,
+    FileStandardInfo, GetFileInformationByHandleEx, MOVEFILE_REPLACE_EXISTING,
+    MOVEFILE_WRITE_THROUGH, MoveFileExW, READ_CONTROL, WRITE_DAC,
 };
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows::core::{Error as WindowsError, PCWSTR};
@@ -36,31 +36,112 @@ const SECURITY_DESCRIPTOR_REVISION: u32 = 1;
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
 const MAX_TOKEN_FILE_BYTES: i64 = 128;
 
-pub(super) fn open_private_token_file(path: &Path) -> io::Result<Option<File>> {
+pub(super) struct TokenDirectory {
+    file: File,
+    identity: FILE_ID_INFO,
+    path: PathBuf,
+    _ancestor_leases: Vec<File>,
+}
+
+impl TokenDirectory {
+    fn new(file: File, path: &Path) -> io::Result<Self> {
+        let identity = query_file_information(handle_for(&file), FileIdInfo)?;
+        let path = std::path::absolute(path)?;
+        let directory = Self {
+            file,
+            identity,
+            _ancestor_leases: open_ancestor_directory_leases(&path)?,
+            path,
+        };
+        directory.ensure_bound()?;
+        Ok(directory)
+    }
+
+    fn child_path(&self, path: &Path) -> io::Result<PathBuf> {
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        if std::path::absolute(parent)? != self.path {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the Windows token path is outside the retained parent directory",
+            ));
+        }
+        let name = path.file_name().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the Windows token path must end with an ordinary file name",
+            )
+        })?;
+        Ok(self.path.join(name))
+    }
+
+    fn ensure_bound(&self) -> io::Result<()> {
+        let current_user = CurrentUser::load()?;
+        if !handle_is_exact_private_path(handle_for(&self.file), true, &current_user)? {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "the held Windows token-directory capability is no longer private",
+            ));
+        }
+        let reopened = open_token_directory_for_validation(&self.path)?;
+        if !handle_is_exact_private_path(handle_for(&reopened), true, &current_user)?
+            || query_file_information::<FILE_ID_INFO>(handle_for(&reopened), FileIdInfo)?
+                != self.identity
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "the Windows token-directory path no longer names the validated directory",
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn open_private_token_file(
+    directory: &TokenDirectory,
+    path: &Path,
+) -> io::Result<Option<File>> {
+    directory.ensure_bound()?;
+    let path = directory.child_path(path)?;
     let file = open_path_no_follow(
-        path,
+        &path,
         FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
     )?;
     let identity = CurrentUser::load()?;
     if !handle_is_exact_private_path(handle_for(&file), false, &identity)? {
         return Ok(None);
     }
+    directory.ensure_bound()?;
     Ok(Some(file))
 }
 
-pub(super) fn token_path_has_private_permissions(path: &Path) -> io::Result<bool> {
+pub(super) fn token_path_has_private_permissions(
+    directory: &TokenDirectory,
+    path: &Path,
+) -> io::Result<bool> {
+    directory.ensure_bound()?;
+    let path = directory.child_path(path)?;
     let file = open_path_no_follow(
-        path,
+        &path,
         FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
     )?;
     let identity = CurrentUser::load()?;
-    handle_is_exact_private_path(handle_for(&file), false, &identity)
+    let private = handle_is_exact_private_path(handle_for(&file), false, &identity)?;
+    directory.ensure_bound()?;
+    Ok(private)
 }
 
-pub(super) fn create_private_token_file(path: &Path) -> io::Result<File> {
+pub(super) fn create_private_token_file(
+    directory: &TokenDirectory,
+    path: &Path,
+) -> io::Result<File> {
+    directory.ensure_bound()?;
+    let path = directory.child_path(path)?;
     let mut security = PrivateSecurity::new(ACE_FLAGS(0))?;
     let attributes = security.attributes();
-    let path = wide_path(path)?;
+    let path = wide_path(&path)?;
     let desired_access = FILE_GENERIC_WRITE.0 | FILE_READ_ATTRIBUTES.0 | READ_CONTROL.0;
     let flags = FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT;
     let handle = unsafe {
@@ -82,13 +163,21 @@ pub(super) fn create_private_token_file(path: &Path) -> io::Result<File> {
             "Windows did not create the token file with its protected owner-only DACL",
         ));
     }
+    directory.ensure_bound()?;
     Ok(file)
 }
 
-pub(super) fn replace_token_file(source: &Path, destination: &Path) -> io::Result<()> {
-    ensure_safe_replacement_target(destination)?;
-    let source = wide_path(source)?;
-    let destination = wide_path(destination)?;
+pub(super) fn replace_token_file(
+    directory: &TokenDirectory,
+    source: &Path,
+    destination: &Path,
+) -> io::Result<()> {
+    directory.ensure_bound()?;
+    let source = directory.child_path(source)?;
+    let destination = directory.child_path(destination)?;
+    ensure_safe_replacement_target(&destination)?;
+    let source = wide_path(&source)?;
+    let destination = wide_path(&destination)?;
     unsafe {
         MoveFileExW(
             PCWSTR(source.as_ptr()),
@@ -96,10 +185,24 @@ pub(super) fn replace_token_file(source: &Path, destination: &Path) -> io::Resul
             MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
         )
     }
-    .map_err(windows_error)
+    .map_err(windows_error)?;
+    directory.ensure_bound()
 }
 
-pub(super) fn create_private_token_directory(path: &Path) -> io::Result<()> {
+pub(super) fn remove_private_temporary_file(
+    directory: &TokenDirectory,
+    path: &Path,
+) -> io::Result<()> {
+    directory.ensure_bound()?;
+    std::fs::remove_file(directory.child_path(path)?)?;
+    directory.ensure_bound()
+}
+
+pub(super) fn ensure_token_directory_bound(directory: &TokenDirectory) -> io::Result<()> {
+    directory.ensure_bound()
+}
+
+pub(super) fn create_private_token_directory(path: &Path) -> io::Result<TokenDirectory> {
     let mut security = PrivateSecurity::new(CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE)?;
     let attributes = security.attributes();
     let wide_path = wide_path(path)?;
@@ -108,14 +211,11 @@ pub(super) fn create_private_token_directory(path: &Path) -> io::Result<()> {
     validate_private_token_directory(path)
 }
 
-pub(super) fn validate_private_token_directory(path: &Path) -> io::Result<()> {
-    let file = open_path_no_follow(
-        path,
-        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
-    )?;
+pub(super) fn validate_private_token_directory(path: &Path) -> io::Result<TokenDirectory> {
+    let file = open_token_directory_for_validation(path)?;
     let identity = CurrentUser::load()?;
     if handle_is_exact_private_path(handle_for(&file), true, &identity)? {
-        Ok(())
+        TokenDirectory::new(file, path)
     } else {
         Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -146,12 +246,12 @@ fn ensure_safe_replacement_target(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-pub(super) fn harden_token_directory(path: &Path) -> io::Result<()> {
-    let file = open_path_for_acl_update(path)?;
+pub(super) fn harden_token_directory(path: &Path) -> io::Result<TokenDirectory> {
+    let file = open_token_directory_for_acl_update(path)?;
     let security = PrivateSecurity::new(CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE)?;
     let handle = handle_for(&file);
     if handle_is_exact_private_path(handle, true, &security.identity)? {
-        return Ok(());
+        return TokenDirectory::new(file, path);
     }
     if !handle_has_expected_kind(handle, true)? {
         return Err(io::Error::new(
@@ -172,7 +272,7 @@ pub(super) fn harden_token_directory(path: &Path) -> io::Result<()> {
             "Windows did not retain the token directory's protected owner-only DACL",
         ));
     }
-    Ok(())
+    TokenDirectory::new(file, path)
 }
 
 fn open_path_no_follow(path: &Path, flags: FILE_FLAGS_AND_ATTRIBUTES) -> io::Result<File> {
@@ -191,6 +291,7 @@ fn open_path_for_replacement_check(path: &Path) -> io::Result<File> {
     options.open(path)
 }
 
+#[cfg(test)]
 fn open_path_for_acl_update(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options
@@ -199,6 +300,53 @@ fn open_path_for_acl_update(path: &Path) -> io::Result<File> {
         .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE).0)
         .custom_flags((FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS).0);
     options.open(path)
+}
+
+fn open_token_directory_for_validation(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .access_mode(READ_CONTROL.0 | FILE_READ_ATTRIBUTES.0)
+        .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE).0)
+        .custom_flags((FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS).0);
+    options.open(path)
+}
+
+fn open_token_directory_for_acl_update(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .access_mode(READ_CONTROL.0 | WRITE_DAC.0 | FILE_READ_ATTRIBUTES.0)
+        .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE).0)
+        .custom_flags((FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS).0);
+    options.open(path)
+}
+
+fn open_ancestor_directory_leases(path: &Path) -> io::Result<Vec<File>> {
+    let mut ancestors: Vec<_> = path.ancestors().skip(1).collect();
+    ancestors.reverse();
+    ancestors
+        .into_iter()
+        .map(|ancestor| {
+            let mut options = OpenOptions::new();
+            options
+                .read(true)
+                .access_mode(FILE_READ_ATTRIBUTES.0)
+                .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE).0)
+                .custom_flags(
+                    (FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS).0,
+                );
+            options.open(ancestor).map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!(
+                        "could not retain a no-delete lease on Windows token-path ancestor {}: {error}",
+                        ancestor.display()
+                    ),
+                )
+            })
+        })
+        .collect()
 }
 
 fn handle_for(file: &File) -> HANDLE {

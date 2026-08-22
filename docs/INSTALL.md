@@ -43,11 +43,13 @@ PROGRAM --licenses
 
 By default, the token lives in the dedicated `.local-browser-bridge` directory under the current user's profile. The bridge may create and narrow permissions on that one exact default directory because it owns the directory. Every `LBB_TOKEN_PATH` value that differs from the computed default is custom—even when its parent is also named `.local-browser-bridge`. A custom parent must already exist and already be private: mode `0700` and current-user ownership on Unix, or a protected current-user-only DACL on Windows. The bridge validates a custom parent without changing it and fails before creating a token when the check does not pass. Create a separate private directory first; never point the variable at Desktop, Documents, a repository, or another general-purpose directory.
 
+The validation and token read-or-create operation use one retained directory capability. On Unix, every token and temporary-file operation is relative to the validated directory descriptor. On Windows, the bridge keeps the validated, no-follow directory handle and no-delete leases on its pathname ancestors open for the whole transaction, then verifies the parent's stable filesystem identity before and after path-based child operations. Replacing the parent pathname after validation therefore cannot redirect the bridge into a different directory.
+
 ### Windows 11
 
 Run the downloaded `.exe` from PowerShell or Explorer. It prints a control-surface URL and a random extension token. No Node.js installation is required.
 
-The generated token is stored under `%USERPROFILE%\.local-browser-bridge\token`. The server protects that directory and file with a non-inherited DACL granting only the signed-in user full control. If the parent or token is a reparse point, the token has another hard-link name, or the filesystem cannot retain and report the required ACL, startup fails without following or weakening that path.
+The generated token is stored under `%USERPROFILE%\.local-browser-bridge\token`. The server protects that directory and file with a non-inherited DACL granting only the signed-in user full control. It also holds the validated directory open without delete sharing until token loading or replacement finishes. If the parent or token is a reparse point, the token has another hard-link name, the parent identity changes, or the filesystem cannot retain and report the required ACL, startup fails without following or weakening that path.
 
 The binary is not yet signed with a Microsoft publisher certificate. Microsoft SmartScreen can therefore report an unknown publisher. Keep SmartScreen enabled. Verify the GitHub release, checksum, and provenance first; do not run the file if its hash or origin differs.
 
