@@ -164,14 +164,35 @@ if [[ ! -f "$checksum_manifest" || -L "$checksum_manifest" || ! -s "$checksum_ma
   echo "Release checksum manifest is missing, empty, linked, or not a regular file: $checksum_manifest" >&2
   exit 1
 fi
-expected_checksum_files="$(printf '%s\n' \
-  "$(basename "$windows_server")" \
-  "$(basename "$windows_helper")" \
-  "$(basename "$macos_archive")" \
-  "$(basename "$extension_archive")" | LC_ALL=C sort)"
-actual_checksum_files="$(sed -n 's/^[[:xdigit:]]\{64\}[[:space:]][ *]\(.*\)$/\1/p' "$checksum_manifest" | LC_ALL=C sort)"
-if [[ "$actual_checksum_files" != "$expected_checksum_files" ]]; then
-  echo "Checksum manifest contains an unexpected file set." >&2
+expected_checksum_files=(
+  "$(basename "$windows_server")"
+  "$(basename "$windows_helper")"
+  "$(basename "$macos_archive")"
+  "$(basename "$extension_archive")"
+)
+checksum_lines=()
+while IFS= read -r line || [[ -n "$line" ]]; do
+  checksum_lines+=("$line")
+done < "$checksum_manifest"
+if (( ${#checksum_lines[@]} != ${#expected_checksum_files[@]} )); then
+  echo "Checksum manifest must contain exactly four canonical lines." >&2
+  exit 1
+fi
+canonical_checksum_manifest="$mac_stage/canonical-SHA256SUMS.txt"
+: > "$canonical_checksum_manifest"
+for index in "${!expected_checksum_files[@]}"; do
+  line="${checksum_lines[$index]}"
+  hash="${line:0:64}"
+  if [[ ! "$hash" =~ ^[0-9a-f]{64}$ ]] \
+    || [[ "${line:64:2}" != "  " ]] \
+    || [[ "${line:66}" != "${expected_checksum_files[$index]}" ]]; then
+    echo "Checksum manifest is not canonical at line $((index + 1))." >&2
+    exit 1
+  fi
+  printf '%s  %s\n' "$hash" "${expected_checksum_files[$index]}" >> "$canonical_checksum_manifest"
+done
+if ! cmp -s "$canonical_checksum_manifest" "$checksum_manifest"; then
+  echo "Checksum manifest bytes are not canonical LF-terminated ASCII." >&2
   exit 1
 fi
 if command -v sha256sum >/dev/null 2>&1; then

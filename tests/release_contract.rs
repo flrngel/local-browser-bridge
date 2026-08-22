@@ -160,6 +160,14 @@ fn release_gates_javascript_macos_and_published_provenance() {
     );
     assert!(verifier.contains("Release asset is missing, empty, linked, or not a regular file"));
     assert!(verifier.contains("Release directory contains an unexpected file set."));
+    assert!(verifier.contains("while IFS= read -r line || [[ -n \"$line\" ]]; do"));
+    assert!(verifier.contains("checksum_lines+=(\"$line\")"));
+    assert!(verifier.contains("Checksum manifest must contain exactly four canonical lines."));
+    assert!(verifier.contains("[[ ! \"$hash\" =~ ^[0-9a-f]{64}$ ]]"));
+    assert!(verifier.contains("[[ \"${line:64:2}\" != \"  \" ]]"));
+    assert!(verifier.contains("[[ \"${line:66}\" != \"${expected_checksum_files[$index]}\" ]]"));
+    assert!(verifier.contains("cmp -s \"$canonical_checksum_manifest\" \"$checksum_manifest\""));
+    assert!(verifier.contains("Checksum manifest bytes are not canonical LF-terminated ASCII."));
     assert!(!verifier.contains("if [[ -f \"$checksum_manifest\" ]]"));
 
     let immutable_gate = release
