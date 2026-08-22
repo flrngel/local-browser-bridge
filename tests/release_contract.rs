@@ -70,6 +70,7 @@ fn release_gates_javascript_macos_and_published_provenance() {
 
     for required in [
         "Run native macOS formatting, lint, and tests",
+        "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
         "Refuse publication unless release immutability is enabled",
         "repos/$GITHUB_REPOSITORY/immutable-releases",
         "X-GitHub-Api-Version: 2026-03-10",

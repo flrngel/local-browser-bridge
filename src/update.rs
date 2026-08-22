@@ -84,6 +84,7 @@ struct LatestRelease {
     html_url: String,
     draft: bool,
     prerelease: bool,
+    immutable: bool,
 }
 
 pub async fn check_for_update() -> UpdateStatus {
@@ -108,7 +109,7 @@ async fn check_for_update_at(api_url: &str, current_version: &str) -> UpdateStat
     let response = match client
         .get(api_url)
         .header("Accept", "application/vnd.github+json")
-        .header("X-GitHub-Api-Version", "2022-11-28")
+        .header("X-GitHub-Api-Version", "2026-03-10")
         .send()
         .await
     {
@@ -160,21 +161,30 @@ fn parse_release(bytes: &[u8], current_version: &str) -> Result<UpdateStatus, St
     if release.draft || release.prerelease {
         return Err("GitHub returned a non-stable release; it was ignored.".to_owned());
     }
-    if !release.html_url.starts_with(RELEASE_TAG_PREFIX)
-        || release.html_url.len() > 2_048
-        || release.html_url.chars().any(char::is_whitespace)
-    {
-        return Err("GitHub returned an unexpected release link; it was rejected.".to_owned());
+    if !release.immutable {
+        return Err("GitHub returned a mutable release; it was ignored.".to_owned());
     }
-
     let latest_text = release
         .tag_name
         .strip_prefix('v')
-        .unwrap_or(&release.tag_name);
+        .ok_or_else(|| "GitHub returned a release tag without the required v prefix.".to_owned())?;
+    let expected_url = format!("{RELEASE_TAG_PREFIX}{}", release.tag_name);
+    if release.html_url != expected_url {
+        return Err("GitHub returned an unexpected release link; it was rejected.".to_owned());
+    }
+
     let current = Version::parse(current_version)
         .map_err(|_| "The installed version is not valid semantic versioning.".to_owned())?;
     let latest = Version::parse(latest_text)
         .map_err(|_| "GitHub returned an invalid release version; it was rejected.".to_owned())?;
+    if !latest.pre.is_empty()
+        || !latest.build.is_empty()
+        || release.tag_name != format!("v{latest}")
+    {
+        return Err(
+            "GitHub returned a non-canonical stable release tag; it was ignored.".to_owned(),
+        );
+    }
     let (status, message) = match current.cmp(&latest) {
         std::cmp::Ordering::Less => (
             UpdateState::Available,
@@ -219,7 +229,8 @@ mod tests {
             "tag_name": tag,
             "html_url": url,
             "draft": false,
-            "prerelease": false
+            "prerelease": false,
+            "immutable": true
         }))
         .unwrap()
     }
@@ -306,6 +317,50 @@ mod tests {
             )
             .is_err()
         );
+        assert!(
+            parse_release(
+                &release(
+                    "0.6.0",
+                    "https://github.com/flrngel/local-browser-bridge/releases/tag/0.6.0",
+                ),
+                "0.5.0",
+            )
+            .is_err()
+        );
+        assert!(
+            parse_release(
+                &release(
+                    "v0.6.0",
+                    "https://github.com/flrngel/local-browser-bridge/releases/tag/v0.7.0",
+                ),
+                "0.5.0",
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_mutable_release_metadata() {
+        let mut value: serde_json::Value = serde_json::from_slice(&release(
+            "v0.6.0",
+            "https://github.com/flrngel/local-browser-bridge/releases/tag/v0.6.0",
+        ))
+        .unwrap();
+        value["immutable"] = false.into();
+        let error = parse_release(&serde_json::to_vec(&value).unwrap(), "0.5.0").unwrap_err();
+        assert!(error.contains("mutable release"));
+    }
+
+    #[test]
+    fn rejects_prerelease_or_build_metadata_on_the_stable_channel() {
+        for version in ["0.6.0-rc.1", "0.6.0+rebuilt"] {
+            let bytes = release(
+                &format!("v{version}"),
+                &format!("https://github.com/flrngel/local-browser-bridge/releases/tag/v{version}"),
+            );
+            let error = parse_release(&bytes, "0.5.0").unwrap_err();
+            assert!(error.contains("non-canonical stable release tag"));
+        }
     }
 
     #[tokio::test]
@@ -323,7 +378,8 @@ mod tests {
                     "tag_name": "v0.6.0",
                     "html_url": "https://github.com/flrngel/local-browser-bridge/releases/tag/v0.6.0",
                     "draft": false,
-                    "prerelease": false
+                    "prerelease": false,
+                    "immutable": true
                 }))
             }),
         );
