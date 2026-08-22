@@ -67,11 +67,15 @@ helper process.
   same ID are refused as `CALL_ID_REUSED`.
 - Explicit cancellation revokes only the owning helper session's share,
   observation, screenshot, pointer, and frame authority. The old screenshot
-  URL returns 404, an idempotent share stop reports `not-active`, and a click
-  carrying the old frame is refused as `COMPUTER_STALE_FRAME` without changing
-  functional fixture state or recreating a surface. The expected bounded move
-  instrumentation is reported separately. Helper exit then clears its server
-  session, and server exit closes the selected loopback listener.
+  URL returns 404 and an idempotent share stop reports `not-active`. Before
+  recovery, a click carrying the old frame is rejected by the server as
+  `NO_COMPUTER_FRAME`, without helper relay or a recreated surface. An explicit
+  one-shot `computer.observe` then recovers the same helper session with a new
+  exact-window frame; retrying the pre-cancel frame is still refused as
+  `COMPUTER_STALE_FRAME`. Neither refusal changes functional fixture state. The
+  expected bounded move instrumentation is reported separately. Helper exit
+  then clears its server session, and server exit closes the selected loopback
+  listener.
 
 `systemIndicator: true` is policy evidence that the helper did not suppress
 ScreenCaptureKit's indication. An exact-window screenshot cannot prove that a

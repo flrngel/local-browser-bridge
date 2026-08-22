@@ -384,9 +384,16 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
         "NO_COMPUTER_SCREENSHOT",
         "command(\"computer.share.stop\")",
         "explicitStop.reason === \"not-active\"",
+        "revoked authority gates pre-recovery mutations before helper relay",
+        "NO_COMPUTER_FRAME",
+        "gated old-frame action cannot recreate a computer surface",
+        "freshObserve(targetWindow.id)",
+        "explicit one-shot observation recovers exact-session authority",
+        "recoveryObservation.frameId !== canceledFrameId",
         "COMPUTER_STALE_FRAME",
-        "rejected stale action cannot recreate a computer surface",
-        "canceled move, replay, and stale refusal caused no functional fixture mutation",
+        "pre-cancellation frame stays stale after explicit recovery",
+        "rejected stale action preserves the recovered exact frame",
+        "canceled move, gated refusal, recovery, and stale refusal caused no functional fixture mutation",
         "cancellation/stop foreground/focus/cursor/Space invariants",
     ] {
         assert!(

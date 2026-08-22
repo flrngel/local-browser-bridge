@@ -1266,6 +1266,42 @@ async function main() {
     "computer observation, screenshot, pointer, and share authority remain unavailable",
   );
 
+  const gatedOldFrameAction = await commandResponse("computer.click", {
+    frameId: canceledFrameId,
+    x: postResizeClickX,
+    y: postResizeClickY,
+    button: "left",
+    clickCount: 1,
+    durationMs: 50,
+  });
+  requireCheck("revoked authority gates pre-recovery mutations before helper relay",
+    gatedOldFrameAction.status === 409 && gatedOldFrameAction.ok === false &&
+      gatedOldFrameAction.body.error?.code === "NO_COMPUTER_FRAME" &&
+      gatedOldFrameAction.body.taxonomy?.code === "stale_snapshot" &&
+      gatedOldFrameAction.body.taxonomy?.retriable === true &&
+      gatedOldFrameAction.body.taxonomy?.recoveryHint === "reobserve",
+    `HTTP ${gatedOldFrameAction.status}, ${gatedOldFrameAction.body.error?.code}/${gatedOldFrameAction.body.taxonomy?.code}/${gatedOldFrameAction.body.taxonomy?.recoveryHint}`,
+  );
+  const gatedState = await apiState();
+  requireCheck("gated old-frame action cannot recreate a computer surface",
+    gatedState.computerObservation === null && gatedState.computer?.share?.active === false,
+    "no frame, screenshot, pointer, or share authority was republished",
+  );
+
+  const recoveryObserve = await freshObserve(targetWindow.id);
+  const recoveryObservation = recoveryObserve.state.computerObservation;
+  requireCheck("explicit one-shot observation recovers exact-session authority",
+    recoveryObserve.state.computer?.sessionId === hello.sessionId &&
+      recoveryObservation.frameId !== canceledFrameId &&
+      recoveryObservation.windowId === targetWindow.id &&
+      recoveryObservation.windowTitle === FIXTURE_TITLE &&
+      recoveryObservation.pid === fixtureReady.pid &&
+      recoveryObservation.share?.active === false &&
+      typeof recoveryObservation.screenshotUrl === "string" &&
+      recoveryObservation.screenshotUrl.startsWith("/api/computer/screenshot?"),
+    `session-preserved=${recoveryObserve.state.computer?.sessionId === hello.sessionId}, fresh-frame=${recoveryObservation.frameId !== canceledFrameId}`,
+  );
+
   const staleAction = await commandResponse("computer.click", {
     frameId: canceledFrameId,
     x: postResizeClickX,
@@ -1274,7 +1310,7 @@ async function main() {
     clickCount: 1,
     durationMs: 50,
   });
-  requireCheck("pre-cancellation frame cannot act after teardown",
+  requireCheck("pre-cancellation frame stays stale after explicit recovery",
     staleAction.status === 409 && staleAction.ok === false &&
       staleAction.body.error?.code === "COMPUTER_STALE_FRAME" &&
       staleAction.body.taxonomy?.code === "stale_snapshot" &&
@@ -1282,10 +1318,12 @@ async function main() {
       staleAction.body.taxonomy?.recoveryHint === "reobserve",
     `HTTP ${staleAction.status}, ${staleAction.body.error?.code}/${staleAction.body.taxonomy?.code}/${staleAction.body.taxonomy?.recoveryHint}`,
   );
-  const tornDownState = await apiState();
-  requireCheck("rejected stale action cannot recreate a computer surface",
-    tornDownState.computerObservation === null && tornDownState.computer?.share?.active === false,
-    "no frame, screenshot, pointer, or share authority was republished",
+  const recoveredState = await apiState();
+  requireCheck("rejected stale action preserves the recovered exact frame",
+    recoveredState.computerObservation?.frameId === recoveryObservation.frameId &&
+      recoveredState.computerObservation?.windowId === targetWindow.id &&
+      recoveredState.computer?.share?.active === false,
+    "the old frame was refused without replacing or revoking the recovered one-shot frame",
   );
 
   const finalFixtureState = await fixtureState(fixtureStatePath);
@@ -1309,7 +1347,7 @@ async function main() {
       contentHeight: finalFixtureState.contentHeight,
     }),
   );
-  requireCheck("canceled move, replay, and stale refusal caused no functional fixture mutation",
+  requireCheck("canceled move, gated refusal, recovery, and stale refusal caused no functional fixture mutation",
     finalFixtureState.clicks === cancellationFixtureBefore.clicks &&
       finalFixtureState.semanticPresses === cancellationFixtureBefore.semanticPresses &&
       finalFixtureState.semanticValue === cancellationFixtureBefore.semanticValue &&
@@ -1526,12 +1564,26 @@ async function main() {
           reason: explicitStop.reason,
           observationCleared: stoppedState.computerObservation === null,
         },
+        preRecoveryGate: {
+          httpStatus: gatedOldFrameAction.status,
+          code: gatedOldFrameAction.body.error.code,
+          taxonomy: gatedOldFrameAction.body.taxonomy,
+          helperFunctionalMutationObserved: false,
+          surfaceRecreated: gatedState.computerObservation !== null ||
+            gatedState.computer.share.active === true,
+        },
+        explicitRecovery: {
+          method: "computer.observe",
+          exactHelperSessionPreserved: recoveryObserve.state.computer.sessionId === hello.sessionId,
+          oldFrameIdReused: recoveryObservation.frameId === canceledFrameId,
+          exactWindowRecovered: recoveryObservation.windowId === targetWindow.id,
+          shareActive: recoveryObservation.share.active,
+        },
         staleFrameRefusal: {
           httpStatus: staleAction.status,
           code: staleAction.body.error.code,
           taxonomy: staleAction.body.taxonomy,
-          surfaceRecreated: tornDownState.computerObservation !== null ||
-            tornDownState.computer.share.active === true,
+          recoveredFramePreserved: recoveredState.computerObservation.frameId === recoveryObservation.frameId,
         },
         fixtureMutationCounters: {
           clicksBefore: cancellationFixtureBefore.clicks,
@@ -1608,7 +1660,7 @@ async function main() {
       "Generic AX invocation remains Partial in the product result; this deterministic fixture supplies separate target-side evidence and does not upgrade that product classification.",
       "Native typeText remains Unverifiable in the product result. This deterministic fixture adds an independent exact read-back, then restores the prior value through confirmed Accessibility setValue. The ephemeral test content is not retained in evidence outputs, but it exists temporarily in process memory and the scratch fixture-state file until cleanup.",
       "The long live-share click intentionally creates native source-frame replacement. A zero transport-drop count is valid when server acknowledgements keep pace.",
-      "Explicit cancellation deliberately reports the in-flight move outcome as unknown. The rig proves target-routed dispatch, authority teardown, and no functional fixture mutation beyond its bounded move-delivery counter; it does not relabel the canceled native trajectory as a confirmed no-op.",
+      "Explicit cancellation deliberately reports the in-flight move outcome as unknown. The rig proves target-routed dispatch, authority teardown, a pre-recovery server gate, explicit one-shot observation recovery, continued stale-frame refusal, and no functional fixture mutation beyond its bounded move-delivery counter; it does not relabel the canceled native trajectory as a confirmed no-op.",
       "Screen Recording and Accessibility permissions were already present. The rig did not request, approve, or modify macOS permissions.",
     ],
   };
