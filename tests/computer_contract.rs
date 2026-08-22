@@ -3,6 +3,8 @@ use std::fs;
 use std::process::Command;
 
 use local_browser_bridge::VERSION;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use local_browser_bridge::computer::ComputerController;
 use local_browser_bridge::computer::{
     COMPUTER_METHODS, COMPUTER_TYPE_TEXT_MAX_DISPATCH_MS, COMPUTER_TYPE_TEXT_MAX_UTF16_UNITS,
 };
@@ -42,6 +44,71 @@ fn helper_exposes_only_bounded_observation_and_input_methods() {
                 .all(|method| !method.contains(dangerous_fragment))
         );
     }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[test]
+fn helper_machine_contract_discloses_platform_activation_truthfully() {
+    let hello = ComputerController::new().hello();
+    let invariants = &hello["invariants"];
+
+    assert_eq!(invariants["globalHidInput"], false);
+    assert_eq!(invariants["movesHardwareCursor"], false);
+    assert_eq!(invariants["foregroundIdentityPreservedBeforeAfter"], true);
+    assert_eq!(invariants["hardwareCursorPreservedBeforeAfter"], true);
+    assert_eq!(invariants["usesAxRaise"], false);
+    assert_eq!(invariants["usesFrontProcessSwitch"], false);
+    assert_eq!(invariants["switchesActiveSpace"], false);
+    assert_eq!(invariants["zeroTransientInterruptionGuaranteed"], false);
+    assert_eq!(invariants["exactWindowRequired"], true);
+    assert_eq!(invariants["implicitForegroundFallback"], false);
+
+    #[cfg(target_os = "macos")]
+    {
+        assert_eq!(invariants["activatesTargetApplication"], true);
+        assert_eq!(
+            invariants["targetActivationMode"],
+            "may-use-transient-ax-frontmost-focus-lease"
+        );
+    }
+    #[cfg(target_os = "windows")]
+    {
+        assert_eq!(invariants["activatesTargetApplication"], false);
+        assert_eq!(
+            invariants["targetActivationMode"],
+            "no-explicit-target-activation-api"
+        );
+    }
+}
+
+#[test]
+fn macos_focus_lease_is_disclosed_without_overclaiming_zero_interruption() {
+    let controller = fs::read_to_string("src/computer.rs").unwrap();
+    let macos = fs::read_to_string("src/computer/platform_macos.rs").unwrap();
+    let readme = fs::read_to_string("README.md").unwrap();
+    let security = fs::read_to_string("SECURITY.md").unwrap();
+    let install = fs::read_to_string("docs/INSTALL.md").unwrap();
+    let capabilities = fs::read_to_string("docs/CAPABILITIES.md").unwrap();
+    let protocol = fs::read_to_string("docs/PROTOCOL.md").unwrap();
+
+    assert!(controller.contains("\"activatesTargetApplication\": cfg!(target_os = \"macos\")"));
+    assert!(controller.contains("may-use-transient-ax-frontmost-focus-lease"));
+    assert!(macos.contains("FocusOperation::Defocus"));
+    assert!(macos.contains("FocusOperation::Focus"));
+    assert!(macos.contains("!self.user_frontmost\n                    && self.target_frontmost"));
+    assert!(!macos.contains("AXRaise"));
+    assert!(!macos.contains("_SLPSSetFrontProcessWithOptions("));
+
+    assert!(readme.contains("briefly borrow and restore app focus"));
+    assert!(readme.contains("[Limitations](docs/LIMITATIONS.md)"));
+    for document in [&security, &install, &capabilities, &protocol] {
+        assert!(document.contains("AXFrontmost"));
+    }
+    assert!(security.contains("activatesTargetApplication: true"));
+    assert!(install.contains("not proof of zero visible or focus-state interruption"));
+    assert!(protocol.contains("zeroTransientInterruptionGuaranteed"));
+    assert!(!install.contains("activate the target app"));
+    assert!(!security.contains("activate the target application, change"));
 }
 
 #[test]

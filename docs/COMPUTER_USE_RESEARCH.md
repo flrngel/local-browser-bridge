@@ -187,7 +187,7 @@ The macOS and Windows backends retain the version 0.8 refusal contract:
 3. Semantic AX/UIA is preferred where the platform exposes a reliable action and postcondition.
 4. Pixel input is target-routed to the exact window, never posted as global HID.
 5. The platform-specific foreground/window-focus oracle, hardware cursor, and active desktop are checked before and after delivery.
-6. Unknown or unsupported delivery fails; it never silently activates the app or changes input mode.
+6. Unknown or unsupported delivery fails; it never silently switches to global/foreground input. The macOS machine contract explicitly discloses the transient target `AXFrontmost` focus lease used by supported focus-capable routes.
 
 macOS one-shot observation uses the snapshot backend, while live sharing uses a persistent desktop-independent ScreenCaptureKit exact-window stream. The pinned [`screencapturekit` 8.0.1 bridge](https://github.com/doom-fish/screencapturekit-rs/blob/2a9f13bcbeadb0aabc5596f0ff3d2ba71da8c1d0/swift-bridge/Sources/CoreMedia/CoreMedia.swift#L26-L38) casts Apple's numeric frame-status attachment directly to a Swift enum, whereas [Apple's canonical sample](https://developer.apple.com/documentation/screencapturekit/capturing-screen-content-in-macos) decodes the raw integer first. The helper therefore reads the raw CFNumber as a compatibility fallback and accepts only `Complete`, retaining a fail-closed status gate. That dependency also guards the base `updateConfiguration` method at macOS 14 even though Apple exposes it from 12.3; the repository vendors the exact 8.0.1 source with a documented one-line availability correction at the product's macOS 13 floor.
 

@@ -98,7 +98,7 @@
             <button id="computer-observe" type="button" class="button primary">One-shot observe</button>
           </div>
         </div>
-        <p class="computer-boundary"><strong>Two capture modes:</strong> Observe takes one exact-window snapshot. Share keeps a persistent operating-system exact-window stream open. Supported input compares the platform's foreground/window-focus oracle, active desktop, and physical pointer before and after delivery and fails if those samples differ; matching samples cannot rule out a shorter transient change. Both modes use your shared login session, not a VM or separate desktop.</p>
+        <p class="computer-boundary"><strong>Two capture modes:</strong> Observe takes one exact-window snapshot. Share keeps a persistent operating-system exact-window stream open. Supported input compares the platform's foreground/window-focus oracle, active desktop, and physical pointer before and after delivery and fails if those samples differ; matching samples cannot rule out a shorter transient change. On macOS, focus-capable input may briefly make the exact target <code>AXFrontmost</code> under a restored focus lease without raising it or switching WindowServer's OS-front process/window. Both modes use your shared login session, not a VM or separate desktop.</p>
         <div class="share-toolbar">
           <label class="share-target" for="computer-window">Target application window
             <select id="computer-window"></select>

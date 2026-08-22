@@ -1062,10 +1062,28 @@ struct ComputerInfo {
     isolation: String,
     input_ready: bool,
     semantic_ready: bool,
+    invariants: ComputerInvariants,
     capabilities: Vec<String>,
     windows: Vec<ComputerWindow>,
     share: Value,
     connected_at: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ComputerInvariants {
+    global_hid_input: bool,
+    moves_hardware_cursor: bool,
+    activates_target_application: bool,
+    target_activation_mode: String,
+    foreground_identity_preserved_before_after: bool,
+    hardware_cursor_preserved_before_after: bool,
+    uses_ax_raise: bool,
+    uses_front_process_switch: bool,
+    switches_active_space: bool,
+    zero_transient_interruption_guaranteed: bool,
+    exact_window_required: bool,
+    implicit_foreground_fallback: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -3053,18 +3071,20 @@ async fn handle_computer_hello(state: &AppState, connection_id: Uuid, message: &
     let share_ack_paced = capabilities
         .iter()
         .any(|item| item == COMPUTER_SHARE_ACK_CAPABILITY);
+    let platform = bounded(
+        message
+            .get("platform")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown"),
+        50,
+    );
+    let invariants = computer_invariants_for_server_platform();
     let computer = ComputerInfo {
         version: version.clone(),
         protocol_version,
         session_id: session_id.clone(),
         compatible,
-        platform: bounded(
-            message
-                .get("platform")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown"),
-            50,
-        ),
+        platform,
         architecture: bounded(
             message
                 .get("architecture")
@@ -3103,6 +3123,7 @@ async fn handle_computer_hello(state: &AppState, connection_id: Uuid, message: &
                 .get("semanticReady")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+        invariants,
         capabilities,
         windows: sanitize_computer_windows(message.get("windows")),
         share: sanitize_share_status(message.get("share")),
@@ -5701,6 +5722,34 @@ fn computer_share_session_exhausted() -> ApiError {
         "COMPUTER_SHARE_SESSION_EXHAUSTED",
         "This helper session exhausted its fail-closed retired-share budget; reconnect the computer helper to create a new session",
     )
+}
+
+fn computer_invariants_for_server_platform() -> ComputerInvariants {
+    let platform = std::env::consts::OS;
+    let macos = platform == "macos";
+    ComputerInvariants {
+        global_hid_input: false,
+        moves_hardware_cursor: false,
+        // A successful macOS focus-capable action may deliberately make the
+        // exact target AXFrontmost under a private, restored focus lease. The
+        // server publishes that conservative platform fact even if a malformed
+        // helper hello omits or understates its own invariant object.
+        activates_target_application: macos,
+        target_activation_mode: if macos {
+            "may-use-transient-ax-frontmost-focus-lease"
+        } else {
+            "no-explicit-target-activation-api"
+        }
+        .to_owned(),
+        foreground_identity_preserved_before_after: true,
+        hardware_cursor_preserved_before_after: true,
+        uses_ax_raise: false,
+        uses_front_process_switch: false,
+        switches_active_space: false,
+        zero_transient_interruption_guaranteed: false,
+        exact_window_required: true,
+        implicit_foreground_fallback: false,
+    }
 }
 
 fn sanitize_computer_windows(value: Option<&Value>) -> Vec<ComputerWindow> {
@@ -8569,6 +8618,7 @@ mod tests {
                 isolation: "exact-window".to_owned(),
                 input_ready: true,
                 semantic_ready: true,
+                invariants: computer_invariants_for_server_platform(),
                 capabilities: vec!["computer.click".to_owned()],
                 windows: Vec::new(),
                 share: json!({ "active": true, "shareId": "replacement-share" }),
@@ -8736,6 +8786,7 @@ mod tests {
                 isolation: "exact-window".to_owned(),
                 input_ready: true,
                 semantic_ready: true,
+                invariants: computer_invariants_for_server_platform(),
                 capabilities: vec!["computer.click".to_owned()],
                 windows: Vec::new(),
                 share: json!({ "active": true, "id": "old-share" }),
@@ -8968,6 +9019,7 @@ mod tests {
                 isolation: "exact-window".to_owned(),
                 input_ready: true,
                 semantic_ready: true,
+                invariants: computer_invariants_for_server_platform(),
                 capabilities: vec!["computer.click".to_owned()],
                 windows: Vec::new(),
                 share: json!({ "active": true, "id": "old-share" }),

@@ -16,7 +16,7 @@ Everything runs locally through `127.0.0.1`. The server and computer helper are 
 - Optionally observe and operate one exact desktop application window
 - Share that window through native macOS or Windows capture with a requested 1–10 FPS cap
 - Prefer macOS Accessibility or Windows UI Automation before pixel input
-- Preserve the user's foreground window and hardware pointer on supported desktop apps
+- Keep the OS foreground-window identity and hardware pointer unchanged before and after supported desktop actions; macOS may briefly use and restore an Accessibility focus lease
 
 The bridge has no cloud relay, telemetry, silent installer, or silent updater. It does not add shell, filesystem, clipboard, download, or process-launch tools to the computer helper.
 
@@ -31,6 +31,8 @@ browser-based agent -> localhost control page -> Rust server
 The agent must use a browser running on the same computer. A cloud-hosted browser cannot reach your local `127.0.0.1` server.
 
 Use the extension for Chrome and Edge web content. Use the optional helper for one already-open desktop window when that application's background route is supported. A separate Windows login/input seat is a different mode that requires an RDP child session or VM; it is not implied by exact-window sharing.
+
+On macOS, the helper may briefly borrow and restore app focus while leaving the user's foreground window and pointer unchanged at checked boundaries; see [Limitations](docs/LIMITATIONS.md) for details.
 
 ## Requirements
 

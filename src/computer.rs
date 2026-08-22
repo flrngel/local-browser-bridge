@@ -59,6 +59,32 @@ const MAX_CURSOR_DURATION_MS: u64 = 2_000;
 const MAX_SHARE_FPS: u64 = 10;
 const MAX_FRAME_AGE: Duration = Duration::from_secs(3);
 
+#[cfg(target_os = "macos")]
+const TARGET_ACTIVATION_MODE: &str = "may-use-transient-ax-frontmost-focus-lease";
+#[cfg(target_os = "windows")]
+const TARGET_ACTIVATION_MODE: &str = "no-explicit-target-activation-api";
+
+fn computer_invariants() -> Value {
+    json!({
+        "globalHidInput": false,
+        "movesHardwareCursor": false,
+        // macOS focus-capable input deliberately uses and restores a private
+        // AXFrontmost focus lease while keeping WindowServer's user-front
+        // identity unchanged. Do not collapse that into a false "activation"
+        // claim merely because no window is raised or made OS-front.
+        "activatesTargetApplication": cfg!(target_os = "macos"),
+        "targetActivationMode": TARGET_ACTIVATION_MODE,
+        "foregroundIdentityPreservedBeforeAfter": true,
+        "hardwareCursorPreservedBeforeAfter": true,
+        "usesAxRaise": false,
+        "usesFrontProcessSwitch": false,
+        "switchesActiveSpace": false,
+        "zeroTransientInterruptionGuaranteed": false,
+        "exactWindowRequired": true,
+        "implicitForegroundFallback": false,
+    })
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowDescriptor {
@@ -339,13 +365,7 @@ impl ComputerController {
             "semanticReady": platform::semantic_ready(false),
             "capabilities": advertised_capabilities(),
             "windows": windows,
-            "invariants": {
-                "globalHidInput": false,
-                "movesHardwareCursor": false,
-                "activatesTargetApplication": false,
-                "exactWindowRequired": true,
-                "implicitForegroundFallback": false
-            },
+            "invariants": computer_invariants(),
             "pointer": self.cursor.snapshot(self.frame.as_ref()),
             "capture": {
                 "mode": "native-exact-window-stream",
@@ -475,7 +495,8 @@ impl ComputerController {
             "inputReady": platform::input_ready(),
             "semanticReady": semantic_ready,
             "windowCount": windows.len(),
-            "sessionMode": "background-window"
+            "sessionMode": "background-window",
+            "invariants": computer_invariants(),
         })
     }
 
@@ -533,6 +554,7 @@ impl ComputerController {
             "pointer": self.cursor.snapshot(self.frame.as_ref()),
             "share": self.share_status_value(),
             "limitations": platform::limitations(),
+            "invariants": computer_invariants(),
         }))
     }
 

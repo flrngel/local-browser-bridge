@@ -44,6 +44,7 @@ fn dashboard_describes_native_capture_evidence_and_development_builds_honestly()
     assert!(app.contains("native input route unavailable"));
     assert!(!app.contains("input permission required"));
     assert!(app.contains("matching samples cannot rule out a shorter transient change"));
+    assert!(app.contains("May use a transient target AXFrontmost lease"));
     assert!(!app.contains("stay untouched"));
     assert!(app.contains("development: `Development build ahead of stable"));
     assert!(app.contains("Recheck stable release"));
@@ -55,6 +56,7 @@ fn dashboard_describes_native_capture_evidence_and_development_builds_honestly()
     assert!(page.contains("Start persistent share"));
     assert!(page.contains("Share keeps a persistent operating-system exact-window stream open"));
     assert!(page.contains("do not prove zero interruption"));
+    assert!(page.contains("may briefly make the exact target <code>AXFrontmost</code>"));
     assert!(!page.contains("prove non-interrupting delivery"));
 
     assert!(security.contains("best-effort target-routed input"));

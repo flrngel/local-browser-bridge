@@ -1547,6 +1547,33 @@ async fn relays_frame_bound_computer_actions_and_serves_desktop_capture() {
     assert_eq!(state["state"]["computerConnected"], true);
     assert_eq!(state["state"]["computer"]["inputReady"], true);
     assert_eq!(state["state"]["computer"]["semanticReady"], true);
+    assert_eq!(state["state"]["computer"]["platform"], "test-os");
+    #[cfg(target_os = "macos")]
+    {
+        assert_eq!(
+            state["state"]["computer"]["invariants"]["targetActivationMode"],
+            "may-use-transient-ax-frontmost-focus-lease"
+        );
+        assert_eq!(
+            state["state"]["computer"]["invariants"]["activatesTargetApplication"],
+            true
+        );
+    }
+    #[cfg(target_os = "windows")]
+    {
+        assert_eq!(
+            state["state"]["computer"]["invariants"]["targetActivationMode"],
+            "no-explicit-target-activation-api"
+        );
+        assert_eq!(
+            state["state"]["computer"]["invariants"]["activatesTargetApplication"],
+            false
+        );
+    }
+    assert_eq!(
+        state["state"]["computer"]["invariants"]["zeroTransientInterruptionGuaranteed"],
+        false
+    );
     assert_eq!(
         state["state"]["computer"]["capabilities"]
             .as_array()

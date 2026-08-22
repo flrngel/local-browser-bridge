@@ -41,6 +41,8 @@ The optional helper is a separate Rust process. It connects outbound to the loop
 | Captured cursor | System cursor disabled; helper cursor composited into returned frames | Same |
 | Semantic observation/action | macOS Accessibility | Windows UI Automation |
 | Background pixel/key route | Process/window-targeted route using dynamically resolved macOS facilities | UIA plus exact-HWND background messages where the application accepts them |
+| Target-activation disclosure | Focus-capable input may use and restore a transient exact-target `AXFrontmost` lease; no `AXRaise`, OS-front-process switch, or Space switch | No explicit target-activation or foreground API; provider behavior is still checked before/after |
+| Foreground/focus invariant | WindowServer-front process/window and saved user AX state must match before/after; no zero-transient guarantee | Foreground and GUI-thread focus HWNDs must match before/after; no zero-transient guarantee |
 | Automatic foreground fallback | Not included | Not included |
 | Physical pointer movement or global HID input | Not included | Not included |
 

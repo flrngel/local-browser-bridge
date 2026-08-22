@@ -460,6 +460,12 @@ function renderComputer(state) {
   }
 
   const share = computer?.share ?? {};
+  const activationMode = computer?.invariants?.targetActivationMode;
+  const activation = activationMode === "may-use-transient-ax-frontmost-focus-lease"
+    ? "May use a transient target AXFrontmost lease · OS foreground checked before/after"
+    : activationMode === "no-explicit-target-activation-api"
+      ? "No explicit target-activation API · foreground/focus checked before/after"
+      : "Activation behavior unavailable";
   if (share.active) {
     ui["computer-share-fps"].value = String(share.fps);
     const indicator = share.systemIndicator ? " The operating system controls capture indication." : "";
@@ -476,6 +482,7 @@ function renderComputer(state) {
     ["Protocol", computer ? `v${computer.protocolVersion} · helper ${computer.version}` : "—"],
     ["Backend", computer ? `${computer.platform} ${computer.architecture} · ${computer.backend}` : "—"],
     ["Delivery", observation?.deliveryMode || computer?.sessionMode || "—"],
+    ["Activation", computer ? activation : "—"],
     ["Share", share.active ? `${shortId(share.id)} · ${share.captureBackend || "native stream"} · ${share.fps} FPS max · source ${share.sourceSequence ?? 0} / transport ${share.sequence ?? 0}` : "Inactive"],
     ["Isolation", share.active ? "Shared login session · exact-window capture and target-routed input · not a VM" : "—"],
     ["Dropped", share.active ? `${share.sourceDroppedFrames ?? 0} source · ${share.transportDroppedFrames ?? share.droppedFrames ?? 0} transport` : "—"],

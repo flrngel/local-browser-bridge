@@ -134,9 +134,25 @@ The computer helper uses the same negotiated envelope and reports its bounded na
     "computer.share.ack",
     "computer.capture.native-stream.v1",
     "computer.click"
-  ]
+  ],
+  "invariants": {
+    "globalHidInput": false,
+    "movesHardwareCursor": false,
+    "activatesTargetApplication": true,
+    "targetActivationMode": "may-use-transient-ax-frontmost-focus-lease",
+    "foregroundIdentityPreservedBeforeAfter": true,
+    "hardwareCursorPreservedBeforeAfter": true,
+    "usesAxRaise": false,
+    "usesFrontProcessSwitch": false,
+    "switchesActiveSpace": false,
+    "zeroTransientInterruptionGuaranteed": false,
+    "exactWindowRequired": true,
+    "implicitForegroundFallback": false
+  }
 }
 ```
+
+The example is macOS, so `activatesTargetApplication` is intentionally `true`: focus-capable input may temporarily release the saved user's AX state and make the exact target `AXFrontmost=true`, then restore both. `foregroundIdentityPreservedBeforeAfter` refers to WindowServer's OS-front process/window at accepted-action boundaries. The route does not use `AXRaise`, switch the front process, move the hardware cursor, or change Space, and it does not claim zero transient interruption. Windows reports `activatesTargetApplication: false` with `targetActivationMode: no-explicit-target-activation-api`, while still treating its foreground/focus comparison as a before/after observation rather than an atomic guarantee.
 
 The server intersects advertised capabilities with its compiled allowlist and sends `helloAck`. `connected` becomes true only after all three compatibility checks pass:
 
