@@ -206,19 +206,64 @@ function Write-NewJson {
     }
 }
 
+function Get-PathStringComparer {
+    if ([IO.Path]::DirectorySeparatorChar -eq [char]92) {
+        return [StringComparer]::OrdinalIgnoreCase
+    }
+    return [StringComparer]::Ordinal
+}
+
+function Get-RootPreservingFullDirectoryPath {
+    param([string]$Path)
+    $resolved = [IO.Path]::GetFullPath($Path)
+    $fileSystemRoot = [IO.Path]::GetPathRoot($resolved)
+    if ([String]::IsNullOrEmpty($fileSystemRoot)) {
+        throw "Self-test cleanup path does not have a filesystem root."
+    }
+    $pathComparer = Get-PathStringComparer
+    if ($pathComparer.Equals($resolved, $fileSystemRoot)) {
+        return $fileSystemRoot
+    }
+    $directorySeparators = [char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    return $resolved.TrimEnd($directorySeparators)
+}
+
+function Test-IsTruePathNotFoundException {
+    param([Exception]$Exception)
+    $current = $Exception
+    while ($null -ne $current) {
+        if ($current -is [IO.FileNotFoundException] -or $current -is [IO.DirectoryNotFoundException]) {
+            return $true
+        }
+        $current = $current.InnerException
+    }
+    return $false
+}
+
+function Test-ExactPathAbsent {
+    param([string]$Path)
+    try {
+        [void][IO.File]::GetAttributes($Path)
+        return $false
+    }
+    catch {
+        if (Test-IsTruePathNotFoundException $_.Exception) {
+            return $true
+        }
+        throw
+    }
+}
+
 function Resolve-ExactSelfTestCleanupRoot {
     param([string]$Path)
-    $directorySeparators = [char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
-    $resolved = [IO.Path]::GetFullPath($Path).TrimEnd($directorySeparators)
-    $temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd($directorySeparators)
+    $resolved = Get-RootPreservingFullDirectoryPath $Path
+    $temporaryRoot = Get-RootPreservingFullDirectoryPath ([IO.Path]::GetTempPath())
     $parent = [IO.Path]::GetDirectoryName($resolved)
     $name = [IO.Path]::GetFileName($resolved)
-    $pathComparer = if ([IO.Path]::DirectorySeparatorChar -eq [char]92) {
-        [StringComparer]::OrdinalIgnoreCase
+    if (-not [String]::IsNullOrEmpty($parent)) {
+        $parent = Get-RootPreservingFullDirectoryPath $parent
     }
-    else {
-        [StringComparer]::Ordinal
-    }
+    $pathComparer = Get-PathStringComparer
     if ([String]::IsNullOrEmpty($parent) -or -not $pathComparer.Equals($parent, $temporaryRoot) -or
         $name -cnotmatch '^lbb-browser-candidate-[0-9a-f]{32}$') {
         throw "Self-test cleanup refused a path outside its exact temporary fixture scope."
@@ -228,22 +273,29 @@ function Resolve-ExactSelfTestCleanupRoot {
 
 function Remove-ExactSelfTestTreeOnce {
     param([string]$RootPath)
-    if (-not [IO.Directory]::Exists($RootPath)) {
+    if (Test-ExactPathAbsent $RootPath) {
         return
+    }
+    $rootAttributes = [IO.File]::GetAttributes($RootPath)
+    if (($rootAttributes -band [IO.FileAttributes]::Directory) -eq 0) {
+        throw "Self-test cleanup fixture root is not a directory."
     }
     $pending = [Collections.Generic.Stack[string]]::new()
     $directories = [Collections.Generic.List[string]]::new()
     $pending.Push($RootPath)
     while ($pending.Count -gt 0) {
         $directoryPath = $pending.Pop()
-        $directory = [IO.DirectoryInfo]::new($directoryPath)
-        $directory.Refresh()
-        if (-not $directory.Exists) {
+        if (Test-ExactPathAbsent $directoryPath) {
             continue
         }
-        if (($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        $directoryAttributes = [IO.File]::GetAttributes($directoryPath)
+        if (($directoryAttributes -band [IO.FileAttributes]::Directory) -eq 0) {
+            throw "Self-test cleanup encountered a non-directory in its directory inventory."
+        }
+        if (($directoryAttributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
             throw "Self-test cleanup refused a reparse point in its temporary fixture."
         }
+        $directory = [IO.DirectoryInfo]::new($directoryPath)
         [void]$directories.Add($directory.FullName)
         foreach ($entry in $directory.GetFileSystemInfos()) {
             $entry.Refresh()
@@ -265,7 +317,7 @@ function Remove-ExactSelfTestTreeOnce {
     }
     for ($index = $directories.Count - 1; $index -ge 0; $index -= 1) {
         $directoryPath = $directories[$index]
-        if (-not [IO.Directory]::Exists($directoryPath)) {
+        if (Test-ExactPathAbsent $directoryPath) {
             continue
         }
         $attributes = [IO.File]::GetAttributes($directoryPath)
@@ -292,10 +344,10 @@ function Remove-ExactSelfTestDirectory {
         }
         try {
             Remove-ExactSelfTestTreeOnce $rootPath
-            if ([IO.Directory]::Exists($rootPath) -or [IO.File]::Exists($rootPath)) {
-                throw "The exact temporary fixture still exists after cleanup."
+            if (Test-ExactPathAbsent $rootPath) {
+                return
             }
-            return
+            throw "The exact temporary fixture still exists after cleanup."
         }
         catch {
             $lastError = $_
@@ -823,7 +875,21 @@ function Invoke-SelfTest {
     $repositoryPath = [IO.Path]::Combine($root, "repository")
     $releasePath = [IO.Path]::Combine($root, "release")
     $extractedPath = [IO.Path]::Combine($root, "extracted")
+    $fixtureOwned = $false
     try {
+        $fileSystemRoot = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($root))
+        $normalizedFileSystemRoot = Get-RootPreservingFullDirectoryPath $fileSystemRoot
+        if (-not (Get-PathStringComparer).Equals($normalizedFileSystemRoot, $fileSystemRoot)) {
+            throw "Self-test cleanup root-preserving path normalization failed."
+        }
+        if (-not (Test-ExactPathAbsent $root)) {
+            throw "Self-test cleanup missing-path probe failed."
+        }
+        [IO.Directory]::CreateDirectory($root) | Out-Null
+        $fixtureOwned = $true
+        if (Test-ExactPathAbsent $root) {
+            throw "Self-test cleanup existing-path probe failed."
+        }
         [IO.Directory]::CreateDirectory([IO.Path]::Combine($repositoryPath, "extension")) | Out-Null
         [IO.Directory]::CreateDirectory($releasePath) | Out-Null
         [IO.Directory]::CreateDirectory($extractedPath) | Out-Null
@@ -1001,7 +1067,9 @@ function Invoke-SelfTest {
         )
     }
     finally {
-        Remove-ExactSelfTestDirectory $root
+        if ($fixtureOwned) {
+            Remove-ExactSelfTestDirectory $root
+        }
     }
     Write-Output "Browser candidate binding self-test passed."
 }

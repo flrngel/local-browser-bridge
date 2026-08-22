@@ -64,6 +64,15 @@ fn candidate_binder_is_exact_external_and_immutable() {
         "Candidate binding record run nonce is invalid.",
         "candidateBinding = Get-CandidateBindingDomain",
         "Candidate postflight domain does not match its candidate and preflight digest.",
+        "function Get-RootPreservingFullDirectoryPath",
+        "[IO.Path]::GetPathRoot($resolved)",
+        "$pathComparer.Equals($resolved, $fileSystemRoot)",
+        "function Test-IsTruePathNotFoundException",
+        "$current -is [IO.FileNotFoundException]",
+        "$current -is [IO.DirectoryNotFoundException]",
+        "$current = $current.InnerException",
+        "function Test-ExactPathAbsent",
+        "[void][IO.File]::GetAttributes($Path)",
         "function Resolve-ExactSelfTestCleanupRoot",
         "^lbb-browser-candidate-[0-9a-f]{32}$",
         "function Remove-ExactSelfTestTreeOnce",
@@ -73,6 +82,10 @@ fn candidate_binder_is_exact_external_and_immutable() {
         "cleanup-read-only.probe",
         "function Remove-ExactSelfTestDirectory",
         "Remove-ExactSelfTestDirectory $root",
+        "Self-test cleanup root-preserving path normalization failed.",
+        "Self-test cleanup missing-path probe failed.",
+        "Self-test cleanup existing-path probe failed.",
+        "$fixtureOwned = $true",
     ] {
         assert!(
             script.contains(required),
@@ -84,6 +97,41 @@ fn candidate_binder_is_exact_external_and_immutable() {
         !script.contains("[IO.Directory]::Delete($root, $true)"),
         "self-test cleanup must not recursively delete an unvalidated path"
     );
+    let cleanup_functions = script
+        .split("function Get-PathStringComparer")
+        .nth(1)
+        .unwrap()
+        .split("function Invoke-GitText")
+        .next()
+        .unwrap();
+    assert!(
+        !cleanup_functions.contains("[IO.Directory]::Exists")
+            && !cleanup_functions.contains("[IO.File]::Exists"),
+        "cleanup boundaries must use the exception-bearing attribute probe"
+    );
+    let remove_once = cleanup_functions
+        .split("function Remove-ExactSelfTestTreeOnce")
+        .nth(1)
+        .unwrap()
+        .split("function Remove-ExactSelfTestDirectory")
+        .next()
+        .unwrap();
+    assert!(
+        remove_once.find("Test-ExactPathAbsent $RootPath").unwrap()
+            < remove_once.find("$pending.Push($RootPath)").unwrap()
+    );
+    let remove_with_retries = cleanup_functions
+        .split("function Remove-ExactSelfTestDirectory")
+        .nth(1)
+        .unwrap();
+    assert!(
+        remove_with_retries
+            .find("Remove-ExactSelfTestTreeOnce $rootPath")
+            .unwrap()
+            < remove_with_retries
+                .find("Test-ExactPathAbsent $rootPath")
+                .unwrap()
+    );
     let self_test = script
         .split("function Invoke-SelfTest")
         .nth(1)
@@ -91,6 +139,16 @@ fn candidate_binder_is_exact_external_and_immutable() {
         .split("switch ($Mode)")
         .next()
         .unwrap();
+    let root_normalization = self_test
+        .find("Get-RootPreservingFullDirectoryPath $fileSystemRoot")
+        .unwrap();
+    let missing_probe = self_test
+        .find("if (-not (Test-ExactPathAbsent $root))")
+        .unwrap();
+    let create_root = self_test
+        .find("[IO.Directory]::CreateDirectory($root)")
+        .unwrap();
+    let existing_probe = self_test.find("if (Test-ExactPathAbsent $root)").unwrap();
     let read_only_probe = self_test.find("cleanup-read-only.probe").unwrap();
     let exact_cleanup = self_test
         .rfind("Remove-ExactSelfTestDirectory $root")
@@ -98,6 +156,8 @@ fn candidate_binder_is_exact_external_and_immutable() {
     let passed = self_test
         .find("Browser candidate binding self-test passed.")
         .unwrap();
+    assert!(root_normalization < missing_probe);
+    assert!(missing_probe < create_root && create_root < existing_probe);
     assert!(read_only_probe < exact_cleanup && exact_cleanup < passed);
 
     for name in [
