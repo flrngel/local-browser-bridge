@@ -27,8 +27,8 @@ checksum_manifest="$assets_dir/SHA256SUMS.txt"
 
 assets=("$windows_server" "$windows_helper" "$macos_archive" "$extension_archive")
 for asset in "${assets[@]}"; do
-  if [[ ! -s "$asset" ]]; then
-    echo "Missing or empty release asset: $asset" >&2
+  if [[ ! -f "$asset" || -L "$asset" || ! -s "$asset" ]]; then
+    echo "Release asset is missing, empty, linked, or not a regular file: $asset" >&2
     exit 1
   fi
 done
@@ -39,7 +39,7 @@ expected_release_listing="$(printf '%s\n' \
   "$(basename "$macos_archive")" \
   "$(basename "$extension_archive")" \
   "$(basename "$checksum_manifest")" | LC_ALL=C sort)"
-actual_release_listing="$(find "$assets_dir" -mindepth 1 -maxdepth 1 -type f -exec basename {} \; | LC_ALL=C sort)"
+actual_release_listing="$(find "$assets_dir" -mindepth 1 -maxdepth 1 -exec basename {} \; | LC_ALL=C sort)"
 if [[ "$actual_release_listing" != "$expected_release_listing" ]]; then
   echo "Release directory contains an unexpected file set." >&2
   diff -u <(printf '%s\n' "$expected_release_listing") <(printf '%s\n' "$actual_release_listing") || true
@@ -153,8 +153,8 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   test "$("$mac_helper" --version)" = "local-computer-helper $version"
 fi
 
-if [[ ! -s "$checksum_manifest" ]]; then
-  echo "Missing or empty release checksum manifest: $checksum_manifest" >&2
+if [[ ! -f "$checksum_manifest" || -L "$checksum_manifest" || ! -s "$checksum_manifest" ]]; then
+  echo "Release checksum manifest is missing, empty, linked, or not a regular file: $checksum_manifest" >&2
   exit 1
 fi
 expected_checksum_files="$(printf '%s\n' \

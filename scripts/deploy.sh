@@ -5,13 +5,14 @@ project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_root"
 
 version="$(bash scripts/audit-versions.sh)"
+release_stage="$(mktemp -d)"
+trap 'rm -rf "$release_stage"' EXIT
 
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
 
-mkdir -p dist
-extension_output="$project_root/dist/local-browser-bridge-extension-v${version}.zip"
+extension_output="$release_stage/local-browser-bridge-extension-v${version}.zip"
 bash scripts/package-extension.sh "$extension_output" >/dev/null
 
 if [[ "$(uname -s)" == "Darwin" ]] && command -v brew >/dev/null 2>&1; then
@@ -39,8 +40,8 @@ else
   exit 1
 fi
 
-windows_output="dist/local-browser-bridge-v${version}-windows-x86_64.exe"
-windows_helper_output="dist/local-computer-helper-v${version}-windows-x86_64.exe"
+windows_output="$release_stage/local-browser-bridge-v${version}-windows-x86_64.exe"
+windows_helper_output="$release_stage/local-computer-helper-v${version}-windows-x86_64.exe"
 cp "$windows_server_exe" "$windows_output"
 cp "$windows_helper_exe" "$windows_helper_output"
 for output in "$windows_output" "$windows_helper_output"; do
@@ -80,7 +81,7 @@ rustup target add aarch64-apple-darwin x86_64-apple-darwin
 cargo build --locked --release --bins --target aarch64-apple-darwin
 cargo build --locked --release --bins --target x86_64-apple-darwin
 mac_stage="$(mktemp -d)"
-trap 'rm -rf "$mac_stage"' EXIT
+trap 'rm -rf "$release_stage" "$mac_stage"' EXIT
 mkdir -p "$mac_stage/Local Computer Helper.app/Contents/MacOS"
 lipo -create \
   target/aarch64-apple-darwin/release/local-browser-bridge \
@@ -105,27 +106,32 @@ codesign --force --sign - "$mac_stage/local-browser-bridge"
 codesign --verify --strict "$mac_stage/local-browser-bridge"
 codesign --force --deep --sign - "$mac_stage/Local Computer Helper.app"
 codesign --verify --deep --strict "$mac_stage/Local Computer Helper.app"
-mac_output="dist/local-browser-bridge-v${version}-macos-universal.tar.gz"
+mac_output="$release_stage/local-browser-bridge-v${version}-macos-universal.tar.gz"
 COPYFILE_DISABLE=1 tar -czf "$mac_output" -C "$mac_stage" local-browser-bridge "Local Computer Helper.app"
 
-checksum_output="dist/SHA256SUMS.txt"
+checksum_output="$release_stage/SHA256SUMS.txt"
 assets=("$(basename "$windows_output")" "$(basename "$windows_helper_output")" "$(basename "$mac_output")" "$(basename "$extension_output")")
 if command -v sha256sum >/dev/null 2>&1; then
-  (cd dist && sha256sum "${assets[@]}") > "$checksum_output"
-  (cd dist && sha256sum --check SHA256SUMS.txt)
+  (cd "$release_stage" && sha256sum "${assets[@]}") > "$checksum_output"
+  (cd "$release_stage" && sha256sum --check SHA256SUMS.txt)
 else
-  (cd dist && shasum -a 256 "${assets[@]}") > "$checksum_output"
-  (cd dist && shasum -a 256 -c SHA256SUMS.txt)
+  (cd "$release_stage" && shasum -a 256 "${assets[@]}") > "$checksum_output"
+  (cd "$release_stage" && shasum -a 256 -c SHA256SUMS.txt)
 fi
 unzip -tq "$extension_output" >/dev/null
 tar -tzf "$mac_output" | grep -Fxq local-browser-bridge
 tar -tzf "$mac_output" | grep -Fxq "Local Computer Helper.app/Contents/MacOS/local-computer-helper"
-bash scripts/verify-release-assets.sh "$version" dist
+bash scripts/verify-release-assets.sh "$version" "$release_stage"
+
+mkdir -p dist
+for asset in "${assets[@]}" SHA256SUMS.txt; do
+  cp "$release_stage/$asset" "dist/$asset"
+done
 
 echo "Created and verified Local Browser Bridge $version:"
 printf '  %s\n' \
-  "$project_root/$windows_output" \
-  "$project_root/$windows_helper_output" \
-  "$project_root/$mac_output" \
-  "$extension_output" \
-  "$project_root/$checksum_output"
+  "$project_root/dist/$(basename "$windows_output")" \
+  "$project_root/dist/$(basename "$windows_helper_output")" \
+  "$project_root/dist/$(basename "$mac_output")" \
+  "$project_root/dist/$(basename "$extension_output")" \
+  "$project_root/dist/$(basename "$checksum_output")"

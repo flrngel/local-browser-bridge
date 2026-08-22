@@ -49,6 +49,11 @@ fn release_workflow_and_local_builder_package_both_processes() {
     }
     assert!(workflow.contains("cargo build --locked --release --bins"));
     assert!(local.contains("cargo xwin build --locked --release --bins"));
+    assert!(local.contains("release_stage=\"$(mktemp -d)\""));
+    assert!(
+        local.contains("bash scripts/verify-release-assets.sh \"$version\" \"$release_stage\"")
+    );
+    assert!(local.contains("cp \"$release_stage/$asset\" \"dist/$asset\""));
 }
 
 #[test]
@@ -85,7 +90,11 @@ fn release_gates_javascript_macos_and_published_provenance() {
         );
     }
 
-    assert!(verifier.contains("Missing or empty release checksum manifest"));
+    assert!(
+        verifier
+            .contains("Release checksum manifest is missing, empty, linked, or not a regular file")
+    );
+    assert!(verifier.contains("Release asset is missing, empty, linked, or not a regular file"));
     assert!(verifier.contains("Release directory contains an unexpected file set."));
     assert!(!verifier.contains("if [[ -f \"$checksum_manifest\" ]]"));
 
