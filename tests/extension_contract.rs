@@ -174,7 +174,7 @@ fn extension_executes_no_remote_code_or_update_client() {
     let source = EXTENSION_FILES
         .iter()
         .filter(|file| file.ends_with(".js") || file.ends_with(".html"))
-        .map(|file| extension_source(file))
+        .map(extension_source)
         .collect::<Vec<_>>()
         .join("\n");
     for forbidden in [
