@@ -1,0 +1,165 @@
+2026-08-22T18:28:44.398Z PASS macOS host: Darwin
+2026-08-22T18:28:44.399Z PASS expected checksum-manifest hash format: 64 lowercase hexadecimal characters
+2026-08-22T18:28:44.399Z PASS canonical checksum-manifest name: SHA256SUMS.txt
+2026-08-22T18:28:44.399Z PASS exact archive name: local-browser-bridge-v0.12.2-macos-universal.tar.gz
+2026-08-22T18:28:44.408Z PASS out-of-band checksum-manifest hash matches: f675892323b816dc30d4df42f467e1128efc247c5a6d0db4b218f67e14b5c700
+2026-08-22T18:28:44.409Z PASS checksum manifest has the exact canonical four-entry set: local-browser-bridge-v0.12.2-windows-x86_64.exe,local-computer-helper-v0.12.2-windows-x86_64.exe,local-browser-bridge-v0.12.2-macos-universal.tar.gz,local-browser-bridge-extension-v0.12.2.zip
+2026-08-22T18:28:44.409Z PASS archive checksum is bound by the canonical manifest: 063596241accc544c7e552eb7c8436590e36bf0be02757100c2bec84d0718511
+2026-08-22T18:28:44.430Z PASS archive paths are traversal-safe: 10 safe entries
+2026-08-22T18:28:44.451Z PASS archive contains only regular files and directories: no links or special filesystem entries
+2026-08-22T18:28:44.451Z PASS archive contains exact server: local-browser-bridge
+2026-08-22T18:28:44.451Z PASS archive contains exact helper: Local Computer Helper.app/Contents/MacOS/local-computer-helper
+2026-08-22T18:28:44.480Z PASS supplied server is archive-exact: 6c3ecb9197a18383beeba3c8be766a4724798ec207b104447de95be58357388c
+2026-08-22T18:28:44.482Z PASS supplied helper is archive-exact: cad11aec73feb5a50f1f14ba75731fad69b420dc005734704c7e58e4a03ecbc2
+2026-08-22T18:28:44.494Z PASS server universal architecture: arm64,x86_64
+2026-08-22T18:28:44.494Z PASS helper universal architecture: arm64,x86_64
+2026-08-22T18:28:44.494Z PASS helper uses packaged app layout: Local Computer Helper.app
+2026-08-22T18:28:44.517Z PASS strict code-signature verification: server, helper executable, and helper app bundle passed strict verification
+2026-08-22T18:28:44.525Z PASS helper bundle version: 0.12.2/0.12.2
+2026-08-22T18:28:44.529Z PASS server version: 0.12.2
+2026-08-22T18:28:44.534Z PASS helper version: 0.12.2
+2026-08-22T18:28:45.403Z PASS screen-capture permission preflight: preexisting permission; no request was made
+2026-08-22T18:28:45.403Z PASS accessibility permission preflight: preexisting permission; no request was made
+2026-08-22T18:28:45.403Z PASS active Space probe available: nonzero active Space identity
+2026-08-22T18:28:45.403Z PASS sandwiched foreground AX focus probe available: stable NSWorkspace/raw PSN plus exact AX focused/main-window identities are available
+2026-08-22T18:28:45.915Z PASS fixture process identity: state belongs to the spawned fixture
+2026-08-22T18:28:46.081Z PASS startup same-PID sibling is the target app's remembered receiver: sibling-main-and-focused=true, fixture-background=true
+2026-08-22T18:28:46.409Z PASS packaged helper compatible: protocol-compatible helper 0.12.2
+2026-08-22T18:28:46.409Z PASS single helper spawn: 1 packaged helper process
+2026-08-22T18:28:46.409Z PASS acknowledged share advertised: computer.share.ack present
+2026-08-22T18:28:46.409Z PASS native stream advertised: computer.capture.native-stream.v1 present
+2026-08-22T18:28:46.574Z PASS helper status backend: background-window/ax+skylight+screencapturekit-stream
+2026-08-22T18:28:46.574Z PASS background shared-session mode: background-window/shared-user-session/target-routed
+2026-08-22T18:28:46.574Z PASS background input backend ready: target-routed input is ready
+2026-08-22T18:28:46.574Z PASS semantic backend ready: macos-accessibility is ready without prompting
+2026-08-22T18:28:46.574Z PASS fixture exact window discovered: 1 matching windows
+2026-08-22T18:28:46.574Z PASS genuine same-PID sibling window discovered: 1 sibling matches, distinct=true
+2026-08-22T18:28:46.574Z PASS fixture is a background target: neither same-PID fixture window owns the user's foreground process or front window
+2026-08-22T18:28:46.800Z PASS exact fixture window observed: 1209x826
+2026-08-22T18:28:46.800Z PASS semantic snapshot available: 4 elements
+2026-08-22T18:28:46.803Z PASS semantic value element discovered: AXTextField
+2026-08-22T18:28:47.887Z PASS semantic setValue confirmed: Confirmed/value-confirmed
+2026-08-22T18:28:47.887Z PASS semantic setValue non-interruption invariants: {"cursorUnchanged":true,"foregroundUnchanged":true,"spaceUnchanged":true,"userFocusUnchanged":true}
+2026-08-22T18:28:48.109Z PASS semantic setValue screenshot changed: fresh exact-window pixels differ from the pre-action observation
+2026-08-22T18:28:48.109Z PASS semantic action element discovered: AXButton
+2026-08-22T18:28:49.224Z PASS semantic invoke target-side proof: fixture semantic counter advanced to 1
+2026-08-22T18:28:49.224Z PASS semantic invoke conservatively classified: Partial/element-state-changed
+2026-08-22T18:28:49.224Z PASS semantic invoke non-interruption invariants: {"cursorUnchanged":true,"foregroundUnchanged":true,"spaceUnchanged":true,"userFocusUnchanged":true}
+2026-08-22T18:28:49.420Z PASS semantic invoke screenshot changed: fresh exact-window pixels differ from the setValue stage
+2026-08-22T18:28:50.202Z PASS persistent live share started: persistent-native-stream/exact-window
+2026-08-22T18:28:50.202Z PASS SCStream start metadata: macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window
+2026-08-22T18:28:50.202Z PASS live share ack pacing: latest-frame-wins, ackPaced=true
+2026-08-22T18:28:50.202Z PASS live share cursor policy: system cursor excluded; synthetic session pointer composited
+2026-08-22T18:28:50.518Z PASS persistent-share screenshot is fresh: sourceSequence=3
+2026-08-22T18:28:50.970Z PASS same-PID sibling is remembered before primary pixel dispatch: sibling-main-and-focused=true, sibling-state-clean=true
+2026-08-22T18:28:53.520Z PASS exact active target receiver observed during pixel lease: active-target=true, exact-main-and-focused=true, saved-user-owner=true
+2026-08-22T18:28:53.595Z PASS background pixel click targets only primary and restores sibling receiver: only the primary click counter advanced and the target app's prior sibling receiver was restored
+2026-08-22T18:28:53.595Z PASS pixel click conservatively classified: Unverifiable
+2026-08-22T18:28:53.595Z PASS pixel action bound to persistent share: share=true, source=8
+2026-08-22T18:28:53.595Z PASS live-share pixel click non-interruption invariants: {"cursorUnchanged":true,"foregroundUnchanged":true,"spaceUnchanged":true,"userFocusUnchanged":true}
+2026-08-22T18:28:53.659Z PASS same-PID pixel routing preserves user foreground/focus/cursor/Space: {"foregroundUnchanged":true,"userFocusUnchanged":true,"foregroundIdentitySandwichHeld":true,"rawForegroundIdentitySandwichHeld":true,"foregroundAxFocusUnchanged":true,"foregroundAxFrontmostHeld":true,"cursorUnchanged":true,"spaceUnchanged":true}
+2026-08-22T18:28:53.762Z PASS native source remained live during input: source +28/drop +27; transport +3
+2026-08-22T18:28:53.762Z PASS settled synthetic pointer published: action=click
+2026-08-22T18:28:53.765Z PASS live-share action screenshot changed: fresh exact-window pixels include the action stage
+2026-08-22T18:28:54.757Z PASS persistent share survived exact-target resize: 720x492 -> 820x552
+2026-08-22T18:28:54.757Z PASS settled resize frame matches exact-window geometry: window=820x552, image=1218x820
+2026-08-22T18:28:54.760Z PASS resize screenshot dimensions match settled observation: 1218x820
+2026-08-22T18:28:54.760Z PASS resize screenshot geometry changed: 1209x826 -> 1218x820
+2026-08-22T18:28:56.974Z PASS post-resize pixel click target-side proof: only the exact fixture click counter changed functional state after resize
+2026-08-22T18:28:56.974Z PASS post-resize action bound to settled persistent share: frame=true, share=true, source=49
+2026-08-22T18:28:56.974Z PASS post-resize pixel click conservatively classified: Unverifiable
+2026-08-22T18:28:56.974Z PASS post-resize pixel click non-interruption invariants: {"cursorUnchanged":true,"foregroundUnchanged":true,"spaceUnchanged":true,"userFocusUnchanged":true}
+2026-08-22T18:28:57.046Z PASS post-resize independent foreground/focus/cursor/Space invariants: {"foregroundUnchanged":true,"userFocusUnchanged":true,"foregroundIdentitySandwichHeld":true,"rawForegroundIdentitySandwichHeld":true,"foregroundAxFocusUnchanged":true,"foregroundAxFrontmostHeld":true,"cursorUnchanged":true,"spaceUnchanged":true}
+2026-08-22T18:28:57.254Z PASS post-resize action retained resized exact-window stream: window=820x552, image=1218x820
+2026-08-22T18:28:57.396Z PASS same-PID sibling is the prior receiver before text preparation: sibling-main-and-focused=true, sibling-state-clean=true
+2026-08-22T18:28:57.572Z PASS background fixture field prepared without mutation while sibling remains prior receiver: the primary responder was prepared, the sibling was restored internally, and no target field mutated
+2026-08-22T18:28:57.641Z PASS field preparation foreground/focus/cursor/Space invariants: {"foregroundUnchanged":true,"userFocusUnchanged":true,"foregroundIdentitySandwichHeld":true,"rawForegroundIdentitySandwichHeld":true,"foregroundAxFocusUnchanged":true,"foregroundAxFrontmostHeld":true,"cursorUnchanged":true,"spaceUnchanged":true}
+2026-08-22T18:28:57.783Z PASS same-PID sibling remains the exact prior receiver immediately before text request: sibling-main-and-focused=true
+2026-08-22T18:28:59.613Z PASS native typeText exact fixture read-back with zero sibling mutation: appended 20 ASCII characters only to the primary field and restored the prior sibling receiver
+2026-08-22T18:28:59.613Z PASS native typeText bounded product result: Unverifiable/exact-window-background, characters=20, utf16=20
+2026-08-22T18:28:59.613Z PASS native typeText non-interruption invariants: {"cursorUnchanged":true,"foregroundUnchanged":true,"spaceUnchanged":true,"userFocusUnchanged":true}
+2026-08-22T18:28:59.680Z PASS native typeText independent foreground/focus/cursor/Space invariants: {"foregroundUnchanged":true,"userFocusUnchanged":true,"foregroundIdentitySandwichHeld":true,"rawForegroundIdentitySandwichHeld":true,"foregroundAxFocusUnchanged":true,"foregroundAxFrontmostHeld":true,"cursorUnchanged":true,"spaceUnchanged":true}
+2026-08-22T18:28:59.977Z PASS native text restore element discovered: AXTextField
+2026-08-22T18:29:00.835Z PASS native text fixture value restored: Confirmed/value-confirmed
+2026-08-22T18:29:00.835Z PASS native text restore non-interruption invariants: {"cursorUnchanged":true,"foregroundUnchanged":true,"spaceUnchanged":true,"userFocusUnchanged":true}
+2026-08-22T18:29:00.835Z PASS native text restore exact fixture state: only the deterministic semantic value was restored
+2026-08-22T18:29:01.042Z PASS persistent share sample count: 10 distinct transport frames
+2026-08-22T18:29:01.042Z PASS one persistent share authority: 1 share IDs
+2026-08-22T18:29:01.042Z PASS share-initial native stream metadata: macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window
+2026-08-22T18:29:01.042Z PASS share-initial ack pacing metadata: ack=true, backpressure=latest-frame-wins
+2026-08-22T18:29:01.042Z PASS share-cadence-1 native stream metadata: macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window
+2026-08-22T18:29:01.042Z PASS share-cadence-1 ack pacing metadata: ack=true, backpressure=latest-frame-wins
+2026-08-22T18:29:01.042Z PASS share-cadence-2 native stream metadata: macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window
+2026-08-22T18:29:01.042Z PASS share-cadence-2 ack pacing metadata: ack=true, backpressure=latest-frame-wins
+2026-08-22T18:29:01.042Z PASS share-after-long-action native stream metadata: macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window
+2026-08-22T18:29:01.042Z PASS share-after-long-action ack pacing metadata: ack=true, backpressure=latest-frame-wins
+2026-08-22T18:29:01.042Z PASS share-after-resize native stream metadata: macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window
+2026-08-22T18:29:01.042Z PASS share-after-resize ack pacing metadata: ack=true, backpressure=latest-frame-wins
+2026-08-22T18:29:01.042Z PASS share-resize-settled native stream metadata: macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window
+2026-08-22T18:29:01.042Z PASS share-resize-settled ack pacing metadata: ack=true, backpressure=latest-frame-wins
+2026-08-22T18:29:01.042Z PASS share-post-resize-cadence native stream metadata: macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window
+2026-08-22T18:29:01.042Z PASS share-post-resize-cadence ack pacing metadata: ack=true, backpressure=latest-frame-wins
+2026-08-22T18:29:01.042Z PASS share-after-post-resize-action native stream metadata: macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window
+2026-08-22T18:29:01.042Z PASS share-after-post-resize-action ack pacing metadata: ack=true, backpressure=latest-frame-wins
+2026-08-22T18:29:01.042Z PASS share-after-native-text-focus native stream metadata: macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window
+2026-08-22T18:29:01.042Z PASS share-after-native-text-focus ack pacing metadata: ack=true, backpressure=latest-frame-wins
+2026-08-22T18:29:01.042Z PASS share-after-native-text-restore native stream metadata: macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window
+2026-08-22T18:29:01.042Z PASS share-after-native-text-restore ack pacing metadata: ack=true, backpressure=latest-frame-wins
+2026-08-22T18:29:01.042Z PASS share-cadence-1 independent sequences advance: source 3->6, transport 1->2
+2026-08-22T18:29:01.042Z PASS share-cadence-1 drop counters are monotonic: source-drop 3->4, transport-drop 0->0
+2026-08-22T18:29:01.042Z PASS share-cadence-1 previous frame was acknowledged: previous=1, ack=1, current=2
+2026-08-22T18:29:01.042Z PASS share-cadence-2 independent sequences advance: source 6->8, transport 2->3
+2026-08-22T18:29:01.042Z PASS share-cadence-2 drop counters are monotonic: source-drop 4->5, transport-drop 0->0
+2026-08-22T18:29:01.042Z PASS share-cadence-2 previous frame was acknowledged: previous=2, ack=2, current=3
+2026-08-22T18:29:01.042Z PASS share-after-long-action independent sequences advance: source 8->36, transport 3->6
+2026-08-22T18:29:01.042Z PASS share-after-long-action drop counters are monotonic: source-drop 5->32, transport-drop 0->0
+2026-08-22T18:29:01.042Z PASS share-after-long-action previous frame was acknowledged: previous=3, ack=5, current=6
+2026-08-22T18:29:01.042Z PASS share-after-resize independent sequences advance: source 36->44, transport 6->8
+2026-08-22T18:29:01.042Z PASS share-after-resize drop counters are monotonic: source-drop 32->36, transport-drop 0->0
+2026-08-22T18:29:01.042Z PASS share-after-resize previous frame was acknowledged: previous=6, ack=7, current=8
+2026-08-22T18:29:01.042Z PASS share-resize-settled independent sequences advance: source 44->46, transport 8->9
+2026-08-22T18:29:01.042Z PASS share-resize-settled drop counters are monotonic: source-drop 36->37, transport-drop 0->0
+2026-08-22T18:29:01.042Z PASS share-resize-settled previous frame was acknowledged: previous=8, ack=8, current=9
+2026-08-22T18:29:01.042Z PASS share-post-resize-cadence independent sequences advance: source 46->49, transport 9->11
+2026-08-22T18:29:01.042Z PASS share-post-resize-cadence drop counters are monotonic: source-drop 37->39, transport-drop 0->0
+2026-08-22T18:29:01.042Z PASS share-post-resize-cadence previous frame was acknowledged: previous=9, ack=9, current=11
+2026-08-22T18:29:01.042Z PASS share-after-post-resize-action independent sequences advance: source 49->70, transport 11->15
+2026-08-22T18:29:01.042Z PASS share-after-post-resize-action drop counters are monotonic: source-drop 39->56, transport-drop 0->1
+2026-08-22T18:29:01.042Z PASS share-after-post-resize-action previous frame was acknowledged: previous=11, ack=14, current=15
+2026-08-22T18:29:01.042Z PASS share-after-native-text-focus independent sequences advance: source 70->73, transport 15->16
+2026-08-22T18:29:01.042Z PASS share-after-native-text-focus drop counters are monotonic: source-drop 56->58, transport-drop 1->1
+2026-08-22T18:29:01.042Z PASS share-after-native-text-focus previous frame was acknowledged: previous=15, ack=15, current=16
+2026-08-22T18:29:01.042Z PASS share-after-native-text-restore independent sequences advance: source 73->109, transport 16->22
+2026-08-22T18:29:01.042Z PASS share-after-native-text-restore drop counters are monotonic: source-drop 58->88, transport-drop 1->1
+2026-08-22T18:29:01.042Z PASS share-after-native-text-restore previous frame was acknowledged: previous=16, ack=21, current=22
+2026-08-22T18:29:01.233Z PASS share status remains native and ack paced: macos-screencapturekit-scstream, source=111, transport=23
+2026-08-22T18:29:01.233Z PASS share status drop domains retained: source-drop=89, transport-drop=1
+2026-08-22T18:29:01.233Z PASS cancellation starts from a current resized share frame: share=true, source=109, screenshot-bound=true
+2026-08-22T18:29:01.306Z PASS bounded fixture mouse-move instrumentation ready: baseline=61
+2026-08-22T18:29:01.710Z PASS cancellation waits for target-routed native move delivery: moveEvents=61->66, wait=404ms
+2026-08-22T18:29:01.712Z PASS exact duplicate observes one causally dispatched product action: HTTP 409, CALL_IN_PROGRESS
+2026-08-22T18:29:01.713Z PASS authenticated exact-call cancellation accepted: HTTP 202, requested=true
+2026-08-22T18:29:01.713Z PASS canceled original reports conservative outcome unknown: HTTP 504, COMMAND_OUTCOME_UNKNOWN/outcome_unknown, elapsed=407ms
+2026-08-22T18:29:01.714Z PASS completed call cannot be canceled twice: HTTP 409, CALL_NOT_IN_PROGRESS
+2026-08-22T18:29:01.716Z PASS exact canceled call replays without redispatch: HTTP 504, replayed=true
+2026-08-22T18:29:01.717Z PASS changed command cannot reuse canceled call identity: HTTP 409, CALL_ID_REUSED/invalid_request
+2026-08-22T18:29:01.719Z PASS cancellation fail-closed state names the exact-session revocation: outcome-unknown/COMMAND_OUTCOME_UNKNOWN
+2026-08-22T18:29:01.720Z PASS cancellation tears down the computer screenshot surface: HTTP 404, NO_COMPUTER_SCREENSHOT
+2026-08-22T18:29:02.023Z PASS canceled share surface stays torn down: no queued SCStream frame republished authority after cancellation
+2026-08-22T18:29:02.025Z PASS post-cancellation share stop is idempotently fail-closed: false/false/not-active
+2026-08-22T18:29:02.025Z PASS explicit stop preserves surface teardown: computer observation, screenshot, pointer, and share authority remain unavailable
+2026-08-22T18:29:02.027Z PASS revoked authority gates pre-recovery mutations before helper relay: HTTP 409, NO_COMPUTER_FRAME/stale_snapshot/reobserve
+2026-08-22T18:29:02.028Z PASS gated old-frame action cannot recreate a computer surface: no frame, screenshot, pointer, or share authority was republished
+2026-08-22T18:29:02.259Z PASS explicit one-shot observation recovers exact-session authority: session-preserved=true, fresh-frame=true
+2026-08-22T18:29:02.260Z PASS pre-cancellation frame stays stale after explicit recovery: HTTP 409, COMPUTER_STALE_FRAME/stale_snapshot/reobserve
+2026-08-22T18:29:02.261Z PASS rejected stale action preserves the recovered exact frame: the old frame was refused without replacing or revoking the recovered one-shot frame
+2026-08-22T18:29:02.261Z PASS fixture final state: {"clicks":2,"semanticPresses":1,"semanticValueMatchesExpected":true,"resizeCount":1,"focusCount":1,"siblingFocusCount":1,"siblingTextLength":0,"siblingClicks":0,"distinctSamePidWindows":true,"moveEvents":66,"appliedControlSequence":2,"contentWidth":820,"contentHeight":520}
+2026-08-22T18:29:02.261Z PASS canceled move, gated refusal, recovery, and stale refusal caused no functional fixture mutation: functional fixture state stayed exact; only bounded move-delivery instrumentation advanced
+2026-08-22T18:29:02.335Z PASS final same-PID receiver main and focus are restored before target close: sibling-main-and-focused=true
+2026-08-22T18:29:02.401Z PASS cancellation/stop foreground/focus/cursor/Space invariants: {"foregroundUnchanged":true,"userFocusUnchanged":true,"foregroundIdentitySandwichHeld":true,"rawForegroundIdentitySandwichHeld":true,"foregroundAxFocusUnchanged":true,"foregroundAxFrontmostHeld":true,"cursorUnchanged":true,"spaceUnchanged":true}
+2026-08-22T18:29:02.401Z PASS every retained screenshot is bound only to the primary exact window: 6 primary-only screenshot records; sibling excluded=true
+2026-08-22T18:29:03.340Z FATAL computer.share.start returned HTTP 502: COMPUTER_INVALID_OBSERVATION Computer observation carried revoked or unapproved share authority; explicitly observe a one-shot frame or start a fresh share
+2026-08-22T18:29:03.344Z helper stopped
+2026-08-22T18:29:03.346Z server stopped
+2026-08-22T18:29:03.349Z fixture stopped
+2026-08-22T18:29:03.351Z scratch directory removed
