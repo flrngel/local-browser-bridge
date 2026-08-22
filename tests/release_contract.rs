@@ -129,7 +129,8 @@ fn release_gates_javascript_macos_and_published_provenance() {
         "X-GitHub-Api-Version: 2026-03-10",
         "--jq '.enabled'",
         "--source-ref \"$GITHUB_REF\"",
-        "--source-digest \"${{ needs.verify.outputs.source_sha }}\"",
+        "VERIFIED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}",
+        "--source-digest \"$VERIFIED_SOURCE_SHA\"",
         "--signer-workflow \"$GITHUB_REPOSITORY/.github/workflows/deploy.yml\"",
         "--deny-self-hosted-runners",
         "Re-download and verify the immutable published release",
@@ -174,6 +175,35 @@ fn release_gates_javascript_macos_and_published_provenance() {
     let approval = release.find("environment:\n      name: release").unwrap();
     assert!(freeze < approval);
     assert!(approval < publish);
+}
+
+#[test]
+fn workflows_disable_persisted_credentials_and_automatic_package_caches() {
+    for path in [".github/workflows/ci.yml", ".github/workflows/deploy.yml"] {
+        let workflow = source(path);
+        assert_eq!(
+            workflow.matches("actions/checkout@").count(),
+            workflow.matches("persist-credentials: false").count(),
+            "every checkout in {path} must drop its injected Git credentials"
+        );
+        assert_eq!(
+            workflow.matches("actions/setup-node@").count(),
+            workflow.matches("package-manager-cache: false").count(),
+            "every Node setup in {path} must disable automatic package caching"
+        );
+    }
+
+    let release = source(".github/workflows/deploy.yml");
+    for forbidden in [
+        "--source-digest \"${{",
+        "= \"${{ needs.verify.outputs.tag_sha }}\"",
+        "= \"${{ needs.verify.outputs.version }}\"",
+    ] {
+        assert!(
+            !release.contains(forbidden),
+            "release shell code contains direct template expansion: {forbidden}"
+        );
+    }
 }
 
 #[test]

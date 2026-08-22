@@ -23,9 +23,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24
+          package-manager-cache: false
       - name: Install the minimum supported Rust toolchain
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
@@ -48,9 +51,12 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24
+          package-manager-cache: false
       - name: Install the minimum supported Rust toolchain
         shell: pwsh
         run: |
@@ -90,9 +96,12 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24
+          package-manager-cache: false
       - name: Install the minimum supported Rust toolchain
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
@@ -108,9 +117,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24
+          package-manager-cache: false
       - name: Install the minimum supported Rust toolchain
         run: |
           rustup toolchain install 1.88.0 --profile minimal
@@ -125,6 +137,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Check packaging scripts and versions
         shell: bash
         run: |

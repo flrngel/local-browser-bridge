@@ -29,9 +29,11 @@ jobs:
         with:
           ref: ${{ env.SOURCE_REF }}
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24
+          package-manager-cache: false
       - name: Install the minimum supported Rust toolchain
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
@@ -71,15 +73,17 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: read
-      id-token: write
-      attestations: write
+      id-token: write # Required by actions/attest-build-provenance.
+      attestations: write # Publishes provenance for the exact Windows binaries.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.source_sha }}
+          persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24
+          package-manager-cache: false
       - name: Install the minimum supported Rust toolchain
         shell: pwsh
         run: |
@@ -93,11 +97,13 @@ jobs:
           cargo clippy --locked --target x86_64-pc-windows-msvc --all-targets -- -D warnings
           cargo test --locked --target x86_64-pc-windows-msvc --all-targets
       - name: Build and verify the standalone executables
+        env:
+          VERIFIED_VERSION: ${{ needs.verify.outputs.version }}
         shell: pwsh
         run: |
           cargo build --locked --release --bins --target x86_64-pc-windows-msvc
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"$').Matches[0].Groups[1].Value
-          if ($version -ne "${{ needs.verify.outputs.version }}") { throw "Source version changed after verification" }
+          if ($version -ne $env:VERIFIED_VERSION) { throw "Source version changed after verification" }
           New-Item -ItemType Directory -Force dist | Out-Null
           $server = "dist/local-browser-bridge-v${version}-windows-x86_64.exe"
           $helper = "dist/local-computer-helper-v${version}-windows-x86_64.exe"
@@ -120,15 +126,17 @@ jobs:
     runs-on: macos-14
     permissions:
       contents: read
-      id-token: write
-      attestations: write
+      id-token: write # Required by actions/attest-build-provenance.
+      attestations: write # Publishes provenance for the exact macOS archive.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.source_sha }}
+          persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24
+          package-manager-cache: false
       - name: Install the minimum supported Rust toolchain and targets
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
@@ -195,12 +203,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
-      attestations: write
+      id-token: write # Required by actions/attest-build-provenance.
+      attestations: write # Publishes provenance for the exact extension archive.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.source_sha }}
+          persist-credentials: false
       - name: Package and verify the exact extension file set
         shell: bash
         run: |
@@ -222,13 +231,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
-      attestations: write
+      id-token: write # Required to attest the checksum manifest.
+      attestations: write # Publishes provenance for the checksum manifest.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.source_sha }}
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
@@ -253,6 +263,7 @@ jobs:
       - name: Verify every GitHub build attestation before freezing the candidate
         env:
           GH_TOKEN: ${{ github.token }}
+          VERIFIED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
         shell: bash
         run: |
           verify_attestation() {
@@ -261,7 +272,7 @@ jobs:
               if gh attestation verify "$subject" \
                 --repo "$GITHUB_REPOSITORY" \
                 --source-ref "$GITHUB_REF" \
-                --source-digest "${{ needs.verify.outputs.source_sha }}" \
+                --source-digest "$VERIFIED_SOURCE_SHA" \
                 --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/deploy.yml" \
                 --deny-self-hosted-runners; then
                 return 0
@@ -288,14 +299,15 @@ jobs:
     environment:
       name: release
     permissions:
-      contents: write
-      id-token: write
-      attestations: write
+      contents: write # Creates the immutable release and uploads accepted assets.
+      id-token: write # Required to verify GitHub artifact attestations.
+      attestations: write # Required by the attestation verification service.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.source_sha }}
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-candidate
@@ -313,6 +325,7 @@ jobs:
       - name: Re-verify the frozen candidate and every build attestation
         env:
           GH_TOKEN: ${{ github.token }}
+          VERIFIED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
         shell: bash
         run: |
           version="${RELEASE_TAG#v}"
@@ -323,7 +336,7 @@ jobs:
               if gh attestation verify "$subject" \
                 --repo "$GITHUB_REPOSITORY" \
                 --source-ref "$GITHUB_REF" \
-                --source-digest "${{ needs.verify.outputs.source_sha }}" \
+                --source-digest "$VERIFIED_SOURCE_SHA" \
                 --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/deploy.yml" \
                 --deny-self-hosted-runners; then
                 return 0
@@ -338,13 +351,14 @@ jobs:
       - name: Publish immutable release assets
         env:
           GH_TOKEN: ${{ github.token }}
+          VERIFIED_TAG_SHA: ${{ needs.verify.outputs.tag_sha }}
         shell: bash
         run: |
           version="${RELEASE_TAG#v}"
           test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$(git rev-parse HEAD)"
-          test "$(git rev-parse "$RELEASE_TAG")" = "${{ needs.verify.outputs.tag_sha }}"
+          test "$(git rev-parse "$RELEASE_TAG")" = "$VERIFIED_TAG_SHA"
           remote_tag_sha="$(git ls-remote --refs origin "refs/tags/$RELEASE_TAG" | awk '{ print $1 }')"
-          test "$remote_tag_sha" = "${{ needs.verify.outputs.tag_sha }}"
+          test "$remote_tag_sha" = "$VERIFIED_TAG_SHA"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             echo "A release already exists for $RELEASE_TAG; refusing to overwrite immutable assets." >&2
             exit 1
@@ -377,6 +391,7 @@ jobs:
       - name: Re-download and verify the immutable published release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERIFIED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
         shell: bash
         run: |
           version="${RELEASE_TAG#v}"
@@ -401,7 +416,7 @@ jobs:
             gh attestation verify "$subject" \
               --repo "$GITHUB_REPOSITORY" \
               --source-ref "$GITHUB_REF" \
-              --source-digest "${{ needs.verify.outputs.source_sha }}" \
+              --source-digest "$VERIFIED_SOURCE_SHA" \
               --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/deploy.yml" \
               --deny-self-hosted-runners
           done
