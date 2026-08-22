@@ -92,7 +92,7 @@ If macOS opens System Settings, enable **Local Computer Helper** under **Privacy
 ./Local\ Computer\ Helper.app/Contents/MacOS/local-computer-helper
 ```
 
-The permission check reports `screenCaptureReady`, pixel `inputReady`, and `semanticReady` separately. If `semanticReady` is false, screenshots and supported pixel routes can still work, but semantic element refs are deliberately omitted until Accessibility is granted.
+The permission check reports `screenCaptureReady`, `inputReady`, and `semanticReady` separately. Screenshots can work while Accessibility is unavailable, but `inputReady` stays false because ordinary click, drag, scroll, key, and text routes may need the AX-backed exact-window focus lease. Semantic element refs are also omitted until Accessibility is granted. Pointer trajectory has a no-focus implementation, but readiness advertises the requirements of the complete input backend rather than a partial exception.
 
 Live sharing uses a ScreenCaptureKit stream for the exact window chosen in the bridge control page. The operating system can show its current capture indicator and Stop affordance, but the helper does not present Apple's system content picker. The target must be on screen, non-minimized, and have a nonzero area when the share starts.
 

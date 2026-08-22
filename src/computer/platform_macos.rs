@@ -3,9 +3,15 @@ use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use core_foundation::base::{CFGetTypeID, CFTypeRef, TCFType};
+use core_foundation::boolean::CFBoolean;
+use core_foundation::dictionary::CFDictionary;
+use core_foundation::number::CFNumber;
+use core_foundation::string::CFString;
 use core_graphics::event::{CGEvent, CGEventFlags, CGEventType, CGMouseButton, ScrollEventUnit};
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use core_graphics::geometry::CGPoint;
+use core_graphics::window::{copy_window_info, kCGNullWindowID, kCGWindowListOptionAll};
 use foreign_types::ForeignType;
 use image::RgbaImage;
 use libc::pid_t;
@@ -18,15 +24,26 @@ use super::{
 };
 
 const TEXT_EVENT_PACE: Duration = Duration::from_millis(1);
-const TEXT_TARGET_REVALIDATE_SCALARS: usize = 256;
+const FOCUS_RESTORE_PROOF_BUDGET: Duration = Duration::from_millis(350);
+const FOCUS_RESTORE_OPERATION_BUDGET: Duration = Duration::from_millis(1_200);
+const FOCUS_USER_RECOVERY_RESERVE: Duration = Duration::from_millis(400);
+const FOCUS_USER_AUTHORIZATION_RESERVE: Duration = Duration::from_millis(270);
+const FOCUS_USER_RESTORE_POLL_BUDGET: Duration = Duration::from_millis(120);
+const FOCUS_USER_RETRY_RESERVE: Duration = Duration::from_millis(150);
+const FOCUS_RECOVERY_CLASSIFY_BUDGET: Duration = Duration::from_millis(170);
+const FOCUS_RESTORE_POLL_STEP: Duration = Duration::from_millis(10);
+const FOCUS_PREPARATION_MIN_SETTLE: Duration = Duration::from_millis(50);
+const KEYBOARD_ELIGIBILITY_PROOF_BUDGET: Duration = Duration::from_millis(650);
+const MAX_RAW_WINDOW_INVENTORY: usize = 4_096;
 
 type PostToPidFn = unsafe extern "C" fn(pid_t, *mut c_void);
 type SetWindowLocationFn = unsafe extern "C" fn(*mut c_void, f64, f64);
 type SetIntegerFieldFn = unsafe extern "C" fn(*mut c_void, u32, i64);
 type PostEventRecordToFn = unsafe extern "C" fn(*const c_void, *const u8) -> i32;
 type GetFrontProcessFn = unsafe extern "C" fn(*mut c_void) -> i32;
-type GetProcessForPidFn = unsafe extern "C" fn(pid_t, *mut c_void) -> i32;
 type GetProcessPidFn = unsafe extern "C" fn(*const c_void, *mut pid_t) -> i32;
+type GetWindowOwnerFn = unsafe extern "C" fn(u32, u32, *mut u32) -> i32;
+type GetConnectionPsnFn = unsafe extern "C" fn(u32, *mut c_void) -> i32;
 type ConnectionIdFn = unsafe extern "C" fn() -> u32;
 type GetActiveSpaceFn = unsafe extern "C" fn(u32) -> u64;
 
@@ -42,8 +59,9 @@ struct Symbols {
     set_integer_field: SetIntegerFieldFn,
     post_event_record: PostEventRecordToFn,
     get_front_process: GetFrontProcessFn,
-    get_process_for_pid: GetProcessForPidFn,
     get_process_pid: GetProcessPidFn,
+    get_window_owner: GetWindowOwnerFn,
+    get_connection_psn: GetConnectionPsnFn,
     connection_id: ConnectionIdFn,
     get_active_space: GetActiveSpaceFn,
 }
@@ -98,13 +116,14 @@ pub fn set_value(
 pub fn limitations() -> Vec<&'static str> {
     vec![
         "Native ScreenCaptureKit sharing is exact-window; input remains limited to non-minimized windows on the active macOS Space",
+        "Accessibility permission is required to prove and restore exact focus/window ownership for focus-capable target-routed input",
         "Secure input, protected content, games, and some GPU surfaces can refuse background events",
         "Private SkyLight event routing may require updates after a macOS release",
     ]
 }
 
 pub fn input_ready() -> bool {
-    symbols().is_some()
+    symbols().is_some() && ax_macos::accessibility_ready(false)
 }
 
 pub fn windows(limit: usize) -> Result<Vec<WindowDescriptor>, ComputerError> {
@@ -158,7 +177,8 @@ pub fn move_pointer_path(
         target,
         InvariantStage::PointerTrajectory,
         cancellation,
-        || {
+        None,
+        |_| {
             if points.is_empty() {
                 return Err(input_error("synthetic pointer trajectory is empty"));
             }
@@ -208,51 +228,69 @@ pub fn click(
             0,
         ),
     };
-    guarded(target, InvariantStage::ClickDispatch, cancellation, || {
-        post_mouse(
-            target,
-            point,
-            CGEventType::MouseMoved,
-            0,
-            number,
-            0,
-            cancellation,
-        )?;
-        for index in 0..count.max(1) {
-            let down_event = mouse_event(
+    guarded(
+        target,
+        InvariantStage::ClickDispatch,
+        cancellation,
+        None,
+        |focus| {
+            let move_event = mouse_event(
                 target,
                 point,
-                down,
-                mouse_button,
-                (index + 1) as i64,
+                CGEventType::MouseMoved,
+                CGMouseButton::Left,
+                0,
                 number,
-                3,
+                0,
             )?;
-            let up_event = mouse_event(
+            let move_deadline = Instant::now() + FOCUS_RESTORE_PROOF_BUDGET;
+            prove_action_dispatch_owner(focus, target, move_deadline, true)?;
+            post_before_deadline(
                 target,
-                point,
-                up,
-                mouse_button,
-                (index + 1) as i64,
-                number,
-                3,
-            )?;
-            held_event_sequence(
-                target,
+                &move_event,
                 cancellation,
-                &down_event,
-                || {
-                    thread::sleep(Duration::from_millis(24));
-                    Ok(())
-                },
-                &up_event,
+                "pointer dispatch",
+                move_deadline,
             )?;
-            if index + 1 < count {
-                thread::sleep(Duration::from_millis(70));
+            for index in 0..count.max(1) {
+                let down_event = mouse_event(
+                    target,
+                    point,
+                    down,
+                    mouse_button,
+                    (index + 1) as i64,
+                    number,
+                    3,
+                )?;
+                let up_event = mouse_event(
+                    target,
+                    point,
+                    up,
+                    mouse_button,
+                    (index + 1) as i64,
+                    number,
+                    3,
+                )?;
+                let press_deadline = Instant::now() + FOCUS_RESTORE_PROOF_BUDGET;
+                prove_action_dispatch_owner(focus, target, press_deadline, true)?;
+                held_event_sequence(
+                    target,
+                    cancellation,
+                    press_deadline,
+                    &down_event,
+                    || {
+                        thread::sleep(Duration::from_millis(24));
+                        Ok(())
+                    },
+                    &up_event,
+                )?;
+                if index + 1 < count {
+                    thread::sleep(Duration::from_millis(70));
+                }
             }
-        }
-        Ok(())
-    })
+            Ok(())
+        },
+    )
 }
 
 pub fn drag(
@@ -262,61 +300,95 @@ pub fn drag(
     duration_ms: u64,
     cancellation: &CommandCancellation,
 ) -> Result<InvariantReport, ComputerError> {
-    guarded(target, InvariantStage::DragDispatch, cancellation, || {
-        post_mouse(target, from, CGEventType::MouseMoved, 0, 0, 0, cancellation)?;
-        let down_event = mouse_event(
-            target,
-            from,
-            CGEventType::LeftMouseDown,
-            CGMouseButton::Left,
-            1,
-            0,
-            3,
-        )?;
-        let up_event = mouse_event(
-            target,
-            from,
-            CGEventType::LeftMouseUp,
-            CGMouseButton::Left,
-            1,
-            0,
-            3,
-        )?;
-        held_event_sequence(
-            target,
-            cancellation,
-            &down_event,
-            || {
-                let steps = (duration_ms / 16).clamp(4, 120);
-                for step in 1..=steps {
-                    let progress = step as f64 / steps as f64;
-                    let point = TargetPoint {
-                        local_x: interpolate(from.local_x, to.local_x, progress),
-                        local_y: interpolate(from.local_y, to.local_y, progress),
-                        screen_x: interpolate(from.screen_x, to.screen_x, progress),
-                        screen_y: interpolate(from.screen_y, to.screen_y, progress),
-                    };
-                    // Keep the prebuilt release event at the latest attempted
-                    // point, so cancellation or a dispatch failure still sends
-                    // a mouse-up at the best-known drag location.
-                    retarget_mouse_event(target, &up_event, point, 1, 0, 3)?;
-                    post_mouse_with_button(
-                        target,
-                        point,
-                        CGEventType::LeftMouseDragged,
-                        CGMouseButton::Left,
-                        1,
-                        0,
-                        3,
-                        cancellation,
-                    )?;
-                    thread::sleep(Duration::from_millis((duration_ms / steps).max(1)));
-                }
-                Ok(())
-            },
-            &up_event,
-        )
-    })
+    guarded(
+        target,
+        InvariantStage::DragDispatch,
+        cancellation,
+        None,
+        |focus| {
+            let move_event = mouse_event(
+                target,
+                from,
+                CGEventType::MouseMoved,
+                CGMouseButton::Left,
+                0,
+                0,
+                0,
+            )?;
+            let move_deadline = Instant::now() + FOCUS_RESTORE_PROOF_BUDGET;
+            prove_action_dispatch_owner(focus, target, move_deadline, true)?;
+            post_before_deadline(
+                target,
+                &move_event,
+                cancellation,
+                "pointer dispatch",
+                move_deadline,
+            )?;
+            let down_event = mouse_event(
+                target,
+                from,
+                CGEventType::LeftMouseDown,
+                CGMouseButton::Left,
+                1,
+                0,
+                3,
+            )?;
+            let up_event = mouse_event(
+                target,
+                from,
+                CGEventType::LeftMouseUp,
+                CGMouseButton::Left,
+                1,
+                0,
+                3,
+            )?;
+            let press_deadline = Instant::now() + FOCUS_RESTORE_PROOF_BUDGET;
+            prove_action_dispatch_owner(focus, target, press_deadline, true)?;
+            held_event_sequence(
+                target,
+                cancellation,
+                press_deadline,
+                &down_event,
+                || {
+                    let steps = (duration_ms / 16).clamp(4, 120);
+                    for step in 1..=steps {
+                        let progress = step as f64 / steps as f64;
+                        let point = TargetPoint {
+                            local_x: interpolate(from.local_x, to.local_x, progress),
+                            local_y: interpolate(from.local_y, to.local_y, progress),
+                            screen_x: interpolate(from.screen_x, to.screen_x, progress),
+                            screen_y: interpolate(from.screen_y, to.screen_y, progress),
+                        };
+                        // Keep the prebuilt release event at the latest attempted
+                        // point, so cancellation or a dispatch failure still sends
+                        // a mouse-up at the best-known drag location.
+                        retarget_mouse_event(target, &up_event, point, 1, 0, 3)?;
+                        let drag_event = mouse_event(
+                            target,
+                            point,
+                            CGEventType::LeftMouseDragged,
+                            CGMouseButton::Left,
+                            1,
+                            0,
+                            3,
+                        )?;
+                        let drag_deadline = Instant::now() + FOCUS_RESTORE_PROOF_BUDGET;
+                        prove_action_dispatch_owner(focus, target, drag_deadline, true)?;
+                        post_before_deadline(
+                            target,
+                            &drag_event,
+                            cancellation,
+                            "pointer dispatch",
+                            drag_deadline,
+                        )?;
+                        thread::sleep(Duration::from_millis((duration_ms / steps).max(1)));
+                    }
+                    Ok(())
+                },
+                &up_event,
+            )
+        },
+    )
 }
 
 pub fn scroll(
@@ -326,36 +398,59 @@ pub fn scroll(
     delta_y: i32,
     cancellation: &CommandCancellation,
 ) -> Result<InvariantReport, ComputerError> {
-    guarded(target, InvariantStage::ScrollDispatch, cancellation, || {
-        post_mouse(
-            target,
-            point,
-            CGEventType::MouseMoved,
-            0,
-            0,
-            0,
-            cancellation,
-        )?;
-        let source = source()?;
-        let event = CGEvent::new_scroll_event(
-            source,
-            ScrollEventUnit::LINE,
-            2,
-            delta_y.clamp(-10, 10),
-            delta_x.clamp(-10, 10),
-            0,
-        )
-        .map_err(|_| input_error("CGEventCreateScrollWheelEvent2 failed"))?;
-        let raw = event.as_ptr() as *mut c_void;
-        unsafe {
-            CGEventSetLocation(
-                raw,
-                CGPoint::new(point.screen_x as f64, point.screen_y as f64),
+    guarded(
+        target,
+        InvariantStage::ScrollDispatch,
+        cancellation,
+        None,
+        |focus| {
+            let move_event = mouse_event(
+                target,
+                point,
+                CGEventType::MouseMoved,
+                CGMouseButton::Left,
+                0,
+                0,
+                0,
+            )?;
+            let move_deadline = Instant::now() + FOCUS_RESTORE_PROOF_BUDGET;
+            prove_action_dispatch_owner(focus, target, move_deadline, true)?;
+            post_before_deadline(
+                target,
+                &move_event,
+                cancellation,
+                "pointer dispatch",
+                move_deadline,
+            )?;
+            let source = source()?;
+            let event = CGEvent::new_scroll_event(
+                source,
+                ScrollEventUnit::LINE,
+                2,
+                delta_y.clamp(-10, 10),
+                delta_x.clamp(-10, 10),
+                0,
             )
-        };
-        stamp(target, point, raw, 0, 0, 0)?;
-        post(target, &event, cancellation, "scroll dispatch")
-    })
+            .map_err(|_| input_error("CGEventCreateScrollWheelEvent2 failed"))?;
+            let raw = event.as_ptr() as *mut c_void;
+            unsafe {
+                CGEventSetLocation(
+                    raw,
+                    CGPoint::new(point.screen_x as f64, point.screen_y as f64),
+                )
+            };
+            stamp(target, point, raw, 0, 0, 0)?;
+            let scroll_deadline = Instant::now() + FOCUS_RESTORE_PROOF_BUDGET;
+            prove_action_dispatch_owner(focus, target, scroll_deadline, true)?;
+            post_before_deadline(
+                target,
+                &event,
+                cancellation,
+                "scroll dispatch",
+                scroll_deadline,
+            )
+        },
+    )
 }
 
 pub fn type_text(
@@ -363,32 +458,42 @@ pub fn type_text(
     text: &str,
     cancellation: &CommandCancellation,
 ) -> Result<InvariantReport, ComputerError> {
-    ensure_unique_keyboard_destination(target)?;
     let deadline = Instant::now() + Duration::from_millis(COMPUTER_TYPE_TEXT_MAX_DISPATCH_MS);
-    guarded(target, InvariantStage::TextDispatch, cancellation, || {
-        let mut characters = text.chars().peekable();
-        let mut dispatched = 0_usize;
-        while let Some(character) = characters.next() {
+    // Preflight proves exact WindowServer/AX top-level identity only. A
+    // background app may currently have a different internal key window; the
+    // dual-state focus lease below remembers and restores that exact sibling.
+    ensure_keyboard_target_eligible_before(target, deadline)?;
+    text_dispatch_checkpoint(cancellation, deadline)?;
+    guarded(
+        target,
+        InvariantStage::TextDispatch,
+        cancellation,
+        Some(deadline),
+        |focus| {
+            let mut characters = text.chars().peekable();
+            let mut dispatched = 0_usize;
+            while let Some(character) = characters.next() {
+                text_dispatch_checkpoint(cancellation, deadline)?;
+                let value = character.to_string();
+                let down = keyboard_event(target, 0, true, CGEventFlags::empty(), Some(&value))?;
+                let up = keyboard_event(target, 0, false, CGEventFlags::empty(), Some(&value))?;
+                // A text scalar can itself move focus (Tab/newline), and the app or
+                // user can react between scalars. Re-prove the actual focused
+                // window and focused-element owner after event construction and
+                // immediately before every key-down. Releases stay unconditional.
+                ensure_text_keyboard_receiver(focus, target, dispatched, deadline)?;
+                text_dispatch_checkpoint(cancellation, deadline)?;
+                held_event_sequence(target, cancellation, deadline, &down, || Ok(()), &up)?;
+                dispatched += 1;
+                if characters.peek().is_some() {
+                    pace_text_dispatch(cancellation, deadline, TEXT_EVENT_PACE)?;
+                }
+            }
+            ensure_text_keyboard_receiver(focus, target, dispatched, deadline)?;
             text_dispatch_checkpoint(cancellation, deadline)?;
-            let value = character.to_string();
-            let down = keyboard_event(target, 0, true, CGEventFlags::empty(), Some(&value))?;
-            let up = keyboard_event(target, 0, false, CGEventFlags::empty(), Some(&value))?;
-            held_event_sequence(target, cancellation, &down, || Ok(()), &up)?;
-            dispatched += 1;
-
-            // Keyboard events are process-routed on macOS. Re-prove that the
-            // captured window is still the process's sole eligible destination
-            // during a long real text action, not only before its first event.
-            if dispatched.is_multiple_of(TEXT_TARGET_REVALIDATE_SCALARS) {
-                ensure_unique_keyboard_destination(target)?;
-            }
-            if characters.peek().is_some() {
-                pace_text_dispatch(cancellation, deadline, TEXT_EVENT_PACE)?;
-            }
-        }
-        ensure_unique_keyboard_destination(target)?;
-        Ok(())
-    })
+            Ok(())
+        },
+    )
 }
 
 fn text_dispatch_checkpoint(
@@ -431,7 +536,7 @@ pub fn key(
     chord: &str,
     cancellation: &CommandCancellation,
 ) -> Result<InvariantReport, ComputerError> {
-    ensure_unique_keyboard_destination(target)?;
+    ensure_keyboard_target_eligible(target)?;
     let parts = chord.split('+').map(str::trim).collect::<Vec<_>>();
     let last = parts.last().copied().unwrap_or("");
     let flags = modifier_flags(&parts[..parts.len().saturating_sub(1)]);
@@ -441,57 +546,322 @@ pub fn key(
             format!("The macOS background backend does not map key {last}"),
         )
     })?;
-    guarded(target, InvariantStage::KeyDispatch, cancellation, || {
-        let down = keyboard_event(target, keycode, true, flags, None)?;
-        let up = keyboard_event(target, keycode, false, flags, None)?;
-        held_event_sequence(
-            target,
-            cancellation,
-            &down,
-            || {
-                thread::sleep(Duration::from_millis(18));
-                Ok(())
-            },
-            &up,
-        )
-    })
+    guarded(
+        target,
+        InvariantStage::KeyDispatch,
+        cancellation,
+        None,
+        |focus| {
+            let down = keyboard_event(target, keycode, true, flags, None)?;
+            let up = keyboard_event(target, keycode, false, flags, None)?;
+            let receiver_deadline = Instant::now() + FOCUS_RESTORE_PROOF_BUDGET;
+            // Non-text chords are routed through the key window's responder chain;
+            // an AXFocusedUIElement is not required (for example, Escape may have
+            // no focused control), but the exact AXFocusedWindow is mandatory.
+            prove_action_dispatch_owner(focus, target, receiver_deadline, false)?;
+            ax_macos::ensure_keyboard_receiver_before(target, false, true, receiver_deadline)?;
+            held_event_sequence(
+                target,
+                cancellation,
+                receiver_deadline,
+                &down,
+                || {
+                    thread::sleep(Duration::from_millis(18));
+                    Ok(())
+                },
+                &up,
+            )
+        },
+    )
 }
 
-fn ensure_unique_keyboard_destination(target: &WindowDescriptor) -> Result<(), ComputerError> {
-    let mut destinations = Window::all()
-        .map_err(capture_error)?
-        .into_iter()
-        .filter(|window| {
-            window.pid().ok() == Some(target.pid) && !window.is_minimized().unwrap_or(false)
-        })
-        .take(2);
-    let Some(destination) = destinations.next() else {
-        return Err(ComputerError::new(
-            "COMPUTER_STALE_FRAME",
-            "The captured macOS keyboard target is no longer available",
-        ));
-    };
-    if destinations.next().is_some() {
-        return Err(ComputerError::new(
-            "COMPUTER_BACKGROUND_UNAVAILABLE",
-            "Process-scoped macOS keyboard delivery is ambiguous because the target process has multiple eligible windows",
-        ));
-    }
-    let destination = descriptor(&destination)?;
-    if destination.id != target.id
-        || destination.pid != target.pid
-        || destination.x != target.x
-        || destination.y != target.y
-        || destination.width != target.width
-        || destination.height != target.height
-        || destination.minimized
-    {
+fn ensure_keyboard_target_eligible(target: &WindowDescriptor) -> Result<(), ComputerError> {
+    ensure_keyboard_target_eligible_before(
+        target,
+        Instant::now() + KEYBOARD_ELIGIBILITY_PROOF_BUDGET,
+    )
+}
+
+fn ensure_keyboard_target_eligible_before(
+    target: &WindowDescriptor,
+    deadline: Instant,
+) -> Result<(), ComputerError> {
+    let target_id = target
+        .id
+        .parse::<u32>()
+        .map_err(|_| input_error("invalid window id"))?;
+    let inventory = raw_keyboard_window_inventory_before(deadline)?;
+    if !raw_keyboard_target_matches(target, target_id, &inventory) {
         return Err(ComputerError::new(
             "COMPUTER_STALE_FRAME",
             "The exact macOS keyboard target changed after the captured frame",
         ));
     }
-    Ok(())
+    ax_macos::ensure_keyboard_target_eligible_before(target, deadline)
+}
+
+fn ensure_text_keyboard_receiver(
+    focus: Option<&FocusLease>,
+    target: &WindowDescriptor,
+    dispatched: usize,
+    deadline: Instant,
+) -> Result<(), ComputerError> {
+    let proof = prove_action_dispatch_owner(focus, target, deadline, false)
+        .and_then(|_| ax_macos::ensure_keyboard_receiver_before(target, true, true, deadline));
+    map_text_receiver_failure(proof, dispatched)
+}
+
+fn prove_action_dispatch_owner(
+    focus: Option<&FocusLease>,
+    target: &WindowDescriptor,
+    deadline: Instant,
+    finish_with_target_window: bool,
+) -> Result<(), ComputerError> {
+    if let Some(focus) = focus {
+        focus.prove_dispatch_owner_before(deadline)?;
+        prove_target_focus_window(target, deadline)?;
+        focus.prove_dispatch_owner_before(deadline)?;
+        if finish_with_target_window {
+            prove_target_focus_window(target, deadline)?;
+        }
+        return Ok(());
+    }
+    let target_window_id = target
+        .id
+        .parse::<u32>()
+        .map_err(|_| input_error("invalid window id"))?;
+    let symbols = symbols().ok_or_else(|| input_error("SkyLight symbols are unavailable"))?;
+    let front_before = front_process_identity(symbols)?;
+    let target_focus_before =
+        ax_macos::target_application_focus_state_before(target.pid, deadline)?;
+    let front_middle = front_process_identity(symbols)?;
+    let target_focus_after = ax_macos::target_application_focus_state_before(target.pid, deadline)?;
+    let front_after = front_process_identity(symbols)?;
+    if front_before == front_middle
+        && front_middle == front_after
+        && front_after.1 == target.pid
+        && target_focus_before == target_focus_after
+        && target_focus_after.frontmost
+        && target_focus_after.window_id == target_window_id
+        && target_focus_after.main_window_id == target_window_id
+        && Instant::now() < deadline
+    {
+        Ok(())
+    } else {
+        Err(background_unavailable(
+            "The selected macOS window is no longer the exact foreground focus owner",
+        ))
+    }
+}
+
+fn prove_target_focus_window(
+    target: &WindowDescriptor,
+    deadline: Instant,
+) -> Result<(), ComputerError> {
+    let target_window_id = target
+        .id
+        .parse::<u32>()
+        .map_err(|_| input_error("invalid window id"))?;
+    if ax_macos::target_application_focus_state_before(target.pid, deadline).is_ok_and(|focus| {
+        focus.frontmost
+            && focus.window_id == target_window_id
+            && focus.main_window_id == target_window_id
+    }) {
+        Ok(())
+    } else {
+        Err(background_unavailable(
+            "The selected macOS target is no longer the exact focused window",
+        ))
+    }
+}
+
+fn map_text_receiver_failure(
+    proof: Result<(), ComputerError>,
+    dispatched: usize,
+) -> Result<(), ComputerError> {
+    match proof {
+        Ok(()) => Ok(()),
+        Err(error) if dispatched == 0 => Err(error),
+        Err(_) => Err(ComputerError::new(
+            "COMPUTER_OUTCOME_UNKNOWN",
+            "The exact macOS text receiver could not be re-proven after input began; observe again and do not automatically retry",
+        )),
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RawKeyboardWindow {
+    window_id: u32,
+    owner_pid: u32,
+    layer: i32,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    // OptionAll prevents the target from disappearing from inventory merely
+    // because it became ineligible. Mutation still requires a known on-screen
+    // target on the active Space; unknown is fail-closed.
+    is_on_screen: Option<bool>,
+    // Sharing state does not identify the keyboard receiver. It is retained in
+    // the independent inventory but never used to distinguish real windows
+    // from the ScreenCaptureKit indicator.
+    _sharing_state: Option<i32>,
+}
+
+fn raw_keyboard_target_matches(
+    target: &WindowDescriptor,
+    target_id: u32,
+    inventory: &[RawKeyboardWindow],
+) -> bool {
+    let matching = inventory
+        .iter()
+        .filter(|window| window.window_id == target_id)
+        .collect::<Vec<_>>();
+    matching.len() == 1
+        && matching[0].owner_pid == target.pid
+        && matching[0].layer == 0
+        && matching[0].is_on_screen == Some(true)
+        && matching[0].x as i32 == target.x
+        && matching[0].y as i32 == target.y
+        && matching[0].width as u32 == target.width
+        && matching[0].height as u32 == target.height
+}
+
+fn raw_focus_window_restorable(pid: u32, window_id: u32, inventory: &[RawKeyboardWindow]) -> bool {
+    let matching = inventory
+        .iter()
+        .filter(|window| window.window_id == window_id)
+        .collect::<Vec<_>>();
+    matching.len() == 1
+        && matching[0].owner_pid == pid
+        && matching[0].layer == 0
+        && matching[0].is_on_screen == Some(true)
+}
+
+fn raw_keyboard_window_inventory_before(
+    deadline: Instant,
+) -> Result<Vec<RawKeyboardWindow>, ComputerError> {
+    if Instant::now() >= deadline {
+        return Err(background_unavailable(
+            "The macOS exact-window proof deadline elapsed",
+        ));
+    }
+    let array = copy_window_info(kCGWindowListOptionAll, kCGNullWindowID).ok_or_else(|| {
+        ComputerError::new(
+            "COMPUTER_BACKGROUND_UNAVAILABLE",
+            "Could not inspect the macOS WindowServer keyboard target",
+        )
+    })?;
+    if Instant::now() >= deadline || array.len() as usize > MAX_RAW_WINDOW_INVENTORY {
+        return Err(background_unavailable(
+            "Could not complete the bounded macOS WindowServer proof",
+        ));
+    }
+    let dictionary_type = CFDictionary::<*const c_void, *const c_void>::type_id();
+    let mut output = Vec::with_capacity(array.len() as usize);
+    for item in array.iter() {
+        if Instant::now() >= deadline {
+            return Err(background_unavailable(
+                "The macOS WindowServer proof exceeded its deadline",
+            ));
+        }
+        let item = *item as CFTypeRef;
+        if unsafe { CFGetTypeID(item) } != dictionary_type {
+            continue;
+        }
+        let dictionary: CFDictionary<*const c_void, *const c_void> =
+            unsafe { CFDictionary::wrap_under_get_rule(item as _) };
+        let Some(window_id) = dictionary_i64(&dictionary, "kCGWindowNumber")
+            .and_then(|value| u32::try_from(value).ok())
+        else {
+            continue;
+        };
+        let Some(owner_pid) = dictionary_i64(&dictionary, "kCGWindowOwnerPID")
+            .and_then(|value| u32::try_from(value).ok())
+        else {
+            continue;
+        };
+        let Some(layer) = dictionary_i64(&dictionary, "kCGWindowLayer")
+            .and_then(|value| i32::try_from(value).ok())
+        else {
+            continue;
+        };
+        let Some(bounds) = dictionary_value(&dictionary, "kCGWindowBounds") else {
+            continue;
+        };
+        if unsafe { CFGetTypeID(bounds) } != dictionary_type {
+            continue;
+        }
+        let bounds: CFDictionary<*const c_void, *const c_void> =
+            unsafe { CFDictionary::wrap_under_get_rule(bounds as _) };
+        let (Some(x), Some(y), Some(width), Some(height)) = (
+            dictionary_f64(&bounds, "X"),
+            dictionary_f64(&bounds, "Y"),
+            dictionary_f64(&bounds, "Width"),
+            dictionary_f64(&bounds, "Height"),
+        ) else {
+            continue;
+        };
+        output.push(RawKeyboardWindow {
+            window_id,
+            owner_pid,
+            layer,
+            x,
+            y,
+            width,
+            height,
+            is_on_screen: dictionary_bool(&dictionary, "kCGWindowIsOnscreen"),
+            _sharing_state: dictionary_i64(&dictionary, "kCGWindowSharingState")
+                .and_then(|value| i32::try_from(value).ok()),
+        });
+    }
+    if Instant::now() >= deadline {
+        return Err(background_unavailable(
+            "The macOS WindowServer proof exceeded its deadline",
+        ));
+    }
+    Ok(output)
+}
+
+fn dictionary_value(
+    dictionary: &CFDictionary<*const c_void, *const c_void>,
+    name: &str,
+) -> Option<CFTypeRef> {
+    let key = CFString::new(name);
+    dictionary
+        .find(key.as_concrete_TypeRef() as *const c_void)
+        .map(|value| *value as CFTypeRef)
+}
+
+fn dictionary_i64(
+    dictionary: &CFDictionary<*const c_void, *const c_void>,
+    name: &str,
+) -> Option<i64> {
+    let value = dictionary_value(dictionary, name)?;
+    (unsafe { CFGetTypeID(value) } == CFNumber::type_id())
+        .then(|| unsafe { CFNumber::wrap_under_get_rule(value as _) }.to_i64())
+        .flatten()
+}
+
+fn dictionary_f64(
+    dictionary: &CFDictionary<*const c_void, *const c_void>,
+    name: &str,
+) -> Option<f64> {
+    let value = dictionary_value(dictionary, name)?;
+    (unsafe { CFGetTypeID(value) } == CFNumber::type_id())
+        .then(|| unsafe { CFNumber::wrap_under_get_rule(value as _) }.to_f64())
+        .flatten()
+}
+
+fn dictionary_bool(
+    dictionary: &CFDictionary<*const c_void, *const c_void>,
+    name: &str,
+) -> Option<bool> {
+    let value = dictionary_value(dictionary, name)?;
+    (unsafe { CFGetTypeID(value) } == CFBoolean::type_id()).then(|| {
+        let flag: bool = unsafe { CFBoolean::wrap_under_get_rule(value as _) }.into();
+        flag
+    })
 }
 
 fn descriptor(window: &Window) -> Result<WindowDescriptor, ComputerError> {
@@ -506,8 +876,8 @@ fn descriptor(window: &Window) -> Result<WindowDescriptor, ComputerError> {
         width: window.width().map_err(map)?,
         height: window.height().map_err(map)?,
         minimized: window.is_minimized().unwrap_or(false),
-        // Corrected against the front ProcessSerialNumber and WindowServer
-        // z-order in `windows`; xcap marks every Chromium window focused.
+        // `windows` resolves focus separately through the exact AX/PSN oracle;
+        // xcap's Chromium focus flag is not an authority for one exact window.
         focused: false,
     })
 }
@@ -535,14 +905,15 @@ fn guarded(
     target: &WindowDescriptor,
     stage: InvariantStage,
     cancellation: &CommandCancellation,
-    action: impl FnOnce() -> Result<(), ComputerError>,
+    preparation_deadline: Option<Instant>,
+    action: impl FnOnce(Option<&FocusLease>) -> Result<(), ComputerError>,
 ) -> Result<InvariantReport, ComputerError> {
     let before = DesktopSnapshot::capture()?;
     let focus = (stage != InvariantStage::PointerTrajectory)
-        .then(|| activate_without_raise(target, &before, cancellation))
+        .then(|| activate_without_raise(target, &before, cancellation, preparation_deadline))
         .transpose()?
         .flatten();
-    let action_result = action();
+    let action_result = action(focus.as_ref());
     cancellation.mark_verification_started();
     let restore_result = focus.map(FocusLease::restore).transpose();
     thread::sleep(Duration::from_millis(35));
@@ -681,17 +1052,18 @@ fn keyboard_event(
 fn held_event_sequence<T>(
     target: &WindowDescriptor,
     cancellation: &CommandCancellation,
+    first_post_deadline: Instant,
     down: &CGEvent,
     action: impl FnOnce() -> Result<T, ComputerError>,
     up: &CGEvent,
 ) -> Result<T, ComputerError> {
-    let press = post(target, down, cancellation, "held input press");
-    if let Err(press_error) = press {
-        return match post_release(target, up) {
-            Ok(()) => Err(press_error),
-            Err(release_error) => Err(release_error),
-        };
-    }
+    post_before_deadline(
+        target,
+        down,
+        cancellation,
+        "held input press",
+        first_post_deadline,
+    )?;
     let action_result = action();
     match post_release(target, up) {
         Ok(()) => action_result,
@@ -741,6 +1113,42 @@ fn post(
     post_release(target, event)
 }
 
+fn post_before_deadline(
+    target: &WindowDescriptor,
+    event: &CGEvent,
+    cancellation: &CommandCancellation,
+    boundary: &str,
+    deadline: Instant,
+) -> Result<(), ComputerError> {
+    ensure_dispatch_deadline(cancellation, boundary, deadline)?;
+    cancellation.begin_side_effect(boundary)?;
+    // Dispatch accounting can block briefly on the command phase lock. Never
+    // let an authorization proof that expired during that boundary post.
+    ensure_dispatch_deadline(cancellation, boundary, deadline)?;
+    post_release(target, event)
+}
+
+fn ensure_dispatch_deadline(
+    cancellation: &CommandCancellation,
+    boundary: &str,
+    deadline: Instant,
+) -> Result<(), ComputerError> {
+    cancellation.check(boundary)?;
+    if Instant::now() < deadline {
+        return Ok(());
+    }
+    Err(if cancellation.was_dispatched() {
+        ComputerError::new(
+            "COMPUTER_OUTCOME_UNKNOWN",
+            format!(
+                "The exact macOS input authorization expired after dispatch accounting at {boundary}; observe again and do not automatically retry"
+            ),
+        )
+    } else {
+        background_unavailable("The exact macOS input authorization expired before native dispatch")
+    })
+}
+
 fn post_release(target: &WindowDescriptor, event: &CGEvent) -> Result<(), ComputerError> {
     let symbols = symbols().ok_or_else(|| input_error("SkyLight symbols are unavailable"))?;
     unsafe { (symbols.post_to_pid)(target.pid as pid_t, event.as_ptr() as *mut c_void) };
@@ -751,61 +1159,264 @@ fn activate_without_raise(
     target: &WindowDescriptor,
     before: &DesktopSnapshot,
     cancellation: &CommandCancellation,
+    action_deadline: Option<Instant>,
 ) -> Result<Option<FocusLease>, ComputerError> {
-    if before.front_pid == target.pid {
-        return Ok(None);
-    }
-    let symbols = symbols().ok_or_else(|| input_error("SkyLight symbols are unavailable"))?;
     let window_id = target
         .id
         .parse::<u32>()
         .map_err(|_| input_error("invalid window id"))?;
-    let mut destination = [0u8; 8];
-    if unsafe {
-        (symbols.get_process_for_pid)(target.pid as pid_t, destination.as_mut_ptr() as *mut c_void)
-    } != 0
+    if !focus_preparation_needed(before.front_pid, target.pid) {
+        ensure_same_process_mutation_target(target, before)?;
+        return Ok(None);
+    }
+    let preparation_deadline = action_deadline.unwrap_or_else(|| {
+        Instant::now() + Duration::from_millis(COMPUTER_TYPE_TEXT_MAX_DISPATCH_MS)
+    });
+    let previous_focus =
+        ax_macos::application_focus_state_before(before.front_pid, preparation_deadline)?;
+    let target_previous_focus =
+        ax_macos::target_application_focus_state_before(target.pid, preparation_deadline)?;
+    let target_main_window =
+        ax_macos::exact_target_main_window_before(target.pid, window_id, preparation_deadline)?;
+    let target_previous_main_window = (target_previous_focus.window_id != window_id)
+        .then(|| {
+            ax_macos::exact_target_main_window_before(
+                target.pid,
+                target_previous_focus.window_id,
+                preparation_deadline,
+            )
+        })
+        .transpose()?;
+    if !previous_focus.frontmost
+        || previous_focus.window_id != before.front_window_id
+        || previous_focus.main_window_id != before.front_window_id
+        || target_previous_focus.frontmost
+        || target_previous_focus.main_window_id != target_previous_focus.window_id
     {
-        return Err(ComputerError::new(
-            "COMPUTER_BACKGROUND_UNAVAILABLE",
-            "macOS could not resolve the exact target process for background focus",
+        return Err(background_unavailable(
+            "Could not prove the macOS focus owners before background preparation",
         ));
     }
-    let previous_window_id = before.front_window_id;
+    let symbols = symbols().ok_or_else(|| input_error("SkyLight symbols are unavailable"))?;
+    let destination = exact_window_process(symbols, target.pid, window_id)?;
+    if target_previous_focus.window_id != window_id
+        && exact_window_process(symbols, target.pid, target_previous_focus.window_id)?
+            != destination
+    {
+        return Err(background_unavailable(
+            "macOS could not bind both exact target windows to one process connection",
+        ));
+    }
     let lease = FocusLease {
         symbols,
         previous_psn: before.front_process,
-        previous_window_id,
+        previous_pid: before.front_pid,
+        previous_window_id: previous_focus.window_id,
         target_psn: destination,
+        target_pid: target.pid,
         target_window_id: window_id,
+        target_previous_window_id: target_previous_focus.window_id,
+        target_main_window,
+        target_previous_main_window,
     };
-    cancellation.begin_side_effect("background focus preparation")?;
-    if !post_focus_record(
-        symbols,
+    cancellation.check("background focus preparation")?;
+    let selected_phase = if lease.target_previous_window_id == lease.target_window_id {
+        FocusLeasePhase::Restored
+    } else {
+        let selection_deadline = std::cmp::min(
+            preparation_deadline,
+            Instant::now() + FOCUS_RESTORE_PROOF_BUDGET,
+        );
+        let selected = match lease.set_target_main_window_before(
+            FocusLeasePhase::Restored,
+            true,
+            true,
+            lease.target_window_id,
+            cancellation,
+            "target exact-window selection",
+            selection_deadline,
+        ) {
+            Ok(selected) => selected,
+            Err(error) => {
+                lease.restore_previous_after_failed_activation(true, false)?;
+                assert_snapshot_held(before)?;
+                return Err(error);
+            }
+        };
+        let selected_result = lease.await_phase_before(
+            FocusLeasePhase::RestoredWithInactiveTargetRequested,
+            true,
+            InvariantStage::FocusPreparation,
+            None,
+            selection_deadline,
+            FOCUS_PREPARATION_MIN_SETTLE,
+        );
+        let cancellation_result = cancellation.check("target exact-window selection");
+        if !selected || selected_result.is_err() || cancellation_result.is_err() {
+            let error = cancellation_result
+                .err()
+                .or_else(|| selected_result.err())
+                .unwrap_or_else(|| {
+                    background_unavailable(
+                        "macOS could not select the exact target window without activation",
+                    )
+                });
+            lease.restore_previous_after_failed_activation(true, false)?;
+            assert_snapshot_held(before)?;
+            return Err(error);
+        }
+        FocusLeasePhase::RestoredWithInactiveTargetRequested
+    };
+
+    let user_release_deadline = std::cmp::min(
+        preparation_deadline,
+        Instant::now() + FOCUS_RESTORE_PROOF_BUDGET,
+    );
+    let user_defocused = match lease.post_phase_transition_before(
+        selected_phase,
+        true,
+        true,
         &lease.previous_psn,
         lease.previous_window_id,
         FocusOperation::Defocus,
+        cancellation,
+        "background focus preparation",
+        user_release_deadline,
     ) {
-        lease.restore_previous_after_failed_activation(false)?;
-        assert_snapshot_held(before)?;
-        return Err(ComputerError::new(
-            "COMPUTER_BACKGROUND_UNAVAILABLE",
-            "macOS could not release the prior background focus without activation",
-        ));
-    }
-    if let Err(error) = cancellation.check("target background focus") {
-        lease.restore_previous_after_failed_activation(false)?;
+        Ok(posted) => posted,
+        Err(error) => {
+            lease.restore_previous_after_failed_activation(true, false)?;
+            assert_snapshot_held(before)?;
+            return Err(error);
+        }
+    };
+    let released_result = lease.await_phase_before(
+        FocusLeasePhase::ReleasedWithInactiveTargetRequested,
+        true,
+        InvariantStage::FocusPreparation,
+        None,
+        user_release_deadline,
+        Duration::ZERO,
+    );
+    let cancellation_result = cancellation.check("target background focus");
+    if !user_defocused || released_result.is_err() || cancellation_result.is_err() {
+        let error = cancellation_result
+            .err()
+            .or_else(|| released_result.err())
+            .unwrap_or_else(|| {
+                background_unavailable(
+                    "macOS could not release the prior focus for exact-window routing",
+                )
+            });
+        lease.restore_previous_after_failed_activation(true, false)?;
         assert_snapshot_held(before)?;
         return Err(error);
     }
-    if !post_focus_record(symbols, &destination, window_id, FocusOperation::Focus) {
-        lease.restore_previous_after_failed_activation(true)?;
+
+    let target_focus_deadline = std::cmp::min(
+        preparation_deadline,
+        Instant::now() + FOCUS_RESTORE_PROOF_BUDGET,
+    );
+    let target_focused = match lease.post_phase_transition_before(
+        FocusLeasePhase::ReleasedWithInactiveTargetRequested,
+        true,
+        false,
+        &destination,
+        window_id,
+        FocusOperation::Focus,
+        cancellation,
+        "target background focus",
+        target_focus_deadline,
+    ) {
+        Ok(posted) => posted,
+        Err(error) => {
+            lease.restore_previous_after_failed_activation(true, true)?;
+            assert_snapshot_held(before)?;
+            return Err(error);
+        }
+    };
+    let prepared_result = lease.await_phase_before(
+        FocusLeasePhase::ReleasedWithTargetRequested,
+        true,
+        InvariantStage::FocusPreparation,
+        None,
+        target_focus_deadline,
+        FOCUS_PREPARATION_MIN_SETTLE,
+    );
+    let cancellation_result = cancellation.check("target background focus");
+    if !target_focused || prepared_result.is_err() || cancellation_result.is_err() {
+        let error = cancellation_result
+            .err()
+            .or_else(|| prepared_result.err())
+            .unwrap_or_else(|| {
+                background_unavailable("macOS could not establish exact-window background focus")
+            });
+        lease.restore_previous_after_failed_activation(true, true)?;
         assert_snapshot_held(before)?;
-        return Err(ComputerError::new(
-            "COMPUTER_BACKGROUND_UNAVAILABLE",
-            "macOS could not establish exact-window background focus without activation",
-        ));
+        return Err(error);
     }
     Ok(Some(lease))
+}
+
+fn ensure_same_process_mutation_target(
+    target: &WindowDescriptor,
+    before: &DesktopSnapshot,
+) -> Result<(), ComputerError> {
+    if before.front_pid != target.pid {
+        return Ok(());
+    }
+    let target_window_id = target
+        .id
+        .parse::<u32>()
+        .map_err(|_| input_error("invalid window id"))?;
+    let symbols = symbols().ok_or_else(|| input_error("SkyLight symbols are unavailable"))?;
+    let front_before = front_process_identity(symbols).ok();
+    let focus = ax_macos::target_application_focus_state(target.pid)?;
+    let front_after = front_process_identity(symbols).ok();
+    if same_process_mutation_target_matches(
+        before.front_process,
+        before.front_pid,
+        before.front_window_id,
+        target.pid,
+        target_window_id,
+        front_before,
+        focus,
+        front_after,
+    ) {
+        Ok(())
+    } else {
+        Err(background_unavailable(
+            "The selected macOS window is not the foreground application's exact receiver",
+        ))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn same_process_mutation_target_matches(
+    expected_front_process: [u8; 8],
+    snapshot_front_pid: u32,
+    snapshot_front_window_id: u32,
+    target_pid: u32,
+    target_window_id: u32,
+    front_before: Option<([u8; 8], u32)>,
+    focus: ax_macos::ApplicationFocusState,
+    front_after: Option<([u8; 8], u32)>,
+) -> bool {
+    snapshot_front_pid == target_pid
+        && snapshot_front_window_id == target_window_id
+        && stable_front_focus_owner_matches(
+            expected_front_process,
+            snapshot_front_pid,
+            target_window_id,
+            true,
+            front_before,
+            Some(focus),
+            front_after,
+        )
+}
+
+fn focus_preparation_needed(front_pid: u32, target_pid: u32) -> bool {
+    front_pid != target_pid
 }
 
 fn assert_snapshot_held(before: &DesktopSnapshot) -> Result<(), ComputerError> {
@@ -816,10 +1427,21 @@ fn assert_snapshot_held(before: &DesktopSnapshot) -> Result<(), ComputerError> {
         .map(|_| ())
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FocusOperation {
     Focus,
     Defocus,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FocusLeasePhase {
+    Restored,
+    RestoredWithInactiveTargetRequested,
+    ReleasedWithTargetPrior,
+    ReleasedWithTargetRequested,
+    ReleasedWithInactiveTargetRequested,
+    ReleasedWithActiveTargetPrior,
+    Unknown,
 }
 
 fn post_focus_record(
@@ -839,64 +1461,953 @@ fn post_focus_record(
     unsafe { (symbols.post_event_record)(process.as_ptr().cast(), record.as_ptr()) == 0 }
 }
 
+/// Posts the target-only make-key pair used by AppKit to commit an exact key
+/// window after a privately active sibling has hosted a field editor. Unlike
+/// yabai's foreground-focus operation, this deliberately does not call
+/// `_SLPSSetFrontProcessWithOptions` and never raises a window.
+fn post_make_key_window_record(symbols: &Symbols, process: &[u8; 8], window_id: u32) -> bool {
+    let mut record = [0u8; 0xF8];
+    record[0x04] = 0xF8;
+    record[0x3A] = 0x10;
+    record[0x3C..0x40].copy_from_slice(&window_id.to_le_bytes());
+    record[0x20..0x30].fill(0xFF);
+    record[0x08] = 0x01;
+    let first =
+        unsafe { (symbols.post_event_record)(process.as_ptr().cast(), record.as_ptr()) == 0 };
+    record[0x08] = 0x02;
+    let second =
+        unsafe { (symbols.post_event_record)(process.as_ptr().cast(), record.as_ptr()) == 0 };
+    first && second
+}
+
 struct FocusLease {
     symbols: &'static Symbols,
     previous_psn: [u8; 8],
+    previous_pid: u32,
     previous_window_id: u32,
     target_psn: [u8; 8],
+    target_pid: u32,
     target_window_id: u32,
+    target_previous_window_id: u32,
+    target_main_window: ax_macos::ExactTargetMainWindow,
+    target_previous_main_window: Option<ax_macos::ExactTargetMainWindow>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct FocusLeaseFacts {
+    user_frontmost: bool,
+    target_frontmost: bool,
+    target_window_id: u32,
+    target_main_window_id: u32,
+    target_process_current: bool,
+    user_raw_restorable: bool,
+    target_prior_raw_restorable: bool,
+    target_requested_raw_restorable: bool,
+}
+
+impl FocusLeaseFacts {
+    fn matches_phase(
+        self,
+        phase: FocusLeasePhase,
+        target_previous_window_id: u32,
+        target_window_id: u32,
+    ) -> bool {
+        match phase {
+            FocusLeasePhase::Restored => {
+                self.user_frontmost
+                    && !self.target_frontmost
+                    && self.target_window_id == target_previous_window_id
+                    && self.target_main_window_id == target_previous_window_id
+            }
+            FocusLeasePhase::RestoredWithInactiveTargetRequested => {
+                self.user_frontmost
+                    && !self.target_frontmost
+                    && self.target_window_id == target_window_id
+                    && self.target_main_window_id == target_window_id
+            }
+            FocusLeasePhase::ReleasedWithTargetPrior => {
+                !self.user_frontmost
+                    && !self.target_frontmost
+                    && self.target_window_id == target_previous_window_id
+                    && self.target_main_window_id == target_previous_window_id
+            }
+            FocusLeasePhase::ReleasedWithTargetRequested => {
+                !self.user_frontmost
+                    && self.target_frontmost
+                    && self.target_window_id == target_window_id
+                    && self.target_main_window_id == target_window_id
+            }
+            FocusLeasePhase::ReleasedWithInactiveTargetRequested => {
+                !self.user_frontmost
+                    && !self.target_frontmost
+                    && self.target_window_id == target_window_id
+                    && self.target_main_window_id == target_window_id
+            }
+            FocusLeasePhase::ReleasedWithActiveTargetPrior => {
+                !self.user_frontmost
+                    && self.target_frontmost
+                    && self.target_window_id == target_previous_window_id
+                    && self.target_main_window_id == target_previous_window_id
+            }
+            FocusLeasePhase::Unknown => false,
+        }
+    }
+
+    fn classify_recovery(
+        self,
+        target_previous_window_id: u32,
+        target_window_id: u32,
+        target_selection_may_be_changed: bool,
+        target_may_be_prepared: bool,
+    ) -> FocusLeasePhase {
+        if self.matches_phase(
+            FocusLeasePhase::Restored,
+            target_previous_window_id,
+            target_window_id,
+        ) {
+            return FocusLeasePhase::Restored;
+        }
+        let restored_selected = self.matches_phase(
+            FocusLeasePhase::RestoredWithInactiveTargetRequested,
+            target_previous_window_id,
+            target_window_id,
+        );
+        let requested_active = self.matches_phase(
+            FocusLeasePhase::ReleasedWithTargetRequested,
+            target_previous_window_id,
+            target_window_id,
+        );
+        let requested_inactive = self.matches_phase(
+            FocusLeasePhase::ReleasedWithInactiveTargetRequested,
+            target_previous_window_id,
+            target_window_id,
+        );
+        let prior_inactive = self.matches_phase(
+            FocusLeasePhase::ReleasedWithTargetPrior,
+            target_previous_window_id,
+            target_window_id,
+        );
+        let prior_active = self.matches_phase(
+            FocusLeasePhase::ReleasedWithActiveTargetPrior,
+            target_previous_window_id,
+            target_window_id,
+        );
+        if !target_selection_may_be_changed {
+            return if prior_inactive {
+                FocusLeasePhase::ReleasedWithTargetPrior
+            } else {
+                FocusLeasePhase::Unknown
+            };
+        }
+        if !target_may_be_prepared {
+            return if restored_selected {
+                FocusLeasePhase::RestoredWithInactiveTargetRequested
+            } else if requested_inactive {
+                FocusLeasePhase::ReleasedWithInactiveTargetRequested
+            } else if prior_inactive {
+                FocusLeasePhase::ReleasedWithTargetPrior
+            } else {
+                FocusLeasePhase::Unknown
+            };
+        }
+        if requested_active {
+            FocusLeasePhase::ReleasedWithTargetRequested
+        } else if restored_selected {
+            FocusLeasePhase::RestoredWithInactiveTargetRequested
+        } else if prior_inactive {
+            FocusLeasePhase::ReleasedWithTargetPrior
+        } else if requested_inactive {
+            FocusLeasePhase::ReleasedWithInactiveTargetRequested
+        } else if prior_active {
+            FocusLeasePhase::ReleasedWithActiveTargetPrior
+        } else {
+            FocusLeasePhase::Unknown
+        }
+    }
 }
 
 impl FocusLease {
+    #[allow(clippy::too_many_arguments)]
+    fn post_phase_transition_before(
+        &self,
+        phase: FocusLeasePhase,
+        require_requested_raw: bool,
+        expected_user_frontmost: bool,
+        process: &[u8; 8],
+        window_id: u32,
+        operation: FocusOperation,
+        cancellation: &CommandCancellation,
+        boundary: &str,
+        deadline: Instant,
+    ) -> Result<bool, ComputerError> {
+        let authorize = || {
+            self.prove_phase_before(
+                phase,
+                require_requested_raw,
+                InvariantStage::FocusPreparation,
+                deadline,
+            )?;
+            if self.user_owner_matches_before(expected_user_frontmost, deadline) {
+                Ok(())
+            } else {
+                Err(background_unavailable(
+                    "The exact macOS user focus owner changed during preparation",
+                ))
+            }
+        };
+        authorize()?;
+        ensure_dispatch_deadline(cancellation, boundary, deadline)?;
+        cancellation.begin_side_effect(boundary)?;
+        ensure_dispatch_deadline(cancellation, boundary, deadline)?;
+        authorize()?;
+        ensure_dispatch_deadline(cancellation, boundary, deadline)?;
+        Ok(post_focus_record(
+            self.symbols,
+            process,
+            window_id,
+            operation,
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn set_target_main_window_before(
+        &self,
+        phase: FocusLeasePhase,
+        require_requested_raw: bool,
+        expected_user_frontmost: bool,
+        window_id: u32,
+        cancellation: &CommandCancellation,
+        boundary: &str,
+        deadline: Instant,
+    ) -> Result<bool, ComputerError> {
+        let exact_window = self.main_window_for_id(window_id).ok_or_else(|| {
+            background_unavailable("The exact macOS target selector is unavailable")
+        })?;
+        let authorize = || {
+            self.prove_phase_before(
+                phase,
+                require_requested_raw,
+                InvariantStage::FocusPreparation,
+                deadline,
+            )?;
+            if self.user_owner_matches_before(expected_user_frontmost, deadline) {
+                Ok(())
+            } else {
+                Err(background_unavailable(
+                    "The exact macOS user focus owner changed during window selection",
+                ))
+            }
+        };
+        authorize()?;
+        ensure_dispatch_deadline(cancellation, boundary, deadline)?;
+        cancellation.begin_side_effect(boundary)?;
+        ensure_dispatch_deadline(cancellation, boundary, deadline)?;
+        authorize()?;
+        ensure_dispatch_deadline(cancellation, boundary, deadline)?;
+        Ok(exact_window.set_main(true))
+    }
+
     fn restore(self) -> Result<(), ComputerError> {
-        let defocused = post_focus_record(
-            self.symbols,
-            &self.target_psn,
-            self.target_window_id,
-            FocusOperation::Defocus,
-        );
-        let focused = post_focus_record(
-            self.symbols,
-            &self.previous_psn,
-            self.previous_window_id,
-            FocusOperation::Focus,
-        );
-        if defocused && focused {
-            Ok(())
-        } else {
-            Err(background_contract_violation(
-                InvariantStage::FocusRestore,
-                [InvariantFailure::UserFocus],
-            ))
+        let stage = InvariantStage::FocusRestore;
+        let deadline = Instant::now() + FOCUS_RESTORE_OPERATION_BUDGET;
+        let target_deadline = deadline
+            .checked_sub(FOCUS_USER_RECOVERY_RESERVE)
+            .unwrap_or(deadline);
+        let user_authorization_deadline = deadline
+            .checked_sub(FOCUS_USER_AUTHORIZATION_RESERVE)
+            .unwrap_or(deadline);
+        let user_poll_limit = deadline
+            .checked_sub(FOCUS_USER_RETRY_RESERVE)
+            .unwrap_or(deadline);
+        if self
+            .prove_phase_before(
+                FocusLeasePhase::ReleasedWithTargetRequested,
+                true,
+                stage,
+                target_deadline,
+            )
+            .is_err()
+        {
+            let _ = self.restore_released_user_without_target_proof_before(stage, deadline);
+            return Err(self.restore_violation(stage));
         }
+        if !self.target_restore_destination_is_restorable_before(target_deadline)
+            || !self.restore_target_focus_before(stage, target_deadline)
+        {
+            let _ = self.restore_released_user_without_target_proof_before(stage, deadline);
+            return Err(self.restore_violation(stage));
+        }
+        if !self.restore_user_focus_before(stage, target_deadline, user_authorization_deadline) {
+            let _ = self.restore_released_user_without_target_proof_before(stage, deadline);
+            return Err(self.restore_violation(stage));
+        }
+        let user_restored_deadline = std::cmp::min(
+            user_poll_limit,
+            Instant::now() + FOCUS_USER_RESTORE_POLL_BUDGET,
+        );
+        if !self.await_user_owner_before(true, user_restored_deadline) {
+            let _ = self.restore_released_user_without_target_proof_before(stage, deadline);
+            return Err(self.restore_violation(stage));
+        }
+        self.await_phase_before(
+            FocusLeasePhase::Restored,
+            false,
+            stage,
+            None,
+            deadline,
+            Duration::ZERO,
+        )
     }
 
     fn restore_previous_after_failed_activation(
         &self,
-        target_may_be_focused: bool,
+        target_selection_may_be_changed: bool,
+        target_may_be_prepared: bool,
     ) -> Result<(), ComputerError> {
-        if target_may_be_focused {
-            let _ = post_focus_record(
-                self.symbols,
-                &self.target_psn,
+        let stage = InvariantStage::FocusRecovery;
+        let deadline = Instant::now() + FOCUS_RESTORE_OPERATION_BUDGET;
+        let target_deadline = deadline
+            .checked_sub(FOCUS_USER_RECOVERY_RESERVE)
+            .unwrap_or(deadline);
+        let user_authorization_deadline = deadline
+            .checked_sub(FOCUS_USER_AUTHORIZATION_RESERVE)
+            .unwrap_or(deadline);
+        let user_poll_limit = deadline
+            .checked_sub(FOCUS_USER_RETRY_RESERVE)
+            .unwrap_or(deadline);
+        let classify_deadline = std::cmp::min(
+            target_deadline,
+            Instant::now() + FOCUS_RECOVERY_CLASSIFY_BUDGET,
+        );
+        let facts = match self.focus_facts_before(classify_deadline, stage) {
+            Ok(facts) => facts,
+            Err(_) => {
+                let _ = self.restore_released_user_without_target_proof_before(stage, deadline);
+                return Err(self.restore_violation(stage));
+            }
+        };
+        let phase = facts.classify_recovery(
+            self.target_previous_window_id,
+            self.target_window_id,
+            target_selection_may_be_changed,
+            target_may_be_prepared,
+        );
+        if phase == FocusLeasePhase::Restored
+            && facts.target_process_current
+            && facts.user_raw_restorable
+            && facts.target_prior_raw_restorable
+        {
+            return Ok(());
+        }
+        if phase == FocusLeasePhase::RestoredWithInactiveTargetRequested {
+            if facts.target_process_current
+                && facts.user_raw_restorable
+                && facts.target_prior_raw_restorable
+                && facts.target_requested_raw_restorable
+                && self.restore_selected_target_while_user_front_before(stage, target_deadline)
+            {
+                return Ok(());
+            }
+            return Err(self.restore_violation(stage));
+        }
+        let target_needs_cleanup = matches!(
+            phase,
+            FocusLeasePhase::ReleasedWithTargetRequested
+                | FocusLeasePhase::ReleasedWithInactiveTargetRequested
+                | FocusLeasePhase::ReleasedWithActiveTargetPrior
+        );
+        let requested_destination_needed = matches!(
+            phase,
+            FocusLeasePhase::ReleasedWithTargetRequested
+                | FocusLeasePhase::ReleasedWithInactiveTargetRequested
+                | FocusLeasePhase::RestoredWithInactiveTargetRequested
+        );
+        if phase == FocusLeasePhase::Unknown
+            || !facts.target_process_current
+            || !facts.user_raw_restorable
+            || !facts.target_prior_raw_restorable
+            || (requested_destination_needed && !facts.target_requested_raw_restorable)
+            || (target_needs_cleanup
+                && !self.restore_target_focus_from_phase_before(phase, stage, target_deadline))
+        {
+            let _ = self.restore_released_user_without_target_proof_before(stage, deadline);
+            return Err(self.restore_violation(stage));
+        }
+        if !self.restore_user_focus_before(stage, target_deadline, user_authorization_deadline) {
+            let _ = self.restore_released_user_without_target_proof_before(stage, deadline);
+            return Err(self.restore_violation(stage));
+        }
+        let user_restored_deadline = std::cmp::min(
+            user_poll_limit,
+            Instant::now() + FOCUS_USER_RESTORE_POLL_BUDGET,
+        );
+        if !self.await_user_owner_before(true, user_restored_deadline) {
+            let _ = self.restore_released_user_without_target_proof_before(stage, deadline);
+            return Err(self.restore_violation(stage));
+        }
+        self.await_phase_before(
+            FocusLeasePhase::Restored,
+            false,
+            stage,
+            None,
+            deadline,
+            Duration::ZERO,
+        )
+    }
+
+    fn prove_phase_before(
+        &self,
+        phase: FocusLeasePhase,
+        require_requested_raw: bool,
+        stage: InvariantStage,
+        deadline: Instant,
+    ) -> Result<(), ComputerError> {
+        let facts = self.focus_facts_before(deadline, stage)?;
+        let matches = facts.target_process_current
+            && facts.user_raw_restorable
+            && facts.target_prior_raw_restorable
+            && (!require_requested_raw || facts.target_requested_raw_restorable)
+            && facts.matches_phase(phase, self.target_previous_window_id, self.target_window_id)
+            && Instant::now() < deadline;
+        if matches {
+            Ok(())
+        } else {
+            Err(self.restore_violation(stage))
+        }
+    }
+
+    fn await_phase_before(
+        &self,
+        phase: FocusLeasePhase,
+        require_requested_raw: bool,
+        stage: InvariantStage,
+        cancellation: Option<&CommandCancellation>,
+        deadline: Instant,
+        minimum_settle: Duration,
+    ) -> Result<(), ComputerError> {
+        let started = Instant::now();
+        let not_before = started + minimum_settle;
+        loop {
+            if let Some(cancellation) = cancellation {
+                cancellation.check("exact-window background focus")?;
+            }
+            if Instant::now() >= not_before
+                && self
+                    .prove_phase_before(phase, require_requested_raw, stage, deadline)
+                    .is_ok()
+            {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(self.restore_violation(stage));
+            }
+            thread::sleep(FOCUS_RESTORE_POLL_STEP);
+        }
+    }
+
+    /// Re-proves the user's exact foreground ownership immediately before the
+    /// final exact-target receiver proof and native event post.
+    fn prove_dispatch_owner_before(&self, deadline: Instant) -> Result<(), ComputerError> {
+        self.prove_phase_before(
+            FocusLeasePhase::ReleasedWithTargetRequested,
+            true,
+            InvariantStage::FocusPreparation,
+            deadline,
+        )
+        .map_err(|_| background_unavailable("The exact macOS input owner changed before dispatch"))
+    }
+
+    fn focus_facts_before(
+        &self,
+        deadline: Instant,
+        stage: InvariantStage,
+    ) -> Result<FocusLeaseFacts, ComputerError> {
+        let inventory = raw_keyboard_window_inventory_before(deadline)?;
+        let user_raw_restorable =
+            raw_focus_window_restorable(self.previous_pid, self.previous_window_id, &inventory);
+        let target_prior_raw_restorable = raw_focus_window_restorable(
+            self.target_pid,
+            self.target_previous_window_id,
+            &inventory,
+        );
+        let target_requested_raw_restorable =
+            raw_focus_window_restorable(self.target_pid, self.target_window_id, &inventory);
+        let target_process_current = self.target_process_is_current();
+        let user_before = self.user_focus_state_before(deadline, stage)?;
+        let target_before =
+            ax_macos::target_application_focus_state_before(self.target_pid, deadline)?;
+        let user_after = self.user_focus_state_before(deadline, stage)?;
+        let target_after =
+            ax_macos::target_application_focus_state_before(self.target_pid, deadline)?;
+        let front_still_matches = front_process_identity(self.symbols)
+            .is_ok_and(|identity| identity == (self.previous_psn, self.previous_pid));
+        let user_stable = user_before == user_after;
+        let target_stable = target_before == target_after;
+        if !user_stable || !target_stable || !front_still_matches || Instant::now() >= deadline {
+            return Err(self.restore_violation(stage));
+        }
+        Ok(FocusLeaseFacts {
+            user_frontmost: user_after.frontmost,
+            target_frontmost: target_after.frontmost,
+            target_window_id: target_after.window_id,
+            target_main_window_id: target_after.main_window_id,
+            target_process_current,
+            user_raw_restorable,
+            target_prior_raw_restorable,
+            target_requested_raw_restorable,
+        })
+    }
+
+    fn user_focus_state_before(
+        &self,
+        deadline: Instant,
+        stage: InvariantStage,
+    ) -> Result<ax_macos::ApplicationFocusState, ComputerError> {
+        let front_before = front_process_identity(self.symbols).ok();
+        let focus = ax_macos::application_focus_state_before(self.previous_pid, deadline)?;
+        let front_after = front_process_identity(self.symbols).ok();
+        if front_before == Some((self.previous_psn, self.previous_pid))
+            && focus.window_id == self.previous_window_id
+            && front_after == Some((self.previous_psn, self.previous_pid))
+            && Instant::now() < deadline
+        {
+            Ok(focus)
+        } else {
+            Err(self.restore_violation(stage))
+        }
+    }
+
+    fn user_owner_matches_before(&self, expected_frontmost: bool, deadline: Instant) -> bool {
+        stable_front_focus_owner_matches(
+            self.previous_psn,
+            self.previous_pid,
+            self.previous_window_id,
+            expected_frontmost,
+            front_process_identity(self.symbols).ok(),
+            ax_macos::application_focus_state_before(self.previous_pid, deadline).ok(),
+            front_process_identity(self.symbols).ok(),
+        ) && Instant::now() < deadline
+    }
+
+    fn await_user_owner_before(&self, expected_frontmost: bool, deadline: Instant) -> bool {
+        while Instant::now() < deadline {
+            if self.user_owner_matches_before(expected_frontmost, deadline) {
+                return true;
+            }
+            thread::sleep(FOCUS_RESTORE_POLL_STEP);
+        }
+        false
+    }
+
+    fn target_process_is_current(&self) -> bool {
+        exact_window_process(
+            self.symbols,
+            self.target_pid,
+            self.target_previous_window_id,
+        )
+        .is_ok_and(|current| current == self.target_psn)
+    }
+
+    fn restore_target_focus_before(&self, stage: InvariantStage, deadline: Instant) -> bool {
+        self.restore_target_focus_from_phase_before(
+            FocusLeasePhase::ReleasedWithTargetRequested,
+            stage,
+            deadline,
+        )
+    }
+
+    fn restore_selected_target_while_user_front_before(
+        &self,
+        stage: InvariantStage,
+        deadline: Instant,
+    ) -> bool {
+        if self.target_previous_window_id == self.target_window_id {
+            return self
+                .prove_phase_before(FocusLeasePhase::Restored, false, stage, deadline)
+                .is_ok();
+        }
+        let _ = self.set_target_main_window_for_restore_before(
+            FocusLeasePhase::RestoredWithInactiveTargetRequested,
+            self.target_previous_window_id,
+            true,
+            stage,
+            deadline,
+        );
+        self.await_phase_before(
+            FocusLeasePhase::Restored,
+            false,
+            stage,
+            None,
+            deadline,
+            FOCUS_PREPARATION_MIN_SETTLE,
+        )
+        .is_ok()
+    }
+
+    fn restore_target_focus_from_phase_before(
+        &self,
+        mut phase: FocusLeasePhase,
+        stage: InvariantStage,
+        deadline: Instant,
+    ) -> bool {
+        if phase == FocusLeasePhase::ReleasedWithTargetRequested {
+            if !self.post_target_focus_record_before(
                 self.target_window_id,
                 FocusOperation::Defocus,
-            );
+                self.target_window_id,
+                true,
+                deadline,
+            ) || self
+                .await_phase_before(
+                    FocusLeasePhase::ReleasedWithInactiveTargetRequested,
+                    true,
+                    stage,
+                    None,
+                    deadline,
+                    FOCUS_PREPARATION_MIN_SETTLE,
+                )
+                .is_err()
+            {
+                return false;
+            }
+            phase = FocusLeasePhase::ReleasedWithInactiveTargetRequested;
         }
-        if post_focus_record(
+        if phase == FocusLeasePhase::ReleasedWithInactiveTargetRequested {
+            if self.target_previous_window_id == self.target_window_id {
+                phase = FocusLeasePhase::ReleasedWithTargetPrior;
+            } else {
+                // Prime AppKit's exact key-window transfer with a balanced
+                // process-focus record, then commit that exact destination
+                // with the target-only make-key pair. The focus record can
+                // transiently report either the old or new exact receiver, so
+                // only those two observed active states are accepted.
+                if !self.post_target_focus_record_before(
+                    self.target_previous_window_id,
+                    FocusOperation::Focus,
+                    self.target_window_id,
+                    false,
+                    deadline,
+                ) {
+                    return false;
+                }
+                let Some(active_phase) = self.await_known_active_target_before(stage, deadline)
+                else {
+                    return false;
+                };
+                if active_phase == FocusLeasePhase::ReleasedWithTargetRequested {
+                    let _ = self.post_target_make_key_window_before(
+                        self.target_previous_window_id,
+                        stage,
+                        deadline,
+                    );
+                    if self
+                        .await_phase_before(
+                            FocusLeasePhase::ReleasedWithActiveTargetPrior,
+                            false,
+                            stage,
+                            None,
+                            deadline,
+                            FOCUS_PREPARATION_MIN_SETTLE,
+                        )
+                        .is_err()
+                    {
+                        return false;
+                    }
+                }
+                phase = FocusLeasePhase::ReleasedWithActiveTargetPrior;
+            }
+        }
+        if phase == FocusLeasePhase::ReleasedWithActiveTargetPrior {
+            if !self.post_target_focus_record_before(
+                self.target_previous_window_id,
+                FocusOperation::Defocus,
+                self.target_previous_window_id,
+                true,
+                deadline,
+            ) {
+                return false;
+            }
+            phase = FocusLeasePhase::ReleasedWithTargetPrior;
+        }
+        phase == FocusLeasePhase::ReleasedWithTargetPrior
+            && self
+                .await_phase_before(
+                    FocusLeasePhase::ReleasedWithTargetPrior,
+                    false,
+                    stage,
+                    None,
+                    deadline,
+                    FOCUS_PREPARATION_MIN_SETTLE,
+                )
+                .is_ok()
+    }
+
+    fn set_target_main_window_for_restore_before(
+        &self,
+        phase: FocusLeasePhase,
+        window_id: u32,
+        expected_user_frontmost: bool,
+        stage: InvariantStage,
+        deadline: Instant,
+    ) -> bool {
+        let Some(exact_window) = self.main_window_for_id(window_id) else {
+            return false;
+        };
+        if !self.target_process_is_current()
+            || !self.target_window_is_restorable_before(window_id, deadline)
+            || self
+                .prove_phase_before(phase, true, stage, deadline)
+                .is_err()
+            || !self.user_owner_matches_before(expected_user_frontmost, deadline)
+            || Instant::now() >= deadline
+        {
+            return false;
+        }
+        exact_window.set_main(true)
+    }
+
+    fn main_window_for_id(&self, window_id: u32) -> Option<&ax_macos::ExactTargetMainWindow> {
+        if window_id == self.target_window_id {
+            Some(&self.target_main_window)
+        } else if window_id == self.target_previous_window_id {
+            self.target_previous_main_window.as_ref()
+        } else {
+            None
+        }
+    }
+
+    fn post_target_make_key_window_before(
+        &self,
+        window_id: u32,
+        stage: InvariantStage,
+        deadline: Instant,
+    ) -> bool {
+        let destination_restorable = self.target_window_is_restorable_before(window_id, deadline);
+        if !destination_restorable
+            || self
+                .prove_phase_before(
+                    FocusLeasePhase::ReleasedWithTargetRequested,
+                    true,
+                    stage,
+                    deadline,
+                )
+                .is_err()
+            || !self.user_owner_matches_before(false, deadline)
+            || Instant::now() >= deadline
+        {
+            return false;
+        }
+        post_make_key_window_record(self.symbols, &self.target_psn, window_id)
+    }
+
+    fn await_known_active_target_before(
+        &self,
+        stage: InvariantStage,
+        deadline: Instant,
+    ) -> Option<FocusLeasePhase> {
+        let not_before = Instant::now() + FOCUS_PREPARATION_MIN_SETTLE;
+        while Instant::now() < deadline {
+            if Instant::now() >= not_before
+                && let Ok(facts) = self.focus_facts_before(deadline, stage)
+            {
+                let phase = if facts.target_process_current
+                    && facts.user_raw_restorable
+                    && facts.target_prior_raw_restorable
+                    && facts.target_requested_raw_restorable
+                    && facts.matches_phase(
+                        FocusLeasePhase::ReleasedWithTargetRequested,
+                        self.target_previous_window_id,
+                        self.target_window_id,
+                    ) {
+                    Some(FocusLeasePhase::ReleasedWithTargetRequested)
+                } else if facts.target_process_current
+                    && facts.user_raw_restorable
+                    && facts.target_prior_raw_restorable
+                    && facts.matches_phase(
+                        FocusLeasePhase::ReleasedWithActiveTargetPrior,
+                        self.target_previous_window_id,
+                        self.target_window_id,
+                    )
+                {
+                    Some(FocusLeasePhase::ReleasedWithActiveTargetPrior)
+                } else {
+                    None
+                };
+                if phase.is_some() && Instant::now() < deadline {
+                    return phase;
+                }
+            }
+            thread::sleep(FOCUS_RESTORE_POLL_STEP);
+        }
+        None
+    }
+
+    fn post_target_focus_record_before(
+        &self,
+        window_id: u32,
+        operation: FocusOperation,
+        expected_target_window_id: u32,
+        expected_target_frontmost: bool,
+        deadline: Instant,
+    ) -> bool {
+        let target_process_current = self.target_process_is_current();
+        let destination_restorable = self.target_window_is_restorable_before(window_id, deadline);
+        let target_matches =
+            ax_macos::target_application_focus_state_before(self.target_pid, deadline).is_ok_and(
+                |focus| {
+                    focus.frontmost == expected_target_frontmost
+                        && focus.window_id == expected_target_window_id
+                        && focus.main_window_id == expected_target_window_id
+                },
+            );
+        if !target_process_current
+            || !destination_restorable
+            || !target_matches
+            || !self.user_owner_matches_before(false, deadline)
+            || Instant::now() >= deadline
+        {
+            return false;
+        }
+        post_focus_record(self.symbols, &self.target_psn, window_id, operation)
+    }
+
+    fn restore_user_focus_before(
+        &self,
+        stage: InvariantStage,
+        phase_deadline: Instant,
+        user_deadline: Instant,
+    ) -> bool {
+        if self
+            .prove_phase_before(
+                FocusLeasePhase::ReleasedWithTargetPrior,
+                false,
+                stage,
+                phase_deadline,
+            )
+            .is_err()
+            || !self.front_restore_destination_is_restorable_before(user_deadline)
+            || !self.user_owner_matches_before(false, user_deadline)
+            || Instant::now() >= user_deadline
+        {
+            return false;
+        }
+        post_focus_record(
             self.symbols,
             &self.previous_psn,
             self.previous_window_id,
             FocusOperation::Focus,
-        ) {
-            Ok(())
-        } else {
-            Err(background_contract_violation(
-                InvariantStage::FocusRecovery,
-                [InvariantFailure::UserFocus],
-            ))
-        }
+        )
     }
+
+    fn restore_released_user_without_target_proof_before(
+        &self,
+        _stage: InvariantStage,
+        deadline: Instant,
+    ) -> bool {
+        if !self.front_restore_destination_is_restorable_before(deadline)
+            || !self.user_owner_matches_before(false, deadline)
+            || Instant::now() >= deadline
+            || !post_focus_record(
+                self.symbols,
+                &self.previous_psn,
+                self.previous_window_id,
+                FocusOperation::Focus,
+            )
+        {
+            return false;
+        }
+        self.await_user_owner_before(true, deadline)
+    }
+
+    fn front_restore_destination_is_restorable_before(&self, deadline: Instant) -> bool {
+        raw_keyboard_window_inventory_before(deadline).is_ok_and(|inventory| {
+            raw_focus_window_restorable(self.previous_pid, self.previous_window_id, &inventory)
+                && Instant::now() < deadline
+        })
+    }
+
+    fn target_restore_destination_is_restorable_before(&self, deadline: Instant) -> bool {
+        self.target_window_is_restorable_before(self.target_previous_window_id, deadline)
+    }
+
+    fn target_window_is_restorable_before(&self, window_id: u32, deadline: Instant) -> bool {
+        raw_keyboard_window_inventory_before(deadline).is_ok_and(|inventory| {
+            raw_focus_window_restorable(self.target_pid, window_id, &inventory)
+                && Instant::now() < deadline
+        })
+    }
+
+    fn restore_violation(&self, stage: InvariantStage) -> ComputerError {
+        background_contract_violation(stage, [InvariantFailure::UserFocus])
+    }
+}
+
+fn stable_front_focus_owner_matches(
+    expected_psn: [u8; 8],
+    expected_pid: u32,
+    expected_window_id: u32,
+    expected_frontmost: bool,
+    front_before: Option<([u8; 8], u32)>,
+    focus: Option<ax_macos::ApplicationFocusState>,
+    front_after: Option<([u8; 8], u32)>,
+) -> bool {
+    front_before == Some((expected_psn, expected_pid))
+        && focus.is_some_and(|focus| {
+            focus.frontmost == expected_frontmost
+                && focus.window_id == expected_window_id
+                && focus.main_window_id == expected_window_id
+        })
+        && front_after == Some((expected_psn, expected_pid))
+}
+
+fn front_process_identity(symbols: &Symbols) -> Result<([u8; 8], u32), ComputerError> {
+    let mut process = [0u8; 8];
+    if unsafe { (symbols.get_front_process)(process.as_mut_ptr() as *mut c_void) } != 0 {
+        return Err(input_error("Could not read the front process"));
+    }
+    let mut pid_raw: pid_t = 0;
+    if unsafe { (symbols.get_process_pid)(process.as_ptr().cast(), &mut pid_raw) } != 0
+        || pid_raw <= 0
+    {
+        return Err(input_error("Could not resolve the front process"));
+    }
+    Ok((process, pid_raw as u32))
+}
+
+fn exact_window_process(
+    symbols: &Symbols,
+    expected_pid: u32,
+    window_id: u32,
+) -> Result<[u8; 8], ComputerError> {
+    let mut owner_connection = 0u32;
+    if unsafe {
+        (symbols.get_window_owner)((symbols.connection_id)(), window_id, &mut owner_connection)
+    } != 0
+        || owner_connection == 0
+    {
+        return Err(background_unavailable(
+            "macOS could not resolve the exact target window owner",
+        ));
+    }
+    let mut process = [0u8; 8];
+    if unsafe {
+        (symbols.get_connection_psn)(owner_connection, process.as_mut_ptr() as *mut c_void)
+    } != 0
+    {
+        return Err(background_unavailable(
+            "macOS could not resolve the exact target window process",
+        ));
+    }
+    let mut pid_raw: pid_t = 0;
+    if unsafe { (symbols.get_process_pid)(process.as_ptr().cast(), &mut pid_raw) } != 0
+        || pid_raw <= 0
+        || pid_raw as u32 != expected_pid
+    {
+        return Err(background_unavailable(
+            "The exact macOS target window owner changed",
+        ));
+    }
+    Ok(process)
 }
 
 fn source() -> Result<CGEventSource, ComputerError> {
@@ -1015,34 +2526,30 @@ struct DesktopSnapshot {
 impl DesktopSnapshot {
     fn capture() -> Result<Self, ComputerError> {
         let symbols = symbols().ok_or_else(|| input_error("SkyLight symbols are unavailable"))?;
-        let mut front_process = [0u8; 8];
-        if unsafe { (symbols.get_front_process)(front_process.as_mut_ptr() as *mut c_void) } != 0 {
-            return Err(input_error("Could not read the front process"));
-        }
+        let (front_process, front_pid) = front_process_identity(symbols)?;
+        let focus_deadline = Instant::now() + FOCUS_RESTORE_PROOF_BUDGET;
+        let front_focus_before =
+            ax_macos::application_focus_state_before(front_pid, focus_deadline)?;
         let cursor = CGEvent::new(source()?)
             .map_err(|_| input_error("Could not read the hardware cursor"))?
             .location();
-        let mut front_pid_raw: pid_t = 0;
-        let front_pid = (unsafe {
-            (symbols.get_process_pid)(front_process.as_ptr().cast(), &mut front_pid_raw)
-        } == 0
-            && front_pid_raw > 0)
-            .then_some(front_pid_raw as u32);
-        // xcap reports every window owned by a frontmost Chromium process as
-        // focused. Resolve the true front process from the ProcessSerialNumber,
-        // then take its first WindowServer entry (front-to-back z-order).
-        let front_window = front_pid.and_then(|pid| {
-            Window::all()
-                .ok()?
-                .into_iter()
-                .find(|window| window.pid().ok() == Some(pid))
-        });
-        let front_window_id = front_window.as_ref().and_then(|window| window.id().ok());
-        let (front_pid, front_window_id) = resolved_front_identity(front_pid, front_window_id)?;
         let active_space = unsafe { (symbols.get_active_space)((symbols.connection_id)()) };
         if active_space == 0 {
             return Err(input_error("Could not prove the active macOS Space"));
         }
+        let front_focus_after =
+            ax_macos::application_focus_state_before(front_pid, focus_deadline)?;
+        let front_after = front_process_identity(symbols)?;
+        if front_after != (front_process, front_pid)
+            || front_focus_before != front_focus_after
+            || !front_focus_after.frontmost
+            || Instant::now() >= focus_deadline
+        {
+            return Err(input_error(
+                "Could not stabilize the exact macOS foreground window",
+            ));
+        }
+        let front_window_id = front_focus_after.window_id;
         Ok(Self {
             front_process,
             front_pid,
@@ -1064,21 +2571,6 @@ impl DesktopSnapshot {
     }
 }
 
-fn resolved_front_identity(
-    front_pid: Option<u32>,
-    front_window_id: Option<u32>,
-) -> Result<(u32, u32), ComputerError> {
-    match (
-        front_pid.filter(|pid| *pid != 0),
-        front_window_id.filter(|id| *id != 0),
-    ) {
-        (Some(pid), Some(window_id)) => Ok((pid, window_id)),
-        _ => Err(input_error(
-            "Could not prove the front process and exact front window",
-        )),
-    }
-}
-
 fn symbols() -> Option<&'static Symbols> {
     static SYMBOLS: OnceLock<Option<Symbols>> = OnceLock::new();
     SYMBOLS
@@ -1094,8 +2586,9 @@ fn symbols() -> Option<&'static Symbols> {
                 set_integer_field: load(b"SLEventSetIntegerValueField\0")?,
                 post_event_record: load(b"SLPSPostEventRecordTo\0")?,
                 get_front_process: load(b"_SLPSGetFrontProcess\0")?,
-                get_process_for_pid: load(b"GetProcessForPID\0")?,
                 get_process_pid: load(b"GetProcessPID\0")?,
+                get_window_owner: load(b"SLSGetWindowOwner\0")?,
+                get_connection_psn: load(b"SLSGetConnectionPSN\0")?,
                 connection_id: load(b"CGSMainConnectionID\0")?,
                 get_active_space: load(b"SLSGetActiveSpace\0")
                     .or_else(|| load(b"CGSGetActiveSpace\0"))?,
@@ -1117,18 +2610,13 @@ fn input_error(message: impl Into<String>) -> ComputerError {
     ComputerError::new("COMPUTER_INPUT_FAILED", message)
 }
 
+fn background_unavailable(message: impl Into<String>) -> ComputerError {
+    ComputerError::new("COMPUTER_BACKGROUND_UNAVAILABLE", message)
+}
+
 #[cfg(test)]
 mod invariant_tests {
     use super::*;
-
-    #[test]
-    fn unresolved_front_identity_fails_closed() {
-        assert!(resolved_front_identity(None, Some(7)).is_err());
-        assert!(resolved_front_identity(Some(42), None).is_err());
-        assert!(resolved_front_identity(Some(0), Some(7)).is_err());
-        assert!(resolved_front_identity(Some(42), Some(0)).is_err());
-        assert_eq!(resolved_front_identity(Some(42), Some(7)).unwrap(), (42, 7));
-    }
 
     #[test]
     fn text_deadline_and_cancellation_fail_at_cooperative_boundaries() {
@@ -1146,5 +2634,349 @@ mod invariant_tests {
             text_dispatch_checkpoint(&cancellation, Instant::now() + Duration::from_secs(1))
                 .unwrap_err();
         assert_eq!(canceled.code, "COMPUTER_OUTCOME_UNKNOWN");
+    }
+
+    #[test]
+    fn native_post_deadline_is_rechecked_after_dispatch_accounting() {
+        let expired = Instant::now() - Duration::from_millis(1);
+        let before = CommandCancellation::new();
+        let retry_safe = ensure_dispatch_deadline(&before, "fixture post", expired).unwrap_err();
+        assert_eq!(retry_safe.code, "COMPUTER_BACKGROUND_UNAVAILABLE");
+        assert!(!before.was_dispatched());
+
+        let after = CommandCancellation::new();
+        after.begin_side_effect("fixture post").unwrap();
+        let unknown = ensure_dispatch_deadline(&after, "fixture post", expired).unwrap_err();
+        assert_eq!(unknown.code, "COMPUTER_OUTCOME_UNKNOWN");
+
+        let canceled = CommandCancellation::new();
+        canceled.begin_side_effect("fixture post").unwrap();
+        canceled.cancel();
+        let unknown = ensure_dispatch_deadline(
+            &canceled,
+            "fixture post",
+            Instant::now() + Duration::from_secs(1),
+        )
+        .unwrap_err();
+        assert_eq!(unknown.code, "COMPUTER_OUTCOME_UNKNOWN");
+    }
+
+    #[test]
+    fn text_receiver_loss_is_retryable_only_before_the_first_scalar() {
+        let unavailable = || {
+            Err(ComputerError::new(
+                "COMPUTER_BACKGROUND_UNAVAILABLE",
+                "fixture receiver unavailable",
+            ))
+        };
+        let before = map_text_receiver_failure(unavailable(), 0).unwrap_err();
+        assert_eq!(before.code, "COMPUTER_BACKGROUND_UNAVAILABLE");
+        let after = map_text_receiver_failure(unavailable(), 1).unwrap_err();
+        assert_eq!(after.code, "COMPUTER_OUTCOME_UNKNOWN");
+        assert!(after.message.contains("do not automatically retry"));
+    }
+
+    fn keyboard_target() -> WindowDescriptor {
+        WindowDescriptor {
+            id: "62090".to_owned(),
+            pid: 4242,
+            app_name: "Fixture".to_owned(),
+            title: "Target".to_owned(),
+            x: 180,
+            y: 768,
+            width: 820,
+            height: 552,
+            minimized: false,
+            focused: false,
+        }
+    }
+
+    fn raw_keyboard_target() -> RawKeyboardWindow {
+        RawKeyboardWindow {
+            window_id: 62090,
+            owner_pid: 4242,
+            layer: 0,
+            x: 180.0,
+            y: 768.0,
+            width: 820.0,
+            height: 552.0,
+            is_on_screen: Some(true),
+            _sharing_state: Some(0),
+        }
+    }
+
+    #[test]
+    fn raw_keyboard_target_accepts_on_screen_unshareable_exact_window() {
+        let target = keyboard_target();
+        let window = raw_keyboard_target();
+        assert!(raw_keyboard_target_matches(&target, 62090, &[window]));
+    }
+
+    #[test]
+    fn raw_keyboard_target_rejects_offscreen_or_unknown_screen_state() {
+        let target = keyboard_target();
+        let mut offscreen = raw_keyboard_target();
+        offscreen.is_on_screen = Some(false);
+        assert!(!raw_keyboard_target_matches(&target, 62090, &[offscreen]));
+        let mut unknown = raw_keyboard_target();
+        unknown.is_on_screen = None;
+        assert!(!raw_keyboard_target_matches(&target, 62090, &[unknown]));
+    }
+
+    #[test]
+    fn raw_keyboard_target_rejects_owner_layer_geometry_and_duplicate_mismatches() {
+        let target = keyboard_target();
+        let mut wrong_owner = raw_keyboard_target();
+        wrong_owner.owner_pid += 1;
+        assert!(!raw_keyboard_target_matches(&target, 62090, &[wrong_owner]));
+
+        let mut wrong_layer = raw_keyboard_target();
+        wrong_layer.layer = 1;
+        assert!(!raw_keyboard_target_matches(&target, 62090, &[wrong_layer]));
+
+        let mut wrong_geometry = raw_keyboard_target();
+        wrong_geometry.width -= 1.0;
+        assert!(!raw_keyboard_target_matches(
+            &target,
+            62090,
+            &[wrong_geometry]
+        ));
+
+        let exact = raw_keyboard_target();
+        assert!(!raw_keyboard_target_matches(
+            &target,
+            62090,
+            &[exact, exact]
+        ));
+    }
+
+    #[test]
+    fn focus_restore_destination_requires_one_on_screen_layer_zero_owner_match() {
+        let exact = raw_keyboard_target();
+        assert!(raw_focus_window_restorable(4242, 62090, &[exact]));
+
+        let mut offscreen = exact;
+        offscreen.is_on_screen = Some(false);
+        assert!(!raw_focus_window_restorable(4242, 62090, &[offscreen]));
+        let mut unknown = exact;
+        unknown.is_on_screen = None;
+        assert!(!raw_focus_window_restorable(4242, 62090, &[unknown]));
+        let mut wrong_owner = exact;
+        wrong_owner.owner_pid += 1;
+        assert!(!raw_focus_window_restorable(4242, 62090, &[wrong_owner]));
+        let mut wrong_layer = exact;
+        wrong_layer.layer = 1;
+        assert!(!raw_focus_window_restorable(4242, 62090, &[wrong_layer]));
+        assert!(!raw_focus_window_restorable(4242, 62090, &[exact, exact]));
+    }
+
+    #[test]
+    fn same_pid_route_never_changes_the_app_internal_key_window() {
+        assert!(!focus_preparation_needed(4242, 4242));
+        assert!(focus_preparation_needed(7, 4242));
+        let psn = [9_u8; 8];
+        let front = Some((psn, 4242));
+        let exact = ax_macos::ApplicationFocusState {
+            window_id: 62090,
+            main_window_id: 62090,
+            frontmost: true,
+        };
+        assert!(same_process_mutation_target_matches(
+            psn, 4242, 62090, 4242, 62090, front, exact, front
+        ));
+        assert!(!same_process_mutation_target_matches(
+            psn, 4242, 62090, 4242, 62100, front, exact, front
+        ));
+        assert!(!same_process_mutation_target_matches(
+            psn, 4242, 62100, 4242, 62090, front, exact, front
+        ));
+        assert!(!same_process_mutation_target_matches(
+            psn,
+            4242,
+            62090,
+            7,
+            62090,
+            Some((psn, 7)),
+            exact,
+            Some((psn, 7)),
+        ));
+        assert!(!same_process_mutation_target_matches(
+            psn,
+            4242,
+            62090,
+            4242,
+            62090,
+            front,
+            ax_macos::ApplicationFocusState {
+                frontmost: false,
+                ..exact
+            },
+            front,
+        ));
+        assert!(!same_process_mutation_target_matches(
+            psn,
+            4242,
+            62090,
+            4242,
+            62090,
+            front,
+            exact,
+            Some(([8_u8; 8], 4242)),
+        ));
+    }
+
+    #[test]
+    fn front_focus_owner_requires_a_stable_psn_window_and_frontmost_sandwich() {
+        let psn = [7_u8; 8];
+        let exact = ax_macos::ApplicationFocusState {
+            window_id: 62090,
+            main_window_id: 62090,
+            frontmost: true,
+        };
+        assert!(stable_front_focus_owner_matches(
+            psn,
+            42,
+            62090,
+            true,
+            Some((psn, 42)),
+            Some(exact),
+            Some((psn, 42)),
+        ));
+        assert!(!stable_front_focus_owner_matches(
+            psn,
+            42,
+            62090,
+            true,
+            Some((psn, 42)),
+            Some(ax_macos::ApplicationFocusState {
+                window_id: 62100,
+                ..exact
+            }),
+            Some((psn, 42)),
+        ));
+        assert!(!stable_front_focus_owner_matches(
+            psn,
+            42,
+            62090,
+            true,
+            Some((psn, 42)),
+            Some(ax_macos::ApplicationFocusState {
+                main_window_id: 62100,
+                ..exact
+            }),
+            Some((psn, 42)),
+        ));
+        assert!(!stable_front_focus_owner_matches(
+            psn,
+            42,
+            62090,
+            true,
+            Some((psn, 42)),
+            Some(ax_macos::ApplicationFocusState {
+                frontmost: false,
+                ..exact
+            }),
+            Some((psn, 42)),
+        ));
+        assert!(!stable_front_focus_owner_matches(
+            psn,
+            42,
+            62090,
+            true,
+            Some((psn, 42)),
+            Some(exact),
+            Some(([8_u8; 8], 42)),
+        ));
+        assert!(stable_front_focus_owner_matches(
+            psn,
+            42,
+            62090,
+            false,
+            Some((psn, 42)),
+            Some(ax_macos::ApplicationFocusState {
+                frontmost: false,
+                ..exact
+            }),
+            Some((psn, 42)),
+        ));
+    }
+
+    #[test]
+    fn focus_lease_facts_model_only_observable_private_focus_phases() {
+        let facts = |user_frontmost, target_frontmost, target_window_id, target_main_window_id| {
+            FocusLeaseFacts {
+                user_frontmost,
+                target_frontmost,
+                target_window_id,
+                target_main_window_id,
+                target_process_current: true,
+                user_raw_restorable: true,
+                target_prior_raw_restorable: true,
+                target_requested_raw_restorable: true,
+            }
+        };
+        assert!(facts(true, false, 62100, 62100).matches_phase(
+            FocusLeasePhase::Restored,
+            62100,
+            62090
+        ));
+        assert!(facts(true, false, 62090, 62090).matches_phase(
+            FocusLeasePhase::RestoredWithInactiveTargetRequested,
+            62100,
+            62090
+        ));
+        assert!(facts(false, false, 62100, 62100).matches_phase(
+            FocusLeasePhase::ReleasedWithTargetPrior,
+            62100,
+            62090
+        ));
+        assert!(facts(false, true, 62090, 62090).matches_phase(
+            FocusLeasePhase::ReleasedWithTargetRequested,
+            62100,
+            62090
+        ));
+        assert!(facts(false, false, 62090, 62090).matches_phase(
+            FocusLeasePhase::ReleasedWithInactiveTargetRequested,
+            62100,
+            62090
+        ));
+        assert!(facts(false, true, 62100, 62100).matches_phase(
+            FocusLeasePhase::ReleasedWithActiveTargetPrior,
+            62100,
+            62090
+        ));
+        assert_eq!(
+            facts(false, true, 62090, 62090).classify_recovery(62100, 62090, true, true),
+            FocusLeasePhase::ReleasedWithTargetRequested
+        );
+        assert_eq!(
+            facts(false, false, 62100, 62100).classify_recovery(62100, 62090, false, false),
+            FocusLeasePhase::ReleasedWithTargetPrior
+        );
+        assert_eq!(
+            facts(false, false, 62090, 62090).classify_recovery(62100, 62090, true, false),
+            FocusLeasePhase::ReleasedWithInactiveTargetRequested
+        );
+        assert_eq!(
+            facts(true, false, 62090, 62090).classify_recovery(62100, 62090, true, false),
+            FocusLeasePhase::RestoredWithInactiveTargetRequested
+        );
+        assert_eq!(
+            facts(false, true, 62090, 62090).classify_recovery(62090, 62090, true, true),
+            FocusLeasePhase::ReleasedWithTargetRequested
+        );
+        assert_eq!(
+            facts(false, true, 62090, 62090).classify_recovery(62090, 62090, false, false),
+            FocusLeasePhase::Unknown
+        );
+        assert_eq!(
+            facts(false, false, 62090, 62090).classify_recovery(62090, 62090, true, true),
+            FocusLeasePhase::ReleasedWithTargetPrior
+        );
+        assert!(!facts(false, true, 62090, 62100).matches_phase(
+            FocusLeasePhase::ReleasedWithTargetRequested,
+            62100,
+            62090
+        ));
     }
 }

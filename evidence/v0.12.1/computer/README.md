@@ -19,8 +19,11 @@ target and a magenta same-PID sibling receiver sentinel.
 - The server and helper report exactly v0.12.1, are universal
   `arm64`/`x86_64` binaries, and pass strict code-signature checks.
 - The supplied executables are byte-for-byte identical to the copies inside
-  `local-browser-bridge-v0.12.1-macos-universal.tar.gz`, whose hash must match
-  `SHA256SUMS.txt`.
+  `local-browser-bridge-v0.12.1-macos-universal.tar.gz`. The archive must be
+  bound by a canonical `SHA256SUMS.txt` containing exactly the four v0.12.1
+  release assets, and that manifest must match a mandatory SHA-256 supplied
+  out of band; a locally rebuilt archive plus a substituted manifest is
+  refused.
 - Existing Screen Recording and Accessibility permission are present. The rig
   never requests or changes either permission.
 - The exact primary fixture window and a distinct sibling window are both
@@ -32,7 +35,10 @@ target and a magenta same-PID sibling receiver sentinel.
   recorded as separate target-side proof.
 - One persistent ScreenCaptureKit `SCStream` keeps the same share authority
   through cadence sampling, a 900 ms background pixel action, and a controlled
-  exact-target resize. Resize evidence waits past the first geometry transition
+  exact-target resize. During the long action an independent probe must observe
+  target `AXMainWindow == AXFocusedWindow == primary` with target
+  `AXFrontmost=true`, while the user's NSWorkspace PID, raw WindowServer
+  PSN/PID, and exact AX main/focused window remain unchanged. Resize evidence waits past the first geometry transition
   for a later acknowledged source frame whose captured-image aspect ratio and
   saved PNG dimensions match the resized exact window.
 - After that settled resize frame and screenshot, the runner sends another real
@@ -47,7 +53,8 @@ target and a magenta same-PID sibling receiver sentinel.
   action must append to that exact field, report `Unverifiable`, and satisfy
   both product and independent non-interruption invariants. Exact fixture
   read-back supplies separate evidence, after which confirmed Accessibility
-  `setValue` restores the deterministic value.
+  `setValue` restores the deterministic value. Before and after delivery, both
+  target `AXMainWindow` and `AXFocusedWindow` must equal the original sibling.
 - Capture metadata reports `macos-screencapturekit-scstream`,
   `nativeStream: true`, the no-suppression system-indicator policy, and
   `programmatic-exact-window` selection.
@@ -166,8 +173,15 @@ node evidence/v0.12.1/computer/helper-evidence-rig.mjs \
   evidence/v0.12.1/computer \
   "$SCRATCH_PARENT" \
   "$RELEASE_CANDIDATE_DIR/local-browser-bridge-v0.12.1-macos-universal.tar.gz" \
-  "$RELEASE_CANDIDATE_DIR/SHA256SUMS.txt"
+  "$RELEASE_CANDIDATE_DIR/SHA256SUMS.txt" \
+  "$EXPECTED_SHA256SUMS_SHA256"
 ```
+
+`EXPECTED_SHA256SUMS_SHA256` must be the 64-character lowercase SHA-256 of the
+frozen candidate manifest obtained through the independent candidate handoff,
+not recomputed from the directory being tested. The runner records the
+expected and actual manifest hashes, canonical four-entry-set proof, and the
+archive-entry binding in both passing and failing machine-readable results.
 
 The runner generates a random bearer token in memory, passes it only in the
 server and helper process environments, deletes it from the temporary launch

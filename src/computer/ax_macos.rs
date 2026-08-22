@@ -11,7 +11,7 @@ use std::ffi::c_void;
 use std::ptr;
 use std::sync::{Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use core_foundation::array::{CFArray, CFArrayRef};
 use core_foundation::base::{
@@ -29,8 +29,15 @@ use super::{
 };
 
 const AX_SUCCESS: i32 = 0;
+const AX_ATTRIBUTE_UNSUPPORTED: i32 = -25205;
+const AX_NO_VALUE: i32 = -25212;
 const AX_POINT: i32 = 1;
 const AX_SIZE: i32 = 2;
+const AX_ELIGIBILITY_TIMEOUT_SECONDS: f32 = 0.05;
+const AX_RECEIVER_TIMEOUT_SECONDS: f32 = 0.05;
+const MAX_KEYBOARD_PARENT_DEPTH: usize = 4;
+const MAX_KEYBOARD_TOP_LEVEL_ELEMENTS: usize = 256;
+const KEYBOARD_RECEIVER_PROOF_BUDGET: Duration = Duration::from_millis(650);
 const MAX_NODES: usize = 1_500;
 const MAX_DEPTH: usize = 25;
 const MAX_ACTIONABLE: usize = 500;
@@ -81,6 +88,561 @@ pub fn accessibility_ready(prompt: bool) -> bool {
         let options = CFDictionary::from_CFType_pairs(&[(key, value)]);
         AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef())
     }
+}
+
+struct OwnedAxElement(AXUIElementRef);
+
+impl OwnedAxElement {
+    unsafe fn from_create_rule(element: AXUIElementRef) -> Self {
+        Self(element)
+    }
+
+    unsafe fn retain(element: AXUIElementRef) -> Self {
+        unsafe { CFRetain(element as CFTypeRef) };
+        Self(element)
+    }
+
+    fn as_ptr(&self) -> AXUIElementRef {
+        self.0
+    }
+}
+
+impl Drop for OwnedAxElement {
+    fn drop(&mut self) {
+        unsafe { CFRelease(self.0 as CFTypeRef) };
+    }
+}
+
+/// A retained, exact, non-minimized target window whose `AXMain` attribute is
+/// writable. Resolution is read-only; the caller separately authorizes the
+/// write against its focus lease immediately before calling `set_main`.
+pub struct ExactTargetMainWindow(OwnedAxElement);
+
+impl ExactTargetMainWindow {
+    pub fn set_main(&self, main: bool) -> bool {
+        let attribute = CFString::new("AXMain");
+        let value = if main {
+            CFBoolean::true_value()
+        } else {
+            CFBoolean::false_value()
+        };
+        unsafe {
+            AXUIElementSetAttributeValue(
+                self.0.as_ptr(),
+                attribute.as_concrete_TypeRef(),
+                value.as_CFTypeRef(),
+            ) == AX_SUCCESS
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct KeyboardWindowFact {
+    window_id: Option<u32>,
+    top_level_role: bool,
+    minimized: Option<bool>,
+}
+
+fn keyboard_target_eligible(
+    target_id: u32,
+    collections_complete: bool,
+    app_hidden: Option<bool>,
+    candidates: &[KeyboardWindowFact],
+) -> bool {
+    if !collections_complete || app_hidden != Some(false) {
+        return false;
+    }
+    let target_candidates = candidates
+        .iter()
+        .filter(|candidate| candidate.top_level_role && candidate.window_id == Some(target_id))
+        .collect::<Vec<_>>();
+    !target_candidates.is_empty()
+        && target_candidates
+            .iter()
+            .all(|candidate| candidate.minimized == Some(false))
+}
+
+fn keyboard_receiver_matches(
+    target_id: u32,
+    focused_window_id: Option<u32>,
+    focused_element_window_id: Option<u32>,
+    require_focused_element: bool,
+) -> bool {
+    focused_window_id == Some(target_id)
+        && (!require_focused_element || focused_element_window_id == Some(target_id))
+}
+
+/// Proves the exact target is a non-minimized Accessibility top-level window.
+/// Sibling count is deliberately not an authorization signal: ScreenCaptureKit
+/// can add a same-PID AXDialog for its sharing indicator, while the receiver
+/// proof below identifies the actual keyboard destination.
+pub fn ensure_keyboard_target_eligible_before(
+    target: &WindowDescriptor,
+    action_deadline: Instant,
+) -> Result<(), ComputerError> {
+    let deadline = std::cmp::min(
+        action_deadline,
+        Instant::now() + KEYBOARD_RECEIVER_PROOF_BUDGET,
+    );
+    let target_id = target
+        .id
+        .parse::<u32>()
+        .map_err(|_| keyboard_destination_unavailable())?;
+    let app = keyboard_application(target.pid, deadline)?;
+    ensure_receiver_deadline(deadline)?;
+    let app_hidden = strict_bool_attr(app.as_ptr(), "AXHidden", deadline)?;
+    ensure_receiver_deadline(deadline)?;
+    let mut windows = required_element_array_attr(app.as_ptr(), "AXChildren", deadline)?;
+    ensure_receiver_deadline(deadline)?;
+    windows.extend(required_element_array_attr(
+        app.as_ptr(),
+        "AXWindows",
+        deadline,
+    )?);
+
+    let mut facts = Vec::with_capacity(windows.len());
+    for window in &windows {
+        ensure_receiver_deadline(deadline)?;
+        let window_id = candidate_window_id(window.as_ptr());
+        let (top_level_role, minimized) = if window_id == Some(target_id) {
+            let role = required_string_attr(window.as_ptr(), "AXRole", deadline)?;
+            let top_level_role = matches!(role.as_str(), "AXWindow" | "AXSheet" | "AXDialog");
+            let minimized = top_level_role
+                .then(|| strict_bool_attr(window.as_ptr(), "AXMinimized", deadline))
+                .transpose()?
+                .flatten();
+            (top_level_role, minimized)
+        } else {
+            (false, None)
+        };
+        facts.push(KeyboardWindowFact {
+            window_id,
+            top_level_role,
+            minimized,
+        });
+    }
+    ensure_receiver_deadline(deadline)?;
+    if keyboard_target_eligible(target_id, true, app_hidden, &facts) {
+        Ok(())
+    } else {
+        Err(keyboard_destination_unavailable())
+    }
+}
+
+/// Proves which exact window will receive a subsequent PID-scoped key event.
+/// This must run after private exact-window focus preparation and immediately
+/// before dispatch. Text additionally requires the focused element to belong
+/// to the target window; non-text chords use the focused window's responder
+/// chain and therefore require the exact focused window itself.
+/// Receiver proof capped by both its own AX budget and the caller's action
+/// deadline. This keeps a late AX IPC from crossing the native text boundary.
+pub fn ensure_keyboard_receiver_before(
+    target: &WindowDescriptor,
+    require_focused_element: bool,
+    expected_frontmost: bool,
+    action_deadline: Instant,
+) -> Result<(), ComputerError> {
+    let deadline = std::cmp::min(
+        action_deadline,
+        Instant::now() + KEYBOARD_RECEIVER_PROOF_BUDGET,
+    );
+    let target_id = target
+        .id
+        .parse::<u32>()
+        .map_err(|_| keyboard_destination_unavailable())?;
+    let app = receiver_application(target.pid, true, deadline)?;
+    ensure_receiver_deadline(deadline)?;
+    let app_hidden = strict_bool_attr(app.as_ptr(), "AXHidden", deadline)?;
+    let app_frontmost = strict_bool_attr(app.as_ptr(), "AXFrontmost", deadline)?;
+    ensure_receiver_deadline(deadline)?;
+    let focused_window = required_element_attr(app.as_ptr(), "AXFocusedWindow", deadline)?;
+    let focused_window_id = element_window_id(focused_window.as_ptr())?;
+    ensure_receiver_deadline(deadline)?;
+    let focused_window_minimized =
+        strict_bool_attr(focused_window.as_ptr(), "AXMinimized", deadline)?;
+    let focused_element_window_id = if require_focused_element {
+        let focused_element = required_element_attr(app.as_ptr(), "AXFocusedUIElement", deadline)?;
+        resolve_containing_window_id(&focused_element, deadline)?
+    } else {
+        None
+    };
+    ensure_receiver_deadline(deadline)?;
+    if app_hidden == Some(false)
+        && app_frontmost == Some(expected_frontmost)
+        && focused_window_minimized == Some(false)
+        && keyboard_receiver_matches(
+            target_id,
+            focused_window_id,
+            focused_element_window_id,
+            require_focused_element,
+        )
+    {
+        Ok(())
+    } else {
+        Err(keyboard_destination_unavailable())
+    }
+}
+
+fn ensure_receiver_deadline(deadline: Instant) -> Result<(), ComputerError> {
+    if Instant::now() < deadline {
+        Ok(())
+    } else {
+        Err(keyboard_destination_unavailable())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ApplicationFocusState {
+    pub window_id: u32,
+    pub main_window_id: u32,
+    pub frontmost: bool,
+}
+
+/// Returns read-only exact focus state without enabling Chromium's manual or
+/// enhanced Accessibility modes. It is safe to use for an unrelated front app.
+pub fn application_focus_state_before(
+    pid: u32,
+    action_deadline: Instant,
+) -> Result<ApplicationFocusState, ComputerError> {
+    application_focus_state_impl(pid, false, action_deadline)
+}
+
+/// Reads the selected target application's focus state. Unlike the unrelated
+/// foreground oracle above, this may use the existing one-time Chromium AX
+/// opt-in needed to expose the selected target's exact window.
+pub fn target_application_focus_state(pid: u32) -> Result<ApplicationFocusState, ComputerError> {
+    application_focus_state_impl(pid, true, Instant::now() + KEYBOARD_RECEIVER_PROOF_BUDGET)
+}
+
+pub fn target_application_focus_state_before(
+    pid: u32,
+    action_deadline: Instant,
+) -> Result<ApplicationFocusState, ComputerError> {
+    application_focus_state_impl(pid, true, action_deadline)
+}
+
+/// Resolves one exact target AX window for a bounded, reversible `AXMain`
+/// selection. The application-level `AXFocusedWindow` attribute is not used:
+/// it can report a successful write while remaining unchanged. The exact
+/// window's settable `AXMain` attribute is the receiver-selection primitive.
+pub fn exact_target_main_window_before(
+    pid: u32,
+    target_id: u32,
+    action_deadline: Instant,
+) -> Result<ExactTargetMainWindow, ComputerError> {
+    let deadline = std::cmp::min(
+        action_deadline,
+        Instant::now() + KEYBOARD_RECEIVER_PROOF_BUDGET,
+    );
+    let app = receiver_application(pid, true, deadline)?;
+    ensure_receiver_deadline(deadline)?;
+    if strict_bool_attr(app.as_ptr(), "AXHidden", deadline)? != Some(false) {
+        return Err(keyboard_destination_unavailable());
+    }
+    let windows = required_element_array_attr(app.as_ptr(), "AXWindows", deadline)?;
+    let mut matched = None;
+    for window in windows {
+        ensure_receiver_deadline(deadline)?;
+        if candidate_window_id(window.as_ptr()) != Some(target_id) {
+            continue;
+        }
+        if matched.is_some()
+            || !matches!(
+                required_string_attr(window.as_ptr(), "AXRole", deadline)?.as_str(),
+                "AXWindow" | "AXSheet" | "AXDialog"
+            )
+            || strict_bool_attr(window.as_ptr(), "AXMinimized", deadline)? != Some(false)
+            || !unsafe { attribute_settable(window.as_ptr(), "AXMain") }
+        {
+            return Err(keyboard_destination_unavailable());
+        }
+        matched = Some(ExactTargetMainWindow(window));
+    }
+    ensure_receiver_deadline(deadline)?;
+    matched.ok_or_else(keyboard_destination_unavailable)
+}
+
+fn application_focus_state_impl(
+    pid: u32,
+    enable_target_accessibility: bool,
+    action_deadline: Instant,
+) -> Result<ApplicationFocusState, ComputerError> {
+    let deadline = std::cmp::min(
+        action_deadline,
+        Instant::now() + KEYBOARD_RECEIVER_PROOF_BUDGET,
+    );
+    let app = receiver_application(pid, enable_target_accessibility, deadline)?;
+    ensure_receiver_deadline(deadline)?;
+    if strict_bool_attr(app.as_ptr(), "AXHidden", deadline)? != Some(false) {
+        return Err(keyboard_destination_unavailable());
+    }
+    let focused_window = required_element_attr(app.as_ptr(), "AXFocusedWindow", deadline)?;
+    let window_id =
+        element_window_id(focused_window.as_ptr())?.ok_or_else(keyboard_destination_unavailable)?;
+    ensure_receiver_deadline(deadline)?;
+    let role = required_string_attr(focused_window.as_ptr(), "AXRole", deadline)?;
+    if !matches!(role.as_str(), "AXWindow" | "AXSheet" | "AXDialog")
+        || strict_bool_attr(focused_window.as_ptr(), "AXMinimized", deadline)? != Some(false)
+    {
+        return Err(keyboard_destination_unavailable());
+    }
+    ensure_receiver_deadline(deadline)?;
+    let main_window = required_element_attr(app.as_ptr(), "AXMainWindow", deadline)?;
+    let main_window_id =
+        element_window_id(main_window.as_ptr())?.ok_or_else(keyboard_destination_unavailable)?;
+    let main_role = required_string_attr(main_window.as_ptr(), "AXRole", deadline)?;
+    if !matches!(main_role.as_str(), "AXWindow" | "AXSheet" | "AXDialog")
+        || strict_bool_attr(main_window.as_ptr(), "AXMinimized", deadline)? != Some(false)
+    {
+        return Err(keyboard_destination_unavailable());
+    }
+    ensure_receiver_deadline(deadline)?;
+    let frontmost = strict_bool_attr(app.as_ptr(), "AXFrontmost", deadline)?
+        .ok_or_else(keyboard_destination_unavailable)?;
+    ensure_receiver_deadline(deadline)?;
+    Ok(ApplicationFocusState {
+        window_id,
+        main_window_id,
+        frontmost,
+    })
+}
+
+fn keyboard_application(pid: u32, deadline: Instant) -> Result<OwnedAxElement, ComputerError> {
+    application_element(pid, true, AX_ELIGIBILITY_TIMEOUT_SECONDS, deadline)
+}
+
+fn receiver_application(
+    pid: u32,
+    enable_target_accessibility: bool,
+    deadline: Instant,
+) -> Result<OwnedAxElement, ComputerError> {
+    application_element(
+        pid,
+        enable_target_accessibility,
+        AX_RECEIVER_TIMEOUT_SECONDS,
+        deadline,
+    )
+}
+
+fn application_element(
+    pid: u32,
+    enable_target_accessibility: bool,
+    timeout_seconds: f32,
+    deadline: Instant,
+) -> Result<OwnedAxElement, ComputerError> {
+    ensure_receiver_deadline(deadline)?;
+    if !accessibility_ready(false) {
+        return Err(keyboard_destination_unavailable());
+    }
+    let raw = unsafe { AXUIElementCreateApplication(pid as i32) };
+    if raw.is_null() {
+        return Err(keyboard_destination_unavailable());
+    }
+    let app = unsafe { OwnedAxElement::from_create_rule(raw) };
+    set_keyboard_timeout(app.as_ptr(), timeout_seconds, deadline)?;
+    if enable_target_accessibility && enable_chromium_accessibility_once(pid, app.as_ptr()) {
+        thread::sleep(Duration::from_millis(180));
+        ensure_receiver_deadline(deadline)?;
+    }
+    Ok(app)
+}
+
+fn set_keyboard_timeout(
+    element: AXUIElementRef,
+    maximum_timeout_seconds: f32,
+    deadline: Instant,
+) -> Result<(), ComputerError> {
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .ok_or_else(keyboard_destination_unavailable)?;
+    let timeout_seconds = remaining
+        .as_secs_f32()
+        .min(maximum_timeout_seconds)
+        .max(0.001);
+    if unsafe { AXUIElementSetMessagingTimeout(element, timeout_seconds) } == AX_SUCCESS {
+        Ok(())
+    } else {
+        Err(keyboard_destination_unavailable())
+    }
+}
+
+fn required_element_array_attr(
+    element: AXUIElementRef,
+    name: &str,
+    deadline: Instant,
+) -> Result<Vec<OwnedAxElement>, ComputerError> {
+    let value = copy_required_keyboard_attr(element, name, deadline)?;
+    if unsafe { CFGetTypeID(value) } != CFArray::<CFTypeRef>::type_id() {
+        unsafe { CFRelease(value) };
+        return Err(keyboard_destination_unavailable());
+    }
+    let array = unsafe { CFArray::<CFTypeRef>::wrap_under_create_rule(value as _) };
+    if array.len() as usize > MAX_KEYBOARD_TOP_LEVEL_ELEMENTS {
+        return Err(keyboard_destination_unavailable());
+    }
+    let expected_type = unsafe { AXUIElementGetTypeID() };
+    let mut output = Vec::with_capacity(array.len() as usize);
+    for index in 0..array.len() {
+        ensure_receiver_deadline(deadline)?;
+        let Some(item) = array.get(index) else {
+            return Err(keyboard_destination_unavailable());
+        };
+        let item = *item;
+        if unsafe { CFGetTypeID(item) } != expected_type {
+            return Err(keyboard_destination_unavailable());
+        }
+        let child = unsafe { OwnedAxElement::retain(item as AXUIElementRef) };
+        set_keyboard_timeout(child.as_ptr(), AX_ELIGIBILITY_TIMEOUT_SECONDS, deadline)?;
+        output.push(child);
+    }
+    Ok(output)
+}
+
+fn required_element_attr(
+    element: AXUIElementRef,
+    name: &str,
+    deadline: Instant,
+) -> Result<OwnedAxElement, ComputerError> {
+    let value = copy_required_keyboard_attr(element, name, deadline)?;
+    if unsafe { CFGetTypeID(value) } != unsafe { AXUIElementGetTypeID() } {
+        unsafe { CFRelease(value) };
+        return Err(keyboard_destination_unavailable());
+    }
+    let child = unsafe { OwnedAxElement::from_create_rule(value as AXUIElementRef) };
+    set_keyboard_timeout(child.as_ptr(), AX_RECEIVER_TIMEOUT_SECONDS, deadline)?;
+    Ok(child)
+}
+
+fn optional_element_attr(
+    element: AXUIElementRef,
+    name: &str,
+    deadline: Instant,
+) -> Result<Option<OwnedAxElement>, ComputerError> {
+    let Some(value) = copy_optional_keyboard_attr(element, name, deadline)? else {
+        return Ok(None);
+    };
+    if unsafe { CFGetTypeID(value) } != unsafe { AXUIElementGetTypeID() } {
+        unsafe { CFRelease(value) };
+        return Err(keyboard_destination_unavailable());
+    }
+    let child = unsafe { OwnedAxElement::from_create_rule(value as AXUIElementRef) };
+    set_keyboard_timeout(child.as_ptr(), AX_RECEIVER_TIMEOUT_SECONDS, deadline)?;
+    Ok(Some(child))
+}
+
+fn required_string_attr(
+    element: AXUIElementRef,
+    name: &str,
+    deadline: Instant,
+) -> Result<String, ComputerError> {
+    let value = copy_required_keyboard_attr(element, name, deadline)?;
+    if unsafe { CFGetTypeID(value) } != CFString::type_id() {
+        unsafe { CFRelease(value) };
+        return Err(keyboard_destination_unavailable());
+    }
+    Ok(unsafe { CFString::wrap_under_create_rule(value as _) }.to_string())
+}
+
+fn strict_bool_attr(
+    element: AXUIElementRef,
+    name: &str,
+    deadline: Instant,
+) -> Result<Option<bool>, ComputerError> {
+    let Some(value) = copy_optional_keyboard_attr(element, name, deadline)? else {
+        return Ok(None);
+    };
+    if unsafe { CFGetTypeID(value) } != CFBoolean::type_id() {
+        unsafe { CFRelease(value) };
+        return Err(keyboard_destination_unavailable());
+    }
+    let flag: bool = unsafe { CFBoolean::wrap_under_create_rule(value as _) }.into();
+    Ok(Some(flag))
+}
+
+fn copy_required_keyboard_attr(
+    element: AXUIElementRef,
+    name: &str,
+    deadline: Instant,
+) -> Result<CFTypeRef, ComputerError> {
+    copy_optional_keyboard_attr(element, name, deadline)?
+        .ok_or_else(keyboard_destination_unavailable)
+}
+
+fn copy_optional_keyboard_attr(
+    element: AXUIElementRef,
+    name: &str,
+    deadline: Instant,
+) -> Result<Option<CFTypeRef>, ComputerError> {
+    set_keyboard_timeout(element, AX_RECEIVER_TIMEOUT_SECONDS, deadline)?;
+    let attribute = CFString::new(name);
+    let mut value: CFTypeRef = ptr::null();
+    let status = unsafe {
+        AXUIElementCopyAttributeValue(element, attribute.as_concrete_TypeRef(), &mut value)
+    };
+    if status == AX_SUCCESS && !value.is_null() {
+        return Ok(Some(value));
+    }
+    if !value.is_null() {
+        unsafe { CFRelease(value) };
+    }
+    if matches!(status, AX_ATTRIBUTE_UNSUPPORTED | AX_NO_VALUE) {
+        Ok(None)
+    } else {
+        Err(keyboard_destination_unavailable())
+    }
+}
+
+fn element_window_id(element: AXUIElementRef) -> Result<Option<u32>, ComputerError> {
+    let mut window_id = 0_u32;
+    let status = unsafe { _AXUIElementGetWindow(element, &mut window_id) };
+    match (status, window_id) {
+        (AX_SUCCESS, 1..) => Ok(Some(window_id)),
+        (AX_SUCCESS, 0) | (AX_ATTRIBUTE_UNSUPPORTED | AX_NO_VALUE, _) => Ok(None),
+        _ => Err(keyboard_destination_unavailable()),
+    }
+}
+
+fn candidate_window_id(element: AXUIElementRef) -> Option<u32> {
+    let mut window_id = 0_u32;
+    (unsafe { _AXUIElementGetWindow(element, &mut window_id) } == AX_SUCCESS && window_id != 0)
+        .then_some(window_id)
+}
+
+fn resolve_containing_window_id(
+    focused_element: &OwnedAxElement,
+    deadline: Instant,
+) -> Result<Option<u32>, ComputerError> {
+    let mut current = unsafe { OwnedAxElement::retain(focused_element.as_ptr()) };
+    let mut visited = Vec::<OwnedAxElement>::new();
+    for _ in 0..MAX_KEYBOARD_PARENT_DEPTH {
+        ensure_receiver_deadline(deadline)?;
+        if visited.iter().any(|candidate| unsafe {
+            CFEqual(
+                candidate.as_ptr() as CFTypeRef,
+                current.as_ptr() as CFTypeRef,
+            ) != 0
+        }) {
+            return Ok(None);
+        }
+        visited.push(unsafe { OwnedAxElement::retain(current.as_ptr()) });
+        if let Some(window_id) = element_window_id(current.as_ptr())? {
+            return Ok(Some(window_id));
+        }
+        for relationship in ["AXWindow", "AXTopLevelUIElement"] {
+            ensure_receiver_deadline(deadline)?;
+            if let Some(related) = optional_element_attr(current.as_ptr(), relationship, deadline)?
+                && let Some(window_id) = element_window_id(related.as_ptr())?
+            {
+                return Ok(Some(window_id));
+            }
+        }
+        ensure_receiver_deadline(deadline)?;
+        let Some(parent) = optional_element_attr(current.as_ptr(), "AXParent", deadline)? else {
+            return Ok(None);
+        };
+        current = parent;
+    }
+    Ok(None)
 }
 
 pub fn snapshot(target: &WindowDescriptor) -> Result<Vec<SemanticTarget>, ComputerError> {
@@ -272,24 +834,11 @@ unsafe fn exact_window(target: &WindowDescriptor) -> Result<AXUIElementRef, Comp
     let mut windows = unsafe { element_array_attr(app, "AXChildren") };
     windows.extend(unsafe { element_array_attr(app, "AXWindows") });
     unsafe { CFRelease(app as CFTypeRef) };
-    let mut candidate_ids = Vec::new();
-    let mut candidate_summaries = Vec::new();
     let mut direct_match = None;
     for &window in &windows {
         let mut id = 0;
         let resolved = unsafe { _AXUIElementGetWindow(window, &mut id) } == AX_SUCCESS && id != 0;
         let role = unsafe { string_attr(window, "AXRole") }.unwrap_or_default();
-        if resolved && !candidate_ids.contains(&id) {
-            candidate_ids.push(id);
-        }
-        if candidate_summaries.len() < 32 {
-            candidate_summaries.push(format!(
-                "{}:{}:{:?}",
-                role,
-                unsafe { string_attr(window, "AXIdentifier") }.unwrap_or_default(),
-                unsafe { element_bounds(window) }
-            ));
-        }
         let matched = resolved
             && id == expected
             && matches!(role.as_str(), "AXWindow" | "AXSheet" | "AXDialog");
@@ -325,9 +874,9 @@ unsafe fn exact_window(target: &WindowDescriptor) -> Result<AXUIElementRef, Comp
     for surface in surface_matches.drain(..) {
         unsafe { CFRelease(surface as CFTypeRef) };
     }
-    Err(semantic_unavailable(format!(
-        "CGWindowID {expected} did not resolve to an exact AX window; AX exposed {candidate_ids:?}; top-level {candidate_summaries:?}"
-    )))
+    Err(semantic_unavailable(
+        "The exact macOS Accessibility window could not be resolved",
+    ))
 }
 
 fn enable_chromium_accessibility_once(pid: u32, app: AXUIElementRef) -> bool {
@@ -723,6 +1272,13 @@ fn semantic_unavailable(message: impl Into<String>) -> ComputerError {
     ComputerError::new("COMPUTER_SEMANTIC_UNAVAILABLE", message)
 }
 
+fn keyboard_destination_unavailable() -> ComputerError {
+    ComputerError::new(
+        "COMPUTER_BACKGROUND_UNAVAILABLE",
+        "Could not prove the exact macOS keyboard receiver",
+    )
+}
+
 fn invalid_semantic(message: impl Into<String>) -> ComputerError {
     ComputerError::new("COMPUTER_INVALID_REQUEST", message)
 }
@@ -743,5 +1299,110 @@ mod tests {
             Some("AXSecureCustomField")
         ));
         assert!(!sensitive_ax_semantics("AXTextField", None));
+    }
+
+    fn target_window(minimized: Option<bool>) -> KeyboardWindowFact {
+        KeyboardWindowFact {
+            window_id: Some(62090),
+            top_level_role: true,
+            minimized,
+        }
+    }
+
+    #[test]
+    fn keyboard_target_requires_known_non_minimized_exact_top_level_window() {
+        assert!(keyboard_target_eligible(
+            62090,
+            true,
+            Some(false),
+            &[target_window(Some(false))]
+        ));
+        assert!(!keyboard_target_eligible(
+            62090,
+            true,
+            Some(false),
+            &[target_window(Some(true))]
+        ));
+        assert!(!keyboard_target_eligible(
+            62090,
+            true,
+            Some(false),
+            &[target_window(None)]
+        ));
+        assert!(!keyboard_target_eligible(
+            62090,
+            true,
+            Some(true),
+            &[target_window(Some(false))]
+        ));
+        assert!(!keyboard_target_eligible(
+            62090,
+            true,
+            None,
+            &[target_window(Some(false))]
+        ));
+    }
+
+    #[test]
+    fn keyboard_target_dedupes_collections_and_ignores_arbitrary_ax_children() {
+        let arbitrary_child = KeyboardWindowFact {
+            window_id: None,
+            top_level_role: false,
+            minimized: None,
+        };
+        assert!(keyboard_target_eligible(
+            62090,
+            true,
+            Some(false),
+            &[
+                arbitrary_child,
+                target_window(Some(false)),
+                target_window(Some(false)),
+            ]
+        ));
+    }
+
+    #[test]
+    fn keyboard_target_collection_error_and_missing_target_fail_closed() {
+        assert!(!keyboard_target_eligible(
+            62090,
+            false,
+            Some(false),
+            &[target_window(Some(false))]
+        ));
+        assert!(!keyboard_target_eligible(
+            62090,
+            true,
+            Some(false),
+            &[KeyboardWindowFact {
+                window_id: Some(62100),
+                top_level_role: true,
+                minimized: Some(false),
+            }]
+        ));
+    }
+
+    #[test]
+    fn keyboard_receiver_requires_exact_focused_window_and_text_element_owner() {
+        assert!(keyboard_receiver_matches(62090, Some(62090), None, false));
+        assert!(keyboard_receiver_matches(
+            62090,
+            Some(62090),
+            Some(62090),
+            true
+        ));
+        assert!(!keyboard_receiver_matches(
+            62090,
+            Some(62100),
+            Some(62090),
+            true
+        ));
+        assert!(!keyboard_receiver_matches(
+            62090,
+            Some(62090),
+            Some(62100),
+            true
+        ));
+        assert!(!keyboard_receiver_matches(62090, Some(62090), None, true));
     }
 }

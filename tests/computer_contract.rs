@@ -152,7 +152,9 @@ fn background_backend_has_no_global_or_foreground_input_fallback() {
     assert!(!windows.contains("space_unchanged: true"));
     assert!(windows.contains("GetForegroundWindow returned no readable window"));
     assert!(windows.contains("GetGUIThreadInfo failed for the foreground thread"));
-    assert!(macos.contains("resolved_front_identity"));
+    assert!(macos.contains("ax_macos::application_focus_state_before(front_pid, focus_deadline)"));
+    assert!(macos.contains("front_focus_before != front_focus_after"));
+    assert!(macos.contains("!front_focus_after.frontmost"));
     assert!(macos.contains(
         "struct DesktopSnapshot {\n    front_process: [u8; 8],\n    front_pid: u32,\n    front_window_id: u32,"
     ));
@@ -178,7 +180,7 @@ fn native_text_delivery_is_bounded_paced_and_cancellable() {
 
     assert!(macos.contains("const TEXT_EVENT_PACE: Duration = Duration::from_millis(1)"));
     assert!(macos.contains("pace_text_dispatch(cancellation, deadline, TEXT_EVENT_PACE)"));
-    assert!(macos.contains("TEXT_TARGET_REVALIDATE_SCALARS"));
+    assert!(macos.contains("ensure_text_keyboard_receiver(focus, target, dispatched, deadline)?;"));
     assert!(windows.contains("const TEXT_MESSAGE_BURST: usize = 16"));
     assert!(windows.contains("ensure_unicode_keyboard_recipient(recipient)?"));
     assert!(windows.contains("WM_CHAR_REPEAT_COUNT"));
@@ -187,6 +189,459 @@ fn native_text_delivery_is_bounded_paced_and_cancellable() {
         assert!(source.contains("cancellation.check(\"native text dispatch\")"));
         assert!(source.contains("COMPUTER_OUTCOME_UNKNOWN"));
     }
+}
+
+#[test]
+fn macos_keyboard_delivery_requires_exact_post_focus_receiver_proof() {
+    let macos = fs::read_to_string("src/computer/platform_macos.rs")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let accessibility = fs::read_to_string("src/computer/ax_macos.rs")
+        .unwrap()
+        .replace("\r\n", "\n");
+
+    assert!(macos.contains("copy_window_info(kCGWindowListOptionAll, kCGNullWindowID)"));
+    assert!(macos.contains("ensure_keyboard_target_eligible(target)?;"));
+    assert!(!macos.contains("ensure_unique_keyboard_destination"));
+    assert!(!macos.contains("ensure_keyboard_dispatch_ready"));
+    assert!(macos.contains("ax_macos::application_focus_state_before("));
+    assert!(macos.contains("enum FocusLeasePhase"));
+    assert!(macos.contains("ReleasedWithTargetPrior"));
+    assert!(macos.contains("ReleasedWithTargetRequested"));
+    assert!(macos.contains("ReleasedWithInactiveTargetRequested"));
+    assert!(macos.contains("ReleasedWithActiveTargetPrior"));
+    assert!(macos.contains("post_phase_transition_before"));
+    assert!(macos.contains("FOCUS_USER_RECOVERY_RESERVE"));
+    assert!(macos.contains("FOCUS_USER_AUTHORIZATION_RESERVE"));
+    assert!(macos.contains("FOCUS_USER_RESTORE_POLL_BUDGET"));
+    assert!(macos.contains("FOCUS_USER_RETRY_RESERVE"));
+    assert!(macos.contains("prove_action_dispatch_owner("));
+    assert!(macos.contains("focus.prove_dispatch_owner_before(deadline)"));
+    assert!(macos.contains("FOCUS_PREPARATION_MIN_SETTLE"));
+    assert!(macos.contains("self.focus_facts_before(classify_deadline, stage)"));
+    assert!(macos.contains("restore_released_user_without_target_proof_before"));
+    assert!(macos.contains("self.front_restore_destination_is_restorable_before(deadline)"));
+    assert!(
+        macos.contains("self.target_restore_destination_is_restorable_before(target_deadline)")
+    );
+    assert!(macos.contains("raw_keyboard_window_inventory_before(deadline)"));
+    assert!(!macos.contains("raw_keyboard_window_inventory()"));
+    assert!(macos.contains("raw_focus_window_restorable("));
+    assert!(macos.contains("SLSGetWindowOwner"));
+    assert!(macos.contains("SLSGetConnectionPSN"));
+    assert!(macos.contains("post_make_key_window_record"));
+    assert!(macos.contains("record[0x3A] = 0x10"));
+    assert!(macos.contains("record[0x20..0x30].fill(0xFF)"));
+    assert!(macos.contains("record[0x08] = 0x01"));
+    assert!(macos.contains("record[0x08] = 0x02"));
+    assert!(!macos.contains("load(b\"_SLPSSetFrontProcessWithOptions"));
+    assert!(!macos.contains("AXRaise"));
+    assert!(accessibility.contains("pub struct ExactTargetMainWindow"));
+    assert!(accessibility.contains("attribute_settable(window.as_ptr(), \"AXMain\")"));
+    assert!(accessibility.contains("main_window_id"));
+    assert!(macos.contains("ensure_same_process_mutation_target(target, before)?;"));
+    assert!(macos.contains("previous_focus.window_id != before.front_window_id"));
+    let semantic_guard = macos
+        .split("fn guarded_semantic<T>(")
+        .nth(1)
+        .unwrap()
+        .split("fn post_mouse(")
+        .next()
+        .unwrap();
+    assert!(!semantic_guard.contains("ensure_same_process_mutation_target"));
+    assert!(macos.contains("ax_macos::accessibility_ready(false)"));
+    assert!(macos.contains("FOCUS_RESTORE_PROOF_BUDGET"));
+
+    let recovery_classifier = macos
+        .split("fn classify_recovery(")
+        .nth(1)
+        .unwrap()
+        .split("impl FocusLease")
+        .next()
+        .unwrap();
+    assert!(
+        recovery_classifier
+            .find("if !target_may_be_prepared")
+            .unwrap()
+            < recovery_classifier.find("if requested_active").unwrap()
+    );
+    assert!(recovery_classifier.contains("FocusLeasePhase::Unknown"));
+
+    let action_owner = macos
+        .split("fn prove_action_dispatch_owner(")
+        .nth(1)
+        .unwrap()
+        .split("fn prove_target_focus_window(")
+        .next()
+        .unwrap();
+    assert!(action_owner.contains("&& Instant::now() < deadline"));
+    assert_eq!(
+        action_owner
+            .matches("focus.prove_dispatch_owner_before(deadline)?;")
+            .count(),
+        2
+    );
+
+    let same_process_guard = macos
+        .split("fn ensure_same_process_mutation_target(")
+        .nth(1)
+        .unwrap()
+        .split("fn focus_preparation_needed(")
+        .next()
+        .unwrap();
+    assert!(same_process_guard.contains("before.front_window_id"));
+    assert!(same_process_guard.contains("front_process_identity(symbols).ok()"));
+    assert!(same_process_guard.contains("snapshot_front_window_id == target_window_id"));
+
+    let target_restore = macos
+        .split("fn post_target_focus_record_before(")
+        .nth(1)
+        .unwrap()
+        .split("fn restore_user_focus_before(")
+        .next()
+        .unwrap();
+    assert!(
+        target_restore.find("target_process_is_current()").unwrap()
+            < target_restore
+                .find("target_window_is_restorable_before(window_id, deadline)")
+                .unwrap()
+    );
+    assert!(
+        target_restore
+            .find("target_application_focus_state_before(self.target_pid, deadline)")
+            .unwrap()
+            < target_restore
+                .find("user_owner_matches_before(false, deadline)")
+                .unwrap()
+    );
+    let target_cleanup = macos
+        .split("fn restore_target_focus_from_phase_before(")
+        .nth(1)
+        .unwrap()
+        .split("fn post_target_focus_record_before(")
+        .next()
+        .unwrap();
+    for phase in [
+        "ReleasedWithTargetRequested",
+        "ReleasedWithInactiveTargetRequested",
+        "ReleasedWithActiveTargetPrior",
+        "ReleasedWithTargetPrior",
+    ] {
+        assert!(target_cleanup.contains(phase));
+    }
+    for required in [
+        "await_known_active_target_before",
+        "post_target_make_key_window_before",
+        "FocusOperation::Focus",
+        "FocusOperation::Defocus",
+    ] {
+        assert!(target_cleanup.contains(required));
+    }
+    assert!(
+        target_cleanup.find("FocusOperation::Defocus").unwrap()
+            < target_cleanup
+                .find("FocusLeasePhase::ReleasedWithInactiveTargetRequested")
+                .unwrap()
+    );
+    let user_restore = macos
+        .split("fn restore_user_focus_before(")
+        .nth(1)
+        .unwrap()
+        .split("fn restore_released_user_without_target_proof_before(")
+        .next()
+        .unwrap();
+    assert!(
+        user_restore.find("prove_phase_before(").unwrap()
+            < user_restore
+                .find("front_restore_destination_is_restorable_before(user_deadline)")
+                .unwrap()
+    );
+    assert!(
+        user_restore
+            .find("front_restore_destination_is_restorable_before(user_deadline)")
+            .unwrap()
+            < user_restore
+                .find("user_owner_matches_before(false, user_deadline)")
+                .unwrap()
+    );
+    assert!(
+        user_restore
+            .find("user_owner_matches_before(false, user_deadline)")
+            .unwrap()
+            < user_restore.find("post_focus_record(").unwrap()
+    );
+
+    let restore = macos
+        .split("fn restore(self)")
+        .nth(1)
+        .unwrap()
+        .split("fn restore_previous_after_failed_activation(")
+        .next()
+        .unwrap();
+    let user_focus_post = restore.find("restore_user_focus_before(").unwrap();
+    let user_restored = restore[user_focus_post..]
+        .find("await_user_owner_before(true, user_restored_deadline)")
+        .unwrap()
+        + user_focus_post;
+    let target_restored = restore[user_restored..]
+        .find("await_phase_before(")
+        .unwrap()
+        + user_restored;
+    assert!(user_focus_post < user_restored && user_restored < target_restored);
+    assert!(restore.contains("checked_sub(FOCUS_USER_RECOVERY_RESERVE)"));
+    assert!(restore.contains("checked_sub(FOCUS_USER_AUTHORIZATION_RESERVE)"));
+    assert!(restore.contains("checked_sub(FOCUS_USER_RETRY_RESERVE)"));
+
+    let user_only_restore = macos
+        .split("fn restore_released_user_without_target_proof_before(")
+        .nth(1)
+        .unwrap()
+        .split("fn front_restore_destination_is_restorable_before(")
+        .next()
+        .unwrap();
+    assert!(
+        user_only_restore
+            .find("front_restore_destination_is_restorable_before(deadline)")
+            .unwrap()
+            < user_only_restore
+                .find("user_owner_matches_before(false, deadline)")
+                .unwrap()
+    );
+    assert!(
+        user_only_restore.find("post_focus_record(").unwrap()
+            < user_only_restore
+                .find("await_user_owner_before(true, deadline)")
+                .unwrap()
+    );
+
+    let phase_transition = macos
+        .split("fn post_phase_transition_before(")
+        .nth(1)
+        .unwrap()
+        .split("fn set_target_main_window_before(")
+        .next()
+        .unwrap();
+    let authorization = phase_transition
+        .split("let authorize = ||")
+        .nth(1)
+        .unwrap()
+        .split("authorize()?;")
+        .next()
+        .unwrap();
+    assert!(
+        authorization.find("prove_phase_before(").unwrap()
+            < authorization
+                .find("user_owner_matches_before(expected_user_frontmost, deadline)")
+                .unwrap()
+    );
+    assert_eq!(phase_transition.matches("authorize()?;").count(), 2);
+    assert!(
+        phase_transition.find("authorize()?;").unwrap()
+            < phase_transition
+                .find("cancellation.begin_side_effect(boundary)?;")
+                .unwrap()
+    );
+    assert!(
+        phase_transition
+            .find("cancellation.begin_side_effect(boundary)?;")
+            .unwrap()
+            < phase_transition.rfind("authorize()?;").unwrap()
+    );
+
+    let phase_facts = macos
+        .split("fn focus_facts_before(")
+        .nth(1)
+        .unwrap()
+        .split("fn user_focus_state_before(")
+        .next()
+        .unwrap();
+    assert!(
+        phase_facts
+            .find("raw_keyboard_window_inventory_before(deadline)")
+            .unwrap()
+            < phase_facts
+                .find("let user_before = self.user_focus_state_before")
+                .unwrap()
+    );
+    assert!(
+        phase_facts
+            .find("let target_process_current = self.target_process_is_current();")
+            .unwrap()
+            < phase_facts
+                .rfind("front_process_identity(self.symbols)")
+                .unwrap()
+    );
+
+    for required_ax_proof in [
+        "AXFocusedWindow",
+        "AXFocusedUIElement",
+        "AXTopLevelUIElement",
+        "AXWindow",
+        "AXParent",
+        "AXMinimized",
+        "AXHidden",
+        "AXFrontmost",
+        "MAX_KEYBOARD_PARENT_DEPTH",
+        "MAX_KEYBOARD_TOP_LEVEL_ELEMENTS",
+        "AX_ELIGIBILITY_TIMEOUT_SECONDS",
+        "AX_RECEIVER_TIMEOUT_SECONDS",
+        "KEYBOARD_RECEIVER_PROOF_BUDGET",
+        "ensure_keyboard_receiver_before",
+        "application_focus_state_impl",
+        "target_application_focus_state",
+    ] {
+        assert!(
+            accessibility.contains(required_ax_proof),
+            "missing macOS keyboard AX proof: {required_ax_proof}"
+        );
+    }
+
+    let text_start = macos.find("pub fn type_text(").unwrap();
+    let text_end = macos[text_start..]
+        .find("fn text_dispatch_checkpoint(")
+        .unwrap()
+        + text_start;
+    let text = &macos[text_start..text_end];
+    let guarded = text.find("InvariantStage::TextDispatch").unwrap();
+    let eligibility = text
+        .find("ensure_keyboard_target_eligible_before(target, deadline)?;")
+        .unwrap();
+    let event_construction = text.find("let down = keyboard_event").unwrap();
+    assert!(eligibility < guarded && guarded < event_construction);
+    let postconstruction_proof = text[event_construction..]
+        .find("ensure_text_keyboard_receiver(focus, target, dispatched, deadline)?;")
+        .unwrap()
+        + event_construction;
+    let postproof_deadline = text[postconstruction_proof..]
+        .find("text_dispatch_checkpoint(cancellation, deadline)?;")
+        .unwrap()
+        + postconstruction_proof;
+    let first_post = text[event_construction..]
+        .find("held_event_sequence(")
+        .unwrap()
+        + event_construction;
+    assert!(
+        event_construction < postconstruction_proof
+            && postconstruction_proof < postproof_deadline
+            && postproof_deadline < first_post
+    );
+    let key_start = macos.find("pub fn key(").unwrap();
+    let key_end = macos[key_start..]
+        .find("fn ensure_keyboard_target_eligible(")
+        .unwrap()
+        + key_start;
+    let key = &macos[key_start..key_end];
+    let key_construction = key.find("let down = keyboard_event").unwrap();
+    let key_receiver = key
+        .find("ax_macos::ensure_keyboard_receiver_before(")
+        .unwrap();
+    let key_owner = key.find("prove_action_dispatch_owner(").unwrap();
+    let key_post = key.find("held_event_sequence(").unwrap();
+    assert!(key_construction < key_owner && key_owner < key_receiver && key_receiver < key_post);
+    assert!(key.contains("let receiver_deadline = Instant::now() + FOCUS_RESTORE_PROOF_BUDGET;"));
+    assert!(key.contains("prove_action_dispatch_owner(focus, target, receiver_deadline, false)?;"));
+    assert!(key.contains("target, false, true, receiver_deadline"));
+    assert!(key.contains("receiver_deadline,\n                &down"));
+
+    let held_sequence = macos
+        .split("fn held_event_sequence<T>(")
+        .nth(1)
+        .unwrap()
+        .split("fn stamp(")
+        .next()
+        .unwrap();
+    assert!(held_sequence.contains("post_before_deadline("));
+    assert!(held_sequence.contains("first_post_deadline"));
+    let deadline_post = macos
+        .split("fn post_before_deadline(")
+        .nth(1)
+        .unwrap()
+        .split("fn post_release(")
+        .next()
+        .unwrap();
+    assert_eq!(
+        deadline_post
+            .matches("ensure_dispatch_deadline(cancellation, boundary, deadline)?;")
+            .count(),
+        2
+    );
+    assert!(deadline_post.contains("cancellation.begin_side_effect(boundary)?;"));
+
+    let focus_preparation = macos
+        .split("fn activate_without_raise(")
+        .nth(1)
+        .unwrap()
+        .split("fn ensure_same_process_mutation_target(")
+        .next()
+        .unwrap();
+    assert_eq!(
+        focus_preparation
+            .matches("lease.post_phase_transition_before(")
+            .count(),
+        2
+    );
+    assert!(focus_preparation.contains("let user_release_deadline = std::cmp::min("));
+    assert!(focus_preparation.contains("let target_focus_deadline = std::cmp::min("));
+    assert!(focus_preparation.contains("FocusLeasePhase::Restored"));
+    assert!(focus_preparation.contains("FocusLeasePhase::RestoredWithInactiveTargetRequested"));
+    assert!(focus_preparation.contains("FocusLeasePhase::ReleasedWithInactiveTargetRequested"));
+    assert!(focus_preparation.contains("FocusLeasePhase::ReleasedWithTargetRequested"));
+    assert!(focus_preparation.contains("exact_target_main_window_before"));
+    assert!(
+        focus_preparation
+            .contains("target_previous_focus.main_window_id != target_previous_focus.window_id")
+    );
+    assert!(focus_preparation.contains("lease.set_target_main_window_before("));
+    assert!(
+        focus_preparation
+            .find("lease.set_target_main_window_before(")
+            .unwrap()
+            < focus_preparation
+                .find("let user_release_deadline = std::cmp::min(")
+                .unwrap()
+    );
+    assert!(
+        focus_preparation
+            .find("previous_focus.window_id != before.front_window_id")
+            .unwrap()
+            < focus_preparation
+                .find("lease.post_phase_transition_before(")
+                .unwrap()
+    );
+
+    let text_dispatch_proof = macos
+        .split("fn ensure_text_keyboard_receiver(")
+        .nth(1)
+        .unwrap()
+        .split("fn map_text_receiver_failure(")
+        .next()
+        .unwrap();
+    assert!(
+        text_dispatch_proof
+            .find("prove_action_dispatch_owner(focus, target, deadline, false)")
+            .unwrap()
+            < text_dispatch_proof
+                .find("ensure_keyboard_receiver_before(target, true, true, deadline)")
+                .unwrap()
+    );
+
+    for pointer_stage in ["ClickDispatch", "DragDispatch", "ScrollDispatch"] {
+        let stage = macos
+            .split(&format!("InvariantStage::{pointer_stage}"))
+            .nth(1)
+            .unwrap()
+            .split("})")
+            .next()
+            .unwrap();
+        assert!(stage.contains("prove_action_dispatch_owner("));
+    }
+
+    assert!(accessibility.contains(
+        "enable_target_accessibility && enable_chromium_accessibility_once(pid, app.as_ptr())"
+    ));
+    assert!(!accessibility.contains("candidate_summaries"));
+    assert!(!accessibility.contains("AXIdentifier="));
+    assert!(!macos.contains("LBB_DIAG"));
 }
 
 #[test]
@@ -285,6 +740,51 @@ fn macos_negative_evidence_keeps_only_equality_and_fixture_counters() {
         assert!(
             !diagnostics.contains(raw_identity),
             "failure evidence persisted raw identity {raw_identity}"
+        );
+    }
+}
+
+#[test]
+fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
+    let rig = fs::read_to_string("evidence/v0.12.1/computer/helper-evidence-rig.mjs")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let readme = fs::read_to_string("evidence/v0.12.1/computer/README.md")
+        .unwrap()
+        .replace("\r\n", "\n");
+
+    for required in [
+        "expectedManifestSha256",
+        "<expected-SHA256SUMS-sha256>",
+        "CANONICAL_RELEASE_ASSETS",
+        "local-browser-bridge-v${EXPECTED_VERSION}-windows-x86_64.exe",
+        "local-computer-helper-v${EXPECTED_VERSION}-windows-x86_64.exe",
+        "local-browser-bridge-extension-v${EXPECTED_VERSION}.zip",
+        "function canonicalChecksumEntries(contents)",
+        "contents.includes(\"\\r\")",
+        "!contents.endsWith(\"\\n\")",
+        "/^([0-9a-f]{64})  ([^\\s/]+)$/",
+        "new Set(entries.map((entry) => entry.file)).size !== entries.length",
+        "manifestSha256 === expectedManifestSha256",
+        "checksum manifest has the exact canonical four-entry set",
+        "archive checksum is bound by the canonical manifest",
+        "checksumManifest: manifestBinding",
+        "packageBinding: manifestBinding",
+    ] {
+        assert!(
+            rig.contains(required),
+            "macOS evidence manifest binding is missing: {required}"
+        );
+    }
+    for required in [
+        "$EXPECTED_SHA256SUMS_SHA256",
+        "mandatory SHA-256 supplied",
+        "exactly the four v0.12.1",
+        "expected and actual manifest hashes",
+    ] {
+        assert!(
+            readme.contains(required),
+            "macOS evidence manifest handoff is undocumented: {required}"
         );
     }
 }
@@ -638,7 +1138,14 @@ fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negati
         "foregroundPIDBefore",
         "foregroundPIDAfter",
         "foregroundIdentityStable",
+        "rawForegroundIdentityStable",
+        "rawForegroundPID",
+        "rawForegroundPSN",
+        "foregroundAXMainWindowID",
         "targetFocusedWindowID",
+        "targetMainWindowID",
+        "targetAXFrontmost",
+        "activeTargetObserved",
     ] {
         assert!(
             probe.contains(required),
@@ -654,7 +1161,9 @@ fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negati
         .unwrap();
     for required in [
         "foregroundIdentitySandwichHeld",
+        "rawForegroundIdentitySandwichHeld",
         "foregroundAXFocusedWindowID",
+        "foregroundAXMainWindowID",
         "foregroundAxFocusUnchanged",
         "foregroundAXFrontmost",
         "foregroundAxFrontmostHeld",
@@ -669,6 +1178,7 @@ fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negati
     for required in [
         "const targetAfter = processProbe(systemProbeBinary, fixtureTargetPid)",
         "targetAfter.targetFocusedWindowID === fixtureSiblingWindowId",
+        "targetAfter.targetMainWindowID === fixtureSiblingWindowId",
         "targetSiblingExpectedAfter: true",
         "targetSiblingExpectedAfter: false",
         "expectedFocusedAfter: targetSiblingExpectedAfter",
@@ -688,7 +1198,7 @@ fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negati
         .unwrap();
     let pointer_before = rig.find("const pixelSiblingFocusBefore").unwrap();
     let pointer_action = rig
-        .find("const clickBody = await command(\"computer.click\"")
+        .find("const clickPromise = command(\"computer.click\"")
         .unwrap();
     let pointer_after = rig.find("const pixelSiblingFocusAfter").unwrap();
     let text_before = rig.find("const nativeTextReceiverBefore").unwrap();
@@ -704,7 +1214,11 @@ fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negati
         "siblingWindows[0].pid === targetWindow.pid",
         "String(fixtureReady.primaryWindowId) === targetWindow.id",
         "String(fixtureReady.siblingWindowId) === siblingWindows[0].id",
-        "startupSiblingFocus.targetFocusedWindowID === fixtureReady.siblingWindowId",
+        "exactTargetReceiverMatches(startupSiblingFocus, fixtureReady.siblingWindowId, false)",
+        "processProbeWaitingForActive(",
+        "activeTargetObserved === true",
+        "exact active target receiver observed during pixel lease",
+        "exactTargetReceiverMatches(activeRequestedReceiver, Number(targetWindow.id), true)",
         "same-PID sibling is remembered before primary pixel dispatch",
         "background pixel click targets only primary and restores sibling receiver",
         "clickedFixtureState.siblingClicks === pixelFixtureBefore.siblingClicks",

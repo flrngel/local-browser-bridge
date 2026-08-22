@@ -9,6 +9,12 @@ import { basename, dirname, join, resolve } from "node:path";
 
 const EXPECTED_VERSION = "0.12.1";
 const EXPECTED_ARCHIVE = `local-browser-bridge-v${EXPECTED_VERSION}-macos-universal.tar.gz`;
+const CANONICAL_RELEASE_ASSETS = [
+  `local-browser-bridge-v${EXPECTED_VERSION}-windows-x86_64.exe`,
+  `local-computer-helper-v${EXPECTED_VERSION}-windows-x86_64.exe`,
+  EXPECTED_ARCHIVE,
+  `local-browser-bridge-extension-v${EXPECTED_VERSION}.zip`,
+];
 const FIXTURE_TITLE = "LBB v0.12.1 Persistent SCStream Evidence";
 const SIBLING_FIXTURE_TITLE = "LBB v0.12.1 Same-PID Sibling Receiver";
 const SEMANTIC_VALUE = "v0.12.1-semantic-value";
@@ -35,10 +41,21 @@ const GENERATED_OUTPUT_NAMES = [
   "computer-06-persistent-share-resize.png",
 ];
 
-const [serverInput, helperInput, outputInput, scratchParentInput, archiveInput, sumsInput] = process.argv.slice(2);
-if (!serverInput || !helperInput || !outputInput || !scratchParentInput || !archiveInput || !sumsInput) {
+const [
+  serverInput,
+  helperInput,
+  outputInput,
+  scratchParentInput,
+  archiveInput,
+  sumsInput,
+  expectedManifestSha256,
+] = process.argv.slice(2);
+if (
+  !serverInput || !helperInput || !outputInput || !scratchParentInput ||
+  !archiveInput || !sumsInput || !expectedManifestSha256
+) {
   console.error(
-    "Usage: node helper-evidence-rig.mjs <server> <helper> <output-dir> <scratch-parent> <macos-archive> <SHA256SUMS.txt>",
+    "Usage: node helper-evidence-rig.mjs <server> <helper> <output-dir> <scratch-parent> <macos-archive> <SHA256SUMS.txt> <expected-SHA256SUMS-sha256>",
   );
   process.exit(2);
 }
@@ -73,6 +90,17 @@ let failureProbeBaseline;
 let fixtureTargetPid;
 let fixtureSiblingWindowId;
 let nativeTextPayloadMayBeVisible = false;
+const manifestBinding = {
+  file: basename(sumsPath),
+  expectedSha256: expectedManifestSha256,
+  actualSha256: null,
+  expectedSha256Matched: false,
+  exactCanonicalAssetSet: false,
+  canonicalEntryCount: 0,
+  archiveFile: basename(archivePath),
+  archiveSha256: null,
+  archiveEntryMatched: false,
+};
 
 function childEnvironment(overrides = {}) {
   const environment = {};
@@ -187,6 +215,21 @@ async function pathExists(path) {
   }
 }
 
+function canonicalChecksumEntries(contents) {
+  if (contents.includes("\r") || !contents.endsWith("\n")) return null;
+  const lines = contents.slice(0, -1).split("\n");
+  if (lines.length !== CANONICAL_RELEASE_ASSETS.length) return null;
+  const entries = lines.map((line) => {
+    const match = /^([0-9a-f]{64})  ([^\s/]+)$/.exec(line);
+    return match ? { sha256: match[1], file: match[2] } : null;
+  });
+  if (entries.some((entry) => entry === null)) return null;
+  if (new Set(entries.map((entry) => entry.file)).size !== entries.length) return null;
+  return entries.every((entry, index) => entry.file === CANONICAL_RELEASE_ASSETS[index])
+    ? entries
+    : null;
+}
+
 function pngDimensions(data) {
   if (data.length < 24 || data.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") {
     throw new Error("captured screenshot is not a PNG");
@@ -207,27 +250,75 @@ function processProbe(path, targetPid = null) {
   return JSON.parse(run(path, args));
 }
 
+async function processProbeWaitingForActive(path, targetPid, targetWindowId, timeoutMs) {
+  return await new Promise((resolveProbe, rejectProbe) => {
+    const child = spawn(path, [String(targetPid), String(targetWindowId), String(timeoutMs)], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+      if (stdout.length > 1024 * 1024) child.kill("SIGKILL");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+      if (stderr.length > 1024 * 1024) child.kill("SIGKILL");
+    });
+    child.once("error", rejectProbe);
+    child.once("close", (code) => {
+      if (code !== 0) {
+        rejectProbe(new Error(`system probe failed: ${stderr.trim() || `exit ${code}`}`));
+        return;
+      }
+      try {
+        resolveProbe(JSON.parse(stdout));
+      } catch {
+        rejectProbe(new Error("system probe returned malformed JSON"));
+      }
+    });
+  });
+}
+
 function systemInvariants(before, after) {
   const foregroundIdentitySandwichHeld =
     before.foregroundIdentityStable === true && after.foregroundIdentityStable === true;
+  const rawForegroundIdentitySandwichHeld =
+    before.rawForegroundIdentityStable === true && after.rawForegroundIdentityStable === true &&
+    Number.isSafeInteger(before.rawForegroundPID) && before.rawForegroundPID > 0 &&
+    before.rawForegroundPID === before.foregroundPID &&
+    before.rawForegroundPID === after.rawForegroundPID &&
+    typeof before.rawForegroundPSN === "string" && before.rawForegroundPSN.length === 16 &&
+    before.rawForegroundPSN === after.rawForegroundPSN;
   const foregroundAxFocusUnchanged =
     Number.isSafeInteger(before.foregroundAXFocusedWindowID) &&
     before.foregroundAXFocusedWindowID > 0 &&
-    before.foregroundAXFocusedWindowID === after.foregroundAXFocusedWindowID;
+    before.foregroundAXFocusedWindowID === before.foregroundAXMainWindowID &&
+    before.foregroundAXFocusedWindowID === after.foregroundAXFocusedWindowID &&
+    after.foregroundAXFocusedWindowID === after.foregroundAXMainWindowID;
   const foregroundAxFrontmostHeld =
     before.foregroundAXFrontmost === true && after.foregroundAXFrontmost === true;
   return {
     foregroundUnchanged: before.foregroundPID > 0 && before.foregroundPID === after.foregroundPID,
     userFocusUnchanged:
       before.frontWindowID > 0 && before.frontWindowID === after.frontWindowID &&
-      foregroundIdentitySandwichHeld && foregroundAxFocusUnchanged && foregroundAxFrontmostHeld,
+      foregroundIdentitySandwichHeld && rawForegroundIdentitySandwichHeld &&
+      foregroundAxFocusUnchanged && foregroundAxFrontmostHeld,
     foregroundIdentitySandwichHeld,
+    rawForegroundIdentitySandwichHeld,
     foregroundAxFocusUnchanged,
     foregroundAxFrontmostHeld,
     cursorUnchanged:
       Math.abs(before.cursorX - after.cursorX) < 0.01 && Math.abs(before.cursorY - after.cursorY) < 0.01,
     spaceUnchanged: before.activeSpace > 0 && before.activeSpace === after.activeSpace,
   };
+}
+
+function exactTargetReceiverMatches(snapshot, windowId, expectedFrontmost = null) {
+  const exact = snapshot?.targetFocusedWindowID === windowId && snapshot?.targetMainWindowID === windowId;
+  return expectedFrontmost === null ? exact : exact && snapshot?.targetAXFrontmost === expectedFrontmost;
 }
 
 function allInvariantsHeld(invariants) {
@@ -304,6 +395,7 @@ async function collectFailureDiagnostics() {
       expectedFocusedAfter: targetSiblingExpectedAfter,
       afterCaptured: false,
       focusedAfter: null,
+      mainAfter: null,
       expectationMet: null,
     },
   };
@@ -329,12 +421,13 @@ async function collectFailureDiagnostics() {
   if (diagnostics.targetSiblingReceiver.targetKnown && systemProbeBinary) {
     try {
       const targetAfter = processProbe(systemProbeBinary, fixtureTargetPid);
-      const focusedAfter =
-        targetAfter.targetFocusedWindowID === fixtureSiblingWindowId;
+      const focusedAfter = targetAfter.targetFocusedWindowID === fixtureSiblingWindowId;
+      const mainAfter = targetAfter.targetMainWindowID === fixtureSiblingWindowId;
       diagnostics.targetSiblingReceiver.afterCaptured = true;
       diagnostics.targetSiblingReceiver.focusedAfter = focusedAfter;
+      diagnostics.targetSiblingReceiver.mainAfter = mainAfter;
       diagnostics.targetSiblingReceiver.expectationMet =
-        focusedAfter === targetSiblingExpectedAfter;
+        focusedAfter === targetSiblingExpectedAfter && mainAfter === targetSiblingExpectedAfter;
     } catch {
       // Persist only bounded availability/equality booleans, never raw target identities.
     }
@@ -619,6 +712,11 @@ async function main() {
   };
 
   requireCheck("macOS host", run("uname", ["-s"]) === "Darwin", "Darwin");
+  requireCheck("expected checksum-manifest hash format",
+    /^[0-9a-f]{64}$/.test(expectedManifestSha256),
+    "64 lowercase hexadecimal characters",
+  );
+  requireCheck("canonical checksum-manifest name", basename(sumsPath) === "SHA256SUMS.txt", basename(sumsPath));
   requireCheck("exact archive name", basename(archivePath) === EXPECTED_ARCHIVE, basename(archivePath));
   requireCheck("server version", exactVersion(serverPath, "local-browser-bridge") === EXPECTED_VERSION, EXPECTED_VERSION);
   requireCheck("helper version", exactVersion(helperPath, "local-computer-helper") === EXPECTED_VERSION, EXPECTED_VERSION);
@@ -644,13 +742,28 @@ async function main() {
   );
 
   const archiveSha256 = await sha256(archivePath);
+  manifestBinding.archiveSha256 = archiveSha256;
+  const manifestSha256 = await sha256(sumsPath);
+  manifestBinding.actualSha256 = manifestSha256;
+  manifestBinding.expectedSha256Matched = manifestSha256 === expectedManifestSha256;
+  requireCheck("out-of-band checksum-manifest hash matches",
+    manifestBinding.expectedSha256Matched,
+    manifestSha256,
+  );
   const sums = await readFile(sumsPath, "utf8");
-  const manifestEntry = sums
-    .split(/\r?\n/)
-    .map((line) => line.trim().split(/\s+/))
-    .find((parts) => parts.at(-1)?.replace(/^\*/, "") === basename(archivePath));
-  requireCheck("archive checksum listed", Boolean(manifestEntry), basename(archivePath));
-  requireCheck("archive checksum matches", manifestEntry?.[0]?.toLowerCase() === archiveSha256, archiveSha256);
+  const canonicalEntries = canonicalChecksumEntries(sums);
+  manifestBinding.exactCanonicalAssetSet = canonicalEntries !== null;
+  manifestBinding.canonicalEntryCount = canonicalEntries?.length ?? 0;
+  requireCheck("checksum manifest has the exact canonical four-entry set",
+    manifestBinding.exactCanonicalAssetSet,
+    canonicalEntries ? CANONICAL_RELEASE_ASSETS.join(",") : "non-canonical manifest refused",
+  );
+  const manifestEntry = canonicalEntries?.find((entry) => entry.file === EXPECTED_ARCHIVE);
+  manifestBinding.archiveEntryMatched = manifestEntry?.sha256 === archiveSha256;
+  requireCheck("archive checksum is bound by the canonical manifest",
+    manifestBinding.archiveEntryMatched,
+    archiveSha256,
+  );
 
   const archiveEntries = run("tar", ["-tzf", archivePath]).split(/\r?\n/).filter(Boolean);
   requireCheck("archive paths are traversal-safe",
@@ -683,9 +796,14 @@ async function main() {
   requireCheck("sandwiched foreground AX focus probe available",
     permissionProbe.foregroundPID > 0 && permissionProbe.frontWindowID > 0 &&
       permissionProbe.foregroundIdentityStable === true &&
+      permissionProbe.rawForegroundIdentityStable === true &&
+      permissionProbe.rawForegroundPID === permissionProbe.foregroundPID &&
+      typeof permissionProbe.rawForegroundPSN === "string" &&
+      permissionProbe.rawForegroundPSN.length === 16 &&
       permissionProbe.foregroundAXFocusedWindowID > 0 &&
+      permissionProbe.foregroundAXMainWindowID === permissionProbe.foregroundAXFocusedWindowID &&
       permissionProbe.foregroundAXFrontmost === true,
-    "stable foreground PID plus exact WindowServer and AXFocusedWindow identities are available",
+    "stable NSWorkspace/raw PSN plus exact AX focused/main-window identities are available",
   );
 
   fixtureProcess = spawn(fixtureBinary, [], {
@@ -713,9 +831,9 @@ async function main() {
   const systemBefore = processProbe(systemProbeBinary);
   const startupSiblingFocus = processProbe(systemProbeBinary, fixtureReady.pid);
   requireCheck("startup same-PID sibling is the target app's remembered receiver",
-    startupSiblingFocus.targetFocusedWindowID === fixtureReady.siblingWindowId &&
+    exactTargetReceiverMatches(startupSiblingFocus, fixtureReady.siblingWindowId, false) &&
       systemBefore.foregroundPID !== fixtureReady.pid,
-    `sibling-focused=${startupSiblingFocus.targetFocusedWindowID === fixtureReady.siblingWindowId}, fixture-background=${systemBefore.foregroundPID !== fixtureReady.pid}`,
+    `sibling-main-and-focused=${exactTargetReceiverMatches(startupSiblingFocus, fixtureReady.siblingWindowId, false)}, fixture-background=${systemBefore.foregroundPID !== fixtureReady.pid}`,
   );
 
   port = await freePort();
@@ -880,9 +998,9 @@ async function main() {
   const pixelFixtureBefore = await fixtureState(fixtureStatePath);
   const pixelSiblingFocusBefore = processProbe(systemProbeBinary, fixtureReady.pid);
   requireCheck("same-PID sibling is remembered before primary pixel dispatch",
-    pixelSiblingFocusBefore.targetFocusedWindowID === Number(siblingWindow.id) &&
+    exactTargetReceiverMatches(pixelSiblingFocusBefore, Number(siblingWindow.id), false) &&
       pixelFixtureBefore.siblingTextLength === 0 && pixelFixtureBefore.siblingClicks === 0,
-    `sibling-focused=${pixelSiblingFocusBefore.targetFocusedWindowID === Number(siblingWindow.id)}, sibling-state-clean=${pixelFixtureBefore.siblingTextLength === 0 && pixelFixtureBefore.siblingClicks === 0}`,
+    `sibling-main-and-focused=${exactTargetReceiverMatches(pixelSiblingFocusBefore, Number(siblingWindow.id), false)}, sibling-state-clean=${pixelFixtureBefore.siblingTextLength === 0 && pixelFixtureBefore.siblingClicks === 0}`,
   );
   failureProbeBaseline = {
     stage: "liveSharePixelAction",
@@ -890,14 +1008,41 @@ async function main() {
     fixture: pixelFixtureBefore,
     targetSiblingExpectedAfter: true,
   };
-  const clickBody = await command("computer.click", {
+  const activeProbePromise = processProbeWaitingForActive(
+    systemProbeBinary,
+    fixtureReady.pid,
+    Number(targetWindow.id),
+    8_000,
+  );
+  await delay(20);
+  const clickPromise = command("computer.click", {
     frameId: observation.frameId,
     x: clickX,
     y: clickY,
     button: "left",
     clickCount: 1,
     durationMs: LONG_PIXEL_ACTION_MS,
-  });
+  }).then((body) => ({ body }), (error) => ({ error }));
+  const [activeRequestedReceiver, clickOutcome] = await Promise.all([
+    activeProbePromise,
+    clickPromise,
+  ]);
+  const activeUserOwnerHeld =
+    activeRequestedReceiver.foregroundIdentityStable === true &&
+    activeRequestedReceiver.rawForegroundIdentityStable === true &&
+    activeRequestedReceiver.foregroundPID === pixelSystemBefore.foregroundPID &&
+    activeRequestedReceiver.rawForegroundPID === pixelSystemBefore.rawForegroundPID &&
+    activeRequestedReceiver.rawForegroundPSN === pixelSystemBefore.rawForegroundPSN &&
+    activeRequestedReceiver.foregroundAXFocusedWindowID === pixelSystemBefore.foregroundAXFocusedWindowID &&
+    activeRequestedReceiver.foregroundAXMainWindowID === pixelSystemBefore.foregroundAXMainWindowID;
+  requireCheck("exact active target receiver observed during pixel lease",
+    activeRequestedReceiver.activeTargetObserved === true &&
+      exactTargetReceiverMatches(activeRequestedReceiver, Number(targetWindow.id), true) &&
+      activeUserOwnerHeld,
+    `active-target=${activeRequestedReceiver.activeTargetObserved === true}, exact-main-and-focused=${exactTargetReceiverMatches(activeRequestedReceiver, Number(targetWindow.id), true)}, saved-user-owner=${activeUserOwnerHeld}`,
+  );
+  if (clickOutcome.error) throw clickOutcome.error;
+  const clickBody = clickOutcome.body;
   const click = actionSummary(clickBody);
   const clickedFixtureState = await waitFor("fixture pixel click", async () => {
     const snapshot = await fixtureState(fixtureStatePath);
@@ -907,14 +1052,14 @@ async function main() {
   });
   const pixelSiblingFocusAfter = await waitFor("same-PID sibling restoration after pixel action", () => {
     const snapshot = processProbe(systemProbeBinary, fixtureReady.pid);
-    return snapshot.targetFocusedWindowID === Number(siblingWindow.id) ? snapshot : null;
+    return exactTargetReceiverMatches(snapshot, Number(siblingWindow.id), false) ? snapshot : null;
   });
   requireCheck("background pixel click targets only primary and restores sibling receiver",
     clickedFixtureState.lastAction === "click" &&
       clickedFixtureState.clicks === pixelFixtureBefore.clicks + 1 &&
       clickedFixtureState.siblingClicks === pixelFixtureBefore.siblingClicks &&
       clickedFixtureState.siblingTextLength === pixelFixtureBefore.siblingTextLength &&
-      pixelSiblingFocusAfter.targetFocusedWindowID === Number(siblingWindow.id),
+      exactTargetReceiverMatches(pixelSiblingFocusAfter, Number(siblingWindow.id), false),
     "only the primary click counter advanced and the target app's prior sibling receiver was restored",
   );
   requireCheck("pixel click conservatively classified", click.effect === "Unverifiable", click.effect);
@@ -1085,10 +1230,10 @@ async function main() {
   const nativeTextSetupFixtureBefore = await fixtureState(fixtureStatePath);
   const nativeTextPriorSiblingFocus = processProbe(systemProbeBinary, fixtureReady.pid);
   requireCheck("same-PID sibling is the prior receiver before text preparation",
-    nativeTextPriorSiblingFocus.targetFocusedWindowID === Number(siblingWindow.id) &&
+    exactTargetReceiverMatches(nativeTextPriorSiblingFocus, Number(siblingWindow.id), false) &&
       nativeTextSetupFixtureBefore.siblingTextLength === 0 &&
       nativeTextSetupFixtureBefore.siblingClicks === 0,
-    `sibling-focused=${nativeTextPriorSiblingFocus.targetFocusedWindowID === Number(siblingWindow.id)}, sibling-state-clean=${nativeTextSetupFixtureBefore.siblingTextLength === 0 && nativeTextSetupFixtureBefore.siblingClicks === 0}`,
+    `sibling-main-and-focused=${exactTargetReceiverMatches(nativeTextPriorSiblingFocus, Number(siblingWindow.id), false)}, sibling-state-clean=${nativeTextSetupFixtureBefore.siblingTextLength === 0 && nativeTextSetupFixtureBefore.siblingClicks === 0}`,
   );
   failureProbeBaseline = {
     stage: "nativeTextFieldFocus",
@@ -1107,7 +1252,7 @@ async function main() {
   });
   const nativeTextPreparedSiblingFocus = await waitFor("prepared same-PID sibling receiver", () => {
     const snapshot = processProbe(systemProbeBinary, fixtureReady.pid);
-    return snapshot.targetFocusedWindowID === Number(siblingWindow.id) ? snapshot : null;
+    return exactTargetReceiverMatches(snapshot, Number(siblingWindow.id), false) ? snapshot : null;
   });
   requireCheck("background fixture field prepared without mutation while sibling remains prior receiver",
     nativeTextFocusedState.lastAction === "focus-field" &&
@@ -1126,7 +1271,7 @@ async function main() {
       nativeTextFocusedState.moveEvents === nativeTextSetupFixtureBefore.moveEvents &&
       nativeTextFocusedState.contentWidth === nativeTextSetupFixtureBefore.contentWidth &&
       nativeTextFocusedState.contentHeight === nativeTextSetupFixtureBefore.contentHeight &&
-      nativeTextPreparedSiblingFocus.targetFocusedWindowID === Number(siblingWindow.id),
+      exactTargetReceiverMatches(nativeTextPreparedSiblingFocus, Number(siblingWindow.id), false),
     "the primary responder was prepared, the sibling was restored internally, and no target field mutated",
   );
   const nativeTextSetupInvariants = systemInvariants(
@@ -1147,8 +1292,8 @@ async function main() {
   const nativeTextSystemBefore = processProbe(systemProbeBinary);
   const nativeTextReceiverBefore = processProbe(systemProbeBinary, fixtureReady.pid);
   requireCheck("same-PID sibling remains the exact prior receiver immediately before text request",
-    nativeTextReceiverBefore.targetFocusedWindowID === Number(siblingWindow.id),
-    `sibling-focused=${nativeTextReceiverBefore.targetFocusedWindowID === Number(siblingWindow.id)}`,
+    exactTargetReceiverMatches(nativeTextReceiverBefore, Number(siblingWindow.id), false),
+    `sibling-main-and-focused=${exactTargetReceiverMatches(nativeTextReceiverBefore, Number(siblingWindow.id), false)}`,
   );
   failureProbeBaseline = {
     stage: "nativeTextDelivery",
@@ -1170,7 +1315,7 @@ async function main() {
   });
   const nativeTextReceiverAfter = await waitFor("same-PID sibling restoration after native text", () => {
     const snapshot = processProbe(systemProbeBinary, fixtureReady.pid);
-    return snapshot.targetFocusedWindowID === Number(siblingWindow.id) ? snapshot : null;
+    return exactTargetReceiverMatches(snapshot, Number(siblingWindow.id), false) ? snapshot : null;
   });
   requireCheck("native typeText exact fixture read-back with zero sibling mutation",
     nativeTextFixtureState.lastAction === "set-value" &&
@@ -1182,7 +1327,7 @@ async function main() {
       nativeTextFixtureState.resizeCount === nativeTextFocusedState.resizeCount &&
       nativeTextFixtureState.focusCount === nativeTextFocusedState.focusCount &&
       nativeTextFixtureState.moveEvents === nativeTextFocusedState.moveEvents &&
-      nativeTextReceiverAfter.targetFocusedWindowID === Number(siblingWindow.id),
+      exactTargetReceiverMatches(nativeTextReceiverAfter, Number(siblingWindow.id), false),
     `appended ${NATIVE_TEXT_SUFFIX.length} ASCII characters only to the primary field and restored the prior sibling receiver`,
   );
   requireCheck("native typeText bounded product result",
@@ -1541,6 +1686,11 @@ async function main() {
       finalFixtureState.moveEvents >= cancellationDispatchedFixtureState.moveEvents,
     "functional fixture state stayed exact; only bounded move-delivery instrumentation advanced",
   );
+  const finalTargetReceiver = processProbe(systemProbeBinary, fixtureReady.pid);
+  requireCheck("final same-PID receiver main and focus are restored before target close",
+    exactTargetReceiverMatches(finalTargetReceiver, Number(siblingWindow.id), false),
+    `sibling-main-and-focused=${exactTargetReceiverMatches(finalTargetReceiver, Number(siblingWindow.id), false)}`,
+  );
   const cancellationInvariants = systemInvariants(
     cancellationSystemBefore,
     processProbe(systemProbeBinary),
@@ -1778,10 +1928,13 @@ async function main() {
       foregroundFocusOracle: "sandwiched-pid+read-only-AXFocusedWindow+AXFrontmost",
     },
     package: {
+      checksumManifest: manifestBinding,
       archive: {
         file: basename(archivePath),
         sha256: archiveSha256,
         checksumManifestMatched: true,
+        checksumManifestSha256: manifestSha256,
+        canonicalEntryMatched: true,
         extractedInputsMatched: true,
       },
       serverVersion: EXPECTED_VERSION,
@@ -1852,8 +2005,12 @@ async function main() {
         ...click,
         durationMs: LONG_PIXEL_ACTION_MS,
         independentFixturePostcondition: "only the primary click counter advanced exactly once",
-        priorSiblingFocused: pixelSiblingFocusBefore.targetFocusedWindowID === Number(siblingWindow.id),
-        priorSiblingRestored: pixelSiblingFocusAfter.targetFocusedWindowID === Number(siblingWindow.id),
+        priorSiblingMainAndFocused:
+          exactTargetReceiverMatches(pixelSiblingFocusBefore, Number(siblingWindow.id), false),
+        activeRequestedMainAndFocused:
+          exactTargetReceiverMatches(activeRequestedReceiver, Number(targetWindow.id), true),
+        priorSiblingRestored:
+          exactTargetReceiverMatches(pixelSiblingFocusAfter, Number(siblingWindow.id), false),
         siblingMutationObserved:
           clickedFixtureState.siblingClicks !== pixelFixtureBefore.siblingClicks ||
           clickedFixtureState.siblingTextLength !== pixelFixtureBefore.siblingTextLength,
@@ -1877,10 +2034,10 @@ async function main() {
         temporaryScratchFixtureStateUsed: true,
         fixtureFieldFocusCount: nativeTextFocusedState.focusCount,
         exactFixtureReadBack: nativeTextFixtureState.semanticValue === `${SEMANTIC_VALUE}${NATIVE_TEXT_SUFFIX}`,
-        priorSiblingFocused:
-          nativeTextReceiverBefore.targetFocusedWindowID === Number(siblingWindow.id),
+        priorSiblingMainAndFocused:
+          exactTargetReceiverMatches(nativeTextReceiverBefore, Number(siblingWindow.id), false),
         priorSiblingRestored:
-          nativeTextReceiverAfter.targetFocusedWindowID === Number(siblingWindow.id),
+          exactTargetReceiverMatches(nativeTextReceiverAfter, Number(siblingWindow.id), false),
         siblingTextLengthBefore: nativeTextFocusedState.siblingTextLength,
         siblingTextLengthAfter: nativeTextFixtureState.siblingTextLength,
         siblingClicksBefore: nativeTextFocusedState.siblingClicks,
@@ -2025,8 +2182,10 @@ async function main() {
         primaryWindowId: targetWindow.id,
         siblingWindowId: siblingWindow.id,
         samePid: siblingWindow.pid === targetWindow.pid,
-        startupSiblingFocused:
-          startupSiblingFocus.targetFocusedWindowID === Number(siblingWindow.id),
+        startupSiblingMainAndFocused:
+          exactTargetReceiverMatches(startupSiblingFocus, Number(siblingWindow.id), false),
+        finalSiblingMainAndFocused:
+          exactTargetReceiverMatches(finalTargetReceiver, Number(siblingWindow.id), false),
         primarySelectionRemainedExact: observed.state.computerObservation.windowId === targetWindow.id,
         positivePointer: {
           primaryMutationObserved: clickedFixtureState.clicks === pixelFixtureBefore.clicks + 1,
@@ -2034,7 +2193,22 @@ async function main() {
             clickedFixtureState.siblingClicks !== pixelFixtureBefore.siblingClicks ||
             clickedFixtureState.siblingTextLength !== pixelFixtureBefore.siblingTextLength,
           priorSiblingRestored:
-            pixelSiblingFocusAfter.targetFocusedWindowID === Number(siblingWindow.id),
+            exactTargetReceiverMatches(pixelSiblingFocusAfter, Number(siblingWindow.id), false),
+          activeRequestedReceiverObserved:
+            exactTargetReceiverMatches(activeRequestedReceiver, Number(targetWindow.id), true),
+          foregroundOwnerDuringActiveLease: {
+            nsWorkspacePidUnchanged:
+              activeRequestedReceiver.foregroundPID === pixelSystemBefore.foregroundPID,
+            rawPsnAndPidUnchanged:
+              activeRequestedReceiver.rawForegroundIdentityStable === true &&
+              activeRequestedReceiver.rawForegroundPID === pixelSystemBefore.rawForegroundPID &&
+              activeRequestedReceiver.rawForegroundPSN === pixelSystemBefore.rawForegroundPSN,
+            exactAxWindowUnchanged:
+              activeRequestedReceiver.foregroundAXFocusedWindowID ===
+                pixelSystemBefore.foregroundAXFocusedWindowID &&
+              activeRequestedReceiver.foregroundAXMainWindowID ===
+                pixelSystemBefore.foregroundAXMainWindowID,
+          },
           userOracle: pixelSystemInvariants,
         },
         positiveNativeText: {
@@ -2043,7 +2217,7 @@ async function main() {
             nativeTextFixtureState.siblingTextLength !== nativeTextFocusedState.siblingTextLength ||
             nativeTextFixtureState.siblingClicks !== nativeTextFocusedState.siblingClicks,
           priorSiblingRestored:
-            nativeTextReceiverAfter.targetFocusedWindowID === Number(siblingWindow.id),
+            exactTargetReceiverMatches(nativeTextReceiverAfter, Number(siblingWindow.id), false),
           userOracle: nativeTextInvariants,
         },
         retainedScreenshots: {
@@ -2160,6 +2334,7 @@ try {
     capturedAt: new Date().toISOString(),
     fatal: sanitizePathDetail(error?.message || String(error)),
     helperSpawnCount,
+    packageBinding: manifestBinding,
     screenshots,
     failureDiagnostics,
     assertions: {
