@@ -53,8 +53,9 @@ fn custom_token_parents_are_validated_without_permission_rewrites() {
 
     for required in [
         "MANAGED_TOKEN_DIRECTORY",
-        "path == managed_token_path",
-        "&default_token_path()",
+        "managed_token_path.is_some_and(|managed_path| path == managed_path)",
+        "default_token_path().ok()",
+        "managed_token_path.as_deref()",
         "validate_private_token_directory(parent)",
         "prepare_managed_token_directory(parent).await",
         "open_owned_unix_token_directory",
@@ -62,6 +63,10 @@ fn custom_token_parents_are_validated_without_permission_rewrites() {
         "metadata.mode() & 0o777 == 0o700",
         "create the custom token parent first",
         "refusing to use a multiply linked Unix token file",
+        "libc::O_NONBLOCK",
+        "rotates_a_fifo_without_blocking_for_a_writer",
+        "default_token_path_requires_an_absolute_user_profile",
+        "must never fall back to the working directory",
     ] {
         assert!(
             shared.contains(required),
@@ -71,6 +76,10 @@ fn custom_token_parents_are_validated_without_permission_rewrites() {
     assert!(
         !shared.contains("fs::create_dir_all(parent)"),
         "custom token parents must never be created recursively"
+    );
+    assert!(
+        !shared.contains("unwrap_or_else(|| PathBuf::from(\".\"))"),
+        "default token storage must never fall back to the working directory"
     );
     assert!(windows.contains("pub(super) fn validate_private_token_directory"));
     assert!(windows.contains("CreateDirectoryW("));

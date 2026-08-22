@@ -65,7 +65,7 @@ Open the complete authenticated control-page URL printed by the server. The serv
 |---|---|---|
 | `LBB_PORT` | `17373` | Loopback HTTP/WebSocket port |
 | `LBB_TOKEN` | Generated automatically | Explicit bridge token |
-| `LBB_TOKEN_PATH` | Platform user-data path | Generated-token storage path; any non-default parent must already exist with private current-user-only permissions and is never rewritten |
+| `LBB_TOKEN_PATH` | Computed profile path | Generated-token storage path; startup never falls back to the working directory when the profile is unavailable, and any explicit/non-default parent must already exist with private current-user-only permissions and is never rewritten |
 | `LBB_DISABLE_UPDATE_CHECK` | `false` | Disable the one-time GitHub metadata check |
 
 The equivalent `--no-update-check` flag disables the startup check; `--check-updates` performs the metadata-only check and exits. The server still binds only to loopback.

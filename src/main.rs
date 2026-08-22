@@ -44,13 +44,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let port = parse_port(env::var("LBB_PORT").ok().as_deref())?;
-    let token_path = env::var_os("LBB_TOKEN_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(default_token_path);
-    let explicit_token = env::var("LBB_TOKEN").ok();
-    let token = match explicit_token.as_deref() {
-        Some(token) if !token.trim().is_empty() => token.trim().to_owned(),
-        _ => load_or_create_token(&token_path).await?,
+    let explicit_token = env::var("LBB_TOKEN")
+        .ok()
+        .map(|token| token.trim().to_owned())
+        .filter(|token| !token.is_empty());
+    let (token, token_path) = match explicit_token {
+        Some(token) => (token, None),
+        None => {
+            let path = match env::var_os("LBB_TOKEN_PATH") {
+                Some(path) => PathBuf::from(path),
+                None => default_token_path()?,
+            };
+            let token = load_or_create_token(&path).await?;
+            (token, Some(path))
+        }
     };
 
     let mut config = ServerConfig::new(port, token.clone());
@@ -65,10 +72,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         address.port()
     );
     println!("Extension token: {token}");
-    if explicit_token.is_some() {
-        println!("Token source: LBB_TOKEN");
-    } else {
-        println!("Token file: {}", token_path.display());
+    match token_path {
+        Some(path) => println!("Token file: {}", path.display()),
+        None => println!("Token source: LBB_TOKEN"),
     }
     println!("Standalone Rust server; Node.js is not required. Press Ctrl+C to stop.");
     if cli.no_update_check || update_check_disabled_from_env()? {

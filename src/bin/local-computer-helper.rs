@@ -236,12 +236,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn run_worker(controller: ComputerController) -> Result<(), Box<dyn std::error::Error>> {
     let port = parse_port(env::var("LBB_PORT").ok().as_deref())?;
-    let token_path = env::var_os("LBB_TOKEN_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(default_token_path);
     let token = match env::var("LBB_TOKEN").ok() {
         Some(token) if !token.trim().is_empty() => token.trim().to_owned(),
-        _ => load_or_create_token(&token_path).await?,
+        _ => {
+            let token_path = match env::var_os("LBB_TOKEN_PATH") {
+                Some(path) => PathBuf::from(path),
+                None => default_token_path()?,
+            };
+            load_or_create_token(&token_path).await?
+        }
     };
 
     println!("Local Computer Helper {VERSION}");

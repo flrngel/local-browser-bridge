@@ -26,7 +26,7 @@ The server embeds the control UI, REST API, SSE state feed, and connector WebSoc
 
 The authenticated control URL uses a fragment-held master token that is exchanged for a port-specific dashboard session capability. State-changing dashboard requests also require same-origin and CSRF checks. The server rejects non-loopback Host headers and exposes no CORS permission.
 
-Persisted-token access is a capability-bound transaction. Unix retains the validated parent directory descriptor and performs child opens, atomic replacement, verification, and cleanup with descriptor-relative operations. Windows retains a no-follow parent handle plus no-delete leases on its pathname ancestors, and checks the directory's volume-and-file identity before and after its path-based child operations. Custom token parents are validation-only; only the exact computed default directory is managed or hardened.
+Persisted-token access is a capability-bound transaction. Default storage requires an absolute current-user profile path and never falls back to the working directory. Unix retains the validated parent directory descriptor and performs nonblocking child opens, atomic replacement, verification, and cleanup with descriptor-relative operations. Windows retains a no-follow parent handle plus no-delete leases on its pathname ancestors, and checks the directory's volume-and-file identity before and after its path-based child operations. Custom token parents are validation-only; only the exact computed default directory is managed or hardened.
 
 ### Chromium extension
 

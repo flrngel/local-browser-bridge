@@ -62,20 +62,28 @@ pub fn token_is_valid(value: &str) -> bool {
     distinct >= MIN_DISTINCT_TOKEN_BYTES
 }
 
-pub fn default_token_path() -> PathBuf {
-    crate::home::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(MANAGED_TOKEN_DIRECTORY)
-        .join("token")
+pub fn default_token_path() -> io::Result<PathBuf> {
+    default_token_path_from_home(crate::home::home_dir())
+}
+
+fn default_token_path_from_home(home: Option<PathBuf>) -> io::Result<PathBuf> {
+    let Some(home) = home.filter(|path| path.is_absolute()) else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "could not resolve an absolute current-user profile directory; set LBB_TOKEN_PATH to a token file inside a pre-created private directory",
+        ));
+    };
+    Ok(home.join(MANAGED_TOKEN_DIRECTORY).join("token"))
 }
 
 pub async fn load_or_create_token(path: &Path) -> io::Result<String> {
-    load_or_create_token_with_managed_path(path, &default_token_path()).await
+    let managed_token_path = default_token_path().ok();
+    load_or_create_token_with_managed_path(path, managed_token_path.as_deref()).await
 }
 
 async fn load_or_create_token_with_managed_path(
     path: &Path,
-    managed_token_path: &Path,
+    managed_token_path: Option<&Path>,
 ) -> io::Result<String> {
     let directory = prepare_token_parent(path, managed_token_path).await?;
 
@@ -93,13 +101,13 @@ async fn load_or_create_token_with_managed_path(
 
 async fn prepare_token_parent(
     path: &Path,
-    managed_token_path: &Path,
+    managed_token_path: Option<&Path>,
 ) -> io::Result<TokenDirectory> {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    if path == managed_token_path {
+    if managed_token_path.is_some_and(|managed_path| path == managed_path) {
         prepare_managed_token_directory(parent).await
     } else {
         validate_private_token_directory(parent)
@@ -138,7 +146,7 @@ async fn load_valid_persisted_token(
     let mut file = match unix_openat(
         directory,
         &token_name,
-        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        libc::O_RDONLY | libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_CLOEXEC,
         None,
     ) {
         Ok(file) => file,
@@ -574,6 +582,28 @@ fn verify_replaced_unix_token_file(
 mod tests {
     use super::*;
 
+    #[test]
+    fn default_token_path_requires_an_absolute_user_profile() {
+        for home in [None, Some(PathBuf::from("relative-profile"))] {
+            let error = default_token_path_from_home(home)
+                .expect_err("the default token path must never fall back to the working directory");
+            assert_eq!(error.kind(), io::ErrorKind::NotFound);
+            assert!(error.to_string().contains("LBB_TOKEN_PATH"));
+        }
+
+        #[cfg(unix)]
+        let home = PathBuf::from("/Users/example");
+        #[cfg(target_os = "windows")]
+        let home = PathBuf::from(r"C:\Users\example");
+        #[cfg(not(any(unix, target_os = "windows")))]
+        let home = std::env::current_dir().expect("absolute current directory");
+
+        assert_eq!(
+            default_token_path_from_home(Some(home.clone())).expect("absolute profile path"),
+            home.join(MANAGED_TOKEN_DIRECTORY).join("token")
+        );
+    }
+
     #[tokio::test]
     async fn creates_and_reuses_a_persisted_token() {
         let directory = tempfile::tempdir().expect("temp directory");
@@ -645,6 +675,53 @@ mod tests {
                 .expect("target remains")
                 .trim(),
             target_token
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn rotates_a_fifo_without_blocking_for_a_writer() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let directory = tempfile::tempdir().expect("temp directory");
+        let parent = private_test_parent(directory.path()).await;
+        let path = parent.join("token");
+        let fifo_path = CString::new(path.as_os_str().as_bytes()).expect("FIFO path has no NUL");
+        assert_eq!(unsafe { libc::mkfifo(fifo_path.as_ptr(), 0o600) }, 0);
+
+        let delayed_writer_path = path.clone();
+        let delayed_writer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(delayed_writer_path)
+                .expect("open the FIFO or its safe replacement");
+        });
+
+        let started = std::time::Instant::now();
+        let token = load_or_create_token(&path)
+            .await
+            .expect("replace a special token entry without waiting for a FIFO peer");
+        let elapsed = started.elapsed();
+        delayed_writer.join().expect("delayed writer thread");
+
+        assert!(
+            elapsed < std::time::Duration::from_millis(800),
+            "token inspection blocked for a FIFO writer: {elapsed:?}"
+        );
+        assert!(token_is_valid(&token));
+        assert!(
+            std::fs::symlink_metadata(&path)
+                .expect("replacement token metadata")
+                .file_type()
+                .is_file()
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path)
+                .expect("replacement token contents")
+                .trim(),
+            token
         );
     }
 
@@ -954,7 +1031,7 @@ mod tests {
         let parent = private_test_parent(directory.path()).await;
         let path = parent.join("token");
         let original = load_or_create_token(&path).await.expect("create token");
-        let capability = prepare_token_parent(&path, &default_token_path())
+        let capability = prepare_token_parent(&path, None)
             .await
             .expect("retain validated parent directory");
 
@@ -1146,7 +1223,7 @@ mod tests {
         std::fs::create_dir(&replaceable_ancestor).expect("create replaceable ancestor");
         let parent = private_test_parent(&replaceable_ancestor).await;
         let path = parent.join("token");
-        let capability = prepare_token_parent(&path, &default_token_path())
+        let capability = prepare_token_parent(&path, None)
             .await
             .expect("retain validated parent directory");
         let moved_parent = directory.path().join("moved-parent");
@@ -1187,7 +1264,7 @@ mod tests {
     }
 
     async fn load_or_create_managed_test_token(path: &Path) -> io::Result<String> {
-        load_or_create_token_with_managed_path(path, path).await
+        load_or_create_token_with_managed_path(path, Some(path)).await
     }
 
     #[cfg(unix)]

@@ -16,12 +16,15 @@ const PIXEL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAA
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let port = env::var("LBB_PORT").unwrap_or_else(|_| "17373".to_owned());
-    let token_path = env::var_os("LBB_TOKEN_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(default_token_path);
     let token = match env::var("LBB_TOKEN") {
         Ok(value) if !value.trim().is_empty() => value.trim().to_owned(),
-        _ => load_or_create_token(&token_path).await?,
+        _ => {
+            let token_path = match env::var_os("LBB_TOKEN_PATH") {
+                Some(path) => PathBuf::from(path),
+                None => default_token_path()?,
+            };
+            load_or_create_token(&token_path).await?
+        }
     };
     let url = format!("ws://127.0.0.1:{port}/bridge");
     let mut request = url.into_client_request()?;
