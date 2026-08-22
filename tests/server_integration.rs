@@ -959,7 +959,16 @@ async fn connect_fake_computer_with_share_ack(
             let mut response = match method {
                 "computer.status" => json!({
                     "id": id, "type": "result", "ok": true,
-                    "result": { "inputReady": true, "displayCount": 1, "frameReady": !current_frame.is_empty() }
+                    "result": {
+                        "inputReady": true,
+                        "displayCount": 1,
+                        "frameReady": !current_frame.is_empty(),
+                        "invariants": {
+                            "activatesTargetApplication": false,
+                            "targetActivationMode": "helper-supplied-understatement",
+                            "zeroTransientInterruptionGuaranteed": true
+                        }
+                    }
                 }),
                 "computer.observe" => {
                     frame_number += 1;
@@ -1592,6 +1601,43 @@ async fn relays_frame_bound_computer_actions_and_serves_desktop_capture() {
             .as_array()
             .unwrap()
             .contains(&json!("computer.shell"))
+    );
+
+    let status: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "computer.status", "params": {} }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    #[cfg(target_os = "macos")]
+    {
+        assert_eq!(
+            status["result"]["invariants"]["targetActivationMode"],
+            "may-use-transient-ax-frontmost-focus-lease"
+        );
+        assert_eq!(
+            status["result"]["invariants"]["activatesTargetApplication"],
+            true
+        );
+    }
+    #[cfg(target_os = "windows")]
+    {
+        assert_eq!(
+            status["result"]["invariants"]["targetActivationMode"],
+            "no-explicit-target-activation-api"
+        );
+        assert_eq!(
+            status["result"]["invariants"]["activatesTargetApplication"],
+            false
+        );
+    }
+    assert_eq!(
+        status["result"]["invariants"]["zeroTransientInterruptionGuaranteed"],
+        false
     );
 
     let observed: Value = client

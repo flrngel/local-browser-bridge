@@ -4271,6 +4271,13 @@ impl AppState {
         let computer_session_id = computer.session_id.clone();
 
         if method == "computer.status" {
+            if let Some(output) = result.as_object_mut() {
+                output.insert(
+                    "invariants".to_owned(),
+                    serde_json::to_value(computer_invariants_for_server_platform())
+                        .expect("computer invariants serialize"),
+                );
+            }
             let mut data = self.data.write().await;
             if !self.computer_hub.is_current_ready(connection_id) {
                 return Ok(result);
