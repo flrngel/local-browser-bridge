@@ -107,3 +107,7 @@ before changing this directory's status from candidate to released evidence.
 - [`attempts/withdrawn-ffd9f8b-transitional-resize-frame`](attempts/withdrawn-ffd9f8b-transitional-resize-frame/README.md)
   preserves an automated pass rejected by mandatory visual review because its
   resize screenshot still contained transitional pre-resize pixels.
+- [`attempts/withdrawn-fbdf89c-fixed-scstream-resize-timeout`](attempts/withdrawn-fbdf89c-fixed-scstream-resize-timeout/README.md)
+  preserves the strengthened run that exposed the product's fixed-dimension
+  SCStream after the target resized. The geometry-bound frame correctly timed
+  out instead of accepting stale pixels under new window metadata.

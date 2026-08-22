@@ -895,6 +895,35 @@ impl ComputerController {
             );
             return Some(self.fail_share_capture(error));
         };
+        let geometry_changed = {
+            let share = self.share.as_mut()?;
+            share.capture.as_mut().map_or_else(
+                || {
+                    Err(ComputerError::new(
+                        "COMPUTER_CAPTURE_FAILED",
+                        "The active share has no native capture stream",
+                    ))
+                },
+                |capture| capture.prepare_for_target(&target),
+            )
+        };
+        let geometry_changed = match geometry_changed {
+            Ok(changed) => changed,
+            Err(error) => return Some(self.fail_share_capture(error)),
+        };
+        if geometry_changed {
+            // The share ID remains stable across an in-place native stream
+            // update, but observation/action authority is geometry-scoped.
+            // Revoke old frame IDs and any locally queued transport frame
+            // before a sample from the new geometry epoch can be published.
+            self.clear_frame_authority();
+            if let Some(share) = self.share.as_mut() {
+                share.mailbox.discard_pending();
+            }
+            // `native_frame` was taken before current geometry was enumerated.
+            // It deliberately does not cross the just-created native epoch.
+            return None;
+        }
         debug_assert!(native_frame.source_sequence > last_source_sequence);
         // Let a native backend bind pixels to capture-time geometry when it
         // can prove that sample. Windows samples DWM bounds on both sides of

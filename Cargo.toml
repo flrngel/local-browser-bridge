@@ -64,6 +64,9 @@ tempfile = "3.23.0"
 embed-manifest = "1.5.0"
 embed-resource = "3.0.11"
 
+[patch.crates-io]
+screencapturekit = { path = "vendor/screencapturekit-8.0.1" }
+
 [profile.release]
 codegen-units = 1
 lto = "thin"

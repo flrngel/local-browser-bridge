@@ -1,0 +1,2 @@
+# Preserve audited upstream vendor bytes; local changes remain visible in diffs.
+vendor/screencapturekit-8.0.1/** whitespace=-trailing-space,-blank-at-eof

@@ -95,8 +95,12 @@ fn helper_source_has_no_shell_filesystem_or_clipboard_implementation() {
 #[test]
 fn background_backend_has_no_global_or_foreground_input_fallback() {
     let manifest = fs::read_to_string("Cargo.toml").unwrap();
-    let macos = fs::read_to_string("src/computer/platform_macos.rs").unwrap();
-    let windows = fs::read_to_string("src/computer/platform_windows.rs").unwrap();
+    let macos = fs::read_to_string("src/computer/platform_macos.rs")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let windows = fs::read_to_string("src/computer/platform_windows.rs")
+        .unwrap()
+        .replace("\r\n", "\n");
     assert!(!manifest.contains("enigo"));
     for forbidden in [
         "CGEventTapLocation::HID",
@@ -226,6 +230,29 @@ fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
     assert!(rig.contains("resize screenshot dimensions match settled observation"));
     assert!(rig.contains("resize screenshot geometry changed"));
     assert!(!rig.contains("resize screenshot changed"));
+}
+
+#[test]
+fn vendored_screen_capture_patch_preserves_macos_13_resize_support() {
+    let manifest = fs::read_to_string("Cargo.toml").unwrap();
+    let vendor_manifest = fs::read_to_string("vendor/screencapturekit-8.0.1/Cargo.toml").unwrap();
+    let bridge = fs::read_to_string(
+        "vendor/screencapturekit-8.0.1/swift-bridge/Sources/ScreenCaptureKitBridge/Stream.swift",
+    )
+    .unwrap();
+    let patch_policy =
+        fs::read_to_string("vendor/screencapturekit-8.0.1/LOCAL_PATCHES.md").unwrap();
+
+    assert!(manifest.contains("screencapturekit = { path = \"vendor/screencapturekit-8.0.1\" }"));
+    assert!(vendor_manifest.contains("version = \"8.0.1\""));
+    assert!(bridge.contains("if #available(macOS 13.0, *)"));
+    assert!(bridge.contains("updateConfiguration requires macOS 13.0 or later"));
+    assert!(!bridge.contains("updateConfiguration requires macOS 14.0 or later"));
+    assert!(patch_policy.contains("2a9f13bcbeadb0aabc5596f0ff3d2ba71da8c1d0"));
+    assert!(
+        patch_policy.contains("9ddaa8d6b16a2762c9a97c9a6297f04cb8ded0487e5ef02dc98b4e2bee3a26c7")
+    );
+    assert!(patch_policy.contains("Apple exposes the underlying API from macOS 12.3"));
 }
 
 #[test]

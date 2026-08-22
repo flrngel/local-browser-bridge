@@ -238,6 +238,21 @@ impl ShareMailbox {
         self.last_acked_sequence
     }
 
+    /// Invalidates a captured frame that has not left the helper yet.
+    ///
+    /// Geometry-epoch changes use this before accepting a replacement native
+    /// frame, so a locally queued old-geometry observation cannot be emitted
+    /// after the exact window has moved or resized. An already emitted frame
+    /// remains ack-paced; the controller separately revokes its action token.
+    pub fn discard_pending(&mut self) -> bool {
+        if self.slot.take().is_some() {
+            self.dropped_frames = self.dropped_frames.saturating_add(1);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Parks the newest captured frame in the single slot.
     ///
     /// A capture that does not advance the strictly increasing share sequence
@@ -408,5 +423,18 @@ mod tests {
         assert!(!mailbox.produce(1, json!({})), "sequences never rewind");
         assert!(mailbox.emit().is_none());
         assert_eq!(mailbox.dropped_frames(), 0);
+    }
+
+    #[test]
+    fn mailbox_discards_a_pending_old_geometry_frame_without_rewinding() {
+        let mut mailbox = ShareMailbox::new(true);
+        assert!(mailbox.produce(4, json!({ "geometry": "old" })));
+        assert!(mailbox.discard_pending());
+        assert!(!mailbox.discard_pending());
+        assert!(mailbox.emit().is_none());
+        assert_eq!(mailbox.dropped_frames(), 1);
+        assert!(!mailbox.produce(4, json!({})), "sequence cannot rewind");
+        assert!(mailbox.produce(5, json!({ "geometry": "new" })));
+        assert_eq!(mailbox.emit().unwrap().0, 5);
     }
 }

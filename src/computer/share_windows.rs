@@ -616,6 +616,17 @@ impl NativeShareCapture {
         Ok(capture)
     }
 
+    /// WGC owns resize handling inside its frame-pool owner and binds every
+    /// delivered frame to capture-time DWM geometry. Keep the common controller
+    /// hook explicit so macOS can update SCStream before either backend's next
+    /// native frame is accepted.
+    pub(crate) fn prepare_for_target(
+        &mut self,
+        _target: &WindowDescriptor,
+    ) -> Result<bool, ComputerError> {
+        Ok(false)
+    }
+
     pub(crate) fn latest_after(
         &self,
         last_source_sequence: u64,

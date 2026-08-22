@@ -68,7 +68,7 @@ One-shot observation and live sharing are deliberately separate paths.
 
 `computer.share.start` validates one selected, non-minimized window and starts a persistent native capture source:
 
-- macOS uses ScreenCaptureKit `SCStream` with `SCContentFilter(desktopIndependentWindow:)`, bound to the exact `(PID, CGWindowID)`.
+- macOS uses ScreenCaptureKit `SCStream` with `SCContentFilter(desktopIndependentWindow:)`, bound to the exact `(PID, CGWindowID)`. Window geometry changes advance a frame-authority epoch and use `SCStream.updateConfiguration` on the same stream for new pixel dimensions; queued and in-flight pre-update frames cannot cross that epoch.
 - Windows uses a project-owned Windows Graphics Capture `CreateFreeThreaded` frame pool on a dedicated MTA owner thread bound to the exact `(PID, HWND)`.
 
 Both sources disable capture of the system cursor. Native callbacks publish only the newest accepted frame into a one-slot handoff, so a slow consumer cannot create an unbounded native-frame backlog. The helper then composites its window-scoped synthetic pointer and emits PNG `computer.share.frame` events with the requested 1–10 FPS as a maximum cadence, not a guaranteed delivery rate. Delivered images are capped at 1,000,000 pixels.
