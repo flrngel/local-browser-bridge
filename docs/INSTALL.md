@@ -44,6 +44,8 @@ PROGRAM --licenses
 
 Run the downloaded `.exe` from PowerShell or Explorer. It prints a control-surface URL and a random extension token. No Node.js installation is required.
 
+The generated token is stored under `%USERPROFILE%\.local-browser-bridge\token`. The server protects that directory and file with a non-inherited DACL granting only the signed-in user full control. If the path is a reparse point, the token has another hard-link name, or the filesystem cannot retain and report that ACL, startup fails without touching that path instead of accepting a weaker secret store. Do not move the token to a shared directory with `LBB_TOKEN_PATH`.
+
 The binary is not yet signed with a Microsoft publisher certificate. Microsoft SmartScreen can therefore report an unknown publisher. Keep SmartScreen enabled. Verify the GitHub release, checksum, and provenance first; do not run the file if its hash or origin differs.
 
 ### macOS

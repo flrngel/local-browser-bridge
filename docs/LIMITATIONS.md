@@ -4,6 +4,10 @@ Local Browser Bridge provides exact-window capture and best-effort non-interrupt
 
 Setup requirements such as browser loading, matching versions, macOS permissions, and the Windows interactive session are documented separately in [Installation](INSTALL.md). This page describes constraints that remain after correct setup.
 
+## Local token storage
+
+The persisted bearer token is protected against accidental cross-user exposure, not against software already running as the same account, an administrator that takes ownership, or kernel compromise. Windows hardens and verifies the dedicated parent directory and token entry with a protected current-user-only DACL, rejects a reparse-point directory or token and a multiply linked token file, and fails closed on filesystems that cannot retain that security descriptor. It does not rewrite the ACLs of ancestor directories, which can legitimately include redirected-profile or managed-storage boundaries. An explicit relative `LBB_TOKEN_PATH` with no parent component protects the file but deliberately does not rewrite the process working directory. Unix uses exact `0700`/`0600` modes for a dedicated parent and retains its existing atomic rename behavior.
+
 ## Browser limits
 
 - The agent browser must run on the same computer. A cloud-hosted browser cannot reach the user's `127.0.0.1` server.

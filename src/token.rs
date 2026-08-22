@@ -6,7 +6,13 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use rand::RngCore as _;
 use subtle::ConstantTimeEq as _;
 use tokio::fs;
+#[cfg(target_os = "windows")]
+use tokio::io::AsyncReadExt as _;
 use tokio::io::AsyncWriteExt as _;
+
+#[cfg(target_os = "windows")]
+#[path = "token_windows.rs"]
+mod windows_security;
 
 const TOKEN_BYTES: usize = 32;
 const TOKEN_ENCODED_BYTES: usize = 43;
@@ -68,6 +74,7 @@ pub async fn load_or_create_token(path: &Path) -> io::Result<String> {
     Ok(token)
 }
 
+#[cfg(not(target_os = "windows"))]
 async fn load_valid_persisted_token(path: &Path) -> io::Result<Option<String>> {
     let metadata = fs::symlink_metadata(path).await?;
     if !metadata.file_type().is_file() || !private_file_permissions_are_valid(&metadata) {
@@ -85,29 +92,78 @@ async fn load_valid_persisted_token(path: &Path) -> io::Result<Option<String>> {
     Ok(Some(value.to_owned()))
 }
 
+#[cfg(target_os = "windows")]
+async fn load_valid_persisted_token(path: &Path) -> io::Result<Option<String>> {
+    let Some(file) = windows_security::open_private_token_file(path)? else {
+        return Ok(None);
+    };
+    let mut file = fs::File::from_std(file);
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).await?;
+    let value = contents.strip_suffix('\n').unwrap_or(&contents);
+    if value.contains(['\r', '\n']) || !token_is_valid(value) {
+        return Ok(None);
+    }
+    Ok(Some(value.to_owned()))
+}
+
 async fn replace_token_file(path: &Path, token: &str) -> io::Result<()> {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     let temporary_path = parent.join(format!(".lbb-token-{}.tmp", create_token()));
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    set_private_file_options(&mut options);
 
     let result = async {
-        let mut file = options.open(&temporary_path).await?;
+        let mut file = open_private_temporary_file(&temporary_path).await?;
         file.write_all(format!("{token}\n").as_bytes()).await?;
         file.flush().await?;
         file.sync_all().await?;
         drop(file);
-        replace_path(&temporary_path, path).await
+        replace_path(&temporary_path, path).await?;
+        verify_replaced_token_file(path)
     }
     .await;
     if result.is_err() {
         let _ = fs::remove_file(&temporary_path).await;
     }
     result
+}
+
+#[cfg(unix)]
+async fn open_private_temporary_file(path: &Path) -> io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true).mode(0o600);
+    options.open(path).await
+}
+
+#[cfg(target_os = "windows")]
+async fn open_private_temporary_file(path: &Path) -> io::Result<fs::File> {
+    windows_security::create_private_token_file(path).map(fs::File::from_std)
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+async fn open_private_temporary_file(path: &Path) -> io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    options.open(path).await
+}
+
+#[cfg(target_os = "windows")]
+fn verify_replaced_token_file(path: &Path) -> io::Result<()> {
+    if windows_security::token_path_has_private_permissions(path)? {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the replaced token file did not retain a private Windows DACL",
+        ))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn verify_replaced_token_file(_path: &Path) -> io::Result<()> {
+    Ok(())
 }
 
 pub fn tokens_equal(actual: &str, expected: &str) -> bool {
@@ -121,23 +177,15 @@ async fn replace_path(source: &Path, destination: &Path) -> io::Result<()> {
     fs::rename(source, destination).await
 }
 
-#[cfg(not(unix))]
+#[cfg(target_os = "windows")]
 async fn replace_path(source: &Path, destination: &Path) -> io::Result<()> {
-    match fs::remove_file(destination).await {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
-    }
+    windows_security::replace_token_file(source, destination)
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+async fn replace_path(source: &Path, destination: &Path) -> io::Result<()> {
     fs::rename(source, destination).await
 }
-
-#[cfg(unix)]
-fn set_private_file_options(options: &mut fs::OpenOptions) {
-    options.mode(0o600);
-}
-
-#[cfg(not(unix))]
-fn set_private_file_options(_options: &mut fs::OpenOptions) {}
 
 #[cfg(unix)]
 async fn set_private_directory_permissions(path: &Path) -> io::Result<()> {
@@ -145,7 +193,12 @@ async fn set_private_directory_permissions(path: &Path) -> io::Result<()> {
     fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).await
 }
 
-#[cfg(not(unix))]
+#[cfg(target_os = "windows")]
+async fn set_private_directory_permissions(path: &Path) -> io::Result<()> {
+    windows_security::harden_token_directory(path)
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
 async fn set_private_directory_permissions(_path: &Path) -> io::Result<()> {
     Ok(())
 }
@@ -156,7 +209,7 @@ fn private_file_permissions_are_valid(metadata: &std::fs::Metadata) -> bool {
     metadata.permissions().mode() & 0o777 == 0o600
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, target_os = "windows")))]
 fn private_file_permissions_are_valid(_metadata: &std::fs::Metadata) -> bool {
     true
 }
@@ -256,6 +309,92 @@ mod tests {
         assert_eq!(mode, 0o600);
     }
 
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn rotates_a_windows_token_with_a_null_dacl() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let path = directory.path().join("token");
+        let original = create_token();
+        std::fs::write(&path, format!("{original}\n")).expect("write token");
+        windows_security::install_permissive_null_dacl_for_test(&path)
+            .expect("install test null DACL");
+
+        let replacement = load_or_create_token(&path)
+            .await
+            .expect("rotate permissive token");
+        assert_ne!(replacement, original);
+        assert!(token_is_valid(&replacement));
+        assert!(
+            windows_security::path_has_private_permissions_for_test(&path, false)
+                .expect("inspect replacement DACL")
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn rejects_a_windows_file_symlink_without_touching_its_target() {
+        use std::os::windows::fs::symlink_file;
+
+        let directory = tempfile::tempdir().expect("temp directory");
+        let target = directory.path().join("target");
+        let path = directory.path().join("token");
+        let target_token = create_token();
+        std::fs::write(&target, format!("{target_token}\n")).expect("write target");
+        match symlink_file(&target, &path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                eprintln!("skipping Windows symlink runtime assertion: {error}");
+                return;
+            }
+            Err(error) => panic!("create Windows file symlink: {error}"),
+        }
+
+        let error = load_or_create_token(&path)
+            .await
+            .expect_err("reject Windows symlink");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(
+            std::fs::symlink_metadata(&path)
+                .expect("token metadata")
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read_to_string(&target)
+                .expect("target remains")
+                .trim(),
+            target_token
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn rejects_a_multiply_linked_windows_token_without_modifying_either_name() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let target = directory.path().join("target");
+        let path = directory.path().join("token");
+        let target_token = create_token();
+        std::fs::write(&target, format!("{target_token}\n")).expect("write target");
+        std::fs::hard_link(&target, &path).expect("create token hard link");
+
+        let error = load_or_create_token(&path)
+            .await
+            .expect_err("reject multiply linked Windows token");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            std::fs::read_to_string(&path)
+                .expect("token link remains")
+                .trim(),
+            target_token
+        );
+        assert_eq!(
+            std::fs::read_to_string(&target)
+                .expect("target remains")
+                .trim(),
+            target_token
+        );
+    }
+
     #[cfg(unix)]
     fn set_private_test_permissions(path: &Path) {
         use std::os::unix::fs::PermissionsExt as _;
@@ -263,7 +402,12 @@ mod tests {
             .expect("set token permissions");
     }
 
-    #[cfg(not(unix))]
+    #[cfg(target_os = "windows")]
+    fn set_private_test_permissions(path: &Path) {
+        windows_security::harden_file_for_test(path).expect("set private Windows token DACL");
+    }
+
+    #[cfg(not(any(unix, target_os = "windows")))]
     fn set_private_test_permissions(_path: &Path) {}
 
     #[cfg(unix)]
@@ -277,7 +421,16 @@ mod tests {
         assert_eq!(mode, expected);
     }
 
-    #[cfg(not(unix))]
+    #[cfg(target_os = "windows")]
+    fn assert_private_test_permissions(path: &Path, expected: u32) {
+        let directory = expected == 0o700;
+        assert!(
+            windows_security::path_has_private_permissions_for_test(path, directory)
+                .expect("inspect private Windows path DACL")
+        );
+    }
+
+    #[cfg(not(any(unix, target_os = "windows")))]
     fn assert_private_test_permissions(_path: &Path, _expected: u32) {}
 
     #[test]
