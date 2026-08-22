@@ -1,12 +1,6 @@
 name: Build verified release
 
 on:
-  workflow_dispatch:
-    inputs:
-      release_tag:
-        description: Existing annotated v-prefixed tag at the selected workflow ref
-        required: true
-        type: string
   push:
     tags:
       - "v*"
@@ -15,12 +9,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.repository }}-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+  group: release-${{ github.repository }}-${{ github.ref_name }}
   cancel-in-progress: false
 
 env:
-  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
-  SOURCE_REF: ${{ github.event_name == 'push' && github.sha || inputs.release_tag }}
+  RELEASE_TAG: ${{ github.ref_name }}
+  SOURCE_REF: ${{ github.sha }}
 
 jobs:
   verify:
@@ -222,12 +216,12 @@ jobs:
           path: dist/*.zip
           if-no-files-found: error
 
-  release:
-    name: Publish GitHub Release
+  assemble:
+    name: Assemble frozen release candidate
     needs: [verify, windows, macos, extension]
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       id-token: write
       attestations: write
     steps:
@@ -239,16 +233,6 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: Refuse publication unless release immutability is enabled
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          test "$(gh api \
-            -H 'Accept: application/vnd.github+json' \
-            -H 'X-GitHub-Api-Version: 2026-03-10' \
-            "repos/$GITHUB_REPOSITORY/immutable-releases" \
-            --jq '.enabled')" = true
       - name: Generate and verify checksums
         shell: bash
         run: |
@@ -266,11 +250,73 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/SHA256SUMS.txt
-      - name: Verify every GitHub build attestation before publishing
+      - name: Verify every GitHub build attestation before freezing the candidate
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
+          verify_attestation() {
+            local subject="$1"
+            for attempt in 1 2 3 4 5; do
+              if gh attestation verify "$subject" \
+                --repo "$GITHUB_REPOSITORY" \
+                --source-ref "$GITHUB_REF" \
+                --source-digest "${{ needs.verify.outputs.source_sha }}" \
+                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/deploy.yml" \
+                --deny-self-hosted-runners; then
+                return 0
+              fi
+              sleep 2
+            done
+            return 1
+          }
+          for subject in dist/*; do
+            verify_attestation "$subject"
+          done
+      - name: Freeze the exact candidate for interactive acceptance
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-candidate
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    needs: [verify, assemble]
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.source_sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-candidate
+          path: dist
+      - name: Refuse publication unless release immutability is enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          test "$(gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/immutable-releases" \
+            --jq '.enabled')" = true
+      - name: Re-verify the frozen candidate and every build attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          version="${RELEASE_TAG#v}"
+          bash scripts/verify-release-assets.sh "$version" dist
           verify_attestation() {
             local subject="$1"
             for attempt in 1 2 3 4 5; do
@@ -313,6 +359,8 @@ jobs:
           3. Run the server. Run the separate helper only when desktop control is wanted; macOS will request Screen Recording and Accessibility.
           4. Extract the extension ZIP, load it from \`chrome://extensions\` with Developer mode enabled, and paste the token printed by the server into its popup.
           5. Keep the server, helper, and extension on this same version.
+
+          For an upgrade, release control first. Disable the existing unpacked extension and replace the contents of its existing folder before reloading the same card. If you extract to a new folder, remove the old card before loading the new one. Confirm that exactly one Local Browser Bridge card remains.
 
           ## Trust notice
 

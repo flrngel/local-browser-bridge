@@ -112,10 +112,18 @@ fn release_gates_javascript_macos_and_published_provenance() {
     assert!(!ci.contains("Extension static and contract tests (Node-free)"));
     assert!(ci.contains("name: macOS formatting, lint, and tests"));
     assert!(ci.contains("runs-on: macos-14"));
+    assert!(!release.contains("workflow_dispatch:"));
+    assert!(release.contains("RELEASE_TAG: ${{ github.ref_name }}"));
 
     for required in [
         "Run native macOS formatting, lint, and tests",
         "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
+        "Assemble frozen release candidate",
+        "Freeze the exact candidate for interactive acceptance",
+        "name: release-candidate",
+        "retention-days: 14",
+        "environment:\n      name: release",
+        "Re-verify the frozen candidate and every build attestation",
         "Refuse publication unless release immutability is enabled",
         "repos/$GITHUB_REPOSITORY/immutable-releases",
         "X-GitHub-Api-Version: 2026-03-10",
@@ -153,6 +161,19 @@ fn release_gates_javascript_macos_and_published_provenance() {
     let publish = release.find("gh release create \"$RELEASE_TAG\"").unwrap();
     assert!(immutable_gate < publish);
     assert!(exact_asset_gate < publish);
+    assert_eq!(
+        release
+            .matches("(cd dist && sha256sum \"${assets[@]}\" > SHA256SUMS.txt)")
+            .count(),
+        1,
+        "the checksum manifest must be generated once in the frozen candidate, never rebuilt after acceptance"
+    );
+    let freeze = release
+        .find("Freeze the exact candidate for interactive acceptance")
+        .unwrap();
+    let approval = release.find("environment:\n      name: release").unwrap();
+    assert!(freeze < approval);
+    assert!(approval < publish);
 }
 
 #[test]

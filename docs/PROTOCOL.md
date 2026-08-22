@@ -1,6 +1,6 @@
 # Bridge protocol
 
-Protocol version: `1`. Package version examples below use `0.11.0`.
+Protocol version: `1`. Package version examples below use `0.12.1`.
 
 ## Transport and trust boundary
 
@@ -87,7 +87,7 @@ After mutual authentication succeeds, the server sends the normal welcome for th
   "type": "welcome",
   "protocolVersion": 1,
   "sessionId": "82b6b311-f71d-4a88-ae07-0b5e7a897815",
-  "serverVersion": "0.11.0",
+  "serverVersion": "0.12.1",
   "connector": "browser-extension"
 }
 ```
@@ -119,7 +119,7 @@ The computer helper uses the same negotiated envelope and reports its bounded na
   "type": "hello",
   "protocolVersion": 1,
   "sessionId": "d559c7b3-56fb-49e6-b661-801cfcb8807f",
-  "version": "0.11.0",
+  "version": "0.12.1",
   "platform": "macos",
   "architecture": "aarch64",
   "backend": "background-window/ax+skylight+screencapturekit-stream",

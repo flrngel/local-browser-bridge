@@ -104,7 +104,14 @@ The app bundle is ad-hoc signed for internal consistency, but it is not Develope
 
 Chrome and Edge 118–124 support the core tab and top-level-page features. Use version 125 or later when the task must observe or click through cross-origin iframes.
 
-The extension includes no remote code, analytics, cookie API, native messaging host, downloader, or external update endpoint. Chrome does not auto-update unpacked extensions on Windows or macOS. The server's metadata-only checker accepts only a canonical stable release marked immutable by GitHub. When the local UI reports a new release, repeat the download and verification steps and replace the server, helper, and extension together.
+The extension includes no remote code, analytics, cookie API, native messaging host, downloader, or external update endpoint. Chrome does not auto-update unpacked extensions on Windows or macOS. The server's metadata-only checker accepts only a canonical stable release marked immutable by GitHub with the exact five uploaded, nonempty assets and GitHub SHA-256 digests.
+
+When the local UI reports a new release, repeat the download and verification steps, release browser and computer control, and stop the old server and helper. Update all three components together. For the unpacked extension, use one of these procedures:
+
+1. To preserve its identity and saved settings, disable the existing card at `chrome://extensions`, replace the contents of that card's existing unpacked folder with the verified new ZIP contents, then re-enable and reload the same card.
+2. To extract to a new folder, first remove the old extension card, then select **Load unpacked** for the new folder and enter the server's new token again.
+
+Finish by confirming that `chrome://extensions` shows exactly one Local Browser Bridge card and that its popup version matches the server and helper. Loading a second extracted path without removing the first creates another unpacked extension identity and can leave the old connector active.
 
 ## 6. Understand the authority granted
 

@@ -109,9 +109,9 @@ Full Access is enabled by default and can act in signed-in sessions, sensitive f
 
 ## Updates
 
-At startup the server checks only the fixed public GitHub Releases metadata endpoint and accepts only a canonical stable release that GitHub reports as immutable. It does not download or install anything. Disable the check with `--no-update-check` or `LBB_DISABLE_UPDATE_CHECK=1`.
+At startup the server checks only the fixed public GitHub Releases metadata endpoint. It accepts only a canonical stable release that GitHub reports as immutable and that exposes the exact five uploaded, nonempty release assets with GitHub SHA-256 digests. It does not download or install anything. Disable the check with `--no-update-check` or `LBB_DISABLE_UPDATE_CHECK=1`.
 
-Unpacked extensions do not update automatically. Replace the server, extension, and helper together with files from the same release. Do not mix versions.
+Unpacked extensions do not update automatically. Replace the server, extension, and helper together with files from the same release; do not mix versions. To preserve one extension identity, release control, disable the existing extension at `chrome://extensions`, replace the contents of its existing unpacked folder with the verified new ZIP, then re-enable and reload that same card. If you use a new folder instead, remove the old extension card before **Load unpacked**. Confirm that exactly one Local Browser Bridge card remains and that its popup version matches the server.
 
 ## Build and test
 
