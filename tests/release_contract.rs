@@ -169,10 +169,11 @@ fn release_gates_javascript_macos_and_published_provenance() {
         "environment:\n      name: release",
         "Re-verify the frozen candidate and every build attestation",
         "Refuse publication unless release immutability is enabled",
-        "gh release view \"$RELEASE_TAG\" --repo \"$GITHUB_REPOSITORY\" --json isDraft --jq '.isDraft'",
-        "draft_release=\"$(mktemp -d)\"",
-        "bash scripts/verify-release-assets.sh \"$version\" \"$draft_release\"",
-        "cmp -s \"$subject\" \"$draft_release/$asset\"",
+        "Recover a verified draft or publish immutable release assets",
+        "assert_release_identity \"$created_draft\" true false",
+        "assert_release_assets \"$created_draft\" exact",
+        "download_and_compare_release_assets \"$created_draft\"",
+        "cmp -s \"dist/$asset_name\" \"$download_dir/$asset_name\"",
         "repos/$GITHUB_REPOSITORY/immutable-releases",
         "X-GitHub-Api-Version: 2026-03-10",
         "--jq '.enabled'",
@@ -237,29 +238,25 @@ fn release_gates_javascript_macos_and_published_provenance() {
     let approval = release.find("environment:\n      name: release").unwrap();
     assert!(freeze < approval);
     assert!(approval < publish);
-    let publish_draft = release
-        .find("gh release edit \"$RELEASE_TAG\" --draft=false")
-        .unwrap();
+    let publish_draft = release.find("-F draft=false").unwrap();
     let upload = release
         .find("gh release upload \"$RELEASE_TAG\" dist/*")
         .unwrap();
-    let draft_download = release
-        .find("gh release download \"$RELEASE_TAG\" \\")
+    let draft_identity = release
+        .find("assert_release_identity \"$created_draft\" true false")
         .unwrap();
-    let draft_exact_verification = release
-        .find("bash scripts/verify-release-assets.sh \"$version\" \"$draft_release\"")
+    let draft_asset_set = release
+        .find("assert_release_assets \"$created_draft\" exact")
         .unwrap();
     let draft_byte_comparison = release
-        .find("cmp -s \"$subject\" \"$draft_release/$asset\"")
+        .find("download_and_compare_release_assets \"$created_draft\"")
         .unwrap();
     assert!(publish < upload);
-    assert!(upload < draft_download);
-    assert!(draft_download < draft_exact_verification);
-    assert!(draft_exact_verification < draft_byte_comparison);
+    assert!(upload < draft_identity);
+    assert!(draft_identity < draft_asset_set);
+    assert!(draft_asset_set < draft_byte_comparison);
     assert!(draft_byte_comparison < publish_draft);
-    let final_tag_recheck = release[..publish_draft]
-        .rfind("remote_tag_sha=\"$(git ls-remote --refs origin")
-        .unwrap();
+    let final_tag_recheck = release[..publish_draft].rfind("assert_remote_tag").unwrap();
     let final_immutable_recheck = release[..publish_draft]
         .rfind("\"repos/$GITHUB_REPOSITORY/immutable-releases\"")
         .unwrap();
@@ -295,6 +292,115 @@ fn release_gates_javascript_macos_and_published_provenance() {
         published_verification_step
             .contains("VERIFIED_TAG_SHA: ${{ needs.verify.outputs.tag_sha }}")
     );
+}
+
+#[test]
+fn release_reruns_delete_only_a_candidate_bound_byte_exact_draft() {
+    let release = source(".github/workflows/deploy.yml");
+
+    for binding in [
+        "local-browser-bridge-release:v1",
+        "source-sha=$VERIFIED_SOURCE_SHA",
+        "tag-object-sha=$VERIFIED_TAG_SHA",
+        "manifest-sha256=$candidate_manifest_sha256",
+        "jq -ej '.body | select(type == \"string\")'",
+        "cmp -s release-notes.md \"$release_body\"",
+    ] {
+        assert!(
+            release.contains(binding),
+            "recoverable draft ownership is missing {binding}"
+        );
+    }
+    assert!(!release.contains("jq -ejr '.body | select(type == \"string\")'"));
+    assert!(
+        release
+            .contains("https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id")
+    );
+    assert!(release.contains("[[ \"$asset_id\" =~ ^[1-9][0-9]*$ ]]"));
+    assert!(!release.contains("((.id | type) == \"number\")"));
+
+    let draft_start = release
+        .find("if jq -e '.isDraft == true and .isImmutable == false'")
+        .unwrap();
+    let published_start = release
+        .find("elif jq -e '.isDraft == false and .isImmutable == true'")
+        .unwrap();
+    let draft = &release[draft_start..published_start];
+    let identity = draft
+        .find("assert_release_identity \"$existing_release\" true false")
+        .unwrap();
+    let subset = draft
+        .find("assert_release_assets \"$existing_release\" subset")
+        .unwrap();
+    let byte_comparison = draft
+        .find("download_and_compare_release_assets \"$existing_release\"")
+        .unwrap();
+    let stable_identity = draft
+        .find("test \"$(release_fingerprint \"$refreshed_draft\")\" = \"$draft_fingerprint\"")
+        .unwrap();
+    let delete = draft.find("--method DELETE").unwrap();
+    let absent = draft.find("wait_for_release_absence").unwrap();
+    assert!(identity < subset);
+    assert!(subset < byte_comparison);
+    assert!(byte_comparison < stable_identity);
+    assert!(stable_identity < delete);
+    assert!(delete < absent);
+    assert!(draft.contains("repos/$GITHUB_REPOSITORY/releases/$draft_release_id"));
+    assert!(draft.matches("assert_remote_tag").count() >= 2);
+    assert_eq!(release.matches("--method DELETE").count(), 1);
+    assert!(!release.contains("gh release delete"));
+    assert!(!release.contains("--cleanup-tag"));
+}
+
+#[test]
+fn release_reruns_resume_only_an_exact_immutable_publication() {
+    let release = source(".github/workflows/deploy.yml");
+    let published_start = release
+        .find("elif jq -e '.isDraft == false and .isImmutable == true'")
+        .unwrap();
+    let rejected_start = release[published_start..]
+        .find("else\n              echo \"The existing release is neither")
+        .map(|offset| published_start + offset)
+        .unwrap();
+    let published = &release[published_start..rejected_start];
+
+    let identity = published
+        .find("assert_release_identity \"$existing_release\" false true")
+        .unwrap();
+    let exact_assets = published
+        .find("assert_release_assets \"$existing_release\" exact")
+        .unwrap();
+    let byte_comparison = published
+        .find("download_and_compare_release_assets \"$existing_release\"")
+        .unwrap();
+    let stable_identity = published
+        .find(
+            "test \"$(release_fingerprint \"$refreshed_published\")\" = \"$published_fingerprint\"",
+        )
+        .unwrap();
+    let resume = published.find("exit 0").unwrap();
+    assert!(identity < exact_assets);
+    assert!(exact_assets < byte_comparison);
+    assert!(byte_comparison < stable_identity);
+    assert!(stable_identity < resume);
+    assert!(published.contains("assert_remote_tag"));
+    assert!(!published.contains("gh release upload"));
+    assert!(!published.contains("--method DELETE"));
+
+    let rejected = &release[rejected_start..release.find("gh release create").unwrap()];
+    assert!(rejected.contains("neither a recoverable draft nor an immutable publication"));
+    assert!(rejected.contains("exit 1"));
+    assert!(release.contains("wait_for_release_absence()"));
+    assert!(release.contains("for attempt in 1 2 3 4 5 6 7 8 9 10; do"));
+    assert!(release.contains("publication_visible=false"));
+    assert!(release.contains("test \"$publication_visible\" = true"));
+
+    let published_verification = release
+        .split("- name: Re-download and verify the immutable published release")
+        .nth(1)
+        .unwrap();
+    assert!(published_verification.contains("bash scripts/verify-release-assets.sh"));
+    assert!(published_verification.contains("cmp -s \"$subject\" \"published/$asset\""));
 }
 
 #[test]

@@ -382,22 +382,27 @@ jobs:
           for subject in dist/*; do
             verify_attestation "$subject"
           done
-      - name: Publish immutable release assets
+      - name: Recover a verified draft or publish immutable release assets
         env:
           GH_TOKEN: ${{ github.token }}
+          VERIFIED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
           VERIFIED_TAG_SHA: ${{ needs.verify.outputs.tag_sha }}
         shell: bash
         run: |
           version="${RELEASE_TAG#v}"
-          test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$(git rev-parse HEAD)"
-          test "$(git rev-parse "$RELEASE_TAG")" = "$VERIFIED_TAG_SHA"
-          remote_tag_sha="$(git ls-remote --refs origin "refs/tags/$RELEASE_TAG" | awk '{ print $1 }')"
-          test "$remote_tag_sha" = "$VERIFIED_TAG_SHA"
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "A release already exists for $RELEASE_TAG; refusing to overwrite immutable assets." >&2
-            exit 1
-          fi
+          expected_title="Local Browser Bridge ${version}"
+          candidate_manifest_sha256="$(sha256sum dist/SHA256SUMS.txt | awk '{ print $1 }')"
+          release_marker="<!-- local-browser-bridge-release:v1 source-sha=$VERIFIED_SOURCE_SHA tag-object-sha=$VERIFIED_TAG_SHA manifest-sha256=$candidate_manifest_sha256 -->"
+          candidate_assets=(
+            "local-browser-bridge-v${version}-windows-x86_64.exe"
+            "local-computer-helper-v${version}-windows-x86_64.exe"
+            "local-browser-bridge-v${version}-macos-universal.tar.gz"
+            "local-browser-bridge-extension-v${version}.zip"
+            "SHA256SUMS.txt"
+          )
           cat > release-notes.md <<EOF
+          $release_marker
+
           Standalone Local Browser Bridge ${version} for Windows and macOS, its separate native computer helper, and the matching Chromium extension.
 
           ## Install
@@ -414,32 +419,252 @@ jobs:
 
           These binaries are built by public GitHub Actions and include GitHub artifact attestations. No release asset auto-installs itself. This release is not yet signed with a Microsoft publisher certificate or Apple Developer ID and is not Apple-notarized, so SmartScreen or Gatekeeper may show an unfamiliar-developer warning. Do not weaken system security globally; verify the release and source first.
           EOF
+          assert_remote_tag() {
+            test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$(git rev-parse HEAD)"
+            test "$(git rev-parse "$RELEASE_TAG")" = "$VERIFIED_TAG_SHA"
+            local remote_tag_sha
+            remote_tag_sha="$(git ls-remote --refs origin "refs/tags/$RELEASE_TAG" | awk '{ print $1 }')"
+            test "$remote_tag_sha" = "$VERIFIED_TAG_SHA"
+          }
+
+          assert_release_identity() {
+            local release_json="$1"
+            local expected_draft="$2"
+            local expected_immutable="$3"
+            jq -e \
+              --arg repository "$GITHUB_REPOSITORY" \
+              --arg tag "$RELEASE_TAG" \
+              --arg title "$expected_title" \
+              --argjson draft "$expected_draft" \
+              --argjson immutable "$expected_immutable" '
+                ((.databaseId | type) == "number")
+                and (.databaseId > 0)
+                and (.apiUrl == ("https://api.github.com/repos/" + $repository + "/releases/" + (.databaseId | tostring)))
+                and (.tagName == $tag)
+                and (.name == $title)
+                and ((.body | type) == "string")
+                and (.isDraft == $draft)
+                and (.isImmutable == $immutable)
+                and (.isPrerelease == false)
+                and ((.assets | type) == "array")
+              ' "$release_json" >/dev/null
+            local release_body
+            release_body="$(mktemp)"
+            jq -ej '.body | select(type == "string")' "$release_json" > "$release_body"
+            cmp -s release-notes.md "$release_body"
+          }
+
+          assert_candidate_asset_name() {
+            local actual="$1"
+            local expected
+            for expected in "${candidate_assets[@]}"; do
+              if [[ "$actual" == "$expected" ]]; then
+                return 0
+              fi
+            done
+            echo "Release contains a non-candidate asset name." >&2
+            return 1
+          }
+
+          assert_release_assets() {
+            local release_json="$1"
+            local expected_mode="$2"
+            local asset_count unique_asset_count
+            local -a release_asset_names=()
+            mapfile -t release_asset_names < <(jq -r '.assets[].name' "$release_json")
+            asset_count="${#release_asset_names[@]}"
+            unique_asset_count="$(printf '%s\n' "${release_asset_names[@]}" | sed '/^$/d' | LC_ALL=C sort -u | wc -l | tr -d ' ')"
+            test "$asset_count" = "$unique_asset_count"
+            if [[ "$expected_mode" == exact ]]; then
+              test "$asset_count" = "${#candidate_assets[@]}"
+            else
+              test "$expected_mode" = subset
+              test "$asset_count" -le "${#candidate_assets[@]}"
+            fi
+            local asset_name
+            for asset_name in "${release_asset_names[@]}"; do
+              assert_candidate_asset_name "$asset_name"
+            done
+            jq -e \
+              --arg asset_api_prefix "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/" '
+              all(.assets[];
+                ((.apiUrl | type) == "string")
+                and (.apiUrl | startswith($asset_api_prefix))
+                and ((.apiUrl | ltrimstr($asset_api_prefix)) | test("^[1-9][0-9]*$"))
+                and ((.size | type) == "number")
+                and (.size > 0)
+                and (.state == "uploaded")
+              )
+            ' "$release_json" >/dev/null
+          }
+
+          release_fingerprint() {
+            jq -cS '
+              {
+                databaseId,
+                apiUrl,
+                tagName,
+                name,
+                body,
+                isDraft,
+                isImmutable,
+                isPrerelease,
+                assets: ([.assets[] | {apiUrl, name, size, state, digest, createdAt, updatedAt}] | sort_by(.name))
+              }
+            ' "$1"
+          }
+
+          download_and_compare_release_assets() {
+            local release_json="$1"
+            local download_dir asset_api_url asset_id asset_name
+            download_dir="$(mktemp -d)"
+            while IFS=$'\t' read -r asset_api_url asset_name; do
+              assert_candidate_asset_name "$asset_name"
+              asset_id="${asset_api_url##*/}"
+              [[ "$asset_api_url" == "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" ]]
+              [[ "$asset_id" =~ ^[1-9][0-9]*$ ]]
+              gh api \
+                -H 'Accept: application/octet-stream' \
+                -H 'X-GitHub-Api-Version: 2026-03-10' \
+                "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+                > "$download_dir/$asset_name"
+            done < <(jq -r '.assets[] | [.apiUrl, .name] | @tsv' "$release_json")
+            local downloaded_count
+            downloaded_count="$(find "$download_dir" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
+            test "$downloaded_count" = "$(jq '.assets | length' "$release_json")"
+            test "$(find "$download_dir" -mindepth 1 -maxdepth 1 -type f ! -type l | wc -l | tr -d ' ')" = "$downloaded_count"
+            while IFS= read -r asset_name; do
+              test -f "dist/$asset_name"
+              test ! -L "dist/$asset_name"
+              cmp -s "dist/$asset_name" "$download_dir/$asset_name"
+            done < <(jq -r '.assets[].name' "$release_json")
+          }
+
+          wait_for_release_absence() {
+            local release_index release_count
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+              release_index="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 10000 --json tagName)"
+              release_count="$(jq --arg tag "$RELEASE_TAG" '[.[] | select(.tagName == $tag)] | length' <<<"$release_index")"
+              if [[ "$release_count" == 0 ]]; then
+                return 0
+              fi
+              sleep 2
+            done
+            return 1
+          }
+
+          assert_remote_tag
+          release_index="$(gh release list \
+            --repo "$GITHUB_REPOSITORY" \
+            --limit 10000 \
+            --json tagName)"
+          release_count="$(jq --arg tag "$RELEASE_TAG" '[.[] | select(.tagName == $tag)] | length' <<<"$release_index")"
+          test "$release_count" -le 1
+
+          if [[ "$release_count" == 1 ]]; then
+            existing_release="$(mktemp)"
+            gh release view "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json databaseId,apiUrl,assets,body,isDraft,isImmutable,isPrerelease,name,tagName \
+              > "$existing_release"
+            if jq -e '.isDraft == true and .isImmutable == false' "$existing_release" >/dev/null; then
+              assert_release_identity "$existing_release" true false
+              assert_release_assets "$existing_release" subset
+              download_and_compare_release_assets "$existing_release"
+              draft_fingerprint="$(release_fingerprint "$existing_release")"
+              draft_release_id="$(jq -er '.databaseId | select((type == "number") and (. > 0))' "$existing_release")"
+              refreshed_draft="$(mktemp)"
+              gh release view "$RELEASE_TAG" \
+                --repo "$GITHUB_REPOSITORY" \
+                --json databaseId,apiUrl,assets,body,isDraft,isImmutable,isPrerelease,name,tagName \
+                > "$refreshed_draft"
+              assert_release_identity "$refreshed_draft" true false
+              assert_release_assets "$refreshed_draft" subset
+              test "$(release_fingerprint "$refreshed_draft")" = "$draft_fingerprint"
+              assert_remote_tag
+              gh api \
+                --method DELETE \
+                -H 'X-GitHub-Api-Version: 2026-03-10' \
+                "repos/$GITHUB_REPOSITORY/releases/$draft_release_id"
+              wait_for_release_absence
+              assert_remote_tag
+            elif jq -e '.isDraft == false and .isImmutable == true' "$existing_release" >/dev/null; then
+              assert_release_identity "$existing_release" false true
+              assert_release_assets "$existing_release" exact
+              download_and_compare_release_assets "$existing_release"
+              published_fingerprint="$(release_fingerprint "$existing_release")"
+              refreshed_published="$(mktemp)"
+              gh release view "$RELEASE_TAG" \
+                --repo "$GITHUB_REPOSITORY" \
+                --json databaseId,apiUrl,assets,body,isDraft,isImmutable,isPrerelease,name,tagName \
+                > "$refreshed_published"
+              assert_release_identity "$refreshed_published" false true
+              assert_release_assets "$refreshed_published" exact
+              test "$(release_fingerprint "$refreshed_published")" = "$published_fingerprint"
+              assert_remote_tag
+              echo "The exact immutable release is already published; continuing with post-publication verification."
+              exit 0
+            else
+              echo "The existing release is neither a recoverable draft nor an immutable publication." >&2
+              exit 1
+            fi
+          fi
+
+          assert_remote_tag
           gh release create "$RELEASE_TAG" \
             --draft \
             --verify-tag \
-            --title "Local Browser Bridge ${version}" \
+            --title "$expected_title" \
             --notes-file release-notes.md
           gh release upload "$RELEASE_TAG" dist/*
-          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = true
-          draft_release="$(mktemp -d)"
-          gh release download "$RELEASE_TAG" \
+          created_draft="$(mktemp)"
+          gh release view "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --dir "$draft_release"
-          test "$(find "$draft_release" -maxdepth 1 -type f | wc -l | tr -d ' ')" = 5
-          bash scripts/verify-release-assets.sh "$version" "$draft_release"
-          for subject in dist/*; do
-            asset="$(basename "$subject")"
-            cmp -s "$subject" "$draft_release/$asset"
-          done
-          remote_tag_sha="$(git ls-remote --refs origin "refs/tags/$RELEASE_TAG" | awk '{ print $1 }')"
-          test "$remote_tag_sha" = "$VERIFIED_TAG_SHA"
+            --json databaseId,apiUrl,assets,body,isDraft,isImmutable,isPrerelease,name,tagName \
+            > "$created_draft"
+          assert_release_identity "$created_draft" true false
+          assert_release_assets "$created_draft" exact
+          download_and_compare_release_assets "$created_draft"
+          created_draft_fingerprint="$(release_fingerprint "$created_draft")"
+          created_draft_id="$(jq -er '.databaseId | select((type == "number") and (. > 0))' "$created_draft")"
+          refreshed_created_draft="$(mktemp)"
+          gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json databaseId,apiUrl,assets,body,isDraft,isImmutable,isPrerelease,name,tagName \
+            > "$refreshed_created_draft"
+          assert_release_identity "$refreshed_created_draft" true false
+          assert_release_assets "$refreshed_created_draft" exact
+          test "$(release_fingerprint "$refreshed_created_draft")" = "$created_draft_fingerprint"
+          assert_remote_tag
           test "$(gh api \
             -H 'Accept: application/vnd.github+json' \
             -H 'X-GitHub-Api-Version: 2026-03-10' \
             "repos/$GITHUB_REPOSITORY/immutable-releases" \
             --jq '.enabled')" = true
-          gh release edit "$RELEASE_TAG" --draft=false
-          gh release view "$RELEASE_TAG" --json url,tagName,isDraft,isPrerelease
+          gh api \
+            --method PATCH \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/releases/$created_draft_id" \
+            -F draft=false \
+            >/dev/null
+          published_release="$(mktemp)"
+          publication_visible=false
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if gh release view "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json databaseId,apiUrl,assets,body,isDraft,isImmutable,isPrerelease,name,tagName,url \
+              > "$published_release" \
+              && jq -e '.isDraft == false and .isImmutable == true' "$published_release" >/dev/null; then
+              publication_visible=true
+              break
+            fi
+            sleep 2
+          done
+          test "$publication_visible" = true
+          assert_release_identity "$published_release" false true
+          assert_release_assets "$published_release" exact
+          test "$(jq -er '.databaseId' "$published_release")" = "$created_draft_id"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json url,tagName,isDraft,isImmutable,isPrerelease
       - name: Re-download and verify the immutable published release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -452,6 +677,10 @@ jobs:
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir published
           test "$(find published -maxdepth 1 -type f | wc -l | tr -d ' ')" = 5
           bash scripts/verify-release-assets.sh "$version" published
+          for subject in dist/*; do
+            asset="$(basename "$subject")"
+            cmp -s "$subject" "published/$asset"
+          done
 
           retry_release_check() {
             for attempt in 1 2 3 4 5 6 7 8 9 10; do
