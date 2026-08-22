@@ -137,6 +137,86 @@ fn background_backend_has_no_global_or_foreground_input_fallback() {
 }
 
 #[test]
+fn background_invariant_failures_use_stage_bound_closed_vocabulary() {
+    let controller = fs::read_to_string("src/computer.rs").unwrap();
+    let macos = fs::read_to_string("src/computer/platform_macos.rs").unwrap();
+    let windows = fs::read_to_string("src/computer/platform_windows.rs").unwrap();
+    let source = format!("{controller}\n{macos}\n{windows}");
+
+    for stage in [
+        "pointerTrajectory",
+        "clickDispatch",
+        "dragDispatch",
+        "scrollDispatch",
+        "textDispatch",
+        "keyDispatch",
+        "semanticInvoke",
+        "semanticSetValue",
+        "focusPreparation",
+        "focusRestore",
+        "focusRecovery",
+    ] {
+        assert!(
+            controller.contains(stage),
+            "missing invariant stage {stage}"
+        );
+    }
+    for invariant in [
+        "foregroundUnchanged",
+        "userFocusUnchanged",
+        "hardwareCursorUnchanged",
+        "desktopSpaceUnchanged",
+    ] {
+        assert!(
+            controller.contains(invariant),
+            "missing invariant name {invariant}"
+        );
+    }
+
+    assert!(controller.contains("stage={};failedInvariants={}"));
+    assert!(!source.contains(".assert_held()"));
+    assert!(source.contains("InvariantStage::PointerTrajectory"));
+    assert!(source.contains("InvariantStage::ClickDispatch"));
+    assert!(source.contains("InvariantStage::DragDispatch"));
+    assert!(source.contains("InvariantStage::ScrollDispatch"));
+    assert!(!controller.contains(
+        "The foreground, hardware cursor, or active desktop changed during background delivery"
+    ));
+}
+
+#[test]
+fn macos_negative_evidence_keeps_only_equality_and_fixture_counters() {
+    let rig = fs::read_to_string("evidence/v0.12.1/computer/helper-evidence-rig.mjs").unwrap();
+    assert!(rig.contains("failureProbeBaseline"));
+    assert!(rig.contains("collectFailureDiagnostics"));
+    assert!(rig.contains("systemInvariants(failureProbeBaseline.system, after)"));
+    assert!(rig.contains("fixtureCounterSnapshot"));
+    assert!(rig.contains("semanticValueMatchesExpected"));
+    assert!(rig.contains("failureDiagnostics,"));
+
+    let diagnostics = rig
+        .split("async function collectFailureDiagnostics()")
+        .nth(1)
+        .unwrap()
+        .split("function requireActionInvariants")
+        .next()
+        .unwrap();
+    for raw_identity in [
+        "foregroundPID:",
+        "frontWindowID:",
+        "cursorX:",
+        "cursorY:",
+        "activeSpace:",
+        "pid:",
+    ] {
+        assert!(
+            !diagnostics.contains(raw_identity),
+            "failure evidence persisted raw identity {raw_identity}"
+        );
+    }
+}
+
+#[test]
 fn semantic_backends_revalidate_exact_targets_and_report_effects() {
     let macos = fs::read_to_string("src/computer/ax_macos.rs").unwrap();
     let windows = fs::read_to_string("src/computer/uia_windows.rs").unwrap();

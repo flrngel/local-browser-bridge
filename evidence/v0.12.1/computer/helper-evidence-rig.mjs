@@ -60,6 +60,9 @@ let port;
 let helperSpawnCount = 0;
 let successfulResultWritten = false;
 let outputReserved = false;
+let systemProbeBinary;
+let fixtureStatePath;
+let failureProbeBaseline;
 
 function sanitizePathDetail(value) {
   let text = String(value);
@@ -193,6 +196,63 @@ function allInvariantsHeld(invariants) {
     invariants?.cursorUnchanged,
     invariants?.spaceUnchanged,
   ].every((value) => value === true);
+}
+
+const FIXTURE_ACTIONS = new Set(["ready", "set-value", "semantic", "click", "resize"]);
+
+function boundedCounter(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function fixtureCounterSnapshot(snapshot) {
+  return {
+    clicks: boundedCounter(snapshot?.clicks),
+    semanticPresses: boundedCounter(snapshot?.semanticPresses),
+    animationTick: boundedCounter(snapshot?.animationTick),
+    resizeCount: boundedCounter(snapshot?.resizeCount),
+    appliedControlSequence: boundedCounter(snapshot?.appliedControlSequence),
+    semanticValueMatchesExpected: snapshot?.semanticValue === SEMANTIC_VALUE,
+    lastAction: FIXTURE_ACTIONS.has(snapshot?.lastAction) ? snapshot.lastAction : "unrecognized",
+  };
+}
+
+async function collectFailureDiagnostics() {
+  const diagnostics = {
+    stage: failureProbeBaseline?.stage || "notReached",
+    systemProbe: {
+      baselineCaptured: Boolean(failureProbeBaseline?.system),
+      afterCaptured: false,
+      equality: null,
+    },
+    fixtureCounters: {
+      baselineCaptured: Boolean(failureProbeBaseline?.fixture),
+      afterCaptured: false,
+      before: failureProbeBaseline?.fixture
+        ? fixtureCounterSnapshot(failureProbeBaseline.fixture)
+        : null,
+      after: null,
+    },
+  };
+
+  if (failureProbeBaseline?.system && systemProbeBinary) {
+    try {
+      const after = processProbe(systemProbeBinary);
+      diagnostics.systemProbe.afterCaptured = true;
+      diagnostics.systemProbe.equality = systemInvariants(failureProbeBaseline.system, after);
+    } catch {
+      // Availability is recorded without persisting a path or platform diagnostic.
+    }
+  }
+  if (failureProbeBaseline?.fixture && fixtureStatePath) {
+    try {
+      const after = await fixtureState(fixtureStatePath);
+      diagnostics.fixtureCounters.afterCaptured = true;
+      diagnostics.fixtureCounters.after = fixtureCounterSnapshot(after);
+    } catch {
+      // Availability is recorded without persisting a scratch path or raw state.
+    }
+  }
+  return diagnostics;
 }
 
 function requireActionInvariants(label, action) {
@@ -416,8 +476,8 @@ async function main() {
   await access(scratchParent, fsConstants.W_OK);
   scratchDir = await mkdtemp(join(scratchParent, "lbb-v0.12.1-scstream-"));
   const fixtureBinary = join(scratchDir, "helper-evidence-fixture");
-  const systemProbeBinary = join(scratchDir, "system-probe");
-  const fixtureStatePath = join(scratchDir, "fixture-state.json");
+  systemProbeBinary = join(scratchDir, "system-probe");
+  fixtureStatePath = join(scratchDir, "fixture-state.json");
   const fixtureControlPath = join(scratchDir, "fixture-control.json");
   const archiveExtractRoot = join(scratchDir, "archive");
   const harnessSha256 = {
@@ -657,6 +717,11 @@ async function main() {
   observation = current.snapshot.computerObservation;
   const clickX = Math.round(observation.imageWidth / 2);
   const clickY = Math.max(0, observation.imageHeight - 80);
+  failureProbeBaseline = {
+    stage: "liveSharePixelAction",
+    system: processProbe(systemProbeBinary),
+    fixture: await fixtureState(fixtureStatePath),
+  };
   const clickBody = await command("computer.click", {
     frameId: observation.frameId,
     x: clickX,
@@ -700,6 +765,11 @@ async function main() {
     "fresh exact-window pixels include the action stage",
   );
 
+  failureProbeBaseline = {
+    stage: "persistentShareResize",
+    system: processProbe(systemProbeBinary),
+    fixture: await fixtureState(fixtureStatePath),
+  };
   const preResizeWindowWidth = current.snapshot.computerObservation.screenWidth;
   const preResizeWindowHeight = current.snapshot.computerObservation.screenHeight;
   await writeFile(fixtureControlPath, `${JSON.stringify({
@@ -941,6 +1011,7 @@ async function main() {
 try {
   await main();
 } catch (error) {
+  const failureDiagnostics = await collectFailureDiagnostics();
   const failure = {
     schemaVersion: 2,
     productVersion: EXPECTED_VERSION,
@@ -950,6 +1021,7 @@ try {
     fatal: sanitizePathDetail(error?.message || String(error)),
     helperSpawnCount,
     screenshots,
+    failureDiagnostics,
     assertions: {
       passed: checks.filter((item) => item.passed).length,
       failed: checks.filter((item) => !item.passed).length,

@@ -6,8 +6,8 @@ use image::RgbaImage;
 use xcap::Window;
 
 use super::{
-    CommandCancellation, ComputerError, InvariantReport, SemanticSnapshot, SemanticTarget,
-    TargetPoint, WindowDescriptor, uia_windows,
+    CommandCancellation, ComputerError, InvariantReport, InvariantStage, SemanticSnapshot,
+    SemanticTarget, TargetPoint, WindowDescriptor, uia_windows,
 };
 
 type Hwnd = isize;
@@ -146,7 +146,7 @@ pub fn invoke(
     action: &str,
     cancellation: &CommandCancellation,
 ) -> Result<(serde_json::Value, InvariantReport), ComputerError> {
-    guarded_effect(target, cancellation, || {
+    guarded_effect(target, InvariantStage::SemanticInvoke, cancellation, || {
         uia_windows::invoke(target, semantic, action, cancellation)
     })
 }
@@ -157,9 +157,12 @@ pub fn set_value(
     value: &str,
     cancellation: &CommandCancellation,
 ) -> Result<(serde_json::Value, InvariantReport), ComputerError> {
-    guarded_effect(target, cancellation, || {
-        uia_windows::set_value(target, semantic, value, cancellation)
-    })
+    guarded_effect(
+        target,
+        InvariantStage::SemanticSetValue,
+        cancellation,
+        || uia_windows::set_value(target, semantic, value, cancellation),
+    )
 }
 
 pub fn limitations() -> Vec<&'static str> {
@@ -205,27 +208,32 @@ pub fn move_pointer_path(
     step_delay: Duration,
     cancellation: &CommandCancellation,
 ) -> Result<InvariantReport, ComputerError> {
-    guarded(target, cancellation, || {
-        if points.is_empty() {
-            return Err(input_error("synthetic pointer trajectory is empty"));
-        }
-        for (index, point) in points.iter().copied().enumerate() {
-            let (recipient, local) = mouse_recipient(target, point)?;
-            post(
-                target,
-                recipient,
-                WM_MOUSEMOVE,
-                0,
-                point_lparam(local)?,
-                cancellation,
-                "pointer path dispatch",
-            )?;
-            if index + 1 < points.len() {
-                thread::sleep(step_delay);
+    guarded(
+        target,
+        InvariantStage::PointerTrajectory,
+        cancellation,
+        || {
+            if points.is_empty() {
+                return Err(input_error("synthetic pointer trajectory is empty"));
             }
-        }
-        Ok(())
-    })
+            for (index, point) in points.iter().copied().enumerate() {
+                let (recipient, local) = mouse_recipient(target, point)?;
+                post(
+                    target,
+                    recipient,
+                    WM_MOUSEMOVE,
+                    0,
+                    point_lparam(local)?,
+                    cancellation,
+                    "pointer path dispatch",
+                )?;
+                if index + 1 < points.len() {
+                    thread::sleep(step_delay);
+                }
+            }
+            Ok(())
+        },
+    )
 }
 
 pub fn click(
@@ -236,7 +244,7 @@ pub fn click(
     cancellation: &CommandCancellation,
 ) -> Result<InvariantReport, ComputerError> {
     let messages = mouse_button_messages(button);
-    guarded(target, cancellation, || {
+    guarded(target, InvariantStage::ClickDispatch, cancellation, || {
         let (recipient, local) = mouse_recipient(target, point)?;
         post(
             target,
@@ -295,7 +303,7 @@ pub fn drag(
     duration_ms: u64,
     cancellation: &CommandCancellation,
 ) -> Result<InvariantReport, ComputerError> {
-    guarded(target, cancellation, || {
+    guarded(target, InvariantStage::DragDispatch, cancellation, || {
         let (recipient, from_local) = mouse_recipient(target, from)?;
         post(
             target,
@@ -366,7 +374,7 @@ pub fn scroll(
     delta_y: i32,
     cancellation: &CommandCancellation,
 ) -> Result<InvariantReport, ComputerError> {
-    guarded(target, cancellation, || {
+    guarded(target, InvariantStage::ScrollDispatch, cancellation, || {
         let (recipient, _) = mouse_recipient(target, point)?;
         let screen = point_lparam(Point {
             x: point.screen_x,
@@ -403,7 +411,7 @@ pub fn type_text(
     text: &str,
     cancellation: &CommandCancellation,
 ) -> Result<InvariantReport, ComputerError> {
-    guarded(target, cancellation, || {
+    guarded(target, InvariantStage::TextDispatch, cancellation, || {
         let recipient = keyboard_recipient(target)?;
         for unit in text.encode_utf16() {
             post(
@@ -428,7 +436,7 @@ pub fn key(
     let parsed = parse_key_chord(chord)?;
     reject_unsupported_system_shortcut(&parsed)?;
     let recipient = keyboard_recipient(target)?;
-    guarded(target, cancellation, || {
+    guarded(target, InvariantStage::KeyDispatch, cancellation, || {
         let mut attempted_modifiers = Vec::with_capacity(parsed.modifiers.len());
         let mut alt_down = false;
         for modifier in &parsed.modifiers {
@@ -486,6 +494,7 @@ fn descriptor(window: &Window) -> Result<WindowDescriptor, ComputerError> {
 
 fn guarded(
     target: &WindowDescriptor,
+    stage: InvariantStage,
     cancellation: &CommandCancellation,
     action: impl FnOnce() -> Result<(), ComputerError>,
 ) -> Result<InvariantReport, ComputerError> {
@@ -496,13 +505,14 @@ fn guarded(
     cancellation.mark_verification_started();
     thread::sleep(Duration::from_millis(35));
     let report = before.compare(&DesktopSnapshot::capture()?);
-    report.clone().assert_held()?;
+    report.clone().assert_held(stage)?;
     action_result?;
     Ok(report)
 }
 
 fn guarded_effect<T>(
     target: &WindowDescriptor,
+    stage: InvariantStage,
     cancellation: &CommandCancellation,
     action: impl FnOnce() -> Result<T, ComputerError>,
 ) -> Result<(T, InvariantReport), ComputerError> {
@@ -512,7 +522,9 @@ fn guarded_effect<T>(
     let action_result = action();
     cancellation.mark_verification_started();
     thread::sleep(Duration::from_millis(35));
-    let report = before.compare(&DesktopSnapshot::capture()?).assert_held()?;
+    let report = before
+        .compare(&DesktopSnapshot::capture()?)
+        .assert_held(stage)?;
     let backend_effect = action_result?;
     Ok((backend_effect, report))
 }

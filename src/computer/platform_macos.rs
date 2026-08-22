@@ -12,8 +12,9 @@ use libc::pid_t;
 use xcap::Window;
 
 use super::{
-    CommandCancellation, ComputerError, InvariantReport, SemanticSnapshot, SemanticTarget,
-    TargetPoint, WindowDescriptor, ax_macos,
+    CommandCancellation, ComputerError, InvariantFailure, InvariantReport, InvariantStage,
+    SemanticSnapshot, SemanticTarget, TargetPoint, WindowDescriptor, ax_macos,
+    background_contract_violation,
 };
 
 type PostToPidFn = unsafe extern "C" fn(pid_t, *mut c_void);
@@ -72,7 +73,7 @@ pub fn invoke(
     action: &str,
     cancellation: &CommandCancellation,
 ) -> Result<(serde_json::Value, InvariantReport), ComputerError> {
-    guarded_semantic(target, cancellation, || {
+    guarded_semantic(target, InvariantStage::SemanticInvoke, cancellation, || {
         ax_macos::invoke(target, semantic, action, cancellation)
     })
 }
@@ -83,9 +84,12 @@ pub fn set_value(
     value: &str,
     cancellation: &CommandCancellation,
 ) -> Result<(serde_json::Value, InvariantReport), ComputerError> {
-    guarded_semantic(target, cancellation, || {
-        ax_macos::set_value(target, semantic, value, cancellation)
-    })
+    guarded_semantic(
+        target,
+        InvariantStage::SemanticSetValue,
+        cancellation,
+        || ax_macos::set_value(target, semantic, value, cancellation),
+    )
 }
 
 pub fn limitations() -> Vec<&'static str> {
@@ -147,26 +151,31 @@ pub fn move_pointer_path(
     step_delay: Duration,
     cancellation: &CommandCancellation,
 ) -> Result<InvariantReport, ComputerError> {
-    guarded(target, false, cancellation, || {
-        if points.is_empty() {
-            return Err(input_error("synthetic pointer trajectory is empty"));
-        }
-        for (index, point) in points.iter().copied().enumerate() {
-            post_mouse(
-                target,
-                point,
-                CGEventType::MouseMoved,
-                0,
-                0,
-                0,
-                cancellation,
-            )?;
-            if index + 1 < points.len() {
-                thread::sleep(step_delay);
+    guarded(
+        target,
+        InvariantStage::PointerTrajectory,
+        cancellation,
+        || {
+            if points.is_empty() {
+                return Err(input_error("synthetic pointer trajectory is empty"));
             }
-        }
-        Ok(())
-    })
+            for (index, point) in points.iter().copied().enumerate() {
+                post_mouse(
+                    target,
+                    point,
+                    CGEventType::MouseMoved,
+                    0,
+                    0,
+                    0,
+                    cancellation,
+                )?;
+                if index + 1 < points.len() {
+                    thread::sleep(step_delay);
+                }
+            }
+            Ok(())
+        },
+    )
 }
 
 pub fn click(
@@ -196,7 +205,7 @@ pub fn click(
             0,
         ),
     };
-    guarded(target, true, cancellation, || {
+    guarded(target, InvariantStage::ClickDispatch, cancellation, || {
         post_mouse(
             target,
             point,
@@ -250,7 +259,7 @@ pub fn drag(
     duration_ms: u64,
     cancellation: &CommandCancellation,
 ) -> Result<InvariantReport, ComputerError> {
-    guarded(target, true, cancellation, || {
+    guarded(target, InvariantStage::DragDispatch, cancellation, || {
         post_mouse(target, from, CGEventType::MouseMoved, 0, 0, 0, cancellation)?;
         let down_event = mouse_event(
             target,
@@ -314,7 +323,7 @@ pub fn scroll(
     delta_y: i32,
     cancellation: &CommandCancellation,
 ) -> Result<InvariantReport, ComputerError> {
-    guarded(target, true, cancellation, || {
+    guarded(target, InvariantStage::ScrollDispatch, cancellation, || {
         post_mouse(
             target,
             point,
@@ -352,7 +361,7 @@ pub fn type_text(
     cancellation: &CommandCancellation,
 ) -> Result<InvariantReport, ComputerError> {
     ensure_unique_keyboard_destination(target)?;
-    guarded(target, true, cancellation, || {
+    guarded(target, InvariantStage::TextDispatch, cancellation, || {
         for character in text.chars() {
             let value = character.to_string();
             let down = keyboard_event(target, 0, true, CGEventFlags::empty(), Some(&value))?;
@@ -378,7 +387,7 @@ pub fn key(
             format!("The macOS background backend does not map key {last}"),
         )
     })?;
-    guarded(target, true, cancellation, || {
+    guarded(target, InvariantStage::KeyDispatch, cancellation, || {
         let down = keyboard_event(target, keycode, true, flags, None)?;
         let up = keyboard_event(target, keycode, false, flags, None)?;
         held_event_sequence(
@@ -452,12 +461,12 @@ fn exact_window(target: &WindowDescriptor) -> Result<Window, ComputerError> {
 
 fn guarded(
     target: &WindowDescriptor,
-    prepare_focus: bool,
+    stage: InvariantStage,
     cancellation: &CommandCancellation,
     action: impl FnOnce() -> Result<(), ComputerError>,
 ) -> Result<InvariantReport, ComputerError> {
     let before = DesktopSnapshot::capture()?;
-    let focus = prepare_focus
+    let focus = (stage != InvariantStage::PointerTrajectory)
         .then(|| activate_without_raise(target, &before, cancellation))
         .transpose()?
         .flatten();
@@ -466,7 +475,7 @@ fn guarded(
     let restore_result = focus.map(FocusLease::restore).transpose();
     thread::sleep(Duration::from_millis(35));
     let report = before.compare(&DesktopSnapshot::capture()?);
-    report.clone().assert_held()?;
+    report.clone().assert_held(stage)?;
     restore_result?;
     action_result?;
     Ok(report)
@@ -474,6 +483,7 @@ fn guarded(
 
 fn guarded_semantic<T>(
     target: &WindowDescriptor,
+    stage: InvariantStage,
     cancellation: &CommandCancellation,
     action: impl FnOnce() -> Result<T, ComputerError>,
 ) -> Result<(T, InvariantReport), ComputerError> {
@@ -483,7 +493,9 @@ fn guarded_semantic<T>(
     let action_result = action();
     cancellation.mark_verification_started();
     thread::sleep(Duration::from_millis(35));
-    let report = before.compare(&DesktopSnapshot::capture()?).assert_held()?;
+    let report = before
+        .compare(&DesktopSnapshot::capture()?)
+        .assert_held(stage)?;
     let backend_effect = action_result?;
     Ok((backend_effect, report))
 }
@@ -728,7 +740,7 @@ fn assert_snapshot_held(before: &DesktopSnapshot) -> Result<(), ComputerError> {
     thread::sleep(Duration::from_millis(35));
     before
         .compare(&DesktopSnapshot::capture()?)
-        .assert_held()
+        .assert_held(InvariantStage::FocusPreparation)
         .map(|_| ())
 }
 
@@ -780,9 +792,9 @@ impl FocusLease {
         if defocused && focused {
             Ok(())
         } else {
-            Err(ComputerError::new(
-                "COMPUTER_BACKGROUND_CONTRACT_VIOLATION",
-                "macOS could not restore the user's prior background-focus state",
+            Err(background_contract_violation(
+                InvariantStage::FocusRestore,
+                [InvariantFailure::UserFocus],
             ))
         }
     }
@@ -807,9 +819,9 @@ impl FocusLease {
         ) {
             Ok(())
         } else {
-            Err(ComputerError::new(
-                "COMPUTER_BACKGROUND_CONTRACT_VIOLATION",
-                "macOS could not restore the user's prior focus after background activation failed",
+            Err(background_contract_violation(
+                InvariantStage::FocusRecovery,
+                [InvariantFailure::UserFocus],
             ))
         }
     }

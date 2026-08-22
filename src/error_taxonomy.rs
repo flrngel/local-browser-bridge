@@ -688,12 +688,18 @@ mod tests {
     /// The body of `classify`, sliced out of this file's own source so the
     /// registry cannot quietly fall behind the codes the match names.
     fn classify_source() -> &'static str {
-        let source = include_str!("error_taxonomy.rs");
+        classify_source_from(include_str!("error_taxonomy.rs"))
+    }
+
+    fn classify_source_from(source: &str) -> &str {
         let start = source
             .find("pub fn classify(")
             .expect("classify is defined in this file");
         let body = &source[start..];
-        let end = body.find("\n}\n").expect("classify has a closing brace");
+        let end = body
+            .find("\n}\n")
+            .or_else(|| body.find("\r\n}\r\n"))
+            .expect("classify has a closing brace");
         let body = &body[..end];
         // Prove the whole function was captured: a slice that stopped early
         // would silently exempt every code below the cut.
@@ -702,6 +708,21 @@ mod tests {
             "the classify slice does not reach the end of the function"
         );
         body
+    }
+
+    #[test]
+    fn classifier_source_slice_accepts_lf_and_crlf() {
+        let source = concat!(
+            "prefix\n",
+            "pub fn classify(code: &str) -> Taxonomy {\n",
+            "    let code = code;\n",
+            "    Taxonomy::for_code(code)\n",
+            "}\n",
+            "suffix\n",
+        );
+        let expected = classify_source_from(source).to_owned();
+        let crlf = source.replace('\n', "\r\n");
+        assert_eq!(classify_source_from(&crlf).replace("\r\n", "\n"), expected);
     }
 
     /// Every legacy-code literal in a slice of source: an uppercase, digit,

@@ -2,6 +2,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
 use std::time::Instant;
 
 use serde_json::{Map, Value, json};
@@ -68,6 +69,7 @@ pub struct CommandCancellation {
 #[derive(Default)]
 struct DispatchPhase {
     epoch: u64,
+    #[cfg(any(test, target_os = "macos", target_os = "windows"))]
     verification_started: Option<(u64, Instant)>,
 }
 
@@ -114,7 +116,10 @@ impl CommandCancellation {
             // A later side effect in a compound action supersedes an earlier
             // verification boundary. The final platform mutation owns the
             // action-level dispatch/verification split.
-            phase.verification_started = None;
+            #[cfg(any(test, target_os = "macos", target_os = "windows"))]
+            {
+                phase.verification_started = None;
+            }
         }
         self.dispatched.store(true, Ordering::Release);
         self.check(boundary)
@@ -124,6 +129,7 @@ impl CommandCancellation {
     /// and non-interruption verification. Providers with an exact read-back
     /// call this immediately after the OS mutation; platform guards provide a
     /// fallback after their dispatch closure returns.
+    #[cfg(any(test, target_os = "macos", target_os = "windows"))]
     pub(crate) fn mark_verification_started(&self) {
         if !self.was_dispatched() {
             return;
@@ -138,6 +144,7 @@ impl CommandCancellation {
         }
     }
 
+    #[cfg(any(test, target_os = "macos", target_os = "windows"))]
     pub(crate) fn verification_started_at(&self) -> Option<Instant> {
         let phase = self
             .dispatch_phase

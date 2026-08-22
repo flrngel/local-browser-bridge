@@ -82,8 +82,66 @@ pub(crate) struct InvariantReport {
     pub space_unchanged: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InvariantStage {
+    PointerTrajectory,
+    ClickDispatch,
+    DragDispatch,
+    ScrollDispatch,
+    TextDispatch,
+    KeyDispatch,
+    SemanticInvoke,
+    SemanticSetValue,
+    #[cfg(target_os = "macos")]
+    FocusPreparation,
+    #[cfg(target_os = "macos")]
+    FocusRestore,
+    #[cfg(target_os = "macos")]
+    FocusRecovery,
+}
+
+impl InvariantStage {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::PointerTrajectory => "pointerTrajectory",
+            Self::ClickDispatch => "clickDispatch",
+            Self::DragDispatch => "dragDispatch",
+            Self::ScrollDispatch => "scrollDispatch",
+            Self::TextDispatch => "textDispatch",
+            Self::KeyDispatch => "keyDispatch",
+            Self::SemanticInvoke => "semanticInvoke",
+            Self::SemanticSetValue => "semanticSetValue",
+            #[cfg(target_os = "macos")]
+            Self::FocusPreparation => "focusPreparation",
+            #[cfg(target_os = "macos")]
+            Self::FocusRestore => "focusRestore",
+            #[cfg(target_os = "macos")]
+            Self::FocusRecovery => "focusRecovery",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InvariantFailure {
+    Foreground,
+    UserFocus,
+    HardwareCursor,
+    DesktopSpace,
+}
+
+impl InvariantFailure {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Foreground => "foregroundUnchanged",
+            Self::UserFocus => "userFocusUnchanged",
+            Self::HardwareCursor => "hardwareCursorUnchanged",
+            Self::DesktopSpace => "desktopSpaceUnchanged",
+        }
+    }
+}
+
 impl InvariantReport {
-    pub(crate) fn assert_held(self) -> Result<Self, ComputerError> {
+    pub(crate) fn assert_held(self, stage: InvariantStage) -> Result<Self, ComputerError> {
         if self.foreground_unchanged
             && self.user_focus_unchanged
             && self.cursor_unchanged
@@ -91,12 +149,39 @@ impl InvariantReport {
         {
             Ok(self)
         } else {
-            Err(ComputerError::new(
-                "COMPUTER_BACKGROUND_CONTRACT_VIOLATION",
-                "The foreground, hardware cursor, or active desktop changed during background delivery",
-            ))
+            Err(background_contract_violation(stage, self.failed_names()))
         }
     }
+
+    fn failed_names(&self) -> Vec<InvariantFailure> {
+        [
+            (!self.foreground_unchanged).then_some(InvariantFailure::Foreground),
+            (!self.user_focus_unchanged).then_some(InvariantFailure::UserFocus),
+            (!self.cursor_unchanged).then_some(InvariantFailure::HardwareCursor),
+            (!self.space_unchanged).then_some(InvariantFailure::DesktopSpace),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+}
+
+pub(crate) fn background_contract_violation(
+    stage: InvariantStage,
+    failed_invariants: impl IntoIterator<Item = InvariantFailure>,
+) -> ComputerError {
+    ComputerError::new(
+        "COMPUTER_BACKGROUND_CONTRACT_VIOLATION",
+        format!(
+            "stage={};failedInvariants={}",
+            stage.as_str(),
+            failed_invariants
+                .into_iter()
+                .map(InvariantFailure::as_str)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -862,7 +947,7 @@ impl ComputerController {
             trajectory.step_delay(),
             cancellation,
         )
-        .and_then(InvariantReport::assert_held)
+        .and_then(|report| report.assert_held(InvariantStage::PointerTrajectory))
         {
             Ok(invariants) => invariants,
             Err(error) => {
@@ -926,15 +1011,15 @@ impl ComputerController {
             trajectory.step_delay(),
             cancellation,
         )
-        .and_then(InvariantReport::assert_held)
+        .and_then(|report| report.assert_held(InvariantStage::PointerTrajectory))
         {
             self.cursor.mark_unknown("clickMoveFailed");
             return Err(error);
         }
         cancellation.check("click pointer state commit")?;
         self.cursor.commit(&frame, &trajectory, "moveForClick");
-        let invariants =
-            platform::click(&frame.target, point, button, count, cancellation)?.assert_held()?;
+        let invariants = platform::click(&frame.target, point, button, count, cancellation)?
+            .assert_held(InvariantStage::ClickDispatch)?;
         cancellation.check("click result commit")?;
         self.cursor.settle(action);
         let evidence = invariant_evidence(&invariants);
@@ -978,7 +1063,7 @@ impl ComputerController {
             trajectory.step_delay(),
             cancellation,
         )
-        .and_then(InvariantReport::assert_held)
+        .and_then(|report| report.assert_held(InvariantStage::PointerTrajectory))
         {
             self.cursor.mark_unknown("dragApproachFailed");
             return Err(error);
@@ -986,7 +1071,7 @@ impl ComputerController {
         cancellation.check("drag pointer state commit")?;
         self.cursor.commit(&frame, &trajectory, "dragApproach");
         let invariants = match platform::drag(&frame.target, from, to, duration_ms, cancellation)
-            .and_then(InvariantReport::assert_held)
+            .and_then(|report| report.assert_held(InvariantStage::DragDispatch))
         {
             Ok(invariants) => invariants,
             Err(error) => {
@@ -1037,7 +1122,7 @@ impl ComputerController {
             trajectory.step_delay(),
             cancellation,
         )
-        .and_then(InvariantReport::assert_held)
+        .and_then(|report| report.assert_held(InvariantStage::PointerTrajectory))
         {
             self.cursor.mark_unknown("scrollMoveFailed");
             return Err(error);
@@ -1045,7 +1130,7 @@ impl ComputerController {
         cancellation.check("scroll pointer state commit")?;
         self.cursor.commit(&frame, &trajectory, "moveForScroll");
         let invariants = platform::scroll(&frame.target, point, delta_x, delta_y, cancellation)?
-            .assert_held()?;
+            .assert_held(InvariantStage::ScrollDispatch)?;
         cancellation.check("scroll result commit")?;
         self.cursor.settle("scroll");
         let evidence = invariant_evidence(&invariants);
@@ -1077,7 +1162,8 @@ impl ComputerController {
             .and_then(Value::as_str)
             .ok_or_else(|| invalid("text must be a string"))?;
         timer.resolved();
-        let invariants = platform::type_text(&frame.target, text, cancellation)?.assert_held()?;
+        let invariants = platform::type_text(&frame.target, text, cancellation)?
+            .assert_held(InvariantStage::TextDispatch)?;
         cancellation.check("text result commit")?;
         let evidence = invariant_evidence(&invariants);
         let result = json!({
@@ -1102,7 +1188,8 @@ impl ComputerController {
             .ok_or_else(|| invalid("key must be a string"))?;
         validate_key_chord(chord)?;
         timer.resolved();
-        let invariants = platform::key(&frame.target, chord, cancellation)?.assert_held()?;
+        let invariants = platform::key(&frame.target, chord, cancellation)?
+            .assert_held(InvariantStage::KeyDispatch)?;
         cancellation.check("key result commit")?;
         let evidence = invariant_evidence(&invariants);
         let result = json!({
@@ -1876,9 +1963,76 @@ mod tests {
             cursor_unchanged: false,
             space_unchanged: true,
         };
+        let error = report
+            .assert_held(InvariantStage::ClickDispatch)
+            .unwrap_err();
+        assert_eq!(error.code, "COMPUTER_BACKGROUND_CONTRACT_VIOLATION");
         assert_eq!(
-            report.assert_held().unwrap_err().code,
-            "COMPUTER_BACKGROUND_CONTRACT_VIOLATION"
+            error.message,
+            "stage=clickDispatch;failedInvariants=hardwareCursorUnchanged"
+        );
+    }
+
+    #[test]
+    fn invariant_diagnostics_use_only_ordered_closed_vocabulary() {
+        let report = InvariantReport {
+            foreground_unchanged: false,
+            user_focus_unchanged: false,
+            cursor_unchanged: false,
+            space_unchanged: false,
+        };
+        let error = report
+            .assert_held(InvariantStage::PointerTrajectory)
+            .unwrap_err();
+        assert_eq!(
+            error.message,
+            "stage=pointerTrajectory;failedInvariants=foregroundUnchanged,userFocusUnchanged,hardwareCursorUnchanged,desktopSpaceUnchanged"
+        );
+
+        let stages = [
+            InvariantStage::PointerTrajectory,
+            InvariantStage::ClickDispatch,
+            InvariantStage::DragDispatch,
+            InvariantStage::ScrollDispatch,
+            InvariantStage::TextDispatch,
+            InvariantStage::KeyDispatch,
+            InvariantStage::SemanticInvoke,
+            InvariantStage::SemanticSetValue,
+        ];
+        assert_eq!(
+            stages.map(InvariantStage::as_str),
+            [
+                "pointerTrajectory",
+                "clickDispatch",
+                "dragDispatch",
+                "scrollDispatch",
+                "textDispatch",
+                "keyDispatch",
+                "semanticInvoke",
+                "semanticSetValue",
+            ]
+        );
+
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            [
+                InvariantStage::FocusPreparation,
+                InvariantStage::FocusRestore,
+                InvariantStage::FocusRecovery,
+            ]
+            .map(InvariantStage::as_str),
+            ["focusPreparation", "focusRestore", "focusRecovery"]
+        );
+
+        #[cfg(target_os = "macos")]
+        let focus_error = background_contract_violation(
+            InvariantStage::FocusRestore,
+            [InvariantFailure::UserFocus],
+        );
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            focus_error.message,
+            "stage=focusRestore;failedInvariants=userFocusUnchanged"
         );
     }
 

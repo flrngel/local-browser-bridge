@@ -18,6 +18,17 @@ impl ComputerController {
         Self
     }
 
+    /// Unsupported hosts never start a native capture whose shutdown can
+    /// fail, so there is no process-fatal capture error to drain.
+    #[doc(hidden)]
+    pub fn take_fatal_capture_stop_error() -> Option<ComputerError> {
+        None
+    }
+
+    pub fn has_active_share(&self) -> bool {
+        false
+    }
+
     pub fn hello(&mut self) -> Value {
         json!({
             "type": "hello",
@@ -106,7 +117,10 @@ mod tests {
     #[test]
     fn unsupported_controller_fails_closed_without_dispatch() {
         let cancellation = CommandCancellation::new();
-        let error = ComputerController::new()
+        let mut controller = ComputerController::new();
+        assert!(!controller.has_active_share());
+        assert!(ComputerController::take_fatal_capture_stop_error().is_none());
+        let error = controller
             .execute_cancellable("computer.status", &json!({}), &cancellation)
             .unwrap_err();
         assert_eq!(error.code, "COMPUTER_UNSUPPORTED_PLATFORM");
