@@ -2,6 +2,19 @@ use std::fs;
 use std::process::Command;
 
 #[test]
+fn node_runtime_is_available_for_dashboard_behavior_contracts() {
+    let output = Command::new("node")
+        .arg("--version")
+        .output()
+        .expect("Node.js is a test-only dependency for dashboard behavior contracts; it is not an end-user runtime dependency");
+    assert!(
+        output.status.success(),
+        "Node.js could not execute the dashboard behavior contracts: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn dashboard_requires_monotonic_state_and_exact_decoded_frame_images() {
     let app = fs::read_to_string("public/app.js").unwrap();
     assert!(app.contains("function shouldAcceptStateRevision"));

@@ -52,6 +52,40 @@ fn release_workflow_and_local_builder_package_both_processes() {
 }
 
 #[test]
+fn release_gates_javascript_macos_and_published_provenance() {
+    let ci = source(".github/workflows/ci.yml");
+    let release = source(".github/workflows/deploy.yml");
+    let verifier = source("scripts/verify-release-assets.sh");
+    let node_pin = "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0";
+
+    assert!(ci.matches(node_pin).count() >= 4);
+    assert!(!ci.contains("Extension static and contract tests (Node-free)"));
+    assert!(ci.contains("name: macOS formatting, lint, and tests"));
+    assert!(ci.contains("runs-on: macos-14"));
+
+    for required in [
+        "Run native macOS formatting, lint, and tests",
+        "--source-ref \"$GITHUB_REF\"",
+        "--source-digest \"${{ needs.verify.outputs.source_sha }}\"",
+        "--signer-workflow \"$GITHUB_REPOSITORY/.github/workflows/deploy.yml\"",
+        "--deny-self-hosted-runners",
+        "Re-download and verify the immutable published release",
+        "gh release download \"$RELEASE_TAG\"",
+        "gh release verify \"$RELEASE_TAG\"",
+        "gh release verify-asset \"$RELEASE_TAG\"",
+        "bash scripts/verify-release-assets.sh \"$version\" published",
+    ] {
+        assert!(
+            release.contains(required),
+            "release gate is missing {required}"
+        );
+    }
+
+    assert!(verifier.contains("Missing or empty release checksum manifest"));
+    assert!(!verifier.contains("if [[ -f \"$checksum_manifest\" ]]"));
+}
+
+#[test]
 fn mac_helper_bundle_has_a_stable_visible_identity() {
     let plist = source("packaging/macos/Info.plist.in");
     for required in [

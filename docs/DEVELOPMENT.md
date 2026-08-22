@@ -1,10 +1,11 @@
 # Development
 
-No Node.js runtime is required. The entry points are Rust executables; the macOS build links a bundled Swift ScreenCaptureKit bridge and system frameworks. Some checked-in browser evidence rigs use JavaScript tooling, but they are optional evidence harnesses rather than production dependencies.
+End users do not need Node.js. The entry points are Rust executables; the macOS build links a bundled Swift ScreenCaptureKit bridge and system frameworks. Developers running the complete contract suite need Node.js 24 for the checked-in extension and dashboard behavior harnesses, and some browser evidence rigs use the same test-only runtime. Node.js is never packaged into or invoked by the server, helper, or extension.
 
 ## Prerequisites
 
 - Rust 1.88 or later with Cargo and rustfmt
+- Node.js 24 for extension/dashboard behavior contracts and browser evidence rigs
 - Platform SDK and linker for the target operating system
 - `zip` and `unzip` for extension packaging
 - Chrome or Edge 118+ for core browser testing

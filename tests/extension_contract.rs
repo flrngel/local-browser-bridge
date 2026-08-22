@@ -23,6 +23,19 @@ fn normalize_newlines(source: String) -> String {
     source.replace("\r\n", "\n")
 }
 
+#[test]
+fn node_runtime_is_available_for_extension_behavior_contracts() {
+    let output = Command::new("node")
+        .arg("--version")
+        .output()
+        .expect("Node.js is a test-only dependency for extension behavior contracts; it is not an end-user runtime dependency");
+    assert!(
+        output.status.success(),
+        "Node.js could not execute the extension behavior contracts: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn extension_source(file: impl AsRef<Path>) -> String {
     normalize_newlines(fs::read_to_string(Path::new("extension").join(file)).unwrap())
 }

@@ -140,22 +140,24 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   test "$("$mac_helper" --version)" = "local-computer-helper $version"
 fi
 
-if [[ -f "$checksum_manifest" ]]; then
-  expected_checksum_files="$(printf '%s\n' \
-    "$(basename "$windows_server")" \
-    "$(basename "$windows_helper")" \
-    "$(basename "$macos_archive")" \
-    "$(basename "$extension_archive")" | LC_ALL=C sort)"
-  actual_checksum_files="$(sed -n 's/^[[:xdigit:]]\{64\}[[:space:]][ *]\(.*\)$/\1/p' "$checksum_manifest" | LC_ALL=C sort)"
-  if [[ "$actual_checksum_files" != "$expected_checksum_files" ]]; then
-    echo "Checksum manifest contains an unexpected file set." >&2
-    exit 1
-  fi
-  if command -v sha256sum >/dev/null 2>&1; then
-    (cd "$assets_dir" && sha256sum --check SHA256SUMS.txt)
-  else
-    (cd "$assets_dir" && shasum -a 256 -c SHA256SUMS.txt)
-  fi
+if [[ ! -s "$checksum_manifest" ]]; then
+  echo "Missing or empty release checksum manifest: $checksum_manifest" >&2
+  exit 1
+fi
+expected_checksum_files="$(printf '%s\n' \
+  "$(basename "$windows_server")" \
+  "$(basename "$windows_helper")" \
+  "$(basename "$macos_archive")" \
+  "$(basename "$extension_archive")" | LC_ALL=C sort)"
+actual_checksum_files="$(sed -n 's/^[[:xdigit:]]\{64\}[[:space:]][ *]\(.*\)$/\1/p' "$checksum_manifest" | LC_ALL=C sort)"
+if [[ "$actual_checksum_files" != "$expected_checksum_files" ]]; then
+  echo "Checksum manifest contains an unexpected file set." >&2
+  exit 1
+fi
+if command -v sha256sum >/dev/null 2>&1; then
+  (cd "$assets_dir" && sha256sum --check SHA256SUMS.txt)
+else
+  (cd "$assets_dir" && shasum -a 256 -c SHA256SUMS.txt)
 fi
 
 echo "Verified release assets for $version."

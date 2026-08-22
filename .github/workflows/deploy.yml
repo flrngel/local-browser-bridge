@@ -35,6 +35,9 @@ jobs:
         with:
           ref: ${{ env.SOURCE_REF }}
           fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
       - name: Install the minimum supported Rust toolchain
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
@@ -76,6 +79,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.source_sha }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
       - name: Install the minimum supported Rust toolchain
         shell: pwsh
         run: |
@@ -122,11 +128,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.source_sha }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
       - name: Install the minimum supported Rust toolchain and targets
         run: |
-          rustup toolchain install 1.88.0 --profile minimal
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
           rustup default 1.88.0
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Run native macOS formatting, lint, and tests
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked --all-targets
       - name: Build and verify universal server and helper app
         shell: bash
         run: |
@@ -236,7 +250,12 @@ jobs:
           verify_attestation() {
             local subject="$1"
             for attempt in 1 2 3 4 5; do
-              if gh attestation verify "$subject" --repo "$GITHUB_REPOSITORY"; then
+              if gh attestation verify "$subject" \
+                --repo "$GITHUB_REPOSITORY" \
+                --source-ref "$GITHUB_REF" \
+                --source-digest "${{ needs.verify.outputs.source_sha }}" \
+                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/deploy.yml" \
+                --deny-self-hosted-runners; then
                 return 0
               fi
               sleep 2
@@ -283,3 +302,34 @@ jobs:
           gh release upload "$RELEASE_TAG" dist/*
           gh release edit "$RELEASE_TAG" --draft=false
           gh release view "$RELEASE_TAG" --json url,tagName,isDraft,isPrerelease
+      - name: Re-download and verify the immutable published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          version="${RELEASE_TAG#v}"
+          mkdir published
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir published
+          test "$(find published -maxdepth 1 -type f | wc -l | tr -d ' ')" = 5
+          bash scripts/verify-release-assets.sh "$version" published
+
+          retry_release_check() {
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+              if "$@"; then
+                return 0
+              fi
+              sleep 3
+            done
+            return 1
+          }
+
+          retry_release_check gh release verify "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"
+          for subject in published/*; do
+            retry_release_check gh release verify-asset "$RELEASE_TAG" "$subject" --repo "$GITHUB_REPOSITORY"
+            gh attestation verify "$subject" \
+              --repo "$GITHUB_REPOSITORY" \
+              --source-ref "$GITHUB_REF" \
+              --source-digest "${{ needs.verify.outputs.source_sha }}" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/deploy.yml" \
+              --deny-self-hosted-runners
+          done
