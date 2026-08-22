@@ -365,8 +365,16 @@ fn extension_storage_is_restricted_to_trusted_contexts_before_use() {
     assert!(access < first_read);
     assert!(access < first_write);
     assert!(background.contains("async function settings() {\n  await trustedStorageReady;"));
-    assert!(background.contains("async function setStatus(status, detail = \"\") {\n  await trustedStorageReady;"));
-    assert!(background.contains("void trustedStorageReady.then(() => chrome.storage.local.get(DEFAULTS))"));
+    assert!(background.contains(
+        "async function setStatus(status, detail = \"\") {\n  await trustedStorageReady;"
+    ));
+    assert!(background.contains(
+        "controlStatePromise = (async () => {\n    await trustedStorageReady;\n    const [stored, storedPause]"
+    ));
+    assert!(
+        background
+            .contains("void trustedStorageReady.then(() => chrome.storage.local.get(DEFAULTS))")
+    );
 }
 
 #[test]

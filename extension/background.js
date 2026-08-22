@@ -1547,6 +1547,7 @@ function scheduleHeartbeat() {
 async function initializeControlState() {
   if (controlStatePromise) return controlStatePromise;
   controlStatePromise = (async () => {
+    await trustedStorageReady;
     const [stored, storedPause] = await Promise.all([
       chrome.storage.session.get({
         [CONTROL_STORAGE_KEY]: null,

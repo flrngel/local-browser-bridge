@@ -107,7 +107,7 @@ The app bundle is ad-hoc signed for internal consistency, but it is not Develope
 5. Open the Local Browser Bridge popup and confirm that its version matches the server version.
 6. Paste the token printed by the server, keep port `17373`, and select **Save and connect**.
 
-Chrome and Edge 118–124 support the core tab and top-level-page features. Use version 125 or later when the task must observe or click through cross-origin iframes.
+Chrome and Edge 140 or later are required. Older builds are refused by the manifest because they cannot enforce the extension's persisted-storage access boundary.
 
 The extension includes no remote code, analytics, cookie API, native messaging host, downloader, or external update endpoint. Chrome does not auto-update unpacked extensions on Windows or macOS. The server's metadata-only checker accepts only a canonical stable release marked immutable by GitHub with the exact five uploaded, nonempty assets and GitHub SHA-256 digests.
 
