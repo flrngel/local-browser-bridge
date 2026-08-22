@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -53,6 +53,7 @@ const MAX_WS_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 const CALL_ID_MAX_CHARS: usize = 128;
 const REPLAY_CACHE_ENTRIES: usize = 256;
 const REPLAY_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
+const MAX_RETIRED_COMPUTER_SHARE_IDS: usize = 256;
 const NORMALIZED_COORDINATE_MAX: f64 = 1_000.0;
 /// Cross-origin frame bounds. `MAX_FRAME_INDEX` mirrors the extension's
 /// 16-frame attachment cap, so a `f<k>` the extension can never mint is
@@ -622,6 +623,228 @@ struct StateData {
     public: PublicState,
     screenshot: Option<Screenshot>,
     computer_screenshot: Option<Screenshot>,
+    /// Fail-closed publication gate installed after an outcome-unknown native
+    /// mutation. It lives under the same lock as the public observation and
+    /// screenshot so revocation and every later publication have one linear
+    /// order.
+    computer_authority_gate: Option<ComputerAuthorityGate>,
+}
+
+#[derive(Debug)]
+struct ComputerAuthorityGate {
+    session_id: String,
+    recovered: bool,
+    approved_share_id: Option<String>,
+    retired_share_ids: HashSet<String>,
+    retired_share_ids_saturated: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ComputerObservationPublication {
+    ExplicitObserve,
+    ShareStart,
+    FollowUp,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShareStartAuthorization {
+    Allowed,
+    Retired,
+    Saturated,
+}
+
+impl ComputerAuthorityGate {
+    fn new(session_id: &str, previous_share_id: Option<&str>) -> Self {
+        let mut retired_share_ids = HashSet::new();
+        if let Some(share_id) = previous_share_id {
+            retired_share_ids.insert(share_id.to_owned());
+        }
+        Self {
+            session_id: session_id.to_owned(),
+            recovered: false,
+            approved_share_id: None,
+            retired_share_ids,
+            retired_share_ids_saturated: false,
+        }
+    }
+
+    fn retire_share_id(&mut self, share_id: String) {
+        if self.retired_share_ids.contains(&share_id) {
+            return;
+        }
+        if self.retired_share_ids.len() >= MAX_RETIRED_COMPUTER_SHARE_IDS {
+            // Never evict a revoked epoch. Saturation permanently refuses
+            // another share start for this helper session, bounding memory
+            // while preserving the fail-closed guarantee.
+            self.retired_share_ids_saturated = true;
+            return;
+        }
+        self.retired_share_ids.insert(share_id);
+    }
+
+    fn revoke_again(&mut self, previous_share_id: Option<&str>) {
+        if let Some(share_id) = self.approved_share_id.take() {
+            self.retire_share_id(share_id);
+        }
+        if let Some(share_id) = previous_share_id {
+            self.retire_share_id(share_id.to_owned());
+        }
+        self.recovered = false;
+    }
+
+    fn authorize_share_start(&mut self, share_id: &str) -> ShareStartAuthorization {
+        if self.retired_share_ids_saturated {
+            return ShareStartAuthorization::Saturated;
+        }
+        if self.retired_share_ids.contains(share_id)
+            || self.approved_share_id.as_deref() == Some(share_id)
+        {
+            return ShareStartAuthorization::Retired;
+        }
+        if let Some(previous) = self.approved_share_id.replace(share_id.to_owned())
+            && previous != share_id
+        {
+            self.retire_share_id(previous);
+        }
+        self.recovered = true;
+        ShareStartAuthorization::Allowed
+    }
+
+    fn note_share_stopped(&mut self) {
+        if let Some(share_id) = self.approved_share_id.take() {
+            self.retire_share_id(share_id);
+        }
+        self.recovered = false;
+    }
+
+    fn authorize_observation(
+        &mut self,
+        share_id: Option<&str>,
+        publication: ComputerObservationPublication,
+    ) -> bool {
+        match self.approved_share_id.as_deref() {
+            Some(approved) => self.recovered && share_id == Some(approved),
+            None if publication == ComputerObservationPublication::ExplicitObserve
+                && share_id.is_none() =>
+            {
+                self.recovered = true;
+                true
+            }
+            None => self.recovered && share_id.is_none(),
+        }
+    }
+
+    fn allows_share_frame(&self, share_id: Option<&str>) -> bool {
+        self.recovered
+            && self
+                .approved_share_id
+                .as_deref()
+                .is_some_and(|approved| Some(approved) == share_id)
+    }
+
+    fn authorize_share_error(&mut self, share_id: &str) -> bool {
+        if self.approved_share_id.as_deref() != Some(share_id) {
+            return false;
+        }
+        self.note_share_stopped();
+        true
+    }
+}
+
+impl StateData {
+    fn revoke_computer_authority(&mut self, session_id: &str, previous_share_id: Option<&str>) {
+        match self.computer_authority_gate.as_mut() {
+            Some(gate) if gate.session_id == session_id => {
+                gate.revoke_again(previous_share_id);
+            }
+            _ => {
+                self.computer_authority_gate =
+                    Some(ComputerAuthorityGate::new(session_id, previous_share_id));
+            }
+        }
+    }
+
+    fn computer_authority_is_gated(&self, session_id: &str) -> bool {
+        self.computer_authority_gate
+            .as_ref()
+            .is_some_and(|gate| gate.session_id == session_id)
+    }
+
+    fn computer_share_session_is_saturated(&self, session_id: &str) -> bool {
+        self.computer_authority_gate
+            .as_ref()
+            .is_some_and(|gate| gate.session_id == session_id && gate.retired_share_ids_saturated)
+    }
+
+    fn authorize_computer_share_start(
+        &mut self,
+        session_id: &str,
+        share_id: &str,
+    ) -> ShareStartAuthorization {
+        self.computer_authority_gate
+            .as_mut()
+            .filter(|gate| gate.session_id == session_id)
+            .map_or(ShareStartAuthorization::Allowed, |gate| {
+                gate.authorize_share_start(share_id)
+            })
+    }
+
+    fn note_computer_share_stopped(&mut self, session_id: &str) {
+        if let Some(gate) = self
+            .computer_authority_gate
+            .as_mut()
+            .filter(|gate| gate.session_id == session_id)
+        {
+            gate.note_share_stopped();
+        }
+    }
+
+    fn authorize_computer_share_error(
+        &mut self,
+        session_id: &str,
+        share_id: &str,
+        current_share_id: Option<&str>,
+    ) -> bool {
+        match self
+            .computer_authority_gate
+            .as_mut()
+            .filter(|gate| gate.session_id == session_id)
+        {
+            Some(gate) => gate.authorize_share_error(share_id),
+            None => current_share_id == Some(share_id),
+        }
+    }
+
+    fn authorize_computer_observation(
+        &mut self,
+        session_id: &str,
+        share_id: Result<Option<&str>, ()>,
+        publication: ComputerObservationPublication,
+    ) -> bool {
+        let Some(gate) = self
+            .computer_authority_gate
+            .as_mut()
+            .filter(|gate| gate.session_id == session_id)
+        else {
+            return true;
+        };
+        share_id.is_ok_and(|share_id| gate.authorize_observation(share_id, publication))
+    }
+
+    fn allows_computer_share_frame(
+        &self,
+        session_id: &str,
+        share_id: Result<Option<&str>, ()>,
+    ) -> bool {
+        let Some(gate) = self
+            .computer_authority_gate
+            .as_ref()
+            .filter(|gate| gate.session_id == session_id)
+        else {
+            return true;
+        };
+        share_id.is_ok_and(|share_id| gate.allows_share_frame(share_id))
+    }
 }
 
 #[derive(Default, Clone, Serialize)]
@@ -2193,6 +2416,7 @@ async fn handle_computer_websocket(
         data.public.computer = None;
         data.public.computer_observation = None;
         data.computer_screenshot = None;
+        data.computer_authority_gate = None;
         connection
     };
     state
@@ -2247,7 +2471,7 @@ async fn handle_computer_websocket(
                             }),
                         );
                     }
-                    Some("hello") => {
+                    Some("hello") if !handshake_complete => {
                         handshake_complete =
                             handle_computer_hello(&state, connection_id, &message).await;
                     }
@@ -2299,6 +2523,7 @@ async fn handle_computer_websocket(
             data.public.computer = None;
             data.public.computer_observation = None;
             data.computer_screenshot = None;
+            data.computer_authority_gate = None;
         }
         detached
     };
@@ -2418,6 +2643,18 @@ async fn handle_computer_hello(state: &AppState, connection_id: Uuid, message: &
         let mut data = state.data.write().await;
         if !state.computer_hub.is_current(connection_id) {
             return false;
+        }
+        // A transport attach already clears the gate. Keep this additional
+        // handshake boundary session-aware so a first hello resets any stale
+        // pre-handshake state, while a repeated hello from the same gated
+        // session cannot launder revoked authority.
+        if data
+            .public
+            .computer
+            .as_ref()
+            .is_none_or(|existing| existing.session_id != session_id)
+        {
+            data.computer_authority_gate = None;
         }
         data.public.computer_connected = compatible;
         data.public.computer = Some(computer);
@@ -2595,6 +2832,7 @@ async fn handle_computer_event(state: &AppState, connection_id: Uuid, message: &
     let data = message.get("data").unwrap_or(&Value::Null);
     match name {
         "computer.share.frame" => {
+            let frame_ack = share_frame_ack(data);
             let mut screenshot = match decode_screenshot(data.get("screenshot")) {
                 Ok(Some(screenshot)) => screenshot,
                 Ok(None) => {
@@ -2656,25 +2894,41 @@ async fn handle_computer_event(state: &AppState, connection_id: Uuid, message: &
                 "computer-frame",
                 &observation.frame_id,
             );
+            let mut publish = false;
             {
                 let mut state_data = state.data.write().await;
                 if !state.computer_hub.is_current_ready(connection_id) {
                     return;
                 }
-                if let Some(computer) = state_data.public.computer.as_mut()
-                    && let Some(frame) = data.get("frame")
-                {
-                    computer.share = sanitize_share_status(frame.get("share"));
+                let session_id = connection_id.to_string();
+                let share_identity =
+                    computer_share_frame_identity(frame_ack.as_ref(), &observation);
+                if state_data.allows_computer_share_frame(&session_id, share_identity) {
+                    if let Some(computer) = state_data.public.computer.as_mut()
+                        && let Some(frame) = data.get("frame")
+                    {
+                        computer.share = sanitize_share_status(frame.get("share"));
+                    }
+                    state_data.public.computer_observation = Some(observation);
+                    state_data.computer_screenshot = Some(screenshot);
+                    publish = true;
                 }
-                state_data.public.computer_observation = Some(observation);
-                state_data.computer_screenshot = Some(screenshot);
             }
             acknowledge_computer_share_frame(state, connection_id, data).await;
-            state
-                .bump_for_connection(&state.computer_hub, connection_id, "computer-share-frame")
-                .await;
+            if publish {
+                state
+                    .bump_for_connection(&state.computer_hub, connection_id, "computer-share-frame")
+                    .await;
+            }
         }
         "computer.share.error" => {
+            let Some(share_id) = data
+                .get("shareId")
+                .and_then(Value::as_str)
+                .filter(|share_id| !share_id.is_empty() && share_id.len() <= 100)
+            else {
+                return;
+            };
             let code = bounded(
                 data.get("code")
                     .and_then(Value::as_str)
@@ -2692,12 +2946,26 @@ async fn handle_computer_event(state: &AppState, connection_id: Uuid, message: &
                 if !state.computer_hub.is_current_ready(connection_id) {
                     return;
                 }
+                let current_share_id = state_data
+                    .public
+                    .computer
+                    .as_ref()
+                    .and_then(|computer| active_share_id(&computer.share))
+                    .map(str::to_owned);
+                if !state_data.authorize_computer_share_error(
+                    &connection_id.to_string(),
+                    share_id,
+                    current_share_id.as_deref(),
+                ) {
+                    return;
+                }
                 if let Some(computer) = state_data.public.computer.as_mut() {
                     computer.share = json!({
                         "active": false,
                         "stopped": true,
                         "reason": "capture-error",
                         "code": code,
+                        "id": share_id,
                     });
                 }
                 state_data.public.computer_observation = None;
@@ -2730,6 +2998,44 @@ fn share_frame_ack(data: &Value) -> Option<ShareFrameAck> {
         share_id: share_id.to_owned(),
         sequence: share.get("sequence")?.as_u64()?,
     })
+}
+
+/// Returns the single share authority named consistently by an observation's
+/// top-level epoch and sanitized share status. A gated session treats any
+/// missing or conflicting identity as unauthorized; ungated legacy sessions
+/// keep their existing compatibility behavior.
+fn computer_observation_share_identity(
+    observation: &ComputerObservation,
+) -> Result<Option<&str>, ()> {
+    let active = observation
+        .share
+        .get("active")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let status_id = observation
+        .share
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|share_id| !share_id.is_empty() && share_id.len() <= 100);
+    match (active, observation.share_id.as_deref(), status_id) {
+        (false, None, None) => Ok(None),
+        (true, Some(frame_id), Some(status_id)) if frame_id == status_id => Some(frame_id)
+            .filter(|share_id| !share_id.is_empty() && share_id.len() <= 100)
+            .map(Some)
+            .ok_or(()),
+        _ => Err(()),
+    }
+}
+
+fn computer_share_frame_identity<'a>(
+    ack: Option<&ShareFrameAck>,
+    observation: &'a ComputerObservation,
+) -> Result<Option<&'a str>, ()> {
+    let ack = ack.ok_or(())?;
+    let observation_id = computer_observation_share_identity(observation)?.ok_or(())?;
+    (ack.share_id == observation_id)
+        .then_some(Some(observation_id))
+        .ok_or(())
 }
 
 /// Sends the `eventAck` for one processed `computer.share.frame` event.
@@ -3414,8 +3720,17 @@ impl AppState {
                 json!(pointer_revision),
             );
         }
+        if method == "computer.share.start"
+            && self
+                .data
+                .read()
+                .await
+                .computer_share_session_is_saturated(&computer.session_id)
+        {
+            return Err(computer_share_session_exhausted());
+        }
 
-        let (connection_id, result) =
+        let (connection_id, mut result) =
             match self.computer_hub.call_scoped(method, params.clone()).await {
                 Ok(result) => result,
                 Err(error) => {
@@ -3430,12 +3745,20 @@ impl AppState {
                     return Err(error.into());
                 }
             };
+        let computer_session_id = computer.session_id.clone();
 
         if method == "computer.status" {
             let mut data = self.data.write().await;
             if !self.computer_hub.is_current_ready(connection_id) {
                 return Ok(result);
             }
+            let gated = data.computer_authority_is_gated(&computer_session_id);
+            let retained_share = data
+                .public
+                .computer
+                .as_ref()
+                .map(|computer| computer.share.clone())
+                .unwrap_or_else(|| json!({ "active": false }));
             if let Some(computer) = data.public.computer.as_mut() {
                 if let Some(input_ready) = result.get("inputReady").and_then(Value::as_bool) {
                     computer.input_ready = input_ready;
@@ -3458,7 +3781,15 @@ impl AppState {
                     100,
                 );
                 computer.windows = sanitize_computer_windows(result.get("windows"));
-                computer.share = sanitize_share_status(result.get("share"));
+                if !gated {
+                    computer.share = sanitize_share_status(result.get("share"));
+                }
+            }
+            if gated && let Some(output) = result.as_object_mut() {
+                // The command may have raced a queued pre-revocation status
+                // result. Return the same fail-closed share state the public
+                // snapshot retained instead of echoing stale active authority.
+                output.insert("share".to_owned(), retained_share);
             }
             drop(data);
             self.log_for_connection(
@@ -3475,16 +3806,79 @@ impl AppState {
         }
 
         if method.starts_with("computer.share.") {
+            let sanitized_share = sanitize_share_status(Some(&result));
+            let reported_share_id = active_share_id(&result).map(str::to_owned);
             let mut data = self.data.write().await;
             if !self.computer_hub.is_current_ready(connection_id) {
                 return Ok(result);
             }
-            if let Some(computer) = data.public.computer.as_mut() {
-                computer.share = sanitize_share_status(Some(&result));
-            }
-            if method == "computer.share.stop" {
-                data.public.computer_observation = None;
-                data.computer_screenshot = None;
+            let gated = data.computer_authority_is_gated(&computer_session_id);
+            let gated_share_start = gated && method == "computer.share.start";
+            let retained_share = data
+                .public
+                .computer
+                .as_ref()
+                .map(|computer| computer.share.clone())
+                .unwrap_or_else(|| json!({ "active": false }));
+            match method {
+                "computer.share.start" if gated => {
+                    let Some(share_id) = reported_share_id.as_deref() else {
+                        return Err(invalid_gated_share_result(
+                            "A successful computer.share.start did not name one active share ID",
+                        ));
+                    };
+                    match data.authorize_computer_share_start(&computer_session_id, share_id) {
+                        ShareStartAuthorization::Allowed => {}
+                        ShareStartAuthorization::Retired => {
+                            return Err(invalid_gated_share_result(
+                                "computer.share.start reused a retired share ID after authority was revoked",
+                            ));
+                        }
+                        ShareStartAuthorization::Saturated => {
+                            return Err(computer_share_session_exhausted());
+                        }
+                    }
+                    if let Some(computer) = data.public.computer.as_mut() {
+                        computer.share = sanitized_share;
+                    }
+                    data.public.computer_observation = None;
+                    data.computer_screenshot = None;
+                }
+                "computer.share.start" => {
+                    if let Some(computer) = data.public.computer.as_mut() {
+                        computer.share = sanitized_share;
+                    }
+                    data.public.computer_observation = None;
+                    data.computer_screenshot = None;
+                }
+                "computer.share.status" if gated => {
+                    // A status reply is descriptive, not a new authority
+                    // boundary. Never let it reintroduce the revoked share.
+                    result = retained_share;
+                }
+                "computer.share.status" => {
+                    if let Some(computer) = data.public.computer.as_mut() {
+                        computer.share = sanitized_share;
+                    }
+                }
+                "computer.share.stop" => {
+                    if sanitized_share
+                        .get("active")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                    {
+                        return Err(invalid_gated_share_result(
+                            "A successful computer.share.stop returned an active share",
+                        ));
+                    }
+                    data.note_computer_share_stopped(&computer_session_id);
+                    if let Some(computer) = data.public.computer.as_mut() {
+                        computer.share = sanitized_share;
+                    }
+                    data.public.computer_observation = None;
+                    data.computer_screenshot = None;
+                }
+                _ => {}
             }
             drop(data);
             if !self
@@ -3506,9 +3900,60 @@ impl AppState {
                     .get("windowId")
                     .and_then(Value::as_str)
                     .or_else(|| params.get("windowId").and_then(Value::as_str));
-                let _ = self
-                    .refresh_computer_observation_for(window_id, Some(connection_id))
+                let observation = self
+                    .refresh_computer_observation_for(
+                        window_id,
+                        Some(connection_id),
+                        ComputerObservationPublication::ShareStart,
+                    )
                     .await;
+                if let Err(error) = observation
+                    && gated_share_start
+                {
+                    // A fresh share is not a recovery boundary until its
+                    // first exact-ID observation is committed. If capture
+                    // failed or an epoch-bound share error raced the result,
+                    // retire that ID and leave no apparently active state.
+                    let mut data = self.data.write().await;
+                    if self.computer_hub.is_current_ready(connection_id)
+                        && data
+                            .public
+                            .computer
+                            .as_ref()
+                            .is_some_and(|computer| computer.session_id == computer_session_id)
+                    {
+                        data.note_computer_share_stopped(&computer_session_id);
+                        if let Some(computer) = data.public.computer.as_mut() {
+                            computer.share = json!({
+                                "active": false,
+                                "stopped": true,
+                                "reason": "recovery-observation-failed",
+                                "code": bounded(&error.code, 80),
+                            });
+                        }
+                        data.public.computer_observation = None;
+                        data.computer_screenshot = None;
+                    }
+                    drop(data);
+                    if self
+                        .log_for_connection(
+                            &self.computer_hub,
+                            connection_id,
+                            "computer.share.start",
+                            "warning",
+                            "Fresh share recovery failed before an exact-ID observation could be published",
+                        )
+                        .await
+                    {
+                        self.bump_for_connection(
+                            &self.computer_hub,
+                            connection_id,
+                            "computer-share-error",
+                        )
+                        .await;
+                    }
+                    return Err(error);
+                }
             }
             return Ok(result);
         }
@@ -3535,7 +3980,11 @@ impl AppState {
             .as_ref()
             .map(|observation| observation.window_id.clone());
         if let Err(error) = self
-            .refresh_computer_observation_for(window_id.as_deref(), Some(connection_id))
+            .refresh_computer_observation_for(
+                window_id.as_deref(),
+                Some(connection_id),
+                ComputerObservationPublication::FollowUp,
+            )
             .await
         {
             self.log("computer.observe", "warning", error.message).await;
@@ -3565,20 +4014,25 @@ impl AppState {
         }
 
         let mut data = self.data.write().await;
-        let Some(computer) = data
-            .public
-            .computer
-            .as_mut()
-            .filter(|computer| computer.session_id == expected_session_id)
-        else {
-            return false;
+        let previous_share_id = {
+            let Some(computer) = data
+                .public
+                .computer
+                .as_mut()
+                .filter(|computer| computer.session_id == expected_session_id)
+            else {
+                return false;
+            };
+            let previous_share_id = active_share_id(&computer.share).map(str::to_owned);
+            computer.share = json!({
+                "active": false,
+                "stopped": true,
+                "reason": "outcome-unknown",
+                "code": bounded(&error.code, 80),
+            });
+            previous_share_id
         };
-        computer.share = json!({
-            "active": false,
-            "stopped": true,
-            "reason": "outcome-unknown",
-            "code": bounded(&error.code, 80),
-        });
+        data.revoke_computer_authority(expected_session_id, previous_share_id.as_deref());
         data.public.computer_observation = None;
         data.computer_screenshot = None;
         true
@@ -3651,13 +4105,19 @@ impl AppState {
         &self,
         window_id: Option<&str>,
     ) -> Result<Value, ApiError> {
-        self.refresh_computer_observation_for(window_id, None).await
+        self.refresh_computer_observation_for(
+            window_id,
+            None,
+            ComputerObservationPublication::ExplicitObserve,
+        )
+        .await
     }
 
     async fn refresh_computer_observation_for(
         &self,
         window_id: Option<&str>,
         expected_connection_id: Option<Uuid>,
+        publication: ComputerObservationPublication,
     ) -> Result<Value, ApiError> {
         let params = window_id
             .map(|window_id| json!({ "windowId": window_id }))
@@ -3694,6 +4154,16 @@ impl AppState {
                     StatusCode::SERVICE_UNAVAILABLE,
                     "COMPUTER_DISCONNECTED",
                     "Computer helper was replaced before the observation could be committed",
+                ));
+            }
+            let session_id = connection_id.to_string();
+            if !data.authorize_computer_observation(
+                &session_id,
+                computer_observation_share_identity(&observation),
+                publication,
+            ) {
+                return Err(invalid_gated_share_result(
+                    "Computer observation carried revoked or unapproved share authority; explicitly observe a one-shot frame or start a fresh share",
                 ));
             }
             data.public.computer_observation = Some(observation.clone());
@@ -4704,6 +5174,32 @@ fn sanitize_share_status(value: Option<&Value>) -> Value {
         "lastAckedSequence": share.get("lastAckedSequence").and_then(Value::as_u64).unwrap_or(0),
         "backpressure": bounded(share.get("backpressure").and_then(Value::as_str).unwrap_or("producer-blocking"), 40),
     })
+}
+
+fn active_share_id(value: &Value) -> Option<&str> {
+    value
+        .get("active")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        .then(|| value.get("id").and_then(Value::as_str))
+        .flatten()
+        .filter(|share_id| !share_id.is_empty() && share_id.len() <= 100)
+}
+
+fn invalid_gated_share_result(message: &str) -> ApiError {
+    ApiError::new(
+        StatusCode::BAD_GATEWAY,
+        "COMPUTER_INVALID_OBSERVATION",
+        message,
+    )
+}
+
+fn computer_share_session_exhausted() -> ApiError {
+    ApiError::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "COMPUTER_SHARE_SESSION_EXHAUSTED",
+        "This helper session exhausted its fail-closed retired-share budget; reconnect the computer helper to create a new session",
+    )
 }
 
 fn sanitize_computer_windows(value: Option<&Value>) -> Vec<ComputerWindow> {
@@ -7927,6 +8423,61 @@ mod tests {
     }
 
     #[test]
+    fn revoked_computer_authority_requires_explicit_recovery_and_exact_share_epochs() {
+        let mut gate = ComputerAuthorityGate::new("session-old", Some("share-old"));
+        assert!(!gate.allows_share_frame(Some("share-old")));
+        assert!(!gate.authorize_observation(None, ComputerObservationPublication::FollowUp));
+        assert!(gate.authorize_observation(None, ComputerObservationPublication::ExplicitObserve));
+        assert!(gate.authorize_observation(None, ComputerObservationPublication::FollowUp));
+        assert!(
+            !gate.allows_share_frame(Some("share-old")),
+            "one-shot recovery must not reopen an old streaming epoch"
+        );
+
+        assert_eq!(
+            gate.authorize_share_start("share-old"),
+            ShareStartAuthorization::Retired
+        );
+        assert_eq!(
+            gate.authorize_share_start("share-fresh"),
+            ShareStartAuthorization::Allowed
+        );
+        assert!(gate.allows_share_frame(Some("share-fresh")));
+        assert!(!gate.allows_share_frame(Some("share-mismatch")));
+        assert!(!gate.authorize_observation(
+            Some("share-old"),
+            ComputerObservationPublication::ExplicitObserve
+        ));
+        assert!(gate.authorize_observation(
+            Some("share-fresh"),
+            ComputerObservationPublication::ShareStart
+        ));
+        assert!(gate.authorize_share_error("share-fresh"));
+        assert!(!gate.allows_share_frame(Some("share-fresh")));
+        assert!(!gate.authorize_observation(None, ComputerObservationPublication::FollowUp));
+        assert_eq!(
+            gate.authorize_share_start("share-fresh"),
+            ShareStartAuthorization::Retired
+        );
+
+        // Retired epochs are never evicted. Once the bounded set is full, one
+        // final active epoch may finish, then this helper session refuses any
+        // further start instead of growing memory or forgetting authority.
+        for index in 0..MAX_RETIRED_COMPUTER_SHARE_IDS {
+            let share_id = format!("bounded-share-{index}");
+            if gate.authorize_share_start(&share_id) == ShareStartAuthorization::Allowed {
+                gate.note_share_stopped();
+            }
+        }
+        assert!(gate.retired_share_ids.len() <= MAX_RETIRED_COMPUTER_SHARE_IDS);
+        assert!(gate.retired_share_ids_saturated);
+        assert_eq!(
+            gate.authorize_share_start("share-after-saturation"),
+            ShareStartAuthorization::Saturated
+        );
+    }
+
+    #[test]
     fn computer_element_sanitizer_never_forwards_a_sensitive_value() {
         let payload = json!([{
             "ref": "secret-1",
@@ -8153,8 +8704,20 @@ mod tests {
             (StatusCode::UNSUPPORTED_MEDIA_TYPE, "UNSUPPORTED_MEDIA_TYPE"),
             (StatusCode::PAYLOAD_TOO_LARGE, "BODY_TOO_LARGE"),
             (StatusCode::TOO_MANY_REQUESTS, "AUTH_BUSY"),
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "COMPUTER_SHARE_SESSION_EXHAUSTED",
+            ),
         ] {
-            assert_eq!(ApiError::new(status, code, "server refusal").status, status);
+            let error = if code == "COMPUTER_SHARE_SESSION_EXHAUSTED" {
+                computer_share_session_exhausted()
+            } else {
+                ApiError::new(status, code, "server refusal")
+            };
+            assert_eq!(error.status, status);
+            if code == "COMPUTER_SHARE_SESSION_EXHAUSTED" {
+                assert_eq!(error.body()["taxonomy"]["recoveryHint"], "reconnect");
+            }
         }
     }
 }

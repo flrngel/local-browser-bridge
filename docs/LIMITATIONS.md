@@ -25,6 +25,7 @@ Setup requirements such as browser loading, matching versions, macOS permissions
 - On macOS, `computer.observe` remains a one-shot snapshot while `computer.share.start` uses `SCStream`. On Windows, one-shot observation starts the same bounded WGC implementation as live sharing and stops it after one fresh frame. The different lifetimes and shutdown paths still require separate tests.
 - The system cursor is excluded. The visible helper pointer is composited into returned images and is not a native desktop cursor overlay.
 - Native capture callbacks continue replacing a one-frame source slot while an action runs, but PNG conversion and protocol publication resume after that serialized action completes. Shared frames show the settled helper pointer; they are not guaranteed to reproduce every intermediate pointer-animation sample.
+- An outcome-unknown native mutation keeps a session-scoped publication quarantine even after a fresh one-shot observation or share start. This is deliberate: late frames and capture errors from the old share stay harmless. The server remembers up to 256 retired share epochs and then returns `COMPUTER_SHARE_SESSION_EXHAUSTED` with the `reconnect` recovery hint instead of forgetting an old authority; reconnect the helper to obtain a new session in that extreme case.
 
 ### macOS
 

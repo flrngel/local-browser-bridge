@@ -844,6 +844,12 @@ impl ComputerController {
             .unwrap_or_else(|| json!({ "active": false }))
     }
 
+    /// Exact authority epoch used to bind asynchronous share failures to the
+    /// capture lease that produced them.
+    pub fn active_share_id(&self) -> Option<&str> {
+        self.share.as_ref().map(|share| share.id.as_str())
+    }
+
     fn share_frame_value(&self) -> Value {
         self.share_status_value()
     }

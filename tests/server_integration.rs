@@ -650,6 +650,7 @@ struct ControlledComputer {
     handle: JoinHandle<()>,
     events: mpsc::UnboundedSender<(String, Value)>,
     commands: mpsc::UnboundedReceiver<Value>,
+    server_messages: Arc<Mutex<Vec<Value>>>,
 }
 
 /// Computer fixture that holds `computer.click` open but remains responsive
@@ -680,7 +681,10 @@ async fn connect_controlled_computer(base_url: &str, token: &str) -> ControlledC
                     "computer.status",
                     "computer.observe",
                     "computer.click",
+                    "computer.share.start",
                     "computer.share.status",
+                    "computer.share.stop",
+                    "computer.share.ack",
                     "computer.capture.native-stream.v1"
                 ]
             })
@@ -691,10 +695,15 @@ async fn connect_controlled_computer(base_url: &str, token: &str) -> ControlledC
         .unwrap();
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<(String, Value)>();
     let (command_tx, command_rx) = mpsc::unbounded_channel();
+    let server_messages = Arc::new(Mutex::new(Vec::new()));
+    let server_messages_log = server_messages.clone();
     let handle = tokio::spawn(async move {
         let (mut writer, mut reader) = socket.split();
         let mut event_sequence = 0_u64;
         let mut events_open = true;
+        let mut observation_sequence = 0_u64;
+        let mut share_sequence = 0_u64;
+        let mut current_share_id = Some("share-old".to_owned());
         loop {
             let message = tokio::select! {
                 event = event_rx.recv(), if events_open => {
@@ -720,7 +729,15 @@ async fn connect_controlled_computer(base_url: &str, token: &str) -> ControlledC
                 break;
             };
             let message: Value = serde_json::from_str(text.as_str()).unwrap();
+            if matches!(
+                message.get("type").and_then(Value::as_str),
+                Some("helloAck") | Some("eventAck")
+            ) {
+                server_messages_log.lock().unwrap().push(message);
+                continue;
+            }
             if message["type"] == "cancel" {
+                current_share_id = None;
                 command_tx.send(message).unwrap();
                 continue;
             }
@@ -735,9 +752,74 @@ async fn connect_controlled_computer(base_url: &str, token: &str) -> ControlledC
                 "computer.status" => json!({
                     "inputReady": true,
                     "semanticReady": true,
-                    "share": { "active": true }
+                    // Deliberately stale: the server gate must retain its
+                    // outcome-unknown state rather than trusting this reply.
+                    "share": {
+                        "active": true,
+                        "id": "share-old",
+                        "windowId": "window-9",
+                        "fps": 4,
+                        "sequence": 99
+                    }
                 }),
-                "computer.observe" => json!({}),
+                "computer.share.status" => json!({
+                    "active": true,
+                    "id": "share-old",
+                    "windowId": "window-9",
+                    "fps": 4,
+                    "sequence": 99
+                }),
+                "computer.share.start" => {
+                    share_sequence += 1;
+                    let share_id = format!("share-fresh-{share_sequence}");
+                    current_share_id = Some(share_id.clone());
+                    json!({
+                        "active": true,
+                        "id": share_id,
+                        "windowId": "window-9",
+                        "fps": 4,
+                        "sequence": 0,
+                        "sourceSequence": 0,
+                        "startedAt": "2026-08-21T00:00:00Z",
+                        "captureScope": "exact-window",
+                        "cursorComposited": true,
+                        "ackPaced": true,
+                        "lastAckedSequence": 0,
+                        "backpressure": "latest-frame-wins"
+                    })
+                }
+                "computer.share.stop" => {
+                    let stopped = current_share_id.take().is_some();
+                    json!({
+                        "active": false,
+                        "stopped": stopped,
+                        "reason": if stopped { "requested" } else { "not-active" }
+                    })
+                }
+                "computer.observe" => {
+                    observation_sequence += 1;
+                    let frame_id = format!("controlled-observe-{observation_sequence}");
+                    let share = current_share_id.as_ref().map_or_else(
+                        || json!({ "active": false }),
+                        |share_id| {
+                            json!({
+                                "active": true,
+                                "id": share_id,
+                                "windowId": "window-9",
+                                "fps": 4,
+                                "sequence": observation_sequence,
+                                "sourceSequence": observation_sequence,
+                                "startedAt": "2026-08-21T00:00:00Z",
+                                "captureScope": "exact-window",
+                                "cursorComposited": true,
+                                "ackPaced": true,
+                                "lastAckedSequence": 0,
+                                "backpressure": "latest-frame-wins"
+                            })
+                        },
+                    );
+                    computer_share_frame_data(&frame_id, share)
+                }
                 method => panic!("unexpected controlled computer method: {method}"),
             };
             let response = json!({
@@ -759,6 +841,7 @@ async fn connect_controlled_computer(base_url: &str, token: &str) -> ControlledC
         handle,
         events: event_tx,
         commands: command_rx,
+        server_messages,
     }
 }
 
@@ -964,6 +1047,12 @@ async fn connect_fake_computer_with_share_ack(
 }
 
 fn computer_share_frame_data(frame_id: &str, share: Value) -> Value {
+    let share_id = share.get("id").cloned().unwrap_or(Value::Null);
+    let source_sequence = share
+        .get("sourceSequence")
+        .cloned()
+        .or_else(|| share.get("sequence").cloned())
+        .unwrap_or(Value::Null);
     let pointer = json!({
         "id": "fixture-cursor",
         "visible": false,
@@ -1002,6 +1091,8 @@ fn computer_share_frame_data(frame_id: &str, share: Value) -> Value {
             "screenHeight": 400,
             "scaleFactor": 1.0,
             "rotation": 0.0,
+            "shareId": share_id,
+            "sourceSequence": source_sequence,
             "pointer": pointer,
             "share": share
         }
@@ -1726,7 +1817,8 @@ async fn paces_negotiated_share_frames_with_event_acks_and_drop_metrics() {
             "computer.share.error".to_owned(),
             json!({
                 "code": "COMPUTER_CAPTURE_FAILED",
-                "message": "fixture native stream ended"
+                "message": "fixture native stream ended",
+                "shareId": "share-fixture"
             }),
         ))
         .unwrap();
@@ -3177,15 +3269,26 @@ async fn canceling_a_computer_mutation_clears_only_its_helper_session_authority(
                 "frame-cancel-1",
                 json!({
                     "active": true,
-                    "shareId": "share-old",
+                    "id": "share-old",
                     "windowId": "window-9",
                     "sourceSequence": 1,
-                    "transportSequence": 1
+                    "sequence": 1,
+                    "ackPaced": true
                 }),
             ),
         ))
         .unwrap();
     wait_for_computer_frame(&client, &base_url, &token, "frame-cancel-1").await;
+    wait_for_server_message(
+        &computer.server_messages,
+        |message| {
+            message["type"] == "eventAck"
+                && message["shareId"] == "share-old"
+                && message["sequence"] == 1
+        },
+        "initial old-share frame acknowledgement",
+    )
+    .await;
 
     let request = json!({
         "method": "computer.click",
@@ -3274,6 +3377,362 @@ async fn canceling_a_computer_mutation_clears_only_its_helper_session_authority(
         .unwrap();
     assert_eq!(screenshot.status(), 404);
 
+    // Status is not an authority-granting operation. The fixture deliberately
+    // returns its queued old active share from both status methods; neither
+    // the API result nor public state may leak that stale authority.
+    let status: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "computer.status", "params": {} }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(status["result"]["share"]["active"], false);
+    assert_eq!(status["result"]["share"]["reason"], "outcome-unknown");
+    let share_status: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "computer.share.status", "params": {} }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(share_status["result"]["active"], false);
+    assert_eq!(share_status["result"]["reason"], "outcome-unknown");
+
+    // This frame was queued under the revoked share before cancellation. The
+    // eventAck arrives only after the server processed the event, proving the
+    // post-202 ordering without reopening its frame, pointer, or screenshot.
+    computer
+        .events
+        .send((
+            "computer.share.frame".to_owned(),
+            computer_share_frame_data(
+                "frame-old-after-202",
+                json!({
+                    "active": true,
+                    "id": "share-old",
+                    "windowId": "window-9",
+                    "sourceSequence": 2,
+                    "sequence": 2,
+                    "ackPaced": true
+                }),
+            ),
+        ))
+        .unwrap();
+    wait_for_server_message(
+        &computer.server_messages,
+        |message| {
+            message["type"] == "eventAck"
+                && message["shareId"] == "share-old"
+                && message["sequence"] == 2
+        },
+        "post-cancel old-share frame acknowledgement",
+    )
+    .await;
+    let still_cleared: Value = client
+        .get(format!("{base_url}/api/state"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(still_cleared["state"]["computerObservation"].is_null());
+    assert_eq!(still_cleared["state"]["computer"]["share"]["active"], false);
+    assert_eq!(
+        client
+            .get(format!("{base_url}/api/computer/screenshot"))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+
+    // Explicit one-shot observation is the first recovery boundary. It does
+    // not authorize any share epoch, so an old streamed frame remains barred.
+    let observed: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "computer.observe",
+            "params": { "windowId": "window-9" }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(observed["result"]["frameId"], "controlled-observe-1");
+    computer
+        .events
+        .send((
+            "computer.share.frame".to_owned(),
+            computer_share_frame_data(
+                "frame-old-after-observe",
+                json!({
+                    "active": true,
+                    "id": "share-old",
+                    "windowId": "window-9",
+                    "sourceSequence": 3,
+                    "sequence": 3,
+                    "ackPaced": true
+                }),
+            ),
+        ))
+        .unwrap();
+    wait_for_server_message(
+        &computer.server_messages,
+        |message| {
+            message["type"] == "eventAck"
+                && message["shareId"] == "share-old"
+                && message["sequence"] == 3
+        },
+        "old-share acknowledgement after one-shot recovery",
+    )
+    .await;
+    let one_shot: Value = client
+        .get(format!("{base_url}/api/state"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        one_shot["state"]["computerObservation"]["frameId"],
+        "controlled-observe-1"
+    );
+
+    // A successful explicit share start grants exactly the returned fresh ID.
+    // Its automatic observation is accepted only because it carries that ID.
+    let started: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "computer.share.start",
+            "params": { "windowId": "window-9", "fps": 4 }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(started["result"]["id"], "share-fresh-1");
+    assert_eq!(started["state"]["computer"]["share"]["id"], "share-fresh-1");
+    assert_eq!(
+        started["state"]["computerObservation"]["shareId"],
+        "share-fresh-1"
+    );
+    let fresh_frame_id = started["state"]["computerObservation"]["frameId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // Even after recovery, stale status bodies are replaced with the exact
+    // approved public epoch rather than echoing share-old.
+    let fresh_status: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "computer.share.status", "params": {} }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(fresh_status["result"]["id"], "share-fresh-1");
+
+    // Errors are also bound to an exact share epoch. A later old-share frame
+    // ack proves this queued old error was processed before state inspection.
+    computer
+        .events
+        .send((
+            "computer.share.error".to_owned(),
+            json!({
+                "code": "COMPUTER_CAPTURE_FAILED",
+                "message": "queued old capture failure",
+                "shareId": "share-old"
+            }),
+        ))
+        .unwrap();
+    computer
+        .events
+        .send((
+            "computer.share.frame".to_owned(),
+            computer_share_frame_data(
+                "frame-old-after-fresh-share",
+                json!({
+                    "active": true,
+                    "id": "share-old",
+                    "windowId": "window-9",
+                    "sourceSequence": 4,
+                    "sequence": 4,
+                    "ackPaced": true
+                }),
+            ),
+        ))
+        .unwrap();
+    wait_for_server_message(
+        &computer.server_messages,
+        |message| {
+            message["type"] == "eventAck"
+                && message["shareId"] == "share-old"
+                && message["sequence"] == 4
+        },
+        "ordered old error and frame processing proof",
+    )
+    .await;
+    let after_old_error: Value = client
+        .get(format!("{base_url}/api/state"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        after_old_error["state"]["computer"]["share"]["id"],
+        "share-fresh-1"
+    );
+    assert_eq!(
+        after_old_error["state"]["computerObservation"]["frameId"],
+        fresh_frame_id
+    );
+
+    computer
+        .events
+        .send((
+            "computer.share.frame".to_owned(),
+            computer_share_frame_data(
+                "frame-mismatched-after-fresh-share",
+                json!({
+                    "active": true,
+                    "id": "share-mismatch",
+                    "windowId": "window-9",
+                    "sourceSequence": 1,
+                    "sequence": 1,
+                    "ackPaced": true
+                }),
+            ),
+        ))
+        .unwrap();
+    wait_for_server_message(
+        &computer.server_messages,
+        |message| {
+            message["type"] == "eventAck"
+                && message["shareId"] == "share-mismatch"
+                && message["sequence"] == 1
+        },
+        "mismatched-share frame acknowledgement",
+    )
+    .await;
+    let after_mismatch: Value = client
+        .get(format!("{base_url}/api/state"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        after_mismatch["state"]["computerObservation"]["frameId"],
+        fresh_frame_id
+    );
+
+    computer
+        .events
+        .send((
+            "computer.share.frame".to_owned(),
+            computer_share_frame_data(
+                "frame-fresh-accepted",
+                json!({
+                    "active": true,
+                    "id": "share-fresh-1",
+                    "windowId": "window-9",
+                    "sourceSequence": 2,
+                    "sequence": 2,
+                    "ackPaced": true
+                }),
+            ),
+        ))
+        .unwrap();
+    wait_for_computer_frame(&client, &base_url, &token, "frame-fresh-accepted").await;
+    wait_for_server_message(
+        &computer.server_messages,
+        |message| {
+            message["type"] == "eventAck"
+                && message["shareId"] == "share-fresh-1"
+                && message["sequence"] == 2
+        },
+        "approved fresh-share frame acknowledgement",
+    )
+    .await;
+
+    let stopped: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "computer.share.stop", "params": {} }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(stopped["result"]["active"], false);
+    assert!(stopped["state"]["computerObservation"].is_null());
+    computer
+        .events
+        .send((
+            "computer.share.frame".to_owned(),
+            computer_share_frame_data(
+                "frame-fresh-after-stop",
+                json!({
+                    "active": true,
+                    "id": "share-fresh-1",
+                    "windowId": "window-9",
+                    "sourceSequence": 3,
+                    "sequence": 3,
+                    "ackPaced": true
+                }),
+            ),
+        ))
+        .unwrap();
+    wait_for_server_message(
+        &computer.server_messages,
+        |message| {
+            message["type"] == "eventAck"
+                && message["shareId"] == "share-fresh-1"
+                && message["sequence"] == 3
+        },
+        "stopped-share late frame acknowledgement",
+    )
+    .await;
+    let after_stop: Value = client
+        .get(format!("{base_url}/api/state"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(after_stop["state"]["computer"]["share"]["active"], false);
+    assert!(after_stop["state"]["computerObservation"].is_null());
+
     // A replacement helper publishes fresh authority after the canceled
     // call's owner was captured. The old call and its late state transitions
     // must never clear this different helper session.
@@ -3303,10 +3762,10 @@ async fn canceling_a_computer_mutation_clears_only_its_helper_session_authority(
                 "frame-replacement-1",
                 json!({
                     "active": true,
-                    "shareId": "share-replacement",
+                    "id": "share-replacement",
                     "windowId": "window-9",
                     "sourceSequence": 1,
-                    "transportSequence": 1
+                    "sequence": 1
                 }),
             ),
         ))
@@ -3355,10 +3814,10 @@ async fn canceling_a_computer_command_queued_on_the_action_lock_never_dispatches
                 "frame-queued-1",
                 json!({
                     "active": true,
-                    "shareId": "share-queued",
+                    "id": "share-queued",
                     "windowId": "window-9",
                     "sourceSequence": 1,
-                    "transportSequence": 1
+                    "sequence": 1
                 }),
             ),
         ))

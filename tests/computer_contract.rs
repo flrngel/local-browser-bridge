@@ -172,6 +172,22 @@ fn native_text_delivery_is_bounded_paced_and_cancellable() {
 }
 
 #[test]
+fn asynchronous_share_failures_are_bound_to_the_producing_epoch() {
+    let helper = fs::read_to_string("src/bin/local-computer-helper.rs").unwrap();
+    let controller = fs::read_to_string("src/computer.rs").unwrap();
+    let server = fs::read_to_string("src/server.rs").unwrap();
+    let protocol = fs::read_to_string("docs/PROTOCOL.md").unwrap();
+
+    assert!(controller.contains("pub fn active_share_id(&self) -> Option<&str>"));
+    assert!(helper.contains("let producing_share_id = controller.active_share_id()"));
+    assert!(helper.contains("\"shareId\": producing_share_id"));
+    assert!(helper.contains("\"shareId\": expired_share.share_id"));
+    assert!(server.contains("authorize_computer_share_error"));
+    assert!(server.contains("COMPUTER_SHARE_SESSION_EXHAUSTED"));
+    assert!(protocol.contains("An unbound or old-share error is ignored"));
+}
+
+#[test]
 fn background_invariant_failures_use_stage_bound_closed_vocabulary() {
     let controller = fs::read_to_string("src/computer.rs").unwrap();
     let macos = fs::read_to_string("src/computer/platform_macos.rs").unwrap();

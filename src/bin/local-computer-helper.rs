@@ -828,7 +828,7 @@ async fn run_authenticated_session(
                 terminate_worker(WATCHDOG_EXIT_CODE);
             }
             _ = wait_for_command_deadline(share_pump_deadline), if share_pump_deadline.is_some() => {
-                active_share_pump
+                let expired_share = active_share_pump
                     .take()
                     .expect("share watchdog is armed only for an active pump");
                 authority.cancel_all();
@@ -844,7 +844,8 @@ async fn run_authenticated_session(
                         "message": format!(
                             "The disposable computer worker exceeded its {} second live-share pump deadline and will restart",
                             COMMAND_WATCHDOG_TIMEOUT.as_secs()
-                        )
+                        ),
+                        "shareId": expired_share.share_id,
                     }
                 });
                 bind_event_envelope(
@@ -1141,6 +1142,7 @@ struct CommandCompletion {
 
 struct ActiveSharePump {
     deadline: Option<tokio::time::Instant>,
+    share_id: Option<String>,
 }
 
 struct SharePumpCompletion {
@@ -1311,10 +1313,15 @@ fn collect_share_emissions(
     controller: &mut ComputerController,
     pending_share_acks: &mut VecDeque<ShareFrameAck>,
 ) -> Vec<(&'static str, Value)> {
+    let producing_share_id = controller.active_share_id().map(str::to_owned);
     if let Some(error) = ComputerController::take_fatal_capture_stop_error() {
         return vec![(
             "computer.share.error",
-            json!({ "code": error.code, "message": error.message }),
+            json!({
+                "code": error.code,
+                "message": error.message,
+                "shareId": producing_share_id,
+            }),
         )];
     }
     while let Some(ack) = pending_share_acks.pop_front() {
@@ -1324,7 +1331,11 @@ fn collect_share_emissions(
     if let Some(error) = ComputerController::take_fatal_capture_stop_error() {
         return vec![(
             "computer.share.error",
-            json!({ "code": error.code, "message": error.message }),
+            json!({
+                "code": error.code,
+                "message": error.message,
+                "shareId": producing_share_id,
+            }),
         )];
     }
     let mut emissions = Vec::new();
@@ -1334,7 +1345,11 @@ fn collect_share_emissions(
     if let Some(error) = capture_error {
         emissions.push((
             "computer.share.error",
-            json!({ "code": error.code, "message": error.message }),
+            json!({
+                "code": error.code,
+                "message": error.message,
+                "shareId": producing_share_id,
+            }),
         ));
     }
     emissions
@@ -1350,8 +1365,13 @@ fn dispatch_share_pump(
     if active.is_some() || command_owns_controller {
         return;
     }
+    let share_id = controller
+        .lock()
+        .ok()
+        .and_then(|controller| controller.active_share_id().map(str::to_owned));
     *active = Some(ActiveSharePump {
         deadline: new_share_pump_deadline(),
+        share_id: share_id.clone(),
     });
     let controller = Arc::clone(controller);
     let completion_tx = completion_tx.clone();
@@ -1368,7 +1388,8 @@ fn dispatch_share_pump(
                 "computer.share.error",
                 json!({
                     "code": "COMPUTER_HELPER_FAILED",
-                    "message": "Computer controller lock was poisoned"
+                    "message": "Computer controller lock was poisoned",
+                    "shareId": share_id,
                 }),
             )],
         };

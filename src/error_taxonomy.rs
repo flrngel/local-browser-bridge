@@ -353,6 +353,7 @@ pub fn classify(legacy_code: &str) -> Taxonomy {
         | "COMPUTER_UNSUPPORTED_PLATFORM"
         | "COMPUTER_BACKGROUND_UNAVAILABLE"
         | "COMPUTER_SEMANTIC_UNAVAILABLE"
+        | "COMPUTER_SHARE_SESSION_EXHAUSTED"
         | "NO_SCREENSHOT"
         | "NO_COMPUTER_SCREENSHOT" => TaxonomyCode::Unavailable,
         "FRAME_ACTION_UNSUPPORTED"
@@ -523,6 +524,10 @@ pub(crate) const LEGACY_CODES: &[(&str, TaxonomyCode)] = &[
     ("COMPUTER_UNSUPPORTED_PLATFORM", TaxonomyCode::Unavailable),
     ("COMPUTER_BACKGROUND_UNAVAILABLE", TaxonomyCode::Unavailable),
     ("COMPUTER_SEMANTIC_UNAVAILABLE", TaxonomyCode::Unavailable),
+    (
+        "COMPUTER_SHARE_SESSION_EXHAUSTED",
+        TaxonomyCode::Unavailable,
+    ),
     ("NO_SCREENSHOT", TaxonomyCode::Unavailable),
     ("NO_COMPUTER_SCREENSHOT", TaxonomyCode::Unavailable),
     // Stale server-side observation prerequisites (coordinate contract).
