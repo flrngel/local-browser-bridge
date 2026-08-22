@@ -66,7 +66,7 @@ The archive supports both Apple silicon and Intel. It is not yet signed with an 
 
 ## 4. Start native desktop control only when wanted
 
-The helper is optional. Its console states what it can do and stays open while desktop control is available. Stop it with `Ctrl+C` or by closing its console. It shares the server's generated token file automatically, so there is no second secret to paste.
+The helper is optional. Its console states what it can do. Stop it with `Ctrl+C` or by closing its console. It shares the server's generated token file automatically, so there is no second secret to paste. The Windows launcher stays open and supervises disposable workers. The macOS helper stays open only for its current server connection and deliberately exits when that connection ends.
 
 ### Windows 11
 
@@ -78,6 +78,8 @@ From a second PowerShell window:
 
 Run it as the signed-in user, not as a Windows service and not from Session 0. Administrator rights are not required for ordinary desktop control. The server UI should show **Computer connected**.
 
+The executable you launch is a supervisor. If its hidden worker loses the server transport, the supervisor replaces that worker with backoff and reconnects when the server is available. Choosing **Stop share** stops only the active capture stream and leaves the worker running.
+
 ### macOS
 
 The helper is packaged as a stable application identity so Screen Recording and Accessibility are granted to the helper rather than to an arbitrary executable path. From a second Terminal window, first request/check both permissions:
@@ -86,11 +88,13 @@ The helper is packaged as a stable application identity so Screen Recording and 
 ./Local\ Computer\ Helper.app/Contents/MacOS/local-computer-helper --request-permissions
 ```
 
-If macOS opens System Settings, enable **Local Computer Helper** under **Privacy & Security → Screen & System Audio Recording** and **Privacy & Security → Accessibility**. Then start the long-running helper:
+If macOS opens System Settings, enable **Local Computer Helper** under **Privacy & Security → Screen & System Audio Recording** and **Privacy & Security → Accessibility**. Then start the helper for the current server session:
 
 ```bash
 ./Local\ Computer\ Helper.app/Contents/MacOS/local-computer-helper
 ```
+
+The macOS helper deliberately terminates after either an intentional server shutdown or an unexpected loss of its server transport. Relaunch it after the server is available again. Choosing **Stop share** is an in-process operation: it stops the current `SCStream` but does not exit the helper.
 
 The permission check reports `screenCaptureReady`, `inputReady`, and `semanticReady` separately. Screenshots can work while Accessibility is unavailable, but `inputReady` stays false because ordinary click, drag, scroll, key, and text routes may need the AX-backed exact-window focus lease. Semantic element refs are also omitted until Accessibility is granted. Pointer trajectory has a no-focus implementation, but readiness advertises the requirements of the complete input backend rather than a partial exception.
 
@@ -131,4 +135,4 @@ On macOS, focus-capable input may briefly release the saved user's Accessibility
 
 Exact-window capture and target-routed input still share the user's login session; they are not a VM, remote desktop, or separate input seat. Stop the helper whenever native application authority is not needed. Review the current [capability matrix](CAPABILITIES.md) and [limitations](LIMITATIONS.md) before using desktop control with consequential applications.
 
-Stopping the server immediately breaks both connections. You can also stop the helper, pause browser control in the extension popup, select **Clear saved token** there to disconnect and forget the extension credential, or remove the extension from `chrome://extensions`.
+Stopping the server immediately breaks both connector sessions. The macOS helper then exits and must be relaunched after the server returns. On Windows, the supervisor keeps replacing disconnected workers with backoff and reconnects one when the server returns. You can also stop the helper, pause browser control in the extension popup, select **Clear saved token** there to disconnect and forget the extension credential, or remove the extension from `chrome://extensions`.

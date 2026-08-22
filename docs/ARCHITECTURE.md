@@ -22,7 +22,9 @@ leased browser tab       exact application window
 
 ### Rust server
 
-The server embeds the control UI, REST API, SSE state feed, and connector WebSocket endpoints in one compiled executable. It owns command validation, serialization, connector version checks, sanitized state, and the latest browser and computer observations.
+The server embeds the control UI, REST API, SSE state feed, and connector WebSocket endpoints in one compiled executable. It owns command validation, serialization, connector version checks, sanitized state, and the latest browser and computer observations. Every primary command and automatic follow-up is dispatched to the exact connector UUID selected from published state before the action begins; replacing a connector never redirects old work to the new session.
+
+Each connector transport has a bounded 64-message data queue plus a separate latest-value shutdown signal. Replacement, exact-session cleanup, and graceful server shutdown use that out-of-band signal, so revocation cannot be lost when the ordinary command queue is saturated. Graceful shutdown sends revocation before waiting for upgraded WebSocket handlers to finish.
 
 The authenticated control URL uses a fragment-held master token that is exchanged for a port-specific dashboard session capability. State-changing dashboard requests also require same-origin and CSRF checks. The server rejects non-loopback Host headers and exposes no CORS permission.
 
@@ -46,7 +48,9 @@ The helper is a separate compiled process because operating-system capture and i
 
 The helper owns native window enumeration, exact-window observations, persistent live sharing, semantic accessibility state, target-routed input, and the computer synthetic cursor. Stopping it removes native application authority without stopping browser control.
 
-On Windows, the executable users start is also a supervisor. It launches the same version-matched executable in a hidden worker mode, places that worker in a kill-on-close Job Object, and restarts it after a transport loss, an unknown action outcome, an unconfirmed capture shutdown, or a hard operation deadline. This is process-failure containment inside the same interactive desktop, not a sandbox or separate input seat. macOS keeps the existing single helper process because its Accessibility and Screen Recording grants are attached to the packaged app identity.
+On Windows, the executable users start is also a supervisor. It launches the same version-matched executable in a hidden worker mode, places that worker in a kill-on-close Job Object, and restarts it after a transport loss, an unknown action outcome, an unconfirmed capture shutdown, or a hard operation deadline. This is process-failure containment inside the same interactive desktop, not a sandbox or separate input seat.
+
+macOS uses one disposable helper process under the packaged app identity to retain the correct Accessibility and Screen Recording grant identity. Intentional or unexpected server-transport loss terminates that process without synchronously waiting for `SCStream` teardown, because the framework callback being torn down may be the stalled component. There is no macOS supervisor, so the user must relaunch the helper after the server is available. An explicit `computer.share.stop` remains an ordinary in-process operation and does not terminate the helper.
 
 ## Browser state and authority
 
@@ -76,6 +80,8 @@ One-shot observation and live sharing are deliberately separate paths.
 
 - macOS uses ScreenCaptureKit `SCStream` with `SCContentFilter(desktopIndependentWindow:)`, bound to the exact `(PID, CGWindowID)`. Window geometry changes advance a frame-authority epoch and use `SCStream.updateConfiguration` on the same stream for new pixel dimensions; queued and in-flight pre-update frames cannot cross that epoch.
 - Windows uses a project-owned Windows Graphics Capture `CreateFreeThreaded` frame pool on a dedicated MTA owner thread bound to the exact `(PID, HWND)`.
+
+The server accepts native share authority only from the raw lifecycle result, never from sanitized presentation defaults. Start must report `active: true` with one nonempty bounded `id`, and its first exact-session observation must carry that same share ID before the start commits. Stop must explicitly report boolean `active: false`.
 
 Both sources disable capture of the system cursor. Native callbacks publish only the newest accepted frame into a one-slot handoff, so a slow consumer cannot create an unbounded native-frame backlog. The helper then composites its window-scoped synthetic pointer and emits PNG `computer.share.frame` events with the requested 1–10 FPS as a maximum cadence, not a guaranteed delivery rate. Delivered images are capped at 1,000,000 pixels.
 
@@ -119,9 +125,10 @@ PiP automation, virtual displays, VM orchestration, RDP loopback, and separate O
 
 - Chrome Cancel, the in-page Stop button, popup release, timeout, target loss, or connector loss revokes the browser lease.
 - `POST /api/v1/command/cancel` is bearer- and `callId`-scoped. It drops the exact action future and sends one original-session connector cancel; it preserves the browser lease when safe and reports the original call as outcome-unknown. For a started controlled-page command, the server independently latches exact-session recovery and removes observation/screenshot authority before returning 202, so a dropped connector cancel cannot reopen the old turn. The same exact-session fence runs before a disconnected HTTP handler releases the action lock and on post-dispatch connector outcome-unknown errors, including no-`callId` and legacy dashboard requests. The extension synchronously advances and persists its turn, clears its frame snapshot both immediately and at the final queue barrier, and serializes that persistence before the next command. Its global browser-action tail also waits for late Chrome reconciliation (including durable `tabs.new` provenance) and freshness finalization before a socket or popup-approved action can enter; explicit `page.observe` is the only normal controlled-page recovery.
-- `computer.share.stop`, helper shutdown, target closure, capture failure, or connector replacement stops the native share and clears frame authority.
+- A valid `computer.share.stop`, helper shutdown, target closure, capture failure, or connector replacement stops the native share and clears frame authority.
+- `computer.share.start` is guarded from immediately before exact-session dispatch through its first exact-ID observation. Cancellation or task drop anywhere in that interval revokes the originating transport out of band. A malformed/rejected start, failed first observation, or unproven stop first quarantines publication and transfers cleanup to a detached task that issues an exact-session stop; if raw `active: false` cannot be proven, only that originating transport is revoked. Caller cancellation cannot cancel this cleanup, and a replacement helper is never selected or cleared.
 - Canceling a computer mutation immediately clears only the owning helper session's published share/frame/pointer/screenshot authority; replacement-session state survives.
-- Stopping the server breaks both outbound connector sessions.
+- Stopping the server revokes both outbound connector sessions through the queue-independent shutdown signal. The macOS helper exits and must be relaunched; the Windows supervisor replaces its worker.
 - A replacement connector session must negotiate capabilities and obtain fresh observations; it cannot inherit stale authority.
 
 ## Release and update flow

@@ -31,6 +31,8 @@ The extension never replaces trusted debugger input with an untrusted page-gener
 
 Canceling one bearer API command stops only that command context and preserves the user's browser-control lease when it can be kept safely. Cancellation is cooperative and can race a dispatched side effect, so the original command is completed as outcome-unknown rather than reported as rolled back. A controlled-page command with an unknown outcome immediately clears the server's observation/screenshot and latches exact-session recovery; later page mutations are refused until an explicit `page.observe` succeeds, even if the extension never receives the cancel. This also covers a disconnected caller with or without `callId`, legacy dashboard actions, and connector timeouts. The extension advances and persists the lease turn before its next queued command, re-clears frame state at the queue barrier, and revokes the lease on persistence failure.
 
+Every primary browser command and follow-up tab list or page observation is bound to the exact extension-session UUID selected before dispatch. A replacement extension never receives work that belonged to the old session.
+
 ## Native application control
 
 The optional helper is a separate Rust process. It connects outbound to the loopback server and exposes a fixed computer-use command set; it does not expose shell, filesystem, clipboard, process-launch, download, or telemetry methods.
@@ -47,12 +49,15 @@ The optional helper is a separate Rust process. It connects outbound to the loop
 | Readiness signal | Current permission and complete focus/input snapshot must be readable | Non-Session-0 process plus readable input desktop, foreground/focus HWNDs, and cursor; provider acceptance is still per action |
 | Target-activation disclosure | Focus-capable input may use and restore a transient exact-target `AXFrontmost` lease; no `AXRaise`, OS-front-process switch, or Space switch | No explicit target-activation or foreground API; provider behavior is still checked before/after |
 | Foreground/focus invariant | WindowServer-front process/window and saved user AX state must match before/after; no zero-transient guarantee | Foreground and GUI-thread focus HWNDs must match before/after; no zero-transient guarantee |
+| Helper transport lifecycle | Intentional or unexpected server-transport loss exits the helper; relaunch is required. Explicit share stop stays in process | The launcher supervises disposable workers and restarts them after transport loss. Explicit share stop stays in process |
 | Automatic foreground fallback | Not included | Not included |
 | Physical pointer movement or global HID input | Not included | Not included |
 
 The live-share target is selected in the Local Browser Bridge control page. The helper starts the native stream programmatically for that exact process/window pair. It does **not** present `SCContentSharingPicker` on macOS or the Windows system capture picker.
 
 The operating system still owns capture lifecycle UI. macOS can show its current screen-capture indicator and stop affordance; Windows can show its normal WGC capture border or indicator. Their exact appearance varies by OS version and policy, so the project does not promise a particular banner or wording.
+
+Every primary computer command and follow-up observation is bound to the exact helper-session UUID selected before dispatch. Share start is accepted only from a raw `{ "active": true, "id": "..." }` result followed by a first observation carrying that exact ID; share stop requires raw `{ "active": false }`. Rejected lifecycle results are quarantined and cleaned up by an exact-session task that survives caller cancellation. If stop cannot be proven, the server revokes only the originating WebSocket through a queue-independent shutdown signal; a replacement helper is never used for that cleanup.
 
 ## Setup prerequisites
 

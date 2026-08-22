@@ -105,6 +105,8 @@ macOS, from the extracted archive:
 
 Choose a window in the control page before observing or sharing it. Live sharing uses ScreenCaptureKit on macOS and Windows Graphics Capture on Windows. Stop the helper when desktop authority is no longer needed.
 
+On macOS, relaunch the helper whenever the server stops or its connection is lost. Choosing **Stop share** only stops the current stream and leaves the helper open. On Windows, the helper's built-in supervisor restarts its disposable worker and reconnects after the server becomes available again.
+
 ## Use it with an agent
 
 Tell the agent to open the complete authenticated control-page URL printed by the server, connect to the intended tab or app window, observe before acting, verify after each action, and stop control when finished.
