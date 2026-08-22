@@ -818,7 +818,7 @@ async fn connect_controlled_computer(base_url: &str, token: &str) -> ControlledC
                             })
                         },
                     );
-                    computer_share_frame_data(&frame_id, share)
+                    computer_one_shot_frame_data(&frame_id, share)
                 }
                 method => panic!("unexpected controlled computer method: {method}"),
             };
@@ -1106,6 +1106,16 @@ fn computer_share_frame_data(frame_id: &str, share: Value) -> Value {
             "share": share
         }
     })
+}
+
+/// Mirrors the production helper: `computer.observe` captures a one-shot
+/// frame, while the nested share block independently reports controller
+/// status when a persistent stream is active.
+fn computer_one_shot_frame_data(frame_id: &str, share: Value) -> Value {
+    let mut data = computer_share_frame_data(frame_id, share);
+    data["frame"]["shareId"] = Value::Null;
+    data["frame"]["sourceSequence"] = Value::Null;
+    data
 }
 
 async fn wait_for_server_message(
@@ -3645,7 +3655,8 @@ async fn canceling_a_computer_mutation_clears_only_its_helper_session_authority(
     );
 
     // A successful explicit share start grants exactly the returned fresh ID.
-    // Its automatic observation is accepted only because it carries that ID.
+    // The production helper's automatic observation is a separate one-shot
+    // frame even though its nested share block reports the active lease.
     let started: Value = client
         .post(format!("{base_url}/api/v1/command"))
         .bearer_auth(&token)
@@ -3661,8 +3672,10 @@ async fn canceling_a_computer_mutation_clears_only_its_helper_session_authority(
         .unwrap();
     assert_eq!(started["result"]["id"], "share-fresh-1");
     assert_eq!(started["state"]["computer"]["share"]["id"], "share-fresh-1");
+    assert!(started["state"]["computerObservation"]["shareId"].is_null());
+    assert!(started["state"]["computerObservation"]["sourceSequence"].is_null());
     assert_eq!(
-        started["state"]["computerObservation"]["shareId"],
+        started["state"]["computerObservation"]["share"]["id"],
         "share-fresh-1"
     );
     let fresh_frame_id = started["state"]["computerObservation"]["frameId"]

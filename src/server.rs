@@ -809,6 +809,18 @@ enum ComputerObservationPublication {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ComputerObservationAuthority<'a> {
+    frame_share_id: Option<&'a str>,
+    active_share_id: Option<&'a str>,
+}
+
+impl ComputerObservationAuthority<'_> {
+    fn is_share_free(self) -> bool {
+        self.frame_share_id.is_none() && self.active_share_id.is_none()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ShareStartAuthorization {
     Allowed,
     Retired,
@@ -881,18 +893,24 @@ impl ComputerAuthorityGate {
 
     fn authorize_observation(
         &mut self,
-        share_id: Option<&str>,
+        authority: ComputerObservationAuthority<'_>,
         publication: ComputerObservationPublication,
     ) -> bool {
         match self.approved_share_id.as_deref() {
-            Some(approved) => self.recovered && share_id == Some(approved),
+            Some(approved) => {
+                self.recovered
+                    && authority.active_share_id == Some(approved)
+                    && authority
+                        .frame_share_id
+                        .is_none_or(|share_id| share_id == approved)
+            }
             None if publication == ComputerObservationPublication::ExplicitObserve
-                && share_id.is_none() =>
+                && authority.is_share_free() =>
             {
                 self.recovered = true;
                 true
             }
-            None => self.recovered && share_id.is_none(),
+            None => self.recovered && authority.is_share_free(),
         }
     }
 
@@ -986,9 +1004,12 @@ impl StateData {
     fn authorize_computer_observation(
         &mut self,
         session_id: &str,
-        share_id: Result<Option<&str>, ()>,
+        authority: Result<ComputerObservationAuthority<'_>, ()>,
         publication: ComputerObservationPublication,
     ) -> bool {
+        let Ok(authority) = authority else {
+            return false;
+        };
         let Some(gate) = self
             .computer_authority_gate
             .as_mut()
@@ -996,7 +1017,7 @@ impl StateData {
         else {
             return true;
         };
-        share_id.is_ok_and(|share_id| gate.authorize_observation(share_id, publication))
+        gate.authorize_observation(authority, publication)
     }
 
     fn allows_computer_share_frame(
@@ -1004,6 +1025,9 @@ impl StateData {
         session_id: &str,
         share_id: Result<Option<&str>, ()>,
     ) -> bool {
+        let Ok(share_id) = share_id else {
+            return false;
+        };
         let Some(gate) = self
             .computer_authority_gate
             .as_ref()
@@ -1011,7 +1035,7 @@ impl StateData {
         else {
             return true;
         };
-        share_id.is_ok_and(|share_id| gate.allows_share_frame(share_id))
+        gate.allows_share_frame(share_id)
     }
 }
 
@@ -3490,13 +3514,14 @@ fn share_frame_ack(data: &Value) -> Option<ShareFrameAck> {
     })
 }
 
-/// Returns the single share authority named consistently by an observation's
-/// top-level epoch and sanitized share status. A gated session treats any
-/// missing or conflicting identity as unauthorized; ungated legacy sessions
-/// keep their existing compatibility behavior.
-fn computer_observation_share_identity(
+/// Returns the streaming authority carried by an observation's top-level
+/// provenance tuple. A one-shot frame has neither field even when its nested
+/// `share` object reports the controller's separate active-share status; that
+/// status must never masquerade as frame provenance. A streamed frame must
+/// carry both fields and name the same exact epoch in its share status.
+fn computer_observation_authority(
     observation: &ComputerObservation,
-) -> Result<Option<&str>, ()> {
+) -> Result<ComputerObservationAuthority<'_>, ()> {
     let active = observation
         .share
         .get("active")
@@ -3507,12 +3532,26 @@ fn computer_observation_share_identity(
         .get("id")
         .and_then(Value::as_str)
         .filter(|share_id| !share_id.is_empty() && share_id.len() <= 100);
-    match (active, observation.share_id.as_deref(), status_id) {
-        (false, None, None) => Ok(None),
-        (true, Some(frame_id), Some(status_id)) if frame_id == status_id => Some(frame_id)
-            .filter(|share_id| !share_id.is_empty() && share_id.len() <= 100)
-            .map(Some)
-            .ok_or(()),
+    let active_share_id = match (active, status_id) {
+        (false, None) => None,
+        (true, Some(share_id)) => Some(share_id),
+        _ => return Err(()),
+    };
+    match (observation.share_id.as_deref(), observation.source_sequence) {
+        (None, None) => Ok(ComputerObservationAuthority {
+            frame_share_id: None,
+            active_share_id,
+        }),
+        (Some(frame_id), Some(_))
+            if active_share_id == Some(frame_id)
+                && !frame_id.is_empty()
+                && frame_id.len() <= 100 =>
+        {
+            Ok(ComputerObservationAuthority {
+                frame_share_id: Some(frame_id),
+                active_share_id,
+            })
+        }
         _ => Err(()),
     }
 }
@@ -3522,7 +3561,9 @@ fn computer_share_frame_identity<'a>(
     observation: &'a ComputerObservation,
 ) -> Result<Option<&'a str>, ()> {
     let ack = ack.ok_or(())?;
-    let observation_id = computer_observation_share_identity(observation)?.ok_or(())?;
+    let observation_id = computer_observation_authority(observation)?
+        .frame_share_id
+        .ok_or(())?;
     (ack.share_id == observation_id)
         .then_some(Some(observation_id))
         .ok_or(())
@@ -4688,7 +4729,7 @@ impl AppState {
             let session_id = connection_id.to_string();
             if !data.authorize_computer_observation(
                 &session_id,
-                computer_observation_share_identity(&observation),
+                computer_observation_authority(&observation),
                 publication,
             ) {
                 return Err(invalid_gated_share_result(
@@ -9367,6 +9408,74 @@ mod tests {
         assert_eq!(observation.elements[0].reference, "a1");
         assert!(observation.pointer.visible);
         assert_eq!(observation.pointer.sequence, 3);
+        assert_eq!(
+            computer_observation_authority(&observation),
+            Ok(ComputerObservationAuthority {
+                frame_share_id: None,
+                active_share_id: None,
+            })
+        );
+
+        let mut one_shot_with_active_share = frame.clone();
+        one_shot_with_active_share["share"] = json!({
+            "active": true,
+            "id": "share-1",
+            "windowId": "47782",
+            "sourceSequence": 7,
+            "sequence": 7
+        });
+        let one_shot_with_active_share =
+            sanitize_computer_observation(Some(&one_shot_with_active_share)).unwrap();
+        assert_eq!(
+            computer_observation_authority(&one_shot_with_active_share),
+            Ok(ComputerObservationAuthority {
+                frame_share_id: None,
+                active_share_id: Some("share-1"),
+            }),
+            "nested controller status must not turn a one-shot frame into stream authority"
+        );
+
+        let mut partial_share_id = frame.clone();
+        partial_share_id["shareId"] = json!("share-1");
+        partial_share_id["share"] = one_shot_with_active_share.share.clone();
+        let partial_share_id = sanitize_computer_observation(Some(&partial_share_id)).unwrap();
+        assert!(
+            computer_observation_authority(&partial_share_id).is_err(),
+            "a share ID without a source sequence is incomplete provenance"
+        );
+
+        let mut partial_source_sequence = frame.clone();
+        partial_source_sequence["sourceSequence"] = json!(7);
+        partial_source_sequence["share"] = one_shot_with_active_share.share.clone();
+        let partial_source_sequence =
+            sanitize_computer_observation(Some(&partial_source_sequence)).unwrap();
+        assert!(
+            computer_observation_authority(&partial_source_sequence).is_err(),
+            "a source sequence without a share ID is incomplete provenance"
+        );
+
+        let mut mismatched_stream = frame.clone();
+        mismatched_stream["shareId"] = json!("share-wrong");
+        mismatched_stream["sourceSequence"] = json!(7);
+        mismatched_stream["share"] = one_shot_with_active_share.share.clone();
+        let mismatched_stream = sanitize_computer_observation(Some(&mismatched_stream)).unwrap();
+        assert!(
+            computer_observation_authority(&mismatched_stream).is_err(),
+            "stream provenance must match the exact nested share epoch"
+        );
+
+        let mut exact_stream = frame.clone();
+        exact_stream["shareId"] = json!("share-1");
+        exact_stream["sourceSequence"] = json!(7);
+        exact_stream["share"] = one_shot_with_active_share.share.clone();
+        let exact_stream = sanitize_computer_observation(Some(&exact_stream)).unwrap();
+        assert_eq!(
+            computer_observation_authority(&exact_stream),
+            Ok(ComputerObservationAuthority {
+                frame_share_id: Some("share-1"),
+                active_share_id: Some("share-1"),
+            })
+        );
 
         let mut invalid_truncation = frame.clone();
         invalid_truncation["semanticTruncationReason"] = json!("future_budget");
@@ -9478,11 +9587,17 @@ mod tests {
 
     #[test]
     fn revoked_computer_authority_requires_explicit_recovery_and_exact_share_epochs() {
+        let share_free = ComputerObservationAuthority {
+            frame_share_id: None,
+            active_share_id: None,
+        };
         let mut gate = ComputerAuthorityGate::new("session-old", Some("share-old"));
         assert!(!gate.allows_share_frame(Some("share-old")));
-        assert!(!gate.authorize_observation(None, ComputerObservationPublication::FollowUp));
-        assert!(gate.authorize_observation(None, ComputerObservationPublication::ExplicitObserve));
-        assert!(gate.authorize_observation(None, ComputerObservationPublication::FollowUp));
+        assert!(!gate.authorize_observation(share_free, ComputerObservationPublication::FollowUp));
+        assert!(
+            gate.authorize_observation(share_free, ComputerObservationPublication::ExplicitObserve)
+        );
+        assert!(gate.authorize_observation(share_free, ComputerObservationPublication::FollowUp));
         assert!(
             !gate.allows_share_frame(Some("share-old")),
             "one-shot recovery must not reopen an old streaming epoch"
@@ -9496,19 +9611,39 @@ mod tests {
             gate.authorize_share_start("share-fresh"),
             ShareStartAuthorization::Allowed
         );
+        assert!(!gate.authorize_observation(
+            ComputerObservationAuthority {
+                frame_share_id: None,
+                active_share_id: Some("share-old"),
+            },
+            ComputerObservationPublication::ShareStart
+        ));
+        assert!(gate.authorize_observation(
+            ComputerObservationAuthority {
+                frame_share_id: None,
+                active_share_id: Some("share-fresh"),
+            },
+            ComputerObservationPublication::ShareStart
+        ));
         assert!(gate.allows_share_frame(Some("share-fresh")));
         assert!(!gate.allows_share_frame(Some("share-mismatch")));
         assert!(!gate.authorize_observation(
-            Some("share-old"),
+            ComputerObservationAuthority {
+                frame_share_id: Some("share-old"),
+                active_share_id: Some("share-old"),
+            },
             ComputerObservationPublication::ExplicitObserve
         ));
         assert!(gate.authorize_observation(
-            Some("share-fresh"),
+            ComputerObservationAuthority {
+                frame_share_id: Some("share-fresh"),
+                active_share_id: Some("share-fresh"),
+            },
             ComputerObservationPublication::ShareStart
         ));
         assert!(gate.authorize_share_error("share-fresh"));
         assert!(!gate.allows_share_frame(Some("share-fresh")));
-        assert!(!gate.authorize_observation(None, ComputerObservationPublication::FollowUp));
+        assert!(!gate.authorize_observation(share_free, ComputerObservationPublication::FollowUp));
         assert_eq!(
             gate.authorize_share_start("share-fresh"),
             ShareStartAuthorization::Retired
