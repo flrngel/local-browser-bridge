@@ -30,6 +30,18 @@ helper process.
   exact-target resize. Resize evidence waits past the first geometry transition
   for a later acknowledged source frame whose captured-image aspect ratio and
   saved PNG dimensions match the resized exact window.
+- After that settled resize frame and screenshot, the runner sends another real
+  `computer.click` through the product API. The result must bind to the exact
+  resized frame, original share ID, and post-resize source sequence. Only the
+  fixture click counter may advance; its semantic, focus, and resize counters
+  plus independent foreground-process, front-window, hardware-cursor, and
+  Space identities must stay unchanged.
+- The fixture then makes its own background text field first responder without
+  becoming the foreground app. A short, bounded native `computer.typeText`
+  action must append to that exact field, report `Unverifiable`, and satisfy
+  both product and independent non-interruption invariants. Exact fixture
+  read-back supplies separate evidence, after which confirmed Accessibility
+  `setValue` restores the deterministic value.
 - Capture metadata reports `macos-screencapturekit-scstream`,
   `nativeStream: true`, the no-suppression system-indicator policy, and
   `programmatic-exact-window` selection.
@@ -42,8 +54,19 @@ helper process.
   keep pace.
 - Foreground process, front window, hardware cursor, and active Space remain
   unchanged, both in each product action record and in an independent probe.
-- Share stop revokes frame authority, helper exit clears its server session,
-  and server exit closes the selected loopback listener.
+- A real two-second `computer.move` starts under one fresh `callId`. An exact
+  duplicate must report HTTP 409 `CALL_IN_PROGRESS`; authenticated
+  `/api/v1/command/cancel` must return 202 for that ID; and the original must
+  settle as HTTP 504 `COMMAND_OUTCOME_UNKNOWN` with the non-retriable
+  `outcome_unknown`/`reobserve` contract. A second cancel is refused,
+  an exact retry replays the cached 504 without redispatch, and changed params
+  under the same ID are refused as `CALL_ID_REUSED`.
+- Explicit cancellation revokes only the owning helper session's share,
+  observation, screenshot, pointer, and frame authority. The old screenshot
+  URL returns 404, an idempotent share stop reports `not-active`, and a click
+  carrying the old frame is refused as `COMPUTER_STALE_FRAME` without changing
+  fixture counters or recreating a surface. Helper exit then clears its server
+  session, and server exit closes the selected loopback listener.
 
 `systemIndicator: true` is policy evidence that the helper did not suppress
 ScreenCaptureKit's indication. An exact-window screenshot cannot prove that a
@@ -64,6 +87,12 @@ Every image is fetched from `/api/computer/screenshot` only after the public
 observation is bound to the fixture's exact PID, native window ID, and title.
 The machine-readable screenshot manifest records each PNG's dimensions,
 SHA-256, frame ID, source sequence, and transport sequence.
+
+Screenshot 06 is intentionally captured before the post-resize click, native
+text proof, and cancellation flow. It is the visual proof that the same share
+settled on `last=resize size=820x520`; the later action, read-back, replay, and
+fail-closed assertions are stronger machine-state/API contracts and do not
+require a seventh screenshot.
 
 ## Run
 
@@ -94,6 +123,13 @@ objects immediately after each spawn, refuses to persist it, and removes the
 entire scratch directory in cleanup. A failure still writes a sanitized
 machine-readable negative result instead of silently discarding partial
 evidence.
+
+The generated native-text suffix and move coordinates are never written to
+results or logs; evidence retains only bounded counts, booleans, and the fresh
+non-secret `callId` needed to audit replay identity. The bearer token is also
+excluded. The cancellation stage uses the product's normal authenticated
+endpoint and a naturally long real action—never a shortened server deadline,
+test-only delay, fault hook, or connector mock.
 
 After the run, inspect every screenshot, confirm `assertions.failed` is zero,
 and compare the recorded archive SHA-256 with the published release asset

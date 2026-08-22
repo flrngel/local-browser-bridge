@@ -17,6 +17,10 @@ const SELECTION_MODE = "programmatic-exact-window";
 const WAIT_STEP_MS = 100;
 const SHARE_FPS = 10;
 const LONG_PIXEL_ACTION_MS = 900;
+const POST_RESIZE_PIXEL_ACTION_MS = 120;
+const CANCELED_MOVE_DURATION_MS = 2_000;
+const CANCEL_AFTER_START_MS = 250;
+const NATIVE_TEXT_SUFFIX = "-native";
 const GENERATED_OUTPUT_NAMES = [
   "helper-results.json",
   "helper-rig.log",
@@ -198,7 +202,7 @@ function allInvariantsHeld(invariants) {
   ].every((value) => value === true);
 }
 
-const FIXTURE_ACTIONS = new Set(["ready", "set-value", "semantic", "click", "resize"]);
+const FIXTURE_ACTIONS = new Set(["ready", "set-value", "semantic", "click", "resize", "focus-field"]);
 
 function boundedCounter(value) {
   return Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -210,6 +214,7 @@ function fixtureCounterSnapshot(snapshot) {
     semanticPresses: boundedCounter(snapshot?.semanticPresses),
     animationTick: boundedCounter(snapshot?.animationTick),
     resizeCount: boundedCounter(snapshot?.resizeCount),
+    focusCount: boundedCounter(snapshot?.focusCount),
     appliedControlSequence: boundedCounter(snapshot?.appliedControlSequence),
     semanticValueMatchesExpected: snapshot?.semanticValue === SEMANTIC_VALUE,
     lastAction: FIXTURE_ACTIONS.has(snapshot?.lastAction) ? snapshot.lastAction : "unrecognized",
@@ -297,22 +302,40 @@ async function healthReachable() {
   }
 }
 
-async function command(method, params = {}) {
+async function commandResponse(method, params = {}, callId = randomUUID()) {
   const response = await fetch(`http://127.0.0.1:${port}/api/v1/command`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${bearerToken}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ callId: randomUUID(), method, params }),
+    body: JSON.stringify({ callId, method, params }),
   });
   const body = await response.json();
-  if (!response.ok || !body.ok) {
+  return { status: response.status, ok: response.ok && body.ok === true, body };
+}
+
+async function command(method, params = {}) {
+  const response = await commandResponse(method, params);
+  const { body } = response;
+  if (!response.ok) {
     const errorCode = body.error?.code || "unknown";
     const errorMessage = body.error?.message || "";
     throw new Error(`${method} returned HTTP ${response.status}: ${errorCode} ${errorMessage}`);
   }
   return body;
+}
+
+async function cancelCommandResponse(callId) {
+  const response = await fetch(`http://127.0.0.1:${port}/api/v1/command/cancel`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${bearerToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ callId }),
+  });
+  return { status: response.status, ok: response.ok, body: await response.json() };
 }
 
 async function fixtureState(path) {
@@ -366,6 +389,8 @@ function actionSummary(body) {
     frameId: result.frameId,
     shareId: result.shareId ?? null,
     sourceSequence: result.sourceSequence ?? null,
+    characters: result.characters ?? null,
+    utf16CodeUnits: result.utf16CodeUnits ?? null,
     invariants: result.invariants,
     evidence: result.evidence,
     backendEffect: result.backendEffect,
@@ -839,6 +864,199 @@ async function main() {
   );
   current = await waitForNextShareState(current.sample.sequence, "share-post-resize-cadence");
 
+  const beforePostResizeAction = current.sample;
+  observation = current.snapshot.computerObservation;
+  const postResizeClickX = Math.round(observation.imageWidth / 2);
+  const postResizeClickY = Math.max(0, observation.imageHeight - 80);
+  const postResizeFixtureBefore = await fixtureState(fixtureStatePath);
+  const postResizeSystemBefore = processProbe(systemProbeBinary);
+  failureProbeBaseline = {
+    stage: "postResizePixelAction",
+    system: postResizeSystemBefore,
+    fixture: postResizeFixtureBefore,
+  };
+  const postResizeClickBody = await command("computer.click", {
+    frameId: observation.frameId,
+    x: postResizeClickX,
+    y: postResizeClickY,
+    button: "left",
+    clickCount: 1,
+    durationMs: POST_RESIZE_PIXEL_ACTION_MS,
+  });
+  const postResizeClick = actionSummary(postResizeClickBody);
+  const postResizeFixtureAfter = await waitFor("post-resize fixture pixel click", async () => {
+    const snapshot = await fixtureState(fixtureStatePath);
+    return snapshot.clicks === postResizeFixtureBefore.clicks + 1 && snapshot;
+  });
+  requireCheck("post-resize pixel click target-side proof",
+    postResizeFixtureAfter.lastAction === "click" &&
+      postResizeFixtureAfter.clicks === 2 &&
+      postResizeFixtureAfter.semanticPresses === postResizeFixtureBefore.semanticPresses &&
+      postResizeFixtureAfter.semanticValue === postResizeFixtureBefore.semanticValue &&
+      postResizeFixtureAfter.resizeCount === postResizeFixtureBefore.resizeCount &&
+      postResizeFixtureAfter.focusCount === postResizeFixtureBefore.focusCount &&
+      postResizeFixtureAfter.appliedControlSequence === postResizeFixtureBefore.appliedControlSequence &&
+      postResizeFixtureAfter.contentWidth === 820 && postResizeFixtureAfter.contentHeight === 520,
+    "only the exact fixture click counter advanced after resize",
+  );
+  requireCheck("post-resize action bound to settled persistent share",
+    postResizeClick.frameId === observation.frameId &&
+      postResizeClick.shareId === firstShareId &&
+      postResizeClick.sourceSequence === beforePostResizeAction.sourceSequence,
+    `frame=${postResizeClick.frameId === observation.frameId}, share=${postResizeClick.shareId === firstShareId}, source=${postResizeClick.sourceSequence}`,
+  );
+  requireCheck("post-resize pixel click conservatively classified",
+    postResizeClick.effect === "Unverifiable",
+    postResizeClick.effect,
+  );
+  requireActionInvariants("post-resize pixel click", postResizeClick);
+  const postResizeActionInvariants = systemInvariants(
+    postResizeSystemBefore,
+    processProbe(systemProbeBinary),
+  );
+  requireCheck("post-resize independent foreground/focus/cursor/Space invariants",
+    allInvariantsHeld(postResizeActionInvariants),
+    JSON.stringify(postResizeActionInvariants),
+  );
+  current = await waitForNextShareState(
+    beforePostResizeAction.sequence,
+    "share-after-post-resize-action",
+    (sample) =>
+      sample.shareId === firstShareId &&
+      sample.sourceSequence > beforePostResizeAction.sourceSequence &&
+      sample.windowWidth === beforePostResizeAction.windowWidth &&
+      sample.windowHeight === beforePostResizeAction.windowHeight &&
+      capturedFrameMatchesWindowGeometry(sample),
+  );
+  const afterPostResizeAction = current.sample;
+  requireCheck("post-resize action retained resized exact-window stream",
+    afterPostResizeAction.windowWidth === resizeTransition.sample.windowWidth &&
+      afterPostResizeAction.windowHeight === resizeTransition.sample.windowHeight &&
+      capturedFrameMatchesWindowGeometry(afterPostResizeAction),
+    `window=${afterPostResizeAction.windowWidth}x${afterPostResizeAction.windowHeight}, image=${afterPostResizeAction.imageWidth}x${afterPostResizeAction.imageHeight}`,
+  );
+
+  const nativeTextSetupSystemBefore = processProbe(systemProbeBinary);
+  const nativeTextSetupFixtureBefore = await fixtureState(fixtureStatePath);
+  failureProbeBaseline = {
+    stage: "nativeTextFieldFocus",
+    system: nativeTextSetupSystemBefore,
+    fixture: nativeTextSetupFixtureBefore,
+  };
+  await writeFile(fixtureControlPath, `${JSON.stringify({
+    sequence: 2,
+    action: "focus-semantic-field",
+  })}\n`);
+  const nativeTextFocusedState = await waitFor("fixture semantic field focus", async () => {
+    const snapshot = await fixtureState(fixtureStatePath);
+    return snapshot.appliedControlSequence === 2 && snapshot.focusCount === 1 && snapshot;
+  });
+  requireCheck("background fixture field prepared without mutation",
+    nativeTextFocusedState.lastAction === "focus-field" &&
+      nativeTextSetupFixtureBefore.focusCount === 0 &&
+      nativeTextSetupFixtureBefore.appliedControlSequence === 1 &&
+      nativeTextFocusedState.focusCount === nativeTextSetupFixtureBefore.focusCount + 1 &&
+      nativeTextFocusedState.clicks === nativeTextSetupFixtureBefore.clicks &&
+      nativeTextFocusedState.semanticPresses === nativeTextSetupFixtureBefore.semanticPresses &&
+      nativeTextFocusedState.semanticValue === SEMANTIC_VALUE &&
+      nativeTextFocusedState.semanticValue === nativeTextSetupFixtureBefore.semanticValue &&
+      nativeTextFocusedState.resizeCount === nativeTextSetupFixtureBefore.resizeCount &&
+      nativeTextFocusedState.contentWidth === nativeTextSetupFixtureBefore.contentWidth &&
+      nativeTextFocusedState.contentHeight === nativeTextSetupFixtureBefore.contentHeight,
+    "only the fixture's internal first-responder counter advanced",
+  );
+  const nativeTextSetupInvariants = systemInvariants(
+    nativeTextSetupSystemBefore,
+    processProbe(systemProbeBinary),
+  );
+  requireCheck("field preparation foreground/focus/cursor/Space invariants",
+    allInvariantsHeld(nativeTextSetupInvariants),
+    JSON.stringify(nativeTextSetupInvariants),
+  );
+
+  current = await waitForNextShareState(
+    afterPostResizeAction.sequence,
+    "share-after-native-text-focus",
+    (sample) => sample.shareId === firstShareId && capturedFrameMatchesWindowGeometry(sample),
+  );
+  observation = current.snapshot.computerObservation;
+  const nativeTextSystemBefore = processProbe(systemProbeBinary);
+  failureProbeBaseline = {
+    stage: "nativeTextDelivery",
+    system: nativeTextSystemBefore,
+    fixture: nativeTextFocusedState,
+  };
+  const nativeTextBody = await command("computer.typeText", {
+    frameId: observation.frameId,
+    text: NATIVE_TEXT_SUFFIX,
+  });
+  const nativeText = actionSummary(nativeTextBody);
+  const nativeTextFixtureState = await waitFor("fixture native text read-back", async () => {
+    const snapshot = await fixtureState(fixtureStatePath);
+    return snapshot.semanticValue === `${SEMANTIC_VALUE}${NATIVE_TEXT_SUFFIX}` && snapshot;
+  });
+  requireCheck("native typeText exact fixture read-back",
+    nativeTextFixtureState.lastAction === "set-value" &&
+      nativeTextFixtureState.clicks === nativeTextFocusedState.clicks &&
+      nativeTextFixtureState.semanticPresses === nativeTextFocusedState.semanticPresses &&
+      nativeTextFixtureState.resizeCount === nativeTextFocusedState.resizeCount &&
+      nativeTextFixtureState.focusCount === nativeTextFocusedState.focusCount,
+    `appended ${NATIVE_TEXT_SUFFIX.length} ASCII characters to the prepared exact-window field`,
+  );
+  requireCheck("native typeText bounded product result",
+    nativeText.effect === "Unverifiable" &&
+      nativeText.deliveryMode === "exact-window-background" &&
+      nativeText.frameId === observation.frameId &&
+      nativeText.characters === NATIVE_TEXT_SUFFIX.length &&
+      nativeText.utf16CodeUnits === NATIVE_TEXT_SUFFIX.length,
+    `${nativeText.effect}/${nativeText.deliveryMode}, characters=${nativeText.characters}, utf16=${nativeText.utf16CodeUnits}`,
+  );
+  requireActionInvariants("native typeText", nativeText);
+  const nativeTextInvariants = systemInvariants(
+    nativeTextSystemBefore,
+    processProbe(systemProbeBinary),
+  );
+  requireCheck("native typeText independent foreground/focus/cursor/Space invariants",
+    allInvariantsHeld(nativeTextInvariants),
+    JSON.stringify(nativeTextInvariants),
+  );
+
+  const restoreObserved = await freshObserve(targetWindow.id);
+  const restoreObservation = restoreObserved.state.computerObservation;
+  const restoreField = restoreObservation.elements.find(
+    (element) => element.name === "Semantic value" && element.actions.includes("setValue"),
+  );
+  requireCheck("native text restore element discovered", Boolean(restoreField), restoreField?.role || "missing");
+  const nativeTextRestoreBody = await command("computer.setValue", {
+    frameId: restoreObservation.frameId,
+    elementRef: restoreField.ref,
+    value: SEMANTIC_VALUE,
+  });
+  const nativeTextRestore = actionSummary(nativeTextRestoreBody);
+  requireCheck("native text fixture value restored",
+    nativeTextRestore.effect === "Confirmed" &&
+      nativeTextRestore.backendEffect?.postcondition === "value-confirmed",
+    `${nativeTextRestore.effect}/${nativeTextRestore.backendEffect?.postcondition}`,
+  );
+  requireActionInvariants("native text restore", nativeTextRestore);
+  const nativeTextRestoredFixtureState = await waitFor("fixture semantic value restore", async () => {
+    const snapshot = await fixtureState(fixtureStatePath);
+    return snapshot.semanticValue === SEMANTIC_VALUE && snapshot;
+  });
+  requireCheck("native text restore exact fixture state",
+    nativeTextRestoredFixtureState.lastAction === "set-value" &&
+      nativeTextRestoredFixtureState.clicks === nativeTextFixtureState.clicks &&
+      nativeTextRestoredFixtureState.semanticPresses === nativeTextFixtureState.semanticPresses &&
+      nativeTextRestoredFixtureState.resizeCount === nativeTextFixtureState.resizeCount &&
+      nativeTextRestoredFixtureState.focusCount === nativeTextFixtureState.focusCount,
+    "only the deterministic semantic value was restored",
+  );
+  current = await waitForNextShareState(
+    current.sample.sequence,
+    "share-after-native-text-restore",
+    (sample) => sample.shareId === firstShareId && capturedFrameMatchesWindowGeometry(sample),
+  );
+
   validateShareSamples(shareSamples);
   const shareStatusBody = await command("computer.share.status");
   const shareStatus = shareStatusBody.result;
@@ -854,26 +1072,213 @@ async function main() {
     `source-drop=${shareStatus.sourceDroppedFrames}, transport-drop=${shareStatus.transportDroppedFrames}`,
   );
 
-  const shareStopBody = await command("computer.share.stop");
-  const shareStop = shareStopBody.result;
-  requireCheck("live share stopped",
-    shareStop.active === false && shareStop.stopped === true &&
-      shareStop.id === firstShareId && shareStop.reason === "requested",
-    shareStop.reason,
+  observation = current.snapshot.computerObservation;
+  const canceledFrameId = observation.frameId;
+  const canceledScreenshotUrl = observation.screenshotUrl;
+  requireCheck("cancellation starts from a current resized share frame",
+    observation.share?.active === true && observation.share?.id === firstShareId &&
+      observation.sourceSequence === current.sample.sourceSequence &&
+      typeof canceledScreenshotUrl === "string" && canceledScreenshotUrl.startsWith("/api/computer/screenshot?"),
+    `share=${observation.share?.id === firstShareId}, source=${observation.sourceSequence}, screenshot-bound=${typeof canceledScreenshotUrl === "string"}`,
+  );
+  const cancellationCallId = randomUUID();
+  const cancellationMoveX = Math.max(0, Math.round(observation.imageWidth / 4));
+  const cancellationMoveY = Math.max(0, Math.round(observation.imageHeight / 3));
+  const cancellationParams = {
+    frameId: canceledFrameId,
+    x: cancellationMoveX,
+    y: cancellationMoveY,
+    durationMs: CANCELED_MOVE_DURATION_MS,
+  };
+  const cancellationFixtureBefore = await fixtureState(fixtureStatePath);
+  const cancellationSystemBefore = processProbe(systemProbeBinary);
+  failureProbeBaseline = {
+    stage: "explicitCommandCancellation",
+    system: cancellationSystemBefore,
+    fixture: cancellationFixtureBefore,
+  };
+
+  const cancellationStartedAt = Date.now();
+  const originalCanceledRequest = commandResponse(
+    "computer.move",
+    cancellationParams,
+    cancellationCallId,
+  );
+  await delay(CANCEL_AFTER_START_MS);
+  const inProgressDuplicate = await commandResponse(
+    "computer.move",
+    cancellationParams,
+    cancellationCallId,
+  );
+  requireCheck("exact duplicate observes one in-flight product action",
+    inProgressDuplicate.status === 409 && inProgressDuplicate.ok === false &&
+      inProgressDuplicate.body.error?.code === "CALL_IN_PROGRESS" &&
+      inProgressDuplicate.body.callId === cancellationCallId &&
+      inProgressDuplicate.body.replayed === undefined,
+    `HTTP ${inProgressDuplicate.status}, ${inProgressDuplicate.body.error?.code}`,
+  );
+
+  const cancelAccepted = await cancelCommandResponse(cancellationCallId);
+  requireCheck("authenticated exact-call cancellation accepted",
+    cancelAccepted.status === 202 && cancelAccepted.ok === true &&
+      cancelAccepted.body.ok === true &&
+      cancelAccepted.body.callId === cancellationCallId &&
+      cancelAccepted.body.cancellationRequested === true,
+    `HTTP ${cancelAccepted.status}, requested=${cancelAccepted.body.cancellationRequested}`,
+  );
+  const canceledOriginal = await originalCanceledRequest;
+  const cancellationElapsedMs = Date.now() - cancellationStartedAt;
+  requireCheck("canceled original reports conservative outcome unknown",
+    canceledOriginal.status === 504 && canceledOriginal.ok === false &&
+      canceledOriginal.body.error?.code === "COMMAND_OUTCOME_UNKNOWN" &&
+      canceledOriginal.body.taxonomy?.code === "outcome_unknown" &&
+      canceledOriginal.body.taxonomy?.retriable === false &&
+      canceledOriginal.body.taxonomy?.recoveryHint === "reobserve" &&
+      canceledOriginal.body.callId === cancellationCallId &&
+      canceledOriginal.body.replayed === undefined &&
+      cancellationElapsedMs >= CANCEL_AFTER_START_MS,
+    `HTTP ${canceledOriginal.status}, ${canceledOriginal.body.error?.code}/${canceledOriginal.body.taxonomy?.code}, elapsed=${cancellationElapsedMs}ms`,
+  );
+
+  const duplicateCancel = await cancelCommandResponse(cancellationCallId);
+  requireCheck("completed call cannot be canceled twice",
+    duplicateCancel.status === 409 && duplicateCancel.ok === false &&
+      duplicateCancel.body.error?.code === "CALL_NOT_IN_PROGRESS" &&
+      duplicateCancel.body.callId === cancellationCallId,
+    `HTTP ${duplicateCancel.status}, ${duplicateCancel.body.error?.code}`,
+  );
+  const replayedCanceled = await commandResponse(
+    "computer.move",
+    cancellationParams,
+    cancellationCallId,
+  );
+  const replayedWithoutMarker = { ...replayedCanceled.body };
+  delete replayedWithoutMarker.replayed;
+  requireCheck("exact canceled call replays without redispatch",
+    replayedCanceled.status === 504 && replayedCanceled.ok === false &&
+      replayedCanceled.body.error?.code === "COMMAND_OUTCOME_UNKNOWN" &&
+      replayedCanceled.body.callId === cancellationCallId &&
+      replayedCanceled.body.replayed === true &&
+      JSON.stringify(replayedWithoutMarker) === JSON.stringify(canceledOriginal.body),
+    `HTTP ${replayedCanceled.status}, replayed=${replayedCanceled.body.replayed}`,
+  );
+  const reusedCallId = await commandResponse(
+    "computer.move",
+    { ...cancellationParams, x: cancellationMoveX + 1 },
+    cancellationCallId,
+  );
+  requireCheck("changed command cannot reuse canceled call identity",
+    reusedCallId.status === 409 && reusedCallId.ok === false &&
+      reusedCallId.body.error?.code === "CALL_ID_REUSED" &&
+      reusedCallId.body.taxonomy?.code === "invalid_request" &&
+      reusedCallId.body.callId === cancellationCallId &&
+      reusedCallId.body.replayed === undefined,
+    `HTTP ${reusedCallId.status}, ${reusedCallId.body.error?.code}/${reusedCallId.body.taxonomy?.code}`,
+  );
+
+  const canceledState = await waitFor("explicit cancellation public authority teardown", async () => {
+    const snapshot = await apiState();
+    return snapshot.computer?.sessionId === hello.sessionId &&
+      snapshot.computerObservation === null &&
+      snapshot.computer?.share?.active === false &&
+      snapshot.computer?.share?.stopped === true &&
+      snapshot.computer?.share?.reason === "outcome-unknown" && snapshot;
+  });
+  requireCheck("cancellation fail-closed state names the exact-session revocation",
+    canceledState.computer.share.code === "COMMAND_OUTCOME_UNKNOWN",
+    `${canceledState.computer.share.reason}/${canceledState.computer.share.code}`,
+  );
+  const clearedScreenshotResponse = await fetch(`http://127.0.0.1:${port}${canceledScreenshotUrl}`, {
+    headers: { Authorization: `Bearer ${bearerToken}` },
+  });
+  const clearedScreenshotBody = await clearedScreenshotResponse.json();
+  requireCheck("cancellation tears down the computer screenshot surface",
+    clearedScreenshotResponse.status === 404 &&
+      clearedScreenshotBody.error?.code === "NO_COMPUTER_SCREENSHOT",
+    `HTTP ${clearedScreenshotResponse.status}, ${clearedScreenshotBody.error?.code}`,
+  );
+  await delay(Math.ceil(3_000 / SHARE_FPS));
+  const canceledStateSettled = await apiState();
+  requireCheck("canceled share surface stays torn down",
+    canceledStateSettled.computer?.sessionId === hello.sessionId &&
+      canceledStateSettled.computerObservation === null &&
+      canceledStateSettled.computer?.share?.active === false &&
+      canceledStateSettled.computer?.share?.reason === "outcome-unknown",
+    "no queued SCStream frame republished authority after cancellation",
+  );
+
+  const explicitStopBody = await command("computer.share.stop");
+  const explicitStop = explicitStopBody.result;
+  requireCheck("post-cancellation share stop is idempotently fail-closed",
+    explicitStop.active === false && explicitStop.stopped === false &&
+      explicitStop.reason === "not-active",
+    `${explicitStop.active}/${explicitStop.stopped}/${explicitStop.reason}`,
   );
   const stoppedState = await apiState();
-  requireCheck("share stop revoked observation", stoppedState.computerObservation === null, "computer observation and frame authority cleared");
+  requireCheck("explicit stop preserves surface teardown",
+    stoppedState.computerObservation === null &&
+      stoppedState.computer?.share?.active === false &&
+      stoppedState.computer?.share?.stopped === false &&
+      stoppedState.computer?.share?.reason === "not-active",
+    "computer observation, screenshot, pointer, and share authority remain unavailable",
+  );
+
+  const staleAction = await commandResponse("computer.click", {
+    frameId: canceledFrameId,
+    x: postResizeClickX,
+    y: postResizeClickY,
+    button: "left",
+    clickCount: 1,
+    durationMs: 50,
+  });
+  requireCheck("pre-cancellation frame cannot act after teardown",
+    staleAction.status === 409 && staleAction.ok === false &&
+      staleAction.body.error?.code === "COMPUTER_STALE_FRAME" &&
+      staleAction.body.taxonomy?.code === "stale_snapshot" &&
+      staleAction.body.taxonomy?.retriable === true &&
+      staleAction.body.taxonomy?.recoveryHint === "reobserve",
+    `HTTP ${staleAction.status}, ${staleAction.body.error?.code}/${staleAction.body.taxonomy?.code}/${staleAction.body.taxonomy?.recoveryHint}`,
+  );
+  const tornDownState = await apiState();
+  requireCheck("rejected stale action cannot recreate a computer surface",
+    tornDownState.computerObservation === null && tornDownState.computer?.share?.active === false,
+    "no frame, screenshot, pointer, or share authority was republished",
+  );
 
   const finalFixtureState = await fixtureState(fixtureStatePath);
   requireCheck("fixture final state",
-    finalFixtureState.clicks === 1 && finalFixtureState.semanticPresses === 1 &&
-      finalFixtureState.semanticValue === SEMANTIC_VALUE && finalFixtureState.resizeCount === 1,
+    finalFixtureState.clicks === 2 && finalFixtureState.semanticPresses === 1 &&
+      finalFixtureState.semanticValue === SEMANTIC_VALUE &&
+      finalFixtureState.resizeCount === 1 && finalFixtureState.focusCount === 1 &&
+      finalFixtureState.appliedControlSequence === 2 &&
+      finalFixtureState.contentWidth === 820 && finalFixtureState.contentHeight === 520,
     JSON.stringify({
       clicks: finalFixtureState.clicks,
       semanticPresses: finalFixtureState.semanticPresses,
-      semanticValue: finalFixtureState.semanticValue,
+      semanticValueMatchesExpected: finalFixtureState.semanticValue === SEMANTIC_VALUE,
       resizeCount: finalFixtureState.resizeCount,
+      focusCount: finalFixtureState.focusCount,
+      appliedControlSequence: finalFixtureState.appliedControlSequence,
+      contentWidth: finalFixtureState.contentWidth,
+      contentHeight: finalFixtureState.contentHeight,
     }),
+  );
+  requireCheck("canceled move, replay, and stale refusal caused no fixture mutation",
+    finalFixtureState.clicks === cancellationFixtureBefore.clicks &&
+      finalFixtureState.semanticPresses === cancellationFixtureBefore.semanticPresses &&
+      finalFixtureState.semanticValue === cancellationFixtureBefore.semanticValue &&
+      finalFixtureState.resizeCount === cancellationFixtureBefore.resizeCount &&
+      finalFixtureState.focusCount === cancellationFixtureBefore.focusCount &&
+      finalFixtureState.appliedControlSequence === cancellationFixtureBefore.appliedControlSequence,
+    "fixture mutation counters and restored semantic value stayed exact",
+  );
+  const cancellationInvariants = systemInvariants(
+    cancellationSystemBefore,
+    processProbe(systemProbeBinary),
+  );
+  requireCheck("cancellation/stop foreground/focus/cursor/Space invariants",
+    allInvariantsHeld(cancellationInvariants),
+    JSON.stringify(cancellationInvariants),
   );
 
   const systemAfter = processProbe(systemProbeBinary);
@@ -907,7 +1312,7 @@ async function main() {
 
   const finalSample = shareSamples.at(-1);
   const result = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     productVersion: EXPECTED_VERSION,
     status: "passed-release-candidate",
     evidenceClass: "exact-release-candidate-package-live-observation",
@@ -954,11 +1359,13 @@ async function main() {
       finalState: {
         clicks: finalFixtureState.clicks,
         semanticPresses: finalFixtureState.semanticPresses,
-        semanticValue: finalFixtureState.semanticValue,
+        semanticValueMatchesExpected: finalFixtureState.semanticValue === SEMANTIC_VALUE,
         animationTick: finalFixtureState.animationTick,
         resizeCount: finalFixtureState.resizeCount,
-        contentWidth: resizedFixtureState.contentWidth,
-        contentHeight: resizedFixtureState.contentHeight,
+        focusCount: finalFixtureState.focusCount,
+        appliedControlSequence: finalFixtureState.appliedControlSequence,
+        contentWidth: finalFixtureState.contentWidth,
+        contentHeight: finalFixtureState.contentHeight,
         lastAction: finalFixtureState.lastAction,
       },
     },
@@ -987,6 +1394,102 @@ async function main() {
         durationMs: LONG_PIXEL_ACTION_MS,
         independentFixturePostcondition: "click counter advanced exactly once",
       },
+      postResizePixelAction: {
+        ...postResizeClick,
+        durationMs: POST_RESIZE_PIXEL_ACTION_MS,
+        resizedWindowWidth: afterPostResizeAction.windowWidth,
+        resizedWindowHeight: afterPostResizeAction.windowHeight,
+        capturedImageWidth: afterPostResizeAction.imageWidth,
+        capturedImageHeight: afterPostResizeAction.imageHeight,
+        independentFixturePostcondition: "only the exact fixture click counter advanced after resize",
+        independentNonInterruptionSample: postResizeActionInvariants,
+      },
+      nativeTextDelivery: {
+        ...nativeText,
+        requestCharacters: NATIVE_TEXT_SUFFIX.length,
+        requestUtf16CodeUnits: NATIVE_TEXT_SUFFIX.length,
+        payloadPersisted: false,
+        fixtureFieldFocusCount: nativeTextFocusedState.focusCount,
+        exactFixtureReadBack: nativeTextFixtureState.semanticValue === `${SEMANTIC_VALUE}${NATIVE_TEXT_SUFFIX}`,
+        restoredToExpectedValue: nativeTextRestoredFixtureState.semanticValue === SEMANTIC_VALUE,
+        fieldPreparationNonInterruptionSample: nativeTextSetupInvariants,
+        independentNonInterruptionSample: nativeTextInvariants,
+        restore: nativeTextRestore,
+      },
+      explicitCancellation: {
+        callId: cancellationCallId,
+        method: "computer.move",
+        durationMs: CANCELED_MOVE_DURATION_MS,
+        cancelAfterStartMs: CANCEL_AFTER_START_MS,
+        elapsedMs: cancellationElapsedMs,
+        inProgressDuplicate: {
+          httpStatus: inProgressDuplicate.status,
+          code: inProgressDuplicate.body.error.code,
+        },
+        cancellationAccepted: {
+          httpStatus: cancelAccepted.status,
+          requested: cancelAccepted.body.cancellationRequested,
+        },
+        original: {
+          httpStatus: canceledOriginal.status,
+          code: canceledOriginal.body.error.code,
+          taxonomy: canceledOriginal.body.taxonomy,
+          replayed: false,
+        },
+        duplicateCancel: {
+          httpStatus: duplicateCancel.status,
+          code: duplicateCancel.body.error.code,
+        },
+        replay: {
+          httpStatus: replayedCanceled.status,
+          code: replayedCanceled.body.error.code,
+          replayed: replayedCanceled.body.replayed,
+          exactCachedBody: JSON.stringify(replayedWithoutMarker) === JSON.stringify(canceledOriginal.body),
+        },
+        changedRequestReuse: {
+          httpStatus: reusedCallId.status,
+          code: reusedCallId.body.error.code,
+          taxonomy: reusedCallId.body.taxonomy,
+        },
+        publicRevocation: {
+          exactHelperSessionPreserved: canceledState.computer.sessionId === hello.sessionId,
+          observationCleared: canceledState.computerObservation === null,
+          screenshotHttpStatus: clearedScreenshotResponse.status,
+          screenshotErrorCode: clearedScreenshotBody.error.code,
+          shareActive: canceledState.computer.share.active,
+          shareStopped: canceledState.computer.share.stopped,
+          reason: canceledState.computer.share.reason,
+          code: canceledState.computer.share.code,
+          stayedTornDownAfterThreeFramePeriods: canceledStateSettled.computerObservation === null &&
+            canceledStateSettled.computer.share.active === false,
+        },
+        explicitStop: {
+          active: explicitStop.active,
+          stopped: explicitStop.stopped,
+          reason: explicitStop.reason,
+          observationCleared: stoppedState.computerObservation === null,
+        },
+        staleFrameRefusal: {
+          httpStatus: staleAction.status,
+          code: staleAction.body.error.code,
+          taxonomy: staleAction.body.taxonomy,
+          surfaceRecreated: tornDownState.computerObservation !== null ||
+            tornDownState.computer.share.active === true,
+        },
+        fixtureMutationCounters: {
+          clicksBefore: cancellationFixtureBefore.clicks,
+          clicksAfter: finalFixtureState.clicks,
+          semanticPressesBefore: cancellationFixtureBefore.semanticPresses,
+          semanticPressesAfter: finalFixtureState.semanticPresses,
+          resizeCountBefore: cancellationFixtureBefore.resizeCount,
+          resizeCountAfter: finalFixtureState.resizeCount,
+          focusCountBefore: cancellationFixtureBefore.focusCount,
+          focusCountAfter: finalFixtureState.focusCount,
+          semanticValueMatchedBefore: cancellationFixtureBefore.semanticValue === SEMANTIC_VALUE,
+          semanticValueMatchedAfter: finalFixtureState.semanticValue === SEMANTIC_VALUE,
+        },
+        independentNonInterruptionSample: cancellationInvariants,
+      },
       persistentShare: {
         shareId: firstShareId,
         fps: SHARE_FPS,
@@ -1011,8 +1514,10 @@ async function main() {
         transportProgressDuringPixelAction: afterPixelAction.sequence - beforePixelAction.sequence,
         sourceDropsDuringPixelAction: afterPixelAction.sourceDroppedFrames - beforePixelAction.sourceDroppedFrames,
         resizeSurvived: true,
-        stopped: shareStop.stopped,
-        stopReason: shareStop.reason,
+        postResizeActionSourceSequence: postResizeClick.sourceSequence,
+        stopped: canceledState.computer.share.stopped,
+        stopReason: canceledState.computer.share.reason,
+        explicitStopWasIdempotent: explicitStop.stopped === false && explicitStop.reason === "not-active",
         samples: shareSamples,
       },
       independentNonInterruptionSample: independentInvariants,
@@ -1038,8 +1543,11 @@ async function main() {
       "systemIndicatorPolicy=true proves that the helper did not suppress ScreenCaptureKit's system indication; exact-window screenshots cannot prove a particular system banner was visible.",
       "Programmatic exact-window selection is authenticated bridge policy, not a native macOS content picker.",
       "The helper uses target-routed background input on the active user Space, not a separate login session, VM, virtual display, sandbox, or independent input seat.",
+      "The fixture-only post-resize proof combines exact PID/window/frame/share binding, fixture counters, and non-interruption identities; the rig deliberately does not capture or fingerprint unrelated window contents.",
       "Generic AX invocation remains Partial in the product result; this deterministic fixture supplies separate target-side evidence and does not upgrade that product classification.",
+      "Native typeText remains Unverifiable in the product result. This deterministic fixture adds an independent exact read-back, then restores the prior value through confirmed Accessibility setValue without persisting the typed payload.",
       "The long live-share click intentionally creates native source-frame replacement. A zero transport-drop count is valid when server acknowledgements keep pace.",
+      "Explicit cancellation deliberately reports the in-flight move outcome as unknown. The rig proves authority teardown and no fixture mutation; it does not relabel the canceled native trajectory as a confirmed no-op.",
       "Screen Recording and Accessibility permissions were already present. The rig did not request, approve, or modify macOS permissions.",
     ],
   };
@@ -1054,7 +1562,7 @@ try {
 } catch (error) {
   const failureDiagnostics = await collectFailureDiagnostics();
   const failure = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     productVersion: EXPECTED_VERSION,
     status: "failed-release-candidate",
     evidenceClass: "release-candidate-negative-result",

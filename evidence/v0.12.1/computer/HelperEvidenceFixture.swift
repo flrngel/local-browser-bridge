@@ -10,6 +10,7 @@ private struct FixtureState: Codable {
     var semanticValue = ""
     var animationTick = 0
     var resizeCount = 0
+    var focusCount = 0
     var appliedControlSequence = 0
     var contentWidth = 720
     var contentHeight = 460
@@ -84,6 +85,21 @@ private final class FixtureView: NSView, NSTextFieldDelegate {
         state.contentHeight = Int(contentSize.height.rounded())
         state.lastAction = "resize"
         persistAndRedraw()
+    }
+
+    func focusSemanticField(controlSequence: Int) -> Bool {
+        guard let window, window.makeFirstResponder(semanticField) else { return false }
+        if let editor = window.fieldEditor(false, for: semanticField) as? NSTextView {
+            editor.setSelectedRange(NSRange(
+                location: (semanticField.stringValue as NSString).length,
+                length: 0
+            ))
+        }
+        state.focusCount += 1
+        state.appliedControlSequence = controlSequence
+        state.lastAction = "focus-field"
+        persistAndRedraw()
+        return true
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -223,12 +239,20 @@ private final class FixtureDelegate: NSObject, NSApplicationDelegate {
             control.sequence > lastControlSequence
         else { return }
 
-        guard
-            control.action == "resize",
-            let width = control.contentWidth,
-            let height = control.contentHeight,
-            (700 ... 900).contains(width),
-            (440 ... 620).contains(height)
+        if control.action == "focus-semantic-field" {
+            guard fixtureView.focusSemanticField(controlSequence: control.sequence) else {
+                fputs("fixture could not focus its semantic field\n", stderr)
+                return
+            }
+            lastControlSequence = control.sequence
+            return
+        }
+
+        guard control.action == "resize",
+              let width = control.contentWidth,
+              let height = control.contentHeight,
+              (700 ... 900).contains(width),
+              (440 ... 620).contains(height)
         else {
             fputs("fixture rejected invalid control command\n", stderr)
             return

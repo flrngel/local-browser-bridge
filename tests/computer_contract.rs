@@ -264,6 +264,146 @@ fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
 }
 
 #[test]
+fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
+    let rig = fs::read_to_string("evidence/v0.12.1/computer/helper-evidence-rig.mjs")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let fixture = fs::read_to_string("evidence/v0.12.1/computer/HelperEvidenceFixture.swift")
+        .unwrap()
+        .replace("\r\n", "\n");
+
+    let generated_outputs = rig
+        .split("const GENERATED_OUTPUT_NAMES = [")
+        .nth(1)
+        .unwrap()
+        .split("];\n")
+        .next()
+        .unwrap();
+    assert_eq!(generated_outputs.matches("computer-0").count(), 6);
+    let resize_screenshot = rig.find("computer-06-persistent-share-resize.png").unwrap();
+    let post_resize_action = rig
+        .find("const beforePostResizeAction = current.sample")
+        .unwrap();
+    assert!(resize_screenshot < post_resize_action);
+
+    let post_resize = rig
+        .split("const beforePostResizeAction = current.sample")
+        .nth(1)
+        .unwrap()
+        .split("const nativeTextSetupSystemBefore")
+        .next()
+        .unwrap();
+    for required in [
+        "command(\"computer.click\"",
+        "post-resize pixel click target-side proof",
+        "postResizeFixtureAfter.clicks === 2",
+        "postResizeFixtureAfter.semanticPresses === postResizeFixtureBefore.semanticPresses",
+        "postResizeFixtureAfter.resizeCount === postResizeFixtureBefore.resizeCount",
+        "postResizeClick.frameId === observation.frameId",
+        "postResizeClick.shareId === firstShareId",
+        "postResizeClick.sourceSequence === beforePostResizeAction.sourceSequence",
+        "post-resize independent foreground/focus/cursor/Space invariants",
+        "share-after-post-resize-action",
+        "capturedFrameMatchesWindowGeometry(sample)",
+    ] {
+        assert!(
+            post_resize.contains(required),
+            "missing post-resize proof: {required}"
+        );
+    }
+
+    for required in [
+        "var focusCount = 0",
+        "func focusSemanticField(controlSequence: Int) -> Bool",
+        "window.makeFirstResponder(semanticField)",
+        "editor.setSelectedRange",
+        "control.action == \"focus-semantic-field\"",
+    ] {
+        assert!(
+            fixture.contains(required),
+            "missing fixture focus proof: {required}"
+        );
+    }
+    let native_text = rig
+        .split("const nativeTextSetupSystemBefore")
+        .nth(1)
+        .unwrap()
+        .split("validateShareSamples(shareSamples);")
+        .next()
+        .unwrap();
+    for required in [
+        "action: \"focus-semantic-field\"",
+        "background fixture field prepared without mutation",
+        "command(\"computer.typeText\"",
+        "native typeText exact fixture read-back",
+        "nativeText.effect === \"Unverifiable\"",
+        "nativeText.characters === NATIVE_TEXT_SUFFIX.length",
+        "nativeText.utf16CodeUnits === NATIVE_TEXT_SUFFIX.length",
+        "native typeText independent foreground/focus/cursor/Space invariants",
+        "command(\"computer.setValue\"",
+        "native text fixture value restored",
+        "native text restore exact fixture state",
+        "share-after-native-text-restore",
+    ] {
+        assert!(
+            native_text.contains(required),
+            "missing native text proof: {required}"
+        );
+    }
+
+    assert!(rig.contains("cancellation starts from a current resized share frame"));
+    let cancellation = rig
+        .split("const cancellationStartedAt = Date.now();")
+        .nth(1)
+        .unwrap()
+        .split("const systemAfter = processProbe(systemProbeBinary);")
+        .next()
+        .unwrap();
+    for required in [
+        "commandResponse(\n    \"computer.move\"",
+        "await delay(CANCEL_AFTER_START_MS)",
+        "CALL_IN_PROGRESS",
+        "cancelCommandResponse(cancellationCallId)",
+        "cancelAccepted.status === 202",
+        "COMMAND_OUTCOME_UNKNOWN",
+        "outcome_unknown",
+        "recoveryHint === \"reobserve\"",
+        "CALL_NOT_IN_PROGRESS",
+        "replayedCanceled.body.replayed === true",
+        "JSON.stringify(replayedWithoutMarker) === JSON.stringify(canceledOriginal.body)",
+        "CALL_ID_REUSED",
+        "snapshot.computer?.sessionId === hello.sessionId",
+        "computerObservation === null",
+        "NO_COMPUTER_SCREENSHOT",
+        "command(\"computer.share.stop\")",
+        "explicitStop.reason === \"not-active\"",
+        "COMPUTER_STALE_FRAME",
+        "rejected stale action cannot recreate a computer surface",
+        "canceled move, replay, and stale refusal caused no fixture mutation",
+        "cancellation/stop foreground/focus/cursor/Space invariants",
+    ] {
+        assert!(
+            cancellation.contains(required),
+            "missing explicit cancellation proof: {required}"
+        );
+    }
+    for forbidden in [
+        "CANCELLATION_TEXT_CHARACTERS",
+        "PRODUCTION_COMMAND_TIMEOUT_FLOOR_MS",
+        "LBB_COMPUTER_TEST",
+        "mock cancellation",
+        "semanticValue: finalFixtureState.semanticValue",
+    ] {
+        assert!(
+            !rig.contains(forbidden),
+            "packaged evidence uses an impossible, synthetic, or unsafe shortcut: {forbidden}"
+        );
+    }
+    assert!(rig.contains("schemaVersion: 3"));
+    assert!(rig.contains("payloadPersisted: false"));
+}
+
+#[test]
 fn vendored_screen_capture_patch_preserves_macos_13_resize_support() {
     let manifest = fs::read_to_string("Cargo.toml").unwrap();
     let vendor_manifest = fs::read_to_string("vendor/screencapturekit-8.0.1/Cargo.toml").unwrap();
