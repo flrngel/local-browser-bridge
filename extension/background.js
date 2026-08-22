@@ -108,6 +108,16 @@ const CONTROL_TTL_DEFAULT_MS = 5 * 60_000;
 const CONTROL_TTL_MIN_MS = 15_000;
 const CONTROL_TTL_MAX_MS = 15 * 60_000;
 const CONTROL_HEARTBEAT_MS = 10_000;
+// The renderer samples every 500ms and bounds its browser-process round trip
+// at 2s. This deadline adds scheduler margin while still revoking if those
+// exact-session acknowledgements stop arriving altogether.
+const CONTROL_UI_BROWSER_WATCHDOG_DEADLINE_MS = 3_000;
+const CONTROL_UI_TOP_LAYER_MAX_NODES = 2_048;
+const CONTROL_UI_TOP_LAYER_TAIL_MAX = 256;
+const CONTROL_UI_ANCESTRY_MAX_DEPTH = 24;
+const CONTROL_UI_ANCESTRY_WORK_MAX = 512;
+const CONTROL_UI_BROWSER_PROOF_DEADLINE_MS = 1_500;
+const CONTROL_UI_HIT_POINT_MAX = 5;
 const CONTROL_STORAGE_KEY = "browserControlLease";
 const CONTROL_REVOCATION_KEY = "browserControlRevocation";
 const CONTROL_CLEANUPS_KEY = "browserControlCleanups";
@@ -136,6 +146,10 @@ const FRAME_AGENT_WORLD_NAME = "__lbb_frame_agent__";
 // deadline and every command inside it is bounded by what is left of it.
 const FRAME_OBSERVE_BUDGET_MS = 4_000;
 const FRAME_OBSERVE_MIN_TIMEOUT_MS = 100;
+// stop-guard.js must come from the manifest at document_start. Recovery
+// injection deliberately cannot synthesize that ordering for an old page;
+// content.js reports the guard missing and control start fails closed until a
+// normal navigation installs it early.
 const CONTENT_SCRIPT_FILES = ["dom-core.js", "content.js"];
 // Session id -> frame record for every OOPIF target auto-attached under the
 // current lease. Cleared only by synchronouslyTakeControlLease, so no frame
@@ -174,7 +188,20 @@ let protocolIdentityPromise = null;
 let sequenceWrite = Promise.resolve();
 let controlStateWrite = Promise.resolve();
 let transportRotation = Promise.resolve();
+let connectionStatusWrite = Promise.resolve();
+let badgeWrite = Promise.resolve();
+let browserActionQueue = Promise.resolve();
+let protocolStatusGeneration = 0;
+let controlUiTopLayerMutationDepth = 0;
+let controlUiTopLayerRevision = 0;
+let controlUiContentLossGeneration = 0;
+let controlUiTopLayerDirty = null;
+let controlUiTopLayerVerificationTimer = null;
+let controlUiProofWrite = Promise.resolve();
 const expectedInternalSettings = new Map();
+const retiredProtocolSockets = new WeakSet();
+const clearOwnedProtocolSockets = new WeakSet();
+const protocolCloseCleanupStarted = new WeakSet();
 const canceledCommandKeys = new Set();
 const activeCommandContexts = new Map();
 const heldMouseInputs = new Map();
@@ -209,12 +236,73 @@ async function settings() {
   };
 }
 
-async function setStatus(status, detail = "") {
+function queueBadgeWrite(operation) {
+  const queued = badgeWrite.then(operation);
+  badgeWrite = queued.catch(() => {});
+  return queued;
+}
+
+function publishStatus(status, detail, generation, admission = null) {
+  const operation = connectionStatusWrite.then(async () => {
+    const current = () => generation === protocolStatusGeneration && (!admission || admission());
+    if (!current()) return false;
+    await trustedStorageReady;
+    if (!current()) return false;
+    await chrome.storage.local.set({ connectionStatus: status, connectionDetail: detail });
+    // A retirement can occur while storage settles. Every newer status write
+    // is serialized behind this one and repairs storage; never let this stale
+    // writer continue into the badge.
+    if (!current()) return false;
+    await queueBadgeWrite(async () => {
+      if (!current()) return false;
+      const pending = (await chrome.storage.local.get({ pendingApproval: null })).pendingApproval;
+      if (!current()) return false;
+      const approvalOwnsBadge = pending?.expiresAt > Date.now()
+        && pendingApprovalMatchesCurrentTransport(pending);
+      const color = approvalOwnsBadge
+        ? "#f3bd4e"
+        : status === "connected" ? "#82d94d" : status === "connecting" ? "#f3bd4e" : "#e36b5d";
+      const text = approvalOwnsBadge
+        ? "?"
+        : status === "connected" ? "ON" : status === "connecting" ? "…" : "!";
+      await chrome.action.setBadgeBackgroundColor({ color }).catch(() => {});
+      if (!current()) return false;
+      await chrome.action.setBadgeText({ text }).catch(() => {});
+      return current();
+    });
+    return current();
+  });
+  connectionStatusWrite = operation.catch(() => {});
+  return operation;
+}
+
+function setStatus(status, detail = "") {
+  return publishStatus(status, detail, protocolStatusGeneration);
+}
+
+function setTransportStatus(candidate, connectionId, serverSessionId, requireReady, generation, status, detail) {
+  return publishStatus(
+    status,
+    detail,
+    generation,
+    () => protocolSocketAdmitted(candidate, connectionId, serverSessionId, requireReady),
+  );
+}
+
+async function clearPendingApprovalUi() {
   await trustedStorageReady;
-  await chrome.storage.local.set({ connectionStatus: status, connectionDetail: detail });
-  const color = status === "connected" ? "#82d94d" : status === "connecting" ? "#f3bd4e" : "#e36b5d";
-  await chrome.action.setBadgeBackgroundColor({ color }).catch(() => {});
-  await chrome.action.setBadgeText({ text: status === "connected" ? "ON" : status === "connecting" ? "…" : "!" }).catch(() => {});
+  await chrome.storage.local.set({ pendingApproval: null });
+  // A queued approval owns the orange "?" badge. A still-current ready
+  // controller returns to green ON; rotation invalidates readiness before this
+  // helper runs, so it gets a blank badge until connectNow() publishes its status.
+  await queueBadgeWrite(async () => {
+    if (currentApprovalAuthority()) {
+      await chrome.action.setBadgeBackgroundColor({ color: "#82d94d" }).catch(() => {});
+      await chrome.action.setBadgeText({ text: "ON" }).catch(() => {});
+    } else {
+      await chrome.action.setBadgeText({ text: "" }).catch(() => {});
+    }
+  });
 }
 
 async function initializeProtocolIdentity() {
@@ -234,6 +322,54 @@ function currentControlOwner() {
   return protocolSessionReady && protocolServerSessionId
     ? `server:${protocolServerSessionId}`
     : `local:${controllerId}`;
+}
+
+function currentApprovalAuthority() {
+  if (!protocolSessionReady
+    || !protocolServerSessionId
+    || !protocolConnectionId
+    || socket?.readyState !== WebSocket.OPEN) return null;
+  return {
+    ownerSessionId: `server:${protocolServerSessionId}`,
+    serverSessionId: protocolServerSessionId,
+    connectionId: protocolConnectionId,
+  };
+}
+
+function pendingApprovalMatchesCurrentTransport(pending) {
+  const authority = currentApprovalAuthority();
+  return Boolean(pending?.authority
+    && authority
+    && pending.authority.ownerSessionId === authority.ownerSessionId
+    && pending.authority.serverSessionId === authority.serverSessionId
+    && pending.authority.connectionId === authority.connectionId);
+}
+
+function assertPendingApprovalTransport(pending) {
+  if (!pendingApprovalMatchesCurrentTransport(pending)) {
+    const error = new Error("APPROVAL_STALE: the queued approval belongs to a disconnected or replaced controller");
+    error.code = "APPROVAL_STALE";
+    throw error;
+  }
+}
+
+function retireProtocolSocket(candidate) {
+  if (candidate && typeof candidate === "object") {
+    if (retiredProtocolSockets.has(candidate)) return false;
+    retiredProtocolSockets.add(candidate);
+  }
+  protocolStatusGeneration += 1;
+  return true;
+}
+
+function protocolSocketAdmitted(candidate, connectionId, serverSessionId, requireReady = true) {
+  if (!candidate
+    || socket !== candidate
+    || retiredProtocolSockets.has(candidate)) return false;
+  if (!requireReady) return true;
+  return protocolSessionReady
+    && protocolConnectionId === connectionId
+    && protocolServerSessionId === serverSessionId;
 }
 
 function commandKey(sessionId, id, sequence) {
@@ -459,6 +595,51 @@ function assertCommandActive(context, boundary = "execution") {
   }
 }
 
+async function awaitCommandCleanup(context) {
+  if (!context?.cancellationCleanup) return;
+  let observedCleanup = null;
+  do {
+    observedCleanup = context.cancellationCleanup;
+    await observedCleanup;
+    // A cancellation/Chrome reconciliation handler can append one more
+    // cleanup while the previously observed promise is settling. Yield once
+    // and require the chain to be stable before releasing the global action
+    // barrier.
+    await Promise.resolve();
+  } while (observedCleanup !== context.cancellationCleanup);
+}
+
+// One worker-wide queue preserves command order across the authenticated
+// socket and the trusted popup's delayed approval path. Security/settings
+// rotation and human handback deliberately stay outside this queue so they
+// can cancel a running or waiting command immediately.
+function queueBrowserAction(context, assertAdmission, operation) {
+  const queued = browserActionQueue.then(async () => {
+    assertCommandActive(context, "browser action queue entry");
+    if (assertAdmission) assertAdmission();
+    assertCommandActive(context, "browser action queue admission");
+    context.started = true;
+    const result = await operation();
+    assertCommandActive(context, "browser action queue completion");
+    if (assertAdmission) assertAdmission();
+    return result;
+  });
+  // The caller receives the command outcome as soon as it is known, but the
+  // next browser action must also wait for any late Chrome outcome to become
+  // durably reconcilable (for example, a canceled tabs.new creation). This
+  // keeps the global order intact through cancellation cleanup, not merely
+  // through the early Promise.race result returned to the caller.
+  const finalizationBarrier = queued
+    .then(() => undefined, () => undefined)
+    .then(async () => {
+      await Promise.resolve();
+      await awaitCommandCleanup(context);
+      finalizeCanceledCommandFreshness(context);
+    });
+  browserActionQueue = finalizationBarrier.catch(() => {});
+  return queued;
+}
+
 function withCommandCancellation(promise, context, boundary) {
   if (!context) return promise;
   assertCommandActive(context, boundary);
@@ -584,17 +765,34 @@ function send(message) {
 }
 
 async function clearSocket(reason = "transport_rotated") {
-  cancelCommandContextsForSession(protocolServerSessionId, reason);
-  await stopControl(reason, { requireExplicitStart: true });
-  if (pingTimer) clearInterval(pingTimer);
-  pingTimer = null;
-  if (socket) {
-    socket.onclose = null;
-    socket.close();
-  }
-  socket = null;
-  protocolServerSessionId = "";
+  const retiringSessionId = protocolServerSessionId;
+  const retiringConnectionId = protocolConnectionId;
+  const retiringSocket = socket;
+  // Invalidate approval authority synchronously before the first await. The
+  // retiring session id is retained long enough to cancel its command contexts
+  // and send best-effort control cleanup on the still-open transport.
+  retireProtocolSocket(retiringSocket);
+  if (retiringSocket) clearOwnedProtocolSockets.add(retiringSocket);
   protocolSessionReady = false;
+  cancelCommandContextsForSession(retiringSessionId, reason);
+  try {
+    await stopControl(reason, { requireExplicitStart: true });
+  } finally {
+    if (pingTimer) clearInterval(pingTimer);
+    pingTimer = null;
+    if (retiringSocket) {
+      retiringSocket.onclose = null;
+      retiringSocket.close();
+    }
+    if (socket === retiringSocket) {
+      socket = null;
+    }
+    if (protocolConnectionId === retiringConnectionId) {
+      protocolServerSessionId = "";
+      protocolConnectionId = "";
+    }
+    await clearPendingApprovalUi();
+  }
 }
 
 function settingFingerprint(value) {
@@ -620,43 +818,46 @@ function consumeInternalSettings(changes) {
   return internal;
 }
 
+function queueTransportIdentityOperation(operation) {
+  const queued = transportRotation.then(operation);
+  transportRotation = queued.catch(() => {});
+  return queued;
+}
+
 function updateSecuritySettings(updates, reason) {
-  const operation = transportRotation.then(async () => {
+  return queueTransportIdentityOperation(async () => {
     await clearSocket(reason);
     markInternalSettings(updates);
     await chrome.storage.local.set(updates);
-    await connect();
+    await connectNow();
   });
-  transportRotation = operation.catch(() => {});
-  return operation;
 }
 
 function removeSecuritySettings(keys, reason) {
-  const operation = transportRotation.then(async () => {
+  return queueTransportIdentityOperation(async () => {
     await clearSocket(reason);
     markInternalSettings(Object.fromEntries(keys.map((key) => [key, undefined])));
     await chrome.storage.local.remove(keys);
-    await connect();
+    await connectNow();
   });
-  transportRotation = operation.catch(() => {});
-  return operation;
 }
 
 function queueTransportRotation(reason) {
-  transportRotation = transportRotation
-    .then(async () => {
-      await clearSocket(reason);
-      await connect();
-    })
-    .catch(() => {});
-  return transportRotation;
+  return queueTransportIdentityOperation(async () => {
+    await clearSocket(reason);
+    await connectNow();
+  });
+}
+
+function queueConnect() {
+  return queueTransportIdentityOperation(connectNow);
 }
 
 function scheduleReconnect() {
   if (reconnectTimer) return;
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
-    void connect();
+    void queueConnect();
   }, reconnectDelay);
   reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
 }
@@ -711,23 +912,34 @@ function exactObjectKeys(value, expected) {
   return actual.length === wanted.length && actual.every((key, index) => key === wanted[index]);
 }
 
-async function connect() {
+async function connectNow() {
   await initializeProtocolIdentity();
   const config = await settings();
-  if (!config.enabled) {
-    await clearSocket("bridge_paused");
-    await setStatus("paused", "Bridge control is paused.");
-    return;
-  }
   if (!config.token) {
     await clearSocket("not_configured");
     await setStatus("not-configured", "Paste the token printed by the local server.");
     return;
   }
-  if (socket && [WebSocket.OPEN, WebSocket.CONNECTING].includes(socket.readyState)) return;
+  if (!config.enabled) {
+    await clearSocket("bridge_paused");
+    await setStatus("paused", "Bridge control is paused.");
+    return;
+  }
+  // A protocol-failed socket remains the exact transport owner until its
+  // close handler performs lease cleanup. Do not let an alarm replace a
+  // CLOSING socket and strand that cleanup on an obsolete closure.
+  if (socket && [WebSocket.OPEN, WebSocket.CONNECTING, WebSocket.CLOSING].includes(socket.readyState)) return;
 
-  await setStatus("connecting", `Connecting to 127.0.0.1:${config.port}`);
-  protocolConnectionId = crypto.randomUUID();
+  protocolStatusGeneration += 1;
+  const statusGeneration = protocolStatusGeneration;
+  protocolServerSessionId = "";
+  protocolSessionReady = false;
+  protocolConnectionId = "";
+  await clearPendingApprovalUi();
+  await publishStatus("connecting", `Connecting to 127.0.0.1:${config.port}`, statusGeneration);
+  if (statusGeneration !== protocolStatusGeneration) return;
+  const connectionId = crypto.randomUUID();
+  protocolConnectionId = connectionId;
   protocolServerSessionId = "";
   protocolSessionReady = false;
   const nextSocket = new WebSocket(`ws://127.0.0.1:${config.port}/bridge`);
@@ -745,12 +957,16 @@ async function connect() {
   let negotiationTimer = null;
 
   const protocolFailure = (detail) => {
-    if (socket !== nextSocket) return;
+    if (!protocolSocketAdmitted(nextSocket, connectionId, authSessionId, false)) return;
+    retireProtocolSocket(nextSocket);
+    protocolSessionReady = false;
+    cancelCommandContextsForSession(protocolServerSessionId, "protocol_failure");
     void setStatus("protocol-error", detail);
     try { nextSocket.close(1002, "Protocol validation failed"); } catch {}
   };
 
   nextSocket.onopen = () => {
+    if (!protocolSocketAdmitted(nextSocket, connectionId, authSessionId, false)) return;
     reconnectDelay = 1_000;
     negotiationTimer = setTimeout(
       () => protocolFailure("The local server did not complete mutual authentication within 3 seconds."),
@@ -763,10 +979,19 @@ async function connect() {
       connector: "browser-extension",
       clientNonce: authClientNonce,
     }));
-    void setStatus("connecting", `Negotiating protocol with 127.0.0.1:${config.port}`);
+    void setTransportStatus(
+      nextSocket,
+      connectionId,
+      authSessionId,
+      false,
+      statusGeneration,
+      "connecting",
+      `Negotiating protocol with 127.0.0.1:${config.port}`,
+    );
   };
 
   nextSocket.onmessage = async (event) => {
+    if (!protocolSocketAdmitted(nextSocket, connectionId, authSessionId, false)) return;
     if (!welcomed) {
       preauthInboundFrames += 1;
       if (preauthInboundFrames > AUTH_MAX_INBOUND_FRAMES
@@ -807,7 +1032,8 @@ async function connect() {
           key,
           clientAuthPayload(message.sessionId, authClientNonce, message.serverNonce),
         );
-        if (socket !== nextSocket || nextSocket.readyState !== WebSocket.OPEN) return;
+        if (!protocolSocketAdmitted(nextSocket, connectionId, authSessionId, false)
+          || nextSocket.readyState !== WebSocket.OPEN) return;
         authSessionId = message.sessionId;
         authServerNonce = message.serverNonce;
         authResponseSent = true;
@@ -820,7 +1046,15 @@ async function connect() {
           serverNonce: authServerNonce,
           clientProof,
         }));
-        void setStatus("connecting", `Mutually authenticated with 127.0.0.1:${config.port}`);
+        void setTransportStatus(
+          nextSocket,
+          connectionId,
+          authSessionId,
+          false,
+          statusGeneration,
+          "connecting",
+          `Mutually authenticated with 127.0.0.1:${config.port}`,
+        );
       } catch {
         protocolFailure("The local server could not prove knowledge of the extension token.");
       } finally {
@@ -840,14 +1074,24 @@ async function connect() {
       if (negotiationTimer) clearTimeout(negotiationTimer);
       negotiationTimer = null;
       await initializeControlState();
+      if (!protocolSocketAdmitted(nextSocket, connectionId, authSessionId, false)) return;
       const incomingOwner = `server:${message.sessionId}`;
       if (controlLease?.ownerSessionId?.startsWith("server:") && controlLease.ownerSessionId !== incomingOwner) {
         await stopControl("owner_session_changed", { requireExplicitStart: true });
       }
-      if (socket !== nextSocket || nextSocket.readyState !== WebSocket.OPEN) return;
+      if (!protocolSocketAdmitted(nextSocket, connectionId, authSessionId, false)
+        || nextSocket.readyState !== WebSocket.OPEN) return;
       welcomed = true;
       protocolServerSessionId = message.sessionId;
-      void setStatus("connecting", `Authenticating extension session with 127.0.0.1:${config.port}`);
+      void setTransportStatus(
+        nextSocket,
+        connectionId,
+        authSessionId,
+        false,
+        statusGeneration,
+        "connecting",
+        `Authenticating extension session with 127.0.0.1:${config.port}`,
+      );
       send({
         type: "hello",
         version: VERSION,
@@ -871,11 +1115,22 @@ async function connect() {
       protocolSessionReady = true;
       if (negotiationTimer) clearTimeout(negotiationTimer);
       negotiationTimer = null;
-      void setStatus("connected", `Connected to 127.0.0.1:${config.port}`);
+      void setTransportStatus(
+        nextSocket,
+        connectionId,
+        authSessionId,
+        true,
+        statusGeneration,
+        "connected",
+        `Connected to 127.0.0.1:${config.port}`,
+      );
       if (pingTimer) clearInterval(pingTimer);
-      pingTimer = setInterval(() => send({ type: "ping" }), PING_INTERVAL_MS);
+      pingTimer = setInterval(() => {
+        if (protocolSocketAdmitted(nextSocket, connectionId, authSessionId)) send({ type: "ping" });
+      }, PING_INTERVAL_MS);
       return;
     }
+    if (!protocolSocketAdmitted(nextSocket, connectionId, authSessionId)) return;
     if (message.type === "pong") return;
     if (message.type === "cancel") {
       if (typeof message.id !== "string"
@@ -926,14 +1181,20 @@ async function connect() {
     };
     activeCommandContexts.set(context.key, context);
     commandChain = commandChain.then(async () => {
-      if (socket !== nextSocket || !ready) {
+      if (!ready || !protocolSocketAdmitted(nextSocket, connectionId, context.sessionId)) {
         activeCommandContexts.delete(context.key);
         return;
       }
       try {
-        context.started = true;
-        assertCommandActive(context, "command dispatch");
-        const result = await dispatch(message.method, message.params ?? {}, false, context);
+        const result = await queueBrowserAction(
+          context,
+          () => {
+            if (!ready || !protocolSocketAdmitted(nextSocket, connectionId, context.sessionId)) {
+              throw commandCanceledError("browser action transport admission");
+            }
+          },
+          () => dispatch(message.method, message.params ?? {}, false, context),
+        );
         assertCommandActive(context, "result delivery");
         send({ id: message.id, type: "result", ok: true, sequence: message.sequence, result });
       } catch (error) {
@@ -946,7 +1207,7 @@ async function connect() {
           error: { code: error.code ?? error.message?.split(":")[0] ?? "COMMAND_FAILED", message: error.message },
         });
       } finally {
-        await context.cancellationCleanup;
+        await awaitCommandCleanup(context);
         finalizeCanceledCommandFreshness(context);
         activeCommandContexts.delete(context.key);
       }
@@ -956,16 +1217,52 @@ async function connect() {
   nextSocket.onerror = () => {};
   nextSocket.onclose = async () => {
     if (negotiationTimer) clearTimeout(negotiationTimer);
-    if (socket !== nextSocket) return;
-    cancelCommandContextsForSession(protocolServerSessionId, "server_disconnected");
+    // protocolFailure retires admission before it asks the WebSocket to close,
+    // but this exact transport still owns mandatory lease/input cleanup. An
+    // intentional clearSocket removes onclose before closing its captured
+    // socket, while a superseded closure is rejected by both exact identities.
+    if (clearOwnedProtocolSockets.has(nextSocket)
+      || socket !== nextSocket
+      || protocolConnectionId !== connectionId
+      || protocolCloseCleanupStarted.has(nextSocket)) return;
+    protocolCloseCleanupStarted.add(nextSocket);
+    const disconnectedSessionId = protocolServerSessionId;
+    // Invalidate the exact approval binding before any asynchronous cleanup.
+    retireProtocolSocket(nextSocket);
+    const closeStatusGeneration = protocolStatusGeneration;
+    protocolSessionReady = false;
+    cancelCommandContextsForSession(disconnectedSessionId, "server_disconnected");
     socket = null;
     protocolServerSessionId = "";
-    protocolSessionReady = false;
+    protocolConnectionId = "";
     if (pingTimer) clearInterval(pingTimer);
     pingTimer = null;
-    await stopControl("server_disconnected", { requireExplicitStart: true });
-    await setStatus("disconnected", "Local server unavailable; retrying automatically.");
-    scheduleReconnect();
+    await queueTransportIdentityOperation(async () => {
+      let stopError = null;
+      let clearError = null;
+      try {
+        await stopControl("server_disconnected", { requireExplicitStart: true });
+      } catch (error) {
+        stopError = error;
+      }
+      try {
+        await clearPendingApprovalUi();
+      } catch (error) {
+        clearError = error;
+      }
+      await publishStatus(
+        "disconnected",
+        "Local server unavailable; retrying automatically.",
+        closeStatusGeneration,
+      );
+      if (stopError) throw stopError;
+      if (clearError) throw clearError;
+    }).catch(() => publishStatus(
+      "disconnected",
+      "Local server unavailable; retrying automatically.",
+      closeStatusGeneration,
+    ));
+    if (closeStatusGeneration === protocolStatusGeneration && !socket) scheduleReconnect();
   };
 }
 
@@ -1216,7 +1513,9 @@ function acceptTopLevelNavigationSignal({ tabId, url = "", loaderId = "", frameI
     lease.pendingNavigation = null;
     lease.lastNavigationCommit = { url: lease.documentUrl, at: Date.now() };
     lease.viewport = null;
-    void persistControlState().catch(() => revokeUnexpectedNavigation("navigation_state_persist_failed"));
+    void persistControlState()
+      .then(() => showControlUi().catch(() => {}))
+      .catch(() => revokeUnexpectedNavigation("navigation_state_persist_failed"));
   }
   return true;
 }
@@ -1229,6 +1528,12 @@ async function authorizeTopLevelNavigation(lease, authority, kind, expectedUrl, 
     if (!verdict.allowed) throw new Error(`SITE_BLOCKED: ${verdict.reason}`);
   }
   lease.documentEpoch = Math.max(0, Number(lease.documentEpoch) || 0) + 1;
+  // Navigation invalidates the old document's closed-shadow marker. The
+  // lease remains alive only for the bounded navigation/rebind window;
+  // showControlUi must browser-verify the new document before passive checks
+  // may treat its proof as authoritative.
+  lease.controlUiProofReady = false;
+  clearControlUiTopLayerDirty(lease);
   lease.pendingNavigation = {
     kind,
     expectedUrl: expectedUrl || null,
@@ -1439,7 +1744,13 @@ function endControlCapture(tabId, captureId) {
 }
 
 function controlUiAcknowledged(state, expectedCaptureIds, expectedCursorVisible) {
-  if (!state?.hostConnected || !state.popoverOpen || !state.hostVisible) return false;
+  if (!state?.hostConnected
+    || !state.popoverOpen
+    || !state.topLayerReordered
+    || state.earlyStopGuardReady !== true
+    || state.accessibilityReady !== true
+    || state.viewTransitionActive !== false
+    || !state.hostVisible) return false;
   const expected = [...expectedCaptureIds].map(String).sort();
   const actual = Array.isArray(state.activeCaptureIds)
     ? state.activeCaptureIds.map(String).sort()
@@ -1450,17 +1761,567 @@ function controlUiAcknowledged(state, expectedCaptureIds, expectedCursorVisible)
   if (expected.length > 0) {
     return state.capturing === true && state.pillVisible === false && state.stopVisible === false;
   }
-  return state.capturing === false && state.pillVisible === true && state.stopVisible === true;
+  return state.capturing === false
+    && state.pillVisible === true
+    && state.stopVisible === true
+    && state.pillTopmost === true
+    && state.stopTopmost === true;
+}
+
+function attributesMap(attributes) {
+  if (!Array.isArray(attributes) || attributes.length % 2 !== 0) return null;
+  const mapped = new Map();
+  for (let index = 0; index < attributes.length; index += 2) {
+    mapped.set(String(attributes[index]), String(attributes[index + 1]));
+  }
+  return mapped;
+}
+
+function browserRootAccessibilityReady(attributes) {
+  const mapped = attributesMap(attributes);
+  if (!mapped || mapped.has("hidden") || mapped.has("inert")) return false;
+  return String(mapped.get("aria-hidden") || "").trim().toLowerCase() !== "true";
+}
+
+function browserControlHostAttributesReady(attributes, hostId) {
+  const mapped = attributesMap(attributes);
+  return Boolean(mapped
+    && !mapped.has("hidden")
+    && !mapped.has("inert")
+    && mapped.get("id") === hostId
+    && mapped.get("popover") === "manual"
+    && mapped.get("aria-hidden") === "false"
+    && mapped.get("aria-label") === "Local Browser Bridge browser control");
+}
+
+function spendControlUiAncestryWork(budget) {
+  if (!budget
+    || !Number.isInteger(budget.remaining)
+    || budget.remaining <= 0
+    || !Number.isFinite(budget.deadlineAt)
+    || Date.now() > budget.deadlineAt) {
+    throw new Error("The browser control proof exceeded its shared ancestry budget");
+  }
+  budget.remaining -= 1;
+}
+
+async function browserNodeAncestry(tabId, locator, authority, commandContext, budget) {
+  let current = { ...locator };
+  let startNodeId = null;
+  let startParentNodeId = null;
+  let closedShadowHostNodeId = null;
+  let closedShadowHostParentNodeId = null;
+  const seen = new Set();
+  for (let depth = 0; depth < CONTROL_UI_ANCESTRY_MAX_DEPTH; depth += 1) {
+    spendControlUiAncestryWork(budget);
+    const described = await debuggerCommand(
+      tabId,
+      "DOM.describeNode",
+      { ...current, depth: 0, pierce: true },
+      authority,
+      commandContext,
+      null,
+      { deadlineAt: budget.deadlineAt, strictDeadline: true },
+    );
+    if (Date.now() > budget.deadlineAt) {
+      throw new Error("The browser control proof exceeded its shared ancestry deadline");
+    }
+    const node = described?.node;
+    if (!node || !Number.isInteger(node.nodeId) || seen.has(node.nodeId)) {
+      throw new Error("Chrome could not describe a bounded unique browser-node ancestry");
+    }
+    seen.add(node.nodeId);
+    if (startNodeId === null) {
+      startNodeId = node.nodeId;
+      startParentNodeId = Number.isInteger(node.parentId) ? node.parentId : null;
+    }
+    if (node.shadowRootType === "closed" && closedShadowHostNodeId === null) {
+      if (!Number.isInteger(node.parentId)) {
+        throw new Error("The closed shadow root did not expose its host ancestry");
+      }
+      // The proof marker lives directly inside the bridge's closed shadow
+      // root. Pin that first/innermost host; a hostile page can later place
+      // the genuine host inside its own outer closed root, whose host must
+      // never replace the marker-bound identity.
+      closedShadowHostNodeId = node.parentId;
+    }
+    if (node.nodeId === closedShadowHostNodeId) {
+      if (!Number.isInteger(node.parentId)) {
+        throw new Error("The exact closed-shadow host did not expose its parent ancestry");
+      }
+      closedShadowHostParentNodeId = node.parentId;
+    }
+    if (node.nodeType === 9 || node.nodeName === "#document") {
+      return {
+        startNodeId,
+        startParentNodeId,
+        closedShadowHostNodeId,
+        closedShadowHostParentNodeId,
+        documentNodeId: node.nodeId,
+      };
+    }
+    if (!Number.isInteger(node.parentId)) break;
+    current = { nodeId: node.parentId };
+  }
+  throw new Error("The browser node did not resolve to a bounded document ancestry");
+}
+
+function boundedTopLayerNodeIds(rawNodeIds) {
+  if (!Array.isArray(rawNodeIds)
+    || rawNodeIds.length === 0
+    || rawNodeIds.length > CONTROL_UI_TOP_LAYER_MAX_NODES
+    || rawNodeIds.some((nodeId) => !Number.isInteger(nodeId))) {
+    throw new Error("Chrome did not expose a bounded ordered top-layer list");
+  }
+  return rawNodeIds;
+}
+
+async function assertControlHostIsDocumentTopLayerTail(
+  lease,
+  rawNodeIds,
+  rootDocumentNodeId,
+  hostNodeId,
+  ancestryCache,
+  authority,
+  commandContext,
+  budget,
+) {
+  const nodeIds = boundedTopLayerNodeIds(rawNodeIds);
+  const hostIndexes = nodeIds
+    .map((nodeId, index) => nodeId === hostNodeId ? index : -1)
+    .filter((index) => index >= 0);
+  if (hostIndexes.length !== 1) {
+    throw new Error("The exact closed-shadow control host was not a unique browser-reported top-layer member");
+  }
+  const laterNodeIds = nodeIds.slice(hostIndexes[0] + 1);
+  if (laterNodeIds.length > CONTROL_UI_TOP_LAYER_TAIL_MAX) {
+    throw new Error("The browser top-layer tail exceeded the bounded control proof budget");
+  }
+  // Chromium concatenates each local document LIFO list. Child-document
+  // nodes may follow the controlled document in the raw response and are
+  // harmless; any later node that resolves back to the exact root document
+  // means a same-document surface outranks the warning, even if it leaves
+  // holes at the bounded point samples.
+  for (const nodeId of laterNodeIds) {
+    let ancestry = ancestryCache.get(nodeId);
+    if (!ancestry) {
+      ancestry = await browserNodeAncestry(lease.tabId, { nodeId }, authority, commandContext, budget);
+      ancestryCache.set(nodeId, ancestry);
+    }
+    if (ancestry.documentNodeId === rootDocumentNodeId) {
+      throw new Error("A later same-document browser top-layer surface outranked the control host");
+    }
+  }
+  return nodeIds;
+}
+
+async function verifyControlUiBrowserTopLayer(
+  lease,
+  state,
+  authority,
+  commandContext = null,
+  contentRequestLossGeneration = null,
+) {
+  const hostId = String(state?.hostId || "");
+  const markerId = String(state?.markerId || "");
+  if (!/^__local_browser_bridge_control_[0-9a-f]{32}__$/.test(hostId)
+    || !/^__local_browser_bridge_marker_[0-9a-f]{32}__$/.test(markerId)
+    || state.viewTransitionActive !== false) {
+    throw new Error("The page did not publish a verifiable control host or view-transition state");
+  }
+  if (!Number.isSafeInteger(contentRequestLossGeneration)
+    || controlUiContentLossGeneration !== contentRequestLossGeneration) {
+    throw new Error("The control indicator changed after its content proof began");
+  }
+  const proofBudget = {
+    remaining: CONTROL_UI_ANCESTRY_WORK_MAX,
+    deadlineAt: Date.now() + CONTROL_UI_BROWSER_PROOF_DEADLINE_MS,
+  };
+  await debuggerCommand(
+    lease.tabId,
+    "DOM.enable",
+    {},
+    authority,
+    commandContext,
+    null,
+    { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
+  );
+  const rootDocument = await debuggerCommand(
+    lease.tabId,
+    "DOM.getDocument",
+    { depth: 0, pierce: true },
+    authority,
+    commandContext,
+    null,
+    { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
+  );
+  const rootDocumentNodeId = rootDocument?.root?.nodeId;
+  if (!Number.isInteger(rootDocumentNodeId) || typeof lease.frameId !== "string" || !lease.frameId) {
+    throw new Error("The controlled root document identity is unavailable");
+  }
+  const rootElement = await debuggerCommand(
+    lease.tabId,
+    "DOM.querySelector",
+    { nodeId: rootDocumentNodeId, selector: ":root" },
+    authority,
+    commandContext,
+    null,
+    { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
+  );
+  const rootElementNodeId = rootElement?.nodeId;
+  if (!Number.isInteger(rootElementNodeId)) {
+    throw new Error("The controlled document element identity is unavailable");
+  }
+  const rootAttributes = await debuggerCommand(
+    lease.tabId,
+    "DOM.getAttributes",
+    { nodeId: rootElementNodeId },
+    authority,
+    commandContext,
+    null,
+    { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
+  );
+  if (!browserRootAccessibilityReady(rootAttributes?.attributes)) {
+    throw new Error("The controlled document element hid or disabled the control surface");
+  }
+  const topLayer = await debuggerCommand(
+    lease.tabId,
+    "DOM.getTopLayerElements",
+    {},
+    authority,
+    commandContext,
+    null,
+    { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
+  );
+  boundedTopLayerNodeIds(topLayer?.nodeIds);
+  const ancestryCache = new Map();
+
+  const search = await debuggerCommand(
+    lease.tabId,
+    "DOM.performSearch",
+    { query: `#${markerId}`, includeUserAgentShadowDOM: true },
+    authority,
+    commandContext,
+    null,
+    { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
+  );
+  if (typeof search?.searchId !== "string" || search.resultCount !== 1) {
+    if (typeof search?.searchId === "string") {
+      await debuggerCommand(
+        lease.tabId,
+        "DOM.discardSearchResults",
+        { searchId: search.searchId },
+        authority,
+        commandContext,
+        null,
+        { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
+      );
+    }
+    throw new Error("The bridge closed-shadow identity marker was missing or duplicated");
+  }
+  let markerAncestry = null;
+  try {
+    const result = await debuggerCommand(
+      lease.tabId,
+      "DOM.getSearchResults",
+      { searchId: search.searchId, fromIndex: 0, toIndex: 1 },
+      authority,
+      commandContext,
+      null,
+      { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
+    );
+    if (!Array.isArray(result?.nodeIds)
+      || result.nodeIds.length !== 1
+      || !Number.isInteger(result.nodeIds[0])) {
+      throw new Error("Chrome did not resolve the unique closed-shadow identity marker");
+    }
+    markerAncestry = await browserNodeAncestry(
+      lease.tabId,
+      { nodeId: result.nodeIds[0] },
+      authority,
+      commandContext,
+      proofBudget,
+    );
+    if (markerAncestry.documentNodeId !== rootDocumentNodeId
+      || !Number.isInteger(markerAncestry.closedShadowHostNodeId)
+      || markerAncestry.closedShadowHostParentNodeId !== rootElementNodeId) {
+      throw new Error("The closed-shadow control marker did not resolve to the controlled root document");
+    }
+  } finally {
+    await debuggerCommand(
+      lease.tabId,
+      "DOM.discardSearchResults",
+      { searchId: search.searchId },
+      authority,
+      commandContext,
+      null,
+      { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
+    );
+  }
+  await assertControlHostIsDocumentTopLayerTail(
+    lease,
+    topLayer.nodeIds,
+    rootDocumentNodeId,
+    markerAncestry.closedShadowHostNodeId,
+    ancestryCache,
+    authority,
+    commandContext,
+    proofBudget,
+  );
+  const attributeResult = await debuggerCommand(
+    lease.tabId,
+    "DOM.getAttributes",
+    { nodeId: markerAncestry.closedShadowHostNodeId },
+    authority,
+    commandContext,
+    null,
+    { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
+  );
+  if (!browserControlHostAttributesReady(attributeResult?.attributes, hostId)) {
+    throw new Error("The exact bridge control host attributes were not intact");
+  }
+
+  if (state.capturing !== true) {
+    const width = Number(state?.viewport?.width);
+    const height = Number(state?.viewport?.height);
+    const points = state?.controlHitPoints;
+    const distinctPoints = Array.isArray(points)
+      ? new Set(points.map((point) => `${point?.x}:${point?.y}`))
+      : new Set();
+    if (!Number.isFinite(width)
+      || !Number.isFinite(height)
+      || width <= 0
+      || height <= 0
+      || !Array.isArray(points)
+      || points.length !== CONTROL_UI_HIT_POINT_MAX
+      || distinctPoints.size !== CONTROL_UI_HIT_POINT_MAX) {
+      throw new Error("The control surface did not publish the exact browser hit-test points");
+    }
+    for (const point of points) {
+      const x = Number(point?.x);
+      const y = Number(point?.y);
+      if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= width || y >= height) {
+        throw new Error("The control surface published an invalid browser hit-test point");
+      }
+      const hit = await debuggerCommand(
+        lease.tabId,
+        "DOM.getNodeForLocation",
+        { x, y, includeUserAgentShadowDOM: true, ignorePointerEventsNone: true },
+        authority,
+        commandContext,
+        null,
+        { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
+      );
+      if (hit?.frameId !== lease.frameId) {
+        throw new Error("A browser paint-order hit test resolved outside the controlled document");
+      }
+      const locator = Number.isInteger(hit?.nodeId)
+        ? { nodeId: hit.nodeId }
+        : Number.isInteger(hit?.backendNodeId)
+          ? { backendNodeId: hit.backendNodeId }
+          : null;
+      if (!locator) throw new Error("Chrome did not resolve a control-surface browser hit test");
+      const hitAncestry = await browserNodeAncestry(
+        lease.tabId,
+        locator,
+        authority,
+        commandContext,
+        proofBudget,
+      );
+      if (hitAncestry.documentNodeId !== rootDocumentNodeId
+        || (hitAncestry.startNodeId !== markerAncestry.closedShadowHostNodeId
+          && hitAncestry.closedShadowHostNodeId !== markerAncestry.closedShadowHostNodeId)) {
+        throw new Error("A browser paint-order hit test did not resolve to the exact control host");
+      }
+    }
+  }
+  // Root-target DOM.topLayerElementsUpdated is delivered independently of
+  // command completion. Treat the final ordered-list sample as a seqlock:
+  // any event delivered while the final browser proof is in flight makes the
+  // acknowledgement stale and must be retried or rejected.
+  const finalProofRevision = controlUiTopLayerRevision;
+  const finalTopLayer = await debuggerCommand(
+    lease.tabId,
+    "DOM.getTopLayerElements",
+    {},
+    authority,
+    commandContext,
+    null,
+    { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
+  );
+  const finalHostAncestry = await browserNodeAncestry(
+    lease.tabId,
+    { nodeId: markerAncestry.closedShadowHostNodeId },
+    authority,
+    commandContext,
+    proofBudget,
+  );
+  if (finalHostAncestry.startNodeId !== markerAncestry.closedShadowHostNodeId
+    || finalHostAncestry.startParentNodeId !== rootElementNodeId
+    || finalHostAncestry.documentNodeId !== rootDocumentNodeId) {
+    throw new Error("The exact control host left the controlled root document during acknowledgement");
+  }
+  const finalHostAttributes = await debuggerCommand(
+    lease.tabId,
+    "DOM.getAttributes",
+    { nodeId: markerAncestry.closedShadowHostNodeId },
+    authority,
+    commandContext,
+    null,
+    { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
+  );
+  if (!browserControlHostAttributesReady(finalHostAttributes?.attributes, hostId)) {
+    throw new Error("The exact control host attributes changed during acknowledgement");
+  }
+  const finalRootAttributes = await debuggerCommand(
+    lease.tabId,
+    "DOM.getAttributes",
+    { nodeId: rootElementNodeId },
+    authority,
+    commandContext,
+    null,
+    { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
+  );
+  if (!browserRootAccessibilityReady(finalRootAttributes?.attributes)) {
+    throw new Error("The controlled document element changed accessibility during acknowledgement");
+  }
+  await assertControlHostIsDocumentTopLayerTail(
+    lease,
+    finalTopLayer?.nodeIds,
+    rootDocumentNodeId,
+    markerAncestry.closedShadowHostNodeId,
+    new Map(),
+    authority,
+    commandContext,
+    proofBudget,
+  );
+  if (controlUiTopLayerRevision !== finalProofRevision) {
+    throw new Error("The browser top layer changed during the final control acknowledgement");
+  }
+  if (controlUiContentLossGeneration !== contentRequestLossGeneration) {
+    throw new Error("The control indicator reported a loss during the final acknowledgement");
+  }
+  assertLeaseAuthority(authority, commandContext, "browser top-layer acknowledgement");
+  return {
+    revision: finalProofRevision,
+    contentLossGeneration: contentRequestLossGeneration,
+  };
+}
+
+function beginControlUiTopLayerMutation() {
+  controlUiTopLayerMutationDepth += 1;
+}
+
+function endControlUiTopLayerMutation() {
+  controlUiTopLayerMutationDepth = Math.max(0, controlUiTopLayerMutationDepth - 1);
+  if (controlUiTopLayerDirty) armControlUiTopLayerDeadline();
+}
+
+function clearControlUiTopLayerDirty(
+  lease = controlLease,
+  verifiedRevision = null,
+  verifiedContentLossGeneration = null,
+) {
+  if (!controlUiTopLayerDirty
+    || !lease
+    || controlUiTopLayerDirty.sessionId !== lease.sessionId
+    || controlUiTopLayerDirty.epoch !== lease.epoch) return false;
+  if (Number.isSafeInteger(verifiedRevision)
+    && controlUiTopLayerDirty.revision > verifiedRevision) return false;
+  if (Number.isSafeInteger(verifiedContentLossGeneration)
+    && controlUiTopLayerDirty.contentLossGeneration !== verifiedContentLossGeneration) return false;
+  controlUiTopLayerDirty = null;
+  if (controlUiTopLayerVerificationTimer) clearTimeout(controlUiTopLayerVerificationTimer);
+  controlUiTopLayerVerificationTimer = null;
+  return true;
+}
+
+function armControlUiTopLayerDeadline() {
+  const dirty = controlUiTopLayerDirty;
+  if (!dirty || controlUiTopLayerVerificationTimer) return;
+  const remaining = Math.max(0, CONTROL_UI_BROWSER_WATCHDOG_DEADLINE_MS - (Date.now() - dirty.at));
+  controlUiTopLayerVerificationTimer = setTimeout(async () => {
+    controlUiTopLayerVerificationTimer = null;
+    const lease = controlLease;
+    if (controlUiTopLayerDirty !== dirty
+      || !lease
+      || dirty.sessionId !== lease.sessionId
+      || dirty.epoch !== lease.epoch) {
+      // A replacement lease/dirty record may have arrived while this timer
+      // was queued. Never let the stale callback consume the one global timer
+      // slot without arming the current exact record.
+      armControlUiTopLayerDeadline();
+      return;
+    }
+    if (lease.pendingNavigation
+      || !lease.navigationReady
+      || lease.pendingDialog
+      || controlCaptureIds(lease.tabId).length > 0) {
+      // Navigation, a browser-native dialog, and an intentional screenshot
+      // capture all suspend page input and have their own completion/rebind
+      // boundaries. Disarm this document proof without extending its original
+      // timestamp; the boundary must establish a fresh proof before ordinary
+      // controlled actions resume.
+      lease.controlUiProofReady = false;
+      clearControlUiTopLayerDirty(lease);
+      return;
+    }
+    const expired = Date.now() - dirty.at >= CONTROL_UI_BROWSER_WATCHDOG_DEADLINE_MS;
+    if (!expired) {
+      armControlUiTopLayerDeadline();
+      return;
+    }
+    clearControlUiTopLayerDirty(lease);
+    await stopControl("control_ui_hidden", { requireExplicitStart: true }).catch(() => {});
+  }, remaining);
+}
+
+function markControlUiProofDirty(lease = controlLease, contentLoss = false) {
+  if (!lease
+    || lease.pendingNavigation
+    || !lease.navigationReady
+    || lease.pendingDialog) return;
+  if (contentLoss) controlUiContentLossGeneration += 1;
+  if (!controlUiTopLayerDirty
+    || controlUiTopLayerDirty.sessionId !== lease.sessionId
+    || controlUiTopLayerDirty.epoch !== lease.epoch) {
+    controlUiTopLayerDirty = {
+      sessionId: lease.sessionId,
+      epoch: lease.epoch,
+      revision: controlUiTopLayerRevision,
+      contentLossGeneration: controlUiContentLossGeneration,
+      at: Date.now(),
+    };
+  } else {
+    controlUiTopLayerDirty.revision = Math.max(
+      controlUiTopLayerDirty.revision,
+      controlUiTopLayerRevision,
+    );
+    controlUiTopLayerDirty.contentLossGeneration = controlUiContentLossGeneration;
+  }
+  armControlUiTopLayerDeadline();
+}
+
+function scheduleControlUiTopLayerVerification() {
+  const lease = controlLease;
+  if (!lease?.controlHostId
+    || !lease.controlMarkerId
+    || lease.controlUiProofReady !== true
+    || lease.pendingNavigation
+    || !lease.navigationReady
+    || lease.pendingDialog
+    || controlCaptureIds(lease.tabId).length > 0) return;
+  markControlUiProofDirty(lease);
 }
 
 async function failControlUiClosed(lease, phase, cause) {
-  // A dialog-frozen renderer cannot repaint or acknowledge the overlay, so an
+  // A dialog-frozen renderer cannot update or acknowledge the overlay, so an
   // unacknowledged indicator under a dialog is the dialog, not a lost lease.
   assertDialogNotBlocking(phase);
   if (lease
     && controlLease?.sessionId === lease.sessionId
     && controlLease?.epoch === lease.epoch) {
-    await stopControl(`control_ui_failed:${phase}`, { requireExplicitStart: true }).catch(() => {});
+    await stopControl("control_ui_hidden", { requireExplicitStart: true }).catch(() => {});
   }
   const error = new Error(`CONTROL_UI_RENDER_FAILED: ${phase} was not visibly acknowledged; browser control was revoked`);
   error.code = "CONTROL_UI_RENDER_FAILED";
@@ -1468,13 +2329,15 @@ async function failControlUiClosed(lease, phase, cause) {
   throw error;
 }
 
-async function showControlUi(lease = controlLease) {
+async function showControlUiNow(lease) {
   if (!lease
     || controlLease?.sessionId !== lease.sessionId
     || controlLease?.epoch !== lease.epoch) return null;
   const authority = captureLeaseAuthority(lease);
   const activeCaptureIds = controlCaptureIds(lease.tabId);
+  beginControlUiTopLayerMutation();
   try {
+    const contentRequestLossGeneration = controlUiContentLossGeneration;
     const state = await contentRequest(lease.tabId, {
       method: "control.show",
       sessionId: lease.sessionId,
@@ -1488,12 +2351,48 @@ async function showControlUi(lease = controlLease) {
     }, { authority });
     assertLeaseAuthority(authority, null, "control UI acknowledgement");
     if (!controlUiAcknowledged(state, activeCaptureIds, lease.cursor.visible)) {
-      throw new Error("The page did not confirm a painted control indicator");
+      throw new Error("The page did not confirm a topmost control indicator");
     }
+    const verifiedProof = await verifyControlUiBrowserTopLayer(
+      lease,
+      state,
+      authority,
+      null,
+      contentRequestLossGeneration,
+    );
+    if (lease.controlHostId !== state.hostId
+      || lease.controlMarkerId !== state.markerId
+      || lease.controlUiProofReady !== true) {
+      lease.controlHostId = state.hostId;
+      lease.controlMarkerId = state.markerId;
+      lease.controlUiProofReady = true;
+      await persistControlState();
+      assertLeaseAuthority(authority, null, "control host identity persistence");
+    }
+    if (controlUiTopLayerRevision !== verifiedProof.revision) {
+      // A root top-layer event can be delivered after the verifier's final
+      // sample but before a newly rebound proof is persisted. proofReady was
+      // false during that window, so the event handler could not arm a dirty
+      // record itself; retain it now instead of erasing it with the older ack.
+      markControlUiProofDirty(lease);
+    }
+    clearControlUiTopLayerDirty(
+      lease,
+      verifiedProof.revision,
+      verifiedProof.contentLossGeneration,
+    );
     return state;
   } catch (error) {
     return failControlUiClosed(lease, "show", error);
+  } finally {
+    endControlUiTopLayerMutation();
   }
+}
+
+function showControlUi(lease = controlLease) {
+  const queued = controlUiProofWrite.then(() => showControlUiNow(lease));
+  controlUiProofWrite = queued.catch(() => {});
+  return queued;
 }
 
 async function hideControlUi(tabId, sessionId = null) {
@@ -1764,6 +2663,7 @@ async function initializeControlState() {
       documentEpoch: Math.max(1, Number(candidate.documentEpoch) || 1),
       navigationReady: false,
       pendingNavigation: null,
+      controlUiProofReady: false,
       policy: controlPolicy(recoveryConfig, recoveryTab),
     };
     controlEpoch = Math.max(controlEpoch, candidate.epoch);
@@ -1776,10 +2676,10 @@ async function initializeControlState() {
 // restart-under-a-dialog path can be driven directly. pendingDialog is
 // persisted with the lease, so a restart can land here with the controlled
 // page still frozen behind a dialog: the document identity is answered by the
-// browser process and is still verified, but the overlay repaint that ends
+// browser process and is still verified, but the overlay render acknowledgement that ends
 // recovery can never be acknowledged. That refusal is the dialog, not a lost
 // lease, so the recovered lease is kept and the first heartbeat after the
-// dialog is resolved repaints the indicator. A recovery that could not verify
+// dialog is resolved rechecks the indicator. A recovery that could not verify
 // the document at all keeps the fail-closed revocation, dialog or not.
 async function finishRecoveredLease(recoveryTab, recoveryConfig) {
   try {
@@ -1802,6 +2702,7 @@ async function finishRecoveredLease(recoveryTab, recoveryConfig) {
 function synchronouslyTakeControlLease(reason, requireExplicitStart) {
   controlEpoch += 1;
   const lease = controlLease;
+  clearControlUiTopLayerDirty(lease);
   controlLease = null;
   activeControlCaptures.clear();
   // Single choke point for frame teardown too. The verified
@@ -2339,6 +3240,7 @@ async function startControl(tabId, {
     documentUrl: null,
     navigationReady: false,
     pendingNavigation: null,
+    controlUiProofReady: false,
     pendingDialog: null,
     policy: controlPolicy(controlConfig, tab),
     viewport: null,
@@ -2391,7 +3293,7 @@ async function requireControl(tabId, reason, commandContext = null) {
   }
   if (controlLease?.tabId === tabId) {
     // JavaScript dialogs freeze the renderer, so page.handleDialog is the one
-    // controlled action that cannot obtain a fresh content paint acknowledgement
+    // controlled action that cannot obtain a fresh content render/hit-test acknowledgement
     // before resolving the dialog in the browser process. Every other same-tab
     // reuse must prove the visible page-owned surface again immediately before
     // the action continues.
@@ -2431,21 +3333,43 @@ async function captureTab(tab, commandContext = null, existingAuthority = null) 
   const activeCaptureIds = beginControlCapture(tab.id, captureId);
   try {
     let beginState;
+    beginControlUiTopLayerMutation();
     try {
-      beginState = await contentRequest(
-        tab.id,
-        { method: "control.capture.begin", captureId, activeCaptureIds },
-        { authority, commandContext },
-      );
-    } catch (error) {
-      await failControlUiClosed(lease, "capture_begin", error);
-    }
-    if (!controlUiAcknowledged(beginState, activeCaptureIds, lease.cursor.visible)) {
-      await failControlUiClosed(
-        lease,
-        "capture_begin",
-        new Error("The page did not confirm that the control overlay was hidden"),
-      );
+      const contentRequestLossGeneration = controlUiContentLossGeneration;
+      try {
+        beginState = await contentRequest(
+          tab.id,
+          { method: "control.capture.begin", captureId, activeCaptureIds },
+          { authority, commandContext },
+        );
+      } catch (error) {
+        await failControlUiClosed(lease, "capture_begin", error);
+      }
+      if (!controlUiAcknowledged(beginState, activeCaptureIds, lease.cursor.visible)) {
+        await failControlUiClosed(
+          lease,
+          "capture_begin",
+          new Error("The page did not confirm that the control overlay was hidden"),
+        );
+      }
+      try {
+        const verifiedProof = await verifyControlUiBrowserTopLayer(
+          lease,
+          beginState,
+          authority,
+          commandContext,
+          contentRequestLossGeneration,
+        );
+        clearControlUiTopLayerDirty(
+          lease,
+          verifiedProof.revision,
+          verifiedProof.contentLossGeneration,
+        );
+      } catch (error) {
+        await failControlUiClosed(lease, "capture_begin_top_layer", error);
+      }
+    } finally {
+      endControlUiTopLayerMutation();
     }
     assertLeaseAuthority(authority, commandContext, "screenshot capture");
     const capture = await debuggerCommand(tab.id, "Page.captureScreenshot", {
@@ -2461,13 +3385,15 @@ async function captureTab(tab, commandContext = null, existingAuthority = null) 
     const remainingCaptureIds = endControlCapture(tab.id, captureId);
     let restored = false;
     // A dialog that opened during the capture freezes the renderer: neither
-    // the capture-end message nor the overlay repaint can be answered, so
-    // both would only burn their content timeout. The overlay is repainted by
+    // the capture-end message nor the overlay render acknowledgement can be answered, so
+    // both would only burn their content timeout. The overlay is rechecked by
     // the next heartbeat or observation once the dialog is resolved, and the
     // capture itself is discarded as BLOCKED_BY_DIALOG by the caller.
     const dialogBlocked = Boolean(controlLease?.pendingDialog);
     if (!dialogBlocked) {
+      beginControlUiTopLayerMutation();
       try {
+        const contentRequestLossGeneration = controlUiContentLossGeneration;
         const endState = await contentRequest(tab.id, {
           method: "control.capture.end",
           captureId,
@@ -2476,8 +3402,24 @@ async function captureTab(tab, commandContext = null, existingAuthority = null) 
           controlEpoch: authority.epoch,
         }, { authority, commandContext });
         restored = controlUiAcknowledged(endState, remainingCaptureIds, lease.cursor.visible);
+        if (restored) {
+          const verifiedProof = await verifyControlUiBrowserTopLayer(
+            lease,
+            endState,
+            authority,
+            commandContext,
+            contentRequestLossGeneration,
+          );
+          clearControlUiTopLayerDirty(
+            lease,
+            verifiedProof.revision,
+            verifiedProof.contentLossGeneration,
+          );
+        }
       } catch {
         restored = false;
+      } finally {
+        endControlUiTopLayerMutation();
       }
     }
     const leaseStillActive = controlLease?.sessionId === authority.sessionId
@@ -2495,14 +3437,15 @@ async function captureTab(tab, commandContext = null, existingAuthority = null) 
 
 // One CDP command's timeout. The default is the lease-fatal
 // DEBUGGER_TIMEOUT_MS; a caller that carries a `deadlineAt` (only the
-// read-only frame-observation pass does) is bounded by what is left of that
-// shared deadline instead, so a page full of slow iframes cannot stretch one
-// observation past its budget one command at a time.
+// read-only frame-observation or browser control proof does) is bounded by
+// what is left of that shared deadline instead, so adversarial page structure
+// cannot stretch one pass past its budget one command at a time.
 function commandTimeoutMs(options) {
   const deadlineAt = Number(options?.deadlineAt);
   if (!Number.isFinite(deadlineAt)) return DEBUGGER_TIMEOUT_MS;
   const remaining = deadlineAt - Date.now();
-  return Math.min(DEBUGGER_TIMEOUT_MS, Math.max(FRAME_OBSERVE_MIN_TIMEOUT_MS, remaining));
+  const minimum = options?.strictDeadline === true ? 1 : FRAME_OBSERVE_MIN_TIMEOUT_MS;
+  return Math.min(DEBUGGER_TIMEOUT_MS, Math.max(minimum, Math.floor(remaining)));
 }
 
 // `sessionId` is the one optional trailing argument that makes this the
@@ -2512,6 +3455,11 @@ function commandTimeoutMs(options) {
 async function debuggerCommand(tabId, method, params, authority = null, commandContext = null, sessionId = null, options = null) {
   if (authority) assertLeaseAuthority(authority, commandContext, `CDP ${method} dispatch`);
   else assertCommandActive(commandContext, `CDP ${method} dispatch`);
+  if (options?.strictDeadline === true && Date.now() >= Number(options.deadlineAt)) {
+    const error = new Error(`CONTROL_UI_PROOF_TIMEOUT: ${method} exceeded the shared browser proof deadline`);
+    error.code = "CONTROL_UI_PROOF_TIMEOUT";
+    throw error;
+  }
   const target = sessionId ? { tabId, sessionId } : { tabId };
   const operation = chrome.debugger.sendCommand(target, method, params);
   operation.catch(() => {});
@@ -2533,6 +3481,11 @@ async function debuggerCommand(tabId, method, params, authority = null, commandC
       unknown.cause = error;
       throw unknown;
     }
+    throw error;
+  }
+  if (options?.strictDeadline === true && Date.now() > Number(options.deadlineAt)) {
+    const error = new Error(`CONTROL_UI_PROOF_TIMEOUT: ${method} exceeded the shared browser proof deadline`);
+    error.code = "CONTROL_UI_PROOF_TIMEOUT";
     throw error;
   }
   if (authority) assertLeaseAuthorityAfterDispatch(authority, commandContext, `CDP ${method}`);
@@ -4043,6 +4996,7 @@ async function trustedClickAt(tabId, x, y, button = "left", clickCount = 1, targ
 const KEY_CODES = {
   Tab: 9, Enter: 13, Escape: 27, Backspace: 8, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40,
   PageUp: 33, PageDown: 34, End: 35, Home: 36, Space: 32, Delete: 46, Insert: 45,
+  ContextMenu: 93, CapsLock: 20, PrintScreen: 44, Pause: 19,
 };
 
 function parseKeyChord(chord) {
@@ -4061,7 +5015,7 @@ function parseKeyChord(chord) {
   const isLetter = /^[a-z]$/i.test(normalizedKey);
   const isDigit = /^\d$/.test(normalizedKey);
   const isFunction = /^F(?:[1-9]|1[0-2])$/.test(normalizedKey);
-  const isNamed = Object.hasOwn(KEY_CODES, normalizedKey) || ["ContextMenu", "CapsLock", "PrintScreen", "Pause"].includes(normalizedKey);
+  const isNamed = Object.hasOwn(KEY_CODES, normalizedKey);
   if (!isLetter && !isDigit && !isFunction && !isNamed && normalizedKey.length !== 1) {
     throw new Error(`BAD_KEY: unsupported key ${normalizedKey}`);
   }
@@ -4137,13 +5091,47 @@ async function evaluateJavaScript(tabId, expression, commandContext = null, exis
 }
 
 async function queueApproval(method, params, tabId, description, risk, commandContext = null) {
-  const pending = {
-    id: crypto.randomUUID(), method, params, tabId, ref: params.ref, label: description.name || description.role,
-    risk, createdAt: Date.now(), expiresAt: Date.now() + 120_000,
-  };
-  await commandSideEffect(commandContext, "approval creation", () => chrome.storage.local.set({ pendingApproval: pending }));
-  await commandSideEffect(commandContext, "approval badge color", () => chrome.action.setBadgeBackgroundColor({ color: "#f3bd4e" }));
-  await commandSideEffect(commandContext, "approval badge text", () => chrome.action.setBadgeText({ text: "?" }));
+  const pending = await commandSideEffect(commandContext, "approval creation", () => queueTransportIdentityOperation(async () => {
+    const authority = currentApprovalAuthority();
+    if (!authority || (commandContext && commandContext.sessionId !== authority.serverSessionId)) {
+      throw new Error("APPROVAL_STALE: cannot queue approval without the exact ready controller transport");
+    }
+    assertCommandActive(commandContext, "approval admission dispatch");
+    const existing = (await settings()).pendingApproval;
+    assertCommandActive(commandContext, "approval admission completion");
+    if (existing?.expiresAt > Date.now() && pendingApprovalMatchesCurrentTransport(existing)) {
+      const error = new Error("APPROVAL_ALREADY_PENDING: resolve the existing popup approval before requesting another risky action");
+      error.code = "APPROVAL_ALREADY_PENDING";
+      throw error;
+    }
+    if (existing) {
+      await clearPendingApprovalUi();
+      assertCommandActive(commandContext, "stale approval cleanup completion");
+    }
+    const queued = {
+      id: crypto.randomUUID(), method, params, tabId, ref: params.ref, label: description.name || description.role,
+      risk, createdAt: Date.now(), expiresAt: Date.now() + 120_000,
+      authority,
+    };
+    try {
+      assertCommandActive(commandContext, "approval storage dispatch");
+      await chrome.storage.local.set({ pendingApproval: queued });
+      assertCommandActive(commandContext, "approval storage completion");
+      await queueBadgeWrite(async () => {
+        assertCommandActive(commandContext, "approval badge dispatch");
+        await chrome.action.setBadgeBackgroundColor({ color: "#f3bd4e" });
+        assertCommandActive(commandContext, "approval badge color completion");
+        await chrome.action.setBadgeText({ text: "?" });
+        assertCommandActive(commandContext, "approval badge text completion");
+      });
+      assertCommandActive(commandContext, "approval badge queue completion");
+      assertPendingApprovalTransport(queued);
+    } catch (error) {
+      await clearPendingApprovalUi().catch(() => {});
+      throw error;
+    }
+    return queued;
+  }));
   return { status: "approval_required", approvalId: pending.id, risk, label: pending.label, expiresAt: pending.expiresAt };
 }
 
@@ -4827,12 +5815,23 @@ async function dispatch(method, params, approved, commandContext = null, { batch
 
 async function popupState() {
   await initializeControlState();
-  const config = await settings();
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  // Querying the active tab can yield. Read settings afterward so a token or
+  // mode rotation that completed during that wait cannot be returned as an
+  // older, internally coherent-looking popup snapshot.
+  const config = await settings();
   let currentHost = "";
   try { currentHost = new URL(tab?.url ?? "").hostname; } catch {}
-  const pending = config.pendingApproval?.expiresAt > Date.now() ? config.pendingApproval : null;
-  if (!pending && config.pendingApproval) await chrome.storage.local.set({ pendingApproval: null });
+  const pending = config.pendingApproval?.expiresAt > Date.now()
+    && pendingApprovalMatchesCurrentTransport(config.pendingApproval)
+    ? config.pendingApproval
+    : null;
+  if (!pending && config.pendingApproval) {
+    // tabs.query can yield long enough for a new approval to replace the
+    // snapshot. Re-read under the transport-identity queue and clear only the
+    // exact stale id/authority that this popup observed.
+    await clearPendingApprovalSnapshot(config.pendingApproval);
+  }
   return {
     enabled: config.enabled,
     fullAccess: config.fullAccess,
@@ -4849,6 +5848,23 @@ async function popupState() {
   };
 }
 
+function sameApprovalIdentity(left, right) {
+  return Boolean(left?.id
+    && left.id === right?.id
+    && left.authority?.ownerSessionId === right?.authority?.ownerSessionId
+    && left.authority?.serverSessionId === right?.authority?.serverSessionId
+    && left.authority?.connectionId === right?.authority?.connectionId);
+}
+
+function clearPendingApprovalSnapshot(expected) {
+  return queueTransportIdentityOperation(async () => {
+    const current = (await settings()).pendingApproval;
+    if (!sameApprovalIdentity(current, expected)) return false;
+    await clearPendingApprovalUi();
+    return true;
+  });
+}
+
 function assertTrustedPopupSender(sender) {
   if (sender.url !== chrome.runtime.getURL("popup.html")) {
     throw new Error("TRUSTED_POPUP_REQUIRED: only the extension popup can perform this action");
@@ -4859,13 +5875,101 @@ async function clearSavedTokenFromPopup(sender) {
   assertTrustedPopupSender(sender);
   await removeSecuritySettings(["token"], "saved_token_cleared");
   const state = await popupState();
-  if (state.tokenConfigured) {
-    throw new Error("TOKEN_CLEAR_FAILED: the saved extension token is still configured");
+  if (state.tokenConfigured || state.connectionStatus !== "not-configured") {
+    throw new Error("TOKEN_CLEAR_FAILED: the saved token or disconnected status was not durably confirmed");
   }
   return state;
 }
 
+function popupApprovalCommandContext(pending) {
+  return {
+    key: `approval:${pending.authority.connectionId}:${pending.id}`,
+    id: pending.id,
+    sequence: -1,
+    sessionId: pending.authority.serverSessionId,
+    method: pending.method,
+    canceled: false,
+    started: false,
+    cancelWaiters: new Set(),
+    cancellationCleanup: Promise.resolve(false),
+  };
+}
+
+async function resolvePendingApprovalFromPopup(id, sender, approved) {
+  assertTrustedPopupSender(sender);
+  const claim = await queueTransportIdentityOperation(async () => {
+    const config = await settings();
+    const pending = config.pendingApproval;
+    if (!pending) {
+      throw new Error("APPROVAL_STALE: approval no longer exists");
+    }
+    // A popup snapshot can lag behind a newer approval. Never let clicking
+    // the stale card delete the newer payload; the popup refreshes and shows
+    // the one live approval instead.
+    if (pending.id !== id) {
+      throw new Error("APPROVAL_STALE: the popup approval was replaced; refresh the popup state");
+    }
+    if (pending.expiresAt <= Date.now()) {
+      await clearPendingApprovalUi();
+      throw new Error("APPROVAL_STALE: approval expired");
+    }
+    try {
+      assertPendingApprovalTransport(pending);
+    } catch (error) {
+      await clearPendingApprovalUi();
+      throw error;
+    }
+
+    if (!approved) {
+      await clearPendingApprovalUi();
+      assertPendingApprovalTransport(pending);
+      send({ type: "event", name: "approval.rejected", data: { id: pending.id } });
+      return { pending, context: null };
+    }
+
+    const context = popupApprovalCommandContext(pending);
+    activeCommandContexts.set(context.key, context);
+    try {
+      // Claim and remove the payload while the exact transport identity queue
+      // is held. Registering the context first lets an unexpected socket close
+      // cancel the claim even while the storage mutation is pending.
+      await clearPendingApprovalUi();
+      assertPendingApprovalTransport(pending);
+      assertCommandActive(context, "approved action claim");
+      return { pending, context };
+    } catch (error) {
+      activeCommandContexts.delete(context.key);
+      throw error;
+    }
+  });
+
+  if (!claim.context) return popupState();
+  const { pending, context } = claim;
+  try {
+    // The identity queue is deliberately released before dispatch. A later
+    // token/port/enable rotation can now invalidate this exact binding and
+    // cancel the registered context before a deferred browser side effect.
+    const result = await queueBrowserAction(
+      context,
+      () => assertPendingApprovalTransport(pending),
+      () => dispatch(pending.method, pending.params, true, context),
+    );
+    assertCommandActiveAfterDispatch(context, "approved action");
+    send({ type: "event", name: "approval.resolved", data: { id: pending.id, method: pending.method, ok: true, result } });
+  } catch (error) {
+    if (!context.canceled) {
+      send({ type: "event", name: "approval.resolved", data: { id: pending.id, method: pending.method, ok: false, error: error.message } });
+    }
+    throw error;
+  } finally {
+    await awaitCommandCleanup(context);
+    activeCommandContexts.delete(context.key);
+  }
+  return popupState();
+}
+
 async function handleControlUiMessage(message, sender) {
+  const messageLossGeneration = controlUiContentLossGeneration;
   await initializeControlState();
   if (!Number.isInteger(sender.tab?.id)) throw new Error("Invalid control UI request");
   if (message.action === "reconcile") {
@@ -4875,8 +5979,68 @@ async function handleControlUiMessage(message, sender) {
   if (message.action === "indicatorLost") {
     if (!controlLease
       || controlLease.tabId !== sender.tab.id
-      || message.sessionId !== controlLease.sessionId) return publicControlState();
+      || message.sessionId !== controlLease.sessionId
+      || controlCaptureIds(controlLease.tabId).length > 0) return publicControlState();
+    if (controlLease.pendingNavigation
+      || !controlLease.navigationReady
+      || controlLease.controlUiProofReady !== true
+      || controlUiTopLayerMutationDepth > 0) {
+      markControlUiProofDirty(controlLease, true);
+      return publicControlState();
+    }
     return stopControl("control_ui_hidden", { requireExplicitStart: true });
+  }
+  if (message.action === "indicatorCheck") {
+    if (!controlLease
+      || controlLease.tabId !== sender.tab.id
+      || message.sessionId !== controlLease.sessionId) return publicControlState();
+    if (controlCaptureIds(controlLease.tabId).length > 0) return publicControlState();
+    const lease = controlLease;
+    const state = message.browserState;
+    if (lease.pendingNavigation
+      || !lease.navigationReady
+      || controlUiTopLayerMutationDepth > 0) return publicControlState();
+    if (lease.controlUiProofReady !== true
+      || state?.hostId !== lease.controlHostId
+      || state?.markerId !== lease.controlMarkerId) {
+      markControlUiProofDirty(lease, true);
+      // A fresh document_idle content world can arrive well before a slow
+      // page reaches tabs.onUpdated "complete". Rebind immediately through
+      // the serialized full renderer + browser-process proof instead of
+      // revoking an authorized navigation for slow subresources.
+      await showControlUi(lease);
+      return publicControlState();
+    }
+    const points = state?.controlHitPoints;
+    const distinctPoints = Array.isArray(points)
+      ? new Set(points.map((point) => `${point?.x}:${point?.y}`))
+      : new Set();
+    if (state?.capturing !== false
+      || !Array.isArray(points)
+      || points.length !== CONTROL_UI_HIT_POINT_MAX
+      || distinctPoints.size !== CONTROL_UI_HIT_POINT_MAX) {
+      await stopControl("control_ui_hidden", { requireExplicitStart: true }).catch(() => {});
+      throw new Error("CONTROL_UI_RENDER_FAILED: passive control acknowledgement was malformed");
+    }
+    const authority = captureLeaseAuthority(lease);
+    try {
+      const verifiedProof = await verifyControlUiBrowserTopLayer(
+        lease,
+        state,
+        authority,
+        null,
+        messageLossGeneration,
+      );
+      clearControlUiTopLayerDirty(
+        lease,
+        verifiedProof.revision,
+        verifiedProof.contentLossGeneration,
+      );
+      return publicControlState();
+    } catch (error) {
+      await stopControl("control_ui_hidden", { requireExplicitStart: true }).catch(() => {});
+      throw error;
+    }
   }
   if (message.action !== "stop") throw new Error("Invalid control UI request");
   if (!controlLease || controlLease.tabId !== sender.tab.id) return publicControlState();
@@ -4950,28 +6114,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return popupState();
       }
       case "approve": {
-        const config = await settings();
-        const pending = config.pendingApproval;
-        if (!pending || pending.id !== message.id || pending.expiresAt <= Date.now()) throw new Error("Approval expired");
-        await chrome.storage.local.set({ pendingApproval: null });
-        try {
-          const result = await dispatch(pending.method, pending.params, true);
-          send({ type: "event", name: "approval.resolved", data: { id: pending.id, method: pending.method, ok: true, result } });
-        } catch (error) {
-          send({ type: "event", name: "approval.resolved", data: { id: pending.id, method: pending.method, ok: false, error: error.message } });
-          throw error;
-        } finally {
-          await setStatus(socket?.readyState === WebSocket.OPEN ? "connected" : "disconnected", "Approval handled.");
-        }
-        return popupState();
+        return resolvePendingApprovalFromPopup(message.id, sender, true);
       }
       case "reject": {
-        const config = await settings();
-        if (config.pendingApproval?.id === message.id) {
-          await chrome.storage.local.set({ pendingApproval: null });
-          send({ type: "event", name: "approval.rejected", data: { id: message.id } });
-        }
-        return popupState();
+        return resolvePendingApprovalFromPopup(message.id, sender, false);
       }
       default: throw new Error("Unknown popup action");
     }
@@ -4987,13 +6133,13 @@ chrome.runtime.onInstalled.addListener(() => {
     allowedHosts: stored.allowedHosts,
     connectionStatus: stored.connectionStatus,
     connectionDetail: stored.connectionDetail,
-    pendingApproval: stored.pendingApproval,
+    pendingApproval: null,
   }, "extension_lifecycle_changed"));
 });
-chrome.runtime.onStartup.addListener(() => void connect());
+chrome.runtime.onStartup.addListener(() => void queueConnect());
 chrome.alarms.create("local-browser-bridge-reconnect", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "local-browser-bridge-reconnect" && socket?.readyState !== WebSocket.OPEN) void connect();
+  if (alarm.name === "local-browser-bridge-reconnect" && socket?.readyState !== WebSocket.OPEN) void queueConnect();
   if (alarm.name === "local-browser-bridge-reconnect") void heartbeatControl();
   if (alarm.name === "local-browser-bridge-reconnect" && pendingControlCleanups.size) {
     void retryPendingControlCleanups();
@@ -5018,6 +6164,11 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
   // corrupt lease.loaderId or revoke the lease outright.
   if (source.sessionId) {
     handleFrameSessionEvent(source, method, params);
+    return;
+  }
+  if (method === "DOM.topLayerElementsUpdated") {
+    controlUiTopLayerRevision += 1;
+    scheduleControlUiTopLayerVerification();
     return;
   }
   if (method === "Target.attachedToTarget") {
@@ -5072,6 +6223,8 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
       at: Date.now(),
     };
     controlLease.pendingDialog = pendingDialog;
+    controlLease.controlUiProofReady = false;
+    clearControlUiTopLayerDirty(controlLease);
     void persistControlState().catch(() => {});
     send({ type: "event", name: "page.dialogOpened", data: { tabId: source.tabId, ...pendingDialog } });
   }
@@ -5083,6 +6236,7 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     // input release the dialog blocked is retried as soon as the renderer can
     // acknowledge it again.
     void retryDialogBlockedInputRelease(source.tabId).catch(() => {});
+    void showControlUi(controlLease).catch(() => {});
   }
 });
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
@@ -5122,4 +6276,4 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 void initializeControlState();
-void connect();
+void queueConnect();

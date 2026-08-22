@@ -53,7 +53,7 @@ for executable in "$windows_server" "$windows_helper"; do
   fi
 done
 
-expected_extension_files=(background.js content.js dom-core.js frame-agent.js lib.js manifest.json popup.css popup.html popup.js LICENSE)
+expected_extension_files=(background.js content.js dom-core.js frame-agent.js lib.js manifest.json popup.css popup.html popup.js stop-guard.js LICENSE)
 expected_extension_listing="$(printf '%s\n' "${expected_extension_files[@]}" | LC_ALL=C sort)"
 actual_extension_listing="$(unzip -Z1 "$extension_archive" | LC_ALL=C sort)"
 if [[ "$actual_extension_listing" != "$expected_extension_listing" ]]; then

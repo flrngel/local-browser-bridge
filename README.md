@@ -9,7 +9,7 @@ Everything runs locally through `127.0.0.1`. The server and computer helper are 
 - Use tabs in an existing, signed-in Chrome or Edge profile, including creating a new tab directly at a policy-approved URL
 - Read page text, screenshots, selection, and interactive elements
 - Click, fill, select, hover, scroll, type, navigate, and run page JavaScript
-- Work with same-origin and cross-origin frames in supported Chrome or Edge versions
+- Work with supported cross-origin frames in Chrome or Edge
 - Show Chrome's native debugging warning while trusted browser control is active
 - Show an in-page status pill, synthetic pointer, and human-owned **Stop** button
 - Use Full Access for broad control or Safe mode for allowlists and approvals
@@ -82,8 +82,9 @@ The server prints an authenticated control-page URL and an extension token. Open
 3. Enable **Developer mode**.
 4. Select **Load unpacked** and choose the folder containing `manifest.json`.
 5. Open the extension popup, enter the printed token, keep port `17373`, and connect.
+6. Reload any already-open tab you want to control so the extension's early Stop guard is present.
 
-Use **Clear saved token** in the trusted popup when you want the extension to disconnect and forget that credential; pausing Bridge control alone keeps it saved.
+Use **Clear saved token** in the trusted popup when you want the extension to disconnect, discard any waiting approval, and forget that credential; pausing Bridge control alone keeps it saved.
 
 When browser control starts, Chrome shows **Local Browser Bridge started debugging this browser**. The page also shows **Local Browser Bridge is using this tab**. If that page indicator disappears, the bridge ends control; Chrome's Cancel action and **Release control** in the popup remain available. See [Limitations](docs/LIMITATIONS.md) for the page-indicator boundary.
 
@@ -114,7 +115,7 @@ Full Access is enabled by default and can act in signed-in sessions, sensitive f
 
 At startup the server checks only the fixed public GitHub Releases metadata endpoint. It accepts only a canonical stable release that GitHub reports as immutable and that exposes the exact five uploaded, nonempty release assets with GitHub SHA-256 digests. It does not download or install anything. Disable the check with `--no-update-check` or `LBB_DISABLE_UPDATE_CHECK=1`.
 
-Unpacked extensions do not update automatically. Replace the server, extension, and helper together with files from the same release; do not mix versions. To preserve one extension identity, release control, disable the existing extension at `chrome://extensions`, replace the contents of its existing unpacked folder with the verified new ZIP, then re-enable and reload that same card. If you use a new folder instead, remove the old extension card before **Load unpacked**. Confirm that exactly one Local Browser Bridge card remains and that its popup version matches the server.
+Unpacked extensions do not update automatically. Replace the server, extension, and helper together with files from the same release; do not mix versions. To preserve one extension identity, release control, disable the existing extension at `chrome://extensions`, replace the contents of its existing unpacked folder with the verified new ZIP, then re-enable and reload that same card. If you use a new folder instead, remove the old extension card before **Load unpacked**. Confirm that exactly one Local Browser Bridge card remains, that its popup version matches the server, and reload each open target page before controlling it.
 
 ## Build and test
 

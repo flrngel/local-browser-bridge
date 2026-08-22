@@ -6307,10 +6307,11 @@ fn normalize_key_chord(chord: &str) -> Result<String, ApiError> {
 }
 
 /// Normalizes one key token: canonical names pass through, lowercase vendor
-/// aliases map onto them, and any other single printable character stays
-/// itself. A bare single letter keeps its case verbatim (legacy v0.9 clients
+/// aliases map onto them, and any other single non-control, non-whitespace
+/// Unicode scalar stays itself. Literal `+` is the chord separator and cannot
+/// be a key token. A bare single ASCII letter keeps its case verbatim (legacy v0.9 clients
 /// send `j` for Gmail-style shortcuts, and uppercasing would imply Shift);
-/// letters inside modifier chords canonicalize to uppercase, matching the
+/// ASCII letters inside modifier chords canonicalize to uppercase, matching the
 /// documented `Meta+L` form.
 fn normalize_key_name(key: &str, in_chord: bool) -> Result<String, ApiError> {
     if CANONICAL_NAMED_KEYS.contains(&key) {
@@ -7484,14 +7485,17 @@ mod tests {
             ("ctrl+ctrl+a", "Control+A"),
             ("Control+.", "Control+."),
             ("9", "9"),
-            // A bare single letter keeps its case verbatim (uppercasing
-            // would imply Shift for Gmail-style j/k shortcuts); letters
+            // A bare single ASCII letter keeps its case verbatim (uppercasing
+            // would imply Shift for Gmail-style j/k shortcuts); ASCII letters
             // inside modifier chords keep the canonical uppercase form.
             ("j", "j"),
             ("J", "J"),
             ("shift+j", "Shift+J"),
             ("ctrl+j", "Control+J"),
             ("Shift+j", "Shift+J"),
+            ("é", "é"),
+            ("\u{200d}", "\u{200d}"),
+            ("😀", "😀"),
         ] {
             assert_eq!(
                 normalize_key_chord(input).unwrap(),
@@ -7509,6 +7513,8 @@ mod tests {
             "ctrl+alt+shift+meta+a",
             "F13",
             "f0",
+            " ",
+            "\t",
         ] {
             assert!(normalize_key_chord(invalid).is_err(), "accepted {invalid}");
         }

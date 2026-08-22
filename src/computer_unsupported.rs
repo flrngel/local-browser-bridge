@@ -30,6 +30,11 @@ impl ComputerController {
         false
     }
 
+    /// Unsupported hosts cannot own a native share identity.
+    pub fn active_share_id(&self) -> Option<&str> {
+        None
+    }
+
     pub fn hello(&mut self) -> Value {
         json!({
             "type": "hello",
@@ -120,6 +125,7 @@ mod tests {
         let cancellation = CommandCancellation::new();
         let mut controller = ComputerController::new();
         assert!(!controller.has_active_share());
+        assert_eq!(controller.active_share_id(), None);
         assert!(ComputerController::take_fatal_capture_stop_error().is_none());
         let error = controller
             .execute_cancellable("computer.status", &json!({}), &cancellation)

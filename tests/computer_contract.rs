@@ -251,6 +251,9 @@ fn browser_and_native_key_grammars_are_documented_as_distinct_subsets() {
     );
     assert!(protocol.contains("`computer.key` is narrower and platform-specific"));
     assert!(protocol.contains("`ContextMenu`, `CapsLock`, `PrintScreen`, and `Pause`"));
+    assert!(protocol.contains("neither a control nor whitespace character"));
+    assert!(protocol.contains("Literal `+` is reserved as the chord separator"));
+    assert!(protocol.contains("exactly one UTF-16 code unit"));
     assert!(protocol.contains("Windows-key chord"));
     assert!(protocol.contains("COMPUTER_BACKGROUND_UNAVAILABLE"));
     assert!(capabilities.contains("| Native key subset |"));
@@ -771,6 +774,14 @@ fn asynchronous_share_failures_are_bound_to_the_producing_epoch() {
     assert!(server.contains("authorize_computer_share_error"));
     assert!(server.contains("COMPUTER_SHARE_SESSION_EXHAUSTED"));
     assert!(protocol.contains("An unbound or old-share error is ignored"));
+}
+
+#[test]
+fn unsupported_host_share_identity_surface_fails_closed_with_api_parity() {
+    let unsupported = fs::read_to_string("src/computer_unsupported.rs").unwrap();
+    assert!(unsupported.contains("pub fn active_share_id(&self) -> Option<&str>"));
+    assert!(unsupported.contains("pub fn active_share_id(&self) -> Option<&str> {\n        None"));
+    assert!(unsupported.contains("assert_eq!(controller.active_share_id(), None)"));
 }
 
 #[test]

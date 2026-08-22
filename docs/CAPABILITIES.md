@@ -16,11 +16,12 @@ This page states what the current code can do, what the user must configure, and
 | List, activate, create at a policy-approved URL, navigate, reload, and close tabs | Available | Chrome or Edge 140+; omit the creation URL only for a blank lifecycle tab |
 | Observe viewport pixels, text, selection, and interactive elements | Available | Regular HTTP(S) pages; file pages require the browser's file-URL permission |
 | Click, hover, fill, select, scroll, type, and send key chords | Available | One explicit debugger-backed lease on one tab |
+| Browser key subset | Available | Documented CDP named keys, F1–F12, ASCII letters/digits, and one non-control/non-whitespace BMP scalar other than the reserved `+`; Safe mode is narrower |
 | Main-world JavaScript evaluation | Available | Full Access, or the applicable Safe-mode policy |
 | Same-process frame observation | Available | Chrome or Edge 140+ |
 | Recursive cross-origin iframe observation and trusted point input | Available | Chrome or Edge 140+; bounded to 16 iframe targets and five levels |
 | Dialog handling, condition waits, and bounded action batches | Available | Commands remain tied to the current lease and observation epoch |
-| Browser-owned warning and extension-owned page indicator | Available | Chrome owns the authoritative warning/Cancel; the page pill has per-document randomized identity, fresh reuse paint checks, and a short fail-closed watchdog |
+| Browser-owned warning and extension-owned page indicator | Available | Chrome owns the authoritative warning/Cancel; the page pill combines a direct-root-child/innermost-host-bound private marker, initial/final host/root accessibility checks, five browser-process point hits, bounded top-layer ancestry, separate top-layer revision/content-loss generations, a 500 ms sampling attempt, and an absolute 3 s dirty-proof deadline |
 | Full Access | Available and default | Broad authority over regular pages in the selected profile |
 | Safe mode | Available | Site allowlist, sensitive-field blocking, and selected one-time approvals |
 | Per-command API cancellation | Available | Bearer-authenticated in-flight `callId`; returns outcome-unknown and requires observation, never automatic retry |

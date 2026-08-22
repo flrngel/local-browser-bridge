@@ -106,8 +106,9 @@ The app bundle is ad-hoc signed for internal consistency, but it is not Develope
 4. Select **Load unpacked** and choose the extracted folder containing `manifest.json`.
 5. Open the Local Browser Bridge popup and confirm that its version matches the server version.
 6. Paste the token printed by the server, keep port `17373`, and select **Save and connect**.
+7. Reload every already-open page you plan to control. The trusted Stop guard is installed at `document_start`; an old page that predates the extension install or update fails control start until a normal reload installs that early guard.
 
-The popup stores that token until the extension is removed or you select **Clear saved token** and confirm. Clearing first revokes active browser control and disconnects the connector, removes the `token` entry from extension storage, and reports the connection as not configured. Turning off **Bridge control** only pauses the connector; it deliberately keeps the saved token for later use.
+The popup stores that token until the extension is removed or you select **Clear saved token** and confirm. Clearing revokes active browser control, cancels work that has not reached Chrome yet, discards any waiting approval, disconnects the connector, removes the `token` entry from extension storage, and reports the connection as not configured even if Bridge control was paused. Turning off **Bridge control** only pauses the connector; it deliberately keeps the saved token for later use.
 
 Chrome and Edge 140 or later are required. Older builds are refused by the manifest because they cannot enforce the extension's persisted-storage access boundary.
 
@@ -118,7 +119,7 @@ When the local UI reports a new release, repeat the download and verification st
 1. To preserve its identity and saved settings, disable the existing card at `chrome://extensions`, replace the contents of that card's existing unpacked folder with the verified new ZIP contents, then re-enable and reload the same card.
 2. To extract to a new folder, first remove the old extension card, then select **Load unpacked** for the new folder and enter the server's new token again.
 
-Finish by confirming that `chrome://extensions` shows exactly one Local Browser Bridge card and that its popup version matches the server and helper. Loading a second extracted path without removing the first creates another unpacked extension identity and can leave the old connector active.
+Finish by confirming that `chrome://extensions` shows exactly one Local Browser Bridge card and that its popup version matches the server and helper, then reload every open target page before controlling it. Loading a second extracted path without removing the first creates another unpacked extension identity and can leave the old connector active.
 
 ## 6. Understand the authority granted
 

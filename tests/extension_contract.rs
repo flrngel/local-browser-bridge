@@ -17,6 +17,7 @@ const EXTENSION_FILES: &[&str] = &[
     "popup.css",
     "popup.html",
     "popup.js",
+    "stop-guard.js",
 ];
 
 fn normalize_newlines(source: String) -> String {
@@ -171,14 +172,21 @@ fn package_contains_only_declared_local_assets() {
         "scripts/verify-release-assets.sh does not verify exactly: {declared}"
     );
 
-    // The content script loads the shared DOM core first; the frame agent is
-    // never a content script and never web accessible.
+    // The stop guard is isolated at document_start; the heavier shared DOM
+    // core and content agent remain document_idle. The frame agent is never a
+    // content script and never web accessible.
     assert_eq!(
         strings(&manifest["content_scripts"][0]["js"]),
+        BTreeSet::from_iter(["stop-guard.js"].map(str::to_owned))
+    );
+    assert_eq!(manifest["content_scripts"][0]["run_at"], "document_start");
+    assert_eq!(
+        strings(&manifest["content_scripts"][1]["js"]),
         BTreeSet::from_iter(["content.js", "dom-core.js"].map(str::to_owned))
     );
-    assert_eq!(manifest["content_scripts"][0]["js"][0], "dom-core.js");
-    assert_eq!(manifest["content_scripts"][0]["js"][1], "content.js");
+    assert_eq!(manifest["content_scripts"][1]["run_at"], "document_idle");
+    assert_eq!(manifest["content_scripts"][1]["js"][0], "dom-core.js");
+    assert_eq!(manifest["content_scripts"][1]["js"][1], "content.js");
     assert!(manifest.get("web_accessible_resources").is_none());
 }
 
@@ -309,13 +317,13 @@ fn transport_and_security_rotation_revoke_control_first() {
         .unwrap()
         + clear_start;
     let clear = &background[clear_start..clear_end];
-    assert!(clear.contains("cancelCommandContextsForSession(protocolServerSessionId, reason)"));
+    assert!(clear.contains("cancelCommandContextsForSession(retiringSessionId, reason)"));
     assert!(clear.contains("await stopControl(reason, { requireExplicitStart: true })"));
     assert!(
         clear
             .find("await stopControl(reason, { requireExplicitStart: true })")
             .unwrap()
-            < clear.find("socket.close()").unwrap()
+            < clear.find("retiringSocket.close()").unwrap()
     );
 
     let update_start = background.find("function updateSecuritySettings").unwrap();
@@ -349,6 +357,766 @@ fn transport_and_security_rotation_revoke_control_first() {
 }
 
 #[test]
+fn retired_socket_refuses_fresh_commands_during_deferred_teardown() {
+    let background = extension_source("background.js");
+    assert!(background.contains("const retiredProtocolSockets = new WeakSet()"));
+    assert!(background.contains(
+        "if (!protocolSocketAdmitted(nextSocket, connectionId, authSessionId, false)) return;"
+    ));
+    assert!(background.contains(
+        "if (!ready || !protocolSocketAdmitted(nextSocket, connectionId, context.sessionId))"
+    ));
+    let clear_start = background.find("async function clearSocket").unwrap();
+    let clear_end = background[clear_start..]
+        .find("function settingFingerprint")
+        .unwrap()
+        + clear_start;
+    let clear = &background[clear_start..clear_end];
+    assert!(
+        clear.find("retireProtocolSocket(retiringSocket)").unwrap()
+            < clear.find("await stopControl").unwrap()
+    );
+    assert!(
+        clear.find("protocolSessionReady = false").unwrap()
+            < clear.find("await stopControl").unwrap()
+    );
+
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const brace = source.indexOf("{", start);
+        let depth = 0, quote = "", escaped = false, lineComment = false, blockComment = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          const next = source[index + 1] ?? "";
+          if (lineComment) {
+            if (character === "\n") lineComment = false;
+          } else if (blockComment) {
+            if (character === "*" && next === "/") { blockComment = false; index += 1; }
+          } else if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (character === "/" && next === "/") { lineComment = true; index += 1; }
+          else if (character === "/" && next === "*") { blockComment = true; index += 1; }
+          else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      let releaseStop;
+      const stopGate = new Promise((resolve) => { releaseStop = resolve; });
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const functions = ["retireProtocolSocket", "protocolSocketAdmitted", "clearSocket"]
+        .map((name) => extractFunction(source, name)).join("\n");
+      const bridge = new Function("stopGate", `
+        const retiredProtocolSockets = new WeakSet();
+        const clearOwnedProtocolSockets = new WeakSet();
+        let protocolStatusGeneration = 0;
+        let protocolSessionReady = true;
+        let protocolServerSessionId = "session-a";
+        let protocolConnectionId = "connection-a";
+        let pingTimer = null;
+        let closed = false;
+        let pendingCleared = false;
+        let sideEffects = 0;
+        const candidate = { onclose: () => {}, close: () => { closed = true; } };
+        let socket = candidate;
+        function cancelCommandContextsForSession() {}
+        async function stopControl() { await stopGate; }
+        async function clearPendingApprovalUi() { pendingCleared = true; }
+        ${functions}
+        return {
+          clear: () => clearSocket("security_rotation"),
+          receiveFresh: () => {
+            if (!protocolSocketAdmitted(candidate, "connection-a", "session-a")) return false;
+            sideEffects += 1;
+            return true;
+          },
+          state: () => ({ sideEffects, closed, pendingCleared, ready: protocolSessionReady }),
+        };
+      `)(stopGate);
+      if (!bridge.receiveFresh()) throw new Error("fixture socket was not initially admitted");
+      const clearing = bridge.clear();
+      if (bridge.receiveFresh()) throw new Error("fresh command was admitted after synchronous retirement");
+      const during = bridge.state();
+      if (during.sideEffects !== 1 || during.ready) throw new Error("retirement did not close admission before deferred stop");
+      releaseStop();
+      await clearing;
+      const after = bridge.state();
+      if (after.sideEffects !== 1 || !after.closed || !after.pendingCleared) {
+        throw new Error(`retired teardown did not finish safely: ${JSON.stringify(after)}`);
+      }
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run retired-socket admission harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node retired-socket admission harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn retired_socket_cannot_resume_auth_welcome_or_status_after_await() {
+    let background = extension_source("background.js");
+    let connect_start = background.find("async function connectNow()").unwrap();
+    let connect_end = background[connect_start..]
+        .find("async function getTab")
+        .unwrap()
+        + connect_start;
+    let connect = &background[connect_start..connect_end];
+    let onopen = &connect
+        [connect.find("nextSocket.onopen").unwrap()..connect.find("nextSocket.onmessage").unwrap()];
+    assert!(onopen.contains(
+        "if (!protocolSocketAdmitted(nextSocket, connectionId, authSessionId, false)) return;"
+    ));
+    let auth_resume = &connect[connect
+        .find("const clientProof = await createAuthProof")
+        .unwrap()
+        ..connect.find("authSessionId = message.sessionId").unwrap()];
+    assert!(
+        auth_resume
+            .contains("protocolSocketAdmitted(nextSocket, connectionId, authSessionId, false)")
+    );
+    let initialize_resume = &connect[connect.find("await initializeControlState()").unwrap()
+        ..connect.find("const incomingOwner").unwrap()];
+    assert!(
+        initialize_resume
+            .contains("protocolSocketAdmitted(nextSocket, connectionId, authSessionId, false)")
+    );
+    let owner_stop = &connect[connect
+        .find("await stopControl(\"owner_session_changed\"")
+        .unwrap()..connect.find("welcomed = true").unwrap()];
+    assert!(
+        owner_stop
+            .contains("protocolSocketAdmitted(nextSocket, connectionId, authSessionId, false)")
+    );
+    let failure = &connect[connect.find("const protocolFailure").unwrap()
+        ..connect.find("nextSocket.onopen").unwrap()];
+    assert!(
+        failure.find("protocolSocketAdmitted").unwrap()
+            < failure.find("retireProtocolSocket").unwrap()
+    );
+    assert!(connect.contains("void setTransportStatus("));
+
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const parameters = source.indexOf("(", start);
+        let parameterDepth = 0, quote = "", escaped = false;
+        let lineComment = false, blockComment = false, parameterEnd = -1;
+        for (let index = parameters; index < source.length; index += 1) {
+          const character = source[index];
+          const next = source[index + 1];
+          if (lineComment) {
+            if (character === "\n") lineComment = false;
+          } else if (blockComment) {
+            if (character === "*" && next === "/") { blockComment = false; index += 1; }
+          } else if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (character === "/" && next === "/") { lineComment = true; index += 1; }
+          else if (character === "/" && next === "*") { blockComment = true; index += 1; }
+          else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "(") parameterDepth += 1;
+          else if (character === ")" && --parameterDepth === 0) { parameterEnd = index; break; }
+        }
+        if (parameterEnd < 0) throw new Error(`unterminated parameters for ${name}`);
+        const brace = source.indexOf("{", parameterEnd);
+        let depth = 0;
+        quote = ""; escaped = false; lineComment = false; blockComment = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          const next = source[index + 1];
+          if (lineComment) {
+            if (character === "\n") lineComment = false;
+          } else if (blockComment) {
+            if (character === "*" && next === "/") { blockComment = false; index += 1; }
+          } else if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (character === "/" && next === "/") { lineComment = true; index += 1; }
+          else if (character === "/" && next === "*") { blockComment = true; index += 1; }
+          else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      function deferred() {
+        let resolve;
+        return { promise: new Promise((done) => { resolve = done; }), resolve };
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const functions = [
+        "retireProtocolSocket", "protocolSocketAdmitted", "queueBadgeWrite", "publishStatus", "setStatus", "setTransportStatus",
+      ].map((name) => extractFunction(source, name)).join("\n");
+      const bridge = new Function("deferred", `
+        const retiredProtocolSockets = new WeakSet();
+        let protocolStatusGeneration = 1;
+        let protocolSessionReady = false;
+        let protocolServerSessionId = "";
+        let protocolConnectionId = "connection-a";
+        let connectionStatusWrite = Promise.resolve();
+        let badgeWrite = Promise.resolve();
+        const trustedStorageReady = Promise.resolve();
+        let statusGate = deferred();
+        let gateFirstStatus = true;
+        let statusStarted = false;
+        const stored = {};
+        const badge = {};
+        const chrome = {
+          storage: { local: { get: async (defaults) => ({ ...defaults, ...stored }), set: async (updates) => {
+            if (gateFirstStatus) {
+              gateFirstStatus = false;
+              statusStarted = true;
+              await statusGate.promise;
+            }
+            Object.assign(stored, updates);
+          } } },
+          action: {
+            setBadgeBackgroundColor: async ({ color }) => { badge.color = color; },
+            setBadgeText: async ({ text }) => { badge.text = text; },
+          },
+        };
+        let socket = null;
+        let authResponses = 0;
+        let welcomes = 0;
+        function pendingApprovalMatchesCurrentTransport() { return false; }
+        ${functions}
+        function admitFresh(connectionId = "connection-a", sessionId = "") {
+          const candidate = {};
+          socket = candidate;
+          protocolConnectionId = connectionId;
+          protocolServerSessionId = sessionId;
+          protocolSessionReady = Boolean(sessionId);
+          return candidate;
+        }
+        async function resumeAuth(candidate, gate) {
+          await gate.promise;
+          if (!protocolSocketAdmitted(candidate, "connection-a", "", false)) return false;
+          authResponses += 1;
+          return true;
+        }
+        async function resumeWelcome(candidate, initGate, stopGate) {
+          await initGate.promise;
+          if (!protocolSocketAdmitted(candidate, "connection-a", "", false)) return false;
+          await stopGate.promise;
+          if (!protocolSocketAdmitted(candidate, "connection-a", "", false)) return false;
+          welcomes += 1;
+          return true;
+        }
+        return {
+          authRace: async () => {
+            const candidate = admitFresh();
+            const gate = deferred();
+            const resumed = resumeAuth(candidate, gate);
+            retireProtocolSocket(candidate);
+            gate.resolve();
+            await resumed;
+          },
+          initializeRace: async () => {
+            const candidate = admitFresh();
+            const initGate = deferred(), stopGate = deferred();
+            const resumed = resumeWelcome(candidate, initGate, stopGate);
+            retireProtocolSocket(candidate);
+            initGate.resolve(); stopGate.resolve();
+            await resumed;
+          },
+          stopRace: async () => {
+            const candidate = admitFresh();
+            const initGate = deferred(), stopGate = deferred();
+            const resumed = resumeWelcome(candidate, initGate, stopGate);
+            initGate.resolve();
+            await Promise.resolve();
+            retireProtocolSocket(candidate);
+            stopGate.resolve();
+            await resumed;
+          },
+          statusRace: async () => {
+            const candidate = admitFresh("connection-status", "session-status");
+            const generation = protocolStatusGeneration;
+            const old = setTransportStatus(candidate, "connection-status", "session-status", true, generation, "connected", "old");
+            while (!statusStarted) await Promise.resolve();
+            retireProtocolSocket(candidate);
+            socket = null;
+            protocolSessionReady = false;
+            protocolConnectionId = "";
+            protocolServerSessionId = "";
+            const replacement = setStatus("not-configured", "new");
+            statusGate.resolve();
+            await Promise.all([old, replacement]);
+          },
+          state: () => ({ authResponses, welcomes, stored: { ...stored }, badge: { ...badge } }),
+        };
+      `)(deferred);
+      await bridge.authRace();
+      await bridge.initializeRace();
+      await bridge.stopRace();
+      await bridge.statusRace();
+      const state = bridge.state();
+      if (state.authResponses !== 0 || state.welcomes !== 0) {
+        throw new Error(`retired protocol resumed after await: ${JSON.stringify(state)}`);
+      }
+      if (state.stored.connectionStatus !== "not-configured" || state.badge.text !== "!") {
+        throw new Error(`retired status overwrote replacement: ${JSON.stringify(state)}`);
+      }
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run post-await retirement harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node post-await retirement harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn connect_and_close_cleanup_are_transport_identity_serialized() {
+    let background = extension_source("background.js");
+    assert!(background.contains(
+        "function queueConnect() {\n  return queueTransportIdentityOperation(connectNow);"
+    ));
+    assert!(background.contains("chrome.runtime.onStartup.addListener(() => void queueConnect())"));
+    assert!(background.contains("void queueConnect();\n  }, reconnectDelay)"));
+    assert!(background.contains("WebSocket.OPEN, WebSocket.CONNECTING, WebSocket.CLOSING"));
+    let clear_start = background.find("async function clearSocket").unwrap();
+    let clear_end = background[clear_start..]
+        .find("function settingFingerprint")
+        .unwrap()
+        + clear_start;
+    let clear = &background[clear_start..clear_end];
+    assert!(
+        clear
+            .find("clearOwnedProtocolSockets.add(retiringSocket)")
+            .unwrap()
+            < clear.find("await stopControl").unwrap()
+    );
+    assert!(clear.contains("retiringSocket.onclose = null"));
+    assert!(clear.contains("if (socket === retiringSocket)"));
+    let close_start = background.find("nextSocket.onclose = async").unwrap();
+    let close_end = background[close_start..].find("\n  };\n}").unwrap() + close_start;
+    let close = &background[close_start..close_end];
+    assert!(close.contains("clearOwnedProtocolSockets.has(nextSocket)"));
+    assert!(close.contains("protocolCloseCleanupStarted.has(nextSocket)"));
+    assert!(!close.contains("protocolSocketAdmitted("));
+
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const brace = source.indexOf("{", start);
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      function deferred() {
+        let resolve;
+        return { promise: new Promise((done) => { resolve = done; }), resolve };
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const functions = ["retireProtocolSocket", "clearSocket", "queueTransportIdentityOperation", "queueConnect"]
+        .map((name) => extractFunction(source, name)).join("\n");
+      const bridge = new Function("deferred", `
+        const WebSocket = { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 };
+        const retiredProtocolSockets = new WeakSet();
+        const clearOwnedProtocolSockets = new WeakSet();
+        const protocolCloseCleanupStarted = new WeakSet();
+        let protocolStatusGeneration = 0;
+        let protocolSessionReady = true;
+        let protocolServerSessionId = "session-old";
+        let protocolConnectionId = "connection-old";
+        let pingTimer = null;
+        let transportRotation = Promise.resolve();
+        let gate = deferred();
+        let stopCalls = 0, pendingClears = 0, creations = 0, duplicateCloseCleanups = 0;
+        function candidate(name) {
+          return { name, readyState: WebSocket.OPEN, onclose: () => {}, closed: false, close() { this.closed = true; this.readyState = WebSocket.CLOSED; } };
+        }
+        const old = candidate("old");
+        let socket = old;
+        function cancelCommandContextsForSession() {}
+        async function stopControl() { stopCalls += 1; await gate.promise; }
+        async function clearPendingApprovalUi() { pendingClears += 1; }
+        async function connectNow() {
+          if (socket && [WebSocket.OPEN, WebSocket.CONNECTING, WebSocket.CLOSING].includes(socket.readyState)) return;
+          creations += 1;
+          socket = candidate("new-" + creations);
+          protocolConnectionId = "connection-" + creations;
+          protocolServerSessionId = "session-" + creations;
+          protocolSessionReady = true;
+        }
+        ${functions}
+        function intentionalCloseSignal() {
+          if (clearOwnedProtocolSockets.has(old)
+            || socket !== old
+            || protocolConnectionId !== "connection-old"
+            || protocolCloseCleanupStarted.has(old)) return false;
+          protocolCloseCleanupStarted.add(old);
+          duplicateCloseCleanups += 1;
+          return true;
+        }
+        function protocolFailureCloseSignal(target, connectionId) {
+          if (clearOwnedProtocolSockets.has(target)
+            || socket !== target
+            || protocolConnectionId !== connectionId
+            || protocolCloseCleanupStarted.has(target)) return false;
+          protocolCloseCleanupStarted.add(target);
+          duplicateCloseCleanups += 1;
+          return true;
+        }
+        return {
+          serializedRace: async () => {
+            const rotation = queueTransportIdentityOperation(async () => {
+              await clearSocket("settings_changed");
+              await connectNow();
+            });
+            const alarm = queueConnect();
+            await Promise.resolve();
+            if (creations !== 0 || protocolSessionReady) throw new Error("alarm connected during deferred retirement");
+            if (intentionalCloseSignal()) throw new Error("clear-owned close started duplicate cleanup");
+            gate.resolve();
+            await Promise.all([rotation, alarm]);
+          },
+          capturedRace: async () => {
+            const retiring = socket;
+            gate = deferred();
+            const clearing = clearSocket("captured_socket_test");
+            const replacement = candidate("manual-new");
+            socket = replacement;
+            protocolConnectionId = "manual-connection";
+            protocolServerSessionId = "manual-session";
+            protocolSessionReady = true;
+            gate.resolve();
+            await clearing;
+            if (!retiring.closed || socket !== replacement || protocolConnectionId !== "manual-connection") {
+              throw new Error("captured clear clobbered a replacement socket");
+            }
+          },
+          failedCloseRace: () => {
+            const failed = candidate("protocol-failed");
+            socket = failed;
+            protocolConnectionId = "failed-connection";
+            protocolServerSessionId = "failed-session";
+            retireProtocolSocket(failed);
+            if (!protocolFailureCloseSignal(failed, "failed-connection")) throw new Error("retired protocol-failure close skipped cleanup");
+            if (protocolFailureCloseSignal(failed, "failed-connection")) throw new Error("protocol-failure close cleanup ran twice");
+          },
+          state: () => ({ creations, stopCalls, pendingClears, duplicateCloseCleanups, socket: socket?.name }),
+        };
+      `)(deferred);
+      await bridge.serializedRace();
+      await bridge.capturedRace();
+      bridge.failedCloseRace();
+      const state = bridge.state();
+      if (state.creations !== 1 || state.duplicateCloseCleanups !== 1) {
+        throw new Error(`transport serialization failed: ${JSON.stringify(state)}`);
+      }
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run transport-serialization harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node transport-serialization harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn actual_websocket_handlers_do_not_resume_after_transport_retirement() {
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const brace = source.indexOf("{", start);
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      function deferred() {
+        let resolve;
+        return { promise: new Promise((done) => { resolve = done; }), resolve };
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const functions = ["retireProtocolSocket", "protocolSocketAdmitted", "exactObjectKeys", "connectNow"]
+        .map((name) => extractFunction(source, name)).join("\n");
+      const bridge = new Function("deferred", `
+        const VERSION = "0.12.2";
+        const PROTOCOL_VERSION = 1;
+        const AUTH_NEGOTIATION_TIMEOUT_MS = 3000;
+        const AUTH_MAX_INBOUND_FRAMES = 4;
+        const AUTH_MAX_FRAME_BYTES = 8192;
+        const DEBUGGER_TIMEOUT_MS = 6000;
+        const PING_INTERVAL_MS = 20000;
+        const COMMANDS = new Set(["status"]);
+        const navigator = { userAgent: "Chrome" };
+        const retiredProtocolSockets = new WeakSet();
+        const clearOwnedProtocolSockets = new WeakSet();
+        const protocolCloseCleanupStarted = new WeakSet();
+        const activeCommandContexts = new Map();
+        const canceledCommandKeys = new Set();
+        let socket = null, latestSocket = null, pingTimer = null;
+        let reconnectDelay = 1000, transportRotation = Promise.resolve();
+        let protocolStatusGeneration = 0;
+        let protocolSessionReady = false;
+        let protocolServerSessionId = "";
+        let protocolConnectionId = "";
+        let controlLease = null;
+        let verificationGate = null, initializationGate = null, stopGate = null;
+        let verificationStarted = false, initializationStarted = false, stopStarted = false;
+        let stopCalls = 0, reconnects = 0;
+        const sent = [];
+        const statuses = [];
+        const timerRecords = new Set();
+        function setTimeout(handler) { const record = { handler }; timerRecords.add(record); return record; }
+        function clearTimeout(record) { timerRecords.delete(record); }
+        function setInterval(handler) { const record = { handler }; timerRecords.add(record); return record; }
+        function clearInterval(record) { timerRecords.delete(record); }
+        class WebSocket {
+          static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
+          constructor() { this.readyState = WebSocket.CONNECTING; this.wire = []; latestSocket = this; }
+          send(raw) { this.wire.push(JSON.parse(raw)); }
+          close() {
+            this.readyState = WebSocket.CLOSED;
+            queueMicrotask(() => { if (typeof this.onclose === "function") void this.onclose(); });
+          }
+          open() { this.readyState = WebSocket.OPEN; this.onopen?.(); }
+        }
+        async function initializeProtocolIdentity() {}
+        async function settings() { return { token: "fixture-token", enabled: true, port: 48123, fullAccess: true }; }
+        async function clearPendingApprovalUi() {}
+        async function publishStatus(status, detail, generation) {
+          if (generation === protocolStatusGeneration) statuses.push({ status, detail, generation });
+          return generation === protocolStatusGeneration;
+        }
+        function setStatus(status, detail = "") { return publishStatus(status, detail, protocolStatusGeneration); }
+        function setTransportStatus(candidate, connectionId, sessionId, requireReady, generation, status, detail) {
+          if (!protocolSocketAdmitted(candidate, connectionId, sessionId, requireReady)) return Promise.resolve(false);
+          return publishStatus(status, detail, generation);
+        }
+        function encodeBase64Url() { return "client-nonce"; }
+        async function importAuthKey() { return {}; }
+        function decodeBase64Url32() {}
+        async function verifyAuthProof() {
+          verificationStarted = true;
+          if (verificationGate) await verificationGate.promise;
+          return true;
+        }
+        async function createAuthProof() { return "client-proof"; }
+        function serverAuthPayload() { return "server"; }
+        function clientAuthPayload() { return "client"; }
+        async function initializeControlState() {
+          initializationStarted = true;
+          if (initializationGate) await initializationGate.promise;
+        }
+        async function stopControl() {
+          stopCalls += 1;
+          stopStarted = true;
+          if (stopGate) await stopGate.promise;
+          controlLease = null;
+          return { active: false };
+        }
+        function cancelCommandContextsForSession() {}
+        function queueTransportIdentityOperation(operation) {
+          const queued = transportRotation.then(operation);
+          transportRotation = queued.catch(() => {});
+          return queued;
+        }
+        function scheduleReconnect() { reconnects += 1; }
+        function send(message) {
+          if (socket?.readyState !== WebSocket.OPEN || !protocolServerSessionId) return false;
+          sent.push(message);
+          socket.send(JSON.stringify(message));
+          return true;
+        }
+        function commandKey(sessionId, id, sequence) { return sessionId + ":" + sequence + ":" + id; }
+        function rememberCanceledCommand() {}
+        function cancelCommandContext(context) { context.canceled = true; }
+        function commandUsesControl() { return false; }
+        function invalidateCanceledCommandFreshness() { return Promise.resolve(false); }
+        function assertCommandActive() {}
+        async function dispatch() { return {}; }
+        function finalizeCanceledCommandFreshness() {}
+        ${functions}
+        function challenge(candidate) {
+          const hello = candidate.wire.find((message) => message.type === "authHello");
+          return {
+            type: "authChallenge", authVersion: 1, connector: "browser-extension",
+            sessionId: "11111111-1111-1111-1111-111111111111",
+            clientNonce: hello.clientNonce, serverNonce: "server-nonce", serverProof: "server-proof",
+          };
+        }
+        function welcome() {
+          return {
+            type: "welcome", protocolVersion: PROTOCOL_VERSION,
+            sessionId: "11111111-1111-1111-1111-111111111111",
+            serverVersion: VERSION, connector: "browser-extension",
+          };
+        }
+        function helloAck() {
+          return { type: "helloAck", protocolVersion: PROTOCOL_VERSION, sessionId: protocolServerSessionId, ok: true };
+        }
+        async function freshSocket() {
+          socket = null;
+          protocolSessionReady = false;
+          protocolServerSessionId = "";
+          protocolConnectionId = "";
+          verificationGate = null; initializationGate = null; stopGate = null;
+          verificationStarted = false; initializationStarted = false; stopStarted = false;
+          controlLease = null;
+          await connectNow();
+          latestSocket.open();
+          return latestSocket;
+        }
+        async function authenticate(candidate) {
+          await candidate.onmessage({ data: JSON.stringify(challenge(candidate)) });
+          if (!candidate.wire.some((message) => message.type === "authResponse")) throw new Error("fixture authentication failed");
+        }
+        return {
+          authRace: async () => {
+            const candidate = await freshSocket();
+            verificationGate = deferred();
+            const pending = candidate.onmessage({ data: JSON.stringify(challenge(candidate)) });
+            while (!verificationStarted) await Promise.resolve();
+            retireProtocolSocket(candidate);
+            verificationGate.resolve();
+            await pending;
+            if (candidate.wire.some((message) => message.type === "authResponse")) throw new Error("authResponse escaped retirement");
+          },
+          initializeRace: async () => {
+            const candidate = await freshSocket();
+            await authenticate(candidate);
+            initializationGate = deferred();
+            const pending = candidate.onmessage({ data: JSON.stringify(welcome()) });
+            while (!initializationStarted) await Promise.resolve();
+            retireProtocolSocket(candidate);
+            initializationGate.resolve();
+            await pending;
+            if (sent.some((message) => message.type === "hello")) throw new Error("hello escaped initialize retirement");
+          },
+          stopRace: async () => {
+            sent.length = 0;
+            const candidate = await freshSocket();
+            await authenticate(candidate);
+            controlLease = { ownerSessionId: "server:other" };
+            stopGate = deferred();
+            const pending = candidate.onmessage({ data: JSON.stringify(welcome()) });
+            while (!stopStarted) await Promise.resolve();
+            retireProtocolSocket(candidate);
+            stopGate.resolve();
+            await pending;
+            if (sent.some((message) => message.type === "hello")) throw new Error("hello escaped stop retirement");
+          },
+          retiredAckRace: async () => {
+            sent.length = 0;
+            const candidate = await freshSocket();
+            await authenticate(candidate);
+            await candidate.onmessage({ data: JSON.stringify(welcome()) });
+            if (!sent.some((message) => message.type === "hello")) throw new Error("fixture welcome failed");
+            retireProtocolSocket(candidate);
+            await candidate.onmessage({ data: JSON.stringify(helloAck()) });
+            if (protocolSessionReady) throw new Error("retired helloAck restored readiness");
+          },
+          protocolFailureClose: async () => {
+            sent.length = 0;
+            const beforeStops = stopCalls;
+            const candidate = await freshSocket();
+            await authenticate(candidate);
+            await candidate.onmessage({ data: JSON.stringify(welcome()) });
+            await candidate.onmessage({ data: JSON.stringify(helloAck()) });
+            if (!protocolSessionReady) throw new Error("fixture helloAck failed");
+            controlLease = { ownerSessionId: "server:11111111-1111-1111-1111-111111111111" };
+            await candidate.onmessage({ data: "{" });
+            await Promise.resolve();
+            await Promise.resolve();
+            await transportRotation;
+            for (let index = 0; index < 10 && reconnects < 1; index += 1) await Promise.resolve();
+            if (stopCalls <= beforeStops || protocolSessionReady || socket !== null || reconnects < 1) {
+              throw new Error("protocolFailure retirement skipped exact onclose cleanup: " + JSON.stringify({ stopCalls, beforeStops, protocolSessionReady, socket: socket?.readyState, reconnects }));
+            }
+          },
+        };
+      `)(deferred);
+      await bridge.authRace();
+      await bridge.initializeRace();
+      await bridge.stopRace();
+      await bridge.retiredAckRace();
+      await bridge.protocolFailureClose();
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run actual WebSocket retirement harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node actual WebSocket retirement harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn trusted_popup_can_remove_and_verify_the_saved_token() {
     let background = extension_source("background.js");
     let popup = extension_source("popup.html");
@@ -362,7 +1130,11 @@ fn trusted_popup_can_remove_and_verify_the_saved_token() {
     assert!(background.contains("case \"clearSavedToken\""));
     assert!(background.contains("assertTrustedPopupSender(sender)"));
     assert!(background.contains("removeSecuritySettings([\"token\"], \"saved_token_cleared\")"));
-    assert!(background.contains("if (state.tokenConfigured)"));
+    assert!(
+        background.contains(
+            "if (state.tokenConfigured || state.connectionStatus !== \"not-configured\")"
+        )
+    );
 
     let remove_start = background.find("function removeSecuritySettings").unwrap();
     let remove_end = background[remove_start..]
@@ -376,7 +1148,7 @@ fn trusted_popup_can_remove_and_verify_the_saved_token() {
     );
     assert!(
         remove.find("chrome.storage.local.remove(keys)").unwrap()
-            < remove.find("await connect()").unwrap()
+            < remove.find("await connectNow()").unwrap()
     );
     assert!(!remove.contains("chrome.storage.local.set"));
 
@@ -396,6 +1168,7 @@ fn trusted_popup_can_remove_and_verify_the_saved_token() {
         throw new Error(`unterminated ${name}`);
       }
       const source = fs.readFileSync("extension/background.js", "utf8");
+      const queueTransport = extractFunction(source, "queueTransportIdentityOperation");
       const remove = extractFunction(source, "removeSecuritySettings");
       const clear = extractFunction(source, "clearSavedTokenFromPopup");
       const assertTrusted = extractFunction(source, "assertTrustedPopupSender");
@@ -408,9 +1181,11 @@ fn trusted_popup_can_remove_and_verify_the_saved_token() {
         };
         async function clearSocket(reason) { events.push(["disconnect", reason]); }
         function markInternalSettings(updates) { events.push(["mark", Object.keys(updates)[0], updates.token]); }
-        async function connect() { events.push(["connect"]); }
+        async function connectNow() { events.push(["connect"]); connectionStatus = "not-configured"; }
         let tokenConfigured = true;
-        async function popupState() { return { tokenConfigured }; }
+        let connectionStatus = "connected";
+        async function popupState() { return { tokenConfigured, connectionStatus }; }
+        ${queueTransport}
         ${remove}
         ${assertTrusted}
         ${clear}
@@ -428,7 +1203,9 @@ fn trusted_popup_can_remove_and_verify_the_saved_token() {
       catch (error) { refused = error.message.startsWith("TRUSTED_POPUP_REQUIRED"); }
       if (!refused || events.length) throw new Error("non-popup token removal was not refused before mutation");
       const result = await bridge.clear("chrome-extension://fixture/popup.html");
-      if (result.tokenConfigured) throw new Error("token removal did not verify the cleared state");
+      if (result.tokenConfigured || result.connectionStatus !== "not-configured") {
+        throw new Error("token removal did not verify the cleared disconnected state");
+      }
       const order = events.map((event) => event[0]).join(",");
       if (order !== "disconnect,mark,remove,connect") throw new Error(`unexpected token-clear order: ${order}`);
     "#;
@@ -443,6 +1220,680 @@ fn trusted_popup_can_remove_and_verify_the_saved_token() {
     assert!(
         output.status.success(),
         "Node saved-token removal harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn pending_approval_is_exact_transport_bound_and_rotation_cancelable() {
+    let background = extension_source("background.js");
+    assert!(background.contains("pendingApprovalMatchesCurrentTransport"));
+    assert!(background.contains("pending.authority.connectionId === authority.connectionId"));
+    assert!(background.contains(
+        "assertTrustedPopupSender(sender);\n  const claim = await queueTransportIdentityOperation"
+    ));
+    assert!(background.contains("activeCommandContexts.set(context.key, context)"));
+    assert!(background.contains("const result = await queueBrowserAction("));
+    assert!(background.contains("() => assertPendingApprovalTransport(pending)"));
+    assert!(background.contains("await clearPendingApprovalUi();"));
+    assert!(background.contains("protocolConnectionId = \"\";"));
+    assert!(background.contains("pendingApproval: null,\n  }, \"extension_lifecycle_changed\""));
+    let queue_start = background.find("async function queueApproval").unwrap();
+    let queue_end = background[queue_start..]
+        .find("async function runBatchActions")
+        .unwrap()
+        + queue_start;
+    let queue = &background[queue_start..queue_end];
+    for boundary in [
+        "approval storage dispatch",
+        "approval storage completion",
+        "approval badge color completion",
+        "approval badge text completion",
+    ] {
+        assert!(
+            queue.contains(boundary),
+            "missing canceled-approval boundary: {boundary}"
+        );
+    }
+    let close_start = background.find("nextSocket.onclose = async").unwrap();
+    let close_end = background[close_start..].find("\n  };\n}").unwrap() + close_start;
+    let close = &background[close_start..close_end];
+    assert!(
+        close.find("protocolSessionReady = false").unwrap()
+            < close.find("await queueTransportIdentityOperation").unwrap()
+    );
+    assert!(
+        close.find("stopControl(\"server_disconnected\"").unwrap()
+            < close.find("clearPendingApprovalUi()").unwrap()
+    );
+
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const brace = source.indexOf("{", start);
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      function deferred() {
+        let resolve;
+        return { promise: new Promise((done) => { resolve = done; }), resolve };
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const functions = [
+        "queueTransportIdentityOperation", "updateSecuritySettings", "removeSecuritySettings",
+        "currentApprovalAuthority", "pendingApprovalMatchesCurrentTransport", "assertPendingApprovalTransport",
+        "assertTrustedPopupSender", "popupApprovalCommandContext", "awaitCommandCleanup",
+        "queueBrowserAction", "resolvePendingApprovalFromPopup",
+      ].map((name) => extractFunction(source, name)).join("\n");
+      const bridge = new Function("deferred", `
+        const WebSocket = { OPEN: 1 };
+        const chrome = {
+          runtime: { getURL: (path) => "chrome-extension://fixture/" + path },
+          storage: { local: {
+            set: async (updates) => {
+              if (Object.hasOwn(updates, "pendingApproval")) pending = updates.pendingApproval;
+              Object.assign(config, updates);
+            },
+            remove: async (keys) => { for (const key of keys) delete config[key]; },
+          } },
+        };
+        let transportRotation = Promise.resolve();
+        let browserActionQueue = Promise.resolve();
+        let protocolSessionReady = true;
+        let protocolServerSessionId = "server-a";
+        let protocolConnectionId = "connection-a";
+        let socket = { readyState: WebSocket.OPEN };
+        let connectionSequence = 0;
+        let pending = null;
+        let config = { token: "token-a", port: 48123, enabled: true, pendingApproval: null };
+        let dispatchGate = { promise: Promise.resolve() };
+        let dispatchCalls = 0;
+        let sideEffects = 0;
+        const activeCommandContexts = new Map();
+        function markInternalSettings() {}
+        async function settings() { return { ...config, pendingApproval: pending }; }
+        async function clearPendingApprovalUi() { pending = null; config.pendingApproval = null; }
+        async function clearSocket() {
+          const retiring = protocolServerSessionId;
+          protocolSessionReady = false;
+          for (const context of activeCommandContexts.values()) {
+            if (context.sessionId === retiring) context.canceled = true;
+          }
+          pending = null;
+          protocolServerSessionId = "";
+          protocolConnectionId = "";
+          socket = null;
+        }
+        async function connectNow() {
+          if (!config.token || !config.enabled) return;
+          connectionSequence += 1;
+          protocolSessionReady = true;
+          protocolServerSessionId = "server-a";
+          protocolConnectionId = "connection-" + connectionSequence;
+          socket = { readyState: WebSocket.OPEN };
+        }
+        function commandCanceledError(boundary) {
+          const error = new Error("COMMAND_CANCELED: " + boundary);
+          error.code = "COMMAND_CANCELED";
+          return error;
+        }
+        function assertCommandActive(context, boundary) {
+          if (context?.canceled) throw commandCanceledError(boundary);
+        }
+        function assertCommandActiveAfterDispatch(context, boundary) { assertCommandActive(context, boundary); }
+        function finalizeCanceledCommandFreshness() {}
+        async function dispatch(method, params, approved, context) {
+          dispatchCalls += 1;
+          await dispatchGate.promise;
+          assertCommandActive(context, "deferred tabs.close side effect");
+          sideEffects += 1;
+          return { closed: params.tabId, method, approved };
+        }
+        function send() { return true; }
+        async function popupState() { return { pendingApproval: pending, tokenConfigured: Boolean(config.token) }; }
+        ${functions}
+        function queuePending(id = "approval-a") {
+          const authority = currentApprovalAuthority();
+          pending = { id, method: "tabs.close", params: { tabId: 7 }, expiresAt: Date.now() + 60000, authority };
+          config.pendingApproval = pending;
+          return structuredClone(pending);
+        }
+        return {
+          queuePending,
+          restore: (value) => { pending = structuredClone(value); config.pendingApproval = pending; },
+          approve: (id = "approval-a", url = "chrome-extension://fixture/popup.html") => resolvePendingApprovalFromPopup(id, { url }, true),
+          rotate: async (kind) => {
+            if (kind === "clear") return removeSecuritySettings(["token"], "saved_token_cleared");
+            if (kind === "token") return updateSecuritySettings({ token: "token-b" }, "connection_settings_changed");
+            if (kind === "port") return updateSecuritySettings({ port: 48124 }, "connection_settings_changed");
+            if (kind === "enable") return updateSecuritySettings({ enabled: false }, "bridge_paused");
+            if (kind === "resume") return updateSecuritySettings({ enabled: true, token: "token-c" }, "bridge_resumed");
+          },
+          deferDispatch: () => { dispatchGate = deferred(); return dispatchGate; },
+          state: () => ({ dispatchCalls, sideEffects, pending, ready: protocolSessionReady, connectionId: protocolConnectionId }),
+        };
+      `)(deferred);
+
+      const valid = bridge.queuePending();
+      let untrusted = false;
+      try { await bridge.approve("approval-a", "chrome-extension://fixture/other.html"); }
+      catch (error) { untrusted = error.message.startsWith("TRUSTED_POPUP_REQUIRED"); }
+      if (!untrusted || bridge.state().sideEffects !== 0) throw new Error("untrusted approval sender dispatched tabs.close");
+
+      bridge.queuePending("approval-b");
+      let snapshotStale = false;
+      try { await bridge.approve("approval-a"); }
+      catch (error) { snapshotStale = error.message.startsWith("APPROVAL_STALE"); }
+      if (!snapshotStale || bridge.state().pending?.id !== "approval-b") {
+        throw new Error("clicking a stale popup snapshot destroyed the newer approval");
+      }
+
+      for (const kind of ["clear", "token", "port", "enable"]) {
+        bridge.restore(valid);
+        await bridge.rotate(kind);
+        bridge.restore(valid); // simulate a late/stale storage record surviving rotation
+        let stale = false;
+        try { await bridge.approve(); } catch (error) { stale = error.code === "APPROVAL_STALE"; }
+        if (!stale || bridge.state().sideEffects !== 0) throw new Error(`${kind} rotation allowed stale tabs.close`);
+      }
+
+      // Re-establish a valid controller, claim approval, and pause dispatch at
+      // a pre-side-effect boundary. Clear token must not wait behind dispatch.
+      await bridge.rotate("resume");
+      bridge.queuePending();
+      const gate = bridge.deferDispatch();
+      const approving = bridge.approve();
+      while (bridge.state().dispatchCalls === 0) await Promise.resolve();
+      const clearing = bridge.rotate("clear");
+      const clearedPromptly = await Promise.race([
+        clearing.then(() => true),
+        new Promise((resolve) => setTimeout(() => resolve(false), 100)),
+      ]);
+      if (!clearedPromptly) throw new Error("token clear waited behind deferred approved dispatch");
+      gate.resolve();
+      let canceled = false;
+      try { await approving; } catch (error) { canceled = error.code === "COMMAND_CANCELED"; }
+      const state = bridge.state();
+      if (!canceled || state.sideEffects !== 0 || state.pending !== null || state.ready) {
+        throw new Error(`clear did not cancel deferred approved tabs.close: ${JSON.stringify({ canceled, state })}`);
+      }
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run approval transport-binding harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node approval transport-binding harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn global_browser_action_queue_serializes_socket_and_popup_dispatch() {
+    let background = extension_source("background.js");
+    assert!(background.contains("let browserActionQueue = Promise.resolve()"));
+    assert!(background.contains("const result = await queueBrowserAction(\n          context,"));
+    assert!(background.contains("const result = await queueBrowserAction(\n      context,"));
+    assert!(background.contains("context.started = true;\n    const result = await operation()"));
+    assert!(background.contains(
+        "await awaitCommandCleanup(context);\n      finalizeCanceledCommandFreshness(context);"
+    ));
+
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const brace = source.indexOf("{", start);
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      function deferred() {
+        let resolve;
+        return { promise: new Promise((done) => { resolve = done; }), resolve };
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const queueBrowserAction = extractFunction(source, "queueBrowserAction");
+      const awaitCommandCleanup = extractFunction(source, "awaitCommandCleanup");
+      const bridge = new Function("deferred", `
+        let browserActionQueue = Promise.resolve();
+        const canceledCommandKeys = new Set();
+        const events = [];
+        function commandCanceledError(boundary) {
+          const error = new Error("COMMAND_CANCELED: " + boundary);
+          error.code = "COMMAND_CANCELED";
+          return error;
+        }
+        function assertCommandActive(context, boundary) {
+          if (context.canceled || canceledCommandKeys.has(context.key)) throw commandCanceledError(boundary);
+        }
+        function finalizeCanceledCommandFreshness(context) {
+          if (context.trackFinalization) events.push("finalize:" + context.key);
+        }
+        ${awaitCommandCleanup}
+        ${queueBrowserAction}
+        function context(key) {
+          return {
+            key, method: key, canceled: false, started: false, admitted: true,
+            cancelReason: "", cancellationCleanup: Promise.resolve(false),
+          };
+        }
+        function run(value, label, gate) {
+          return queueBrowserAction(
+            value,
+            () => { if (!value.admitted) throw new Error("transport retired"); },
+            async () => {
+              events.push("enter:" + label);
+              await gate.promise;
+              assertCommandActive(value, label + " side effect");
+              events.push("exit:" + label);
+              return label;
+            },
+          );
+        }
+        function canceledTabCreation(value, cleanupGate) {
+          return queueBrowserAction(value, () => {}, async () => {
+            events.push("enter:tabs.new-canceled");
+            value.canceled = true;
+            value.cancelReason = "request_canceled";
+            value.trackFinalization = true;
+            canceledCommandKeys.add(value.key);
+            value.cancellationCleanup = cleanupGate.promise.then(() => {
+              events.push("tabs.new-provenance-durable");
+              return true;
+            });
+            throw commandCanceledError("late tab creation outcome");
+          });
+        }
+        return {
+          context, run, canceledTabCreation, events,
+          cancel(value) { value.canceled = true; canceledCommandKeys.add(value.key); },
+        };
+      `)(deferred);
+
+      async function direction(firstLabel, secondLabel) {
+        const first = bridge.context(firstLabel), second = bridge.context(secondLabel);
+        const gate = deferred(), ready = { promise: Promise.resolve() };
+        const firstRun = bridge.run(first, firstLabel, gate);
+        const secondRun = bridge.run(second, secondLabel, ready);
+        for (let index = 0; index < 16 && !first.started; index += 1) await Promise.resolve();
+        if (second.started || bridge.events.at(-1) !== "enter:" + firstLabel) {
+          throw new Error(`queue overlap in ${firstLabel}->${secondLabel}`);
+        }
+        gate.resolve();
+        await Promise.all([firstRun, secondRun]);
+      }
+      await direction("socket-a", "popup-a");
+      await direction("popup-b", "socket-b");
+      const expected = [
+        "enter:socket-a", "exit:socket-a", "enter:popup-a", "exit:popup-a",
+        "enter:popup-b", "exit:popup-b", "enter:socket-b", "exit:socket-b",
+      ];
+      if (bridge.events.join("|") !== expected.join("|")) throw new Error("browser action ordering changed");
+
+      const blocker = bridge.context("blocker"), canceled = bridge.context("queued-canceled");
+      const blockerGate = deferred(), ready = { promise: Promise.resolve() };
+      const blocking = bridge.run(blocker, "blocker", blockerGate);
+      const waiting = bridge.run(canceled, "queued-canceled", ready);
+      for (let index = 0; index < 4; index += 1) await Promise.resolve();
+      bridge.cancel(canceled);
+      blockerGate.resolve();
+      await blocking;
+      let refused = false;
+      try { await waiting; } catch (error) { refused = error.code === "COMMAND_CANCELED"; }
+      if (!refused || canceled.started || bridge.events.includes("enter:queued-canceled")) {
+        throw new Error("a canceled queued command entered browser dispatch");
+      }
+
+      // A canceled tabs.new can report its outcome before Chrome's late tab
+      // has been grouped and its provenance persisted. The popup-approved
+      // action must stay behind that reconciliation/freshness barrier even
+      // though the canceled caller has already received its error.
+      const lateTab = bridge.context("tabs.new-late");
+      const approved = bridge.context("popup-approved");
+      const cleanupGate = deferred();
+      const canceledCreation = bridge.canceledTabCreation(lateTab, cleanupGate);
+      const approvedRun = bridge.run(approved, "popup-approved", { promise: Promise.resolve() });
+      let canceledOutcome = false;
+      try { await canceledCreation; } catch (error) { canceledOutcome = error.code === "COMMAND_CANCELED"; }
+      if (!canceledOutcome) throw new Error("canceled tabs.new did not report promptly");
+      for (let index = 0; index < 4; index += 1) await Promise.resolve();
+      if (approved.started || bridge.events.includes("enter:popup-approved")) {
+        throw new Error("popup-approved action crossed unresolved tabs.new provenance");
+      }
+      cleanupGate.resolve();
+      await approvedRun;
+      const durable = bridge.events.indexOf("tabs.new-provenance-durable");
+      const finalized = bridge.events.indexOf("finalize:tabs.new-late");
+      const approvedEntry = bridge.events.indexOf("enter:popup-approved");
+      if (!(durable >= 0 && finalized > durable && approvedEntry > finalized)) {
+        throw new Error(`cleanup barrier ordering changed: ${bridge.events.join("|")}`);
+      }
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run global browser action queue harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node global browser action queue harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn approval_admission_preserves_one_live_popup_request() {
+    let background = extension_source("background.js");
+    assert!(background.contains("APPROVAL_ALREADY_PENDING"));
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const brace = source.indexOf("{", start);
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const queueApproval = extractFunction(source, "queueApproval");
+      const authority = { ownerSessionId: "server:s1", serverSessionId: "s1", connectionId: "c1" };
+      let pending = { id: "approval-a", expiresAt: Date.now() + 60000, authority };
+      let writes = 0, clears = 0;
+      const crypto = { randomUUID: () => "approval-b" };
+      const chrome = {
+        storage: { local: { set: async ({ pendingApproval }) => { pending = pendingApproval; writes += 1; } } },
+        action: { setBadgeBackgroundColor: async () => {}, setBadgeText: async () => {} },
+      };
+      function commandSideEffect(_context, _boundary, operation) { return operation(); }
+      function queueTransportIdentityOperation(operation) { return operation(); }
+      function currentApprovalAuthority() { return authority; }
+      function pendingApprovalMatchesCurrentTransport(value) { return value?.authority?.connectionId === authority.connectionId; }
+      async function settings() { return { pendingApproval: pending }; }
+      function assertCommandActive() {}
+      async function clearPendingApprovalUi() { pending = null; clears += 1; }
+      function queueBadgeWrite(operation) { return operation(); }
+      function assertPendingApprovalTransport(value) {
+        if (!pendingApprovalMatchesCurrentTransport(value)) throw new Error("stale");
+      }
+      const queueApprovalFn = new Function(
+        "commandSideEffect", "queueTransportIdentityOperation", "currentApprovalAuthority",
+        "pendingApprovalMatchesCurrentTransport", "settings", "assertCommandActive",
+        "clearPendingApprovalUi", "queueBadgeWrite", "assertPendingApprovalTransport",
+        "crypto", "chrome", "Date",
+        `${queueApproval}\nreturn queueApproval;`,
+      )(
+        commandSideEffect, queueTransportIdentityOperation, currentApprovalAuthority,
+        pendingApprovalMatchesCurrentTransport, settings, assertCommandActive,
+        clearPendingApprovalUi, queueBadgeWrite, assertPendingApprovalTransport,
+        crypto, chrome, Date,
+      );
+      let blocked = false;
+      try {
+        await queueApprovalFn("tabs.close", { tabId: 7 }, 7, { name: "A", role: "tab" }, "close", { sessionId: "s1" });
+      } catch (error) { blocked = error.code === "APPROVAL_ALREADY_PENDING"; }
+      if (!blocked || pending.id !== "approval-a" || writes !== 0 || clears !== 0) {
+        throw new Error("a second risky command replaced the live approval");
+      }
+      pending.expiresAt = Date.now() - 1;
+      const queued = await queueApprovalFn("tabs.close", { tabId: 8 }, 8, { name: "B", role: "tab" }, "close", { sessionId: "s1" });
+      if (queued.approvalId !== "approval-b" || pending.id !== "approval-b" || writes !== 1 || clears !== 1) {
+        throw new Error("an expired approval did not admit exactly one replacement");
+      }
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run one-live approval harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node one-live approval harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn approval_badge_wins_delayed_connected_status_publication() {
+    let background = extension_source("background.js");
+    assert!(background.contains("const approvalOwnsBadge = pending?.expiresAt > Date.now()"));
+    let script = r##"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        const brace = source.indexOf("{", start);
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      function deferred() {
+        let resolve;
+        return { promise: new Promise((done) => { resolve = done; }), resolve };
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const functions = [
+        "queueBadgeWrite", "currentApprovalAuthority", "pendingApprovalMatchesCurrentTransport", "publishStatus",
+      ].map((name) => extractFunction(source, name)).join("\n");
+      const bridge = new Function("deferred", `
+        const WebSocket = { OPEN: 1 };
+        let protocolSessionReady = true, protocolServerSessionId = "s1", protocolConnectionId = "c1";
+        let protocolStatusGeneration = 1, connectionStatusWrite = Promise.resolve(), badgeWrite = Promise.resolve();
+        let socket = { readyState: WebSocket.OPEN };
+        const trustedStorageReady = Promise.resolve();
+        const authority = { ownerSessionId: "server:s1", serverSessionId: "s1", connectionId: "c1" };
+        const stored = { pendingApproval: null };
+        const badge = {};
+        let gate = null, statusColorStarted = false;
+        const chrome = {
+          storage: { local: {
+            set: async (updates) => Object.assign(stored, updates),
+            get: async (defaults) => ({ ...defaults, ...stored }),
+          } },
+          action: {
+            setBadgeBackgroundColor: async ({ color }) => {
+              if (color === "#82d94d" && gate) { statusColorStarted = true; await gate.promise; }
+              badge.color = color;
+            },
+            setBadgeText: async ({ text }) => { badge.text = text; },
+          },
+        };
+        ${functions}
+        async function approvalBadge() {
+          return queueBadgeWrite(async () => {
+            await chrome.action.setBadgeBackgroundColor({ color: "#f3bd4e" });
+            await chrome.action.setBadgeText({ text: "?" });
+          });
+        }
+        return {
+          delayedStatus: () => { gate = deferred(); return publishStatus("connected", "ready", 1); },
+          waitStatusColor: async () => { while (!statusColorStarted) await Promise.resolve(); },
+          queueApproval: () => {
+            stored.pendingApproval = { id: "a", expiresAt: Date.now() + 60000, authority };
+            return approvalBadge();
+          },
+          release: () => gate.resolve(),
+          status: () => publishStatus("connected", "ready", 1),
+          badge: () => ({ ...badge }),
+        };
+      `)(deferred);
+
+      const late = bridge.delayedStatus();
+      await bridge.waitStatusColor();
+      const approval = bridge.queueApproval();
+      bridge.release();
+      await Promise.all([late, approval]);
+      if (bridge.badge().text !== "?" || bridge.badge().color !== "#f3bd4e") {
+        throw new Error("late connected badge overwrote a newly queued approval");
+      }
+      await bridge.status();
+      if (bridge.badge().text !== "?" || bridge.badge().color !== "#f3bd4e") {
+        throw new Error("connected status did not preserve the exact live approval badge");
+      }
+    "##;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run approval badge serialization harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node approval badge serialization harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn popup_stale_cleanup_cannot_delete_a_newer_approval() {
+    let background = extension_source("background.js");
+    assert!(background.contains("if (!sameApprovalIdentity(current, expected)) return false;"));
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const brace = source.indexOf("{", start);
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      function deferred() {
+        let resolve;
+        return { promise: new Promise((done) => { resolve = done; }), resolve };
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const functions = ["popupState", "sameApprovalIdentity", "clearPendingApprovalSnapshot"]
+        .map((name) => extractFunction(source, name)).join("\n");
+      const bridge = new Function("deferred", `
+        const authority = { ownerSessionId: "server:s1", serverSessionId: "s1", connectionId: "c1" };
+        let pending = { id: "old", expiresAt: Date.now() - 1, authority };
+        let queryGate = deferred(), blockQuery = true, clears = 0;
+        const chrome = { tabs: { query: async () => {
+          if (blockQuery) await queryGate.promise;
+          return [{ id: 7, url: "https://example.test/" }];
+        } } };
+        async function initializeControlState() {}
+        async function settings() {
+          return {
+            enabled: true, fullAccess: true, port: 17373, token: "token", connectionStatus: "connected",
+            connectionDetail: "", allowedHosts: ["example.test"], pendingApproval: structuredClone(pending),
+          };
+        }
+        function pendingApprovalMatchesCurrentTransport(value) { return value?.authority?.connectionId === authority.connectionId; }
+        function isUrlAllowed() { return { allowed: true }; }
+        function publicControlState() { return { active: false }; }
+        function queueTransportIdentityOperation(operation) { return operation(); }
+        async function clearPendingApprovalUi() { pending = null; clears += 1; }
+        ${functions}
+        return {
+          read: popupState,
+          replace() { pending = { id: "new", expiresAt: Date.now() + 60000, authority }; },
+          release() { queryGate.resolve(); },
+          unblock() { blockQuery = false; },
+          state: () => ({ pending: structuredClone(pending), clears }),
+        };
+      `)(deferred);
+      const first = bridge.read();
+      await Promise.resolve();
+      bridge.replace();
+      bridge.release();
+      await first;
+      if (bridge.state().pending?.id !== "new" || bridge.state().clears !== 0) {
+        throw new Error("stale popup cleanup deleted the newer exact approval");
+      }
+      bridge.unblock();
+      const current = await bridge.read();
+      if (current.pendingApproval?.id !== "new") throw new Error("popup did not surface the preserved newer approval");
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run popup snapshot race harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node popup snapshot race harness failed:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -465,9 +1916,13 @@ fn extension_storage_is_restricted_to_trusted_contexts_before_use() {
     assert!(access < first_read);
     assert!(access < first_write);
     assert!(background.contains("async function settings() {\n  await trustedStorageReady;"));
-    assert!(background.contains(
-        "async function setStatus(status, detail = \"\") {\n  await trustedStorageReady;"
-    ));
+    assert!(background.contains("function publishStatus(status, detail, generation"));
+    assert!(
+        background.contains(
+            "const operation = connectionStatusWrite.then(async () => {\n    const current"
+        )
+    );
+    assert!(background.contains("await trustedStorageReady;\n    if (!current()) return false;"));
     assert!(background.contains(
         "controlStatePromise = (async () => {\n    await trustedStorageReady;\n    const [stored, storedPause]"
     ));
@@ -866,6 +2321,192 @@ fn snapshots_invalidate_on_mutation_scroll_and_resize() {
 }
 
 #[test]
+fn snapshot_exclusion_uses_exact_control_identity_and_rejects_page_owned_mutations() {
+    let content = extension_source("content.js");
+    let core = extension_source("dom-core.js");
+    let is_control_start = content.find("function isControlNode(").unwrap();
+    let is_control_end = content[is_control_start..]
+        .find("\n  function reinsertControlUiWhenLost(")
+        .map(|offset| is_control_start + offset)
+        .unwrap();
+    let is_control = &content[is_control_start..is_control_end];
+    assert!(is_control.contains("node === host"));
+    assert!(is_control.contains("node === shadow"));
+    assert!(is_control.contains("shadow?.contains?.(node)"));
+    assert!(!is_control.contains("CONTROL_HOST_ID"));
+    assert!(!is_control.contains(".closest("));
+    assert!(core.contains("changed.length > 0 && changed.every((node) => isExcludedNode(node))"));
+    assert!(core.contains("target became part of the bridge control surface"));
+
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const parameters = source.indexOf("(", start);
+        let parameterDepth = 0, quote = "", escaped = false;
+        let lineComment = false, blockComment = false, parameterEnd = -1;
+        for (let index = parameters; index < source.length; index += 1) {
+          const character = source[index];
+          const next = source[index + 1];
+          if (lineComment) {
+            if (character === "\n") lineComment = false;
+          } else if (blockComment) {
+            if (character === "*" && next === "/") { blockComment = false; index += 1; }
+          } else if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (character === "/" && next === "/") { lineComment = true; index += 1; }
+          else if (character === "/" && next === "*") { blockComment = true; index += 1; }
+          else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "(") parameterDepth += 1;
+          else if (character === ")" && --parameterDepth === 0) { parameterEnd = index; break; }
+        }
+        if (parameterEnd < 0) throw new Error(`unterminated parameters for ${name}`);
+        const brace = source.indexOf("{", parameterEnd);
+        let depth = 0;
+        quote = ""; escaped = false; lineComment = false; blockComment = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          const next = source[index + 1];
+          if (lineComment) {
+            if (character === "\n") lineComment = false;
+          } else if (blockComment) {
+            if (character === "*" && next === "/") { blockComment = false; index += 1; }
+          } else if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (character === "/" && next === "/") { lineComment = true; index += 1; }
+          else if (character === "/" && next === "*") { blockComment = true; index += 1; }
+          else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+
+      const contentSource = fs.readFileSync("extension/content.js", "utf8");
+      const coreSource = fs.readFileSync("extension/dom-core.js", "utf8");
+      const isControlNodeSource = extractFunction(contentSource, "isControlNode");
+      const createRevisionTrackerSource = extractFunction(coreSource, "createRevisionTracker");
+      const validateRecordSource = extractFunction(coreSource, "validateRecord");
+      const bridge = new Function(`
+        let controlUi = null;
+        let mutationCallback = null;
+        const document = {};
+        class MutationObserver {
+          constructor(callback) { mutationCallback = callback; }
+          observe() {}
+        }
+        function addEventListener() {}
+        ${isControlNodeSource}
+        ${createRevisionTrackerSource}
+        return {
+          configure(value) { controlUi = value; },
+          isControlNode,
+          tracker() {
+            const value = createRevisionTracker({ isExcludedNode: isControlNode });
+            return { value, emit: (mutations) => mutationCallback(mutations) };
+          },
+        };
+      `)();
+
+      const host = { id: "bridge-public-id" };
+      const shadowOwned = { name: "real closed-shadow child" };
+      const shadow = { contains: (node) => node === shadowOwned };
+      bridge.configure({ host, shadow });
+      const fakeContainer = {
+        id: host.id,
+        style: { display: "contents" },
+        closest: () => fakeContainer,
+      };
+      const observed = { parentElement: fakeContainer };
+      const pageLightChild = { parentElement: host };
+      const fakeForm = { id: host.id, action: "/transfer", closest: () => fakeContainer };
+      const pageRoot = {};
+      if (!bridge.isControlNode(host) || !bridge.isControlNode(shadow)
+        || !bridge.isControlNode(shadowOwned)) {
+        throw new Error("exact retained control objects were not excluded");
+      }
+      for (const pageNode of [fakeContainer, observed, pageLightChild, fakeForm]) {
+        if (bridge.isControlNode(pageNode)) {
+          throw new Error("page-owned node spoofed the exact control identity");
+        }
+      }
+
+      const revisions = bridge.tracker();
+      const attributes = (target) => ({ type: "attributes", target });
+      const characterData = (target) => ({ type: "characterData", target });
+      const childList = (target, addedNodes = [], removedNodes = []) => ({
+        type: "childList", target, addedNodes, removedNodes,
+      });
+      revisions.emit([attributes(host), characterData(shadowOwned)]);
+      revisions.emit([childList(pageRoot, [host]), childList(pageRoot, [], [host])]);
+      if (revisions.value.read() !== 0) {
+        throw new Error("exact-owned control mutations invalidated the page snapshot");
+      }
+
+      revisions.emit([attributes(fakeContainer)]);
+      revisions.emit([
+        childList(pageRoot, [], [observed]),
+        childList(fakeContainer, [observed]),
+      ]);
+      revisions.emit([childList(host, [pageLightChild])]);
+      revisions.emit([attributes(fakeForm)]);
+      revisions.emit([characterData(observed)]);
+      if (revisions.value.read() !== 5
+        || revisions.value.reason() !== "the document mutated") {
+        throw new Error(`page-owned fake-ID/context mutations stayed fresh: ${revisions.value.read()}`);
+      }
+
+      const replacementHost = { id: host.id };
+      const replacementOwned = {};
+      const replacementShadow = { contains: (node) => node === replacementOwned };
+      bridge.configure({ host: replacementHost, shadow: replacementShadow });
+      if (bridge.isControlNode(host) || bridge.isControlNode(shadowOwned)
+        || !bridge.isControlNode(replacementHost) || !bridge.isControlNode(replacementOwned)) {
+        throw new Error("replacing the control surface retained an old object identity");
+      }
+      bridge.configure(null);
+      if (bridge.isControlNode(replacementHost) || bridge.isControlNode(replacementOwned)) {
+        throw new Error("clearing the control surface retained an object identity");
+      }
+
+      let excludedAfterObservation = false;
+      const validate = new Function("isExcludedNode", `
+        ${validateRecordSource}
+        return validateRecord;
+      `)(() => excludedAfterObservation);
+      excludedAfterObservation = true;
+      let rejected = false;
+      try {
+        validate({ element: observed });
+      } catch (error) {
+        rejected = error.message.startsWith("TARGET_CHANGED: target became part");
+      }
+      if (!rejected) throw new Error("a newly excluded observed target remained actionable");
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run exact snapshot exclusion harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node exact snapshot exclusion harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn snapshots_and_target_proofs_never_embed_live_text_input_values() {
     let content = extension_source("content.js");
     let core = extension_source("dom-core.js");
@@ -1136,6 +2777,140 @@ fn safe_mode_blocks_sensitive_selects_before_page_mutation() {
 }
 
 #[test]
+fn stale_popup_approval_refreshes_the_replacement_card_immediately() {
+    let popup = extension_source("popup.js");
+    assert!(popup.contains("error.message.startsWith(\"APPROVAL_STALE\")"));
+    assert!(popup.contains("const next = await call(\"getState\")"));
+    assert!(popup.contains("requestGeneration === popupUpdateGeneration"));
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const parameters = source.indexOf("(", start);
+        let parameterDepth = 0, quote = "", escaped = false;
+        let lineComment = false, blockComment = false, parameterEnd = -1;
+        for (let index = parameters; index < source.length; index += 1) {
+          const character = source[index];
+          const next = source[index + 1];
+          if (lineComment) {
+            if (character === "\n") lineComment = false;
+          } else if (blockComment) {
+            if (character === "*" && next === "/") { blockComment = false; index += 1; }
+          } else if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (character === "/" && next === "/") { lineComment = true; index += 1; }
+          else if (character === "/" && next === "*") { blockComment = true; index += 1; }
+          else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "(") parameterDepth += 1;
+          else if (character === ")" && --parameterDepth === 0) { parameterEnd = index; break; }
+        }
+        if (parameterEnd < 0) throw new Error(`unterminated parameters for ${name}`);
+        const brace = source.indexOf("{", parameterEnd);
+        let depth = 0;
+        quote = ""; escaped = false; lineComment = false; blockComment = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          const next = source[index + 1];
+          if (lineComment) {
+            if (character === "\n") lineComment = false;
+          } else if (blockComment) {
+            if (character === "*" && next === "/") { blockComment = false; index += 1; }
+          } else if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (character === "/" && next === "/") { lineComment = true; index += 1; }
+          else if (character === "/" && next === "*") { blockComment = true; index += 1; }
+          else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      const source = fs.readFileSync("extension/popup.js", "utf8");
+      const update = extractFunction(source, "update");
+      const bridge = new Function(`
+        const calls = [], messages = [];
+        let popupUpdateGeneration = 0;
+        let rendered = { pendingApproval: { id: "approval-a" } };
+        async function call(action) {
+          calls.push(action);
+          if (action === "approve") throw new Error("APPROVAL_STALE: approval was replaced");
+          if (action === "reject") throw new Error("COMMAND_FAILED: unrelated failure");
+          if (action === "getState") return { pendingApproval: { id: "approval-b" } };
+          throw new Error("unexpected action " + action);
+        }
+        function render(next) { rendered = next; }
+        function showMessage(message) { messages.push(message); }
+        ${update}
+        return { update, state: () => ({ calls: [...calls], messages: [...messages], rendered }) };
+      `)();
+      await bridge.update("approve", { id: "approval-a" });
+      let state = bridge.state();
+      if (state.calls.join("|") !== "approve|getState" || state.rendered.pendingApproval?.id !== "approval-b") {
+        throw new Error(`stale approval did not refresh replacement: ${JSON.stringify(state)}`);
+      }
+      await bridge.update("reject", { id: "approval-b" });
+      state = bridge.state();
+      if (state.calls.join("|") !== "approve|getState|reject" || state.rendered.pendingApproval?.id !== "approval-b") {
+        throw new Error("unrelated popup error triggered a destructive refresh");
+      }
+
+      const orderingBridge = new Function(`
+        let popupUpdateGeneration = 0;
+        let rendered = { connectionStatus: "connected", tokenConfigured: true };
+        const pending = new Map();
+        function call(action) {
+          return new Promise((resolve) => pending.set(action, resolve));
+        }
+        function render(next) { rendered = next; }
+        function showMessage() {}
+        ${update}
+        return {
+          update,
+          resolve: (action, value) => pending.get(action)(value),
+          rendered: () => rendered,
+        };
+      `)();
+      const olderDisable = orderingBridge.update("toggleEnabled", { enabled: false });
+      await Promise.resolve();
+      const newerClear = orderingBridge.update("clearSavedToken");
+      await Promise.resolve();
+      orderingBridge.resolve("clearSavedToken", {
+        connectionStatus: "not-configured", tokenConfigured: false,
+      });
+      await newerClear;
+      orderingBridge.resolve("toggleEnabled", {
+        connectionStatus: "paused", tokenConfigured: true,
+      });
+      await olderDisable;
+      const ordered = orderingBridge.rendered();
+      if (ordered.connectionStatus !== "not-configured" || ordered.tokenConfigured !== false) {
+        throw new Error(`older popup response repainted newer credential truth: ${JSON.stringify(ordered)}`);
+      }
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run stale-popup refresh harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node stale-popup refresh harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn control_is_visible_and_user_stoppable_in_page_and_popup() {
     let content = extension_source("content.js");
     let popup = extension_source("popup.html");
@@ -1163,23 +2938,55 @@ fn control_is_visible_and_user_stoppable_in_page_and_popup() {
 }
 
 #[test]
-fn control_indicator_reuse_and_loss_are_fail_closed() {
+fn document_start_stop_guard_precedes_hostile_capture_and_verifies_exact_stop() {
+    let manifest = manifest();
     let background = extension_source("background.js");
     let content = extension_source("content.js");
-
-    assert!(content.contains("crypto.randomUUID().replaceAll(\"-\", \"\")"));
-    assert!(!content.contains("const CONTROL_HOST_ID = \"__local_browser_bridge_control__\""));
-    assert!(content.contains("const CONTROL_UI_WATCHDOG_INTERVAL_MS = 500"));
-    assert!(content.contains("action: \"indicatorLost\""));
-    assert!(content.contains("controlUiLossReportPendingSessionId === sessionId"));
-    assert!(content.contains("captureDepth > 0"));
-    assert!(background.contains("await showControlUi(controlLease)"));
-    assert!(background.contains("reason !== \"page.handleDialog\""));
-    assert!(background.contains("message.sessionId !== controlLease.sessionId"));
-    assert!(background.contains("stopControl(\"control_ui_hidden\""));
+    assert_eq!(manifest["content_scripts"][0]["js"][0], "stop-guard.js");
+    assert_eq!(manifest["content_scripts"][0]["run_at"], "document_start");
+    assert!(background.contains("state.earlyStopGuardReady !== true"));
+    assert!(content.contains("earlyStopGuardReady = globalThis.__LOCAL_BROWSER_BRIDGE_STOP_GUARD__?.install?.(handleControlStopActivation) === true"));
 
     let script = r#"
       import fs from "node:fs";
+      import vm from "node:vm";
+      class Target {
+        constructor() { this.listeners = new Map(); }
+        addEventListener(type, listener) {
+          const listeners = this.listeners.get(type) || [];
+          listeners.push(listener);
+          this.listeners.set(type, listeners);
+        }
+        emit(event) {
+          for (const listener of this.listeners.get(event.type) || []) {
+            listener(event);
+            if (event.immediateStopped) break;
+          }
+        }
+        count() { return [...this.listeners.values()].reduce((sum, listeners) => sum + listeners.length, 0); }
+      }
+      function event(type, trusted = true) {
+        return { type, isTrusted: trusted, immediateStopped: false, stopImmediatePropagation() { this.immediateStopped = true; } };
+      }
+      const windowTarget = new Target(), documentTarget = new Target();
+      const context = vm.createContext({ window: windowTarget, document: documentTarget });
+      const guardSource = fs.readFileSync("extension/stop-guard.js", "utf8");
+      vm.runInContext(guardSource, context);
+      const guard = context.__LOCAL_BROWSER_BRIDGE_STOP_GUARD__;
+      let forwarded = 0;
+      if (!guard.install(() => { forwarded += 1; })) throw new Error("guard installation failed");
+      windowTarget.addEventListener("pointerdown", (value) => value.stopImmediatePropagation(), true);
+      documentTarget.addEventListener("pointerdown", (value) => value.stopImmediatePropagation(), true);
+      const trusted = event("pointerdown");
+      windowTarget.emit(trusted);
+      if (!trusted.immediateStopped) documentTarget.emit(trusted);
+      if (forwarded !== 1) throw new Error("hostile capture suppressed or duplicated the early guard");
+      const beforeReinject = windowTarget.count() + documentTarget.count();
+      vm.runInContext(guardSource, context);
+      if (windowTarget.count() + documentTarget.count() !== beforeReinject) throw new Error("guard reinjection duplicated listeners");
+      windowTarget.emit(event("click", false));
+      if (forwarded !== 1) throw new Error("untrusted activation reached the guard handler");
+
       function extractFunction(source, name) {
         const marker = `function ${name}(`;
         let start = source.indexOf(marker);
@@ -1199,39 +3006,217 @@ fn control_indicator_reuse_and_loss_are_fail_closed() {
         }
         throw new Error(`unterminated ${name}`);
       }
+      const contentSource = fs.readFileSync("extension/content.js", "utf8");
+      const functions = ["stopPointOwnedByControl", "trustedKeyboardStopActivation", "handleControlStopActivation"]
+        .map((name) => extractFunction(contentSource, name)).join("\n");
+      const verifier = new Function(`
+        const handledStopActivationEvents = new WeakSet();
+        const revokedControlSessions = new Set();
+        let activeControlSessionId = "lease-a";
+        let lastStopPointerActivation = null;
+        let requests = 0;
+        const host = { isConnected: true, matches: () => true };
+        const stop = { isConnected: true, contains: (node) => node === stop };
+        const shadow = { activeElement: null, elementFromPoint: () => stop };
+        let documentHit = host;
+        const document = { activeElement: host, elementFromPoint: () => documentHit };
+        const innerWidth = 1000, innerHeight = 800;
+        let controlUi = { host, stop, shadow };
+        function rendered() { return true; }
+        function requestControlStop() { requests += 1; return Promise.resolve(); }
+        ${functions}
+        return {
+          pointer: (value) => handleControlStopActivation(value),
+          keyboard: () => { shadow.activeElement = stop; return handleControlStopActivation({ type: "keydown", key: "Enter", isTrusted: true }); },
+          occlude: () => { documentHit = {}; },
+          clearSession: () => { activeControlSessionId = ""; },
+          requests: () => requests,
+        };
+      `)();
+      const pointer = { type: "pointerdown", isTrusted: true, button: 0, clientX: 10, clientY: 10 };
+      if (!verifier.pointer(pointer) || verifier.requests() !== 1) throw new Error("exact Stop pointer was not accepted");
+      verifier.pointer(pointer);
+      verifier.pointer({ type: "click", isTrusted: true, button: 0, clientX: 10, clientY: 10 });
+      if (verifier.requests() !== 1) throw new Error("one pointer activation dispatched Stop more than once");
+      verifier.occlude();
+      if (verifier.pointer({ type: "pointerdown", isTrusted: true, button: 0, clientX: 20, clientY: 20 })) {
+        throw new Error("non-owned Stop coordinates were accepted");
+      }
+      if (!verifier.keyboard() || verifier.requests() !== 2) throw new Error("trusted focused keyboard Stop was rejected");
+      verifier.clearSession();
+      if (verifier.keyboard() || verifier.requests() !== 2) throw new Error("keyboard Stop escaped exact session binding");
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run early Stop guard harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node early Stop guard harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn control_indicator_reuse_and_loss_are_fail_closed() {
+    let background = extension_source("background.js");
+    let content = extension_source("content.js");
+
+    assert!(content.contains("function randomHex128()"));
+    assert!(content.contains("crypto.getRandomValues(new Uint8Array(16))"));
+    assert!(!content.contains("const CONTROL_HOST_ID = \"__local_browser_bridge_control__\""));
+    assert!(content.contains("const CONTROL_UI_WATCHDOG_INTERVAL_MS = 500"));
+    assert!(content.contains("action: \"indicatorLost\""));
+    assert!(content.contains("controlUiLossReportPendingSessionId === sessionId"));
+    assert!(content.contains("captureDepth > 0"));
+    assert!(content.contains("controlUiRetopDepth > 0"));
+    assert!(content.contains("ensureControlUiLatestTopLayer"));
+    assert!(content.contains("document.elementFromPoint(x, y) !== controlUi.host"));
+    assert!(content.contains("controlUi.shadow.elementFromPoint(x, y)"));
+    for reset in [
+        "all: initial !important",
+        "opacity: 1 !important",
+        "filter: none !important",
+        "mask: none !important",
+        "-webkit-mask: none !important",
+        "clip-path: none !important",
+        "transform: none !important",
+        "content-visibility: visible !important",
+        "mix-blend-mode: normal !important",
+    ] {
+        assert!(
+            content.contains(reset),
+            "missing hostile page-style reset: {reset}"
+        );
+    }
+    assert!(content.contains("Number(style.opacity) === 1"));
+    assert!(content.contains(":host::before, :host::after"));
+    assert!(content.contains("content: none !important; display: none !important"));
+    assert!(content.contains(":host::backdrop"));
+    assert!(content.contains("background: transparent !important"));
+    assert!(content.contains("accessibilityReady: controlAccessibilityReady()"));
+    assert!(content.contains("host.parentElement !== document.documentElement"));
+    assert!(content.contains("host.parentNode !== document.documentElement"));
+    assert!(content.contains(
+        "current.hidden || current.inert || current.getAttribute(\"aria-hidden\") === \"true\""
+    ));
+    assert!(content.contains("root = current.getRootNode?.()"));
+    assert!(background.contains("state.pillTopmost === true"));
+    assert!(background.contains("state.stopTopmost === true"));
+    assert!(background.contains("await showControlUi(controlLease)"));
+    assert!(background.contains("reason !== \"page.handleDialog\""));
+    assert!(background.contains("message.sessionId !== controlLease.sessionId"));
+    assert!(background.contains("stopControl(\"control_ui_hidden\""));
+
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const brace = source.indexOf("{", start);
+        let depth = 0, quote = "", escaped = false, lineComment = false, blockComment = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          const next = source[index + 1] ?? "";
+          if (lineComment) {
+            if (character === "\n") lineComment = false;
+          } else if (blockComment) {
+            if (character === "*" && next === "/") { blockComment = false; index += 1; }
+          } else if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (character === "/" && next === "/") { lineComment = true; index += 1; }
+          else if (character === "/" && next === "*") { blockComment = true; index += 1; }
+          else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
 
       const content = fs.readFileSync("extension/content.js", "utf8");
+      const report = extractFunction(content, "reportControlUiLoss");
+      const browserCheck = extractFunction(content, "requestBrowserStackCheck");
       const lost = extractFunction(content, "failClosedOnLostControlUi");
       const lossBridge = new Function(`
+        const CONTROL_BROWSER_ACK_TIMEOUT_MS = 2000;
         let activeControlSessionId = "lease-a";
         let captureDepth = 0;
+        let controlUiRetopDepth = 0;
         let controlUiLossReportPendingSessionId = "";
         let visible = true;
         let sends = 0;
-        let sender = async () => ({ ok: true, result: { active: false } });
+        let retops = 0;
+        let hides = 0;
+        let waitForRender = async () => {};
+        let sender = async (message) => ({ ok: true, result: { active: message.action === "indicatorCheck" } });
         const chrome = { runtime: { sendMessage: (...args) => { sends += 1; return sender(...args); } } };
+        function hideControl({ sessionId }) {
+          if (activeControlSessionId === sessionId) { activeControlSessionId = ""; hides += 1; }
+        }
         function controlUiVisiblyAvailable() { return visible; }
+        function controlUiRenderState() {
+          return {
+            hostId: "__local_browser_bridge_control_11111111111111111111111111111111__",
+            markerId: "__local_browser_bridge_marker_22222222222222222222222222222222__",
+            viewTransitionActive: false,
+            viewport: { width: 1000, height: 800 },
+            controlHitPoints: [{ x: 10, y: 10 }],
+            capturing: captureDepth > 0,
+          };
+        }
+        function ensureControlUiLatestTopLayer() { retops += 1; return true; }
+        function applyCaptureVisibility() {}
+        function waitForRenderOpportunity() { return waitForRender(); }
+        ${report}
+        ${browserCheck}
         ${lost}
         return {
           check: failClosedOnLostControlUi,
           setVisible: (value) => { visible = value; },
           setCapturing: (value) => { captureDepth = value ? 1 : 0; },
+          setWaiter: (value) => { waitForRender = value; },
           setSender: (value) => { sender = value; },
+          resetActive: () => { activeControlSessionId = "lease-a"; },
           sends: () => sends,
+          hides: () => hides,
+          retops: () => retops,
         };
       `)();
-      if (await lossBridge.check() || lossBridge.sends() !== 0) throw new Error("visible indicator failed closed");
-      lossBridge.setVisible(false);
+      if (await lossBridge.check() || lossBridge.sends() !== 1) throw new Error("visible indicator missed browser-stack acknowledgement");
+      if (lossBridge.retops() !== 1) throw new Error("clean watchdog sample did not re-top the indicator");
+      let releaseRender;
+      lossBridge.setWaiter(() => new Promise((resolve) => { releaseRender = resolve; }));
+      const captureOverlap = lossBridge.check();
+      await Promise.resolve();
       lossBridge.setCapturing(true);
-      if (await lossBridge.check() || lossBridge.sends() !== 0) throw new Error("intentional capture failed closed");
+      releaseRender();
+      if (await captureOverlap || lossBridge.sends() !== 1) {
+        throw new Error("capture beginning during render acknowledgement falsely reported indicator loss");
+      }
+      lossBridge.setWaiter(async () => {});
+      lossBridge.setVisible(false);
+      if (await lossBridge.check() || lossBridge.sends() !== 1) throw new Error("intentional capture failed closed");
       lossBridge.setCapturing(false);
+      const retopsBeforeOcclusion = lossBridge.retops();
       let release;
       lossBridge.setSender(() => new Promise((resolve) => { release = resolve; }));
       const first = lossBridge.check();
       await Promise.resolve();
-      if (await lossBridge.check() || lossBridge.sends() !== 1) throw new Error("loss report was duplicated");
+      if (lossBridge.retops() !== retopsBeforeOcclusion) throw new Error("hit-testable occlusion was re-topped before revocation");
+      if (await lossBridge.check() || lossBridge.sends() !== 2) throw new Error("loss report was duplicated");
       release({ ok: true, result: { active: false } });
       if (!await first) throw new Error("indicator loss was not acknowledged");
+      if (lossBridge.hides() !== 1) throw new Error("inactive loss acknowledgement did not clear local UI state");
+      lossBridge.resetActive();
       lossBridge.setSender(async () => { throw new Error("transient"); });
       if (await lossBridge.check()) throw new Error("failed revocation was acknowledged");
       const afterFailure = lossBridge.sends();
@@ -1270,9 +3255,15 @@ fn control_indicator_reuse_and_loss_are_fail_closed() {
 
       const handler = extractFunction(background, "handleControlUiMessage");
       const handlerBridge = new Function(`
-        let controlLease = { tabId: 7, sessionId: "lease-a", expiresAt: Date.now() + 10000 };
+        let controlLease = {
+          tabId: 7, sessionId: "lease-a", expiresAt: Date.now() + 10000,
+          navigationReady: true, pendingNavigation: null, controlUiProofReady: true,
+        };
+        let controlUiTopLayerMutationDepth = 0;
+        let controlUiContentLossGeneration = 0;
         const reasons = [];
         async function initializeControlState() {}
+        function controlCaptureIds() { return []; }
         async function stopControl(reason) { reasons.push(reason); controlLease = null; return { active: false }; }
         function publicControlState() { return { active: Boolean(controlLease) }; }
         ${handler}
@@ -1282,6 +3273,213 @@ fn control_indicator_reuse_and_loss_are_fail_closed() {
       if (!stale.active || handlerBridge.reasons.length) throw new Error("stale indicator report revoked a newer lease");
       const exact = await handlerBridge.handle({ action: "indicatorLost", sessionId: "lease-a" });
       if (exact.active || handlerBridge.reasons[0] !== "control_ui_hidden") throw new Error("exact indicator loss did not fail closed");
+
+      const hitFunctions = ["controlElementHitPoints", "controlElementTopmost", "ensureControlUiLatestTopLayer"]
+        .map((name) => extractFunction(content, name)).join("\n");
+      const hitBridge = new Function(`
+        const CONTROL_ACCESSIBLE_LABEL = "Local Browser Bridge browser control";
+        let open = true;
+        const events = [];
+        const host = {
+          isConnected: true,
+          hidden: false,
+          inert: false,
+          setAttribute: () => {},
+          matches: () => open,
+          hidePopover: () => { events.push("hide"); open = false; },
+          showPopover: () => { events.push("show"); open = true; },
+        };
+        const pill = {
+          getBoundingClientRect: () => ({ left: 10, top: 10, width: 120, height: 40 }),
+          contains: (node) => node?.owner === "pill" || node?.owner === "stop",
+        };
+        const stop = {
+          getBoundingClientRect: () => ({ left: 95, top: 15, width: 30, height: 30 }),
+          contains: (node) => node?.owner === "stop",
+        };
+        let documentHit = host;
+        let shadowOwner = "pill";
+        const shadow = { elementFromPoint: () => ({ owner: shadowOwner }) };
+        const document = { elementFromPoint: () => documentHit };
+        let controlUi = { host, shadow, pill, stop };
+        function rendered() { return true; }
+        ${hitFunctions}
+        return {
+          pillTopmost: () => controlElementTopmost(pill),
+          stopTopmost: () => { shadowOwner = "stop"; return controlElementTopmost(stop); },
+          cover: () => { documentHit = { hostile: true }; },
+          uncover: () => { documentHit = host; },
+          foreignShadow: () => { shadowOwner = "foreign"; },
+          retop: ensureControlUiLatestTopLayer,
+          close: () => { open = false; },
+          events,
+        };
+      `)();
+      if (!hitBridge.pillTopmost() || !hitBridge.stopTopmost()) throw new Error("owned control points were not accepted");
+      hitBridge.cover();
+      if (hitBridge.pillTopmost()) throw new Error("later document top-layer coverage was not detected");
+      hitBridge.uncover();
+      hitBridge.foreignShadow();
+      if (hitBridge.pillTopmost()) throw new Error("foreign closed-shadow hit was accepted");
+      hitBridge.retop();
+      if (hitBridge.events.slice(-2).join(",") !== "hide,show") throw new Error("open host was not moved to the top-layer tail");
+      hitBridge.close();
+      hitBridge.retop();
+      if (hitBridge.events.at(-1) !== "show") throw new Error("closed host was not reopened");
+
+      const hostSafety = extractFunction(content, "controlHostSafelyRendered");
+      const hostSafetyBridge = new Function(`
+        const host = {};
+        let controlUi = { host };
+        let style = {
+          display: "block", position: "fixed", visibility: "visible", opacity: "1", filter: "none",
+          backdropFilter: "none", webkitBackdropFilter: "none", maskImage: "none", webkitMaskImage: "none",
+          clipPath: "none", transform: "none", translate: "none", rotate: "none", scale: "none",
+          contentVisibility: "visible", mixBlendMode: "normal",
+        };
+        let pseudoStyle = { display: "none", content: "none" };
+        let backdropStyle = {
+          backgroundColor: "rgba(0, 0, 0, 0)", backgroundImage: "none", opacity: "1", filter: "none",
+          backdropFilter: "none", webkitBackdropFilter: "none", pointerEvents: "none",
+        };
+        function rendered() { return true; }
+        function getComputedStyle(_host, pseudo) {
+          if (pseudo === "::backdrop") return backdropStyle;
+          return pseudo ? pseudoStyle : style;
+        }
+        ${hostSafety}
+        return {
+          safe: controlHostSafelyRendered,
+          hostile: (property, value) => { style = { ...style, [property]: value }; },
+          hostilePseudo: () => { pseudoStyle = { display: "block", content: "normal" }; },
+          resetPseudo: () => { pseudoStyle = { display: "none", content: "none" }; },
+          hostileBackdrop: () => { backdropStyle = { ...backdropStyle, backgroundColor: "rgb(0, 0, 0)" }; },
+          reset: () => { style = { ...style, opacity: "1", filter: "none", maskImage: "none", clipPath: "none", transform: "none", contentVisibility: "visible" }; },
+        };
+      `)();
+      if (!hostSafetyBridge.safe()) throw new Error("safe computed host surface was rejected");
+      for (const [property, value] of [
+        ["opacity", "0.01"], ["filter", "opacity(0)"], ["maskImage", "linear-gradient(transparent, transparent)"],
+        ["clipPath", "inset(100%)"], ["transform", "matrix(0.001, 0, 0, 0.001, 0, 0)"], ["contentVisibility", "hidden"],
+      ]) {
+        hostSafetyBridge.reset();
+        hostSafetyBridge.hostile(property, value);
+        if (hostSafetyBridge.safe()) throw new Error(`hostile generic popover ${property} style was accepted`);
+      }
+      hostSafetyBridge.reset();
+      hostSafetyBridge.hostilePseudo();
+      if (hostSafetyBridge.safe()) throw new Error("hostile popover pseudo-element coverage was accepted");
+      hostSafetyBridge.resetPseudo();
+      hostSafetyBridge.hostileBackdrop();
+      if (hostSafetyBridge.safe()) throw new Error("hostile popover backdrop coverage was accepted");
+
+      const accessibility = extractFunction(content, "controlAccessibilityReady");
+      const accessibilityBridge = new Function(`
+        const CONTROL_ACCESSIBLE_LABEL = "Local Browser Bridge browser control";
+        const CONTROL_ACCESSIBILITY_ANCESTRY_MAX = 64;
+        const document = {};
+        const attributes = new Map([
+          ["aria-hidden", "false"], ["aria-label", CONTROL_ACCESSIBLE_LABEL],
+        ]);
+        const root = {
+          hidden: false, inert: false, parentElement: null,
+          getAttribute: () => null, getRootNode: () => document,
+        };
+        document.documentElement = root;
+        const outerAttributes = new Map();
+        const outerHost = {
+          hidden: false, inert: false, parentElement: root,
+          getAttribute: (name) => outerAttributes.get(name) ?? null,
+          getRootNode: () => document,
+        };
+        let shadowRoot = null;
+        const host = {
+          isConnected: true, hidden: false, inert: false, parentElement: root, parentNode: root,
+          getAttribute: (name) => attributes.get(name) ?? null,
+          getRootNode: () => shadowRoot ?? document,
+        };
+        let controlUi = { host };
+        ${accessibility}
+        return {
+          ready: controlAccessibilityReady,
+          hideHost: () => attributes.set("aria-hidden", "true"),
+          resetHost: () => attributes.set("aria-hidden", "false"),
+          inertRoot: () => { root.inert = true; },
+          resetRoot: () => { root.inert = false; root.getAttribute = () => null; },
+          hideRoot: () => { root.inert = false; root.getAttribute = (name) => name === "aria-hidden" ? "true" : null; },
+          nest: (mode) => {
+            shadowRoot = { mode, host: outerHost };
+            host.parentElement = null;
+            host.parentNode = shadowRoot;
+          },
+          wrap: () => { shadowRoot = null; host.parentElement = outerHost; host.parentNode = outerHost; },
+          unnest: () => { shadowRoot = null; host.parentElement = root; host.parentNode = root; },
+          inertOuter: (value) => { outerHost.inert = value; },
+          hideOuter: (value) => {
+            if (value) outerAttributes.set("aria-hidden", "true");
+            else outerAttributes.delete("aria-hidden");
+          },
+        };
+      `)();
+      if (!accessibilityBridge.ready()) throw new Error("accessible exact indicator was rejected");
+      accessibilityBridge.hideHost();
+      if (accessibilityBridge.ready()) throw new Error("page aria-hidden on the randomized host was accepted");
+      accessibilityBridge.resetHost();
+      accessibilityBridge.inertRoot();
+      if (accessibilityBridge.ready()) throw new Error("inert document ancestor was accepted");
+      accessibilityBridge.resetRoot();
+      accessibilityBridge.nest("open");
+      if (accessibilityBridge.ready()) throw new Error("open-shadow reparented host was accepted");
+      accessibilityBridge.nest("closed");
+      if (accessibilityBridge.ready()) throw new Error("closed-shadow reparented host was accepted");
+      accessibilityBridge.wrap();
+      if (accessibilityBridge.ready()) throw new Error("light-DOM wrapper reparented host was accepted");
+      accessibilityBridge.unnest();
+      accessibilityBridge.hideRoot();
+      if (accessibilityBridge.ready()) throw new Error("aria-hidden document ancestor was accepted");
+
+      const acknowledge = extractFunction(background, "controlUiAcknowledged");
+      const show = extractFunction(background, "showControlUiNow");
+      const acknowledgementBridge = new Function(`
+        let controlLease = { tabId: 7, sessionId: "lease-a", epoch: 2, cursor: { visible: false } };
+        let controlUiContentLossGeneration = 0;
+        let stopped = 0, browserVerifications = 0;
+        const base = {
+          hostConnected: true, popoverOpen: true, topLayerReordered: true, earlyStopGuardReady: true,
+          accessibilityReady: true, viewTransitionActive: false,
+          hostId: "__local_browser_bridge_control_11111111111111111111111111111111__", hostVisible: true,
+          markerId: "__local_browser_bridge_marker_22222222222222222222222222222222__",
+          pillVisible: true, stopVisible: true, pillTopmost: false, stopTopmost: true,
+          cursorVisible: false, capturing: false, captureDepth: 0, activeCaptureIds: [],
+        };
+        function captureLeaseAuthority() { return {}; }
+        function controlCaptureIds() { return []; }
+        function beginControlUiTopLayerMutation() {}
+        function endControlUiTopLayerMutation() {}
+        async function contentRequest() { return { ...base }; }
+        function assertLeaseAuthority() {}
+        async function verifyControlUiBrowserTopLayer() { browserVerifications += 1; }
+        async function persistControlState() {}
+        function clearControlUiTopLayerDirty() {}
+        async function failControlUiClosed() { stopped += 1; throw new Error("CONTROL_UI_RENDER_FAILED"); }
+        ${acknowledge}
+        ${show}
+        return {
+          show: () => showControlUiNow(controlLease),
+          captureAccepted: () => controlUiAcknowledged({
+            ...base, pillVisible: false, stopVisible: false, pillTopmost: false, stopTopmost: false,
+            capturing: true, captureDepth: 1, activeCaptureIds: ["capture-a"],
+          }, ["capture-a"], false),
+          stopped: () => stopped,
+          browserVerifications: () => browserVerifications,
+        };
+      `)();
+      let actionCount = 0;
+      try { await acknowledgementBridge.show(); actionCount += 1; } catch {}
+      if (actionCount !== 0 || acknowledgementBridge.stopped() !== 1 || acknowledgementBridge.browserVerifications() !== 0) {
+        throw new Error("non-topmost indicator acknowledgement allowed an action to proceed");
+      }
+      if (!acknowledgementBridge.captureAccepted()) throw new Error("intentional capture-hidden acknowledgement was rejected");
     "#;
     let output = match Command::new("node")
         .args(["--input-type=module", "-e", script])
@@ -1294,6 +3492,687 @@ fn control_indicator_reuse_and_loss_are_fail_closed() {
     assert!(
         output.status.success(),
         "Node indicator fail-closed harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn browser_process_top_layer_order_and_view_transition_gate_fail_closed() {
+    let background = extension_source("background.js");
+    let content = extension_source("content.js");
+    assert!(background.contains("\"DOM.getTopLayerElements\""));
+    assert!(background.contains("\"DOM.performSearch\""));
+    assert!(background.contains(
+        "exact closed-shadow control host was not a unique browser-reported top-layer member"
+    ));
+    assert!(background.contains("\"DOM.getNodeForLocation\""));
+    assert!(background.contains("ignorePointerEventsNone: true"));
+    assert!(background.contains("hit?.frameId !== lease.frameId"));
+    assert!(background.contains("state.viewTransitionActive !== false"));
+    assert!(content.contains("document.activeViewTransition"));
+    assert!(content.contains(":active-view-transition"));
+    assert!(content.contains("pseudo.startsWith(\"::view-transition\")"));
+
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const brace = source.indexOf("{", start);
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const functions = [
+        "attributesMap", "browserRootAccessibilityReady", "browserControlHostAttributesReady",
+        "spendControlUiAncestryWork", "browserNodeAncestry", "boundedTopLayerNodeIds",
+        "assertControlHostIsDocumentTopLayerTail", "verifyControlUiBrowserTopLayer",
+      ]
+        .map((name) => extractFunction(source, name)).join("\n");
+      const bridge = new Function(`
+        const CONTROL_UI_ANCESTRY_MAX_DEPTH = 24;
+        const CONTROL_UI_ANCESTRY_WORK_MAX = 512;
+        const CONTROL_UI_BROWSER_PROOF_DEADLINE_MS = 1500;
+        const CONTROL_UI_TOP_LAYER_MAX_NODES = 2048;
+        const CONTROL_UI_TOP_LAYER_TAIL_MAX = 256;
+        const CONTROL_UI_HIT_POINT_MAX = 5;
+        const hostId = "__local_browser_bridge_control_11111111111111111111111111111111__";
+        const markerId = "__local_browser_bridge_marker_22222222222222222222222222222222__";
+        let mode = "good", topReads = 0;
+        let discarded = 0, missingProofDeadline = 0, controlUiTopLayerRevision = 0;
+        let controlUiContentLossGeneration = 0;
+        async function debuggerCommand(_tabId, method, params, _authority, _context, sessionId, options) {
+          if (sessionId !== null || options?.strictDeadline !== true || !Number.isFinite(options?.deadlineAt)) {
+            missingProofDeadline += 1;
+          }
+          if (method === "DOM.enable") {
+            if (mode === "content-loss-early") controlUiContentLossGeneration += 1;
+            if (mode === "own-root-events") controlUiTopLayerRevision += 3;
+            return {};
+          }
+          if (method === "DOM.getDocument") return { root: { nodeId: 1 } };
+          if (method === "DOM.querySelector") {
+            if (params.nodeId !== 1 || params.selector !== ":root") throw new Error("unexpected root query");
+            return { nodeId: 3 };
+          }
+          if (method === "DOM.getTopLayerElements") {
+            topReads += 1;
+            if (mode === "revision-churn" && topReads > 1) controlUiTopLayerRevision += 1;
+            if (mode === "content-loss-mid-proof" && topReads > 1) controlUiContentLossGeneration += 1;
+            if (mode === "unavailable") return {};
+            if (mode === "churn" && topReads > 1) return { nodeIds: Array.from({ length: 48 }, (_, index) => 20 + index) };
+            if (mode === "missing") return { nodeIds: [20, 21] };
+            if (mode === "duplicate-host") return { nodeIds: [9, 9, 20] };
+            if (mode === "nested-closed-substitution") return { nodeIds: [8, ...Array.from({ length: 48 }, (_, index) => 20 + index)] };
+            if (mode === "budget") return { nodeIds: [9, ...Array.from({ length: 255 }, (_, index) => 300 + index)] };
+            // More than 32 benign child-document popovers are ordinary page
+            // state. The proof spends no ancestry work on them: membership
+            // binds the exact host, point hit tests decide actual coverage.
+            if (mode === "sparse-strip") return { nodeIds: [9, 10, ...Array.from({ length: 48 }, (_, index) => 20 + index)] };
+            return { nodeIds: [9, ...Array.from({ length: 48 }, (_, index) => 20 + index)] };
+          }
+          if (method === "DOM.getAttributes") {
+            if (params.nodeId === 3) {
+              if (mode === "root-hidden") return { attributes: ["hidden", ""] };
+              if (mode === "root-inert") return { attributes: ["inert", ""] };
+              if (mode === "root-aria-hidden" || (mode === "root-accessibility-churn" && topReads > 1)) {
+                return { attributes: ["aria-hidden", "true"] };
+              }
+              return { attributes: [] };
+            }
+            const hostAttributes = [
+              "id", hostId, "popover", "manual", "aria-hidden", "false",
+              "aria-label", "Local Browser Bridge browser control",
+            ];
+            if (mode === "host-hidden") hostAttributes.push("hidden", "");
+            if (mode === "host-inert") hostAttributes.push("inert", "");
+            if (mode === "host-attributes-churn" && topReads > 1) {
+              hostAttributes[hostAttributes.indexOf("aria-hidden") + 1] = "true";
+            }
+            return { attributes: hostAttributes };
+          }
+          if (method === "DOM.performSearch") {
+            if (params.query !== "\u0023" + markerId) throw new Error("search leaked to page-forgeable host identity");
+            return { searchId: "search", resultCount: mode === "duplicate" ? 2 : 1 };
+          }
+          if (method === "DOM.getSearchResults") return { nodeIds: [100] };
+          if (method === "DOM.describeNode") {
+            if (params.nodeId === 1) return { node: { nodeId: 1, nodeType: 9, nodeName: "DOCUMENT" } };
+            if (params.nodeId === 2) return { node: { nodeId: 2, nodeType: 9, nodeName: "DOCUMENT" } };
+            if (params.nodeId === 9) {
+              let parentId = 3;
+              if (["nested-closed-substitution", "closed-shadow-wrapper"].includes(mode)) parentId = 102;
+              else if (mode === "light-dom-wrapper") parentId = 8;
+              else if (mode === "root-replacement" && topReads > 1) parentId = 4;
+              else if (mode === "adopt-host" && topReads > 1) parentId = 2;
+              return { node: { nodeId: 9, parentId } };
+            }
+            if (params.nodeId === 3) return { node: { nodeId: 3, parentId: 1, nodeName: "HTML" } };
+            if (params.nodeId === 4) return { node: { nodeId: 4, parentId: 1, nodeName: "HTML" } };
+            if (params.nodeId === 8) return { node: { nodeId: 8, parentId: 3 } };
+            if (params.nodeId === 102) return { node: { nodeId: 102, parentId: 8, shadowRootType: "closed" } };
+            if (params.nodeId === 10) return { node: { nodeId: 10, parentId: 1 } };
+            if (Number.isInteger(params.nodeId) && params.nodeId >= 20 && params.nodeId < 100) {
+              return { node: { nodeId: params.nodeId, parentId: mode === "tail-reparent" && topReads > 1 ? 1 : 2 } };
+            }
+            if (Number.isInteger(params.nodeId) && params.nodeId >= 300 && params.nodeId < 555) {
+              return { node: { nodeId: params.nodeId, parentId: 2 } };
+            }
+            if (params.nodeId === 100) return { node: { nodeId: 100, parentId: 101 } };
+            if (params.nodeId === 101) return { node: { nodeId: 101, parentId: mode === "mismatch" ? 8 : 9, shadowRootType: "closed" } };
+            if (params.nodeId === 110) return { node: { nodeId: 110, parentId: 101 } };
+            if (params.nodeId === 200) return { node: { nodeId: 200, parentId: 1 } };
+          }
+          if (method === "DOM.getNodeForLocation") return {
+            nodeId: mode === "point-cover" ? 200 : 110,
+            frameId: mode === "wrong-frame-hit" ? "frame-child" : "frame-root",
+          };
+          if (method === "DOM.discardSearchResults") { discarded += 1; return {}; }
+          throw new Error("unexpected method " + method + JSON.stringify(params));
+        }
+        function assertLeaseAuthority() {}
+        ${functions}
+        const lease = { tabId: 7, frameId: "frame-root" };
+        const authority = {};
+        const state = () => ({
+          hostId, markerId, viewTransitionActive: false, capturing: false,
+          viewport: { width: 1000, height: 800 },
+          controlHitPoints: [
+            { x: 10, y: 10 }, { x: 20, y: 10 }, { x: 30, y: 10 },
+            { x: 40, y: 10 }, { x: 50, y: 10 },
+          ],
+        });
+        return {
+          good: () => verifyControlUiBrowserTopLayer(
+            lease, state(), authority, null, controlUiContentLossGeneration,
+          ),
+          accept: async (nextMode) => {
+            mode = nextMode;
+            topReads = 0;
+            await verifyControlUiBrowserTopLayer(
+              lease, state(), authority, null, controlUiContentLossGeneration,
+            );
+          },
+          reject: async (nextMode, viewTransitionActive = false) => {
+            mode = nextMode;
+            topReads = 0;
+            try {
+              await verifyControlUiBrowserTopLayer(
+                lease,
+                { ...state(), viewTransitionActive },
+                authority,
+                null,
+                controlUiContentLossGeneration,
+              );
+              return false;
+            } catch { return true; }
+          },
+          discarded: () => discarded,
+          missingProofDeadline: () => missingProofDeadline,
+        };
+      `)();
+      await bridge.good();
+      await bridge.accept("own-root-events");
+      for (const mode of ["missing", "duplicate-host", "duplicate", "mismatch", "unavailable", "churn", "revision-churn", "content-loss-early", "content-loss-mid-proof", "nested-closed-substitution", "light-dom-wrapper", "closed-shadow-wrapper", "root-replacement", "host-hidden", "host-inert", "host-attributes-churn", "root-hidden", "root-inert", "root-aria-hidden", "root-accessibility-churn", "sparse-strip", "point-cover", "wrong-frame-hit", "adopt-host", "tail-reparent", "budget"]) {
+        if (!await bridge.reject(mode)) throw new Error(`${mode} browser top-layer state was accepted`);
+      }
+      if (!await bridge.reject("good", true)) throw new Error("active view transition was accepted");
+      if (bridge.discarded() < 3) throw new Error("DOM search handles were not discarded");
+      if (bridge.missingProofDeadline() !== 0) throw new Error("a browser proof CDP call escaped the shared strict deadline");
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run browser top-layer harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node browser top-layer harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn page_key_uses_exact_cdp_virtual_keys_and_documented_scalar_boundary() {
+    let content = extension_source("content.js");
+    let protocol = fs::read_to_string("docs/PROTOCOL.md").unwrap();
+    assert!(content.contains("const token = randomHex128();"));
+    assert!(!content.contains("crypto.randomUUID()"));
+    assert!(protocol.contains("neither a control nor whitespace character"));
+    assert!(protocol.contains("Literal `+` is reserved as the chord separator"));
+    assert!(protocol.contains("exactly one UTF-16 code unit"));
+    assert!(protocol.contains("93, 20, 44, and 19"));
+
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        const start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        const brace = source.indexOf("{", start);
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const codesStart = source.indexOf("const KEY_CODES = {");
+      const codesEnd = source.indexOf("\n};", codesStart) + 3;
+      const parse = extractFunction(source, "parseKeyChord");
+      const bridge = new Function(`${source.slice(codesStart, codesEnd)}\n${parse}\nreturn parseKeyChord;`)();
+      for (const [key, expected] of [["ContextMenu", 93], ["CapsLock", 20], ["PrintScreen", 44], ["Pause", 19]]) {
+        const parsed = bridge(key);
+        if (parsed.keyCode !== expected || parsed.code !== key) {
+          throw new Error(`${key} mapped to ${JSON.stringify(parsed)}`);
+        }
+      }
+      if (bridge("é").keyCode !== "é".charCodeAt(0)) throw new Error("BMP fallback changed");
+      if (bridge("\u200d").keyCode !== 0x200d) throw new Error("documented format scalar changed");
+      let nonBmpRejected = false;
+      try { bridge("😀"); } catch (error) { nonBmpRejected = error.message.startsWith("BAD_KEY:"); }
+      if (!nonBmpRejected) throw new Error("page.key accepted a two-code-unit scalar");
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run page-key grammar harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node page-key grammar harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn root_top_layer_events_use_bounded_dirty_acknowledgement() {
+    let background = extension_source("background.js");
+    let event_start = background
+        .find("chrome.debugger.onEvent.addListener")
+        .unwrap();
+    let event_end = background[event_start..]
+        .find("chrome.tabs.onUpdated.addListener")
+        .unwrap()
+        + event_start;
+    let event = &background[event_start..event_end];
+    assert!(
+        event.find("if (source.sessionId)").unwrap()
+            < event
+                .find("method === \"DOM.topLayerElementsUpdated\"")
+                .unwrap()
+    );
+    assert!(event.contains("scheduleControlUiTopLayerVerification()"));
+    assert!(background.contains(
+        "controlUiTopLayerMutationDepth > 0) {\n      markControlUiProofDirty(controlLease, true);"
+    ));
+    let show_start = background.find("async function showControlUiNow").unwrap();
+    let show_end = background[show_start..]
+        .find("\nfunction showControlUi(")
+        .unwrap()
+        + show_start;
+    let show = &background[show_start..show_end];
+    assert!(
+        show.find("const contentRequestLossGeneration").unwrap()
+            < show.find("const state = await contentRequest").unwrap()
+    );
+    assert!(show.contains("controlUiTopLayerRevision !== verifiedProof.revision"));
+    assert!(show.contains("markControlUiProofDirty(lease)"));
+    assert!(show.contains("verifiedProof.contentLossGeneration"));
+    let message_start = background
+        .find("async function handleControlUiMessage")
+        .unwrap();
+    let message_end = background[message_start..]
+        .find("\nchrome.runtime.onMessage.addListener")
+        .unwrap()
+        + message_start;
+    let message_handler = &background[message_start..message_end];
+    assert!(
+        message_handler.find("const messageLossGeneration").unwrap()
+            < message_handler
+                .find("await initializeControlState()")
+                .unwrap()
+    );
+
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const brace = source.indexOf("{", start);
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const functions = [
+        "beginControlUiTopLayerMutation", "endControlUiTopLayerMutation",
+        "clearControlUiTopLayerDirty", "armControlUiTopLayerDeadline",
+        "markControlUiProofDirty", "scheduleControlUiTopLayerVerification",
+      ]
+        .map((name) => extractFunction(source, name)).join("\n");
+      const bridge = new Function(`
+        const CONTROL_UI_BROWSER_WATCHDOG_DEADLINE_MS = 3000;
+        let controlUiTopLayerMutationDepth = 0;
+        let controlUiTopLayerRevision = 0;
+        let controlUiContentLossGeneration = 0;
+        let controlUiTopLayerDirty = null;
+        let controlUiTopLayerVerificationTimer = null;
+        let controlLease = {
+          tabId: 7, sessionId: "lease-a", epoch: 3,
+          controlHostId: "host-a", controlMarkerId: "marker-a", controlUiProofReady: true,
+          pendingNavigation: null, navigationReady: true, pendingDialog: null,
+        };
+        let now = 1000, revokeCalls = 0, replacement = 0;
+        const reasons = [];
+        const timers = [];
+        const Date = { now: () => now };
+        function setTimeout(handler, delay) {
+          const timer = { handler, at: now + delay, canceled: false };
+          timers.push(timer);
+          return timer;
+        }
+        function clearTimeout(timer) { if (timer) timer.canceled = true; }
+        function controlCaptureIds() { return []; }
+        async function stopControl(reason) {
+          revokeCalls += 1;
+          reasons.push(reason);
+          controlLease = null;
+        }
+        ${functions}
+        return {
+          begin: beginControlUiTopLayerMutation,
+          end: endControlUiTopLayerMutation,
+          event: () => { controlUiTopLayerRevision += 1; scheduleControlUiTopLayerVerification(); },
+          proof: () => ({
+            revision: controlUiTopLayerRevision,
+            contentLossGeneration: controlUiContentLossGeneration,
+          }),
+          ack: (proof = {
+            revision: controlUiTopLayerRevision,
+            contentLossGeneration: controlUiContentLossGeneration,
+          }) => clearControlUiTopLayerDirty(controlLease, proof.revision, proof.contentLossGeneration),
+          indicatorLost: () => markControlUiProofDirty(controlLease, true),
+          mismatch: () => markControlUiProofDirty(controlLease, true),
+          setNavigation: (value) => { controlLease.pendingNavigation = value ? {} : null; },
+          setProofReady: (value) => { controlLease.controlUiProofReady = value; },
+          replaceLease: () => {
+            replacement += 1;
+            controlLease = {
+              tabId: 7, sessionId: "lease-replacement-" + replacement, epoch: 3 + replacement,
+              controlHostId: "host-b", controlMarkerId: "marker-b", controlUiProofReady: true,
+              pendingNavigation: null, navigationReady: true, pendingDialog: null,
+            };
+          },
+          advance: async (milliseconds) => {
+            now += milliseconds;
+            let ran;
+            do {
+              ran = false;
+              for (const timer of timers) {
+                if (!timer.canceled && !timer.ran && timer.at <= now) {
+                  timer.ran = true;
+                  await timer.handler();
+                  ran = true;
+                }
+              }
+              for (let index = 0; index < 4; index += 1) await Promise.resolve();
+            } while (ran);
+          },
+          state: () => ({
+            revokeCalls, reasons: [...reasons],
+            timerCount: timers.filter((timer) => !timer.canceled && !timer.ran).length,
+            dirty: Boolean(controlUiTopLayerDirty),
+            lease: controlLease?.sessionId ?? null,
+          }),
+        };
+      `)();
+
+      const preShowLossGeneration = bridge.proof().contentLossGeneration;
+      bridge.begin();
+      bridge.event(); bridge.event(); bridge.event();
+      if (!bridge.state().dirty || bridge.state().timerCount !== 1) {
+        throw new Error("own top-layer mutation did not retain one absolute dirty deadline");
+      }
+      const postShowBrowserProof = bridge.proof();
+      postShowBrowserProof.contentLossGeneration = preShowLossGeneration;
+      if (!bridge.ack(postShowBrowserProof)) {
+        throw new Error("clean show poisoned its content-loss generation with own root events");
+      }
+      bridge.end();
+      if (bridge.state().timerCount !== 0) throw new Error("successful own mutation left a stale deadline");
+
+      bridge.event(); bridge.event();
+      if (bridge.state().timerCount !== 1) throw new Error("root event burst did not coalesce to one deadline");
+      bridge.ack();
+      await bridge.advance(3000);
+      if (bridge.state().revokeCalls !== 0) throw new Error("clean watchdog acknowledgement did not clear dirty state");
+
+      // A browser event delivered after the verifier's final list sample but
+      // before its clear must survive as a newer exact dirty revision.
+      bridge.event();
+      const sampledProof = bridge.proof();
+      bridge.event();
+      if (bridge.ack(sampledProof) || !bridge.state().dirty) {
+        throw new Error("a newer top-layer event was erased by an older proof");
+      }
+      bridge.ack();
+
+      // indicatorLost does not change Chrome's top-layer revision. A loss
+      // delivered after the final proof sample must still get its own serial,
+      // survive the older acknowledgement, and retain the absolute deadline.
+      const beforeLossProof = bridge.proof();
+      bridge.indicatorLost();
+      if (bridge.ack(beforeLossProof) || !bridge.state().dirty) {
+        throw new Error("same-revision indicator loss was erased by an older proof");
+      }
+      await bridge.advance(3000);
+      let state = bridge.state();
+      if (state.revokeCalls !== 1 || state.reasons[0] !== "control_ui_hidden") {
+        throw new Error(`same-revision indicator loss missed its deadline: ${JSON.stringify(state)}`);
+      }
+      bridge.replaceLease();
+
+      // Mutation depth cannot postpone the absolute deadline. A renderer/CDP
+      // proof that stalls after a hostile event is revoked at the same bound.
+      bridge.begin();
+      bridge.event();
+      await bridge.advance(3000);
+      state = bridge.state();
+      if (state.revokeCalls !== 2 || state.reasons[1] !== "control_ui_hidden") {
+        throw new Error(`stalled in-mutation browser proof did not revoke: ${JSON.stringify(state)}`);
+      }
+      bridge.end();
+
+      // A stale timer may observe a replacement dirty record, but it must arm
+      // that record's deadline—not clear it or revoke the replacement using
+      // the old lease identity.
+      bridge.replaceLease();
+      bridge.event();
+      bridge.replaceLease();
+      bridge.event();
+      await bridge.advance(3000);
+      state = bridge.state();
+      if (state.revokeCalls !== 3 || state.lease !== null) {
+        throw new Error(`replacement dirty record lost its exact deadline: ${JSON.stringify(state)}`);
+      }
+
+      const navigation = new Function(`
+        const CONTROL_UI_BROWSER_WATCHDOG_DEADLINE_MS = 3000;
+        let controlUiTopLayerMutationDepth = 0, controlUiTopLayerDirty = null;
+        let controlUiTopLayerRevision = 0, controlUiContentLossGeneration = 0;
+        let controlUiTopLayerVerificationTimer = null, stopped = 0;
+        let now = 1000;
+        const Date = { now: () => now };
+        const timers = [];
+        function setTimeout(handler, delay) { const timer = { handler, at: now + delay }; timers.push(timer); return timer; }
+        function clearTimeout(timer) { if (timer) timer.canceled = true; }
+        function controlCaptureIds() { return []; }
+        async function stopControl() { stopped += 1; }
+        let controlLease = {
+          tabId: 7, sessionId: "lease-nav", epoch: 5,
+          controlHostId: "old-host", controlMarkerId: "old-marker", controlUiProofReady: false,
+          pendingNavigation: {}, navigationReady: true, pendingDialog: null,
+        };
+        ${functions}
+        return {
+          event: () => { controlUiTopLayerRevision += 1; scheduleControlUiTopLayerVerification(); },
+          mismatch: () => markControlUiProofDirty(controlLease, true),
+          commit: () => { controlLease.pendingNavigation = null; },
+          state: () => ({ stopped, dirty: Boolean(controlUiTopLayerDirty), timers: timers.filter((timer) => !timer.canceled).length }),
+        };
+      `)();
+      navigation.event(); navigation.mismatch();
+      if (navigation.state().dirty || navigation.state().timers) throw new Error("old marker armed during pending navigation");
+      navigation.commit();
+      navigation.event();
+      if (navigation.state().dirty) throw new Error("root event armed before a new exact marker was browser-verified");
+      navigation.mismatch();
+      if (!navigation.state().dirty || navigation.state().timers !== 1) {
+        throw new Error("stable unverified marker mismatch had no bounded rebind deadline");
+      }
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run top-layer event harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node top-layer event harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn navigation_indicator_messages_wait_for_and_trigger_exact_rebind() {
+    let background = extension_source("background.js");
+    let content = extension_source("content.js");
+    assert!(background.contains("await showControlUi(lease);\n      return publicControlState();"));
+    assert!(content.contains("scheduleInitialControlReconcile();"));
+    assert!(!content.contains("if (document.readyState === \"complete\") queueMicrotask"));
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const brace = source.indexOf("{", start);
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const contentSource = fs.readFileSync("extension/content.js", "utf8");
+      const scheduleInitialControlReconcile = extractFunction(contentSource, "scheduleInitialControlReconcile");
+      const initial = new Function(`
+        const document = { readyState: "interactive" };
+        let reconciles = 0;
+        function reconcileControl() { reconciles += 1; }
+        ${scheduleInitialControlReconcile}
+        return { schedule: scheduleInitialControlReconcile, count: () => reconciles, state: () => document.readyState };
+      `)();
+      initial.schedule();
+      await Promise.resolve();
+      if (initial.state() !== "interactive" || initial.count() !== 1) {
+        throw new Error("document_idle content waited for readyState complete before reconcile");
+      }
+      const handler = extractFunction(source, "handleControlUiMessage");
+      const bridge = new Function(`
+        const CONTROL_UI_HIT_POINT_MAX = 5;
+        let controlUiTopLayerMutationDepth = 0;
+        let controlUiContentLossGeneration = 0;
+        let showCalls = 0, verifyCalls = 0, stopCalls = 0, dirtyCalls = 0;
+        const reasons = [];
+        let controlLease = {
+          tabId: 7, sessionId: "lease-a", epoch: 3, expiresAt: Date.now() + 60000,
+          navigationReady: true, pendingNavigation: {}, controlUiProofReady: false,
+          controlHostId: "old-host", controlMarkerId: "old-marker",
+        };
+        async function initializeControlState() {}
+        function controlCaptureIds() { return []; }
+        function publicControlState() { return { active: Boolean(controlLease), proofReady: controlLease?.controlUiProofReady === true }; }
+        function markControlUiProofDirty() { dirtyCalls += 1; }
+        async function showControlUi(lease) {
+          showCalls += 1;
+          lease.controlHostId = "new-host";
+          lease.controlMarkerId = "new-marker";
+          lease.controlUiProofReady = true;
+        }
+        function captureLeaseAuthority() { return {}; }
+        async function verifyControlUiBrowserTopLayer() {
+          verifyCalls += 1;
+          return { revision: 0, contentLossGeneration: 0 };
+        }
+        function clearControlUiTopLayerDirty() {}
+        async function stopControl(reason) { reasons.push(reason); stopCalls += 1; controlLease = null; return { active: false }; }
+        ${handler}
+        const points = [
+          { x: 1, y: 1 }, { x: 2, y: 1 }, { x: 3, y: 1 }, { x: 4, y: 1 }, { x: 5, y: 1 },
+        ];
+        return {
+          handle: (message) => handleControlUiMessage(message, { tab: { id: 7 } }),
+          commit() { controlLease.pendingNavigation = null; },
+          validState: () => ({
+            hostId: "new-host", markerId: "new-marker", capturing: false,
+            viewTransitionActive: false, viewport: { width: 100, height: 100 }, controlHitPoints: points,
+          }),
+          malformedState: () => ({
+            hostId: "new-host", markerId: "new-marker", capturing: true,
+            viewTransitionActive: false, viewport: { width: 100, height: 100 }, controlHitPoints: [],
+          }),
+          state: () => ({ showCalls, verifyCalls, stopCalls, dirtyCalls, reasons: [...reasons], lease: controlLease }),
+        };
+      `)();
+
+      const pendingLoss = await bridge.handle({ action: "indicatorLost", sessionId: "lease-a" });
+      const pendingCheck = await bridge.handle({ action: "indicatorCheck", sessionId: "lease-a", browserState: bridge.validState() });
+      if (!pendingLoss.active || !pendingCheck.active || bridge.state().stopCalls || bridge.state().showCalls) {
+        throw new Error("old-document indicator messages revoked or rebound during authorized navigation");
+      }
+      bridge.commit();
+      // No tabs.onUpdated complete signal is delivered here. The fresh
+      // document_idle watchdog itself must perform the exact rebind, so slow
+      // subresources cannot consume the 3s proof deadline.
+      const rebound = await bridge.handle({ action: "indicatorCheck", sessionId: "lease-a", browserState: bridge.validState() });
+      if (!rebound.active || !rebound.proofReady || bridge.state().showCalls !== 1 || bridge.state().stopCalls) {
+        throw new Error("fresh document_idle indicator did not rebind the browser proof");
+      }
+      const checked = await bridge.handle({ action: "indicatorCheck", sessionId: "lease-a", browserState: bridge.validState() });
+      if (!checked.active || bridge.state().verifyCalls !== 1) throw new Error("rebound watchdog skipped browser verification");
+
+      let malformed = false;
+      try { await bridge.handle({ action: "indicatorCheck", sessionId: "lease-a", browserState: bridge.malformedState() }); }
+      catch (error) { malformed = error.message.includes("malformed"); }
+      const finalState = bridge.state();
+      if (!malformed || finalState.stopCalls !== 1 || finalState.reasons[0] !== "control_ui_hidden") {
+        throw new Error("capture-shaped passive acknowledgement did not fail closed");
+      }
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run navigation indicator rebind harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node navigation indicator rebind harness failed:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -1377,7 +4256,7 @@ fn capture_visibility_survives_overlay_reinsertion_and_nested_capture() {
           for (const id of ids || []) activeCaptureIds.add(String(id));
         }
         function syncCaptureGlobals() {}
-        async function confirmControlUiPaint() {
+        async function confirmControlUiRender() {
           return { activeCaptureIds: [...activeCaptureIds] };
         }
         ${functions}
@@ -1689,7 +4568,7 @@ fn server_cancel_is_session_bound_suppresses_late_results_and_preserves_explicit
     assert!(chain.contains("dispatch(message.method, message.params ?? {}, false, context)"));
     assert!(chain.contains("assertCommandActive(context, \"result delivery\")"));
     assert!(chain.contains("if (context.canceled || canceledCommandKeys.has(context.key)) return"));
-    assert!(chain.contains("await context.cancellationCleanup"));
+    assert!(chain.contains("await awaitCommandCleanup(context)"));
     assert!(chain.contains("finalizeCanceledCommandFreshness(context)"));
     assert!(chain.contains("activeCommandContexts.delete(context.key)"));
     assert!(background.contains("context.cancelWaiters.add(rejectCancellation)"));
@@ -3021,7 +5900,18 @@ fn human_stop_wins_deferred_tab_mutations_and_debugger_attach() {
     let approve_end = background[approve_start..].find("case \"reject\"").unwrap() + approve_start;
     assert!(
         background[approve_start..approve_end]
-            .contains("dispatch(pending.method, pending.params, true)")
+            .contains("resolvePendingApprovalFromPopup(message.id, sender, true)")
+    );
+    let approval_start = background
+        .find("async function resolvePendingApprovalFromPopup")
+        .unwrap();
+    let approval_end = background[approval_start..]
+        .find("async function handleControlUiMessage")
+        .unwrap()
+        + approval_start;
+    assert!(
+        background[approval_start..approval_end]
+            .contains("dispatch(pending.method, pending.params, true, context)")
     );
 
     let start_control_start = background.find("async function startControl").unwrap();
@@ -3246,14 +6136,15 @@ fn restored_unknown_attach_needs_repeated_detach_confirmation() {
 }
 
 #[test]
-fn control_ui_paint_capture_and_stop_failures_are_fail_closed() {
+fn control_ui_render_capture_and_stop_failures_are_fail_closed() {
     let background = extension_source("background.js");
     let content = extension_source("content.js");
 
-    let show_start = background.find("async function showControlUi").unwrap();
+    let show_start = background.find("async function showControlUiNow").unwrap();
     let show_end = background[show_start..]
-        .find("async function hideControlUi")
+        .find("\n}\n\nfunction showControlUi")
         .unwrap()
+        + 2
         + show_start;
     let show = &background[show_start..show_end];
     assert!(show.contains("activeCaptureIds"));
@@ -3264,15 +6155,18 @@ fn control_ui_paint_capture_and_stop_failures_are_fail_closed() {
     for acknowledgement in [
         "hostConnected",
         "popoverOpen",
+        "topLayerReordered",
         "hostVisible",
         "pillVisible",
         "stopVisible",
+        "pillTopmost",
+        "stopTopmost",
         "captureDepth",
         "activeCaptureIds",
     ] {
         assert!(content.contains(acknowledgement));
     }
-    assert!(content.contains("await waitForPaint()"));
+    assert!(content.contains("await waitForRenderOpportunity()"));
     assert!(content.contains("Stop failed—use Chrome Cancel or the extension popup."));
     assert!(content.contains("Retry Stop"));
 
@@ -3357,6 +6251,7 @@ fn start_then_stop_records_explicit_revocation_without_runtime_reference_errors(
         const activeControlCaptures = new Map();
         function stopHeartbeat() {}
         function clearFrameSessions() {}
+        function clearControlUiTopLayerDirty() {}
         ${fn}
         return {
           start() {
@@ -5026,6 +7921,7 @@ fn a_dialog_that_opens_mid_observation_is_never_paid_for_with_the_lease() {
       const boundary = new Function(`
         const crypto = { randomUUID: () => "capture-1" };
         let controlLease = null;
+        let controlUiContentLossGeneration = 0;
         let stopCalls = 0, contentCalls = 0, reportedLoaderId = "L1", releaseRetries = 0;
         function retryDialogBlockedInputRelease() { releaseRetries += 1; return Promise.resolve(); }
         let onScreenshot = () => {};
@@ -5037,7 +7933,13 @@ fn a_dialog_that_opens_mid_observation_is_never_paid_for_with_the_lease() {
         function assertLeaseAuthorityAfterDispatch() {}
         function beginControlCapture() { return ["capture-1"]; }
         function endControlCapture() { return []; }
+        function beginControlUiTopLayerMutation() {}
+        function endControlUiTopLayerMutation() {}
         function controlUiAcknowledged() { return true; }
+        function verifyControlUiBrowserTopLayer() {
+          return Promise.resolve({ revision: 0, contentLossGeneration: 0 });
+        }
+        function clearControlUiTopLayerDirty() {}
         function contentRequest() { contentCalls += 1; return Promise.resolve({}); }
         function showControlUi() { return Promise.resolve({}); }
         function persistControlState() { return Promise.resolve(); }

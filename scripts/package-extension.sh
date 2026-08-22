@@ -12,7 +12,7 @@ output_dir="$(cd "$(dirname "$output")" && pwd -P)"
 output="$output_dir/$(basename "$output")"
 rm -f "$output"
 
-files=(background.js content.js dom-core.js frame-agent.js lib.js manifest.json popup.css popup.html popup.js LICENSE)
+files=(background.js content.js dom-core.js frame-agent.js lib.js manifest.json popup.css popup.html popup.js stop-guard.js LICENSE)
 for file in "${files[@]}"; do
   source_path="extension/$file"
   if [[ "$file" == LICENSE ]]; then

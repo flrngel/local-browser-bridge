@@ -184,6 +184,9 @@ function createDomCore({ isExcludedNode = () => false } = {}) {
 
   function validateRecord(record, { requireHitTest = false } = {}) {
     const { element } = record;
+    if (isExcludedNode(element)) {
+      throw new Error("TARGET_CHANGED: target became part of the bridge control surface; observe again");
+    }
     if (!visible(element)) throw new Error("TARGET_CHANGED: target is no longer visible; observe again");
     const currentSignature = targetSignature(element);
     const currentBounds = boundsOf(element);
@@ -271,7 +274,7 @@ function createRevisionTracker({
   }
 
   function isOnlyExcludedMutation(mutation) {
-    if (isExcludedNode(mutation.target)) return true;
+    if (mutation.type !== "childList") return isExcludedNode(mutation.target);
     const changed = [...mutation.addedNodes, ...mutation.removedNodes];
     return changed.length > 0 && changed.every((node) => isExcludedNode(node));
   }

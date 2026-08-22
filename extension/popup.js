@@ -11,6 +11,7 @@ const ui = {
   startControl: byId("start-control"), releaseControl: byId("release-control"),
 };
 let state = null;
+let popupUpdateGeneration = 0;
 ui.version.textContent = `Version ${VERSION}`;
 
 function call(action, extra = {}) {
@@ -78,8 +79,24 @@ function render(next) {
 }
 
 async function update(action, extra = {}) {
-  try { render(await call(action, extra)); }
-  catch (error) { showMessage(error.message); }
+  const requestGeneration = ++popupUpdateGeneration;
+  try {
+    const next = await call(action, extra);
+    if (requestGeneration === popupUpdateGeneration) render(next);
+  }
+  catch (error) {
+    if (requestGeneration !== popupUpdateGeneration) return;
+    showMessage(error.message);
+    if (error.message.startsWith("APPROVAL_STALE")) {
+      try {
+        const next = await call("getState");
+        if (requestGeneration === popupUpdateGeneration) render(next);
+      }
+      catch (refreshError) {
+        if (requestGeneration === popupUpdateGeneration) showMessage(refreshError.message);
+      }
+    }
+  }
 }
 
 ui.connectionForm.addEventListener("submit", (event) => {
