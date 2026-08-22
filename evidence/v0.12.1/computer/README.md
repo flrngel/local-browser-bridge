@@ -96,3 +96,9 @@ evidence.
 After the run, inspect every screenshot, confirm `assertions.failed` is zero,
 and compare the recorded archive SHA-256 with the published release asset
 before changing this directory's status from candidate to released evidence.
+
+## Retained negative attempts
+
+- [`attempts/withdrawn-98ff6f0-macos-invariant-refusal`](attempts/withdrawn-98ff6f0-macos-invariant-refusal/README.md)
+  preserves the first fail-closed run. It is diagnostic history, not release
+  evidence and not a passing result.

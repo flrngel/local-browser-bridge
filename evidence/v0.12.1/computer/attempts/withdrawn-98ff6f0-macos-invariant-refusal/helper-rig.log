@@ -1,0 +1,53 @@
+2026-08-22T03:56:22.650Z PASS macOS host: Darwin
+2026-08-22T03:56:22.651Z PASS exact archive name: local-browser-bridge-v0.12.1-macos-universal.tar.gz
+2026-08-22T03:56:22.841Z PASS server version: 0.12.1
+2026-08-22T03:56:22.962Z PASS helper version: 0.12.1
+2026-08-22T03:56:22.988Z PASS server universal architecture: arm64,x86_64
+2026-08-22T03:56:22.988Z PASS helper universal architecture: arm64,x86_64
+2026-08-22T03:56:22.988Z PASS helper uses packaged app layout: Local Computer Helper.app
+2026-08-22T03:56:23.014Z PASS strict code-signature verification: server, helper executable, and helper app bundle passed strict verification
+2026-08-22T03:56:23.028Z PASS helper bundle version: 0.12.1/0.12.1
+2026-08-22T03:56:23.031Z PASS archive checksum listed: local-browser-bridge-v0.12.1-macos-universal.tar.gz
+2026-08-22T03:56:23.031Z PASS archive checksum matches: 57906096dd0f3b2046ac55140254d9165b0e7fe7b6863b4688a9693bb5bc5994
+2026-08-22T03:56:23.050Z PASS archive paths are traversal-safe: 8 safe entries
+2026-08-22T03:56:23.071Z PASS archive contains only regular files and directories: no links or special filesystem entries
+2026-08-22T03:56:23.071Z PASS archive contains exact server: local-browser-bridge
+2026-08-22T03:56:23.071Z PASS archive contains exact helper: Local Computer Helper.app/Contents/MacOS/local-computer-helper
+2026-08-22T03:56:23.097Z PASS supplied server is archive-exact: 4de9d545518ce77d11930befbec9ed20478d973172814488dedf12b103ed99f8
+2026-08-22T03:56:23.099Z PASS supplied helper is archive-exact: 94ae1db490c6b8ed6dd60c07dbde38d42025570ffbab0c770ca33e3793cf89e7
+2026-08-22T03:56:24.196Z PASS screen-capture permission preflight: preexisting permission; no request was made
+2026-08-22T03:56:24.196Z PASS accessibility permission preflight: preexisting permission; no request was made
+2026-08-22T03:56:24.196Z PASS active Space probe available: nonzero active Space identity
+2026-08-22T03:56:24.196Z PASS front-window probe available: exact front process/window identity available
+2026-08-22T03:56:24.811Z PASS fixture process identity: state belongs to the spawned fixture
+2026-08-22T03:56:25.257Z PASS packaged helper compatible: protocol-compatible helper 0.12.1
+2026-08-22T03:56:25.257Z PASS single helper spawn: 1 packaged helper process
+2026-08-22T03:56:25.257Z PASS acknowledged share advertised: computer.share.ack present
+2026-08-22T03:56:25.257Z PASS native stream advertised: computer.capture.native-stream.v1 present
+2026-08-22T03:56:25.421Z PASS helper status backend: background-window/ax+skylight+screencapturekit-stream
+2026-08-22T03:56:25.421Z PASS background shared-session mode: background-window/shared-user-session/target-routed
+2026-08-22T03:56:25.421Z PASS background input backend ready: target-routed input is ready
+2026-08-22T03:56:25.421Z PASS semantic backend ready: macos-accessibility is ready without prompting
+2026-08-22T03:56:25.421Z PASS fixture exact window discovered: 1 matching windows
+2026-08-22T03:56:25.421Z PASS fixture is a background target: the fixture neither owns the foreground process nor the front window
+2026-08-22T03:56:25.697Z PASS exact fixture window observed: 1209x826
+2026-08-22T03:56:25.697Z PASS semantic snapshot available: 4 elements
+2026-08-22T03:56:25.701Z PASS semantic value element discovered: AXTextField
+2026-08-22T03:56:26.497Z PASS semantic setValue confirmed: Confirmed/value-confirmed
+2026-08-22T03:56:26.497Z PASS semantic setValue non-interruption invariants: {"cursorUnchanged":true,"foregroundUnchanged":true,"spaceUnchanged":true,"userFocusUnchanged":true}
+2026-08-22T03:56:26.685Z PASS semantic setValue screenshot changed: fresh exact-window pixels differ from the pre-action observation
+2026-08-22T03:56:26.685Z PASS semantic action element discovered: AXButton
+2026-08-22T03:56:27.581Z PASS semantic invoke target-side proof: fixture semantic counter advanced to 1
+2026-08-22T03:56:27.581Z PASS semantic invoke conservatively classified: Partial/element-state-changed
+2026-08-22T03:56:27.581Z PASS semantic invoke non-interruption invariants: {"cursorUnchanged":true,"foregroundUnchanged":true,"spaceUnchanged":true,"userFocusUnchanged":true}
+2026-08-22T03:56:27.766Z PASS semantic invoke screenshot changed: fresh exact-window pixels differ from the setValue stage
+2026-08-22T03:56:28.597Z PASS persistent live share started: persistent-native-stream/exact-window
+2026-08-22T03:56:28.597Z PASS SCStream start metadata: macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window
+2026-08-22T03:56:28.598Z PASS live share ack pacing: latest-frame-wins, ackPaced=true
+2026-08-22T03:56:28.598Z PASS live share cursor policy: system cursor excluded; synthetic session pointer composited
+2026-08-22T03:56:28.809Z PASS persistent-share screenshot is fresh: sourceSequence=3
+2026-08-22T03:56:30.632Z FATAL computer.click returned HTTP 504: COMPUTER_OUTCOME_UNKNOWN The command was canceled or failed after computer input dispatch; observe again and do not automatically retry. COMPUTER_BACKGROUND_CONTRACT_VIOLATION: The foreground, hardware cursor, or active desktop changed during background delivery
+2026-08-22T03:56:30.637Z helper stopped
+2026-08-22T03:56:30.642Z server stopped
+2026-08-22T03:56:30.647Z fixture stopped
+2026-08-22T03:56:30.650Z scratch directory removed

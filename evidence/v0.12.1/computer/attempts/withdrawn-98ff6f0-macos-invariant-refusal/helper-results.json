@@ -1,0 +1,302 @@
+{
+  "schemaVersion": 2,
+  "productVersion": "0.12.1",
+  "status": "failed-release-candidate",
+  "evidenceClass": "release-candidate-negative-result",
+  "capturedAt": "2026-08-22T03:56:30.631Z",
+  "fatal": "computer.click returned HTTP 504: COMPUTER_OUTCOME_UNKNOWN The command was canceled or failed after computer input dispatch; observe again and do not automatically retry. COMPUTER_BACKGROUND_CONTRACT_VIOLATION: The foreground, hardware cursor, or active desktop changed during background delivery",
+  "helperSpawnCount": 1,
+  "screenshots": [
+    {
+      "file": "computer-01-exact-window-observe.png",
+      "sha256": "5c4fa6ee47ccba569c76f406fbf41680cc0500031b5945b69fc37e1306a856f1",
+      "bytes": 778800,
+      "width": 1209,
+      "height": 826,
+      "frameId": "5172b912-13c6-4ffc-bed8-9ea4917cda10",
+      "windowId": "61449",
+      "sourceSequence": null,
+      "transportSequence": null
+    },
+    {
+      "file": "computer-02-semantic-set-value.png",
+      "sha256": "8c027c3423f7b7370f893ad17e6b670951051aea991d0455a0d57484ca61cddf",
+      "bytes": 793011,
+      "width": 1209,
+      "height": 826,
+      "frameId": "005d848d-0442-41fb-9c02-b6222c6a4d0b",
+      "windowId": "61449",
+      "sourceSequence": null,
+      "transportSequence": null
+    },
+    {
+      "file": "computer-03-semantic-invoke.png",
+      "sha256": "bffe9beb49c04c1a9b7488229c337a213ba82a61825e3630319cf1eb48e9f6e4",
+      "bytes": 795246,
+      "width": 1209,
+      "height": 826,
+      "frameId": "0a373e4c-9b93-452d-bb30-b132d549eec9",
+      "windowId": "61449",
+      "sourceSequence": null,
+      "transportSequence": null
+    },
+    {
+      "file": "computer-04-persistent-scstream-start.png",
+      "sha256": "0a8e6903a609781c47ced71448d8ba21c043b4283a6995923359e1e58508d289",
+      "bytes": 753195,
+      "width": 1209,
+      "height": 826,
+      "frameId": "78f66420-6f48-4dd5-992d-da403b8c5941",
+      "windowId": "61449",
+      "sourceSequence": 3,
+      "transportSequence": 1
+    }
+  ],
+  "assertions": {
+    "passed": 48,
+    "failed": 0,
+    "total": 48,
+    "details": [
+      {
+        "name": "macOS host",
+        "passed": true,
+        "detail": "Darwin"
+      },
+      {
+        "name": "exact archive name",
+        "passed": true,
+        "detail": "local-browser-bridge-v0.12.1-macos-universal.tar.gz"
+      },
+      {
+        "name": "server version",
+        "passed": true,
+        "detail": "0.12.1"
+      },
+      {
+        "name": "helper version",
+        "passed": true,
+        "detail": "0.12.1"
+      },
+      {
+        "name": "server universal architecture",
+        "passed": true,
+        "detail": "arm64,x86_64"
+      },
+      {
+        "name": "helper universal architecture",
+        "passed": true,
+        "detail": "arm64,x86_64"
+      },
+      {
+        "name": "helper uses packaged app layout",
+        "passed": true,
+        "detail": "Local Computer Helper.app"
+      },
+      {
+        "name": "strict code-signature verification",
+        "passed": true,
+        "detail": "server, helper executable, and helper app bundle passed strict verification"
+      },
+      {
+        "name": "helper bundle version",
+        "passed": true,
+        "detail": "0.12.1/0.12.1"
+      },
+      {
+        "name": "archive checksum listed",
+        "passed": true,
+        "detail": "local-browser-bridge-v0.12.1-macos-universal.tar.gz"
+      },
+      {
+        "name": "archive checksum matches",
+        "passed": true,
+        "detail": "57906096dd0f3b2046ac55140254d9165b0e7fe7b6863b4688a9693bb5bc5994"
+      },
+      {
+        "name": "archive paths are traversal-safe",
+        "passed": true,
+        "detail": "8 safe entries"
+      },
+      {
+        "name": "archive contains only regular files and directories",
+        "passed": true,
+        "detail": "no links or special filesystem entries"
+      },
+      {
+        "name": "archive contains exact server",
+        "passed": true,
+        "detail": "local-browser-bridge"
+      },
+      {
+        "name": "archive contains exact helper",
+        "passed": true,
+        "detail": "Local Computer Helper.app/Contents/MacOS/local-computer-helper"
+      },
+      {
+        "name": "supplied server is archive-exact",
+        "passed": true,
+        "detail": "4de9d545518ce77d11930befbec9ed20478d973172814488dedf12b103ed99f8"
+      },
+      {
+        "name": "supplied helper is archive-exact",
+        "passed": true,
+        "detail": "94ae1db490c6b8ed6dd60c07dbde38d42025570ffbab0c770ca33e3793cf89e7"
+      },
+      {
+        "name": "screen-capture permission preflight",
+        "passed": true,
+        "detail": "preexisting permission; no request was made"
+      },
+      {
+        "name": "accessibility permission preflight",
+        "passed": true,
+        "detail": "preexisting permission; no request was made"
+      },
+      {
+        "name": "active Space probe available",
+        "passed": true,
+        "detail": "nonzero active Space identity"
+      },
+      {
+        "name": "front-window probe available",
+        "passed": true,
+        "detail": "exact front process/window identity available"
+      },
+      {
+        "name": "fixture process identity",
+        "passed": true,
+        "detail": "state belongs to the spawned fixture"
+      },
+      {
+        "name": "packaged helper compatible",
+        "passed": true,
+        "detail": "protocol-compatible helper 0.12.1"
+      },
+      {
+        "name": "single helper spawn",
+        "passed": true,
+        "detail": "1 packaged helper process"
+      },
+      {
+        "name": "acknowledged share advertised",
+        "passed": true,
+        "detail": "computer.share.ack present"
+      },
+      {
+        "name": "native stream advertised",
+        "passed": true,
+        "detail": "computer.capture.native-stream.v1 present"
+      },
+      {
+        "name": "helper status backend",
+        "passed": true,
+        "detail": "background-window/ax+skylight+screencapturekit-stream"
+      },
+      {
+        "name": "background shared-session mode",
+        "passed": true,
+        "detail": "background-window/shared-user-session/target-routed"
+      },
+      {
+        "name": "background input backend ready",
+        "passed": true,
+        "detail": "target-routed input is ready"
+      },
+      {
+        "name": "semantic backend ready",
+        "passed": true,
+        "detail": "macos-accessibility is ready without prompting"
+      },
+      {
+        "name": "fixture exact window discovered",
+        "passed": true,
+        "detail": "1 matching windows"
+      },
+      {
+        "name": "fixture is a background target",
+        "passed": true,
+        "detail": "the fixture neither owns the foreground process nor the front window"
+      },
+      {
+        "name": "exact fixture window observed",
+        "passed": true,
+        "detail": "1209x826"
+      },
+      {
+        "name": "semantic snapshot available",
+        "passed": true,
+        "detail": "4 elements"
+      },
+      {
+        "name": "semantic value element discovered",
+        "passed": true,
+        "detail": "AXTextField"
+      },
+      {
+        "name": "semantic setValue confirmed",
+        "passed": true,
+        "detail": "Confirmed/value-confirmed"
+      },
+      {
+        "name": "semantic setValue non-interruption invariants",
+        "passed": true,
+        "detail": "{\"cursorUnchanged\":true,\"foregroundUnchanged\":true,\"spaceUnchanged\":true,\"userFocusUnchanged\":true}"
+      },
+      {
+        "name": "semantic setValue screenshot changed",
+        "passed": true,
+        "detail": "fresh exact-window pixels differ from the pre-action observation"
+      },
+      {
+        "name": "semantic action element discovered",
+        "passed": true,
+        "detail": "AXButton"
+      },
+      {
+        "name": "semantic invoke target-side proof",
+        "passed": true,
+        "detail": "fixture semantic counter advanced to 1"
+      },
+      {
+        "name": "semantic invoke conservatively classified",
+        "passed": true,
+        "detail": "Partial/element-state-changed"
+      },
+      {
+        "name": "semantic invoke non-interruption invariants",
+        "passed": true,
+        "detail": "{\"cursorUnchanged\":true,\"foregroundUnchanged\":true,\"spaceUnchanged\":true,\"userFocusUnchanged\":true}"
+      },
+      {
+        "name": "semantic invoke screenshot changed",
+        "passed": true,
+        "detail": "fresh exact-window pixels differ from the setValue stage"
+      },
+      {
+        "name": "persistent live share started",
+        "passed": true,
+        "detail": "persistent-native-stream/exact-window"
+      },
+      {
+        "name": "SCStream start metadata",
+        "passed": true,
+        "detail": "macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window"
+      },
+      {
+        "name": "live share ack pacing",
+        "passed": true,
+        "detail": "latest-frame-wins, ackPaced=true"
+      },
+      {
+        "name": "live share cursor policy",
+        "passed": true,
+        "detail": "system cursor excluded; synthetic session pointer composited"
+      },
+      {
+        "name": "persistent-share screenshot is fresh",
+        "passed": true,
+        "detail": "sourceSequence=3"
+      }
+    ]
+  }
+}
