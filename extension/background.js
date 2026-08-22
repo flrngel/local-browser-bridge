@@ -58,6 +58,7 @@ const DEBUGGER_LIFECYCLE_TIMEOUT_MS = 3_000;
 // JavaScript dialog metadata is bounded before it is stored or published.
 const DIALOG_MESSAGE_MAX_CHARS = 500;
 const DIALOG_PROMPT_TEXT_MAX_CHARS = 1_000;
+const NEW_TAB_URL_MAX_CHARS = 4_096;
 // page.batch runs at most this many sub-actions, and only these snapshot
 // bound page interactions may appear inside a batch: no navigation, no
 // evaluation, and no nested batching.
@@ -4179,17 +4180,19 @@ async function runBatchActions(actions, dispatchAction) {
 async function groupBridgeCreatedTab(tab, commandContext = null) {
   await initializeControlState();
   if (!Number.isInteger(tab?.id)) throw new Error("BAD_TAB: Chrome did not return a new tab identifier");
-  // Provenance is the first uncancellable commit after Chrome returns the
-  // created tab. In Safe mode this is what makes a canceled about:blank
-  // creation visible to tabs.list for reconciliation. Group decoration may
-  // still be canceled afterwards without losing that provenance.
+  // Provenance is the first uncancellable commit after Chrome returns any
+  // bridge-created tab. In Safe mode it is also what makes a canceled
+  // omitted-URL about:blank creation visible to tabs.list for reconciliation.
+  // Group decoration may still be canceled afterwards without losing that
+  // provenance.
   bridgeCreatedTabs.add(tab.id);
   try {
     await persistControlState();
   } catch (error) {
-    // Avoid leaving an untracked blank tab when durable provenance cannot be
-    // committed. If Chrome refuses cleanup, retain the in-memory marker so
-    // the current worker can still expose the tab to tabs.list.
+    // Avoid leaving an untracked bridge-created tab when durable provenance
+    // cannot be committed. If Chrome refuses cleanup, retain the in-memory
+    // marker so the current worker can still expose an omitted-URL blank tab
+    // to tabs.list under the Safe-mode provenance rule.
     bridgeCreatedTabs.delete(tab.id);
     try {
       await chrome.tabs.remove(tab.id);
@@ -4218,10 +4221,34 @@ function appendCommandCleanup(commandContext, cleanup) {
     .catch(() => false);
 }
 
-async function createBridgeTab(commandContext) {
+async function createAllowedBridgeTab(rawUrl, commandContext) {
+  let creationUrl = "about:blank";
+  if (rawUrl !== undefined) {
+    if (typeof rawUrl !== "string") {
+      throw new Error("BAD_URL: url must be a string no longer than 4096 characters");
+    }
+    let urlChars = 0;
+    for (const _character of rawUrl) {
+      urlChars += 1;
+      if (urlChars > NEW_TAB_URL_MAX_CHARS) {
+        throw new Error("BAD_URL: url must be a string no longer than 4096 characters");
+      }
+    }
+    const config = await settings();
+    const verdict = isUrlAllowed(rawUrl, config.allowedHosts, config.port, config.fullAccess);
+    if (!verdict.allowed) {
+      const code = verdict.reason === "Invalid URL" ? "BAD_URL" : "SITE_BLOCKED";
+      throw new Error(`${code}: ${verdict.reason}`);
+    }
+    creationUrl = verdict.url;
+  }
+  return createBridgeTab(commandContext, creationUrl);
+}
+
+async function createBridgeTab(commandContext, creationUrl = "about:blank") {
   assertCommandActive(commandContext, "tab creation dispatch");
   assertHumanControlAvailable();
-  const creation = chrome.tabs.create({ url: "about:blank", active: true });
+  const creation = chrome.tabs.create({ url: creationUrl, active: true });
   creation.catch(() => {});
   let tab = null;
   try {
@@ -4390,7 +4417,7 @@ async function dispatch(method, params, approved, commandContext = null, { batch
         tabs: allowedTabs.filter((tab) => Number.isInteger(tab.id)).map((tab) => ({
           id: tab.id,
           title: String(tab.title ?? "").slice(0, 300),
-          url: safeUrlForDisplay(tab.url ?? ""),
+          url: safeUrlForDisplay(effectiveTabUrl(tab)),
           active: Boolean(tab.active),
         })),
       };
@@ -4403,7 +4430,7 @@ async function dispatch(method, params, approved, commandContext = null, { batch
       return { tabId: tab.id, active: true };
     }
     case "tabs.new": {
-      const tab = await createBridgeTab(commandContext);
+      const tab = await createAllowedBridgeTab(params.url, commandContext);
       const groupId = await groupBridgeCreatedTab(tab, commandContext);
       return { tabId: tab.id, groupId, bridgeCreated: true };
     }

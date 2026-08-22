@@ -5769,7 +5769,17 @@ fn sanitize_params(
     };
 
     let mut sanitized = match method {
-        "status" | "browser.control.status" | "tabs.list" | "tabs.new" => Ok(json!({})),
+        "status" | "browser.control.status" | "tabs.list" => Ok(json!({})),
+        "tabs.new" => {
+            let mut output = Map::new();
+            if let Some(url) = source.get("url") {
+                output.insert(
+                    "url".to_owned(),
+                    Value::String(required_string(Some(url), "url", 4_096)?),
+                );
+            }
+            Ok(Value::Object(output))
+        }
         "browser.control.start" => {
             let mut output = object(with_tab()?);
             let ttl_ms = source
@@ -6984,6 +6994,53 @@ mod tests {
             .is_err()
         );
         assert!(sanitize_params("page.evaluate", json!({ "tabId": 7 }), None, None).is_err());
+    }
+
+    #[test]
+    fn tabs_new_accepts_only_an_optional_bounded_url() {
+        assert_eq!(
+            sanitize_params("tabs.new", json!({}), None, None).unwrap(),
+            json!({})
+        );
+        assert_eq!(
+            sanitize_params(
+                "tabs.new",
+                json!({
+                    "url": "https://allowed.example/path?private=query#fragment",
+                    "tabId": 99,
+                    "unexpected": { "nested": true }
+                }),
+                None,
+                None,
+            )
+            .unwrap(),
+            json!({ "url": "https://allowed.example/path?private=query#fragment" })
+        );
+        assert!(
+            sanitize_params("tabs.new", json!({ "url": "x".repeat(4_096) }), None, None).is_ok()
+        );
+        assert!(
+            sanitize_params("tabs.new", json!({ "url": "x".repeat(4_097) }), None, None).is_err()
+        );
+        assert!(
+            sanitize_params("tabs.new", json!({ "url": "😀".repeat(4_096) }), None, None).is_ok(),
+            "the URL limit must count Unicode scalar values, not UTF-8 bytes"
+        );
+        assert!(
+            sanitize_params("tabs.new", json!({ "url": "😀".repeat(4_097) }), None, None).is_err(),
+            "the Unicode scalar boundary must remain bounded"
+        );
+        for invalid in [
+            Value::Null,
+            json!(true),
+            json!(7),
+            json!(["https://allowed.example/"]),
+        ] {
+            assert!(
+                sanitize_params("tabs.new", json!({ "url": invalid }), None, None).is_err(),
+                "tabs.new accepted a non-string url"
+            );
+        }
     }
 
     #[test]

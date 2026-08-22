@@ -6,7 +6,7 @@ Everything runs locally through `127.0.0.1`. The server and computer helper are 
 
 ## What it can do
 
-- Use tabs in an existing, signed-in Chrome or Edge profile
+- Use tabs in an existing, signed-in Chrome or Edge profile, including creating a new tab directly at a policy-approved URL
 - Read page text, screenshots, selection, and interactive elements
 - Click, fill, select, hover, scroll, type, navigate, and run page JavaScript
 - Work with same-origin and cross-origin frames in supported Chrome or Edge versions

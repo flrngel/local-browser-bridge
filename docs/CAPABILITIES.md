@@ -13,7 +13,7 @@ This page states what the current code can do, what the user must configure, and
 
 | Capability | Status | Requirement or boundary |
 |---|---|---|
-| List, activate, create, navigate, reload, and close tabs | Available | Chrome or Edge 140+ |
+| List, activate, create at a policy-approved URL, navigate, reload, and close tabs | Available | Chrome or Edge 140+; omit the creation URL only for a blank lifecycle tab |
 | Observe viewport pixels, text, selection, and interactive elements | Available | Regular HTTP(S) pages; file pages require the browser's file-URL permission |
 | Click, hover, fill, select, scroll, type, and send key chords | Available | One explicit debugger-backed lease on one tab |
 | Main-world JavaScript evaluation | Available | Full Access, or the applicable Safe-mode policy |

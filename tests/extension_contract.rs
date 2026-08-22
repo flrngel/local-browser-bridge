@@ -1219,6 +1219,152 @@ fn only_bridge_created_tabs_are_grouped() {
 }
 
 #[test]
+fn tabs_new_validates_an_optional_url_before_creation() {
+    let background = extension_source("background.js");
+    let validation_start = background
+        .find("async function createAllowedBridgeTab")
+        .unwrap();
+    let validation_end = background[validation_start..]
+        .find("async function createBridgeTab")
+        .unwrap()
+        + validation_start;
+    let validation = &background[validation_start..validation_end];
+    assert!(validation.contains("typeof rawUrl !== \"string\""));
+    assert!(validation.contains("NEW_TAB_URL_MAX_CHARS"));
+    assert!(
+        validation.find("await settings()").unwrap() < validation.find("isUrlAllowed(").unwrap()
+    );
+    assert!(
+        validation.find("isUrlAllowed(").unwrap() < validation.find("createBridgeTab(").unwrap()
+    );
+    assert!(validation.contains("creationUrl = verdict.url"));
+
+    let new_start = background.find("case \"tabs.new\"").unwrap();
+    let new_end = background[new_start + 5..].find("\n    case \"").unwrap() + new_start + 5;
+    let new_case = &background[new_start..new_end];
+    assert!(new_case.contains("createAllowedBridgeTab(params.url, commandContext)"));
+    assert!(!new_case.contains("chrome.tabs.create"));
+
+    let script = r#"
+      import fs from "node:fs";
+      import { isUrlAllowed as actualIsUrlAllowed } from "./extension/lib.js";
+
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const brace = source.indexOf("{", start);
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const createAllowedBridgeTab = extractFunction(source, "createAllowedBridgeTab");
+      const events = [];
+      const config = {
+        allowedHosts: ["allowed.example", "localhost", "127.0.0.1"],
+        port: 17373,
+        fullAccess: false,
+      };
+      const create = new Function("actualIsUrlAllowed", "events", "config", `
+        const NEW_TAB_URL_MAX_CHARS = 4096;
+        async function settings() {
+          events.push(["settings"]);
+          return config;
+        }
+        function isUrlAllowed(...args) {
+          events.push(["policy", args[0]]);
+          return actualIsUrlAllowed(...args);
+        }
+        async function createBridgeTab(commandContext, creationUrl) {
+          events.push(["create", creationUrl, commandContext]);
+          return { id: 41 };
+        }
+        ${createAllowedBridgeTab}
+        return createAllowedBridgeTab;
+      `)(actualIsUrlAllowed, events, config);
+
+      const omitted = await create(undefined, "blank-context");
+      if (omitted.id !== 41 || JSON.stringify(events) !== JSON.stringify([
+        ["create", "about:blank", "blank-context"],
+      ])) throw new Error(`omitted URL changed legacy creation: ${JSON.stringify(events)}`);
+
+      events.length = 0;
+      await create("HTTPS://ALLOWED.EXAMPLE:443/path?private=query#fragment", "url-context");
+      if (JSON.stringify(events) !== JSON.stringify([
+        ["settings"],
+        ["policy", "HTTPS://ALLOWED.EXAMPLE:443/path?private=query#fragment"],
+        ["create", "https://allowed.example/path?private=query#fragment", "url-context"],
+      ])) throw new Error(`allowed URL was not canonicalized before creation: ${JSON.stringify(events)}`);
+
+      const unicodePrefix = "https://allowed.example/";
+      const unicodeBoundary = unicodePrefix + "😀".repeat(4096 - [...unicodePrefix].length);
+      events.length = 0;
+      await create(unicodeBoundary, "unicode-context");
+      const unicodeCreate = events.find(([event]) => event === "create");
+      if (unicodeCreate?.[1] !== new URL(unicodeBoundary).href
+        || unicodeCreate?.[2] !== "unicode-context") {
+        throw new Error("the 4096-code-point Unicode URL boundary did not create canonically");
+      }
+
+      for (const blockedUrl of [
+        "",
+        "http://127.0.0.1:17373/api/v1/command",
+        "https://blocked.example/path",
+        "javascript:alert(1)",
+      ]) {
+        events.length = 0;
+        let blocked = false;
+        let failure = "";
+        try { await create(blockedUrl, "blocked-context"); }
+        catch (error) {
+          failure = String(error.message);
+          blocked = /^(SITE_BLOCKED|BAD_URL):/.test(failure);
+        }
+        if (!blocked) throw new Error(`${blockedUrl} was not blocked`);
+        if (blockedUrl === "" && !failure.startsWith("BAD_URL:")) {
+          throw new Error("an empty URL did not fail as BAD_URL");
+        }
+        if (events.some(([event]) => event === "create")) {
+          throw new Error(`${blockedUrl} reached tab creation`);
+        }
+      }
+
+      const overlongUnicode = unicodePrefix + "😀".repeat(4097 - [...unicodePrefix].length);
+      for (const invalid of [null, true, 7, {}, "x".repeat(4097), overlongUnicode]) {
+        events.length = 0;
+        let blocked = false;
+        try { await create(invalid, "invalid-context"); }
+        catch (error) { blocked = String(error.message).startsWith("BAD_URL:"); }
+        if (!blocked || events.length !== 0) {
+          throw new Error(`invalid URL shape crossed validation: ${JSON.stringify(events)}`);
+        }
+      }
+    "#;
+    let output = Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+        .expect("failed to run tabs.new URL harness");
+    assert!(
+        output.status.success(),
+        "Node tabs.new URL harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn server_cancel_is_session_bound_suppresses_late_results_and_preserves_explicit_lease() {
     let background = extension_source("background.js");
     let freshness_methods = background
@@ -2598,7 +2744,19 @@ fn human_stop_wins_deferred_tab_mutations_and_debugger_attach() {
         .find("\n    case \"")
         .map(|offset| new_start + 5 + offset)
         .unwrap_or(background.len());
-    assert!(background[new_start..new_end].contains("createBridgeTab(commandContext)"));
+    assert!(
+        background[new_start..new_end]
+            .contains("createAllowedBridgeTab(params.url, commandContext)")
+    );
+    let validation_start = background
+        .find("async function createAllowedBridgeTab")
+        .unwrap();
+    let validation_end = background[validation_start..]
+        .find("async function createBridgeTab")
+        .unwrap()
+        + validation_start;
+    let validation = &background[validation_start..validation_end];
+    assert!(validation.contains("createBridgeTab(commandContext, creationUrl)"));
     let create_start = background.find("async function createBridgeTab").unwrap();
     let create_end = background[create_start..]
         .find("async function clearPendingDialog")
@@ -3002,6 +3160,7 @@ fn safe_mode_blank_tabs_require_bridge_provenance() {
     assert!(background.contains("bridgeCreatedTabs.has(tab.id)"));
     assert!(background.contains("!Number.isInteger(tab.openerTabId)"));
     assert!(background.contains("tab?.pendingUrl || tab?.url"));
+    assert!(background.contains("url: safeUrlForDisplay(effectiveTabUrl(tab))"));
     assert!(
         background
             .contains("allowedTabs = tabs.filter((tab) => allowedTabVerdict(tab, config).allowed)")
