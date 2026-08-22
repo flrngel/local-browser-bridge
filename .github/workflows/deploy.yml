@@ -389,6 +389,17 @@ jobs:
             --title "Local Browser Bridge ${version}" \
             --notes-file release-notes.md
           gh release upload "$RELEASE_TAG" dist/*
+          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = true
+          draft_release="$(mktemp -d)"
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir "$draft_release"
+          test "$(find "$draft_release" -maxdepth 1 -type f | wc -l | tr -d ' ')" = 5
+          bash scripts/verify-release-assets.sh "$version" "$draft_release"
+          for subject in dist/*; do
+            asset="$(basename "$subject")"
+            cmp -s "$subject" "$draft_release/$asset"
+          done
           remote_tag_sha="$(git ls-remote --refs origin "refs/tags/$RELEASE_TAG" | awk '{ print $1 }')"
           test "$remote_tag_sha" = "$VERIFIED_TAG_SHA"
           test "$(gh api \

@@ -128,6 +128,10 @@ fn release_gates_javascript_macos_and_published_provenance() {
         "environment:\n      name: release",
         "Re-verify the frozen candidate and every build attestation",
         "Refuse publication unless release immutability is enabled",
+        "gh release view \"$RELEASE_TAG\" --repo \"$GITHUB_REPOSITORY\" --json isDraft --jq '.isDraft'",
+        "draft_release=\"$(mktemp -d)\"",
+        "bash scripts/verify-release-assets.sh \"$version\" \"$draft_release\"",
+        "cmp -s \"$subject\" \"$draft_release/$asset\"",
         "repos/$GITHUB_REPOSITORY/immutable-releases",
         "X-GitHub-Api-Version: 2026-03-10",
         "--jq '.enabled'",
@@ -195,6 +199,23 @@ fn release_gates_javascript_macos_and_published_provenance() {
     let publish_draft = release
         .find("gh release edit \"$RELEASE_TAG\" --draft=false")
         .unwrap();
+    let upload = release
+        .find("gh release upload \"$RELEASE_TAG\" dist/*")
+        .unwrap();
+    let draft_download = release
+        .find("gh release download \"$RELEASE_TAG\" \\")
+        .unwrap();
+    let draft_exact_verification = release
+        .find("bash scripts/verify-release-assets.sh \"$version\" \"$draft_release\"")
+        .unwrap();
+    let draft_byte_comparison = release
+        .find("cmp -s \"$subject\" \"$draft_release/$asset\"")
+        .unwrap();
+    assert!(publish < upload);
+    assert!(upload < draft_download);
+    assert!(draft_download < draft_exact_verification);
+    assert!(draft_exact_verification < draft_byte_comparison);
+    assert!(draft_byte_comparison < publish_draft);
     let final_tag_recheck = release[..publish_draft]
         .rfind("remote_tag_sha=\"$(git ls-remote --refs origin")
         .unwrap();
