@@ -217,6 +217,18 @@ fn macos_negative_evidence_keeps_only_equality_and_fixture_counters() {
 }
 
 #[test]
+fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
+    let rig = fs::read_to_string("evidence/v0.12.1/computer/helper-evidence-rig.mjs").unwrap();
+    assert!(rig.contains("capturedFrameMatchesWindowGeometry"));
+    assert!(rig.contains("share-resize-settled"));
+    assert!(rig.contains("sample.sourceSequence > resizeTransition.sample.sourceSequence"));
+    assert!(rig.contains("captured PNG dimensions do not match the bound observation"));
+    assert!(rig.contains("resize screenshot dimensions match settled observation"));
+    assert!(rig.contains("resize screenshot geometry changed"));
+    assert!(!rig.contains("resize screenshot changed"));
+}
+
+#[test]
 fn semantic_backends_revalidate_exact_targets_and_report_effects() {
     let macos = fs::read_to_string("src/computer/ax_macos.rs").unwrap();
     let windows = fs::read_to_string("src/computer/uia_windows.rs").unwrap();

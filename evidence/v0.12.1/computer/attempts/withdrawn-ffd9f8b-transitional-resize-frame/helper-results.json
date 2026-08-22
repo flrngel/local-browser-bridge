@@ -1,0 +1,1002 @@
+{
+  "schemaVersion": 2,
+  "productVersion": "0.12.1",
+  "status": "passed-release-candidate",
+  "evidenceClass": "exact-release-candidate-package-live-observation",
+  "capturedAt": "2026-08-22T04:19:04.679Z",
+  "candidateNotice": "This becomes release evidence only after the supplied checksum manifest and archive are published immutably for v0.12.1.",
+  "environment": {
+    "operatingSystem": "26.5.1",
+    "architecture": "arm64",
+    "backend": "background-window/ax+skylight+screencapturekit-stream",
+    "semanticMode": "macos-accessibility",
+    "sessionMode": "background-window",
+    "screenCapturePermissionPreexisting": true,
+    "accessibilityPermissionPreexisting": true,
+    "permissionRequestPerformed": false
+  },
+  "package": {
+    "archive": {
+      "file": "local-browser-bridge-v0.12.1-macos-universal.tar.gz",
+      "sha256": "048d28336f8726110cd41260b7205d3dbcbf53eceade90e0b212fcb7e6966cd7",
+      "checksumManifestMatched": true,
+      "extractedInputsMatched": true
+    },
+    "serverVersion": "0.12.1",
+    "helperVersion": "0.12.1",
+    "helperBundleVersion": "0.12.1",
+    "helperBundleBuildVersion": "0.12.1",
+    "serverSha256": "d709d148e5b9c7332eda765b776830358b7fc44127394276a59a114a6d1340a8",
+    "helperSha256": "4d04373d98f0ee06d19aed9eb540ccd47a3991fcc491b5a16438bf9ff401b693",
+    "serverArchitectures": [
+      "arm64",
+      "x86_64"
+    ],
+    "helperArchitectures": [
+      "arm64",
+      "x86_64"
+    ],
+    "strictCodeSignatureVerification": "passed"
+  },
+  "harness": {
+    "runnerSha256": "f266f4c6e45d6fb6869233268e59fa2df30249494ae1efaecccbe551878276d8",
+    "fixtureSha256": "745ff731c9873e3c83d212ce91a6823a872ca558e967d43dfa1a27d5cdfeb6ba",
+    "systemProbeSha256": "556cb357c7622021ea57847df09f569c262d3926770c793ba667764956277de3",
+    "packagedHelperSpawnCount": 1
+  },
+  "fixture": {
+    "application": "helper-evidence-fixture",
+    "windowTitle": "LBB v0.12.1 Persistent SCStream Evidence",
+    "windowId": "61458",
+    "pid": 78736,
+    "finalState": {
+      "clicks": 1,
+      "semanticPresses": 1,
+      "semanticValue": "v0.12.1-semantic-value",
+      "animationTick": 76,
+      "resizeCount": 1,
+      "contentWidth": 820,
+      "contentHeight": 520,
+      "lastAction": "resize"
+    }
+  },
+  "checks": {
+    "helperHandshake": {
+      "compatible": true,
+      "version": "0.12.1",
+      "protocolVersion": 1,
+      "helperSpawnCount": 1,
+      "shareAckAdvertised": true,
+      "nativeStreamAdvertised": true
+    },
+    "exactWindowObserve": {
+      "passed": true,
+      "windowId": "61458",
+      "semanticAvailable": true,
+      "semanticElementCount": 4
+    },
+    "semanticSetValue": {
+      "ok": true,
+      "actionId": "2cfd3deb-841f-4a70-8909-36755e4443e8",
+      "effect": "Confirmed",
+      "deliveryMode": "exact-window-semantic",
+      "frameId": "bc533943-a39a-453c-9634-841c23981842",
+      "shareId": null,
+      "sourceSequence": null,
+      "invariants": {
+        "cursorUnchanged": true,
+        "foregroundUnchanged": true,
+        "spaceUnchanged": true,
+        "userFocusUnchanged": true
+      },
+      "evidence": [
+        {
+          "claim": "semanticDispatchReturned",
+          "detail": "The semantic backend returned after dispatch; this is not target-effect proof",
+          "kind": "dispatchAcknowledgement",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "value-confirmed",
+          "detail": "The semantic backend observed this target-side postcondition",
+          "kind": "postcondition",
+          "observed": true,
+          "supportsConfirmation": true
+        },
+        {
+          "claim": "foregroundUnchanged",
+          "detail": "The foreground application was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "userFocusUnchanged",
+          "detail": "The platform-specific front-window or focused-window oracle was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "hardwareCursorUnchanged",
+          "detail": "The hardware cursor was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "desktopSpaceUnchanged",
+          "detail": "The active desktop or Space was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        }
+      ],
+      "backendEffect": {
+        "delivered": true,
+        "effectObserved": true,
+        "postcondition": "value-confirmed"
+      }
+    },
+    "semanticInvoke": {
+      "ok": true,
+      "actionId": "31cd6a8b-a4a4-418a-8c18-cf778e76c6a0",
+      "effect": "Partial",
+      "deliveryMode": "exact-window-semantic",
+      "frameId": "5a1e3649-0e38-42c0-9dac-341ce6d6a14a",
+      "shareId": null,
+      "sourceSequence": null,
+      "invariants": {
+        "cursorUnchanged": true,
+        "foregroundUnchanged": true,
+        "spaceUnchanged": true,
+        "userFocusUnchanged": true
+      },
+      "evidence": [
+        {
+          "claim": "semanticDispatchReturned",
+          "detail": "The semantic backend returned after dispatch; this is not target-effect proof",
+          "kind": "dispatchAcknowledgement",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "element-state-changed",
+          "detail": "The semantic backend observed this target-side postcondition",
+          "kind": "postcondition",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "foregroundUnchanged",
+          "detail": "The foreground application was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "userFocusUnchanged",
+          "detail": "The platform-specific front-window or focused-window oracle was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "hardwareCursorUnchanged",
+          "detail": "The hardware cursor was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "desktopSpaceUnchanged",
+          "detail": "The active desktop or Space was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        }
+      ],
+      "backendEffect": {
+        "delivered": true,
+        "effectObserved": true,
+        "postcondition": "element-state-changed"
+      },
+      "independentFixturePostcondition": "semantic counter advanced exactly once"
+    },
+    "backgroundPixelAction": {
+      "ok": true,
+      "actionId": "27772616-b183-495f-8d6a-0bb7c1c98ca2",
+      "effect": "Unverifiable",
+      "deliveryMode": "exact-window-background",
+      "frameId": "4984d2a8-efdc-4a97-860d-bb81f617f832",
+      "shareId": "2f135f7c-52fb-431a-b0b0-55dba4aa502f",
+      "sourceSequence": 7,
+      "invariants": {
+        "cursorUnchanged": true,
+        "foregroundUnchanged": true,
+        "spaceUnchanged": true,
+        "userFocusUnchanged": true
+      },
+      "evidence": [
+        {
+          "claim": "foregroundUnchanged",
+          "detail": "The foreground application was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "userFocusUnchanged",
+          "detail": "The platform-specific front-window or focused-window oracle was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "hardwareCursorUnchanged",
+          "detail": "The hardware cursor was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "desktopSpaceUnchanged",
+          "detail": "The active desktop or Space was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        }
+      ],
+      "durationMs": 900,
+      "independentFixturePostcondition": "click counter advanced exactly once"
+    },
+    "persistentShare": {
+      "shareId": "2f135f7c-52fb-431a-b0b0-55dba4aa502f",
+      "fps": 10,
+      "captureMode": "persistent-native-stream",
+      "captureScope": "exact-window",
+      "captureBackend": "macos-screencapturekit-scstream",
+      "nativeStream": true,
+      "systemIndicatorPolicy": true,
+      "selectionMode": "programmatic-exact-window",
+      "systemCursorExcluded": true,
+      "syntheticPointerComposited": true,
+      "ackPaced": true,
+      "backpressure": "latest-frame-wins",
+      "initialSourceSequence": 3,
+      "finalSourceSequence": 35,
+      "initialTransportSequence": 1,
+      "finalTransportSequence": 10,
+      "sourceDroppedFrames": 26,
+      "transportDroppedFrames": 0,
+      "lastAckedSequence": 9,
+      "sourceProgressDuringPixelAction": 22,
+      "transportProgressDuringPixelAction": 4,
+      "sourceDropsDuringPixelAction": 18,
+      "resizeSurvived": true,
+      "stopped": true,
+      "stopReason": "requested",
+      "samples": [
+        {
+          "stage": "share-initial",
+          "shareId": "2f135f7c-52fb-431a-b0b0-55dba4aa502f",
+          "sourceSequence": 3,
+          "sourceDroppedFrames": 3,
+          "sequence": 1,
+          "transportDroppedFrames": 0,
+          "lastAckedSequence": 0,
+          "ackPaced": true,
+          "backpressure": "latest-frame-wins",
+          "captureBackend": "macos-screencapturekit-scstream",
+          "nativeStream": true,
+          "systemIndicator": true,
+          "selectionMode": "programmatic-exact-window",
+          "windowWidth": 720,
+          "windowHeight": 492,
+          "imageWidth": 1209,
+          "imageHeight": 826
+        },
+        {
+          "stage": "share-cadence-1",
+          "shareId": "2f135f7c-52fb-431a-b0b0-55dba4aa502f",
+          "sourceSequence": 5,
+          "sourceDroppedFrames": 4,
+          "sequence": 2,
+          "transportDroppedFrames": 0,
+          "lastAckedSequence": 1,
+          "ackPaced": true,
+          "backpressure": "latest-frame-wins",
+          "captureBackend": "macos-screencapturekit-scstream",
+          "nativeStream": true,
+          "systemIndicator": true,
+          "selectionMode": "programmatic-exact-window",
+          "windowWidth": 720,
+          "windowHeight": 492,
+          "imageWidth": 1209,
+          "imageHeight": 826
+        },
+        {
+          "stage": "share-cadence-2",
+          "shareId": "2f135f7c-52fb-431a-b0b0-55dba4aa502f",
+          "sourceSequence": 7,
+          "sourceDroppedFrames": 5,
+          "sequence": 3,
+          "transportDroppedFrames": 0,
+          "lastAckedSequence": 2,
+          "ackPaced": true,
+          "backpressure": "latest-frame-wins",
+          "captureBackend": "macos-screencapturekit-scstream",
+          "nativeStream": true,
+          "systemIndicator": true,
+          "selectionMode": "programmatic-exact-window",
+          "windowWidth": 720,
+          "windowHeight": 492,
+          "imageWidth": 1209,
+          "imageHeight": 826
+        },
+        {
+          "stage": "share-after-long-action",
+          "shareId": "2f135f7c-52fb-431a-b0b0-55dba4aa502f",
+          "sourceSequence": 29,
+          "sourceDroppedFrames": 23,
+          "sequence": 7,
+          "transportDroppedFrames": 0,
+          "lastAckedSequence": 6,
+          "ackPaced": true,
+          "backpressure": "latest-frame-wins",
+          "captureBackend": "macos-screencapturekit-scstream",
+          "nativeStream": true,
+          "systemIndicator": true,
+          "selectionMode": "programmatic-exact-window",
+          "windowWidth": 720,
+          "windowHeight": 492,
+          "imageWidth": 1209,
+          "imageHeight": 826
+        },
+        {
+          "stage": "share-after-resize",
+          "shareId": "2f135f7c-52fb-431a-b0b0-55dba4aa502f",
+          "sourceSequence": 33,
+          "sourceDroppedFrames": 25,
+          "sequence": 9,
+          "transportDroppedFrames": 0,
+          "lastAckedSequence": 8,
+          "ackPaced": true,
+          "backpressure": "latest-frame-wins",
+          "captureBackend": "macos-screencapturekit-scstream",
+          "nativeStream": true,
+          "systemIndicator": true,
+          "selectionMode": "programmatic-exact-window",
+          "windowWidth": 820,
+          "windowHeight": 552,
+          "imageWidth": 1209,
+          "imageHeight": 826
+        },
+        {
+          "stage": "share-post-resize-cadence",
+          "shareId": "2f135f7c-52fb-431a-b0b0-55dba4aa502f",
+          "sourceSequence": 35,
+          "sourceDroppedFrames": 25,
+          "sequence": 10,
+          "transportDroppedFrames": 0,
+          "lastAckedSequence": 9,
+          "ackPaced": true,
+          "backpressure": "latest-frame-wins",
+          "captureBackend": "macos-screencapturekit-scstream",
+          "nativeStream": true,
+          "systemIndicator": true,
+          "selectionMode": "programmatic-exact-window",
+          "windowWidth": 820,
+          "windowHeight": 552,
+          "imageWidth": 1209,
+          "imageHeight": 826
+        }
+      ]
+    },
+    "independentNonInterruptionSample": {
+      "foregroundUnchanged": true,
+      "userFocusUnchanged": true,
+      "cursorUnchanged": true,
+      "spaceUnchanged": true
+    },
+    "teardown": {
+      "helper": {
+        "requested": true,
+        "alreadyExited": false,
+        "exitCode": null,
+        "signal": "SIGTERM"
+      },
+      "helperConnected": false,
+      "helperStateCleared": true,
+      "observationCleared": true,
+      "server": {
+        "requested": true,
+        "alreadyExited": false,
+        "exitCode": null,
+        "signal": "SIGTERM"
+      },
+      "serverListenerClosed": true,
+      "fixture": {
+        "requested": true,
+        "alreadyExited": false,
+        "exitCode": null,
+        "signal": "SIGTERM"
+      }
+    }
+  },
+  "screenshots": [
+    {
+      "file": "computer-01-exact-window-observe.png",
+      "sha256": "5c4fa6ee47ccba569c76f406fbf41680cc0500031b5945b69fc37e1306a856f1",
+      "bytes": 778800,
+      "width": 1209,
+      "height": 826,
+      "frameId": "bc533943-a39a-453c-9634-841c23981842",
+      "windowId": "61458",
+      "sourceSequence": null,
+      "transportSequence": null
+    },
+    {
+      "file": "computer-02-semantic-set-value.png",
+      "sha256": "8c027c3423f7b7370f893ad17e6b670951051aea991d0455a0d57484ca61cddf",
+      "bytes": 793011,
+      "width": 1209,
+      "height": 826,
+      "frameId": "5a1e3649-0e38-42c0-9dac-341ce6d6a14a",
+      "windowId": "61458",
+      "sourceSequence": null,
+      "transportSequence": null
+    },
+    {
+      "file": "computer-03-semantic-invoke.png",
+      "sha256": "428adf580c0ef9fcc7bc83550dc9dc8c2240e01939853dd4b34a07f0bac71ce6",
+      "bytes": 795579,
+      "width": 1209,
+      "height": 826,
+      "frameId": "66fe0c57-28cf-4ab2-88d1-55cc0274002b",
+      "windowId": "61458",
+      "sourceSequence": null,
+      "transportSequence": null
+    },
+    {
+      "file": "computer-04-persistent-scstream-start.png",
+      "sha256": "0a8e6903a609781c47ced71448d8ba21c043b4283a6995923359e1e58508d289",
+      "bytes": 753195,
+      "width": 1209,
+      "height": 826,
+      "frameId": "d84b1198-6318-4da8-8fea-4c7f566d17e8",
+      "windowId": "61458",
+      "sourceSequence": 3,
+      "transportSequence": 1
+    },
+    {
+      "file": "computer-05-live-share-pixel-action.png",
+      "sha256": "5f3ba0587c5bcb9e8dc8559ecc055aa781d96236e33e81e857f6fa4b58a05e0f",
+      "bytes": 752879,
+      "width": 1209,
+      "height": 826,
+      "frameId": "a4772d77-4e7f-457b-af45-a5d35a09a4a8",
+      "windowId": "61458",
+      "sourceSequence": 29,
+      "transportSequence": 7
+    },
+    {
+      "file": "computer-06-persistent-share-resize.png",
+      "sha256": "12302d4ac11c11bd2e5d0db036670d92467e25da331b01532b15980af37c7db3",
+      "bytes": 750208,
+      "width": 1209,
+      "height": 826,
+      "frameId": "aa9eacc8-f105-47df-b81a-12b30214928f",
+      "windowId": "61458",
+      "sourceSequence": 33,
+      "transportSequence": 9
+    }
+  ],
+  "assertions": {
+    "passed": 98,
+    "failed": 0,
+    "total": 98,
+    "details": [
+      {
+        "name": "macOS host",
+        "passed": true,
+        "detail": "Darwin"
+      },
+      {
+        "name": "exact archive name",
+        "passed": true,
+        "detail": "local-browser-bridge-v0.12.1-macos-universal.tar.gz"
+      },
+      {
+        "name": "server version",
+        "passed": true,
+        "detail": "0.12.1"
+      },
+      {
+        "name": "helper version",
+        "passed": true,
+        "detail": "0.12.1"
+      },
+      {
+        "name": "server universal architecture",
+        "passed": true,
+        "detail": "arm64,x86_64"
+      },
+      {
+        "name": "helper universal architecture",
+        "passed": true,
+        "detail": "arm64,x86_64"
+      },
+      {
+        "name": "helper uses packaged app layout",
+        "passed": true,
+        "detail": "Local Computer Helper.app"
+      },
+      {
+        "name": "strict code-signature verification",
+        "passed": true,
+        "detail": "server, helper executable, and helper app bundle passed strict verification"
+      },
+      {
+        "name": "helper bundle version",
+        "passed": true,
+        "detail": "0.12.1/0.12.1"
+      },
+      {
+        "name": "archive checksum listed",
+        "passed": true,
+        "detail": "local-browser-bridge-v0.12.1-macos-universal.tar.gz"
+      },
+      {
+        "name": "archive checksum matches",
+        "passed": true,
+        "detail": "048d28336f8726110cd41260b7205d3dbcbf53eceade90e0b212fcb7e6966cd7"
+      },
+      {
+        "name": "archive paths are traversal-safe",
+        "passed": true,
+        "detail": "8 safe entries"
+      },
+      {
+        "name": "archive contains only regular files and directories",
+        "passed": true,
+        "detail": "no links or special filesystem entries"
+      },
+      {
+        "name": "archive contains exact server",
+        "passed": true,
+        "detail": "local-browser-bridge"
+      },
+      {
+        "name": "archive contains exact helper",
+        "passed": true,
+        "detail": "Local Computer Helper.app/Contents/MacOS/local-computer-helper"
+      },
+      {
+        "name": "supplied server is archive-exact",
+        "passed": true,
+        "detail": "d709d148e5b9c7332eda765b776830358b7fc44127394276a59a114a6d1340a8"
+      },
+      {
+        "name": "supplied helper is archive-exact",
+        "passed": true,
+        "detail": "4d04373d98f0ee06d19aed9eb540ccd47a3991fcc491b5a16438bf9ff401b693"
+      },
+      {
+        "name": "screen-capture permission preflight",
+        "passed": true,
+        "detail": "preexisting permission; no request was made"
+      },
+      {
+        "name": "accessibility permission preflight",
+        "passed": true,
+        "detail": "preexisting permission; no request was made"
+      },
+      {
+        "name": "active Space probe available",
+        "passed": true,
+        "detail": "nonzero active Space identity"
+      },
+      {
+        "name": "front-window probe available",
+        "passed": true,
+        "detail": "exact front process/window identity available"
+      },
+      {
+        "name": "fixture process identity",
+        "passed": true,
+        "detail": "state belongs to the spawned fixture"
+      },
+      {
+        "name": "packaged helper compatible",
+        "passed": true,
+        "detail": "protocol-compatible helper 0.12.1"
+      },
+      {
+        "name": "single helper spawn",
+        "passed": true,
+        "detail": "1 packaged helper process"
+      },
+      {
+        "name": "acknowledged share advertised",
+        "passed": true,
+        "detail": "computer.share.ack present"
+      },
+      {
+        "name": "native stream advertised",
+        "passed": true,
+        "detail": "computer.capture.native-stream.v1 present"
+      },
+      {
+        "name": "helper status backend",
+        "passed": true,
+        "detail": "background-window/ax+skylight+screencapturekit-stream"
+      },
+      {
+        "name": "background shared-session mode",
+        "passed": true,
+        "detail": "background-window/shared-user-session/target-routed"
+      },
+      {
+        "name": "background input backend ready",
+        "passed": true,
+        "detail": "target-routed input is ready"
+      },
+      {
+        "name": "semantic backend ready",
+        "passed": true,
+        "detail": "macos-accessibility is ready without prompting"
+      },
+      {
+        "name": "fixture exact window discovered",
+        "passed": true,
+        "detail": "1 matching windows"
+      },
+      {
+        "name": "fixture is a background target",
+        "passed": true,
+        "detail": "the fixture neither owns the foreground process nor the front window"
+      },
+      {
+        "name": "exact fixture window observed",
+        "passed": true,
+        "detail": "1209x826"
+      },
+      {
+        "name": "semantic snapshot available",
+        "passed": true,
+        "detail": "4 elements"
+      },
+      {
+        "name": "semantic value element discovered",
+        "passed": true,
+        "detail": "AXTextField"
+      },
+      {
+        "name": "semantic setValue confirmed",
+        "passed": true,
+        "detail": "Confirmed/value-confirmed"
+      },
+      {
+        "name": "semantic setValue non-interruption invariants",
+        "passed": true,
+        "detail": "{\"cursorUnchanged\":true,\"foregroundUnchanged\":true,\"spaceUnchanged\":true,\"userFocusUnchanged\":true}"
+      },
+      {
+        "name": "semantic setValue screenshot changed",
+        "passed": true,
+        "detail": "fresh exact-window pixels differ from the pre-action observation"
+      },
+      {
+        "name": "semantic action element discovered",
+        "passed": true,
+        "detail": "AXButton"
+      },
+      {
+        "name": "semantic invoke target-side proof",
+        "passed": true,
+        "detail": "fixture semantic counter advanced to 1"
+      },
+      {
+        "name": "semantic invoke conservatively classified",
+        "passed": true,
+        "detail": "Partial/element-state-changed"
+      },
+      {
+        "name": "semantic invoke non-interruption invariants",
+        "passed": true,
+        "detail": "{\"cursorUnchanged\":true,\"foregroundUnchanged\":true,\"spaceUnchanged\":true,\"userFocusUnchanged\":true}"
+      },
+      {
+        "name": "semantic invoke screenshot changed",
+        "passed": true,
+        "detail": "fresh exact-window pixels differ from the setValue stage"
+      },
+      {
+        "name": "persistent live share started",
+        "passed": true,
+        "detail": "persistent-native-stream/exact-window"
+      },
+      {
+        "name": "SCStream start metadata",
+        "passed": true,
+        "detail": "macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window"
+      },
+      {
+        "name": "live share ack pacing",
+        "passed": true,
+        "detail": "latest-frame-wins, ackPaced=true"
+      },
+      {
+        "name": "live share cursor policy",
+        "passed": true,
+        "detail": "system cursor excluded; synthetic session pointer composited"
+      },
+      {
+        "name": "persistent-share screenshot is fresh",
+        "passed": true,
+        "detail": "sourceSequence=3"
+      },
+      {
+        "name": "background pixel click target-side proof",
+        "passed": true,
+        "detail": "fixture click counter advanced to 1"
+      },
+      {
+        "name": "pixel click conservatively classified",
+        "passed": true,
+        "detail": "Unverifiable"
+      },
+      {
+        "name": "pixel action bound to persistent share",
+        "passed": true,
+        "detail": "share=true, source=7"
+      },
+      {
+        "name": "live-share pixel click non-interruption invariants",
+        "passed": true,
+        "detail": "{\"cursorUnchanged\":true,\"foregroundUnchanged\":true,\"spaceUnchanged\":true,\"userFocusUnchanged\":true}"
+      },
+      {
+        "name": "native source remained live during input",
+        "passed": true,
+        "detail": "source +22/drop +18; transport +4"
+      },
+      {
+        "name": "settled synthetic pointer published",
+        "passed": true,
+        "detail": "action=click"
+      },
+      {
+        "name": "live-share action screenshot changed",
+        "passed": true,
+        "detail": "fresh exact-window pixels include the action stage"
+      },
+      {
+        "name": "persistent share survived exact-target resize",
+        "passed": true,
+        "detail": "720x492 -> 820x552"
+      },
+      {
+        "name": "resize screenshot changed",
+        "passed": true,
+        "detail": "fresh exact-window pixels include the resized target"
+      },
+      {
+        "name": "persistent share sample count",
+        "passed": true,
+        "detail": "6 distinct transport frames"
+      },
+      {
+        "name": "one persistent share authority",
+        "passed": true,
+        "detail": "1 share IDs"
+      },
+      {
+        "name": "share-initial native stream metadata",
+        "passed": true,
+        "detail": "macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window"
+      },
+      {
+        "name": "share-initial ack pacing metadata",
+        "passed": true,
+        "detail": "ack=true, backpressure=latest-frame-wins"
+      },
+      {
+        "name": "share-cadence-1 native stream metadata",
+        "passed": true,
+        "detail": "macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window"
+      },
+      {
+        "name": "share-cadence-1 ack pacing metadata",
+        "passed": true,
+        "detail": "ack=true, backpressure=latest-frame-wins"
+      },
+      {
+        "name": "share-cadence-2 native stream metadata",
+        "passed": true,
+        "detail": "macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window"
+      },
+      {
+        "name": "share-cadence-2 ack pacing metadata",
+        "passed": true,
+        "detail": "ack=true, backpressure=latest-frame-wins"
+      },
+      {
+        "name": "share-after-long-action native stream metadata",
+        "passed": true,
+        "detail": "macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window"
+      },
+      {
+        "name": "share-after-long-action ack pacing metadata",
+        "passed": true,
+        "detail": "ack=true, backpressure=latest-frame-wins"
+      },
+      {
+        "name": "share-after-resize native stream metadata",
+        "passed": true,
+        "detail": "macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window"
+      },
+      {
+        "name": "share-after-resize ack pacing metadata",
+        "passed": true,
+        "detail": "ack=true, backpressure=latest-frame-wins"
+      },
+      {
+        "name": "share-post-resize-cadence native stream metadata",
+        "passed": true,
+        "detail": "macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window"
+      },
+      {
+        "name": "share-post-resize-cadence ack pacing metadata",
+        "passed": true,
+        "detail": "ack=true, backpressure=latest-frame-wins"
+      },
+      {
+        "name": "share-cadence-1 independent sequences advance",
+        "passed": true,
+        "detail": "source 3->5, transport 1->2"
+      },
+      {
+        "name": "share-cadence-1 drop counters are monotonic",
+        "passed": true,
+        "detail": "source-drop 3->4, transport-drop 0->0"
+      },
+      {
+        "name": "share-cadence-1 previous frame was acknowledged",
+        "passed": true,
+        "detail": "previous=1, ack=1, current=2"
+      },
+      {
+        "name": "share-cadence-2 independent sequences advance",
+        "passed": true,
+        "detail": "source 5->7, transport 2->3"
+      },
+      {
+        "name": "share-cadence-2 drop counters are monotonic",
+        "passed": true,
+        "detail": "source-drop 4->5, transport-drop 0->0"
+      },
+      {
+        "name": "share-cadence-2 previous frame was acknowledged",
+        "passed": true,
+        "detail": "previous=2, ack=2, current=3"
+      },
+      {
+        "name": "share-after-long-action independent sequences advance",
+        "passed": true,
+        "detail": "source 7->29, transport 3->7"
+      },
+      {
+        "name": "share-after-long-action drop counters are monotonic",
+        "passed": true,
+        "detail": "source-drop 5->23, transport-drop 0->0"
+      },
+      {
+        "name": "share-after-long-action previous frame was acknowledged",
+        "passed": true,
+        "detail": "previous=3, ack=6, current=7"
+      },
+      {
+        "name": "share-after-resize independent sequences advance",
+        "passed": true,
+        "detail": "source 29->33, transport 7->9"
+      },
+      {
+        "name": "share-after-resize drop counters are monotonic",
+        "passed": true,
+        "detail": "source-drop 23->25, transport-drop 0->0"
+      },
+      {
+        "name": "share-after-resize previous frame was acknowledged",
+        "passed": true,
+        "detail": "previous=7, ack=8, current=9"
+      },
+      {
+        "name": "share-post-resize-cadence independent sequences advance",
+        "passed": true,
+        "detail": "source 33->35, transport 9->10"
+      },
+      {
+        "name": "share-post-resize-cadence drop counters are monotonic",
+        "passed": true,
+        "detail": "source-drop 25->25, transport-drop 0->0"
+      },
+      {
+        "name": "share-post-resize-cadence previous frame was acknowledged",
+        "passed": true,
+        "detail": "previous=9, ack=9, current=10"
+      },
+      {
+        "name": "share status remains native and ack paced",
+        "passed": true,
+        "detail": "macos-screencapturekit-scstream, source=36, transport=11"
+      },
+      {
+        "name": "share status drop domains retained",
+        "passed": true,
+        "detail": "source-drop=26, transport-drop=0"
+      },
+      {
+        "name": "live share stopped",
+        "passed": true,
+        "detail": "requested"
+      },
+      {
+        "name": "share stop revoked observation",
+        "passed": true,
+        "detail": "computer observation and frame authority cleared"
+      },
+      {
+        "name": "fixture final state",
+        "passed": true,
+        "detail": "{\"clicks\":1,\"semanticPresses\":1,\"semanticValue\":\"v0.12.1-semantic-value\",\"resizeCount\":1}"
+      },
+      {
+        "name": "independent foreground/focus/cursor/Space invariants",
+        "passed": true,
+        "detail": "{\"foregroundUnchanged\":true,\"userFocusUnchanged\":true,\"cursorUnchanged\":true,\"spaceUnchanged\":true}"
+      },
+      {
+        "name": "helper remained alive until controlled teardown",
+        "passed": true,
+        "detail": "SIGTERM was sent by the rig"
+      },
+      {
+        "name": "helper transport disconnected cleanly",
+        "passed": true,
+        "detail": "helper session and observation were revoked"
+      },
+      {
+        "name": "helper was never respawned",
+        "passed": true,
+        "detail": "1 packaged helper process"
+      },
+      {
+        "name": "server remained alive until controlled teardown",
+        "passed": true,
+        "detail": "SIGTERM was sent by the rig"
+      },
+      {
+        "name": "server listener closed",
+        "passed": true,
+        "detail": "the evidence port no longer accepts health requests"
+      },
+      {
+        "name": "fixture remained alive until controlled teardown",
+        "passed": true,
+        "detail": "SIGTERM was sent by the rig"
+      }
+    ]
+  },
+  "limitations": [
+    "This run proves the supplied v0.12.1 macOS release-candidate archive, not an immutable GitHub release until those exact checksums are published.",
+    "systemIndicatorPolicy=true proves that the helper did not suppress ScreenCaptureKit's system indication; exact-window screenshots cannot prove a particular system banner was visible.",
+    "Programmatic exact-window selection is authenticated bridge policy, not a native macOS content picker.",
+    "The helper uses target-routed background input on the active user Space, not a separate login session, VM, virtual display, sandbox, or independent input seat.",
+    "Generic AX invocation remains Partial in the product result; this deterministic fixture supplies separate target-side evidence and does not upgrade that product classification.",
+    "The long live-share click intentionally creates native source-frame replacement. A zero transport-drop count is valid when server acknowledgements keep pace.",
+    "Screen Recording and Accessibility permissions were already present. The rig did not request, approve, or modify macOS permissions."
+  ]
+}

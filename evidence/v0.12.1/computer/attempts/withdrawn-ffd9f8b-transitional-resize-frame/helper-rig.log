@@ -1,0 +1,103 @@
+2026-08-22T04:18:55.238Z PASS macOS host: Darwin
+2026-08-22T04:18:55.239Z PASS exact archive name: local-browser-bridge-v0.12.1-macos-universal.tar.gz
+2026-08-22T04:18:55.428Z PASS server version: 0.12.1
+2026-08-22T04:18:55.547Z PASS helper version: 0.12.1
+2026-08-22T04:18:55.571Z PASS server universal architecture: arm64,x86_64
+2026-08-22T04:18:55.572Z PASS helper universal architecture: arm64,x86_64
+2026-08-22T04:18:55.572Z PASS helper uses packaged app layout: Local Computer Helper.app
+2026-08-22T04:18:55.597Z PASS strict code-signature verification: server, helper executable, and helper app bundle passed strict verification
+2026-08-22T04:18:55.608Z PASS helper bundle version: 0.12.1/0.12.1
+2026-08-22T04:18:55.611Z PASS archive checksum listed: local-browser-bridge-v0.12.1-macos-universal.tar.gz
+2026-08-22T04:18:55.611Z PASS archive checksum matches: 048d28336f8726110cd41260b7205d3dbcbf53eceade90e0b212fcb7e6966cd7
+2026-08-22T04:18:55.631Z PASS archive paths are traversal-safe: 8 safe entries
+2026-08-22T04:18:55.651Z PASS archive contains only regular files and directories: no links or special filesystem entries
+2026-08-22T04:18:55.651Z PASS archive contains exact server: local-browser-bridge
+2026-08-22T04:18:55.651Z PASS archive contains exact helper: Local Computer Helper.app/Contents/MacOS/local-computer-helper
+2026-08-22T04:18:55.678Z PASS supplied server is archive-exact: d709d148e5b9c7332eda765b776830358b7fc44127394276a59a114a6d1340a8
+2026-08-22T04:18:55.680Z PASS supplied helper is archive-exact: 4d04373d98f0ee06d19aed9eb540ccd47a3991fcc491b5a16438bf9ff401b693
+2026-08-22T04:18:56.625Z PASS screen-capture permission preflight: preexisting permission; no request was made
+2026-08-22T04:18:56.625Z PASS accessibility permission preflight: preexisting permission; no request was made
+2026-08-22T04:18:56.625Z PASS active Space probe available: nonzero active Space identity
+2026-08-22T04:18:56.625Z PASS front-window probe available: exact front process/window identity available
+2026-08-22T04:18:57.239Z PASS fixture process identity: state belongs to the spawned fixture
+2026-08-22T04:18:57.670Z PASS packaged helper compatible: protocol-compatible helper 0.12.1
+2026-08-22T04:18:57.670Z PASS single helper spawn: 1 packaged helper process
+2026-08-22T04:18:57.670Z PASS acknowledged share advertised: computer.share.ack present
+2026-08-22T04:18:57.670Z PASS native stream advertised: computer.capture.native-stream.v1 present
+2026-08-22T04:18:57.832Z PASS helper status backend: background-window/ax+skylight+screencapturekit-stream
+2026-08-22T04:18:57.833Z PASS background shared-session mode: background-window/shared-user-session/target-routed
+2026-08-22T04:18:57.833Z PASS background input backend ready: target-routed input is ready
+2026-08-22T04:18:57.833Z PASS semantic backend ready: macos-accessibility is ready without prompting
+2026-08-22T04:18:57.833Z PASS fixture exact window discovered: 1 matching windows
+2026-08-22T04:18:57.833Z PASS fixture is a background target: the fixture neither owns the foreground process nor the front window
+2026-08-22T04:18:58.090Z PASS exact fixture window observed: 1209x826
+2026-08-22T04:18:58.090Z PASS semantic snapshot available: 4 elements
+2026-08-22T04:18:58.093Z PASS semantic value element discovered: AXTextField
+2026-08-22T04:18:58.918Z PASS semantic setValue confirmed: Confirmed/value-confirmed
+2026-08-22T04:18:58.918Z PASS semantic setValue non-interruption invariants: {"cursorUnchanged":true,"foregroundUnchanged":true,"spaceUnchanged":true,"userFocusUnchanged":true}
+2026-08-22T04:18:59.095Z PASS semantic setValue screenshot changed: fresh exact-window pixels differ from the pre-action observation
+2026-08-22T04:18:59.095Z PASS semantic action element discovered: AXButton
+2026-08-22T04:19:00.098Z PASS semantic invoke target-side proof: fixture semantic counter advanced to 1
+2026-08-22T04:19:00.098Z PASS semantic invoke conservatively classified: Partial/element-state-changed
+2026-08-22T04:19:00.098Z PASS semantic invoke non-interruption invariants: {"cursorUnchanged":true,"foregroundUnchanged":true,"spaceUnchanged":true,"userFocusUnchanged":true}
+2026-08-22T04:19:00.301Z PASS semantic invoke screenshot changed: fresh exact-window pixels differ from the setValue stage
+2026-08-22T04:19:01.081Z PASS persistent live share started: persistent-native-stream/exact-window
+2026-08-22T04:19:01.081Z PASS SCStream start metadata: macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window
+2026-08-22T04:19:01.081Z PASS live share ack pacing: latest-frame-wins, ackPaced=true
+2026-08-22T04:19:01.081Z PASS live share cursor policy: system cursor excluded; synthetic session pointer composited
+2026-08-22T04:19:01.293Z PASS persistent-share screenshot is fresh: sourceSequence=3
+2026-08-22T04:19:03.736Z PASS background pixel click target-side proof: fixture click counter advanced to 1
+2026-08-22T04:19:03.736Z PASS pixel click conservatively classified: Unverifiable
+2026-08-22T04:19:03.736Z PASS pixel action bound to persistent share: share=true, source=7
+2026-08-22T04:19:03.736Z PASS live-share pixel click non-interruption invariants: {"cursorUnchanged":true,"foregroundUnchanged":true,"spaceUnchanged":true,"userFocusUnchanged":true}
+2026-08-22T04:19:03.944Z PASS native source remained live during input: source +22/drop +18; transport +4
+2026-08-22T04:19:03.944Z PASS settled synthetic pointer published: action=click
+2026-08-22T04:19:03.947Z PASS live-share action screenshot changed: fresh exact-window pixels include the action stage
+2026-08-22T04:19:04.309Z PASS persistent share survived exact-target resize: 720x492 -> 820x552
+2026-08-22T04:19:04.311Z PASS resize screenshot changed: fresh exact-window pixels include the resized target
+2026-08-22T04:19:04.519Z PASS persistent share sample count: 6 distinct transport frames
+2026-08-22T04:19:04.519Z PASS one persistent share authority: 1 share IDs
+2026-08-22T04:19:04.519Z PASS share-initial native stream metadata: macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window
+2026-08-22T04:19:04.519Z PASS share-initial ack pacing metadata: ack=true, backpressure=latest-frame-wins
+2026-08-22T04:19:04.519Z PASS share-cadence-1 native stream metadata: macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window
+2026-08-22T04:19:04.519Z PASS share-cadence-1 ack pacing metadata: ack=true, backpressure=latest-frame-wins
+2026-08-22T04:19:04.519Z PASS share-cadence-2 native stream metadata: macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window
+2026-08-22T04:19:04.519Z PASS share-cadence-2 ack pacing metadata: ack=true, backpressure=latest-frame-wins
+2026-08-22T04:19:04.519Z PASS share-after-long-action native stream metadata: macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window
+2026-08-22T04:19:04.519Z PASS share-after-long-action ack pacing metadata: ack=true, backpressure=latest-frame-wins
+2026-08-22T04:19:04.519Z PASS share-after-resize native stream metadata: macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window
+2026-08-22T04:19:04.519Z PASS share-after-resize ack pacing metadata: ack=true, backpressure=latest-frame-wins
+2026-08-22T04:19:04.519Z PASS share-post-resize-cadence native stream metadata: macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window
+2026-08-22T04:19:04.519Z PASS share-post-resize-cadence ack pacing metadata: ack=true, backpressure=latest-frame-wins
+2026-08-22T04:19:04.519Z PASS share-cadence-1 independent sequences advance: source 3->5, transport 1->2
+2026-08-22T04:19:04.519Z PASS share-cadence-1 drop counters are monotonic: source-drop 3->4, transport-drop 0->0
+2026-08-22T04:19:04.519Z PASS share-cadence-1 previous frame was acknowledged: previous=1, ack=1, current=2
+2026-08-22T04:19:04.519Z PASS share-cadence-2 independent sequences advance: source 5->7, transport 2->3
+2026-08-22T04:19:04.519Z PASS share-cadence-2 drop counters are monotonic: source-drop 4->5, transport-drop 0->0
+2026-08-22T04:19:04.519Z PASS share-cadence-2 previous frame was acknowledged: previous=2, ack=2, current=3
+2026-08-22T04:19:04.519Z PASS share-after-long-action independent sequences advance: source 7->29, transport 3->7
+2026-08-22T04:19:04.519Z PASS share-after-long-action drop counters are monotonic: source-drop 5->23, transport-drop 0->0
+2026-08-22T04:19:04.519Z PASS share-after-long-action previous frame was acknowledged: previous=3, ack=6, current=7
+2026-08-22T04:19:04.519Z PASS share-after-resize independent sequences advance: source 29->33, transport 7->9
+2026-08-22T04:19:04.519Z PASS share-after-resize drop counters are monotonic: source-drop 23->25, transport-drop 0->0
+2026-08-22T04:19:04.519Z PASS share-after-resize previous frame was acknowledged: previous=7, ack=8, current=9
+2026-08-22T04:19:04.519Z PASS share-post-resize-cadence independent sequences advance: source 33->35, transport 9->10
+2026-08-22T04:19:04.520Z PASS share-post-resize-cadence drop counters are monotonic: source-drop 25->25, transport-drop 0->0
+2026-08-22T04:19:04.520Z PASS share-post-resize-cadence previous frame was acknowledged: previous=9, ack=9, current=10
+2026-08-22T04:19:04.600Z PASS share status remains native and ack paced: macos-screencapturekit-scstream, source=36, transport=11
+2026-08-22T04:19:04.601Z PASS share status drop domains retained: source-drop=26, transport-drop=0
+2026-08-22T04:19:04.607Z PASS live share stopped: requested
+2026-08-22T04:19:04.609Z PASS share stop revoked observation: computer observation and frame authority cleared
+2026-08-22T04:19:04.609Z PASS fixture final state: {"clicks":1,"semanticPresses":1,"semanticValue":"v0.12.1-semantic-value","resizeCount":1}
+2026-08-22T04:19:04.670Z PASS independent foreground/focus/cursor/Space invariants: {"foregroundUnchanged":true,"userFocusUnchanged":true,"cursorUnchanged":true,"spaceUnchanged":true}
+2026-08-22T04:19:04.672Z helper stopped
+2026-08-22T04:19:04.672Z PASS helper remained alive until controlled teardown: SIGTERM was sent by the rig
+2026-08-22T04:19:04.674Z PASS helper transport disconnected cleanly: helper session and observation were revoked
+2026-08-22T04:19:04.674Z PASS helper was never respawned: 1 packaged helper process
+2026-08-22T04:19:04.676Z server stopped
+2026-08-22T04:19:04.676Z PASS server remained alive until controlled teardown: SIGTERM was sent by the rig
+2026-08-22T04:19:04.677Z PASS server listener closed: the evidence port no longer accepts health requests
+2026-08-22T04:19:04.679Z fixture stopped
+2026-08-22T04:19:04.679Z PASS fixture remained alive until controlled teardown: SIGTERM was sent by the rig
+2026-08-22T04:19:04.692Z 98/98 checks passed
+2026-08-22T04:19:04.693Z scratch directory removed

@@ -333,13 +333,20 @@ async function saveCurrentScreenshot(publicState, filename, expectedWindowId) {
   if (data.includes(Buffer.from(bearerToken, "utf8"))) {
     throw new Error("refusing to persist a screenshot containing the bearer token");
   }
+  const dimensions = pngDimensions(data);
+  if (
+    dimensions.width !== observation.imageWidth ||
+    dimensions.height !== observation.imageHeight
+  ) {
+    throw new Error("captured PNG dimensions do not match the bound observation");
+  }
   const path = join(outputDir, filename);
   await writeFile(path, data);
   const record = {
     file: filename,
     sha256: createHash("sha256").update(data).digest("hex"),
     bytes: data.length,
-    ...pngDimensions(data),
+    ...dimensions,
     frameId: observation.frameId,
     windowId: observation.windowId,
     sourceSequence: observation.sourceSequence ?? null,
@@ -387,6 +394,20 @@ function shareSample(observation, stage) {
     imageWidth: observation.imageWidth,
     imageHeight: observation.imageHeight,
   };
+}
+
+function capturedFrameMatchesWindowGeometry(sample) {
+  if (
+    !Number.isSafeInteger(sample?.windowWidth) || sample.windowWidth <= 0 ||
+    !Number.isSafeInteger(sample?.windowHeight) || sample.windowHeight <= 0 ||
+    !Number.isSafeInteger(sample?.imageWidth) || sample.imageWidth <= 0 ||
+    !Number.isSafeInteger(sample?.imageHeight) || sample.imageHeight <= 0
+  ) {
+    return false;
+  }
+  const windowAspect = sample.windowWidth / sample.windowHeight;
+  const imageAspect = sample.imageWidth / sample.imageHeight;
+  return Math.abs(windowAspect - imageAspect) <= 0.003;
 }
 
 async function waitForNextShareState(previousSequence, stage, predicate = () => true, timeoutMs = 20_000) {
@@ -783,18 +804,38 @@ async function main() {
     return snapshot.appliedControlSequence === 1 && snapshot.resizeCount === 1 &&
       snapshot.contentWidth === 820 && snapshot.contentHeight === 520 && snapshot;
   });
-  current = await waitForNextShareState(afterPixelAction.sequence, "share-after-resize", (sample) =>
+  const resizeTransition = await waitForNextShareState(afterPixelAction.sequence, "share-after-resize", (sample) =>
     sample.shareId === firstShareId &&
       (sample.windowWidth !== preResizeWindowWidth || sample.windowHeight !== preResizeWindowHeight),
+  );
+  current = await waitForNextShareState(
+    resizeTransition.sample.sequence,
+    "share-resize-settled",
+    (sample) =>
+      sample.shareId === firstShareId &&
+      sample.sourceSequence > resizeTransition.sample.sourceSequence &&
+      sample.windowWidth === resizeTransition.sample.windowWidth &&
+      sample.windowHeight === resizeTransition.sample.windowHeight &&
+      capturedFrameMatchesWindowGeometry(sample),
   );
   requireCheck("persistent share survived exact-target resize",
     current.sample.shareId === firstShareId && current.sample.sourceSequence > afterPixelAction.sourceSequence,
     `${preResizeWindowWidth}x${preResizeWindowHeight} -> ${current.sample.windowWidth}x${current.sample.windowHeight}`,
   );
+  requireCheck("settled resize frame matches exact-window geometry",
+    capturedFrameMatchesWindowGeometry(current.sample),
+    `window=${current.sample.windowWidth}x${current.sample.windowHeight}, image=${current.sample.imageWidth}x${current.sample.imageHeight}`,
+  );
   const resizeScreenshot = await saveCurrentScreenshot(current.snapshot, "computer-06-persistent-share-resize.png", targetWindow.id);
-  requireCheck("resize screenshot changed",
-    resizeScreenshot.sha256 !== pixelActionScreenshot.sha256,
-    "fresh exact-window pixels include the resized target",
+  requireCheck("resize screenshot dimensions match settled observation",
+    resizeScreenshot.width === current.sample.imageWidth &&
+      resizeScreenshot.height === current.sample.imageHeight,
+    `${resizeScreenshot.width}x${resizeScreenshot.height}`,
+  );
+  requireCheck("resize screenshot geometry changed",
+    resizeScreenshot.width !== pixelActionScreenshot.width ||
+      resizeScreenshot.height !== pixelActionScreenshot.height,
+    `${pixelActionScreenshot.width}x${pixelActionScreenshot.height} -> ${resizeScreenshot.width}x${resizeScreenshot.height}`,
   );
   current = await waitForNextShareState(current.sample.sequence, "share-post-resize-cadence");
 

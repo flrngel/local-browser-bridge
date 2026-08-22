@@ -27,7 +27,9 @@ helper process.
   recorded as separate target-side proof.
 - One persistent ScreenCaptureKit `SCStream` keeps the same share authority
   through cadence sampling, a 900 ms background pixel action, and a controlled
-  exact-target resize.
+  exact-target resize. Resize evidence waits past the first geometry transition
+  for a later acknowledged source frame whose captured-image aspect ratio and
+  saved PNG dimensions match the resized exact window.
 - Capture metadata reports `macos-screencapturekit-scstream`,
   `nativeStream: true`, the no-suppression system-indicator policy, and
   `programmatic-exact-window` selection.
@@ -102,3 +104,6 @@ before changing this directory's status from candidate to released evidence.
 - [`attempts/withdrawn-98ff6f0-macos-invariant-refusal`](attempts/withdrawn-98ff6f0-macos-invariant-refusal/README.md)
   preserves the first fail-closed run. It is diagnostic history, not release
   evidence and not a passing result.
+- [`attempts/withdrawn-ffd9f8b-transitional-resize-frame`](attempts/withdrawn-ffd9f8b-transitional-resize-frame/README.md)
+  preserves an automated pass rejected by mandatory visual review because its
+  resize screenshot still contained transitional pre-resize pixels.
