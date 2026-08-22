@@ -118,7 +118,9 @@ jobs:
 
   macos:
     name: macOS formatting, lint, and tests
-    runs-on: macos-14
+    # apple-metal 0.8.8's Swift bridge names Metal APIs introduced in the
+    # macOS 26 SDK. Artifact inspection still enforces the macOS 13 runtime floor.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -127,6 +129,8 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
+      - name: Verify the macOS build SDK and runtime floor
+        run: bash scripts/verify-macos-build-host.sh
       - name: Install the minimum supported Rust toolchain
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy

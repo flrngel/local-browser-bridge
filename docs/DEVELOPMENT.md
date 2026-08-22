@@ -6,7 +6,10 @@ End users do not need Node.js. The entry points are Rust executables; the macOS 
 
 - Rust 1.88 or later with Cargo and rustfmt
 - Node.js 24 for extension/dashboard behavior contracts and browser evidence rigs
-- Platform SDK and linker for the target operating system
+- Platform SDK and linker for the target operating system. Native macOS builds
+  require the macOS 26 SDK or newer because the locked `apple-metal` Swift
+  bridge names Metal 4 APIs at compile time. The resulting universal package
+  still targets and is artifact-checked for macOS 13 on both architectures.
 - `zip` and `unzip` for extension packaging
 - Chrome or Edge 140+ for browser and recursive cross-origin iframe testing
 - macOS 13+ with Screen Recording and Accessibility permissions for native macOS testing

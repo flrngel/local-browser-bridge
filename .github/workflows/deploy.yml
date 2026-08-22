@@ -123,7 +123,9 @@ jobs:
   macos:
     name: Build macOS universal
     needs: verify
-    runs-on: macos-14
+    # apple-metal 0.8.8's Swift bridge names Metal APIs introduced in the
+    # macOS 26 SDK. Artifact inspection still enforces the macOS 13 runtime floor.
+    runs-on: macos-26
     permissions:
       contents: read
       id-token: write # Required by actions/attest-build-provenance.
@@ -137,6 +139,8 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
+      - name: Verify the macOS build SDK and runtime floor
+        run: bash scripts/verify-macos-build-host.sh
       - name: Install the minimum supported Rust toolchain and targets
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy

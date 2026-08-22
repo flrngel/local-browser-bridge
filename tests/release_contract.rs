@@ -114,7 +114,16 @@ fn release_gates_javascript_macos_and_published_provenance() {
     assert!(ci.matches(node_pin).count() >= 4);
     assert!(!ci.contains("Extension static and contract tests (Node-free)"));
     assert!(ci.contains("name: macOS formatting, lint, and tests"));
-    assert!(ci.contains("runs-on: macos-14"));
+    assert_eq!(ci.matches("runs-on: macos-26").count(), 1);
+    assert_eq!(release.matches("runs-on: macos-26").count(), 1);
+    assert!(!ci.contains("runs-on: macos-14"));
+    assert!(!release.contains("runs-on: macos-14"));
+    assert!(ci.contains("bash scripts/verify-macos-build-host.sh"));
+    assert!(release.contains("bash scripts/verify-macos-build-host.sh"));
+    let macos_host_verifier = source("scripts/verify-macos-build-host.sh");
+    assert!(macos_host_verifier.contains("required_sdk_major=26"));
+    assert!(macos_host_verifier.contains("required_deployment_target=\"13.0\""));
+    assert!(macos_host_verifier.contains("xcrun --sdk macosx --show-sdk-version"));
     assert!(!release.contains("workflow_dispatch:"));
     assert!(release.contains("RELEASE_TAG: ${{ github.ref_name }}"));
 
