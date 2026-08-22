@@ -73,9 +73,23 @@ helper process.
   one-shot `computer.observe` then recovers the same helper session with a new
   exact-window frame; retrying the pre-cancel frame is still refused as
   `COMPUTER_STALE_FRAME`. Neither refusal changes functional fixture state. The
-  expected bounded move instrumentation is reported separately. Helper exit
-  then clears its server session, and server exit closes the selected loopback
-  listener.
+  expected bounded move instrumentation is reported separately.
+- After that cancellation recovery, the runner starts a second persistent
+  exact-window share and waits for a current frame from the same fixture PID and
+  native window ID. While that share is active, the runner sends `SIGTERM` only
+  to its spawned fixture process and waits for process exit. The helper must no
+  longer enumerate that exact `(process, window)` pair and must emit a terminal
+  error for the same share ID. The server must mark the share stopped with
+  `capture-error`, clear observation and screenshot authority, return 404 for
+  the retired screenshot URL, and remain clear beyond three configured frame
+  periods. A click carrying the retired frame must fail at the server as
+  `NO_COMPUTER_FRAME`, and an explicit observe of the closed native window must
+  fail as `COMPUTER_NO_WINDOW`. An idempotent stop then confirms helper-side
+  cleanup without replacing or respawning the helper.
+- Helper exit then clears its server session, and server exit closes the
+  selected loopback listener. The fixture is already gone because exact-target
+  close is now part of the live evidence sequence, not deferred to generic
+  teardown.
 
 `systemIndicator: true` is policy evidence that the helper did not suppress
 ScreenCaptureKit's indication. An exact-window screenshot cannot prove that a
@@ -100,8 +114,10 @@ SHA-256, frame ID, source sequence, and transport sequence.
 Screenshot 06 is intentionally captured before the post-resize click, native
 text proof, and cancellation flow. It is the visual proof that the same share
 settled on `last=resize size=820x520`; the later action, read-back, replay, and
-fail-closed assertions are stronger machine-state/API contracts and do not
-require a seventh screenshot.
+target-close fail-closed assertions are stronger machine-state/API contracts
+and do not require a seventh screenshot. In particular, the close proof records
+only bounded process/share/frame identities and API outcomes; it never retains
+another target image after native text delivery begins.
 
 ## Run
 
@@ -111,6 +127,8 @@ foreground app, mouse, or Spaces during the run; an invariant failure is a real
 negative result and must be retained. The runner refuses to overwrite any
 existing result, log, or expected screenshot. Move a completed or failed
 attempt to a separately named evidence directory before starting another one.
+The runner deliberately closes its own fixture during the target-close stage;
+it never closes an unrelated application or window.
 
 ```sh
 mkdir -p "$SCRATCH_PARENT/v0.12.1-package"
@@ -143,6 +161,13 @@ cleanup. The bearer token is also excluded. The cancellation stage uses the
 product's normal authenticated endpoint and a naturally long real action—never
 a shortened server deadline, test-only dispatch delay, fault hook, or connector
 mock.
+
+macOS can report the exact-target loss first through window enumeration
+(`COMPUTER_NO_WINDOW`) or through the ScreenCaptureKit stop callback
+(`COMPUTER_CAPTURE_FAILED`). The rig accepts only those two terminal codes, and
+only after it has requested and observed exit of its exact spawned fixture. In
+both cases the event must name the second share ID and produce the identical
+server authority-clear, stale-frame refusal, and cleanup contract.
 
 After the run, inspect every screenshot, confirm `assertions.failed` is zero,
 and compare the recorded archive SHA-256 with the published release asset

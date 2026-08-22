@@ -20,6 +20,8 @@ const LONG_PIXEL_ACTION_MS = 900;
 const POST_RESIZE_PIXEL_ACTION_MS = 120;
 const CANCELED_MOVE_DURATION_MS = 2_000;
 const CANCELLATION_DISPATCH_PROOF_TIMEOUT_MS = 10_000;
+const TARGET_CLOSE_SETTLE_FRAME_PERIODS = 3;
+const TARGET_CLOSE_CAPTURE_CODES = new Set(["COMPUTER_NO_WINDOW", "COMPUTER_CAPTURE_FAILED"]);
 const NATIVE_TEXT_SUFFIX = `-native-${randomBytes(6).toString("hex")}`;
 const GENERATED_OUTPUT_NAMES = [
   "helper-results.json",
@@ -1368,6 +1370,178 @@ async function main() {
     JSON.stringify(cancellationInvariants),
   );
 
+  const targetCloseShareStartBody = await command("computer.share.start", {
+    windowId: targetWindow.id,
+    fps: SHARE_FPS,
+  });
+  const targetCloseShare = targetCloseShareStartBody.result;
+  requireCheck("target-close persistent share started with fresh authority",
+    targetCloseShare.active === true && targetCloseShare.id !== firstShareId &&
+      targetCloseShare.windowId === targetWindow.id && targetCloseShare.pid === fixtureReady.pid &&
+      targetCloseShare.captureMode === "persistent-native-stream" &&
+      targetCloseShare.captureBackend === CAPTURE_BACKEND && targetCloseShare.nativeStream === true,
+    `fresh-share=${targetCloseShare.id !== firstShareId}, target=${targetCloseShare.windowId === targetWindow.id}, backend=${targetCloseShare.captureBackend}`,
+  );
+  const targetCloseSystemBefore = processProbe(systemProbeBinary);
+  const targetCloseActive = await waitFor("target-close persistent share authority", async () => {
+    const snapshot = await apiState();
+    const activeObservation = snapshot.computerObservation;
+    const sample = shareSample(activeObservation, "target-close-share-active");
+    return snapshot.computerConnected === true &&
+      snapshot.computer?.sessionId === hello.sessionId &&
+      activeObservation?.windowId === targetWindow.id &&
+      activeObservation?.pid === fixtureReady.pid &&
+      sample?.shareId === targetCloseShare.id &&
+      typeof activeObservation.screenshotUrl === "string" &&
+      activeObservation.screenshotUrl.startsWith("/api/computer/screenshot?")
+      ? { snapshot, sample }
+      : null;
+  });
+  const targetCloseObservation = targetCloseActive.snapshot.computerObservation;
+  const targetCloseFrameId = targetCloseObservation.frameId;
+  const targetCloseScreenshotUrl = targetCloseObservation.screenshotUrl;
+  requireCheck("exact target is alive while its closing share frame is current",
+    fixtureProcess?.exitCode === null && fixtureProcess?.signalCode === null &&
+      targetCloseObservation.share?.active === true &&
+      targetCloseObservation.share?.id === targetCloseShare.id &&
+      targetCloseObservation.sourceSequence === targetCloseActive.sample.sourceSequence,
+    `share=${targetCloseObservation.share?.id === targetCloseShare.id}, source=${targetCloseObservation.sourceSequence}`,
+  );
+
+  failureProbeBaseline = {
+    stage: "activeShareExactTargetClose",
+    system: targetCloseSystemBefore,
+    fixture: finalFixtureState,
+  };
+  const fixtureTargetClosure = await terminate(fixtureProcess, "exact fixture target");
+  fixtureProcess = null;
+  requireCheck("rig closed the exact target while its persistent share was active",
+    fixtureTargetClosure.requested === true && fixtureTargetClosure.alreadyExited === false,
+    `signal-requested=${fixtureTargetClosure.requested}, already-exited=${fixtureTargetClosure.alreadyExited}`,
+  );
+
+  const targetClosedState = await waitFor("exact-target close share failure", async () => {
+    const snapshot = await apiState();
+    const share = snapshot.computer?.share;
+    return snapshot.computerConnected === true &&
+      snapshot.computer?.sessionId === hello.sessionId &&
+      snapshot.computerObservation === null &&
+      share?.active === false && share?.stopped === true &&
+      share?.reason === "capture-error" && share?.id === targetCloseShare.id &&
+      TARGET_CLOSE_CAPTURE_CODES.has(share?.code)
+      ? snapshot
+      : null;
+  });
+  requireCheck("helper-originated exact-share failure stops server authority",
+    targetClosedState.computer.share.id === targetCloseShare.id &&
+      TARGET_CLOSE_CAPTURE_CODES.has(targetClosedState.computer.share.code) &&
+      helperProcess?.exitCode === null && helperProcess?.signalCode === null &&
+      helperSpawnCount === 1,
+    `${targetClosedState.computer.share.reason}/${targetClosedState.computer.share.code}, same-helper=${helperSpawnCount === 1}`,
+  );
+
+  const targetClosedScreenshotResponse = await fetch(
+    `http://127.0.0.1:${port}${targetCloseScreenshotUrl}`,
+    { headers: { Authorization: `Bearer ${bearerToken}` } },
+  );
+  const targetClosedScreenshotBody = await targetClosedScreenshotResponse.json();
+  requireCheck("target close clears the exact share screenshot surface",
+    targetClosedScreenshotResponse.status === 404 &&
+      targetClosedScreenshotBody.error?.code === "NO_COMPUTER_SCREENSHOT",
+    `HTTP ${targetClosedScreenshotResponse.status}, ${targetClosedScreenshotBody.error?.code}`,
+  );
+  await delay(Math.ceil((TARGET_CLOSE_SETTLE_FRAME_PERIODS * 1_000) / SHARE_FPS));
+  const targetClosedSettledState = await apiState();
+  requireCheck("closed target cannot republish a queued native frame",
+    targetClosedSettledState.computer?.sessionId === hello.sessionId &&
+      targetClosedSettledState.computerObservation === null &&
+      targetClosedSettledState.computer?.share?.active === false &&
+      targetClosedSettledState.computer?.share?.stopped === true &&
+      targetClosedSettledState.computer?.share?.reason === "capture-error" &&
+      targetClosedSettledState.computer?.share?.id === targetCloseShare.id &&
+      targetClosedSettledState.computer?.share?.code === targetClosedState.computer.share.code,
+    `${TARGET_CLOSE_SETTLE_FRAME_PERIODS} frame periods settled without authority republish`,
+  );
+
+  const targetClosedStaleAction = await commandResponse("computer.click", {
+    frameId: targetCloseFrameId,
+    x: postResizeClickX,
+    y: postResizeClickY,
+    button: "left",
+    clickCount: 1,
+    durationMs: 50,
+  });
+  requireCheck("closed-target frame is refused before helper action relay",
+    targetClosedStaleAction.status === 409 && targetClosedStaleAction.ok === false &&
+      targetClosedStaleAction.body.error?.code === "NO_COMPUTER_FRAME" &&
+      targetClosedStaleAction.body.taxonomy?.code === "stale_snapshot" &&
+      targetClosedStaleAction.body.taxonomy?.retriable === true &&
+      targetClosedStaleAction.body.taxonomy?.recoveryHint === "reobserve",
+    `HTTP ${targetClosedStaleAction.status}, ${targetClosedStaleAction.body.error?.code}/${targetClosedStaleAction.body.taxonomy?.code}`,
+  );
+  const targetClosedAfterStaleAction = await apiState();
+  requireCheck("stale closed-target action cannot recreate a computer surface",
+    targetClosedAfterStaleAction.computerObservation === null &&
+      targetClosedAfterStaleAction.computer?.share?.active === false &&
+      targetClosedAfterStaleAction.computer?.share?.id === targetCloseShare.id &&
+      targetClosedAfterStaleAction.computer?.share?.reason === "capture-error",
+    "the retired frame remained unavailable after the rejected mutation",
+  );
+
+  const targetClosedObserve = await commandResponse("computer.observe", {
+    windowId: targetWindow.id,
+  });
+  requireCheck("explicit observe cannot recover a closed exact target",
+    targetClosedObserve.status === 409 && targetClosedObserve.ok === false &&
+      targetClosedObserve.body.error?.code === "COMPUTER_NO_WINDOW" &&
+      targetClosedObserve.body.taxonomy?.code === "target_changed" &&
+      targetClosedObserve.body.taxonomy?.retriable === true &&
+      targetClosedObserve.body.taxonomy?.recoveryHint === "reobserve",
+    `HTTP ${targetClosedObserve.status}, ${targetClosedObserve.body.error?.code}/${targetClosedObserve.body.taxonomy?.code}`,
+  );
+  const targetClosedAfterObserve = await apiState();
+  requireCheck("closed-target observe refusal preserves terminal teardown",
+    targetClosedAfterObserve.computerObservation === null &&
+      targetClosedAfterObserve.computer?.share?.active === false &&
+      targetClosedAfterObserve.computer?.share?.id === targetCloseShare.id &&
+      targetClosedAfterObserve.computer?.share?.reason === "capture-error" &&
+      targetClosedAfterObserve.computer?.share?.code === targetClosedState.computer.share.code,
+    "the failed recovery did not restore observation, screenshot, pointer, share, or frame authority",
+  );
+  const targetClosedStatusBody = await command("computer.status");
+  const targetClosedStatus = targetClosedStatusBody.result;
+  requireCheck("helper independently observes the exact target pair is gone",
+    !targetClosedStatus.windows.some(
+      (window) => window.id === targetWindow.id && window.pid === fixtureReady.pid,
+    ),
+    "the helper no longer enumerates the closed (process, window) pair",
+  );
+  const targetCloseStopBody = await command("computer.share.stop");
+  const targetCloseStop = targetCloseStopBody.result;
+  requireCheck("target-close share stop is idempotently clean",
+    targetCloseStop.active === false && targetCloseStop.stopped === false &&
+      targetCloseStop.reason === "not-active",
+    `${targetCloseStop.active}/${targetCloseStop.stopped}/${targetCloseStop.reason}`,
+  );
+  const targetCloseStoppedState = await apiState();
+  requireCheck("target-close cleanup leaves no share or frame authority",
+    targetCloseStoppedState.computerConnected === true &&
+      targetCloseStoppedState.computer?.sessionId === hello.sessionId &&
+      targetCloseStoppedState.computerObservation === null &&
+      targetCloseStoppedState.computer?.share?.active === false &&
+      targetCloseStoppedState.computer?.share?.stopped === false &&
+      targetCloseStoppedState.computer?.share?.reason === "not-active",
+    "the same helper remains ready with no target, share, observation, screenshot, or frame authority",
+  );
+  const targetCloseInvariants = systemInvariants(
+    targetCloseSystemBefore,
+    processProbe(systemProbeBinary),
+  );
+  requireCheck("target-close foreground/focus/cursor/Space invariants",
+    allInvariantsHeld(targetCloseInvariants),
+    JSON.stringify(targetCloseInvariants),
+  );
+
   const systemAfter = processProbe(systemProbeBinary);
   const independentInvariants = systemInvariants(systemBefore, systemAfter);
   requireCheck("independent foreground/focus/cursor/Space invariants",
@@ -1393,9 +1567,6 @@ async function main() {
   requireCheck("server remained alive until controlled teardown", serverTeardown.requested === true, "SIGTERM was sent by the rig");
   await waitFor("loopback listener teardown", async () => !(await healthReachable()), 5_000);
   requireCheck("server listener closed", true, "the evidence port no longer accepts health requests");
-  const fixtureTeardown = await terminate(fixtureProcess, "fixture");
-  fixtureProcess = null;
-  requireCheck("fixture remained alive until controlled teardown", fixtureTeardown.requested === true, "SIGTERM was sent by the rig");
 
   const finalSample = shareSamples.at(-1);
   const result = {
@@ -1633,6 +1804,52 @@ async function main() {
         explicitStopWasIdempotent: explicitStop.stopped === false && explicitStop.reason === "not-active",
         samples: shareSamples,
       },
+      exactTargetClose: {
+        shareId: targetCloseShare.id,
+        frameId: targetCloseFrameId,
+        windowId: targetWindow.id,
+        pid: fixtureReady.pid,
+        shareActiveAtClose: targetCloseObservation.share.active,
+        exactTargetTermination: fixtureTargetClosure,
+        helperObservedTargetAbsent: !targetClosedStatus.windows.some(
+          (window) => window.id === targetWindow.id && window.pid === fixtureReady.pid,
+        ),
+        helperSessionPreserved: targetClosedState.computer.sessionId === hello.sessionId,
+        helperSpawnCount,
+        terminalShare: {
+          active: targetClosedState.computer.share.active,
+          stopped: targetClosedState.computer.share.stopped,
+          reason: targetClosedState.computer.share.reason,
+          code: targetClosedState.computer.share.code,
+          exactShareIdMatched: targetClosedState.computer.share.id === targetCloseShare.id,
+        },
+        authorityClear: {
+          observationCleared: targetClosedState.computerObservation === null,
+          screenshotHttpStatus: targetClosedScreenshotResponse.status,
+          screenshotErrorCode: targetClosedScreenshotBody.error.code,
+          stayedClearedAfterFramePeriods: TARGET_CLOSE_SETTLE_FRAME_PERIODS,
+          queuedFrameRepublished: targetClosedSettledState.computerObservation !== null,
+        },
+        staleFrameRefusal: {
+          httpStatus: targetClosedStaleAction.status,
+          code: targetClosedStaleAction.body.error.code,
+          taxonomy: targetClosedStaleAction.body.taxonomy,
+          helperActionRelayed: false,
+          surfaceRecreated: targetClosedAfterStaleAction.computerObservation !== null,
+        },
+        closedTargetObserveRefusal: {
+          httpStatus: targetClosedObserve.status,
+          code: targetClosedObserve.body.error.code,
+          taxonomy: targetClosedObserve.body.taxonomy,
+          surfaceRecreated: targetClosedAfterObserve.computerObservation !== null,
+        },
+        explicitStop: {
+          active: targetCloseStop.active,
+          stopped: targetCloseStop.stopped,
+          reason: targetCloseStop.reason,
+        },
+        independentNonInterruptionSample: targetCloseInvariants,
+      },
       independentNonInterruptionSample: independentInvariants,
       teardown: {
         helper: helperTeardown,
@@ -1641,7 +1858,8 @@ async function main() {
         observationCleared: disconnected.computerObservation === null,
         server: serverTeardown,
         serverListenerClosed: true,
-        fixture: fixtureTeardown,
+        fixture: fixtureTargetClosure,
+        fixtureClosedDuringActiveShare: true,
       },
     },
     screenshots,
@@ -1661,6 +1879,7 @@ async function main() {
       "Native typeText remains Unverifiable in the product result. This deterministic fixture adds an independent exact read-back, then restores the prior value through confirmed Accessibility setValue. The ephemeral test content is not retained in evidence outputs, but it exists temporarily in process memory and the scratch fixture-state file until cleanup.",
       "The long live-share click intentionally creates native source-frame replacement. A zero transport-drop count is valid when server acknowledgements keep pace.",
       "Explicit cancellation deliberately reports the in-flight move outcome as unknown. The rig proves target-routed dispatch, authority teardown, a pre-recovery server gate, explicit one-shot observation recovery, continued stale-frame refusal, and no functional fixture mutation beyond its bounded move-delivery counter; it does not relabel the canceled native trajectory as a confirmed no-op.",
+      "After cancellation recovery, the rig starts a fresh persistent exact-window share and deliberately terminates only the spawned fixture process. Depending on whether target enumeration or ScreenCaptureKit reports closure first, the terminal share code is COMPUTER_NO_WINDOW or COMPUTER_CAPTURE_FAILED; both paths must identify the exact share, stop capture, clear server authority, and refuse the retired frame.",
       "Screen Recording and Accessibility permissions were already present. The rig did not request, approve, or modify macOS permissions.",
     ],
   };

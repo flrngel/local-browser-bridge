@@ -376,7 +376,7 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
         .split("const cancellationStartedAt = Date.now();")
         .nth(1)
         .unwrap()
-        .split("const systemAfter = processProbe(systemProbeBinary);")
+        .split("const targetCloseShareStartBody")
         .next()
         .unwrap();
     for required in [
@@ -442,6 +442,106 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
     assert!(rig.contains("assertNoRetainedNativeTextPayload(persistedLog"));
     assert!(rig.contains("text.split(NATIVE_TEXT_SUFFIX).join(\"[NATIVE_TEXT_PAYLOAD]\")"));
     assert!(rig.contains("nativeTextPayloadMayBeVisible = true"));
+}
+
+#[test]
+fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() {
+    let rig = fs::read_to_string("evidence/v0.12.1/computer/helper-evidence-rig.mjs")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let readme = fs::read_to_string("evidence/v0.12.1/computer/README.md")
+        .unwrap()
+        .replace("\r\n", "\n");
+
+    let share_start = rig.find("const targetCloseShareStartBody").unwrap();
+    let active_frame = rig.find("const targetCloseActive").unwrap();
+    let target_termination = rig.find("const fixtureTargetClosure").unwrap();
+    let terminal_state = rig.find("const targetClosedState").unwrap();
+    let stale_refusal = rig.find("const targetClosedStaleAction").unwrap();
+    let closed_observe = rig.find("const targetClosedObserve").unwrap();
+    let target_absent = rig.find("const targetClosedStatusBody").unwrap();
+    let helper_teardown = rig.find("const helperTeardown").unwrap();
+    assert!(
+        share_start < active_frame
+            && active_frame < target_termination
+            && target_termination < terminal_state
+            && terminal_state < stale_refusal
+            && stale_refusal < closed_observe
+            && closed_observe < target_absent
+            && target_absent < helper_teardown,
+        "exact-target close evidence must follow the live share boundary and precede generic teardown"
+    );
+
+    let pre_close = &rig[active_frame..target_termination];
+    assert!(pre_close.contains("targetCloseObservation.share?.active === true"));
+    assert!(pre_close.contains("targetCloseObservation.share?.id === targetCloseShare.id"));
+    assert!(pre_close.contains("fixtureProcess?.exitCode === null"));
+    assert!(
+        !pre_close.contains("delay("),
+        "target termination must be causally gated by a live exact-share frame, not a fixed sleep"
+    );
+
+    let target_close = &rig[share_start..helper_teardown];
+    for required in [
+        "targetCloseShare.id !== firstShareId",
+        "targetCloseShare.windowId === targetWindow.id",
+        "targetCloseShare.pid === fixtureReady.pid",
+        "sample?.shareId === targetCloseShare.id",
+        "terminate(fixtureProcess, \"exact fixture target\")",
+        "fixtureTargetClosure.requested === true",
+        "fixtureTargetClosure.alreadyExited === false",
+        "!targetClosedStatus.windows.some",
+        "window.id === targetWindow.id && window.pid === fixtureReady.pid",
+        "share?.reason === \"capture-error\"",
+        "share?.id === targetCloseShare.id",
+        "TARGET_CLOSE_CAPTURE_CODES.has(share?.code)",
+        "helperProcess?.exitCode === null",
+        "helperSpawnCount === 1",
+        "NO_COMPUTER_SCREENSHOT",
+        "TARGET_CLOSE_SETTLE_FRAME_PERIODS * 1_000",
+        "closed target cannot republish a queued native frame",
+        "targetClosedStaleAction.body.error?.code === \"NO_COMPUTER_FRAME\"",
+        "closed-target frame is refused before helper action relay",
+        "targetClosedAfterStaleAction.computerObservation === null",
+        "targetClosedObserve.body.error?.code === \"COMPUTER_NO_WINDOW\"",
+        "targetClosedObserve.body.taxonomy?.code === \"target_changed\"",
+        "closed-target observe refusal preserves terminal teardown",
+        "targetCloseStop.reason === \"not-active\"",
+        "target-close cleanup leaves no share or frame authority",
+        "target-close foreground/focus/cursor/Space invariants",
+        "fixtureProcess = null",
+    ] {
+        assert!(
+            target_close.contains(required),
+            "missing exact-target close proof: {required}"
+        );
+    }
+    assert!(rig.contains("\"COMPUTER_NO_WINDOW\", \"COMPUTER_CAPTURE_FAILED\""));
+    assert!(rig.contains("exactTargetClose: {"));
+    assert!(rig.contains("helperActionRelayed: false"));
+    assert!(
+        rig.contains(
+            "queuedFrameRepublished: targetClosedSettledState.computerObservation !== null"
+        )
+    );
+    assert!(
+        !target_close.contains("saveCurrentScreenshot("),
+        "target-close evidence must not retain a target image after native-text delivery"
+    );
+
+    for required in [
+        "While that share is active, the runner sends `SIGTERM` only",
+        "The server must mark the share stopped with",
+        "`NO_COMPUTER_FRAME`",
+        "`COMPUTER_NO_WINDOW`",
+        "never closes an unrelated application or window",
+        "only after it has requested and observed exit of its exact spawned fixture",
+    ] {
+        assert!(
+            readme.contains(required),
+            "evidence README is missing target-close contract: {required}"
+        );
+    }
 }
 
 #[test]
