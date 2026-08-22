@@ -2182,7 +2182,7 @@ try {
         $shareStarted = $false
         Start-Sleep -Milliseconds 900
         $replacementStateSettled = Get-LbbState
-        Assert-True ($replacementStateSettled.computer.sessionId -eq $replacementSessionId -and $null -eq $replacementStateSettled.computerObservation -and $replacementStateSettled.computer.share.active -eq $false) "An old worker or queued native frame replaced the ready helper or republished revoked authority after cancellation."
+        Assert-True ($replacementStateSettled.computer.sessionId -eq $replacementSessionId -and $null -eq $replacementStateSettled.computerObservation -and $replacementStateSettled.computer.share.active -eq $false) "An old worker or queued native frame replaced the ready helper or republished old-session authority after cancellation."
 
         $idempotentStop = Invoke-LbbCommand "computer.share.stop" @{}
         Assert-True ($idempotentStop.result.active -eq $false -and $idempotentStop.result.stopped -eq $false -and $idempotentStop.result.reason -eq "not-active") "Post-cancellation share stop was not idempotently fail-closed."
@@ -2197,7 +2197,7 @@ try {
             clickCount = 1
             durationMs = 50
         }
-        $gatedOldFrameParams = @{
+        $replacementNoFrameParams = @{
             frameId = $canceledFrameId
             x = 250
             y = 330
@@ -2206,11 +2206,11 @@ try {
             clickCount = 1
             durationMs = 50
         }
-        $gatedOldFrame = Invoke-LbbCommandResponse "computer.click" $gatedOldFrameParams ("windows-gated-" + [Guid]::NewGuid().ToString("N"))
-        Assert-True ($gatedOldFrame.status -eq 409 -and $gatedOldFrame.httpOk -eq $false -and $gatedOldFrame.body.error.code -eq "NO_COMPUTER_FRAME" -and $gatedOldFrame.body.taxonomy.code -eq "stale_snapshot" -and $gatedOldFrame.body.taxonomy.recoveryHint -eq "reobserve") "Revoked authority did not gate a pre-recovery mutation before helper relay."
-        $gatedState = Get-LbbState
-        Assert-True ($null -eq $gatedState.computerObservation -and $gatedState.computer.share.active -eq $false) "The pre-recovery gated action recreated a computer surface."
-        Save-StepResponse "explicit cancellation pre-recovery gate" $gatedOldFrame.body
+        $replacementNoFrame = Invoke-LbbCommandResponse "computer.click" $replacementNoFrameParams ("windows-no-frame-" + [Guid]::NewGuid().ToString("N"))
+        Assert-True ($replacementNoFrame.status -eq 409 -and $replacementNoFrame.httpOk -eq $false -and $replacementNoFrame.body.error.code -eq "NO_COMPUTER_FRAME" -and $replacementNoFrame.body.taxonomy.code -eq "stale_snapshot" -and $replacementNoFrame.body.taxonomy.recoveryHint -eq "reobserve") "The replacement helper accepted normalized coordinates before an explicit observation supplied frame dimensions."
+        $replacementNoFrameState = Get-LbbState
+        Assert-True ($replacementNoFrameState.computer.sessionId -eq $replacementSessionId -and $null -eq $replacementNoFrameState.computerObservation -and $replacementNoFrameState.computer.share.active -eq $false) "The replacement-session no-frame refusal recreated a computer surface or changed helper sessions."
+        Save-StepResponse "explicit cancellation replacement has no frame before observe" $replacementNoFrame.body
 
         $recoveryObserve = Invoke-LbbCommand "computer.observe" @{ windowId = $targetWindowId }
         $recoveryFrame = $recoveryObserve.state.computerObservation
@@ -2258,7 +2258,7 @@ try {
             originalCode = $canceledOriginal.body.error.code
             exactReplay = $replayComparable -ceq $originalComparable
             changedRequestCode = $reusedCallId.body.error.code
-            oldSessionRevoked = $replacementSessionId -ne $cancellationSessionId
+            oldSessionReplaced = $replacementSessionId -ne $cancellationSessionId
             replacementSessionObserved = $recoveryObserve.state.computer.sessionId -eq $replacementSessionId
             disposableWorkerReplaced = $cancellationReplacementWorkerPid -ne $cancellationWorkerPid
             helperSupervisorPreserved = $helperProcess.Id -eq $cancellationSupervisorPid
@@ -2266,7 +2266,7 @@ try {
             observationCleared = $replacementState.computerObservation -eq $null
             screenshotHttpStatus = $clearedScreenshot.status
             stayedTornDownAfterThreeFramePeriods = $replacementStateSettled.computerObservation -eq $null
-            preRecoveryGateCode = $gatedOldFrame.body.error.code
+            replacementNoFrameCode = $replacementNoFrame.body.error.code
             recoveryMethod = "computer.observe"
             recoveredFreshFrame = $recoveryFrame.frameId -ne $canceledFrameId
             staleAfterRecoveryCode = $staleAfterRecovery.body.error.code

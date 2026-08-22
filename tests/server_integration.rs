@@ -4228,6 +4228,213 @@ async fn timed_out_rest_client_quarantines_before_replay_or_a_fresh_waiter_can_a
 }
 
 #[tokio::test]
+async fn dropped_no_call_id_and_legacy_computer_actions_fence_fresh_waiters() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let mut computer = connect_controlled_computer(&base_url, &token).await;
+    let client = Client::new();
+    wait_for_computer(&client, &base_url, &token).await;
+
+    computer
+        .events
+        .send((
+            "computer.share.frame".to_owned(),
+            computer_share_frame_data(
+                "frame-unregistered-1",
+                json!({
+                    "active": true,
+                    "id": "share-old",
+                    "windowId": "window-9",
+                    "sourceSequence": 1,
+                    "sequence": 1,
+                    "ackPaced": true
+                }),
+            ),
+        ))
+        .unwrap();
+    wait_for_computer_frame(&client, &base_url, &token, "frame-unregistered-1").await;
+
+    let timeout_client = Client::builder()
+        .timeout(Duration::from_millis(250))
+        .build()
+        .unwrap();
+    let owner = {
+        let base_url = base_url.clone();
+        let token = token.clone();
+        tokio::spawn(async move {
+            timeout_client
+                .post(format!("{base_url}/api/v1/command"))
+                .bearer_auth(token)
+                .json(&json!({
+                    "method": "computer.click",
+                    "params": {
+                        "frameId": "frame-unregistered-1",
+                        "x": 20,
+                        "y": 20,
+                        "button": "left",
+                        "clickCount": 1
+                    }
+                }))
+                .send()
+                .await
+        })
+    };
+    let owner_command = computer.commands.recv().await.unwrap();
+    assert_eq!(owner_command["method"], "computer.click");
+
+    let waiter = {
+        let client = client.clone();
+        let base_url = base_url.clone();
+        let token = token.clone();
+        tokio::spawn(async move {
+            client
+                .post(format!("{base_url}/api/v1/command"))
+                .bearer_auth(token)
+                .json(&json!({
+                    "method": "computer.click",
+                    "params": {
+                        "frameId": "frame-unregistered-1",
+                        "x": 25,
+                        "y": 25,
+                        "button": "left",
+                        "clickCount": 1
+                    },
+                    "callId": "fresh-after-unregistered-drop"
+                }))
+                .send()
+                .await
+                .unwrap()
+        })
+    };
+    let timeout_error = owner.await.unwrap().unwrap_err();
+    assert!(timeout_error.is_timeout());
+    let cancel = computer.commands.recv().await.unwrap();
+    assert_eq!(cancel["type"], "cancel");
+    assert_eq!(cancel["id"], owner_command["id"]);
+    let waiter = waiter.await.unwrap();
+    assert_eq!(waiter.status(), 409);
+    assert_eq!(
+        waiter.json::<Value>().await.unwrap()["error"]["code"],
+        "NO_COMPUTER_FRAME"
+    );
+    assert!(
+        computer.commands.try_recv().is_err(),
+        "the fresh waiter after a no-callId drop must not relay the old frame"
+    );
+
+    let recovered: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "computer.observe", "params": {} }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(recovered["ok"], true);
+    let recovered_frame = recovered["result"]["frameId"].as_str().unwrap().to_owned();
+
+    let session: Value = client
+        .get(format!("{base_url}/api/session"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let legacy_client = Client::builder()
+        .timeout(Duration::from_millis(250))
+        .build()
+        .unwrap();
+    let legacy_owner = {
+        let base_url = base_url.clone();
+        let frame_id = recovered_frame.clone();
+        let session_token = session["sessionToken"].as_str().unwrap().to_owned();
+        let csrf = session["csrfToken"].as_str().unwrap().to_owned();
+        tokio::spawn(async move {
+            legacy_client
+                .post(format!("{base_url}/api/action"))
+                .header("Authorization", format!("Session {session_token}"))
+                .header("Origin", &base_url)
+                .header("X-CSRF-Token", csrf)
+                .json(&json!({
+                    "method": "computer.click",
+                    "params": {
+                        "frameId": frame_id,
+                        "x": 30,
+                        "y": 30,
+                        "button": "left",
+                        "clickCount": 1
+                    }
+                }))
+                .send()
+                .await
+        })
+    };
+    let legacy_command = computer.commands.recv().await.unwrap();
+    assert_eq!(legacy_command["method"], "computer.click");
+
+    let legacy_waiter = {
+        let client = client.clone();
+        let base_url = base_url.clone();
+        let token = token.clone();
+        let frame_id = recovered_frame;
+        tokio::spawn(async move {
+            client
+                .post(format!("{base_url}/api/v1/command"))
+                .bearer_auth(token)
+                .json(&json!({
+                    "method": "computer.click",
+                    "params": {
+                        "frameId": frame_id,
+                        "x": 35,
+                        "y": 35,
+                        "button": "left",
+                        "clickCount": 1
+                    },
+                    "callId": "fresh-after-legacy-computer-drop"
+                }))
+                .send()
+                .await
+                .unwrap()
+        })
+    };
+    let legacy_timeout = legacy_owner.await.unwrap().unwrap_err();
+    assert!(legacy_timeout.is_timeout());
+    let legacy_cancel = computer.commands.recv().await.unwrap();
+    assert_eq!(legacy_cancel["type"], "cancel");
+    assert_eq!(legacy_cancel["id"], legacy_command["id"]);
+    let legacy_waiter = legacy_waiter.await.unwrap();
+    assert_eq!(legacy_waiter.status(), 409);
+    assert_eq!(
+        legacy_waiter.json::<Value>().await.unwrap()["error"]["code"],
+        "NO_COMPUTER_FRAME"
+    );
+    assert!(
+        computer.commands.try_recv().is_err(),
+        "the fresh waiter after a legacy drop must not relay the old frame"
+    );
+
+    let cleared: Value = client
+        .get(format!("{base_url}/api/state"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(cleared["state"]["computer"]["share"]["active"], false);
+    assert!(cleared["state"]["computerObservation"].is_null());
+
+    computer.handle.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
 async fn converts_normalized1000_computer_clicks_and_exposes_stable_content_hashes() {
     let token = create_token();
     let (base_url, shutdown, handle) = start_server(&token).await;

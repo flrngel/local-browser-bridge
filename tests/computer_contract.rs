@@ -467,9 +467,12 @@ fn windows_live_runner_causally_proves_cancel_quarantine_and_recovery() {
         "$cancellationReplacementWorkerPid -ne $cancellationWorkerPid",
         "$helperProcess.Id -eq $cancellationSupervisorPid",
         "$serverProcess.Id -eq $cancellationServerPid",
-        "An old worker or queued native frame replaced the ready helper or republished revoked authority after cancellation",
+        "An old worker or queued native frame replaced the ready helper or republished old-session authority after cancellation",
         "NO_COMPUTER_FRAME",
         "coordinateSpace = \"normalized1000\"",
+        "The replacement helper accepted normalized coordinates before an explicit observation supplied frame dimensions",
+        "explicit cancellation replacement has no frame before observe",
+        "replacementNoFrameCode",
         "computer.observe",
         "$recoveryFrame.frameId -ne $canceledFrameId",
         "COMPUTER_STALE_FRAME",
@@ -489,6 +492,9 @@ fn windows_live_runner_causally_proves_cancel_quarantine_and_recovery() {
         "CANCEL_AFTER_START_MS",
         "Start-Sleep -Milliseconds 2000",
         "Stop-Process -Name",
+        "explicit cancellation pre-recovery gate",
+        "preRecoveryGateCode",
+        "oldSessionRevoked",
     ] {
         assert!(
             !runner.contains(forbidden),

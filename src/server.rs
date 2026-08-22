@@ -189,6 +189,7 @@ struct AppState {
     data: Arc<RwLock<StateData>>,
     sessions: Arc<Mutex<HashMap<String, Session>>>,
     command_replay: Arc<Mutex<CommandReplay>>,
+    unregistered_command_interruptions: Arc<Mutex<UnregisteredCommandInterruptions>>,
     browser_freshness_recovery: Arc<Mutex<HashMap<String, BrowserFreshnessRecovery>>>,
     events: broadcast::Sender<ServerEvent>,
     action_lock: Arc<tokio::sync::Mutex<()>>,
@@ -219,6 +220,9 @@ impl AppState {
             data: Arc::new(RwLock::new(data)),
             sessions: Arc::new(Mutex::new(HashMap::new())),
             command_replay: Arc::new(Mutex::new(CommandReplay::new())),
+            unregistered_command_interruptions: Arc::new(Mutex::new(
+                UnregisteredCommandInterruptions::default(),
+            )),
             browser_freshness_recovery: Arc::new(Mutex::new(HashMap::new())),
             events,
             action_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -259,6 +263,31 @@ impl AppState {
             .unwrap_or_else(|| canceled_call_response(call_id))
     }
 
+    fn bind_unregistered_computer_owner(
+        &self,
+        request_id: Uuid,
+        owner: ComputerCommandOwner,
+    ) -> bool {
+        self.unregistered_command_interruptions
+            .lock()
+            .unwrap()
+            .bind_computer_owner(request_id, owner)
+    }
+
+    fn interrupt_unregistered_command(&self, request_id: Uuid, interruption: CommandInterruption) {
+        self.unregistered_command_interruptions
+            .lock()
+            .unwrap()
+            .interrupt(request_id, interruption);
+    }
+
+    fn complete_unregistered_command(&self, request_id: Uuid) {
+        self.unregistered_command_interruptions
+            .lock()
+            .unwrap()
+            .complete(request_id);
+    }
+
     /// Installs every exact-session fail-closed boundary before publishing the
     /// interrupted call's replayable 504. A single settlement claim prevents
     /// competing cancellation, handler-drop, and helper paths from publishing
@@ -295,12 +324,32 @@ impl AppState {
         completed
     }
 
-    /// A browser action without a callId still owns page freshness while its
-    /// HTTP handler is alive. There is no replay entry to publish, but its
-    /// synchronous Drop latch and asynchronous public-state clear use the same
-    /// exact-session settlement as registered commands.
-    async fn settle_unregistered_command_interruption(&self, interruption: CommandInterruption) {
+    /// An action without a callId still owns browser or computer authority
+    /// while its HTTP handler is alive. There is no replay entry to publish,
+    /// but synchronous Drop fencing and asynchronous public-state clearing use
+    /// the same exact-session settlement as registered commands.
+    async fn settle_unregistered_command_interruption(&self, request_id: Uuid) {
+        let interruption = loop {
+            let claim = self
+                .unregistered_command_interruptions
+                .lock()
+                .unwrap()
+                .claim(request_id);
+            match claim {
+                UnregisteredInterruptionClaim::Claimed(interruption) => break interruption,
+                UnregisteredInterruptionClaim::Settling | UnregisteredInterruptionClaim::Active => {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                UnregisteredInterruptionClaim::Missing => return,
+            }
+        };
+        let mut settlement = UnregisteredInterruptionSettlementGuard {
+            interruptions: self.unregistered_command_interruptions.clone(),
+            request_id: Some(request_id),
+        };
         self.settle_command_authority(&interruption).await;
+        self.complete_unregistered_command(request_id);
+        settlement.disarm();
     }
 
     async fn settle_command_authority(&self, interruption: &CommandInterruption) {
@@ -380,6 +429,35 @@ impl AppState {
                 .lock()
                 .unwrap()
                 .has_other_computer_owner(current_call_id)
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    }
+
+    /// Extends the same authority-publication barrier to computer requests
+    /// without a replay callId, including legacy `/api/action`. An active
+    /// owner remains here after its action future releases `action_lock` and
+    /// until its HTTP guard disarms normally or marks it interrupted. A fresh
+    /// waiter therefore cannot consume its old frame in either the mid-action
+    /// or post-action/pre-response teardown window.
+    async fn settle_prior_unregistered_computer_commands(&self, current_request_id: Uuid) {
+        loop {
+            let request_ids = self
+                .unregistered_command_interruptions
+                .lock()
+                .unwrap()
+                .interrupted_computer_requests();
+            for request_id in request_ids {
+                self.settle_unregistered_command_interruption(request_id)
+                    .await;
+            }
+            if !self
+                .unregistered_command_interruptions
+                .lock()
+                .unwrap()
+                .has_other_computer_owner(current_request_id)
             {
                 return;
             }
@@ -1390,9 +1468,20 @@ struct ComputerCommandOwner {
     method: String,
 }
 
-#[derive(Default)]
 struct RequestCommandOwners {
+    request_id: Uuid,
     browser_owner: Option<BrowserCommandOwner>,
+    computer_owner: Option<ComputerCommandOwner>,
+}
+
+impl Default for RequestCommandOwners {
+    fn default() -> Self {
+        Self {
+            request_id: Uuid::new_v4(),
+            browser_owner: None,
+            computer_owner: None,
+        }
+    }
 }
 
 type SharedRequestCommandOwners = Arc<Mutex<RequestCommandOwners>>;
@@ -1421,10 +1510,116 @@ impl CommandInterruption {
         if self.browser_owner.is_none() {
             self.browser_owner.clone_from(&owners.browser_owner);
         }
+        if self.computer_owner.is_none() {
+            self.computer_owner.clone_from(&owners.computer_owner);
+        }
     }
 
     fn is_empty(&self) -> bool {
         self.browser_owner.is_none() && self.computer_owner.is_none()
+    }
+}
+
+#[derive(Default)]
+struct UnregisteredCommandInterruptions {
+    entries: HashMap<Uuid, UnregisteredCommandInterruption>,
+}
+
+struct UnregisteredCommandInterruption {
+    interruption: CommandInterruption,
+    interrupted: bool,
+    settlement_claimed: bool,
+}
+
+enum UnregisteredInterruptionClaim {
+    Claimed(CommandInterruption),
+    Settling,
+    Active,
+    Missing,
+}
+
+impl UnregisteredCommandInterruptions {
+    fn bind_computer_owner(&mut self, request_id: Uuid, owner: ComputerCommandOwner) -> bool {
+        let entry =
+            self.entries
+                .entry(request_id)
+                .or_insert_with(|| UnregisteredCommandInterruption {
+                    interruption: CommandInterruption::default(),
+                    interrupted: false,
+                    settlement_claimed: false,
+                });
+        if entry.interrupted {
+            return false;
+        }
+        entry.interruption.computer_owner = Some(owner);
+        true
+    }
+
+    fn interrupt(&mut self, request_id: Uuid, interruption: CommandInterruption) {
+        let entry =
+            self.entries
+                .entry(request_id)
+                .or_insert_with(|| UnregisteredCommandInterruption {
+                    interruption: CommandInterruption::default(),
+                    interrupted: false,
+                    settlement_claimed: false,
+                });
+        if entry.interruption.browser_owner.is_none() {
+            entry
+                .interruption
+                .browser_owner
+                .clone_from(&interruption.browser_owner);
+        }
+        if entry.interruption.computer_owner.is_none() {
+            entry
+                .interruption
+                .computer_owner
+                .clone_from(&interruption.computer_owner);
+        }
+        entry.interruption.canceled_by_caller |= interruption.canceled_by_caller;
+        entry.interrupted = true;
+    }
+
+    fn claim(&mut self, request_id: Uuid) -> UnregisteredInterruptionClaim {
+        let Some(entry) = self.entries.get_mut(&request_id) else {
+            return UnregisteredInterruptionClaim::Missing;
+        };
+        if !entry.interrupted {
+            return UnregisteredInterruptionClaim::Active;
+        }
+        if entry.settlement_claimed {
+            return UnregisteredInterruptionClaim::Settling;
+        }
+        entry.settlement_claimed = true;
+        UnregisteredInterruptionClaim::Claimed(entry.interruption.clone())
+    }
+
+    fn release_claim(&mut self, request_id: Uuid) {
+        if let Some(entry) = self
+            .entries
+            .get_mut(&request_id)
+            .filter(|entry| entry.interrupted)
+        {
+            entry.settlement_claimed = false;
+        }
+    }
+
+    fn complete(&mut self, request_id: Uuid) {
+        self.entries.remove(&request_id);
+    }
+
+    fn interrupted_computer_requests(&self) -> Vec<Uuid> {
+        self.entries
+            .iter()
+            .filter(|(_, entry)| entry.interrupted && entry.interruption.computer_owner.is_some())
+            .map(|(request_id, _)| *request_id)
+            .collect()
+    }
+
+    fn has_other_computer_owner(&self, current_request_id: Uuid) -> bool {
+        self.entries.iter().any(|(request_id, entry)| {
+            *request_id != current_request_id && entry.interruption.computer_owner.is_some()
+        })
     }
 }
 
@@ -1734,6 +1929,31 @@ impl Drop for InterruptionSettlementGuard {
     }
 }
 
+/// Mirrors replay settlement ownership for requests without a callId. If a
+/// spawned cleanup task or helping waiter is canceled while awaiting the
+/// exact-session state clear, another computer waiter can reclaim the entry
+/// instead of losing the only fail-closed transition.
+struct UnregisteredInterruptionSettlementGuard {
+    interruptions: Arc<Mutex<UnregisteredCommandInterruptions>>,
+    request_id: Option<Uuid>,
+}
+
+impl UnregisteredInterruptionSettlementGuard {
+    fn disarm(&mut self) {
+        self.request_id = None;
+    }
+}
+
+impl Drop for UnregisteredInterruptionSettlementGuard {
+    fn drop(&mut self) {
+        if let Some(request_id) = self.request_id.take()
+            && let Ok(mut interruptions) = self.interruptions.lock()
+        {
+            interruptions.release_claim(request_id);
+        }
+    }
+}
+
 /// Hashes one command request (method plus its canonical JSON parameters) so
 /// a repeated callId can prove it carries the exact same command. serde_json
 /// objects serialize with sorted keys, so equal parameter values always hash
@@ -1774,12 +1994,10 @@ fn canceled_call_response(call_id: &str) -> (StatusCode, Value) {
     error_response_for_call(canceled_call_error(), call_id)
 }
 
-/// Completes an admitted callId with a synthetic outcome-unknown failure if
-/// the handler never reaches its own completion. The command may already be
-/// dispatched to a connector when the handler future is dropped, so freeing
-/// the callId would let a retry re-dispatch the action; caching the
-/// outcome-unknown failure makes every later replay of that callId return it
-/// without touching any connector.
+/// Fences a command if its handler never reaches completion. An admitted
+/// callId receives a synthetic outcome-unknown result only after authority is
+/// quarantined; an unregistered request keeps only its internal owner barrier
+/// because it has no public replay identity.
 struct InFlightCallGuard {
     state: AppState,
     runtime: Option<tokio::runtime::Handle>,
@@ -1790,6 +2008,8 @@ struct InFlightCallGuard {
 
 impl InFlightCallGuard {
     fn disarm(&mut self) -> Option<String> {
+        let request_id = self.request_owners.lock().unwrap().request_id;
+        self.state.complete_unregistered_command(request_id);
         self.armed = false;
         self.call_id.take()
     }
@@ -1810,13 +2030,26 @@ impl Drop for InFlightCallGuard {
         } else {
             CommandInterruption::default()
         };
-        interruption.merge_request_owners(&self.request_owners.lock().unwrap());
+        let request_id = {
+            let request_owners = self.request_owners.lock().unwrap();
+            interruption.merge_request_owners(&request_owners);
+            request_owners.request_id
+        };
         if interruption.is_empty() {
             if let Some(call_id) = call_id.as_deref() {
                 self.state
                     .complete_interrupted_command_without_authority(call_id);
             }
             return;
+        }
+
+        if call_id.is_none() {
+            // Publish this pending unregistered owner synchronously before
+            // `action` drops and releases action_lock. A fresh computer waiter
+            // either sees an active entry from pre-dispatch binding or this
+            // interrupted entry, and helps settle it before reading a frame.
+            self.state
+                .interrupt_unregistered_command(request_id, interruption.clone());
         }
 
         // This must happen in Drop, before the runtime can poll a later
@@ -1842,7 +2075,7 @@ impl Drop for InFlightCallGuard {
         } else {
             runtime.spawn(async move {
                 state
-                    .settle_unregistered_command_interruption(interruption)
+                    .settle_unregistered_command_interruption(request_id)
                     .await;
             });
         }
@@ -3615,7 +3848,7 @@ impl AppState {
     ) -> Result<Value, ApiError> {
         if COMPUTER_METHODS.contains(&method) {
             return self
-                .perform_computer_action(method, raw_params, call_id)
+                .perform_computer_action(method, raw_params, call_id, request_owners)
                 .await;
         }
         if !ACTION_METHODS.contains(&method) {
@@ -3892,8 +4125,12 @@ impl AppState {
         method: &str,
         raw_params: Value,
         call_id: Option<&str>,
+        request_owners: SharedRequestCommandOwners,
     ) -> Result<Value, ApiError> {
         let _guard = self.action_lock.lock().await;
+        let request_id = request_owners.lock().unwrap().request_id;
+        self.settle_prior_unregistered_computer_commands(request_id)
+            .await;
         self.settle_prior_computer_commands(call_id).await;
         let (computer, pointer_revision, frame_size, recovery_required) = {
             let data = self.data.read().await;
@@ -3954,7 +4191,15 @@ impl AppState {
                 "Computer authority was revoked after an outcome-unknown command; explicitly observe a fresh one-shot frame or start a fresh share before acting again",
             ));
         }
+        let computer_owner = ComputerCommandOwner {
+            session_id: computer.session_id.clone(),
+            method: method.to_owned(),
+        };
         if !self.bind_computer_command_owner(call_id, &computer.session_id, method) {
+            return Err(canceled_call_error());
+        }
+        request_owners.lock().unwrap().computer_owner = Some(computer_owner.clone());
+        if call_id.is_none() && !self.bind_unregistered_computer_owner(request_id, computer_owner) {
             return Err(canceled_call_error());
         }
         if method == "computer.observe" {
@@ -4251,11 +4496,10 @@ impl AppState {
     }
 
     /// Mirrors the helper's fail-closed outcome-unknown boundary in public
-    /// state. The helper has already revoked its share, frame, and pointer
-    /// authority, so retaining the previous frame here would make the
-    /// dashboard look active even though no subsequent action can use it.
-    /// The connector session check prevents a late result from an old helper
-    /// from clearing a replacement helper's newly published state.
+    /// state and independently supplies it when best-effort cancel delivery is
+    /// lost. Retaining the previous frame would expose stale authority to a
+    /// fresh server-side action. The connector session check prevents a late
+    /// result from an old helper from clearing replacement-session state.
     async fn clear_published_computer_authority_after_unknown(
         &self,
         expected_session_id: &str,
@@ -8393,6 +8637,7 @@ mod tests {
                         session_id: "browser-session-a".to_owned(),
                         method: "page.typeText".to_owned(),
                     }),
+                    ..RequestCommandOwners::default()
                 })),
                 call_id: None,
                 armed: true,
@@ -8414,6 +8659,167 @@ mod tests {
         assert!(
             waiter.await.unwrap(),
             "a fresh-callId waiter acquired action_lock before browser recovery was latched"
+        );
+    }
+
+    #[tokio::test]
+    async fn dropped_unregistered_computer_owner_fences_mid_action_and_post_action_waiters() {
+        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false);
+        {
+            let mut data = state.data.write().await;
+            data.public.computer = Some(ComputerInfo {
+                version: VERSION.to_owned(),
+                protocol_version: PROTOCOL_VERSION,
+                session_id: "computer-session".to_owned(),
+                compatible: true,
+                platform: "test-os".to_owned(),
+                architecture: "test-arch".to_owned(),
+                backend: "test-backend".to_owned(),
+                session_mode: "background-window".to_owned(),
+                isolation: "exact-window".to_owned(),
+                input_ready: true,
+                semantic_ready: true,
+                capabilities: vec!["computer.click".to_owned()],
+                windows: Vec::new(),
+                share: json!({ "active": true, "id": "old-share" }),
+                connected_at: "2026-08-21T00:00:00Z".to_owned(),
+            });
+        }
+
+        let bind_owner = |request_owners: &SharedRequestCommandOwners| {
+            let computer_owner = ComputerCommandOwner {
+                session_id: "computer-session".to_owned(),
+                method: "computer.click".to_owned(),
+            };
+            let request_id = {
+                let mut owners = request_owners.lock().unwrap();
+                owners.computer_owner = Some(computer_owner.clone());
+                owners.request_id
+            };
+            assert!(state.bind_unregistered_computer_owner(request_id, computer_owner));
+        };
+
+        let request_owners = Arc::new(Mutex::new(RequestCommandOwners::default()));
+        bind_owner(&request_owners);
+        let action_state = state.clone();
+        let guard_state = state.clone();
+        let (locked_tx, locked_rx) = oneshot::channel();
+        let owner = tokio::spawn(async move {
+            let mut action = Box::pin(async move {
+                let _action_lock = action_state.action_lock.lock().await;
+                let _ = locked_tx.send(());
+                std::future::pending::<()>().await;
+            });
+            let _registration = InFlightCallGuard {
+                state: guard_state,
+                runtime: tokio::runtime::Handle::try_current().ok(),
+                request_owners,
+                call_id: None,
+                armed: true,
+            };
+            action.as_mut().await;
+        });
+        locked_rx.await.unwrap();
+
+        let waiter_state = state.clone();
+        let waiter = tokio::spawn(async move {
+            waiter_state
+                .perform_computer_action(
+                    "computer.click",
+                    json!({
+                        "frameId": "old-frame",
+                        "x": 10,
+                        "y": 10,
+                        "button": "left",
+                        "clickCount": 1
+                    }),
+                    None,
+                    Arc::new(Mutex::new(RequestCommandOwners::default())),
+                )
+                .await
+        });
+        tokio::task::yield_now().await;
+        owner.abort();
+        assert!(owner.await.unwrap_err().is_cancelled());
+        let error = waiter.await.unwrap().unwrap_err();
+        assert_eq!(error.code, "NO_COMPUTER_FRAME");
+        assert!(
+            state
+                .data
+                .read()
+                .await
+                .computer_authority_requires_recovery("computer-session")
+        );
+        assert!(
+            state
+                .unregistered_command_interruptions
+                .lock()
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+
+        {
+            let mut data = state.data.write().await;
+            data.computer_authority_gate = None;
+            data.public.computer.as_mut().unwrap().share =
+                json!({ "active": true, "id": "old-share-2" });
+        }
+        let request_owners = Arc::new(Mutex::new(RequestCommandOwners::default()));
+        bind_owner(&request_owners);
+        let action_state = state.clone();
+        let guard_state = state.clone();
+        let (returned_tx, returned_rx) = oneshot::channel();
+        let owner = tokio::spawn(async move {
+            let mut action = Box::pin(async move {
+                let _action_lock = action_state.action_lock.lock().await;
+            });
+            let _registration = InFlightCallGuard {
+                state: guard_state,
+                runtime: tokio::runtime::Handle::try_current().ok(),
+                request_owners,
+                call_id: None,
+                armed: true,
+            };
+            action.as_mut().await;
+            let _ = returned_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        returned_rx.await.unwrap();
+
+        let waiter_state = state.clone();
+        let waiter = tokio::spawn(async move {
+            waiter_state
+                .perform_computer_action(
+                    "computer.click",
+                    json!({
+                        "frameId": "old-frame-2",
+                        "x": 12,
+                        "y": 12,
+                        "button": "left",
+                        "clickCount": 1
+                    }),
+                    None,
+                    Arc::new(Mutex::new(RequestCommandOwners::default())),
+                )
+                .await
+        });
+        tokio::task::yield_now().await;
+        assert!(
+            !waiter.is_finished(),
+            "a fresh waiter passed an active unregistered owner before response publication"
+        );
+        owner.abort();
+        assert!(owner.await.unwrap_err().is_cancelled());
+        let error = waiter.await.unwrap().unwrap_err();
+        assert_eq!(error.code, "NO_COMPUTER_FRAME");
+        assert!(
+            state
+                .unregistered_command_interruptions
+                .lock()
+                .unwrap()
+                .entries
+                .is_empty()
         );
     }
 
@@ -8561,6 +8967,7 @@ mod tests {
                         "clickCount": 1
                     }),
                     None,
+                    Arc::new(Mutex::new(RequestCommandOwners::default())),
                 )
                 .await
         });
@@ -8646,6 +9053,7 @@ mod tests {
                         "clickCount": 1
                     }),
                     None,
+                    Arc::new(Mutex::new(RequestCommandOwners::default())),
                 )
                 .await
         });
