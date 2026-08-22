@@ -30,11 +30,11 @@ Persisted-token access is a capability-bound transaction. Default storage requir
 
 ### Chromium extension
 
-The Manifest V3 extension connects outbound to the server. A mutual-HMAC handshake binds the extension role, nonces, and server-created connector session without putting the raw token in the WebSocket URL.
+The Manifest V3 extension connects outbound to the server. A mutual-HMAC handshake binds the extension role, nonces, and server-created connector session without putting the raw token in the WebSocket URL. Before its first storage read, the service worker restricts `chrome.storage.local` to Chrome's `TRUSTED_CONTEXTS`, so injected content scripts cannot read the persisted bridge token or control state through the extension storage API.
 
 An explicit browser-control lease attaches `chrome.debugger` to one tab. The held attachment supplies trusted CDP input and causes Chrome to show its browser-owned debugging warning. An isolated content script supplies structured DOM observation and the extension-owned page pill, Stop control, and synthetic pointer.
 
-Cross-origin iframes use recursively verified child CDP sessions on Chromium 125+. They remain children of the single tab attachment and share its count, depth, time, and lease bounds. Input is dispatched through the page target after coordinates are translated into top-level viewport space.
+Cross-origin iframes use recursively verified child CDP sessions on supported Chromium 140+ browsers. They remain children of the single tab attachment and share its count, depth, time, and lease bounds. Input is dispatched through the page target after coordinates are translated into top-level viewport space.
 
 ### Native computer helper
 
@@ -129,6 +129,8 @@ See [Security](../SECURITY.md) for trust details, [Protocol](PROTOCOL.md) for en
 ## Primary platform references
 
 - [Chrome debugger API](https://developer.chrome.com/docs/extensions/reference/api/debugger)
+- [Chrome extension storage access levels](https://developer.chrome.com/docs/extensions/reference/api/storage/StorageArea#method-setAccessLevel)
+- [Chromium implementation of trusted access for local and sync storage](https://chromium.googlesource.com/chromium/src.git/+/a8f1f337c692360aaec9470a0a91f965011d37a3)
 - [Apple ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit)
 - [Apple desktop-independent window capture behavior](https://developer.apple.com/videos/play/wwdc2022/10155/)
 - [Windows Graphics Capture `CreateForWindow`](https://learn.microsoft.com/en-us/windows/win32/api/windows.graphics.capture.interop/nf-windows-graphics-capture-interop-igraphicscaptureiteminterop-createforwindow)

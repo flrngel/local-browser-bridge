@@ -8,8 +8,7 @@ End users do not need Node.js. The entry points are Rust executables; the macOS 
 - Node.js 24 for extension/dashboard behavior contracts and browser evidence rigs
 - Platform SDK and linker for the target operating system
 - `zip` and `unzip` for extension packaging
-- Chrome or Edge 118+ for core browser testing
-- Chrome or Edge 125+ for recursive cross-origin iframe testing
+- Chrome or Edge 140+ for browser and recursive cross-origin iframe testing
 - macOS 13+ with Screen Recording and Accessibility permissions for native macOS testing
 - A signed-in interactive Windows 11 session for native Windows testing
 
@@ -79,7 +78,7 @@ The equivalent `--no-update-check` flag disables the startup check; `--check-upd
 5. Use `/demo` for ordinary element, key, scroll, dialog, and navigation checks.
 6. Confirm the Chrome-owned debugger warning, page pill, trusted Stop, revocation, and reconnect behavior.
 
-Use Chromium 125 or later for the nested cross-origin fixtures. A passing same-process iframe test does not prove the OOPIF route.
+Use Chromium 140 or later for the nested cross-origin fixtures. A passing same-process iframe test does not prove the OOPIF route.
 
 ## Test the computer helper
 

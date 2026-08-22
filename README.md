@@ -9,7 +9,7 @@ Everything runs locally through `127.0.0.1`. The server and computer helper are 
 - Use tabs in an existing, signed-in Chrome or Edge profile
 - Read page text, screenshots, selection, and interactive elements
 - Click, fill, select, hover, scroll, type, navigate, and run page JavaScript
-- Work with same-origin frames and, on Chromium 125 or later, cross-origin frames
+- Work with same-origin and cross-origin frames in supported Chrome or Edge versions
 - Show Chrome's native debugging warning while trusted browser control is active
 - Show an in-page status pill, synthetic pointer, and human-owned **Stop** button
 - Use Full Access for broad control or Safe mode for allowlists and approvals
@@ -36,8 +36,7 @@ Use the extension for Chrome and Edge web content. Use the optional helper for o
 
 | Use | Requirement |
 |---|---|
-| Browser control | Chrome or Edge 118+ |
-| Cross-origin frame control | Chrome or Edge 125+ |
+| Browser control, including cross-origin frames | Chrome or Edge 140+ |
 | Windows desktop control | Windows 11 interactive user session |
 | macOS package | macOS 13+; Screen Recording for desktop sharing and Accessibility for semantic/input features |
 

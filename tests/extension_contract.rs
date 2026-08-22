@@ -91,7 +91,7 @@ fn manifest_has_only_reviewed_capabilities() {
     let manifest = manifest();
     assert_eq!(manifest["manifest_version"], 3);
     assert_eq!(manifest["version"], VERSION);
-    assert_eq!(manifest["minimum_chrome_version"], "118");
+    assert_eq!(manifest["minimum_chrome_version"], "140");
     assert_eq!(
         strings(&manifest["permissions"]),
         BTreeSet::from_iter(
@@ -346,6 +346,27 @@ fn transport_and_security_rotation_revoke_control_first() {
     assert!(save.find("decodeBase64Url32").unwrap() < save.find("updates.token = token").unwrap());
     assert!(background.contains("external_security_settings_changed"));
     assert!(background.contains("consumeInternalSettings(changes)"));
+}
+
+#[test]
+fn extension_storage_is_restricted_to_trusted_contexts_before_use() {
+    let background = extension_source("background.js");
+    let access = background
+        .find("chrome.storage.local.setAccessLevel")
+        .expect("storage access boundary");
+    let first_read = background
+        .find("chrome.storage.local.get")
+        .expect("storage read");
+    let first_write = background
+        .find("chrome.storage.local.set({")
+        .expect("storage write");
+
+    assert!(background.contains("accessLevel: \"TRUSTED_CONTEXTS\""));
+    assert!(access < first_read);
+    assert!(access < first_write);
+    assert!(background.contains("async function settings() {\n  await trustedStorageReady;"));
+    assert!(background.contains("async function setStatus(status, detail = \"\") {\n  await trustedStorageReady;"));
+    assert!(background.contains("void trustedStorageReady.then(() => chrome.storage.local.get(DEFAULTS))"));
 }
 
 #[test]
@@ -5221,7 +5242,7 @@ fn frame_targets_auto_attach_is_flat_bounded_and_iframe_only() {
     assert!(background.contains("!visited.has(candidate.sessionId)"));
     assert!(background.contains("Date.now() >= options.deadlineAt"));
     assert!(background.contains("session_routing_unverified"));
-    assert_eq!(manifest()["minimum_chrome_version"], "118");
+    assert_eq!(manifest()["minimum_chrome_version"], "140");
 }
 
 #[test]

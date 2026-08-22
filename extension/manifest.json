@@ -3,7 +3,7 @@
   "name": "Local Browser Bridge",
   "version": "0.12.1",
   "description": "Connects browser tabs to a loopback-only control surface for local browser agents.",
-  "minimum_chrome_version": "118",
+  "minimum_chrome_version": "140",
   "permissions": [
     "tabs",
     "scripting",

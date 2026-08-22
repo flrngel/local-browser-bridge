@@ -15,6 +15,16 @@ import {
 import "./dom-core.js";
 import "./frame-agent.js";
 
+// chrome.storage.local is exposed to content-script contexts by default. The
+// bridge token and control state belong only to trusted extension pages and
+// this service worker, so narrow the storage boundary before any read or
+// connection attempt. Chrome 140+ supports this API on local storage (see
+// manifest.json); older versions exposed the generic API only on session
+// storage.
+const trustedStorageReady = chrome.storage.local.setAccessLevel({
+  accessLevel: "TRUSTED_CONTEXTS",
+});
+
 const DEFAULTS = {
   token: "",
   port: DEFAULT_PORT,
@@ -189,6 +199,7 @@ function withTimeout(promise, timeoutMs, label, code = "DEBUGGER_TIMEOUT") {
 }
 
 async function settings() {
+  await trustedStorageReady;
   const stored = await chrome.storage.local.get(DEFAULTS);
   return {
     ...stored,
@@ -198,6 +209,7 @@ async function settings() {
 }
 
 async function setStatus(status, detail = "") {
+  await trustedStorageReady;
   await chrome.storage.local.set({ connectionStatus: status, connectionDetail: detail });
   const color = status === "connected" ? "#82d94d" : status === "connecting" ? "#f3bd4e" : "#e36b5d";
   await chrome.action.setBadgeBackgroundColor({ color }).catch(() => {});
@@ -207,6 +219,7 @@ async function setStatus(status, detail = "") {
 async function initializeProtocolIdentity() {
   if (protocolIdentityPromise) return protocolIdentityPromise;
   protocolIdentityPromise = (async () => {
+    await trustedStorageReady;
     const stored = await chrome.storage.local.get({ controllerId: "", bridgeSessionId: "", outboundSequence: 0, eventSequence: 0 });
     controllerId = String(stored.controllerId || stored.bridgeSessionId || crypto.randomUUID());
     outboundSequence = Math.max(0, Number(stored.outboundSequence) || 0);
@@ -4892,7 +4905,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 chrome.runtime.onInstalled.addListener(() => {
-  void chrome.storage.local.get(DEFAULTS).then((stored) => updateSecuritySettings({
+  void trustedStorageReady.then(() => chrome.storage.local.get(DEFAULTS)).then((stored) => updateSecuritySettings({
     enabled: stored.enabled,
     fullAccess: stored.fullAccess,
     port: stored.port,

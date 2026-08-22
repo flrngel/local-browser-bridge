@@ -13,12 +13,12 @@ This page states what the current code can do, what the user must configure, and
 
 | Capability | Status | Requirement or boundary |
 |---|---|---|
-| List, activate, create, navigate, reload, and close tabs | Available | Chrome or Edge 118+ |
+| List, activate, create, navigate, reload, and close tabs | Available | Chrome or Edge 140+ |
 | Observe viewport pixels, text, selection, and interactive elements | Available | Regular HTTP(S) pages; file pages require the browser's file-URL permission |
 | Click, hover, fill, select, scroll, type, and send key chords | Available | One explicit debugger-backed lease on one tab |
 | Main-world JavaScript evaluation | Available | Full Access, or the applicable Safe-mode policy |
-| Same-process frame observation | Available | Chrome or Edge 118+ |
-| Recursive cross-origin iframe observation and trusted point input | Available | Chrome or Edge 125+; bounded to 16 iframe targets and five levels |
+| Same-process frame observation | Available | Chrome or Edge 140+ |
+| Recursive cross-origin iframe observation and trusted point input | Available | Chrome or Edge 140+; bounded to 16 iframe targets and five levels |
 | Dialog handling, condition waits, and bounded action batches | Available | Commands remain tied to the current lease and observation epoch |
 | Browser-owned warning and extension-owned page indicator | Available | Chrome owns the debugger warning; the extension owns its pill and Stop button |
 | Full Access | Available and default | Broad authority over regular pages in the selected profile |
@@ -54,7 +54,7 @@ These are setup conditions, not product limitations:
 
 - Every installed component must use the same release version.
 - Browser control requires an unpacked Manifest V3 extension loaded from `chrome://extensions` or `edge://extensions`.
-- Core browser control requires Chromium 118+; cross-origin frame routing requires Chromium 125+.
+- Browser control requires Chromium 140+. Cross-origin child-session routing first appeared in Chromium 125, but version 0.12.1 raises the overall floor so persisted extension storage can be restricted to trusted contexts.
 - The complete macOS archive requires macOS 13+. Live sharing additionally requires Screen Recording permission for the packaged helper application.
 - macOS semantic control and supported input routes require Accessibility permission.
 - Windows native control must run in the signed-in interactive session, not Session 0 or a service.
