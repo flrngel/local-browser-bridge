@@ -70,24 +70,14 @@ pub(super) struct PrivateTemporaryFile {
 
 impl PrivateTemporaryFile {
     pub(super) fn write_and_sync(&mut self, contents: &[u8]) -> io::Result<()> {
-        if self.committed {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "the Windows token temporary file was already committed",
-            ));
-        }
+        self.ensure_uncommitted()?;
         self.file.write_all(contents)?;
         self.file.flush()?;
         self.file.sync_all()
     }
 
     pub(super) fn discard(mut self) -> io::Result<()> {
-        if self.committed {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "refusing to discard a committed Windows token file",
-            ));
-        }
+        self.ensure_uncommitted()?;
         run_test_barrier("cleanup");
         let result = delete_file_handle(&self.file);
         if result.is_ok() {
@@ -100,8 +90,32 @@ impl PrivateTemporaryFile {
         &self.file
     }
 
-    fn mark_committed(&mut self) {
+    fn ensure_uncommitted(&self) -> io::Result<()> {
+        if self.committed {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the Windows token temporary-file capability was already committed",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn ensure_committed(&self) -> io::Result<()> {
+        if self.committed {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the Windows token temporary-file capability has not reached its rename commit boundary",
+            ))
+        }
+    }
+
+    fn mark_committed(&mut self) -> io::Result<()> {
+        self.ensure_uncommitted()?;
         self.committed = true;
+        Ok(())
     }
 
     fn ensure_created_in(&self, directory: &TokenDirectory) -> io::Result<()> {
@@ -257,6 +271,7 @@ pub(super) fn replace_token_file(
     source: &mut PrivateTemporaryFile,
     destination: &Path,
 ) -> io::Result<()> {
+    source.ensure_uncommitted()?;
     directory.ensure_bound()?;
     source.ensure_created_in(directory)?;
     let destination_name = directory.child_name(destination)?;
@@ -271,8 +286,7 @@ pub(super) fn replace_token_file(
     }
     run_test_barrier("rename");
     rename_relative_file(directory, source.file(), &destination_name)?;
-    source.mark_committed();
-    Ok(())
+    source.mark_committed()
 }
 
 pub(super) fn verify_replaced_token_file(
@@ -280,6 +294,7 @@ pub(super) fn verify_replaced_token_file(
     source: &PrivateTemporaryFile,
     destination: &Path,
 ) -> io::Result<()> {
+    source.ensure_committed()?;
     source.ensure_created_in(directory)?;
     source.file().sync_all()?;
     let destination_name = directory.child_name(destination)?;

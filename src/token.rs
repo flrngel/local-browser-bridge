@@ -1358,6 +1358,74 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[tokio::test]
+    async fn windows_private_temporary_rejects_verify_before_commit() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let parent = private_test_parent(directory.path()).await;
+        let path = parent.join("token");
+        let capability = prepare_token_parent(&path, None)
+            .await
+            .expect("retain validated parent directory");
+        let temporary_path = parent.join("uncommitted-temp");
+        let mut source = windows_security::create_private_token_file(&capability, &temporary_path)
+            .expect("create private temporary capability");
+        source
+            .write_and_sync(format!("{}\n", create_token()).as_bytes())
+            .expect("write uncommitted temporary token");
+
+        let error = windows_security::verify_replaced_token_file(&capability, &source, &path)
+            .expect_err("verification before the rename commit boundary must fail");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(!path.exists(), "verification must not commit a token");
+        source
+            .discard()
+            .expect("delete the still-uncommitted exact temporary handle");
+        assert!(!temporary_path.exists());
+        drop(capability);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn windows_private_temporary_rejects_a_second_replace() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let parent = private_test_parent(directory.path()).await;
+        let first_path = parent.join("token");
+        let second_path = parent.join("second-token");
+        let capability = prepare_token_parent(&first_path, None)
+            .await
+            .expect("retain validated parent directory");
+        let temporary_path = parent.join("single-use-temp");
+        let token = create_token();
+        let mut source = windows_security::create_private_token_file(&capability, &temporary_path)
+            .expect("create private temporary capability");
+        source
+            .write_and_sync(format!("{token}\n").as_bytes())
+            .expect("write replacement token");
+        windows_security::replace_token_file(&capability, &mut source, &first_path)
+            .expect("commit the capability exactly once");
+
+        let error = windows_security::replace_token_file(&capability, &mut source, &second_path)
+            .expect_err("a committed capability must not be renamed a second time");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        windows_security::verify_replaced_token_file(&capability, &source, &first_path)
+            .expect("the first committed destination remains verifiable");
+        assert_eq!(
+            std::fs::read_to_string(&first_path)
+                .expect("read first committed token")
+                .trim(),
+            token
+        );
+        assert!(
+            !second_path.exists(),
+            "a second destination must not appear"
+        );
+        drop(source);
+        drop(capability);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
     async fn windows_relative_target_check_and_rename_do_not_follow_ancestor_path_swaps() {
         for stage in ["target_check", "rename"] {
             let directory = tempfile::tempdir().expect("temp directory");
