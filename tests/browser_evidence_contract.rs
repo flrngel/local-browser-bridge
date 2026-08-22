@@ -64,12 +64,41 @@ fn candidate_binder_is_exact_external_and_immutable() {
         "Candidate binding record run nonce is invalid.",
         "candidateBinding = Get-CandidateBindingDomain",
         "Candidate postflight domain does not match its candidate and preflight digest.",
+        "function Resolve-ExactSelfTestCleanupRoot",
+        "^lbb-browser-candidate-[0-9a-f]{32}$",
+        "function Remove-ExactSelfTestTreeOnce",
+        "Self-test cleanup refused a reparse point in its temporary fixture.",
+        "[IO.FileAttributes]::ReadOnly",
+        "$script:SelfTestCleanupRetryMilliseconds",
+        "cleanup-read-only.probe",
+        "function Remove-ExactSelfTestDirectory",
+        "Remove-ExactSelfTestDirectory $root",
     ] {
         assert!(
             script.contains(required),
             "candidate binder is missing {required}"
         );
     }
+
+    assert!(
+        !script.contains("[IO.Directory]::Delete($root, $true)"),
+        "self-test cleanup must not recursively delete an unvalidated path"
+    );
+    let self_test = script
+        .split("function Invoke-SelfTest")
+        .nth(1)
+        .unwrap()
+        .split("switch ($Mode)")
+        .next()
+        .unwrap();
+    let read_only_probe = self_test.find("cleanup-read-only.probe").unwrap();
+    let exact_cleanup = self_test
+        .rfind("Remove-ExactSelfTestDirectory $root")
+        .unwrap();
+    let passed = self_test
+        .find("Browser candidate binding self-test passed.")
+        .unwrap();
+    assert!(read_only_probe < exact_cleanup && exact_cleanup < passed);
 
     for name in [
         "local-browser-bridge-v$ExpectedVersion-windows-x86_64.exe",

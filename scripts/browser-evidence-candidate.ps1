@@ -47,6 +47,7 @@ $script:ExtensionHostPermissions = @("http://*/*", "https://*/*", "file://*/*")
 $script:ExtensionDescription = "Connects browser tabs to a loopback-only control surface for local browser agents."
 $script:MaxExtensionEntryBytes = 2MB
 $script:MaxExtensionArchiveBytes = 8MB
+$script:SelfTestCleanupRetryMilliseconds = @(0, 50, 100, 250, 500, 1000)
 $script:Utf8NoBom = [Text.UTF8Encoding]::new($false, $true)
 $script:AsciiStrict = [Text.Encoding]::GetEncoding(
     "us-ascii",
@@ -203,6 +204,105 @@ function Write-NewJson {
         }
         throw
     }
+}
+
+function Resolve-ExactSelfTestCleanupRoot {
+    param([string]$Path)
+    $directorySeparators = [char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $resolved = [IO.Path]::GetFullPath($Path).TrimEnd($directorySeparators)
+    $temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd($directorySeparators)
+    $parent = [IO.Path]::GetDirectoryName($resolved)
+    $name = [IO.Path]::GetFileName($resolved)
+    $pathComparer = if ([IO.Path]::DirectorySeparatorChar -eq [char]92) {
+        [StringComparer]::OrdinalIgnoreCase
+    }
+    else {
+        [StringComparer]::Ordinal
+    }
+    if ([String]::IsNullOrEmpty($parent) -or -not $pathComparer.Equals($parent, $temporaryRoot) -or
+        $name -cnotmatch '^lbb-browser-candidate-[0-9a-f]{32}$') {
+        throw "Self-test cleanup refused a path outside its exact temporary fixture scope."
+    }
+    return $resolved
+}
+
+function Remove-ExactSelfTestTreeOnce {
+    param([string]$RootPath)
+    if (-not [IO.Directory]::Exists($RootPath)) {
+        return
+    }
+    $pending = [Collections.Generic.Stack[string]]::new()
+    $directories = [Collections.Generic.List[string]]::new()
+    $pending.Push($RootPath)
+    while ($pending.Count -gt 0) {
+        $directoryPath = $pending.Pop()
+        $directory = [IO.DirectoryInfo]::new($directoryPath)
+        $directory.Refresh()
+        if (-not $directory.Exists) {
+            continue
+        }
+        if (($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Self-test cleanup refused a reparse point in its temporary fixture."
+        }
+        [void]$directories.Add($directory.FullName)
+        foreach ($entry in $directory.GetFileSystemInfos()) {
+            $entry.Refresh()
+            if (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "Self-test cleanup refused a reparse point in its temporary fixture."
+            }
+            if (($entry.Attributes -band [IO.FileAttributes]::Directory) -ne 0) {
+                $pending.Push($entry.FullName)
+                continue
+            }
+            if (($entry.Attributes -band [IO.FileAttributes]::ReadOnly) -ne 0) {
+                [IO.File]::SetAttributes(
+                    $entry.FullName,
+                    ($entry.Attributes -band (-bnot [IO.FileAttributes]::ReadOnly))
+                )
+            }
+            [IO.File]::Delete($entry.FullName)
+        }
+    }
+    for ($index = $directories.Count - 1; $index -ge 0; $index -= 1) {
+        $directoryPath = $directories[$index]
+        if (-not [IO.Directory]::Exists($directoryPath)) {
+            continue
+        }
+        $attributes = [IO.File]::GetAttributes($directoryPath)
+        if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Self-test cleanup refused a reparse point in its temporary fixture."
+        }
+        if (($attributes -band [IO.FileAttributes]::ReadOnly) -ne 0) {
+            [IO.File]::SetAttributes(
+                $directoryPath,
+                ($attributes -band (-bnot [IO.FileAttributes]::ReadOnly))
+            )
+        }
+        [IO.Directory]::Delete($directoryPath, $false)
+    }
+}
+
+function Remove-ExactSelfTestDirectory {
+    param([string]$Path)
+    $rootPath = Resolve-ExactSelfTestCleanupRoot $Path
+    $lastError = $null
+    foreach ($delayMilliseconds in $script:SelfTestCleanupRetryMilliseconds) {
+        if ($delayMilliseconds -gt 0) {
+            Start-Sleep -Milliseconds $delayMilliseconds
+        }
+        try {
+            Remove-ExactSelfTestTreeOnce $rootPath
+            if ([IO.Directory]::Exists($rootPath) -or [IO.File]::Exists($rootPath)) {
+                throw "The exact temporary fixture still exists after cleanup."
+            }
+            return
+        }
+        catch {
+            $lastError = $_
+        }
+    }
+    $detail = if ($null -eq $lastError) { "unknown cleanup failure" } else { $lastError.Exception.Message }
+    throw "Self-test cleanup could not remove its exact temporary fixture after bounded retries: $detail"
 }
 
 function Invoke-GitText {
@@ -723,10 +823,10 @@ function Invoke-SelfTest {
     $repositoryPath = [IO.Path]::Combine($root, "repository")
     $releasePath = [IO.Path]::Combine($root, "release")
     $extractedPath = [IO.Path]::Combine($root, "extracted")
-    [IO.Directory]::CreateDirectory([IO.Path]::Combine($repositoryPath, "extension")) | Out-Null
-    [IO.Directory]::CreateDirectory($releasePath) | Out-Null
-    [IO.Directory]::CreateDirectory($extractedPath) | Out-Null
     try {
+        [IO.Directory]::CreateDirectory([IO.Path]::Combine($repositoryPath, "extension")) | Out-Null
+        [IO.Directory]::CreateDirectory($releasePath) | Out-Null
+        [IO.Directory]::CreateDirectory($extractedPath) | Out-Null
         $testVersion = "0.12.2"
         [IO.File]::WriteAllText([IO.Path]::Combine($repositoryPath, "Cargo.toml"), "[package]`nname = `"local-browser-bridge`"`nversion = `"$testVersion`"`n", $script:Utf8NoBom)
         [IO.File]::WriteAllText([IO.Path]::Combine($repositoryPath, "Cargo.lock"), "[[package]]`nname = `"local-browser-bridge`"`nversion = `"$testVersion`"`n", $script:Utf8NoBom)
@@ -893,13 +993,17 @@ function Invoke-SelfTest {
                 throw "Candidate binding accepted noncanonical manifest $($mutation.Label)."
             }
         }
-        Write-Output "Browser candidate binding self-test passed."
+        $cleanupProbePath = [IO.Path]::Combine($root, "cleanup-read-only.probe")
+        [IO.File]::WriteAllText($cleanupProbePath, "self-test cleanup probe", $script:Utf8NoBom)
+        [IO.File]::SetAttributes(
+            $cleanupProbePath,
+            ([IO.File]::GetAttributes($cleanupProbePath) -bor [IO.FileAttributes]::ReadOnly)
+        )
     }
     finally {
-        if ([IO.Directory]::Exists($root)) {
-            [IO.Directory]::Delete($root, $true)
-        }
+        Remove-ExactSelfTestDirectory $root
     }
+    Write-Output "Browser candidate binding self-test passed."
 }
 
 switch ($Mode) {
