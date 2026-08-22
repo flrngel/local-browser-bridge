@@ -171,9 +171,21 @@ impl BridgeServer {
     where
         F: Future<Output = ()> + Send + 'static,
     {
+        // Revoke upgraded transports as part of the shutdown trigger, before
+        // Axum is allowed to wait for graceful connection completion. This
+        // avoids a circular wait if an HTTP implementation tracks a live
+        // WebSocket upgrade until its handler exits.
+        let shutdown_state = self.state.clone();
+        let shutdown = async move {
+            shutdown.await;
+            shutdown_state.hub.close();
+            shutdown_state.computer_hub.close();
+        };
         let result = axum::serve(self.listener, self.router)
             .with_graceful_shutdown(shutdown)
             .await;
+        // Listener errors and runtimes that do not poll the shutdown future
+        // still converge on the same idempotent transport revocation.
         self.state.hub.close();
         self.state.computer_hub.close();
         result
@@ -196,6 +208,63 @@ struct AppState {
     update_lock: Arc<tokio::sync::Mutex<()>>,
     browser_auth_slots: Arc<Semaphore>,
     computer_auth_slots: Arc<Semaphore>,
+}
+
+/// Once a successful `computer.share.start` result crosses the connector
+/// boundary, native capture may exist even if the HTTP future is canceled
+/// before its result and first exact-epoch observation are validated. Normal
+/// failures hand this guard off to a durable rollback task. An unexpected Drop
+/// revokes the exact transport synchronously through the hub's out-of-band
+/// shutdown signal, so request cancellation cannot cancel the only cleanup.
+struct ShareStartValidationGuard {
+    state: AppState,
+    connection_id: Uuid,
+    session_id: String,
+    armed: bool,
+}
+
+impl ShareStartValidationGuard {
+    fn new(state: &AppState, connection_id: Uuid, session_id: &str) -> Self {
+        Self {
+            state: state.clone(),
+            connection_id,
+            session_id: session_id.to_owned(),
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for ShareStartValidationGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.armed = false;
+        if !self
+            .state
+            .computer_hub
+            .close_if_current(self.connection_id, "share_start_validation_interrupted")
+        {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let state = self.state.clone();
+        let session_id = self.session_id.clone();
+        runtime.spawn(async move {
+            state
+                .clear_revoked_computer_transport_state(
+                    &session_id,
+                    "Interrupted share.start validation revoked its exact helper transport",
+                )
+                .await;
+        });
+    }
 }
 
 impl AppState {
@@ -809,6 +878,12 @@ enum ComputerObservationPublication {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BrowserObservationPublication {
+    ExplicitObserve,
+    FollowUp,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ComputerObservationAuthority<'a> {
     frame_share_id: Option<&'a str>,
     active_share_id: Option<&'a str>,
@@ -967,12 +1042,17 @@ impl StateData {
         session_id: &str,
         share_id: &str,
     ) -> ShareStartAuthorization {
+        if self
+            .computer_authority_gate
+            .as_ref()
+            .is_none_or(|gate| gate.session_id != session_id)
+        {
+            self.computer_authority_gate = Some(ComputerAuthorityGate::new(session_id, None));
+        }
         self.computer_authority_gate
             .as_mut()
-            .filter(|gate| gate.session_id == session_id)
-            .map_or(ShareStartAuthorization::Allowed, |gate| {
-                gate.authorize_share_start(share_id)
-            })
+            .expect("the exact-session share gate was installed above")
+            .authorize_share_start(share_id)
     }
 
     fn note_computer_share_stopped(&mut self, session_id: &str) {
@@ -1015,7 +1095,10 @@ impl StateData {
             .as_mut()
             .filter(|gate| gate.session_id == session_id)
         else {
-            return true;
+            // A helper cannot introduce active native-share authority through
+            // an observation. Every share epoch must first cross the strict
+            // share.start result boundary above.
+            return authority.is_share_free();
         };
         gate.authorize_observation(authority, publication)
     }
@@ -1033,7 +1116,8 @@ impl StateData {
             .as_ref()
             .filter(|gate| gate.session_id == session_id)
         else {
-            return true;
+            // Stream events are never a share-start authority boundary.
+            return false;
         };
         gate.allows_share_frame(share_id)
     }
@@ -2775,7 +2859,7 @@ async fn handle_websocket(
     // relay through the still-current old hub before replacement commits (or
     // through the replacement afterwards). The new connection has a fresh
     // session ID, so old latches cannot block it.
-    let (connection_id, mut outgoing) = {
+    let (connection_id, mut outgoing, mut shutdown) = {
         let mut data = state.data.write().await;
         let connection = state.hub.attach_with_id(connection_id);
         data.public.connected = false;
@@ -2819,7 +2903,19 @@ async fn handle_websocket(
 
     let mut handshake_complete = false;
     let mut last_event_sequence = 0_u64;
-    while let Some(Ok(message)) = socket_receiver.next().await {
+    loop {
+        let message = tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    break;
+                }
+                continue;
+            }
+            message = socket_receiver.next() => message,
+        };
+        let Some(Ok(message)) = message else {
+            break;
+        };
         match message {
             Message::Text(text) => {
                 let Ok(message) = serde_json::from_str::<Value>(text.as_str()) else {
@@ -2883,6 +2979,7 @@ async fn handle_websocket(
     }
 
     writer.abort();
+    let _ = writer.await;
     let detached = {
         let mut data = state.data.write().await;
         let detached = state.hub.detach(connection_id);
@@ -2920,7 +3017,7 @@ async fn handle_computer_websocket(
             }
         };
     drop(auth_permit);
-    let (connection_id, mut outgoing) = {
+    let (connection_id, mut outgoing, mut shutdown) = {
         let mut data = state.data.write().await;
         let connection = state.computer_hub.attach_with_id(connection_id);
         data.public.computer_connected = false;
@@ -2961,7 +3058,19 @@ async fn handle_computer_websocket(
 
     let mut handshake_complete = false;
     let mut last_event_sequence = 0_u64;
-    while let Some(Ok(message)) = socket_receiver.next().await {
+    loop {
+        let message = tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    break;
+                }
+                continue;
+            }
+            message = socket_receiver.next() => message,
+        };
+        let Some(Ok(message)) = message else {
+            break;
+        };
         match message {
             Message::Text(text) => {
                 let Ok(message) = serde_json::from_str::<Value>(text.as_str()) else {
@@ -3026,6 +3135,7 @@ async fn handle_computer_websocket(
     }
 
     writer.abort();
+    let _ = writer.await;
     let detached = {
         let mut data = state.data.write().await;
         let detached = state.computer_hub.detach(connection_id);
@@ -3330,7 +3440,7 @@ async fn handle_hello(state: &AppState, connection_id: Uuid, message: &Value) ->
     let state = state.clone();
     tokio::spawn(async move {
         let _guard = state.action_lock.lock().await;
-        if let Err(error) = state.refresh_tabs_for(Some(connection_id)).await {
+        if let Err(error) = state.refresh_tabs_for(connection_id).await {
             state.log("tabs.list", "warning", error.message).await;
             state.bump("warning").await;
         }
@@ -3760,7 +3870,7 @@ async fn handle_extension_event(state: &AppState, connection_id: Uuid, message: 
                     if !state.hub.is_current_ready(connection_id) {
                         return;
                     }
-                    let _ = state.refresh_tabs_for(Some(connection_id)).await;
+                    let _ = state.refresh_tabs_for(connection_id).await;
                     if !state.hub.is_current_ready(connection_id) {
                         return;
                     }
@@ -3769,7 +3879,11 @@ async fn handle_extension_event(state: &AppState, connection_id: Uuid, message: 
                         && let Some(tab_id) = target
                     {
                         let _ = state
-                            .refresh_observation_for(tab_id, Some(connection_id))
+                            .refresh_observation_for(
+                                tab_id,
+                                connection_id,
+                                BrowserObservationPublication::FollowUp,
+                            )
                             .await;
                     }
                 });
@@ -3956,6 +4070,13 @@ impl AppState {
                 format!("Browser extension did not advertise {method}"),
             ));
         }
+        let expected_connection_id = Uuid::parse_str(&extension.session_id).map_err(|_| {
+            ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "EXTENSION_DISCONNECTED",
+                "Browser extension session identity is invalid",
+            )
+        })?;
         let (target_tab_id, browser_control, viewport, pending_dialog) = {
             let data = self.data.read().await;
             (
@@ -4024,11 +4145,15 @@ impl AppState {
         }
 
         if method == "tabs.list" {
-            return self.refresh_tabs().await;
+            return self.refresh_tabs_for(expected_connection_id).await;
         }
         if method == "page.observe" {
             let observed = self
-                .refresh_observation(params["tabId"].as_u64().unwrap())
+                .refresh_observation_for(
+                    params["tabId"].as_u64().unwrap(),
+                    expected_connection_id,
+                    BrowserObservationPublication::ExplicitObserve,
+                )
                 .await;
             if let Err(error) = observed.as_ref()
                 && classify(&error.code).code == TaxonomyCode::OutcomeUnknown
@@ -4046,7 +4171,12 @@ impl AppState {
             return observed;
         }
 
-        let (connection_id, result) = match self.hub.call_scoped(method, params.clone()).await {
+        let connection_id = expected_connection_id;
+        let result = match self
+            .hub
+            .call_scoped_to(connection_id, method, params.clone())
+            .await
+        {
             Ok(result) => result,
             Err(error) => {
                 if error.code == "NO_PENDING_DIALOG" {
@@ -4139,7 +4269,7 @@ impl AppState {
         }
 
         if method.starts_with("tabs.")
-            && let Err(error) = self.refresh_tabs_for(Some(connection_id)).await
+            && let Err(error) = self.refresh_tabs_for(connection_id).await
         {
             self.log("tabs.list", "warning", &error.message).await;
             self.bump("warning").await;
@@ -4160,7 +4290,11 @@ impl AppState {
             if !dialog_pending
                 && let Some(tab_id) = target
                 && let Err(error) = self
-                    .refresh_observation_for(tab_id, Some(connection_id))
+                    .refresh_observation_for(
+                        tab_id,
+                        connection_id,
+                        BrowserObservationPublication::FollowUp,
+                    )
                     .await
             {
                 // The dialog can also open in the gap between the check above
@@ -4251,6 +4385,13 @@ impl AppState {
                 format!("Computer helper did not advertise {method}"),
             ));
         }
+        let expected_connection_id = Uuid::parse_str(&computer.session_id).map_err(|_| {
+            ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "COMPUTER_DISCONNECTED",
+                "Computer helper session identity is invalid",
+            )
+        })?;
         if recovery_required
             && !matches!(
                 method,
@@ -4280,11 +4421,13 @@ impl AppState {
         }
         if method == "computer.observe" {
             return self
-                .refresh_computer_observation(
+                .refresh_computer_observation_for(
                     params
                         .get("windowId")
                         .or_else(|| params.get("displayId"))
                         .and_then(Value::as_str),
+                    expected_connection_id,
+                    ComputerObservationPublication::ExplicitObserve,
                 )
                 .await;
         }
@@ -4308,23 +4451,30 @@ impl AppState {
             return Err(computer_share_session_exhausted());
         }
 
-        let (connection_id, mut result) =
-            match self.computer_hub.call_scoped(method, params.clone()).await {
-                Ok(result) => result,
-                Err(error) => {
-                    self.clear_published_computer_authority_after_unknown(
-                        &computer.session_id,
-                        method,
-                        &error,
-                    )
-                    .await;
-                    self.log(method, "error", &error.message).await;
-                    self.bump("computer-error").await;
-                    return Err(error.into());
-                }
-            };
+        let connection_id = expected_connection_id;
         let computer_session_id = computer.session_id.clone();
-
+        // Arm before relay: cancellation may win after native share startup
+        // crossed its side-effect boundary but before a result reaches us.
+        let mut share_start_validation = (method == "computer.share.start")
+            .then(|| ShareStartValidationGuard::new(self, connection_id, &computer_session_id));
+        let mut result = match self
+            .computer_hub
+            .call_scoped_to(connection_id, method, params.clone())
+            .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                self.clear_published_computer_authority_after_unknown(
+                    &computer.session_id,
+                    method,
+                    &error,
+                )
+                .await;
+                self.log(method, "error", &error.message).await;
+                self.bump("computer-error").await;
+                return Err(error.into());
+            }
+        };
         if method == "computer.status" {
             if let Some(output) = result.as_object_mut() {
                 output.insert(
@@ -4395,11 +4545,20 @@ impl AppState {
             let reported_share_id = active_share_id(&result).map(str::to_owned);
             let mut data = self.data.write().await;
             if !self.computer_hub.is_current_ready(connection_id) {
-                return Ok(result);
+                return Err(ApiError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "COMPUTER_DISCONNECTED",
+                    "Computer helper was replaced before the share result could be committed",
+                ));
             }
             let gated = data.computer_authority_is_gated(&computer_session_id);
-            let gated_share_start = gated && method == "computer.share.start";
-            let mut rejected_gated_start = None;
+            let current_share_id = data
+                .public
+                .computer
+                .as_ref()
+                .and_then(|computer| active_share_id(&computer.share))
+                .map(str::to_owned);
+            let mut rejected_share_result = None;
             let retained_share = data
                 .public
                 .computer
@@ -4407,44 +4566,36 @@ impl AppState {
                 .map(|computer| computer.share.clone())
                 .unwrap_or_else(|| json!({ "active": false }));
             match method {
-                "computer.share.start" if gated => {
-                    match reported_share_id.as_deref() {
-                        None => {
-                            rejected_gated_start = Some(invalid_gated_share_result(
-                                "A successful computer.share.start did not name one active share ID",
-                            ));
-                        }
-                        Some(share_id) => {
-                            match data
-                                .authorize_computer_share_start(&computer_session_id, share_id)
-                            {
-                                ShareStartAuthorization::Allowed => {}
-                                ShareStartAuthorization::Retired => {
-                                    rejected_gated_start = Some(invalid_gated_share_result(
-                                        "computer.share.start reused a retired share ID after authority was revoked",
-                                    ));
+                "computer.share.start" => match reported_share_id.as_deref() {
+                    None => {
+                        rejected_share_result = Some(invalid_gated_share_result(
+                            "A successful computer.share.start did not name one raw active share ID",
+                        ));
+                        data.revoke_computer_authority(
+                            &computer_session_id,
+                            current_share_id.as_deref(),
+                        );
+                    }
+                    Some(share_id) => {
+                        match data.authorize_computer_share_start(&computer_session_id, share_id) {
+                            ShareStartAuthorization::Allowed => {
+                                if let Some(computer) = data.public.computer.as_mut() {
+                                    computer.share = sanitized_share;
                                 }
-                                ShareStartAuthorization::Saturated => {
-                                    rejected_gated_start = Some(computer_share_session_exhausted());
-                                }
+                                data.public.computer_observation = None;
+                                data.computer_screenshot = None;
+                            }
+                            ShareStartAuthorization::Retired => {
+                                rejected_share_result = Some(invalid_gated_share_result(
+                                    "computer.share.start reused a retired share ID after authority was revoked",
+                                ));
+                            }
+                            ShareStartAuthorization::Saturated => {
+                                rejected_share_result = Some(computer_share_session_exhausted());
                             }
                         }
                     }
-                    if rejected_gated_start.is_none() {
-                        if let Some(computer) = data.public.computer.as_mut() {
-                            computer.share = sanitized_share;
-                        }
-                        data.public.computer_observation = None;
-                        data.computer_screenshot = None;
-                    }
-                }
-                "computer.share.start" => {
-                    if let Some(computer) = data.public.computer.as_mut() {
-                        computer.share = sanitized_share;
-                    }
-                    data.public.computer_observation = None;
-                    data.computer_screenshot = None;
-                }
+                },
                 "computer.share.status" if gated => {
                     // A status reply is descriptive, not a new authority
                     // boundary. Never let it reintroduce the revoked share.
@@ -4456,45 +4607,50 @@ impl AppState {
                     }
                 }
                 "computer.share.stop" => {
-                    if sanitized_share
-                        .get("active")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                    {
-                        return Err(invalid_gated_share_result(
-                            "A successful computer.share.stop returned an active share",
+                    if raw_share_stop_confirmed(&result) {
+                        data.note_computer_share_stopped(&computer_session_id);
+                        if let Some(computer) = data.public.computer.as_mut() {
+                            computer.share = sanitized_share;
+                        }
+                        data.public.computer_observation = None;
+                        data.computer_screenshot = None;
+                    } else {
+                        rejected_share_result = Some(invalid_gated_share_result(
+                            "A successful computer.share.stop did not explicitly report raw active:false",
                         ));
+                        data.revoke_computer_authority(
+                            &computer_session_id,
+                            current_share_id.as_deref(),
+                        );
                     }
-                    data.note_computer_share_stopped(&computer_session_id);
-                    if let Some(computer) = data.public.computer.as_mut() {
-                        computer.share = sanitized_share;
-                    }
-                    data.public.computer_observation = None;
-                    data.computer_screenshot = None;
                 }
                 _ => {}
             }
-            if let Some(error) = rejected_gated_start.as_ref() {
-                // The helper committed the native share before it returned this
-                // invalid success body. Revoke all publication authority before
-                // awaiting cleanup, but report capture as stopping/unconfirmed
-                // until an exact-session stop proves otherwise.
+            if let Some(error) = rejected_share_result.as_ref() {
+                // A start can commit capture before its invalid success body;
+                // an invalid stop gives no teardown proof. Revoke publication
+                // before handing cleanup to a cancellation-independent task.
                 data.note_computer_share_stopped(&computer_session_id);
                 if let Some(computer) = data.public.computer.as_mut() {
-                    computer.share =
-                        rejected_share_cleanup_pending(reported_share_id.as_deref(), &error.code);
+                    computer.share = rejected_share_cleanup_pending(
+                        reported_share_id.as_deref().or(current_share_id.as_deref()),
+                        &error.code,
+                    );
                 }
                 data.public.computer_observation = None;
                 data.computer_screenshot = None;
             }
             drop(data);
-            if let Some(error) = rejected_gated_start {
-                self.rollback_rejected_computer_share_start(
+            if let Some(error) = rejected_share_result {
+                let cleanup = self.spawn_rejected_computer_share_cleanup(
                     connection_id,
-                    &computer_session_id,
-                    &error.code,
-                )
-                .await;
+                    computer_session_id.clone(),
+                    error.code.clone(),
+                );
+                if let Some(validation) = share_start_validation.as_mut() {
+                    validation.disarm();
+                }
+                let _ = cleanup.await;
                 return Err(error);
             }
             if !self
@@ -4519,13 +4675,11 @@ impl AppState {
                 let observation = self
                     .refresh_computer_observation_for(
                         window_id,
-                        Some(connection_id),
+                        connection_id,
                         ComputerObservationPublication::ShareStart,
                     )
                     .await;
-                if let Err(error) = observation
-                    && gated_share_start
-                {
+                if let Err(error) = observation {
                     // A fresh share is not a recovery boundary until its
                     // first exact-ID observation is committed. If capture
                     // failed or an epoch-bound share error raced the result,
@@ -4550,13 +4704,19 @@ impl AppState {
                             data.computer_screenshot = None;
                         }
                     }
-                    self.rollback_rejected_computer_share_start(
+                    let cleanup = self.spawn_rejected_computer_share_cleanup(
                         connection_id,
-                        &computer_session_id,
-                        &error.code,
-                    )
-                    .await;
+                        computer_session_id.clone(),
+                        error.code.clone(),
+                    );
+                    if let Some(validation) = share_start_validation.as_mut() {
+                        validation.disarm();
+                    }
+                    let _ = cleanup.await;
                     return Err(error);
+                }
+                if let Some(validation) = share_start_validation.as_mut() {
+                    validation.disarm();
                 }
             }
             return Ok(result);
@@ -4586,7 +4746,7 @@ impl AppState {
         if let Err(error) = self
             .refresh_computer_observation_for(
                 window_id.as_deref(),
-                Some(connection_id),
+                connection_id,
                 ComputerObservationPublication::FollowUp,
             )
             .await
@@ -4597,10 +4757,32 @@ impl AppState {
         Ok(result)
     }
 
-    /// A gated `share.start` can commit native capture before its success body
-    /// or first observation proves the new authority epoch. Stop that capture
-    /// on the exact originating transport. A replacement helper is never
-    /// selected, and any unprovable stop revokes only the original transport.
+    /// Transfers rejected lifecycle cleanup to its own task before the request
+    /// awaits it. Dropping the HTTP/action future therefore drops only the
+    /// JoinHandle; Tokio keeps the exact-session cleanup running.
+    fn spawn_rejected_computer_share_cleanup(
+        &self,
+        connection_id: Uuid,
+        computer_session_id: String,
+        rejection_code: String,
+    ) -> tokio::task::JoinHandle<()> {
+        let state = self.clone();
+        tokio::spawn(async move {
+            state
+                .rollback_rejected_computer_share_start(
+                    connection_id,
+                    &computer_session_id,
+                    &rejection_code,
+                )
+                .await;
+        })
+    }
+
+    /// A share start can commit native capture before its success body or first
+    /// observation proves the new authority epoch. An invalid stop result also
+    /// carries no teardown proof. Stop on the exact originating transport; a
+    /// replacement is never selected, and any unprovable stop revokes only the
+    /// original transport.
     async fn rollback_rejected_computer_share_start(
         &self,
         connection_id: Uuid,
@@ -4611,13 +4793,7 @@ impl AppState {
             .computer_hub
             .call_scoped_to(connection_id, "computer.share.stop", json!({}))
             .await;
-        if stop.as_ref().is_ok_and(|result| {
-            result
-                .as_object()
-                .and_then(|result| result.get("active"))
-                .and_then(Value::as_bool)
-                == Some(false)
-        }) {
+        if stop.as_ref().is_ok_and(raw_share_stop_confirmed) {
             let mut data = self.data.write().await;
             if self.computer_hub.is_current_ready(connection_id)
                 && data
@@ -4646,7 +4822,7 @@ impl AppState {
                     connection_id,
                     "computer.share.stop",
                     "warning",
-                    "Rejected share start was stopped on its exact helper session",
+                    "Rejected share lifecycle result was stopped on its exact helper session",
                 )
                 .await
             {
@@ -4686,6 +4862,31 @@ impl AppState {
                 "Rejected share cleanup could not be proven; the originating helper transport was revoked",
             )
             .await;
+            self.bump("computer-connection").await;
+        }
+    }
+
+    async fn clear_revoked_computer_transport_state(&self, session_id: &str, detail: &str) {
+        let cleared = {
+            let mut data = self.data.write().await;
+            if !data
+                .public
+                .computer
+                .as_ref()
+                .is_some_and(|computer| computer.session_id == session_id)
+            {
+                false
+            } else {
+                data.public.computer_connected = false;
+                data.public.computer = None;
+                data.public.computer_observation = None;
+                data.computer_screenshot = None;
+                data.computer_authority_gate = None;
+                true
+            }
+        };
+        if cleared {
+            self.log("computer.share.stop", "error", detail).await;
             self.bump("computer-connection").await;
         }
     }
@@ -4797,41 +4998,20 @@ impl AppState {
         true
     }
 
-    async fn refresh_computer_observation(
-        &self,
-        window_id: Option<&str>,
-    ) -> Result<Value, ApiError> {
-        self.refresh_computer_observation_for(
-            window_id,
-            None,
-            ComputerObservationPublication::ExplicitObserve,
-        )
-        .await
-    }
-
     async fn refresh_computer_observation_for(
         &self,
         window_id: Option<&str>,
-        expected_connection_id: Option<Uuid>,
+        connection_id: Uuid,
         publication: ComputerObservationPublication,
     ) -> Result<Value, ApiError> {
         let params = window_id
             .map(|window_id| json!({ "windowId": window_id }))
             .unwrap_or_else(|| json!({}));
-        let (connection_id, result) = match expected_connection_id {
-            Some(connection_id) => (
-                connection_id,
-                self.computer_hub
-                    .call_scoped_to(connection_id, "computer.observe", params)
-                    .await
-                    .map_err(ApiError::from)?,
-            ),
-            None => self
-                .computer_hub
-                .call_scoped("computer.observe", params)
-                .await
-                .map_err(ApiError::from)?,
-        };
+        let result = self
+            .computer_hub
+            .call_scoped_to(connection_id, "computer.observe", params)
+            .await
+            .map_err(ApiError::from)?;
         let mut screenshot = decode_screenshot(result.get("screenshot"))?.ok_or_else(|| {
             ApiError::new(
                 StatusCode::BAD_GATEWAY,
@@ -4884,26 +5064,12 @@ impl AppState {
         Ok(serde_json::to_value(observation).unwrap_or_else(|_| json!({})))
     }
 
-    async fn refresh_tabs(&self) -> Result<Value, ApiError> {
-        self.refresh_tabs_for(None).await
-    }
-
-    async fn refresh_tabs_for(
-        &self,
-        expected_connection_id: Option<Uuid>,
-    ) -> Result<Value, ApiError> {
-        let (connection_id, result) = self
+    async fn refresh_tabs_for(&self, connection_id: Uuid) -> Result<Value, ApiError> {
+        let result = self
             .hub
-            .call_scoped("tabs.list", json!({}))
+            .call_scoped_to(connection_id, "tabs.list", json!({}))
             .await
             .map_err(ApiError::from)?;
-        if expected_connection_id.is_some_and(|expected| expected != connection_id) {
-            return Err(ApiError::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "EXTENSION_DISCONNECTED",
-                "Browser extension was replaced before tabs could be refreshed",
-            ));
-        }
         let tabs = result
             .get("tabs")
             .and_then(Value::as_array)
@@ -4943,27 +5109,17 @@ impl AppState {
         Ok(result)
     }
 
-    async fn refresh_observation(&self, tab_id: u64) -> Result<Value, ApiError> {
-        self.refresh_observation_for(tab_id, None).await
-    }
-
     async fn refresh_observation_for(
         &self,
         tab_id: u64,
-        expected_connection_id: Option<Uuid>,
+        connection_id: Uuid,
+        publication: BrowserObservationPublication,
     ) -> Result<Value, ApiError> {
-        let (connection_id, result) = self
+        let result = self
             .hub
-            .call_scoped("page.observe", json!({ "tabId": tab_id }))
+            .call_scoped_to(connection_id, "page.observe", json!({ "tabId": tab_id }))
             .await
             .map_err(ApiError::from)?;
-        if expected_connection_id.is_some_and(|expected| expected != connection_id) {
-            return Err(ApiError::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "EXTENSION_DISCONNECTED",
-                "Browser extension was replaced before the observation started",
-            ));
-        }
         let mut screenshot = decode_screenshot(result.get("screenshot"))?;
         let browser_control = result.get("control").map(sanitize_browser_control);
         let snapshot = result.get("snapshot").and_then(Value::as_object);
@@ -5066,10 +5222,10 @@ impl AppState {
             }
         }
         // Only a caller-requested page.observe clears cancellation recovery.
-        // Automatic post-action observations pass an expected connection ID
-        // and cannot silently reopen mutation authority after an unknown
-        // outcome.
-        if expected_connection_id.is_none() {
+        // Exact transport scoping is independent of publication intent, so an
+        // automatic post-action observation cannot silently reopen mutation
+        // authority after an unknown outcome.
+        if publication == BrowserObservationPublication::ExplicitObserve {
             self.clear_browser_freshness_recovery(&connection_id.to_string());
         }
         if self
@@ -5873,6 +6029,9 @@ fn sanitize_share_status(value: Option<&Value>) -> Value {
 }
 
 fn active_share_id(value: &Value) -> Option<&str> {
+    // This is also the native start-authority parser: it reads only raw,
+    // correctly typed fields and never consumes presentation defaults from
+    // `sanitize_share_status`.
     value
         .get("active")
         .and_then(Value::as_bool)
@@ -5880,6 +6039,17 @@ fn active_share_id(value: &Value) -> Option<&str> {
         .then(|| value.get("id").and_then(Value::as_str))
         .flatten()
         .filter(|share_id| !share_id.is_empty() && share_id.len() <= 100)
+}
+
+/// Native teardown proof is read from the raw result. Presentation defaults
+/// must never turn a missing, null, string, or otherwise malformed `active`
+/// field into a false claim that capture stopped.
+fn raw_share_stop_confirmed(value: &Value) -> bool {
+    value
+        .as_object()
+        .and_then(|result| result.get("active"))
+        .and_then(Value::as_bool)
+        == Some(false)
 }
 
 fn rejected_share_cleanup_pending(share_id: Option<&str>, rejection_code: &str) -> Value {
@@ -7197,6 +7367,196 @@ fn is_loopback_host(host: &str, bound_port: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ws_auth::ClientHello;
+    use tokio_tungstenite::connect_async;
+    use tokio_tungstenite::tungstenite::Message as ClientMessage;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+
+    const TEST_COMPUTER_SESSION_ID: &str = "00000000-0000-4000-8000-000000000001";
+    type ComputerTestSocket = tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >;
+
+    async fn authenticate_computer_test_peer(
+        socket: &mut ComputerTestSocket,
+        token: &str,
+    ) -> Value {
+        let client = ClientHello::new(COMPUTER_CONNECTOR).unwrap();
+        socket
+            .send(ClientMessage::Text(client.envelope().to_string().into()))
+            .await
+            .unwrap();
+        let mut authenticated_session: Option<String> = None;
+        for _ in 0..MAX_AUTH_MESSAGES {
+            let message = tokio::time::timeout(AUTH_TIMEOUT, socket.next())
+                .await
+                .expect("computer authentication deadline")
+                .expect("computer authentication socket open")
+                .expect("computer authentication message");
+            match message {
+                ClientMessage::Text(text) => {
+                    let message: Value = serde_json::from_str(text.as_str()).unwrap();
+                    if let Some(session_id) = authenticated_session.as_ref() {
+                        assert_eq!(message["type"], "welcome");
+                        assert_eq!(message["sessionId"], session_id.as_str());
+                        return message;
+                    }
+                    let (session_id, response) = client.answer_challenge(token, &message).unwrap();
+                    socket
+                        .send(ClientMessage::Text(response.to_string().into()))
+                        .await
+                        .unwrap();
+                    authenticated_session = Some(session_id.to_string());
+                }
+                ClientMessage::Ping(bytes) => {
+                    socket.send(ClientMessage::Pong(bytes)).await.unwrap();
+                }
+                other => panic!("unexpected authentication message: {other:?}"),
+            }
+        }
+        panic!("computer authentication message limit exceeded")
+    }
+
+    async fn connect_ready_computer_test_peer(
+        address: SocketAddr,
+        token: &str,
+        backend: &str,
+    ) -> (ComputerTestSocket, Uuid) {
+        let mut request = format!("ws://{address}/computer")
+            .into_client_request()
+            .unwrap();
+        request
+            .headers_mut()
+            .insert("Origin", COMPUTER_HELPER_ORIGIN.parse().unwrap());
+        let (mut socket, _) = connect_async(request).await.unwrap();
+        let welcome = authenticate_computer_test_peer(&mut socket, token).await;
+        let connection_id = Uuid::parse_str(welcome["sessionId"].as_str().unwrap()).unwrap();
+        socket
+            .send(ClientMessage::Text(
+                json!({
+                    "type": "hello",
+                    "version": VERSION,
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "sessionId": connection_id.to_string(),
+                    "platform": "test-os",
+                    "architecture": "test-arch",
+                    "backend": backend,
+                    "inputReady": true,
+                    "semanticReady": true,
+                    "capabilities": ["computer.status"]
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        loop {
+            let message = socket.next().await.unwrap().unwrap();
+            if let ClientMessage::Text(text) = message {
+                let message: Value = serde_json::from_str(text.as_str()).unwrap();
+                if message["type"] == "helloAck" {
+                    assert_eq!(message["ok"], true);
+                    break;
+                }
+            }
+        }
+        (socket, connection_id)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn saturated_real_computer_peer_is_closed_by_out_of_band_revocation() {
+        let token = create_token();
+        let mut config = ServerConfig::new(0, token.clone());
+        config.call_timeout = Duration::from_secs(1);
+        config.check_for_updates = false;
+        let server = BridgeServer::bind(config).await.unwrap();
+        let address = server.local_addr().unwrap();
+        let state = server.state.clone();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_task = tokio::spawn(async move {
+            server
+                .serve(async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+                .unwrap();
+        });
+
+        let (mut socket, connection_id) =
+            connect_ready_computer_test_peer(address, &token, "saturated-real-peer").await;
+
+        // This current-thread test does not yield while filling the bounded
+        // queue, so the websocket writer cannot drain any of these messages.
+        // The 65th send proves the real peer's ordinary transport queue is
+        // saturated before revocation is requested.
+        let payload = Bytes::from(vec![0_u8; 64 * 1024]);
+        for index in 0..64 {
+            state
+                .computer_hub
+                .send_message_to(connection_id, Message::Binary(payload.clone()))
+                .unwrap_or_else(|error| panic!("queue slot {index} rejected early: {error}"));
+        }
+        let saturated = state
+            .computer_hub
+            .send_message_to(connection_id, Message::Binary(payload));
+        assert_eq!(saturated.unwrap_err().code, "COMPUTER_OVERLOADED");
+
+        assert!(
+            state
+                .computer_hub
+                .close_if_current(connection_id, "saturated_real_peer_test")
+        );
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                match socket.next().await {
+                    None | Some(Err(_)) | Some(Ok(ClientMessage::Close(_))) => break,
+                    Some(Ok(_)) => {}
+                }
+            }
+        })
+        .await
+        .expect("out-of-band shutdown did not physically close the saturated peer");
+
+        let _ = shutdown_tx.send(());
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn graceful_server_shutdown_revokes_a_live_upgraded_peer_before_waiting() {
+        let token = create_token();
+        let mut config = ServerConfig::new(0, token.clone());
+        config.call_timeout = Duration::from_secs(1);
+        config.check_for_updates = false;
+        let server = BridgeServer::bind(config).await.unwrap();
+        let address = server.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let server_task = tokio::spawn(async move {
+            server
+                .serve(async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+                .unwrap();
+        });
+        let (mut socket, _connection_id) =
+            connect_ready_computer_test_peer(address, &token, "live-shutdown-peer").await;
+
+        shutdown_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), server_task)
+            .await
+            .expect("graceful server shutdown waited indefinitely on a live WebSocket")
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                match socket.next().await {
+                    None | Some(Err(_)) | Some(Ok(ClientMessage::Close(_))) => break,
+                    Some(Ok(_)) => {}
+                }
+            }
+        })
+        .await
+        .expect("graceful server shutdown did not close its live upgraded peer");
+    }
 
     #[test]
     fn accepts_only_exact_chrome_extension_origins() {
@@ -8974,7 +9334,7 @@ mod tests {
             data.public.computer = Some(ComputerInfo {
                 version: VERSION.to_owned(),
                 protocol_version: PROTOCOL_VERSION,
-                session_id: "computer-session".to_owned(),
+                session_id: TEST_COMPUTER_SESSION_ID.to_owned(),
                 compatible: true,
                 platform: "test-os".to_owned(),
                 architecture: "test-arch".to_owned(),
@@ -8993,7 +9353,7 @@ mod tests {
 
         let bind_owner = |request_owners: &SharedRequestCommandOwners| {
             let computer_owner = ComputerCommandOwner {
-                session_id: "computer-session".to_owned(),
+                session_id: TEST_COMPUTER_SESSION_ID.to_owned(),
                 method: "computer.click".to_owned(),
             };
             let request_id = {
@@ -9053,7 +9413,7 @@ mod tests {
                 .data
                 .read()
                 .await
-                .computer_authority_requires_recovery("computer-session")
+                .computer_authority_requires_recovery(TEST_COMPUTER_SESSION_ID)
         );
         assert!(
             state
@@ -9142,7 +9502,7 @@ mod tests {
         ));
         assert!(state.bind_computer_command_owner(
             Some("owner"),
-            "computer-session",
+            TEST_COMPUTER_SESSION_ID,
             "computer.click"
         ));
 
@@ -9178,7 +9538,7 @@ mod tests {
         ));
         assert!(state.bind_computer_command_owner(
             Some("shutdown"),
-            "computer-session",
+            TEST_COMPUTER_SESSION_ID,
             "computer.click"
         ));
         drop(InFlightCallGuard {
@@ -9207,7 +9567,7 @@ mod tests {
             data.public.computer = Some(ComputerInfo {
                 version: VERSION.to_owned(),
                 protocol_version: PROTOCOL_VERSION,
-                session_id: "computer-session".to_owned(),
+                session_id: TEST_COMPUTER_SESSION_ID.to_owned(),
                 compatible: true,
                 platform: "test-os".to_owned(),
                 architecture: "test-arch".to_owned(),
@@ -9233,7 +9593,7 @@ mod tests {
         ));
         assert!(state.bind_computer_command_owner(
             Some("owner"),
-            "computer-session",
+            TEST_COMPUTER_SESSION_ID,
             "computer.click"
         ));
 
@@ -9285,7 +9645,7 @@ mod tests {
         assert_eq!(error.status, StatusCode::CONFLICT);
         assert_eq!(error.code, "NO_COMPUTER_FRAME");
         let data = state.data.read().await;
-        assert!(data.computer_authority_requires_recovery("computer-session"));
+        assert!(data.computer_authority_requires_recovery(TEST_COMPUTER_SESSION_ID));
         assert_eq!(
             data.public.computer.as_ref().unwrap().share["active"],
             false
@@ -9323,7 +9683,7 @@ mod tests {
         ));
         assert!(state.bind_computer_command_owner(
             Some("owner-2"),
-            "computer-session",
+            TEST_COMPUTER_SESSION_ID,
             "computer.click"
         ));
         let (action_returned_tx, action_returned_rx) = oneshot::channel();
@@ -9787,6 +10147,35 @@ mod tests {
             None
         );
         assert_eq!(share_frame_ack(&json!({ "frame": {} })), None);
+    }
+
+    #[test]
+    fn raw_share_lifecycle_authority_requires_exact_boolean_proofs() {
+        assert_eq!(
+            active_share_id(&json!({ "active": true, "id": "share-1" })),
+            Some("share-1")
+        );
+        for rejected in [
+            json!({ "active": false, "id": "share-1" }),
+            json!({ "active": "true", "id": "share-1" }),
+            json!({ "active": true }),
+            json!({ "active": true, "id": "" }),
+            json!({ "active": true, "id": 7 }),
+            json!({ "active": true, "id": "x".repeat(101) }),
+        ] {
+            assert_eq!(active_share_id(&rejected), None, "accepted {rejected}");
+        }
+
+        assert!(raw_share_stop_confirmed(&json!({ "active": false })));
+        for rejected in [
+            Value::Null,
+            json!({}),
+            json!({ "active": true }),
+            json!({ "active": "false" }),
+            json!({ "stopped": true }),
+        ] {
+            assert!(!raw_share_stop_confirmed(&rejected), "accepted {rejected}");
+        }
     }
 
     #[test]

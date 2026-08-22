@@ -658,6 +658,8 @@ enum RejectedShareStart {
     MissingId,
     RetiredId,
     FreshWithWrongObservation,
+    FreshWithPendingObservation,
+    PendingResult,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -671,7 +673,6 @@ enum RejectedShareCleanup {
 
 struct RejectedShareComputer {
     handle: JoinHandle<()>,
-    events: mpsc::UnboundedSender<(String, Value)>,
     commands: Arc<Mutex<Vec<Value>>>,
     capture_active: Arc<AtomicBool>,
     transport_closed: Arc<AtomicBool>,
@@ -727,7 +728,7 @@ async fn connect_controlled_computer(base_url: &str, token: &str) -> ControlledC
         let mut events_open = true;
         let mut observation_sequence = 0_u64;
         let mut share_sequence = 0_u64;
-        let mut current_share_id = Some("share-old".to_owned());
+        let mut current_share_id = None;
         loop {
             let message = tokio::select! {
                 event = event_rx.recv(), if events_open => {
@@ -795,7 +796,11 @@ async fn connect_controlled_computer(base_url: &str, token: &str) -> ControlledC
                 }),
                 "computer.share.start" => {
                     share_sequence += 1;
-                    let share_id = format!("share-fresh-{share_sequence}");
+                    let share_id = if share_sequence == 1 {
+                        "share-old".to_owned()
+                    } else {
+                        format!("share-fresh-{}", share_sequence - 1)
+                    };
                     current_share_id = Some(share_id.clone());
                     json!({
                         "active": true,
@@ -861,12 +866,15 @@ async fn connect_controlled_computer(base_url: &str, token: &str) -> ControlledC
                 .unwrap();
         }
     });
-    ControlledComputer {
+    let computer = ControlledComputer {
         handle,
         events: event_tx,
         commands: command_rx,
         server_messages,
-    }
+    };
+    let started = start_computer_share(base_url, token).await;
+    assert_eq!(started["result"]["id"], "share-old");
+    computer
 }
 
 /// Models a helper that has already committed native capture when a gated
@@ -915,7 +923,7 @@ async fn connect_rejected_share_computer(
         .await
         .unwrap();
 
-    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<(String, Value)>();
+    let (_event_tx, mut event_rx) = mpsc::unbounded_channel::<(String, Value)>();
     let commands = Arc::new(Mutex::new(Vec::new()));
     let command_log = commands.clone();
     let capture_active = Arc::new(AtomicBool::new(true));
@@ -926,6 +934,7 @@ async fn connect_rejected_share_computer(
         let (mut writer, mut reader) = socket.split();
         let mut event_sequence = 0_u64;
         let mut events_open = true;
+        let mut share_start_received = false;
         loop {
             let message = tokio::select! {
                 event = event_rx.recv(), if events_open => {
@@ -976,31 +985,43 @@ async fn connect_rejected_share_computer(
                     }
                 })),
                 "computer.share.start" => {
+                    share_start_received = true;
                     capture_active_task.store(true, Ordering::SeqCst);
-                    let result = match start {
-                        RejectedShareStart::MissingId => json!({
-                            "active": true,
-                            "windowId": "window-9",
-                            "fps": 4
-                        }),
-                        RejectedShareStart::RetiredId => json!({
-                            "active": true,
-                            "id": "share-old",
-                            "windowId": "window-9",
-                            "fps": 4
-                        }),
-                        RejectedShareStart::FreshWithWrongObservation => json!({
-                            "active": true,
-                            "id": "share-fresh-rejected",
-                            "windowId": "window-9",
-                            "fps": 4
-                        }),
-                    };
-                    Some(json!({ "ok": true, "result": result }))
+                    if matches!(start, RejectedShareStart::PendingResult) {
+                        None
+                    } else {
+                        let result = match start {
+                            RejectedShareStart::MissingId => json!({
+                                "active": true,
+                                "windowId": "window-9",
+                                "fps": 4
+                            }),
+                            RejectedShareStart::RetiredId => json!({
+                                "active": true,
+                                "id": "share-old",
+                                "windowId": "window-9",
+                                "fps": 4
+                            }),
+                            RejectedShareStart::FreshWithWrongObservation
+                            | RejectedShareStart::FreshWithPendingObservation => json!({
+                                "active": true,
+                                "id": "share-fresh-rejected",
+                                "windowId": "window-9",
+                                "fps": 4
+                            }),
+                            RejectedShareStart::PendingResult => unreachable!(),
+                        };
+                        Some(json!({ "ok": true, "result": result }))
+                    }
                 }
                 "computer.observe" => {
-                    let share = match start {
-                        RejectedShareStart::FreshWithWrongObservation => json!({
+                    if share_start_received
+                        && matches!(start, RejectedShareStart::FreshWithPendingObservation)
+                    {
+                        continue;
+                    }
+                    let share = match (share_start_received, start) {
+                        (true, RejectedShareStart::FreshWithWrongObservation) => json!({
                             "active": true,
                             "id": "share-wrong-observation",
                             "windowId": "window-9",
@@ -1068,7 +1089,6 @@ async fn connect_rejected_share_computer(
     });
     RejectedShareComputer {
         handle,
-        events: event_tx,
         commands,
         capture_active,
         transport_closed,
@@ -1144,6 +1164,7 @@ async fn connect_fake_computer_with_share_ack(
         let (mut writer, mut reader) = socket.split();
         let mut frame_number = 0_u64;
         let mut current_frame = String::new();
+        let mut current_share_id: Option<String> = None;
         let mut event_sequence = 0_u64;
         let mut events_open = true;
         loop {
@@ -1193,6 +1214,10 @@ async fn connect_fake_computer_with_share_ack(
                         "inputReady": true,
                         "displayCount": 1,
                         "frameReady": !current_frame.is_empty(),
+                        "share": current_share_id.as_ref().map_or_else(
+                            || json!({ "active": false }),
+                            |share_id| json!({ "active": true, "id": share_id, "windowId": "window-9", "fps": 4 })
+                        ),
                         "invariants": {
                             "activatesTargetApplication": false,
                             "targetActivationMode": "helper-supplied-understatement",
@@ -1203,6 +1228,10 @@ async fn connect_fake_computer_with_share_ack(
                 "computer.observe" => {
                     frame_number += 1;
                     current_frame = format!("frame-{frame_number}");
+                    let share = current_share_id.as_ref().map_or_else(
+                        || json!({ "active": false }),
+                        |share_id| json!({ "active": true, "id": share_id, "windowId": "window-9", "fps": 4 }),
+                    );
                     json!({
                         "id": id, "type": "result", "ok": true,
                         "result": {
@@ -1221,7 +1250,7 @@ async fn connect_fake_computer_with_share_ack(
                                 "screenHeight": 400,
                                 "scaleFactor": 1.0,
                                 "rotation": 0.0,
-                                "share": { "active": false },
+                                "share": share,
                                 "pointer": {
                                     "id": "fixture-cursor",
                                     "visible": false,
@@ -1253,13 +1282,50 @@ async fn connect_fake_computer_with_share_ack(
                         "expectedPointerRevision": params["expectedPointerRevision"]
                     }
                 }),
-                "computer.move" => json!({
-                    "id": id, "type": "result", "ok": false,
-                    "error": {
-                        "code": "COMPUTER_OUTCOME_UNKNOWN",
-                        "message": "Fixture lost authority after dispatch"
-                    }
+                "computer.move" => {
+                    current_share_id = None;
+                    json!({
+                        "id": id, "type": "result", "ok": false,
+                        "error": {
+                            "code": "COMPUTER_OUTCOME_UNKNOWN",
+                            "message": "Fixture lost authority after dispatch"
+                        }
+                    })
+                }
+                "computer.share.start" => {
+                    current_share_id = Some("share-fixture".to_owned());
+                    json!({
+                        "id": id, "type": "result", "ok": true,
+                        "result": {
+                            "active": true,
+                            "id": "share-fixture",
+                            "windowId": params["windowId"],
+                            "fps": params["fps"],
+                            "sequence": 0,
+                            "sourceSequence": 0,
+                            "startedAt": "2026-08-19T00:00:00Z",
+                            "captureScope": "exact-window",
+                            "cursorComposited": true,
+                            "ackPaced": advertise_share_ack,
+                            "lastAckedSequence": 0,
+                            "backpressure": if advertise_share_ack { "latest-frame-wins" } else { "producer-blocking" }
+                        }
+                    })
+                }
+                "computer.share.status" => json!({
+                    "id": id, "type": "result", "ok": true,
+                    "result": current_share_id.as_ref().map_or_else(
+                        || json!({ "active": false }),
+                        |share_id| json!({ "active": true, "id": share_id, "windowId": "window-9", "fps": 4 })
+                    )
                 }),
+                "computer.share.stop" => {
+                    let stopped = current_share_id.take().is_some();
+                    json!({
+                        "id": id, "type": "result", "ok": true,
+                        "result": { "active": false, "stopped": stopped }
+                    })
+                }
                 _ => json!({
                     "id": id, "type": "result", "ok": false,
                     "error": { "code": "COMPUTER_UNSUPPORTED_ACTION", "message": "Unsupported test action" }
@@ -1284,6 +1350,21 @@ async fn connect_fake_computer_with_share_ack(
         events: event_tx,
         server_messages,
     }
+}
+
+async fn start_computer_share(base_url: &str, token: &str) -> Value {
+    let response = Client::new()
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(token)
+        .json(&json!({
+            "method": "computer.share.start",
+            "params": { "windowId": "window-9", "fps": 4 }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    response.json().await.unwrap()
 }
 
 fn computer_share_frame_data(frame_id: &str, share: Value) -> Value {
@@ -1511,24 +1592,24 @@ async fn establish_rejected_share_start_gate(
         .as_str()
         .unwrap()
         .to_owned();
-    computer
-        .events
-        .send((
-            "computer.share.frame".to_owned(),
-            computer_share_frame_data(
-                "frame-before-rejected-start",
-                json!({
-                    "active": true,
-                    "id": "share-old",
-                    "windowId": "window-9",
-                    "sourceSequence": 1,
-                    "sequence": 1,
-                    "ackPaced": false
-                }),
-            ),
-        ))
+    let observed = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(token)
+        .json(&json!({ "method": "computer.observe", "params": {} }))
+        .send()
+        .await
         .unwrap();
-    wait_for_computer_frame(client, base_url, token, "frame-before-rejected-start").await;
+    assert_eq!(observed.status(), 200);
+    assert_eq!(
+        observed.json::<Value>().await.unwrap()["result"]["frameId"],
+        "rejected-start-observe"
+    );
+    wait_for_logged_computer_message(
+        &computer.commands,
+        |message| message["method"] == "computer.observe",
+        "share-gate setup observation",
+    )
+    .await;
 
     let outcome_unknown = client
         .post(format!("{base_url}/api/v1/command"))
@@ -1536,7 +1617,7 @@ async fn establish_rejected_share_start_gate(
         .json(&json!({
             "method": "computer.move",
             "params": {
-                "frameId": "frame-before-rejected-start",
+                "frameId": "rejected-start-observe",
                 "x": 10,
                 "y": 10
             }
@@ -2121,6 +2202,8 @@ async fn paces_negotiated_share_frames_with_event_acks_and_drop_metrics() {
     .await;
     assert_eq!(hello_ack["ok"], true);
     assert_eq!(hello_ack["shareAck"], true);
+    let started = start_computer_share(&base_url, &token).await;
+    assert_eq!(started["result"]["id"], "share-fixture");
 
     fake.events
         .send((
@@ -2228,6 +2311,8 @@ async fn outcome_unknown_native_action_clears_published_share_and_frame_authorit
     let fake = connect_fake_computer_with_share_ack(&base_url, &token, VERSION, true).await;
     let client = Client::new();
     wait_for_computer(&client, &base_url, &token).await;
+    let started = start_computer_share(&base_url, &token).await;
+    assert_eq!(started["result"]["id"], "share-fixture");
 
     fake.events
         .send((
@@ -2236,7 +2321,7 @@ async fn outcome_unknown_native_action_clears_published_share_and_frame_authorit
                 "frame-outcome-unknown",
                 json!({
                     "active": true,
-                    "id": "share-outcome-unknown",
+                    "id": "share-fixture",
                     "windowId": "window-9",
                     "fps": 4,
                     "sequence": 1,
@@ -2323,7 +2408,7 @@ async fn outcome_unknown_native_action_clears_published_share_and_frame_authorit
         .json()
         .await
         .unwrap();
-    assert_eq!(recovered["result"]["frameId"], "frame-1");
+    assert_eq!(recovered["result"]["frameId"], "frame-2");
     let stale_after_recovery = client
         .post(format!("{base_url}/api/v1/command"))
         .bearer_auth(&token)
@@ -2458,8 +2543,8 @@ async fn rejected_gated_share_starts_are_stopped_on_the_exact_session_and_remain
                     .iter()
                     .filter(|message| message["method"] == "computer.observe")
                     .count(),
-                1,
-                "a retired start result must be rejected before automatic observation"
+                2,
+                "only gate setup and the first fresh start may observe; the retired retry must be rejected first"
             );
         }
 
@@ -2467,6 +2552,316 @@ async fn rejected_gated_share_starts_are_stopped_on_the_exact_session_and_remain
         let _ = shutdown.send(());
         handle.await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn ungated_share_start_requires_raw_active_true_and_a_bounded_id() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let computer = connect_rejected_share_computer(
+        &base_url,
+        &token,
+        RejectedShareStart::MissingId,
+        RejectedShareCleanup::Confirmed,
+    )
+    .await;
+    let client = Client::new();
+    let session_id =
+        wait_for_computer(&client, &base_url, &token).await["state"]["computer"]["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+    let rejected = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "computer.share.start",
+            "params": { "windowId": "window-9", "fps": 4 }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), 502);
+    assert_eq!(
+        rejected.json::<Value>().await.unwrap()["error"]["code"],
+        "COMPUTER_INVALID_OBSERVATION"
+    );
+
+    {
+        let commands = computer.commands.lock().unwrap();
+        let start = commands
+            .iter()
+            .find(|message| message["method"] == "computer.share.start")
+            .expect("strict ungated start command");
+        let stop = commands
+            .iter()
+            .find(|message| message["method"] == "computer.share.stop")
+            .expect("exact rollback after malformed ungated start");
+        assert_eq!(start["sessionId"], session_id);
+        assert_eq!(stop["sessionId"], session_id);
+    }
+    assert!(!computer.capture_active.load(Ordering::SeqCst));
+    assert!(!computer.transport_closed.load(Ordering::SeqCst));
+
+    computer.handle.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn direct_share_stop_requires_raw_active_false_and_revokes_if_retry_is_unproven() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let computer = connect_rejected_share_computer(
+        &base_url,
+        &token,
+        RejectedShareStart::MissingId,
+        RejectedShareCleanup::MissingActive,
+    )
+    .await;
+    let client = Client::new();
+    let session_id =
+        wait_for_computer(&client, &base_url, &token).await["state"]["computer"]["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+    let rejected = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "computer.share.stop", "params": {} }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), 502);
+    assert_eq!(
+        rejected.json::<Value>().await.unwrap()["error"]["code"],
+        "COMPUTER_INVALID_OBSERVATION"
+    );
+
+    for _ in 0..200 {
+        if computer.transport_closed.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(computer.transport_closed.load(Ordering::SeqCst));
+    assert!(!computer.capture_active.load(Ordering::SeqCst));
+    {
+        let commands = computer.commands.lock().unwrap();
+        let stops = commands
+            .iter()
+            .filter(|message| message["method"] == "computer.share.stop")
+            .collect::<Vec<_>>();
+        assert_eq!(stops.len(), 2, "the ambiguous direct stop is retried once");
+        assert!(
+            stops
+                .iter()
+                .all(|message| message["sessionId"] == session_id),
+            "both direct stop and fail-closed retry stay on the exact helper"
+        );
+    }
+
+    computer.handle.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn cancel_after_pending_share_start_dispatch_revokes_the_exact_transport() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let computer = connect_rejected_share_computer(
+        &base_url,
+        &token,
+        RejectedShareStart::PendingResult,
+        RejectedShareCleanup::Confirmed,
+    )
+    .await;
+    let client = Client::new();
+    wait_for_computer(&client, &base_url, &token).await;
+
+    let original = {
+        let client = client.clone();
+        let base_url = base_url.clone();
+        let token = token.clone();
+        tokio::spawn(async move {
+            client
+                .post(format!("{base_url}/api/v1/command"))
+                .bearer_auth(token)
+                .json(&json!({
+                    "method": "computer.share.start",
+                    "params": { "windowId": "window-9", "fps": 4 },
+                    "callId": "cancel-pending-share-start"
+                }))
+                .send()
+                .await
+                .unwrap()
+        })
+    };
+    wait_for_logged_computer_message(
+        &computer.commands,
+        |message| message["method"] == "computer.share.start",
+        "pending native share.start",
+    )
+    .await;
+    assert!(computer.capture_active.load(Ordering::SeqCst));
+
+    let canceled = client
+        .post(format!("{base_url}/api/v1/command/cancel"))
+        .bearer_auth(&token)
+        .json(&json!({ "callId": "cancel-pending-share-start" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(canceled.status(), 202);
+    assert_eq!(original.await.unwrap().status(), 504);
+
+    for _ in 0..200 {
+        if computer.transport_closed.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(computer.transport_closed.load(Ordering::SeqCst));
+    assert!(!computer.capture_active.load(Ordering::SeqCst));
+
+    computer.handle.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn cancel_during_first_share_observation_revokes_the_exact_transport() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let computer = connect_rejected_share_computer(
+        &base_url,
+        &token,
+        RejectedShareStart::FreshWithPendingObservation,
+        RejectedShareCleanup::Confirmed,
+    )
+    .await;
+    let client = Client::new();
+    wait_for_computer(&client, &base_url, &token).await;
+
+    let original = {
+        let client = client.clone();
+        let base_url = base_url.clone();
+        let token = token.clone();
+        tokio::spawn(async move {
+            client
+                .post(format!("{base_url}/api/v1/command"))
+                .bearer_auth(token)
+                .json(&json!({
+                    "method": "computer.share.start",
+                    "params": { "windowId": "window-9", "fps": 4 },
+                    "callId": "cancel-first-share-observe"
+                }))
+                .send()
+                .await
+                .unwrap()
+        })
+    };
+    wait_for_logged_computer_message(
+        &computer.commands,
+        |message| message["method"] == "computer.observe",
+        "first exact-ID share observation",
+    )
+    .await;
+    assert!(computer.capture_active.load(Ordering::SeqCst));
+
+    let canceled = client
+        .post(format!("{base_url}/api/v1/command/cancel"))
+        .bearer_auth(&token)
+        .json(&json!({ "callId": "cancel-first-share-observe" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(canceled.status(), 202);
+    assert_eq!(original.await.unwrap().status(), 504);
+
+    for _ in 0..200 {
+        if computer.transport_closed.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(computer.transport_closed.load(Ordering::SeqCst));
+    assert!(!computer.capture_active.load(Ordering::SeqCst));
+
+    computer.handle.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn cancel_during_rejected_start_rollback_cannot_cancel_the_cleanup_owner() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let computer = connect_rejected_share_computer(
+        &base_url,
+        &token,
+        RejectedShareStart::MissingId,
+        RejectedShareCleanup::Timeout,
+    )
+    .await;
+    let client = Client::new();
+    wait_for_computer(&client, &base_url, &token).await;
+
+    let original = {
+        let client = client.clone();
+        let base_url = base_url.clone();
+        let token = token.clone();
+        tokio::spawn(async move {
+            client
+                .post(format!("{base_url}/api/v1/command"))
+                .bearer_auth(token)
+                .json(&json!({
+                    "method": "computer.share.start",
+                    "params": { "windowId": "window-9", "fps": 4 },
+                    "callId": "cancel-rejected-share-rollback"
+                }))
+                .send()
+                .await
+                .unwrap()
+        })
+    };
+    wait_for_logged_computer_message(
+        &computer.commands,
+        |message| message["method"] == "computer.share.stop",
+        "durable rejected-start rollback",
+    )
+    .await;
+    assert!(computer.capture_active.load(Ordering::SeqCst));
+    assert!(!computer.transport_closed.load(Ordering::SeqCst));
+
+    let canceled = client
+        .post(format!("{base_url}/api/v1/command/cancel"))
+        .bearer_auth(&token)
+        .json(&json!({ "callId": "cancel-rejected-share-rollback" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(canceled.status(), 202);
+    assert_eq!(original.await.unwrap().status(), 504);
+
+    for _ in 0..250 {
+        if computer.transport_closed.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        computer.transport_closed.load(Ordering::SeqCst),
+        "the detached rollback task must revoke after its own stop timeout"
+    );
+    assert!(!computer.capture_active.load(Ordering::SeqCst));
+
+    computer.handle.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
 }
 
 #[tokio::test]
@@ -2782,6 +3177,8 @@ async fn keeps_legacy_timer_shares_without_event_acks() {
         hello_ack["shareAck"], false,
         "a helper without the capability must not be promised acks"
     );
+    let started = start_computer_share(&base_url, &token).await;
+    assert_eq!(started["result"]["id"], "share-fixture");
 
     fake.events
         .send((
@@ -2790,7 +3187,7 @@ async fn keeps_legacy_timer_shares_without_event_acks() {
                 "frame-legacy-1",
                 json!({
                     "active": true,
-                    "id": "share-legacy",
+                    "id": "share-fixture",
                     "windowId": "window-9",
                     "fps": 4,
                     "sequence": 1,
@@ -4320,7 +4717,7 @@ async fn canceling_a_computer_mutation_clears_only_its_helper_session_authority(
         .json()
         .await
         .unwrap();
-    assert_eq!(observed["result"]["frameId"], "controlled-observe-1");
+    assert_eq!(observed["result"]["frameId"], "controlled-observe-2");
     computer
         .events
         .send((
@@ -4359,7 +4756,7 @@ async fn canceling_a_computer_mutation_clears_only_its_helper_session_authority(
         .unwrap();
     assert_eq!(
         one_shot["state"]["computerObservation"]["frameId"],
-        "controlled-observe-1"
+        "controlled-observe-2"
     );
 
     // A successful explicit share start grants exactly the returned fresh ID.
@@ -4605,6 +5002,8 @@ async fn canceling_a_computer_mutation_clears_only_its_helper_session_authority(
         }
         tokio::task::yield_now().await;
     };
+    let started = start_computer_share(&base_url, &token).await;
+    assert_eq!(started["result"]["id"], "share-fixture");
     replacement
         .events
         .send((
@@ -4613,7 +5012,7 @@ async fn canceling_a_computer_mutation_clears_only_its_helper_session_authority(
                 "frame-replacement-1",
                 json!({
                     "active": true,
-                    "id": "share-replacement",
+                    "id": "share-fixture",
                     "windowId": "window-9",
                     "sourceSequence": 1,
                     "sequence": 1
@@ -4665,7 +5064,7 @@ async fn canceling_a_computer_command_queued_on_the_action_lock_never_dispatches
                 "frame-queued-1",
                 json!({
                     "active": true,
-                    "id": "share-queued",
+                    "id": "share-old",
                     "windowId": "window-9",
                     "sourceSequence": 1,
                     "sequence": 1

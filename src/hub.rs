@@ -7,7 +7,7 @@ use axum::extract::ws::Message;
 use serde_json::{Value, json};
 use thiserror::Error;
 use tokio::sync::mpsc::error::TrySendError;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Error)]
@@ -43,6 +43,9 @@ struct HubInner {
 struct Connection {
     id: Uuid,
     sender: mpsc::Sender<Message>,
+    /// Out-of-band transport revocation. Unlike the ordinary bounded message
+    /// queue, this latest-value signal cannot be displaced by backpressure.
+    shutdown: watch::Sender<bool>,
     sequence: Arc<AtomicU64>,
     ready: Arc<AtomicBool>,
 }
@@ -142,24 +145,30 @@ impl ExtensionHub {
             .is_some_and(|connection| connection.ready.load(Ordering::Acquire))
     }
 
-    pub fn attach(&self) -> (Uuid, mpsc::Receiver<Message>) {
+    pub fn attach(&self) -> (Uuid, mpsc::Receiver<Message>, watch::Receiver<bool>) {
         let id = Uuid::new_v4();
         self.attach_with_id(id)
     }
 
-    pub fn attach_with_id(&self, id: Uuid) -> (Uuid, mpsc::Receiver<Message>) {
+    pub fn attach_with_id(
+        &self,
+        id: Uuid,
+    ) -> (Uuid, mpsc::Receiver<Message>, watch::Receiver<bool>) {
         let (sender, receiver) = mpsc::channel(64);
+        let (shutdown, shutdown_receiver) = watch::channel(false);
         let previous = self.inner.connection.lock().unwrap().replace(Connection {
             id,
             sender,
+            shutdown,
             sequence: Arc::new(AtomicU64::new(0)),
             ready: Arc::new(AtomicBool::new(false)),
         });
         if let Some(previous) = previous {
+            previous.shutdown.send_replace(true);
             self.fail_enqueued_for(previous.id, Some(&previous.sender), "connection_replaced");
             let _ = previous.sender.try_send(Message::Close(None));
         }
-        (id, receiver)
+        (id, receiver, shutdown_receiver)
     }
 
     pub fn mark_ready(&self, connection_id: Uuid) -> bool {
@@ -235,6 +244,10 @@ impl ExtensionHub {
     }
 
     pub fn detach(&self, connection_id: Uuid) -> bool {
+        // This is the natural transport-exit path: websocket handlers call it
+        // only after inbound EOF (or after observing `shutdown`) and aborting
+        // their writer. There is no live transport left for a watch signal to
+        // wake; revocation paths must use `close_if_current` or `close` first.
         let detached = {
             let mut connection = self.inner.connection.lock().unwrap();
             if connection
@@ -514,8 +527,10 @@ impl ExtensionHub {
         let Some(closed) = closed else {
             return false;
         };
-        // Give transport teardown priority over advisory cancellation frames.
-        // Pending callers are failed below even if their cancels cannot queue.
+        // Revoke the actual socket out of band before any best-effort protocol
+        // frames. This signal is latest-value and cannot fail when the ordinary
+        // 64-slot data queue is full.
+        closed.shutdown.send_replace(true);
         let _ = closed.sender.try_send(Message::Close(None));
         self.fail_enqueued_for(connection_id, Some(&closed.sender), reason);
         true
@@ -523,6 +538,7 @@ impl ExtensionHub {
 
     pub fn close(&self) {
         if let Some(connection) = self.inner.connection.lock().unwrap().take() {
+            connection.shutdown.send_replace(true);
             self.fail_enqueued_for(connection.id, Some(&connection.sender), "server_stopped");
             let _ = connection.sender.try_send(Message::Close(None));
         }
@@ -560,7 +576,7 @@ mod tests {
     #[tokio::test]
     async fn binds_results_to_the_exact_connection_session_and_sequence() {
         let hub = ExtensionHub::new(Duration::from_secs(1));
-        let (connection_id, mut receiver) = hub.attach();
+        let (connection_id, mut receiver, _shutdown) = hub.attach();
         assert!(hub.mark_ready(connection_id));
         let caller = {
             let hub = hub.clone();
@@ -601,7 +617,7 @@ mod tests {
     #[tokio::test]
     async fn quarantines_a_mismatched_result_and_reports_unknown_outcome() {
         let hub = ExtensionHub::new(Duration::from_secs(1));
-        let (connection_id, mut receiver) = hub.attach();
+        let (connection_id, mut receiver, _shutdown) = hub.attach();
         assert!(hub.mark_ready(connection_id));
         let caller = {
             let hub = hub.clone();
@@ -632,9 +648,9 @@ mod tests {
     #[tokio::test]
     async fn refuses_calls_until_the_current_connection_is_ready() {
         let hub = ExtensionHub::new(Duration::from_secs(1));
-        let (first, _first_receiver) = hub.attach();
+        let (first, _first_receiver, _first_shutdown) = hub.attach();
         assert!(hub.mark_ready(first));
-        let (_replacement, _replacement_receiver) = hub.attach();
+        let (_replacement, _replacement_receiver, _replacement_shutdown) = hub.attach();
 
         let error = hub.call("tabs.list", json!({})).await.unwrap_err();
         assert_eq!(error.code, "EXTENSION_HANDSHAKE_PENDING");
@@ -644,12 +660,12 @@ mod tests {
     #[tokio::test]
     async fn connection_scoped_replies_never_cross_to_a_replacement() {
         let hub = ExtensionHub::new(Duration::from_secs(1));
-        let (first, mut first_receiver) = hub.attach();
+        let (first, mut first_receiver, _first_shutdown) = hub.attach();
         hub.send_to(first, json!({ "type": "welcome", "for": "first" }))
             .unwrap();
         assert_eq!(next_json(&mut first_receiver).await["for"], "first");
 
-        let (second, mut second_receiver) = hub.attach();
+        let (second, mut second_receiver, _second_shutdown) = hub.attach();
         assert!(
             hub.send_to(first, json!({ "type": "pong", "for": "first" }))
                 .is_err()
@@ -662,7 +678,7 @@ mod tests {
     #[tokio::test]
     async fn scoped_call_identifies_the_connection_that_produced_a_resolved_result() {
         let hub = ExtensionHub::new(Duration::from_secs(1));
-        let (first, mut first_receiver) = hub.attach();
+        let (first, mut first_receiver, _first_shutdown) = hub.attach();
         assert!(hub.mark_ready(first));
         let caller = {
             let hub = hub.clone();
@@ -682,7 +698,7 @@ mod tests {
             }),
         );
 
-        let (replacement, _replacement_receiver) = hub.attach();
+        let (replacement, _replacement_receiver, _replacement_shutdown) = hub.attach();
         assert_ne!(replacement, first);
         let (producer, result) = caller.await.unwrap().unwrap();
         assert_eq!(producer, first);
@@ -693,7 +709,7 @@ mod tests {
     #[tokio::test]
     async fn timeout_emits_a_session_bound_cancel_and_reports_unknown_outcome() {
         let hub = ExtensionHub::new(Duration::from_millis(20));
-        let (connection_id, mut receiver) = hub.attach();
+        let (connection_id, mut receiver, _shutdown) = hub.attach();
         assert!(hub.mark_ready(connection_id));
         let caller = {
             let hub = hub.clone();
@@ -716,7 +732,7 @@ mod tests {
     #[tokio::test]
     async fn dropping_a_call_emits_one_exact_request_cancel_and_rejects_late_results() {
         let hub = ExtensionHub::new(Duration::from_secs(1));
-        let (connection_id, mut receiver) = hub.attach();
+        let (connection_id, mut receiver, _shutdown) = hub.attach();
         assert!(hub.mark_ready(connection_id));
         let caller = {
             let hub = hub.clone();
@@ -752,7 +768,7 @@ mod tests {
     #[tokio::test]
     async fn replacing_extension_after_dequeue_cancels_and_reports_unknown_outcome() {
         let hub = ExtensionHub::new(Duration::from_secs(1));
-        let (first, mut first_receiver) = hub.attach();
+        let (first, mut first_receiver, _first_shutdown) = hub.attach();
         assert!(hub.mark_ready(first));
         let caller = {
             let hub = hub.clone();
@@ -760,7 +776,7 @@ mod tests {
         };
         let command = next_json(&mut first_receiver).await;
 
-        let (replacement, _replacement_receiver) = hub.attach();
+        let (replacement, _replacement_receiver, _replacement_shutdown) = hub.attach();
         assert_ne!(replacement, first);
         let cancel = next_json(&mut first_receiver).await;
         assert_eq!(cancel["type"], "cancel");
@@ -776,7 +792,7 @@ mod tests {
     #[tokio::test]
     async fn disconnecting_helper_after_dequeue_cancels_and_reports_unknown_outcome() {
         let hub = ExtensionHub::computer(Duration::from_secs(1));
-        let (connection_id, mut receiver) = hub.attach();
+        let (connection_id, mut receiver, _shutdown) = hub.attach();
         assert!(hub.mark_ready(connection_id));
         let caller = {
             let hub = hub.clone();
@@ -799,9 +815,9 @@ mod tests {
     #[tokio::test]
     async fn exact_connection_call_never_falls_through_to_a_replacement() {
         let hub = ExtensionHub::computer(Duration::from_secs(1));
-        let (origin, mut origin_receiver) = hub.attach();
+        let (origin, mut origin_receiver, _origin_shutdown) = hub.attach();
         assert!(hub.mark_ready(origin));
-        let (replacement, mut replacement_receiver) = hub.attach();
+        let (replacement, mut replacement_receiver, _replacement_shutdown) = hub.attach();
         assert!(hub.mark_ready(replacement));
 
         let error = hub
@@ -819,9 +835,9 @@ mod tests {
     #[tokio::test]
     async fn exact_close_revokes_only_the_named_current_connection() {
         let hub = ExtensionHub::computer(Duration::from_secs(1));
-        let (origin, _origin_receiver) = hub.attach();
+        let (origin, _origin_receiver, _origin_shutdown) = hub.attach();
         assert!(hub.mark_ready(origin));
-        let (replacement, mut replacement_receiver) = hub.attach();
+        let (replacement, mut replacement_receiver, mut replacement_shutdown) = hub.attach();
         assert!(hub.mark_ready(replacement));
 
         assert!(!hub.close_if_current(origin, "rejected_share_cleanup"));
@@ -830,9 +846,26 @@ mod tests {
 
         assert!(hub.close_if_current(replacement, "rejected_share_cleanup"));
         assert!(!hub.connected());
+        replacement_shutdown.changed().await.unwrap();
+        assert!(*replacement_shutdown.borrow());
         assert!(matches!(
             replacement_receiver.recv().await,
             Some(Message::Close(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn exact_close_signal_survives_a_saturated_message_queue() {
+        let hub = ExtensionHub::computer(Duration::from_secs(1));
+        let (connection, _receiver, mut shutdown) = hub.attach();
+        assert!(hub.mark_ready(connection));
+        for sequence in 0..64 {
+            hub.send_to(connection, json!({ "sequence": sequence }))
+                .unwrap();
+        }
+
+        assert!(hub.close_if_current(connection, "saturated_transport_revoke"));
+        shutdown.changed().await.unwrap();
+        assert!(*shutdown.borrow());
     }
 }

@@ -35,7 +35,7 @@ const FATAL_CAPTURE_STOP_CODE: &str = "COMPUTER_CAPTURE_STOP_FATAL";
 const FATAL_CAPTURE_STOP_DETAIL: &str = "COMPUTER_CAPTURE_STOP_FATAL:";
 const WATCHDOG_EXIT_CODE: i32 = 70;
 const CAPTURE_STOP_EXIT_CODE: i32 = 71;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 const TRANSPORT_EXIT_CODE: i32 = 72;
 const OUTCOME_UNKNOWN_EXIT_CODE: i32 = 73;
 
@@ -271,7 +271,28 @@ async fn run_worker(controller: ComputerController) -> Result<(), Box<dyn std::e
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
+    // ScreenCaptureKit teardown can synchronously wait on a wedged framework
+    // callback. Treat the macOS worker as disposable after transport loss just
+    // like the supervised Windows worker: the OS owns final resource cleanup,
+    // so the async session can never hang while trying to stop SCStream.
+    #[cfg(target_os = "macos")]
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            println!("Stopping...");
+            terminate_worker(0);
+        }
+        result = run_session(port, &token, Arc::clone(&controller)) => {
+            match result {
+                Ok(()) => eprintln!("Bridge connection closed; terminating the disposable helper."),
+                Err(error) => eprintln!("Bridge session ended: {error}; terminating the disposable helper."),
+            }
+            terminate_worker(TRANSPORT_EXIT_CODE);
+        }
+    }
+
+    // Keep the reconnecting stub on unsupported/test Unix hosts. Linux must
+    // never inherit the native-helper process-termination policy.
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let mut backoff = Duration::from_millis(250);
         loop {
@@ -1227,14 +1248,15 @@ impl Drop for SessionAuthorityGuard {
         for cancellation in self.commands.values() {
             cancellation.cancel();
         }
-        // A production Windows worker is disposable: its caller terminates it
-        // as soon as this transport future returns. Do not synchronously wait
-        // for a controller lock or WGC shutdown here, because either may be the
-        // platform call whose failure caused transport teardown.
-        #[cfg(all(target_os = "windows", not(test)))]
+        // Production Windows and macOS workers are disposable: their caller
+        // terminates them as soon as this transport future returns. Do not
+        // synchronously wait for a controller lock or native capture shutdown
+        // here, because either may be the platform call whose failure caused
+        // transport teardown.
+        #[cfg(all(any(target_os = "windows", target_os = "macos"), not(test)))]
         let _ = &self.controller;
 
-        #[cfg(any(not(target_os = "windows"), test))]
+        #[cfg(any(not(any(target_os = "windows", target_os = "macos")), test))]
         self.controller
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
