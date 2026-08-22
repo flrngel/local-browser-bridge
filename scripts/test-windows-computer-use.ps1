@@ -20,7 +20,7 @@ param(
 
     [string]$Token,
 
-    [ValidateSet("Smoke", "Capture", "Recovery", "Semantic", "Keyboard", "Pixel", "All")]
+    [ValidateSet("Smoke", "Capture", "Recovery", "Semantic", "Keyboard", "Pixel", "Cancellation", "All")]
     [string[]]$Suite = @("Smoke"),
 
     [ValidateRange(0, 65535)]
@@ -39,6 +39,8 @@ $ProgressPreference = "SilentlyContinue"
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     throw "The Windows acceptance runner can run only on Windows."
 }
+
+Add-Type -AssemblyName System.Net.Http -ErrorAction Stop
 
 function Resolve-RequiredFile {
     param([string]$Path, [string]$Label)
@@ -1116,24 +1118,142 @@ function Assert-True {
     }
 }
 
+function New-LbbHttpClient {
+    $client = [Net.Http.HttpClient]::new()
+    $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
+    $client.DefaultRequestHeaders.Authorization = [Net.Http.Headers.AuthenticationHeaderValue]::new("Bearer", $Token)
+    return $client
+}
+
+function Close-LbbPendingRequest {
+    param([object]$Pending)
+    if ($null -eq $Pending -or $Pending.disposed -eq $true) {
+        return
+    }
+    if ($null -ne $Pending.content) {
+        $Pending.content.Dispose()
+    }
+    $Pending.client.Dispose()
+    $Pending.disposed = $true
+}
+
+function Start-LbbJsonPost {
+    param([string]$Path, [object]$Body)
+    $client = New-LbbHttpClient
+    $content = $null
+    try {
+        $json = $Body | ConvertTo-Json -Depth 20 -Compress
+        $content = [Net.Http.StringContent]::new($json, [Text.Encoding]::UTF8, "application/json")
+        $task = $client.PostAsync($script:baseUrl + $Path, $content)
+        return [pscustomobject]@{
+            client = $client
+            content = $content
+            task = $task
+            disposed = $false
+        }
+    }
+    catch {
+        if ($null -ne $content) {
+            $content.Dispose()
+        }
+        $client.Dispose()
+        throw
+    }
+}
+
+function Receive-LbbJsonResponse {
+    param([object]$Pending)
+    $httpResponse = $null
+    try {
+        $httpResponse = ($Pending.task.GetAwaiter()).GetResult()
+        $json = (($httpResponse.Content.ReadAsStringAsync()).GetAwaiter()).GetResult()
+        if ([String]::IsNullOrWhiteSpace($json)) {
+            throw "Loopback API returned an empty JSON response."
+        }
+        $body = $json | ConvertFrom-Json
+        return [pscustomobject]@{
+            status = [int]$httpResponse.StatusCode
+            httpOk = $httpResponse.IsSuccessStatusCode
+            body = $body
+        }
+    }
+    catch {
+        throw "Loopback API request failed: $(ConvertTo-SafeFailureText $_.Exception.Message)"
+    }
+    finally {
+        if ($null -ne $httpResponse) {
+            $httpResponse.Dispose()
+        }
+        Close-LbbPendingRequest $Pending
+    }
+}
+
+function Invoke-LbbJsonPost {
+    param([string]$Path, [object]$Body)
+    $pending = Start-LbbJsonPost $Path $Body
+    return Receive-LbbJsonResponse $pending
+}
+
+function Invoke-LbbJsonGet {
+    param([string]$Path)
+    $client = New-LbbHttpClient
+    $httpResponse = $null
+    try {
+        $httpResponse = (($client.GetAsync($script:baseUrl + $Path)).GetAwaiter()).GetResult()
+        $json = (($httpResponse.Content.ReadAsStringAsync()).GetAwaiter()).GetResult()
+        if ([String]::IsNullOrWhiteSpace($json)) {
+            throw "Loopback API returned an empty JSON response."
+        }
+        return [pscustomobject]@{
+            status = [int]$httpResponse.StatusCode
+            httpOk = $httpResponse.IsSuccessStatusCode
+            body = ($json | ConvertFrom-Json)
+        }
+    }
+    catch {
+        throw "Loopback API request failed: $(ConvertTo-SafeFailureText $_.Exception.Message)"
+    }
+    finally {
+        if ($null -ne $httpResponse) {
+            $httpResponse.Dispose()
+        }
+        $client.Dispose()
+    }
+}
+
+function Start-LbbCommandRequest {
+    param([string]$Method, [hashtable]$Params, [string]$CallId)
+    return Start-LbbJsonPost "/api/v1/command" ([ordered]@{
+        method = $Method
+        params = $Params
+        callId = $CallId
+    })
+}
+
+function Invoke-LbbCommandResponse {
+    param([string]$Method, [hashtable]$Params, [string]$CallId)
+    return Invoke-LbbJsonPost "/api/v1/command" ([ordered]@{
+        method = $Method
+        params = $Params
+        callId = $CallId
+    })
+}
+
+function Invoke-LbbCancelResponse {
+    param([string]$CallId)
+    return Invoke-LbbJsonPost "/api/v1/command/cancel" ([ordered]@{ callId = $CallId })
+}
+
 function Invoke-LbbCommand {
     param([string]$Method, [hashtable]$Params)
     $callId = "windows-fixture-" + [Guid]::NewGuid().ToString("N")
-    $body = [ordered]@{ method = $Method; params = $Params; callId = $callId } | ConvertTo-Json -Depth 15 -Compress
-    try {
-        $response = Invoke-RestMethod -UseBasicParsing -Uri "$script:baseUrl/api/v1/command" -Method Post -Headers @{ Authorization = "Bearer $Token" } -ContentType "application/json" -Body $body -TimeoutSec $TimeoutSeconds
-    }
-    catch {
-        $detail = $_.ErrorDetails.Message
-        if ([String]::IsNullOrWhiteSpace($detail)) {
-            $detail = $_.Exception.Message
-        }
-        throw "Loopback command $Method failed: $(ConvertTo-SafeFailureText $detail)"
-    }
+    $raw = Invoke-LbbCommandResponse $Method $Params $callId
+    $response = $raw.body
     $responseError = Get-PropertyValue $response "error"
     if ($null -ne $responseError) {
         throw "Loopback command $Method returned $($responseError.code): $($responseError.message)"
     }
+    Assert-True ($raw.httpOk -eq $true) "Loopback command $Method returned HTTP $($raw.status) without a structured error."
     return $response
 }
 
@@ -1462,7 +1582,7 @@ function New-WatchdogCausalityProof {
 }
 
 $selectedSuites = if ($Suite -contains "All") {
-    @("Smoke", "Recovery", "Semantic", "Keyboard", "Pixel", "Capture")
+    @("Smoke", "Recovery", "Semantic", "Keyboard", "Pixel", "Capture", "Cancellation")
 }
 else {
     @($Suite | Select-Object -Unique)
@@ -1477,6 +1597,7 @@ if ($selectedSuites -contains "Recovery" -and $TimeoutSeconds -lt 25) {
 $fixtureProcess = $null
 $serverProcess = $null
 $helperProcess = $null
+$pendingCancellationRequest = $null
 $script:ownedJob = $null
 $script:fixtureReady = $null
 $script:baseUrl = "http://127.0.0.1:$Port"
@@ -1960,6 +2081,200 @@ try {
         Save-StepResponse "native share stop" $response
     }
 
+    if ($selectedSuites -contains "Cancellation") {
+        $cancelShareStart = Invoke-LbbCommand "computer.share.start" @{ windowId = $targetWindowId; fps = 4 }
+        $shareStarted = $true
+        Save-StepResponse "cancellation native share start" $cancelShareStart
+        $cancelFrame = Wait-Condition {
+            $candidate = Get-CurrentObservation
+            if ($candidate.share.active -eq $true -and [int64]$candidate.share.sequence -gt 0) { return $candidate }
+            return $false
+        } "a native frame for explicit cancellation"
+        Assert-True ($cancelFrame.share.nativeStream -eq $true -and $cancelFrame.share.captureScope -eq "exact-window") "Explicit cancellation did not start from a native exact-window share frame."
+        $cancelShot = Save-ObservationScreenshot $cancelFrame "50-explicit-cancel-live-frame"
+        Save-StepRecord "explicit cancellation live frame screenshot" $cancelShot
+
+        $canceledFrameId = [string]$cancelFrame.frameId
+        $canceledScreenshotUrl = [string]$cancelFrame.screenshotUrl
+        Assert-True ($canceledScreenshotUrl.StartsWith("/api/computer/screenshot?id=", [StringComparison]::Ordinal) -and -not $canceledScreenshotUrl.Contains("://")) "The cancellation frame returned an invalid screenshot URL."
+        $cancellationSessionId = [string](Get-LbbState).computer.sessionId
+        Assert-True (-not [String]::IsNullOrWhiteSpace($cancellationSessionId)) "The cancellation frame had no exact helper session identity."
+        $cancellationSupervisorPid = $helperProcess.Id
+        $cancellationServerPid = $serverProcess.Id
+        $cancellationWorkerPid = Wait-ForDirectHelperWorker $cancellationSupervisorPid "the pre-cancellation disposable helper worker"
+
+        $cancelPoint = Get-SurfacePoint $cancelFrame 0.25 0.33
+        $cancelParams = @{
+            frameId = $canceledFrameId
+            x = $cancelPoint.x
+            y = $cancelPoint.y
+            coordinateSpace = "image"
+            durationMs = 2000
+        }
+        $cancelCallId = "windows-cancel-" + [Guid]::NewGuid().ToString("N")
+        $cancelFixtureBefore = Get-FixtureState
+        $cancelProbeBefore = Capture-InvariantProbe
+        $cancelWatch = [Diagnostics.Stopwatch]::StartNew()
+        $pendingCancellationRequest = Start-LbbCommandRequest "computer.move" $cancelParams $cancelCallId
+
+        $cancelDispatchState = Wait-ForFixtureProof {
+            param($state)
+            return [int]$state.messageCounters.mouseMove -gt [int]$cancelFixtureBefore.messageCounters.mouseMove
+        } "target-routed WM_MOUSEMOVE before explicit cancellation"
+        $cancelDispatchElapsedMs = [int64]$cancelWatch.ElapsedMilliseconds
+        Assert-True ([int]$cancelDispatchState.messageCounters.mouseMove -gt [int]$cancelFixtureBefore.messageCounters.mouseMove) "The cancellation test did not causally observe native move delivery."
+        Assert-True ([int]$cancelDispatchState.messageCounters.mouseDown -eq [int]$cancelFixtureBefore.messageCounters.mouseDown -and [int]$cancelDispatchState.messageCounters.mouseUp -eq [int]$cancelFixtureBefore.messageCounters.mouseUp) "The cancellation move unexpectedly delivered a click."
+
+        $inProgressDuplicate = Invoke-LbbCommandResponse "computer.move" $cancelParams $cancelCallId
+        Assert-True ($inProgressDuplicate.status -eq 409 -and $inProgressDuplicate.httpOk -eq $false -and $inProgressDuplicate.body.error.code -eq "CALL_IN_PROGRESS" -and $inProgressDuplicate.body.callId -eq $cancelCallId) "An exact duplicate did not observe CALL_IN_PROGRESS after causal native dispatch."
+        Save-StepResponse "explicit cancellation in-progress duplicate" $inProgressDuplicate.body
+
+        $cancelAccepted = Invoke-LbbCancelResponse $cancelCallId
+        Assert-True ($cancelAccepted.status -eq 202 -and $cancelAccepted.httpOk -eq $true -and $cancelAccepted.body.ok -eq $true -and $cancelAccepted.body.callId -eq $cancelCallId -and $cancelAccepted.body.cancellationRequested -eq $true) "The authenticated exact-call cancellation request was not accepted."
+        Save-StepResponse "explicit cancellation accepted" $cancelAccepted.body
+
+        $canceledOriginal = Receive-LbbJsonResponse $pendingCancellationRequest
+        $pendingCancellationRequest = $null
+        $cancelWatch.Stop()
+        $cancellationElapsedMs = [int64]$cancelWatch.ElapsedMilliseconds
+        Assert-True ($canceledOriginal.status -eq 504 -and $canceledOriginal.httpOk -eq $false -and $canceledOriginal.body.error.code -eq "COMMAND_OUTCOME_UNKNOWN" -and $canceledOriginal.body.taxonomy.code -eq "outcome_unknown" -and $canceledOriginal.body.taxonomy.retriable -eq $false -and $canceledOriginal.body.taxonomy.recoveryHint -eq "reobserve" -and $canceledOriginal.body.callId -eq $cancelCallId) "The canceled original did not settle as conservative COMMAND_OUTCOME_UNKNOWN."
+        Save-StepResponse "explicit cancellation original outcome" $canceledOriginal.body
+
+        $duplicateCancel = Invoke-LbbCancelResponse $cancelCallId
+        Assert-True ($duplicateCancel.status -eq 409 -and $duplicateCancel.httpOk -eq $false -and $duplicateCancel.body.error.code -eq "CALL_NOT_IN_PROGRESS" -and $duplicateCancel.body.callId -eq $cancelCallId) "A completed canceled call was cancellable twice."
+        Save-StepResponse "explicit cancellation duplicate refused" $duplicateCancel.body
+
+        $replayedCanceled = Invoke-LbbCommandResponse "computer.move" $cancelParams $cancelCallId
+        Assert-True ($replayedCanceled.status -eq 504 -and $replayedCanceled.httpOk -eq $false -and $replayedCanceled.body.error.code -eq "COMMAND_OUTCOME_UNKNOWN" -and $replayedCanceled.body.callId -eq $cancelCallId -and $replayedCanceled.body.replayed -eq $true) "The exact canceled call did not replay its cached outcome without redispatch."
+        $originalComparable = $canceledOriginal.body | ConvertTo-Json -Depth 40 -Compress
+        $replayComparableObject = ($replayedCanceled.body | ConvertTo-Json -Depth 40 -Compress) | ConvertFrom-Json
+        $replayComparableObject.PSObject.Properties.Remove("replayed")
+        $replayComparable = $replayComparableObject | ConvertTo-Json -Depth 40 -Compress
+        Assert-True ($replayComparable -ceq $originalComparable) "The replayed cancellation body differed from the original after removing only the replay marker."
+        Save-StepResponse "explicit cancellation cached replay" $replayedCanceled.body
+
+        $changedCancelParams = @{}
+        foreach ($entry in $cancelParams.GetEnumerator()) {
+            $changedCancelParams[$entry.Key] = $entry.Value
+        }
+        $changedCancelParams.x = [double]$changedCancelParams.x + 1
+        $reusedCallId = Invoke-LbbCommandResponse "computer.move" $changedCancelParams $cancelCallId
+        Assert-True ($reusedCallId.status -eq 409 -and $reusedCallId.httpOk -eq $false -and $reusedCallId.body.error.code -eq "CALL_ID_REUSED" -and $reusedCallId.body.taxonomy.code -eq "invalid_request" -and $reusedCallId.body.callId -eq $cancelCallId) "Changed parameters reused a canceled call identity."
+        Save-StepResponse "explicit cancellation changed request refused" $reusedCallId.body
+
+        $clearedScreenshot = Invoke-LbbJsonGet $canceledScreenshotUrl
+        Assert-True ($clearedScreenshot.status -eq 404 -and $clearedScreenshot.httpOk -eq $false -and $clearedScreenshot.body.error.code -eq "NO_COMPUTER_SCREENSHOT") "Cancellation did not remove the exact screenshot surface."
+        Save-StepResponse "explicit cancellation screenshot removed" $clearedScreenshot.body
+
+        $replacementState = Wait-Condition {
+            $candidate = Get-LbbState
+            $candidateSessionId = [string](Get-PropertyValue (Get-PropertyValue $candidate "computer") "sessionId")
+            if ($candidate.computerConnected -eq $true -and -not [String]::IsNullOrWhiteSpace($candidateSessionId) -and $candidateSessionId -ne $cancellationSessionId -and $null -eq $candidate.computerObservation -and $candidate.computer.share.active -eq $false) {
+                return $candidate
+            }
+            return $false
+        } "a replacement Windows helper worker after outcome-unknown cancellation"
+        $replacementSessionId = [string]$replacementState.computer.sessionId
+        $cancellationReplacementWorkerPid = Wait-ForDirectHelperWorker $cancellationSupervisorPid "the post-cancellation replacement helper worker"
+        Assert-True ($cancellationReplacementWorkerPid -ne $cancellationWorkerPid) "Outcome-unknown cancellation did not replace the disposable Windows worker."
+        Assert-True ($helperProcess.Id -eq $cancellationSupervisorPid -and -not $helperProcess.HasExited) "Outcome-unknown cancellation replaced the helper supervisor instead of only its disposable worker."
+        Assert-True ($serverProcess.Id -eq $cancellationServerPid -and -not $serverProcess.HasExited) "Outcome-unknown cancellation restarted the loopback server."
+        $shareStarted = $false
+        Start-Sleep -Milliseconds 900
+        $replacementStateSettled = Get-LbbState
+        Assert-True ($replacementStateSettled.computer.sessionId -eq $replacementSessionId -and $null -eq $replacementStateSettled.computerObservation -and $replacementStateSettled.computer.share.active -eq $false) "An old worker or queued native frame replaced the ready helper or republished revoked authority after cancellation."
+
+        $idempotentStop = Invoke-LbbCommand "computer.share.stop" @{}
+        Assert-True ($idempotentStop.result.active -eq $false -and $idempotentStop.result.stopped -eq $false -and $idempotentStop.result.reason -eq "not-active") "Post-cancellation share stop was not idempotently fail-closed."
+        Save-StepResponse "explicit cancellation idempotent share stop" $idempotentStop
+
+        $oldFrameClick = @{
+            frameId = $canceledFrameId
+            x = $cancelPoint.x
+            y = $cancelPoint.y
+            coordinateSpace = "image"
+            button = "left"
+            clickCount = 1
+            durationMs = 50
+        }
+        $gatedOldFrameParams = @{
+            frameId = $canceledFrameId
+            x = 250
+            y = 330
+            coordinateSpace = "normalized1000"
+            button = "left"
+            clickCount = 1
+            durationMs = 50
+        }
+        $gatedOldFrame = Invoke-LbbCommandResponse "computer.click" $gatedOldFrameParams ("windows-gated-" + [Guid]::NewGuid().ToString("N"))
+        Assert-True ($gatedOldFrame.status -eq 409 -and $gatedOldFrame.httpOk -eq $false -and $gatedOldFrame.body.error.code -eq "NO_COMPUTER_FRAME" -and $gatedOldFrame.body.taxonomy.code -eq "stale_snapshot" -and $gatedOldFrame.body.taxonomy.recoveryHint -eq "reobserve") "Revoked authority did not gate a pre-recovery mutation before helper relay."
+        $gatedState = Get-LbbState
+        Assert-True ($null -eq $gatedState.computerObservation -and $gatedState.computer.share.active -eq $false) "The pre-recovery gated action recreated a computer surface."
+        Save-StepResponse "explicit cancellation pre-recovery gate" $gatedOldFrame.body
+
+        $recoveryObserve = Invoke-LbbCommand "computer.observe" @{ windowId = $targetWindowId }
+        $recoveryFrame = $recoveryObserve.state.computerObservation
+        Assert-True ($recoveryObserve.state.computer.sessionId -eq $replacementSessionId -and $recoveryFrame.frameId -ne $canceledFrameId -and $recoveryFrame.windowId -eq $targetWindowId -and $recoveryFrame.share.active -eq $false) "Explicit one-shot observation did not recover the replacement helper session with a fresh frame."
+        Save-StepResponse "explicit cancellation fresh recovery observe" $recoveryObserve
+
+        $staleAfterRecovery = Invoke-LbbCommandResponse "computer.click" $oldFrameClick ("windows-stale-" + [Guid]::NewGuid().ToString("N"))
+        Assert-True ($staleAfterRecovery.status -eq 409 -and $staleAfterRecovery.httpOk -eq $false -and $staleAfterRecovery.body.error.code -eq "COMPUTER_STALE_FRAME" -and $staleAfterRecovery.body.taxonomy.code -eq "stale_snapshot" -and $staleAfterRecovery.body.taxonomy.recoveryHint -eq "reobserve") "The pre-cancellation frame became usable after explicit recovery."
+        $recoveredState = Get-LbbState
+        Assert-True ($recoveredState.computerObservation.frameId -eq $recoveryFrame.frameId -and $recoveredState.computerObservation.windowId -eq $targetWindowId -and $recoveredState.computer.share.active -eq $false) "The rejected stale action replaced or revoked the recovered one-shot frame."
+        Save-StepResponse "explicit cancellation stale frame after recovery" $staleAfterRecovery.body
+
+        $recoveryMoveBefore = (Get-FixtureState).messageCounters
+        $recoveryPoint = Get-SurfacePoint $recoveryFrame 0.60 0.55
+        $recoveryMove = Invoke-LbbCommand "computer.move" @{
+            frameId = [string]$recoveryFrame.frameId
+            x = $recoveryPoint.x
+            y = $recoveryPoint.y
+            coordinateSpace = "image"
+            durationMs = 120
+        }
+        $null = Wait-ForFixtureProof { param($state) return [int]$state.messageCounters.mouseMove -gt [int]$recoveryMoveBefore.mouseMove } "a fresh post-cancellation WM_MOUSEMOVE"
+        $observation = $recoveryMove.state.computerObservation
+        $recoveryShot = Save-ObservationScreenshot $observation "51-explicit-cancel-recovered-action"
+        Save-StepResponse "explicit cancellation recovered action" $recoveryMove
+        Save-StepRecord "explicit cancellation recovered action screenshot" $recoveryShot
+
+        $cancelFixtureAfter = Get-FixtureState
+        Assert-True ([int]$cancelFixtureAfter.messageCounters.mouseDown -eq [int]$cancelFixtureBefore.messageCounters.mouseDown -and [int]$cancelFixtureAfter.messageCounters.mouseUp -eq [int]$cancelFixtureBefore.messageCounters.mouseUp -and [int]$cancelFixtureAfter.messageCounters.dragMove -eq [int]$cancelFixtureBefore.messageCounters.dragMove) "Cancellation, replay, gating, or stale refusal caused an unexpected functional pointer mutation."
+        $cancelFinalProbe = Assert-InvariantsHeld $cancelProbeBefore "Explicit cancellation and recovery"
+        Save-StepRecord "explicit cancellation authority and recovery proof" ([ordered]@{
+            callId = $cancelCallId
+            method = "computer.move"
+            durationMs = 2000
+            elapsedMs = $cancellationElapsedMs
+            dispatchProof = [ordered]@{
+                type = "fixture-owned WM_MOUSEMOVE counter"
+                elapsedMs = $cancelDispatchElapsedMs
+                before = $cancelFixtureBefore.messageCounters.mouseMove
+                observed = $cancelDispatchState.messageCounters.mouseMove
+            }
+            inProgressCode = $inProgressDuplicate.body.error.code
+            cancellationHttpStatus = $cancelAccepted.status
+            originalHttpStatus = $canceledOriginal.status
+            originalCode = $canceledOriginal.body.error.code
+            exactReplay = $replayComparable -ceq $originalComparable
+            changedRequestCode = $reusedCallId.body.error.code
+            oldSessionRevoked = $replacementSessionId -ne $cancellationSessionId
+            replacementSessionObserved = $recoveryObserve.state.computer.sessionId -eq $replacementSessionId
+            disposableWorkerReplaced = $cancellationReplacementWorkerPid -ne $cancellationWorkerPid
+            helperSupervisorPreserved = $helperProcess.Id -eq $cancellationSupervisorPid
+            loopbackServerPreserved = $serverProcess.Id -eq $cancellationServerPid
+            observationCleared = $replacementState.computerObservation -eq $null
+            screenshotHttpStatus = $clearedScreenshot.status
+            stayedTornDownAfterThreeFramePeriods = $replacementStateSettled.computerObservation -eq $null
+            preRecoveryGateCode = $gatedOldFrame.body.error.code
+            recoveryMethod = "computer.observe"
+            recoveredFreshFrame = $recoveryFrame.frameId -ne $canceledFrameId
+            staleAfterRecoveryCode = $staleAfterRecovery.body.error.code
+            recoveredActionDelivered = [int]$cancelFixtureAfter.messageCounters.mouseMove -gt [int]$recoveryMoveBefore.mouseMove
+            independentNonInterruptionSample = $cancelFinalProbe
+        })
+    }
+
     $finalProbe = Assert-InvariantsHeld $baselineProbe "Full acceptance run"
     Save-StepRecord "foreground cursor focus desktop invariants" ([ordered]@{
         before = $baselineProbe
@@ -1973,6 +2288,15 @@ catch {
     $failureText = ConvertTo-SafeFailureText $_.Exception.Message
 }
 finally {
+    if ($null -ne $pendingCancellationRequest) {
+        try {
+            Close-LbbPendingRequest $pendingCancellationRequest
+            $pendingCancellationRequest = $null
+        }
+        catch {
+            $cleanupIssues.Add("The runner-owned pending cancellation request did not close cleanly.")
+        }
+    }
     if ($shareStarted -and $null -ne $serverProcess -and -not $serverProcess.HasExited -and $null -ne $helperProcess -and -not $helperProcess.HasExited) {
         try {
             $null = Invoke-LbbCommand "computer.share.stop" @{}

@@ -429,6 +429,59 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
 }
 
 #[test]
+fn windows_live_runner_causally_proves_cancel_quarantine_and_recovery() {
+    let runner = fs::read_to_string("scripts/test-windows-computer-use.ps1")
+        .unwrap()
+        .replace("\r\n", "\n");
+
+    for required in [
+        "\"Cancellation\", \"All\"",
+        "@(\"Smoke\", \"Recovery\", \"Semantic\", \"Keyboard\", \"Pixel\", \"Capture\", \"Cancellation\")",
+        "Start-LbbCommandRequest \"computer.move\" $cancelParams $cancelCallId",
+        "target-routed WM_MOUSEMOVE before explicit cancellation",
+        "CALL_IN_PROGRESS",
+        "Invoke-LbbCancelResponse $cancelCallId",
+        "COMMAND_OUTCOME_UNKNOWN",
+        "CALL_NOT_IN_PROGRESS",
+        "$replayedCanceled.body.replayed -eq $true",
+        "CALL_ID_REUSED",
+        "NO_COMPUTER_SCREENSHOT",
+        "a replacement Windows helper worker after outcome-unknown cancellation",
+        "$replacementSessionId -ne $cancellationSessionId",
+        "$cancellationReplacementWorkerPid -ne $cancellationWorkerPid",
+        "$helperProcess.Id -eq $cancellationSupervisorPid",
+        "$serverProcess.Id -eq $cancellationServerPid",
+        "An old worker or queued native frame replaced the ready helper or republished revoked authority after cancellation",
+        "NO_COMPUTER_FRAME",
+        "coordinateSpace = \"normalized1000\"",
+        "computer.observe",
+        "$recoveryFrame.frameId -ne $canceledFrameId",
+        "COMPUTER_STALE_FRAME",
+        "a fresh post-cancellation WM_MOUSEMOVE",
+        "Explicit cancellation and recovery",
+        "Close-LbbPendingRequest $pendingCancellationRequest",
+    ] {
+        assert!(
+            runner.contains(required),
+            "Windows runner is missing live cancellation proof: {required}"
+        );
+    }
+
+    for forbidden in [
+        "mock cancellation",
+        "LBB_COMPUTER_TEST",
+        "CANCEL_AFTER_START_MS",
+        "Start-Sleep -Milliseconds 2000",
+        "Stop-Process -Name",
+    ] {
+        assert!(
+            !runner.contains(forbidden),
+            "Windows cancellation proof uses an unsafe or synthetic shortcut: {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn vendored_screen_capture_patch_preserves_macos_13_resize_support() {
     let manifest = fs::read_to_string("Cargo.toml").unwrap();
     let vendor_manifest = fs::read_to_string("vendor/screencapturekit-8.0.1/Cargo.toml").unwrap();
