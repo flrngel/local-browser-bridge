@@ -1,6 +1,6 @@
-use std::ffi::c_void;
+use std::ffi::{OsStr, c_void};
 use std::fs::{File, OpenOptions};
-use std::io;
+use std::io::{self, Write as _};
 use std::mem::{offset_of, size_of};
 use std::os::windows::ffi::OsStrExt as _;
 use std::os::windows::fs::OpenOptionsExt as _;
@@ -8,7 +8,19 @@ use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _};
 use std::path::{Path, PathBuf};
 use std::ptr;
 
-use windows::Win32::Foundation::{BOOL, CloseHandle, ERROR_SUCCESS, HANDLE};
+#[cfg(test)]
+use std::cell::RefCell;
+
+use windows::Wdk::Foundation::OBJECT_ATTRIBUTES;
+use windows::Wdk::Storage::FileSystem::{
+    FILE_CREATE, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_REPARSE_POINT,
+    FILE_SYNCHRONOUS_IO_NONALERT, FILE_WRITE_THROUGH, NTCREATEFILE_CREATE_DISPOSITION,
+    NTCREATEFILE_CREATE_OPTIONS, NtCreateFile,
+};
+use windows::Win32::Foundation::{
+    BOOL, BOOLEAN, CloseHandle, ERROR_SUCCESS, HANDLE, NTSTATUS, RtlNtStatusToDosError,
+    STATUS_REPARSE_POINT_ENCOUNTERED, UNICODE_STRING,
+};
 use windows::Win32::Security::Authorization::{SE_FILE_OBJECT, SetSecurityInfo};
 use windows::Win32::Security::{
     ACCESS_ALLOWED_ACE, ACE_FLAGS, ACL, ACL_REVISION, ACL_SIZE_INFORMATION, AclSizeInformation,
@@ -21,26 +33,95 @@ use windows::Win32::Security::{
     SetSecurityDescriptorDacl, SetSecurityDescriptorOwner, TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
 use windows::Win32::Storage::FileSystem::{
-    CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL,
-    FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS,
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAGS_AND_ATTRIBUTES, FILE_GENERIC_WRITE, FILE_ID_INFO,
-    FILE_INFO_BY_HANDLE_CLASS, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_MODE,
-    FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO, FileAttributeTagInfo, FileIdInfo,
-    FileStandardInfo, GetFileInformationByHandleEx, MOVEFILE_REPLACE_EXISTING,
-    MOVEFILE_WRITE_THROUGH, MoveFileExW, READ_CONTROL, WRITE_DAC,
+    CreateDirectoryW, DELETE, FILE_ACCESS_RIGHTS, FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL,
+    FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO, FILE_DISPOSITION_INFO,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_WRITE, FILE_ID_INFO,
+    FILE_INFO_BY_HANDLE_CLASS, FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_RENAME_INFO,
+    FILE_SHARE_DELETE, FILE_SHARE_MODE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO,
+    FILE_TRAVERSE, FileAttributeTagInfo, FileDispositionInfo, FileIdInfo, FileRenameInfo,
+    FileStandardInfo, GetFileInformationByHandleEx, READ_CONTROL, SYNCHRONIZE,
+    SetFileInformationByHandle, WRITE_DAC,
 };
+#[cfg(test)]
+use windows::Win32::Storage::FileSystem::{
+    FILE_FLAGS_AND_ATTRIBUTES, FILE_WRITE_ATTRIBUTES, FileCaseSensitiveInfo,
+};
+use windows::Win32::System::IO::IO_STATUS_BLOCK;
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
-use windows::core::{Error as WindowsError, PCWSTR};
+use windows::core::{Error as WindowsError, PCWSTR, PWSTR};
 
 const SECURITY_DESCRIPTOR_REVISION: u32 = 1;
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
 const MAX_TOKEN_FILE_BYTES: i64 = 128;
+const OBJ_DONT_REPARSE: u32 = 0x0000_1000;
 
 pub(super) struct TokenDirectory {
     file: File,
     identity: FILE_ID_INFO,
     path: PathBuf,
-    _ancestor_leases: Vec<File>,
+}
+
+#[derive(Debug)]
+pub(super) struct PrivateTemporaryFile {
+    file: File,
+    directory_identity: FILE_ID_INFO,
+    committed: bool,
+}
+
+impl PrivateTemporaryFile {
+    pub(super) fn write_and_sync(&mut self, contents: &[u8]) -> io::Result<()> {
+        if self.committed {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the Windows token temporary file was already committed",
+            ));
+        }
+        self.file.write_all(contents)?;
+        self.file.flush()?;
+        self.file.sync_all()
+    }
+
+    pub(super) fn discard(mut self) -> io::Result<()> {
+        if self.committed {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "refusing to discard a committed Windows token file",
+            ));
+        }
+        run_test_barrier("cleanup");
+        let result = delete_file_handle(&self.file);
+        if result.is_ok() {
+            self.committed = true;
+        }
+        result
+    }
+
+    fn file(&self) -> &File {
+        &self.file
+    }
+
+    fn mark_committed(&mut self) {
+        self.committed = true;
+    }
+
+    fn ensure_created_in(&self, directory: &TokenDirectory) -> io::Result<()> {
+        if self.directory_identity == directory.identity {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the Windows token temporary-file capability belongs to another directory",
+            ))
+        }
+    }
+}
+
+impl Drop for PrivateTemporaryFile {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = delete_file_handle(&self.file);
+        }
+    }
 }
 
 impl TokenDirectory {
@@ -50,14 +131,13 @@ impl TokenDirectory {
         let directory = Self {
             file,
             identity,
-            _ancestor_leases: open_ancestor_directory_leases(&path)?,
             path,
         };
         directory.ensure_bound()?;
         Ok(directory)
     }
 
-    fn child_path(&self, path: &Path) -> io::Result<PathBuf> {
+    fn child_name(&self, path: &Path) -> io::Result<Vec<u16>> {
         let parent = path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
@@ -74,7 +154,7 @@ impl TokenDirectory {
                 "the Windows token path must end with an ordinary file name",
             )
         })?;
-        Ok(self.path.join(name))
+        validate_child_name(name)
     }
 
     fn ensure_bound(&self) -> io::Result<()> {
@@ -104,10 +184,16 @@ pub(super) fn open_private_token_file(
     path: &Path,
 ) -> io::Result<Option<File>> {
     directory.ensure_bound()?;
-    let path = directory.child_path(path)?;
-    let file = open_path_no_follow(
-        &path,
-        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+    run_test_barrier("read");
+    let name = directory.child_name(path)?;
+    let file = open_relative_file(
+        directory,
+        &name,
+        FILE_READ_DATA | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE,
+        FILE_SHARE_READ,
+        FILE_OPEN,
+        FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
+        None,
     )?;
     let identity = CurrentUser::load()?;
     if !handle_is_exact_private_path(handle_for(&file), false, &identity)? {
@@ -117,84 +203,106 @@ pub(super) fn open_private_token_file(
     Ok(Some(file))
 }
 
-pub(super) fn token_path_has_private_permissions(
-    directory: &TokenDirectory,
-    path: &Path,
-) -> io::Result<bool> {
-    directory.ensure_bound()?;
-    let path = directory.child_path(path)?;
-    let file = open_path_no_follow(
-        &path,
-        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
-    )?;
-    let identity = CurrentUser::load()?;
-    let private = handle_is_exact_private_path(handle_for(&file), false, &identity)?;
-    directory.ensure_bound()?;
-    Ok(private)
-}
-
 pub(super) fn create_private_token_file(
     directory: &TokenDirectory,
     path: &Path,
-) -> io::Result<File> {
+) -> io::Result<PrivateTemporaryFile> {
     directory.ensure_bound()?;
-    let path = directory.child_path(path)?;
+    run_test_barrier("create");
+    let name = directory.child_name(path)?;
     let mut security = PrivateSecurity::new(ACE_FLAGS(0))?;
-    let attributes = security.attributes();
-    let path = wide_path(&path)?;
-    let desired_access = FILE_GENERIC_WRITE.0 | FILE_READ_ATTRIBUTES.0 | READ_CONTROL.0;
-    let flags = FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT;
-    let handle = unsafe {
-        CreateFileW(
-            PCWSTR(path.as_ptr()),
-            desired_access,
-            FILE_SHARE_MODE(0),
-            Some(&attributes),
-            CREATE_NEW,
-            flags,
-            HANDLE::default(),
-        )
+    let file = open_relative_file(
+        directory,
+        &name,
+        FILE_GENERIC_WRITE | DELETE | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_DELETE,
+        FILE_CREATE,
+        FILE_NON_DIRECTORY_FILE
+            | FILE_OPEN_REPARSE_POINT
+            | FILE_SYNCHRONOUS_IO_NONALERT
+            | FILE_WRITE_THROUGH,
+        Some(&mut security),
+    )?;
+    let temporary = PrivateTemporaryFile {
+        file,
+        directory_identity: directory.identity,
+        committed: false,
+    };
+    let validation =
+        validate_private_temporary_file("post_create", temporary.file(), &security.identity);
+    match validation {
+        Ok(true) => {}
+        Ok(false) => {
+            let error = io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Windows did not create the token file with its protected owner-only DACL",
+            );
+            let cleanup = temporary.discard();
+            return Err(cleanup_after_new_file_error(error, cleanup));
+        }
+        Err(error) => {
+            let cleanup = temporary.discard();
+            return Err(cleanup_after_new_file_error(error, cleanup));
+        }
     }
-    .map_err(windows_error)?;
-    let file = unsafe { File::from_raw_handle(handle.0) };
-    if !handle_is_exact_private_path(handle_for(&file), false, &security.identity)? {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "Windows did not create the token file with its protected owner-only DACL",
-        ));
+    if let Err(error) = directory.ensure_bound() {
+        let cleanup = temporary.discard();
+        return Err(cleanup_after_new_file_error(error, cleanup));
     }
-    directory.ensure_bound()?;
-    Ok(file)
+    Ok(temporary)
 }
 
 pub(super) fn replace_token_file(
     directory: &TokenDirectory,
-    source: &Path,
+    source: &mut PrivateTemporaryFile,
     destination: &Path,
 ) -> io::Result<()> {
     directory.ensure_bound()?;
-    let source = directory.child_path(source)?;
-    let destination = directory.child_path(destination)?;
-    ensure_safe_replacement_target(&destination)?;
-    let source = wide_path(&source)?;
-    let destination = wide_path(&destination)?;
-    unsafe {
-        MoveFileExW(
-            PCWSTR(source.as_ptr()),
-            PCWSTR(destination.as_ptr()),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
+    source.ensure_created_in(directory)?;
+    let destination_name = directory.child_name(destination)?;
+    run_test_barrier("target_check");
+    ensure_safe_replacement_target(directory, &destination_name)?;
+    let identity = CurrentUser::load()?;
+    if !validate_private_temporary_file("pre_rename", source.file(), &identity)? {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "refusing to rename a non-private Windows token temporary file",
+        ));
     }
-    .map_err(windows_error)?;
-    directory.ensure_bound()
+    run_test_barrier("rename");
+    rename_relative_file(directory, source.file(), &destination_name)?;
+    source.mark_committed();
+    Ok(())
 }
 
-pub(super) fn remove_private_temporary_file(
+pub(super) fn verify_replaced_token_file(
     directory: &TokenDirectory,
-    path: &Path,
+    source: &PrivateTemporaryFile,
+    destination: &Path,
 ) -> io::Result<()> {
-    directory.ensure_bound()?;
-    std::fs::remove_file(directory.child_path(path)?)?;
+    source.ensure_created_in(directory)?;
+    source.file().sync_all()?;
+    let destination_name = directory.child_name(destination)?;
+    let source_identity: FILE_ID_INFO =
+        query_file_information(handle_for(source.file()), FileIdInfo)?;
+    let identity = CurrentUser::load()?;
+    let renamed = open_relative_file(
+        directory,
+        &destination_name,
+        FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        FILE_OPEN,
+        FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
+        None,
+    )?;
+    if query_file_information::<FILE_ID_INFO>(handle_for(&renamed), FileIdInfo)? != source_identity
+        || !handle_is_exact_private_path(handle_for(&renamed), false, &identity)?
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the Windows token rename did not retain the exact private temporary-file identity",
+        ));
+    }
     directory.ensure_bound()
 }
 
@@ -224,8 +332,16 @@ pub(super) fn validate_private_token_directory(path: &Path) -> io::Result<TokenD
     }
 }
 
-fn ensure_safe_replacement_target(path: &Path) -> io::Result<()> {
-    let file = match open_path_for_replacement_check(path) {
+fn ensure_safe_replacement_target(directory: &TokenDirectory, name: &[u16]) -> io::Result<()> {
+    let file = match open_relative_file(
+        directory,
+        name,
+        FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        FILE_OPEN,
+        FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
+        None,
+    ) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),
@@ -275,19 +391,10 @@ pub(super) fn harden_token_directory(path: &Path) -> io::Result<TokenDirectory> 
     TokenDirectory::new(file, path)
 }
 
+#[cfg(test)]
 fn open_path_no_follow(path: &Path, flags: FILE_FLAGS_AND_ATTRIBUTES) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.read(true).custom_flags(flags.0);
-    options.open(path)
-}
-
-fn open_path_for_replacement_check(path: &Path) -> io::Result<File> {
-    let mut options = OpenOptions::new();
-    options
-        .read(true)
-        .access_mode(FILE_READ_ATTRIBUTES.0)
-        .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE).0)
-        .custom_flags((FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS).0);
     options.open(path)
 }
 
@@ -306,8 +413,8 @@ fn open_token_directory_for_validation(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options
         .read(true)
-        .access_mode(READ_CONTROL.0 | FILE_READ_ATTRIBUTES.0)
-        .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE).0)
+        .access_mode(READ_CONTROL.0 | FILE_READ_ATTRIBUTES.0 | FILE_TRAVERSE.0)
+        .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE).0)
         .custom_flags((FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS).0);
     options.open(path)
 }
@@ -316,41 +423,365 @@ fn open_token_directory_for_acl_update(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options
         .read(true)
-        .access_mode(READ_CONTROL.0 | WRITE_DAC.0 | FILE_READ_ATTRIBUTES.0)
-        .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE).0)
+        .access_mode(READ_CONTROL.0 | WRITE_DAC.0 | FILE_READ_ATTRIBUTES.0 | FILE_TRAVERSE.0)
+        .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE).0)
         .custom_flags((FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS).0);
     options.open(path)
 }
 
-fn open_ancestor_directory_leases(path: &Path) -> io::Result<Vec<File>> {
-    let mut ancestors: Vec<_> = path.ancestors().skip(1).collect();
-    ancestors.reverse();
-    ancestors
-        .into_iter()
-        .map(|ancestor| {
-            let mut options = OpenOptions::new();
-            options
-                .read(true)
-                .access_mode(FILE_READ_ATTRIBUTES.0)
-                .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE).0)
-                .custom_flags(
-                    (FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS).0,
-                );
-            options.open(ancestor).map_err(|error| {
+fn open_relative_file(
+    directory: &TokenDirectory,
+    name: &[u16],
+    desired_access: FILE_ACCESS_RIGHTS,
+    share_access: FILE_SHARE_MODE,
+    disposition: NTCREATEFILE_CREATE_DISPOSITION,
+    options: NTCREATEFILE_CREATE_OPTIONS,
+    security: Option<&mut PrivateSecurity>,
+) -> io::Result<File> {
+    let name_bytes = name.len().checked_mul(size_of::<u16>()).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Windows child name is too long",
+        )
+    })?;
+    let name_length = u16::try_from(name_bytes).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Windows child name exceeds the native Unicode-string limit",
+        )
+    })?;
+    let mut name = name.to_vec();
+    let unicode_name = UNICODE_STRING {
+        Length: name_length,
+        MaximumLength: name_length,
+        Buffer: PWSTR(name.as_mut_ptr()),
+    };
+    let security_descriptor = security
+        .as_ref()
+        .map_or(ptr::null(), |security| security.descriptor_ptr());
+    let attributes = OBJECT_ATTRIBUTES {
+        Length: u32::try_from(size_of::<OBJECT_ATTRIBUTES>())
+            .expect("Windows object attributes fit u32"),
+        RootDirectory: handle_for(&directory.file),
+        ObjectName: ptr::addr_of!(unicode_name),
+        Attributes: OBJ_DONT_REPARSE,
+        SecurityDescriptor: security_descriptor,
+        SecurityQualityOfService: ptr::null(),
+    };
+    let mut status_block = IO_STATUS_BLOCK::default();
+    let mut handle = HANDLE::default();
+    let status = unsafe {
+        NtCreateFile(
+            &mut handle,
+            desired_access,
+            ptr::addr_of!(attributes),
+            &mut status_block,
+            None,
+            FILE_ATTRIBUTE_NORMAL,
+            share_access,
+            disposition,
+            options,
+            None,
+            0,
+        )
+    };
+    if status.0 < 0 {
+        if !handle.is_invalid() {
+            let _ = unsafe { CloseHandle(handle) };
+        }
+        Err(ntstatus_error(status))
+    } else if handle.is_invalid() {
+        Err(io::Error::other(
+            "NtCreateFile returned success without a valid child handle",
+        ))
+    } else {
+        Ok(unsafe { File::from_raw_handle(handle.0) })
+    }
+}
+
+fn rename_relative_file(
+    directory: &TokenDirectory,
+    source: &File,
+    destination_name: &[u16],
+) -> io::Result<()> {
+    let name_bytes = destination_name
+        .len()
+        .checked_mul(size_of::<u16>())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Windows child name is too long",
+            )
+        })?;
+    // FILE_RENAME_INFO is a variable-length structure whose documented input size is the full
+    // fixed structure plus the filename bytes, even though FileName already declares one WCHAR.
+    let buffer_bytes = size_of::<FILE_RENAME_INFO>()
+        .checked_add(name_bytes)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Windows rename buffer is too large",
+            )
+        })?;
+    let mut buffer = AlignedBuffer::new(buffer_bytes)?;
+    let information = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+    unsafe {
+        (*information).Anonymous.ReplaceIfExists = BOOLEAN(1);
+        (*information).RootDirectory = handle_for(&directory.file);
+        (*information).FileNameLength = u32::try_from(name_bytes).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Windows child name is too long",
+            )
+        })?;
+        ptr::copy_nonoverlapping(
+            destination_name.as_ptr(),
+            ptr::addr_of_mut!((*information).FileName).cast::<u16>(),
+            destination_name.len(),
+        );
+        SetFileInformationByHandle(
+            handle_for(source),
+            FileRenameInfo,
+            information.cast(),
+            u32::try_from(buffer_bytes).map_err(|_| {
                 io::Error::new(
-                    error.kind(),
-                    format!(
-                        "could not retain a no-delete lease on Windows token-path ancestor {}: {error}",
-                        ancestor.display()
-                    ),
+                    io::ErrorKind::InvalidInput,
+                    "Windows rename buffer is too large",
                 )
-            })
+            })?,
+        )
+    }
+    .map_err(windows_error)
+}
+
+fn delete_file_handle(file: &File) -> io::Result<()> {
+    let disposition = FILE_DISPOSITION_INFO {
+        DeleteFile: BOOLEAN(1),
+    };
+    unsafe {
+        SetFileInformationByHandle(
+            handle_for(file),
+            FileDispositionInfo,
+            ptr::addr_of!(disposition).cast(),
+            u32::try_from(size_of::<FILE_DISPOSITION_INFO>())
+                .expect("Windows disposition information fits u32"),
+        )
+    }
+    .map_err(windows_error)
+}
+
+fn cleanup_after_new_file_error(operation: io::Error, cleanup: io::Result<()>) -> io::Error {
+    match cleanup {
+        Ok(()) => operation,
+        Err(cleanup) => io::Error::new(
+            cleanup.kind(),
+            format!(
+                "validation of a newly created Windows token file failed and exact-handle cleanup also failed: operation={operation}; cleanup={cleanup}"
+            ),
+        ),
+    }
+}
+
+#[cfg(test)]
+type TestBarrier = Option<(&'static str, Box<dyn FnOnce()>)>;
+
+#[cfg(test)]
+type TestValidationFault = Option<(&'static str, bool)>;
+
+#[cfg(test)]
+pub(super) struct TestBarrierGuard {
+    armed: bool,
+}
+
+#[cfg(test)]
+impl TestBarrierGuard {
+    pub(super) fn assert_consumed(mut self) {
+        TEST_BARRIER.with(|barrier| {
+            assert!(
+                barrier.borrow().is_none(),
+                "the expected Windows token test barrier was not reached"
+            );
+        });
+        self.armed = false;
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestBarrierGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            TEST_BARRIER.with(|barrier| {
+                barrier.borrow_mut().take();
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+pub(super) struct TestValidationFaultGuard {
+    armed: bool,
+}
+
+#[cfg(test)]
+impl TestValidationFaultGuard {
+    pub(super) fn assert_consumed(mut self) {
+        TEST_VALIDATION_FAULT.with(|fault| {
+            assert!(
+                fault.borrow().is_none(),
+                "the expected Windows token validation fault was not reached"
+            );
+        });
+        self.armed = false;
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestValidationFaultGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            TEST_VALIDATION_FAULT.with(|fault| {
+                fault.borrow_mut().take();
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_BARRIER: RefCell<TestBarrier> = RefCell::new(None);
+    static TEST_VALIDATION_FAULT: RefCell<TestValidationFault> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn run_test_barrier(stage: &'static str) {
+    TEST_BARRIER.with(|barrier| {
+        let callback = {
+            let mut barrier = barrier.borrow_mut();
+            if barrier
+                .as_ref()
+                .is_some_and(|(expected, _)| *expected == stage)
+            {
+                barrier.take().map(|(_, callback)| callback)
+            } else {
+                None
+            }
+        };
+        if let Some(callback) = callback {
+            callback();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn run_test_barrier(_stage: &'static str) {}
+
+#[cfg(test)]
+pub(super) fn install_test_barrier(
+    stage: &'static str,
+    callback: impl FnOnce() + 'static,
+) -> TestBarrierGuard {
+    TEST_BARRIER.with(|barrier| {
+        assert!(
+            barrier.replace(Some((stage, Box::new(callback)))).is_none(),
+            "a Windows token test barrier was already installed"
+        );
+    });
+    TestBarrierGuard { armed: true }
+}
+
+#[cfg(test)]
+pub(super) fn install_validation_fault_for_test(
+    stage: &'static str,
+    return_error: bool,
+) -> TestValidationFaultGuard {
+    TEST_VALIDATION_FAULT.with(|fault| {
+        assert!(
+            fault.replace(Some((stage, return_error))).is_none(),
+            "a Windows token validation fault was already installed"
+        );
+    });
+    TestValidationFaultGuard { armed: true }
+}
+
+fn validate_child_name(name: &OsStr) -> io::Result<Vec<u16>> {
+    let name: Vec<u16> = name.encode_wide().collect();
+    let invalid_shape = name.is_empty()
+        || name == [u16::from(b'.')]
+        || name == [u16::from(b'.'), u16::from(b'.')]
+        || name
+            .iter()
+            .any(|unit| matches!(*unit, 0..=31 | 34 | 42 | 47 | 58 | 60 | 62 | 63 | 92 | 124))
+        || name.last().is_some_and(|unit| matches!(*unit, 32 | 46))
+        || name
+            .windows(2)
+            .any(|units| units[0] == u16::from(b' ') && units[1] == u16::from(b'.'));
+    let base_end = name
+        .iter()
+        .position(|unit| *unit == u16::from(b'.'))
+        .unwrap_or(name.len());
+    let base: Vec<u16> = name[..base_end]
+        .iter()
+        .map(|unit| {
+            if (u16::from(b'a')..=u16::from(b'z')).contains(unit) {
+                unit - u16::from(b'a') + u16::from(b'A')
+            } else {
+                *unit
+            }
         })
-        .collect()
+        .collect();
+    let reserved_device = matches!(
+        base.as_slice(),
+        [67, 79, 78]
+            | [80, 82, 78]
+            | [65, 85, 88]
+            | [78, 85, 76]
+            | [67, 76, 79, 67, 75, 36]
+            | [67, 79, 78, 73, 78, 36]
+            | [67, 79, 78, 79, 85, 84, 36]
+    ) || (base.len() == 4
+        && matches!(&base[..3], [67, 79, 77] | [76, 80, 84])
+        && matches!(base[3], 49..=57 | 0x00b2 | 0x00b3 | 0x00b9));
+    if invalid_shape || reserved_device {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the Windows token file name must be an unambiguous ordinary child name",
+        ));
+    }
+    Ok(name)
 }
 
 fn handle_for(file: &File) -> HANDLE {
     HANDLE(file.as_raw_handle())
+}
+
+fn validate_private_temporary_file(
+    stage: &'static str,
+    file: &File,
+    identity: &CurrentUser,
+) -> io::Result<bool> {
+    #[cfg(not(test))]
+    let _ = stage;
+    #[cfg(test)]
+    if let Some(return_error) = TEST_VALIDATION_FAULT.with(|fault| {
+        let mut fault = fault.borrow_mut();
+        if fault
+            .as_ref()
+            .is_some_and(|(expected, _)| *expected == stage)
+        {
+            fault.take().map(|(_, return_error)| return_error)
+        } else {
+            None
+        }
+    }) {
+        return if return_error {
+            Err(io::Error::other(
+                "injected Windows token validation query failure",
+            ))
+        } else {
+            Ok(false)
+        };
+    }
+    handle_is_exact_private_path(handle_for(file), false, identity)
 }
 
 fn handle_is_exact_private_path(
@@ -656,6 +1087,10 @@ impl PrivateSecurity {
         self.acl.as_ptr().cast()
     }
 
+    fn descriptor_ptr(&self) -> *const c_void {
+        ptr::from_ref::<SECURITY_DESCRIPTOR>(self.descriptor.as_ref()).cast()
+    }
+
     fn attributes(&mut self) -> SECURITY_ATTRIBUTES {
         SECURITY_ATTRIBUTES {
             nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>())
@@ -724,6 +1159,17 @@ fn windows_error(error: WindowsError) -> io::Error {
     }
 }
 
+fn ntstatus_error(status: NTSTATUS) -> io::Error {
+    if status == STATUS_REPARSE_POINT_ENCOUNTERED {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "refusing to traverse a reparse point in a Windows token child operation",
+        )
+    } else {
+        io::Error::from_raw_os_error(unsafe { RtlNtStatusToDosError(status) } as i32)
+    }
+}
+
 #[cfg(test)]
 pub(super) fn harden_file_for_test(path: &Path) -> io::Result<()> {
     let file = open_path_for_acl_update(path)?;
@@ -777,4 +1223,41 @@ pub(super) fn install_permissive_null_dacl_for_test(path: &Path) -> io::Result<(
     } else {
         Err(io::Error::from_raw_os_error(result.0 as i32))
     }
+}
+
+#[cfg(test)]
+pub(super) fn enable_case_sensitive_directory_for_test(path: &Path) -> io::Result<()> {
+    #[repr(C)]
+    struct FileCaseSensitiveInformation {
+        flags: u32,
+    }
+
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .access_mode(FILE_WRITE_ATTRIBUTES.0)
+        .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE).0)
+        .custom_flags((FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS).0);
+    let directory = options.open(path)?;
+    let information = FileCaseSensitiveInformation { flags: 1 };
+    unsafe {
+        SetFileInformationByHandle(
+            handle_for(&directory),
+            FileCaseSensitiveInfo,
+            ptr::addr_of!(information).cast(),
+            u32::try_from(size_of::<FileCaseSensitiveInformation>())
+                .expect("Windows case-sensitive information fits u32"),
+        )
+    }
+    .map_err(windows_error)
+}
+
+#[cfg(test)]
+pub(super) fn number_of_links_for_test(path: &Path) -> io::Result<u32> {
+    let file = open_path_no_follow(
+        path,
+        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+    )?;
+    let standard: FILE_STANDARD_INFO = query_file_information(handle_for(&file), FileStandardInfo)?;
+    Ok(standard.NumberOfLinks)
 }

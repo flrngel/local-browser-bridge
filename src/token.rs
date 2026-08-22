@@ -8,7 +8,7 @@ use subtle::ConstantTimeEq as _;
 use tokio::fs;
 #[cfg(target_os = "windows")]
 use tokio::io::AsyncReadExt as _;
-#[cfg(not(unix))]
+#[cfg(not(any(unix, target_os = "windows")))]
 use tokio::io::AsyncWriteExt as _;
 
 #[cfg(target_os = "windows")]
@@ -267,34 +267,33 @@ async fn replace_token_file(
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     let temporary_path = parent.join(format!(".lbb-token-{}.tmp", create_token()));
-    let mut temporary_created = false;
+    let mut file = windows_security::create_private_token_file(directory, &temporary_path)?;
+    if let Err(error) = file.write_and_sync(format!("{token}\n").as_bytes()) {
+        let cleanup = file.discard();
+        return Err(windows_temporary_cleanup_error(error, cleanup));
+    }
 
-    let result = async {
-        let mut file = fs::File::from_std(windows_security::create_private_token_file(
-            directory,
-            &temporary_path,
-        )?);
-        temporary_created = true;
-        file.write_all(format!("{token}\n").as_bytes()).await?;
-        file.flush().await?;
-        file.sync_all().await?;
-        drop(file);
-        windows_security::replace_token_file(directory, &temporary_path, path)?;
-        temporary_created = false;
-        if windows_security::token_path_has_private_permissions(directory, path)? {
-            Ok(())
-        } else {
-            Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "the replaced token file did not retain a private Windows DACL",
-            ))
-        }
+    if let Err(error) = windows_security::replace_token_file(directory, &mut file, path) {
+        let cleanup = file.discard();
+        return Err(windows_temporary_cleanup_error(error, cleanup));
     }
-    .await;
-    if result.is_err() && temporary_created {
-        let _ = windows_security::remove_private_temporary_file(directory, &temporary_path);
+
+    // The rename is the commit boundary. Never attempt temporary-name cleanup after this point:
+    // a later verification error cannot make reopening that old leaf safe.
+    windows_security::verify_replaced_token_file(directory, &file, path)
+}
+
+#[cfg(target_os = "windows")]
+fn windows_temporary_cleanup_error(operation: io::Error, cleanup: io::Result<()>) -> io::Error {
+    match cleanup {
+        Ok(()) => operation,
+        Err(cleanup) => io::Error::new(
+            cleanup.kind(),
+            format!(
+                "the Windows token operation failed and exact-handle temporary cleanup also failed: operation={operation}; cleanup={cleanup}"
+            ),
+        ),
     }
-    result
 }
 
 #[cfg(not(any(unix, target_os = "windows")))]
@@ -581,6 +580,19 @@ fn verify_replaced_unix_token_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "windows")]
+    const WINDOWS_SWAP_TEMP_MARKER: &str = "decoy-safe-temp-marker";
+    #[cfg(target_os = "windows")]
+    const WINDOWS_SWAP_TOKEN_MARKER: &str = "decoy-unsafe-token-marker";
+
+    #[cfg(target_os = "windows")]
+    #[derive(Clone, Copy)]
+    enum WindowsSwapDecoy {
+        Empty,
+        SafeTemporaryMarker,
+        MultiplyLinkedTokenMarker,
+    }
 
     #[test]
     fn default_token_path_requires_an_absolute_user_profile() {
@@ -1167,7 +1179,10 @@ mod tests {
     async fn managed_windows_policy_replaces_a_permissive_dacl_with_the_exact_private_dacl() {
         let directory = tempfile::tempdir().expect("temp directory");
         let parent = directory.path().join(MANAGED_TOKEN_DIRECTORY);
-        std::fs::create_dir(&parent).expect("create managed parent");
+        drop(
+            windows_security::create_private_token_directory(&parent)
+                .expect("create a deterministic TokenUser-owned managed parent"),
+        );
         windows_security::install_permissive_null_dacl_for_test(&parent)
             .expect("install permissive parent DACL");
 
@@ -1217,7 +1232,44 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[tokio::test]
-    async fn windows_token_transaction_holds_no_delete_parent_and_ancestor_leases() {
+    async fn windows_relative_read_does_not_follow_an_ancestor_path_swap() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let replaceable_ancestor = directory.path().join("replaceable-ancestor");
+        std::fs::create_dir(&replaceable_ancestor).expect("create replaceable ancestor");
+        let parent = private_test_parent(&replaceable_ancestor).await;
+        let path = parent.join("token");
+        let token = replace_token_for_windows_swap_test(&path).await;
+        let capability = prepare_token_parent(&path, None)
+            .await
+            .expect("retain validated parent directory");
+        let moved_ancestor = directory.path().join("moved-ancestor");
+        let barrier = arm_windows_token_path_swap(
+            "read",
+            &replaceable_ancestor,
+            &moved_ancestor,
+            &parent,
+            WindowsSwapDecoy::Empty,
+        );
+
+        let error = load_valid_persisted_token(&capability, &path)
+            .await
+            .expect_err("the public path swap must be detected after the relative read");
+
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        barrier.assert_consumed();
+        assert!(!path.exists(), "the decoy parent must remain untouched");
+        assert_eq!(
+            std::fs::read_to_string(moved_ancestor.join(MANAGED_TOKEN_DIRECTORY).join("token"))
+                .expect("read token through the moved original parent")
+                .trim(),
+            token
+        );
+        drop(capability);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn windows_relative_create_cleans_its_exact_handle_after_an_ancestor_path_swap() {
         let directory = tempfile::tempdir().expect("temp directory");
         let replaceable_ancestor = directory.path().join("replaceable-ancestor");
         std::fs::create_dir(&replaceable_ancestor).expect("create replaceable ancestor");
@@ -1226,33 +1278,328 @@ mod tests {
         let capability = prepare_token_parent(&path, None)
             .await
             .expect("retain validated parent directory");
-        let moved_parent = directory.path().join("moved-parent");
-
-        std::fs::rename(&parent, &moved_parent)
-            .expect_err("a live no-delete directory handle must block parent replacement");
-        assert!(parent.is_dir());
-        assert!(!moved_parent.exists());
-
+        let temporary_path = parent.join("safe-temp");
         let moved_ancestor = directory.path().join("moved-ancestor");
-        std::fs::rename(&replaceable_ancestor, &moved_ancestor)
-            .expect_err("a live ancestor lease must block ancestor-path replacement");
-        assert!(replaceable_ancestor.is_dir());
-        assert!(!moved_ancestor.exists());
-
-        let token = create_token();
-        replace_token_file(&capability, &path, &token)
-            .await
-            .expect("write while the directory lease is held");
-        assert_eq!(
-            load_valid_persisted_token(&capability, &path)
-                .await
-                .expect("read while the directory lease is held"),
-            Some(token)
+        let barrier = arm_windows_token_path_swap(
+            "create",
+            &replaceable_ancestor,
+            &moved_ancestor,
+            &parent,
+            WindowsSwapDecoy::SafeTemporaryMarker,
         );
 
+        let error = windows_security::create_private_token_file(&capability, &temporary_path)
+            .expect_err("a changed public path must fail the post-create binding check");
+
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        barrier.assert_consumed();
+        assert_eq!(
+            std::fs::read_to_string(&temporary_path).expect("read decoy temporary marker"),
+            WINDOWS_SWAP_TEMP_MARKER,
+            "relative creation or cleanup must not alter the same-named decoy leaf"
+        );
+        assert!(
+            !moved_ancestor
+                .join(MANAGED_TOKEN_DIRECTORY)
+                .join("safe-temp")
+                .exists(),
+            "post-create failure must delete the exact newly created handle"
+        );
         drop(capability);
-        std::fs::rename(&replaceable_ancestor, &moved_ancestor)
-            .expect("ancestor can move after every directory lease is released");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn windows_private_temporary_validation_failures_always_delete_the_exact_handle() {
+        for return_error in [false, true] {
+            let directory = tempfile::tempdir().expect("temp directory");
+            let parent = private_test_parent(directory.path()).await;
+            let path = parent.join("token");
+            let capability = prepare_token_parent(&path, None)
+                .await
+                .expect("retain validated parent directory");
+            let temporary_path = parent.join("post-create-temp");
+            let post_create_fault =
+                windows_security::install_validation_fault_for_test("post_create", return_error);
+
+            let _error = windows_security::create_private_token_file(&capability, &temporary_path)
+                .expect_err("post-create validation failure must fail the operation");
+
+            post_create_fault.assert_consumed();
+            assert!(
+                !temporary_path.exists(),
+                "post-create validation failure left an empty private leaf"
+            );
+
+            let secret_path = parent.join("secret-temp");
+            let mut source = windows_security::create_private_token_file(&capability, &secret_path)
+                .expect("create private temporary capability");
+            source
+                .write_and_sync(format!("{}\n", create_token()).as_bytes())
+                .expect("write secret-bearing temporary file");
+            let pre_rename_fault =
+                windows_security::install_validation_fault_for_test("pre_rename", return_error);
+
+            let _error = windows_security::replace_token_file(&capability, &mut source, &path)
+                .expect_err("pre-rename validation failure must fail before commit");
+            pre_rename_fault.assert_consumed();
+            source
+                .discard()
+                .expect("unconditionally delete the exact secret-bearing handle");
+
+            assert!(
+                !secret_path.exists(),
+                "pre-rename validation failure leaked a secret-bearing temporary file"
+            );
+            assert!(!path.exists(), "pre-rename failure must not commit a token");
+            drop(capability);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn windows_relative_target_check_and_rename_do_not_follow_ancestor_path_swaps() {
+        for stage in ["target_check", "rename"] {
+            let directory = tempfile::tempdir().expect("temp directory");
+            let replaceable_ancestor = directory.path().join("replaceable-ancestor");
+            std::fs::create_dir(&replaceable_ancestor).expect("create replaceable ancestor");
+            let parent = private_test_parent(&replaceable_ancestor).await;
+            let path = parent.join("token");
+            let _initial = replace_token_for_windows_swap_test(&path).await;
+            let capability = prepare_token_parent(&path, None)
+                .await
+                .expect("retain validated parent directory");
+            let temporary_path = parent.join("safe-temp");
+            let replacement = create_token();
+            let mut source =
+                windows_security::create_private_token_file(&capability, &temporary_path)
+                    .expect("create retained private temporary handle");
+            source
+                .write_and_sync(format!("{replacement}\n").as_bytes())
+                .expect("write and flush replacement token");
+            let moved_ancestor = directory.path().join("moved-ancestor");
+            let barrier = arm_windows_token_path_swap(
+                stage,
+                &replaceable_ancestor,
+                &moved_ancestor,
+                &parent,
+                WindowsSwapDecoy::MultiplyLinkedTokenMarker,
+            );
+
+            windows_security::replace_token_file(&capability, &mut source, &path)
+                .expect("the handle-relative atomic rename must stay on the original directory");
+            barrier.assert_consumed();
+            let error = windows_security::verify_replaced_token_file(&capability, &source, &path)
+                .expect_err("the public path replacement must fail the post-rename check");
+
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+            let decoy_source = parent.join("decoy-token-source");
+            assert_eq!(
+                std::fs::read_to_string(&path).expect("read decoy token marker"),
+                WINDOWS_SWAP_TOKEN_MARKER,
+                "target inspection or rename must not alter the path-swapped decoy"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&decoy_source).expect("read linked decoy source"),
+                WINDOWS_SWAP_TOKEN_MARKER
+            );
+            assert_eq!(
+                windows_security::number_of_links_for_test(&path)
+                    .expect("inspect linked decoy token"),
+                2,
+                "the deliberately unsafe path-based target must remain multiply linked"
+            );
+            assert_eq!(
+                std::fs::read_to_string(moved_ancestor.join(MANAGED_TOKEN_DIRECTORY).join("token"))
+                    .expect("read token through the moved original parent")
+                    .trim(),
+                replacement
+            );
+            drop(source);
+            drop(capability);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn windows_temporary_cleanup_deletes_the_exact_handle_after_an_ancestor_path_swap() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let replaceable_ancestor = directory.path().join("replaceable-ancestor");
+        std::fs::create_dir(&replaceable_ancestor).expect("create replaceable ancestor");
+        let parent = private_test_parent(&replaceable_ancestor).await;
+        let path = parent.join("token");
+        let capability = prepare_token_parent(&path, None)
+            .await
+            .expect("retain validated parent directory");
+        let temporary_path = parent.join("safe-temp");
+        let source = windows_security::create_private_token_file(&capability, &temporary_path)
+            .expect("create retained private temporary handle");
+        let moved_ancestor = directory.path().join("moved-ancestor");
+        let barrier = arm_windows_token_path_swap(
+            "cleanup",
+            &replaceable_ancestor,
+            &moved_ancestor,
+            &parent,
+            WindowsSwapDecoy::SafeTemporaryMarker,
+        );
+
+        source
+            .discard()
+            .expect("delete the exact retained temporary handle");
+        barrier.assert_consumed();
+
+        assert_eq!(
+            std::fs::read_to_string(&temporary_path).expect("read decoy temporary marker"),
+            WINDOWS_SWAP_TEMP_MARKER,
+            "exact-handle cleanup must not reopen or delete the path-swapped decoy"
+        );
+        assert!(
+            !moved_ancestor
+                .join(MANAGED_TOKEN_DIRECTORY)
+                .join("safe-temp")
+                .exists(),
+            "cleanup must delete the moved original rather than reopen a leaf"
+        );
+        drop(capability);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn windows_token_child_names_reject_win32_namespace_ambiguity() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let parent = private_test_parent(directory.path()).await;
+        let capability = prepare_token_parent(&parent.join("token"), None)
+            .await
+            .expect("retain validated parent directory");
+
+        for name in [
+            "token:stream",
+            "CON",
+            "com1.txt",
+            "LPT².log",
+            "trailing.",
+            "trailing ",
+            "space .txt",
+            "question?.txt",
+            "control\u{1}.txt",
+        ] {
+            let error =
+                windows_security::create_private_token_file(&capability, &parent.join(name))
+                    .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "name={name:?}");
+        }
+        drop(capability);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn windows_handle_relative_rename_accepts_a_one_character_token_leaf() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let parent = private_test_parent(directory.path()).await;
+        let path = parent.join("x");
+
+        let token = load_or_create_token(&path)
+            .await
+            .expect("create one-character custom token leaf");
+
+        assert_eq!(
+            std::fs::read_to_string(&path)
+                .expect("read one-character token leaf")
+                .trim(),
+            token
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn windows_handle_relative_lookup_preserves_case_distinct_siblings() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let parent = private_test_parent(directory.path()).await;
+        windows_security::enable_case_sensitive_directory_for_test(&parent)
+            .expect("enable case-sensitive lookup on an empty private directory");
+        let uppercase = parent.join("TOKEN");
+        let uppercase_marker = "case-distinct-decoy";
+        std::fs::write(&uppercase, uppercase_marker).expect("write uppercase sibling");
+        let lowercase = parent.join("token");
+
+        let token = load_or_create_token(&lowercase)
+            .await
+            .expect("create the exact lowercase token sibling");
+        let reused = load_or_create_token(&lowercase)
+            .await
+            .expect("reuse the exact lowercase token sibling");
+
+        assert_eq!(reused, token);
+        assert_eq!(
+            std::fs::read_to_string(&uppercase).expect("read uppercase sibling"),
+            uppercase_marker,
+            "case-insensitive native lookup must not select the uppercase decoy"
+        );
+        let mut names: Vec<_> = std::fs::read_dir(&parent)
+            .expect("enumerate case-sensitive token parent")
+            .map(|entry| entry.expect("directory entry").file_name())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                std::ffi::OsString::from("TOKEN"),
+                std::ffi::OsString::from("token")
+            ],
+            "both case-distinct leaves must coexist"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    async fn replace_token_for_windows_swap_test(path: &Path) -> String {
+        let token = create_token();
+        let parent = path.parent().expect("test token parent");
+        let capability = prepare_token_parent(path, None)
+            .await
+            .expect("retain private token directory");
+        replace_token_file(&capability, path, &token)
+            .await
+            .expect("seed private token");
+        drop(capability);
+        assert!(parent.is_dir());
+        token
+    }
+
+    #[cfg(target_os = "windows")]
+    fn arm_windows_token_path_swap(
+        stage: &'static str,
+        replaceable_ancestor: &Path,
+        moved_ancestor: &Path,
+        parent: &Path,
+        decoy: WindowsSwapDecoy,
+    ) -> windows_security::TestBarrierGuard {
+        let replaceable_ancestor = replaceable_ancestor.to_path_buf();
+        let moved_ancestor = moved_ancestor.to_path_buf();
+        let parent = parent.to_path_buf();
+        windows_security::install_test_barrier(stage, move || {
+            std::fs::rename(&replaceable_ancestor, &moved_ancestor)
+                .expect("replace the token-path ancestor during the native operation");
+            std::fs::create_dir(&replaceable_ancestor)
+                .expect("create replacement token-path ancestor");
+            drop(
+                windows_security::create_private_token_directory(&parent)
+                    .expect("create TokenUser-owned decoy parent"),
+            );
+            match decoy {
+                WindowsSwapDecoy::Empty => {}
+                WindowsSwapDecoy::SafeTemporaryMarker => {
+                    std::fs::write(parent.join("safe-temp"), WINDOWS_SWAP_TEMP_MARKER)
+                        .expect("seed same-named decoy temporary marker");
+                }
+                WindowsSwapDecoy::MultiplyLinkedTokenMarker => {
+                    let source = parent.join("decoy-token-source");
+                    std::fs::write(&source, WINDOWS_SWAP_TOKEN_MARKER)
+                        .expect("seed unsafe decoy token source");
+                    std::fs::hard_link(&source, parent.join("token"))
+                        .expect("create multiply linked path-based token decoy");
+                }
+            }
+        })
     }
 
     async fn private_test_parent(root: &Path) -> std::path::PathBuf {
