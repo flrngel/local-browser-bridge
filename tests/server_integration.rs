@@ -1904,6 +1904,63 @@ async fn outcome_unknown_native_action_clears_published_share_and_frame_authorit
     );
     assert!(state["state"]["computerObservation"].is_null());
 
+    let gated_old_frame = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "computer.click",
+            "params": {
+                "frameId": "frame-outcome-unknown",
+                "x": 100,
+                "y": 100,
+                "button": "left",
+                "clickCount": 1
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(gated_old_frame.status(), 409);
+    assert_eq!(
+        gated_old_frame.json::<Value>().await.unwrap()["error"]["code"],
+        "NO_COMPUTER_FRAME",
+        "the server gate refuses every mutation before explicit recovery"
+    );
+
+    let recovered: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "computer.observe", "params": {} }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(recovered["result"]["frameId"], "frame-1");
+    let stale_after_recovery = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "computer.click",
+            "params": {
+                "frameId": "frame-outcome-unknown",
+                "x": 100,
+                "y": 100,
+                "button": "left",
+                "clickCount": 1
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stale_after_recovery.status(), 409);
+    assert_eq!(
+        stale_after_recovery.json::<Value>().await.unwrap()["error"]["code"],
+        "COMPUTER_STALE_FRAME",
+        "after explicit recovery the helper still rejects the retired frame lease"
+    );
+
     fake.handle.abort();
     let _ = shutdown.send(());
     handle.await.unwrap();
@@ -3932,6 +3989,239 @@ async fn canceling_a_computer_command_queued_on_the_action_lock_never_dispatches
     assert_eq!(blocker.await.unwrap().status(), 504);
 
     browser.handle.abort();
+    computer.handle.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn timed_out_rest_client_quarantines_before_replay_or_a_fresh_waiter_can_act() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let mut computer = connect_controlled_computer(&base_url, &token).await;
+    let client = Client::new();
+    wait_for_computer(&client, &base_url, &token).await;
+
+    computer
+        .events
+        .send((
+            "computer.share.frame".to_owned(),
+            computer_share_frame_data(
+                "frame-disconnect-1",
+                json!({
+                    "active": true,
+                    "id": "share-old",
+                    "windowId": "window-9",
+                    "sourceSequence": 1,
+                    "sequence": 1,
+                    "ackPaced": true
+                }),
+            ),
+        ))
+        .unwrap();
+    wait_for_computer_frame(&client, &base_url, &token, "frame-disconnect-1").await;
+    wait_for_server_message(
+        &computer.server_messages,
+        |message| {
+            message["type"] == "eventAck"
+                && message["shareId"] == "share-old"
+                && message["sequence"] == 1
+        },
+        "pre-disconnect frame acknowledgement",
+    )
+    .await;
+
+    let owner_request = json!({
+        "method": "computer.click",
+        "params": {
+            "frameId": "frame-disconnect-1",
+            "x": 25,
+            "y": 30,
+            "button": "left",
+            "clickCount": 1
+        },
+        "callId": "call-client-disconnect-owner"
+    });
+    let timeout_client = Client::builder()
+        .timeout(Duration::from_millis(250))
+        .build()
+        .unwrap();
+    let owner = {
+        let base_url = base_url.clone();
+        let token = token.clone();
+        let request = owner_request.clone();
+        tokio::spawn(async move {
+            timeout_client
+                .post(format!("{base_url}/api/v1/command"))
+                .bearer_auth(token)
+                .json(&request)
+                .send()
+                .await
+        })
+    };
+    let owner_command = computer.commands.recv().await.unwrap();
+    assert_eq!(owner_command["method"], "computer.click");
+
+    // Queue a different callId behind the owner's action lock before the
+    // client's HTTP timeout tears the owner handler down. It carries the old
+    // frame on purpose: after teardown it must fail server-side, not relay.
+    let waiter_request = json!({
+        "method": "computer.click",
+        "params": {
+            "frameId": "frame-disconnect-1",
+            "x": 30,
+            "y": 35,
+            "button": "left",
+            "clickCount": 1
+        },
+        "callId": "call-client-disconnect-waiter"
+    });
+    let waiter = {
+        let client = client.clone();
+        let base_url = base_url.clone();
+        let token = token.clone();
+        let request = waiter_request;
+        tokio::spawn(async move {
+            client
+                .post(format!("{base_url}/api/v1/command"))
+                .bearer_auth(token)
+                .json(&request)
+                .send()
+                .await
+                .unwrap()
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(25)).await;
+
+    let timeout_error = owner.await.unwrap().unwrap_err();
+    assert!(
+        timeout_error.is_timeout(),
+        "the real REST client must abandon the dispatched request by timeout: {timeout_error}"
+    );
+    let cancel = tokio::time::timeout(Duration::from_millis(700), computer.commands.recv())
+        .await
+        .expect("server noticed the disconnected REST client before connector timeout")
+        .unwrap();
+    assert_eq!(cancel["type"], "cancel");
+    assert_eq!(cancel["id"], owner_command["id"]);
+    assert_eq!(cancel["reason"], "request_canceled");
+
+    let waiter = waiter.await.unwrap();
+    assert_eq!(waiter.status(), 409);
+    let waiter: Value = waiter.json().await.unwrap();
+    assert_eq!(waiter["error"]["code"], "NO_COMPUTER_FRAME");
+    assert_eq!(waiter["callId"], "call-client-disconnect-waiter");
+    assert!(
+        computer.commands.try_recv().is_err(),
+        "the fresh waiter must install/observe the fence before it can relay the old frame"
+    );
+
+    // Until exact-session quarantine is committed, the interrupted callId is
+    // observable only as in-flight. The first replayable 504 must therefore
+    // imply that public share, observation, and screenshot authority is gone.
+    let mut replay = None;
+    for _ in 0..100 {
+        let response = client
+            .post(format!("{base_url}/api/v1/command"))
+            .bearer_auth(&token)
+            .json(&owner_request)
+            .send()
+            .await
+            .unwrap();
+        if response.status() == 409 {
+            let body: Value = response.json().await.unwrap();
+            assert_eq!(body["error"]["code"], "CALL_IN_PROGRESS");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            continue;
+        }
+        replay = Some(response);
+        break;
+    }
+    let replay = replay.expect("interrupted call never settled into a replayable outcome");
+    assert_eq!(replay.status(), 504);
+    let replay: Value = replay.json().await.unwrap();
+    assert_eq!(replay["error"]["code"], "COMMAND_OUTCOME_UNKNOWN");
+    assert_eq!(replay["callId"], "call-client-disconnect-owner");
+    assert_eq!(replay["replayed"], true);
+
+    let cleared: Value = client
+        .get(format!("{base_url}/api/state"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(cleared["state"]["computer"]["share"]["active"], false);
+    assert_eq!(
+        cleared["state"]["computer"]["share"]["reason"],
+        "outcome-unknown"
+    );
+    assert!(cleared["state"]["computerObservation"].is_null());
+    assert_eq!(
+        client
+            .get(format!("{base_url}/api/computer/screenshot"))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+
+    computer
+        .events
+        .send((
+            "computer.share.frame".to_owned(),
+            computer_share_frame_data(
+                "frame-disconnect-late",
+                json!({
+                    "active": true,
+                    "id": "share-old",
+                    "windowId": "window-9",
+                    "sourceSequence": 2,
+                    "sequence": 2,
+                    "ackPaced": true
+                }),
+            ),
+        ))
+        .unwrap();
+    wait_for_server_message(
+        &computer.server_messages,
+        |message| {
+            message["type"] == "eventAck"
+                && message["shareId"] == "share-old"
+                && message["sequence"] == 2
+        },
+        "post-disconnect stale frame acknowledgement",
+    )
+    .await;
+    let after_late_frame: Value = client
+        .get(format!("{base_url}/api/state"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        after_late_frame["state"]["computer"]["share"],
+        cleared["state"]["computer"]["share"]
+    );
+    assert!(after_late_frame["state"]["computerObservation"].is_null());
+    assert_eq!(
+        client
+            .get(format!("{base_url}/api/computer/screenshot"))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+
     computer.handle.abort();
     let _ = shutdown.send(());
     handle.await.unwrap();

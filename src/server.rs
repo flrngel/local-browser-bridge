@@ -240,27 +240,71 @@ impl AppState {
         call_id: &str,
         status: StatusCode,
         body: Value,
-    ) -> (StatusCode, Value) {
+    ) -> ReplayCompletion {
         self.command_replay
             .lock()
             .unwrap()
             .complete(call_id, status, body, Instant::now())
     }
 
-    fn request_command_cancellation(&self, call_id: &str) -> Option<CommandCancellation> {
-        self.command_replay.lock().unwrap().cancel(call_id)
-    }
-
     fn begin_command_interruption(&self, call_id: &str) -> Option<CommandInterruption> {
         self.command_replay.lock().unwrap().interrupt(call_id)
     }
 
-    async fn settle_interrupted_command(
-        &self,
-        call_id: Option<String>,
-        interruption: CommandInterruption,
-    ) {
-        if let Some(owner) = interruption.browser_owner
+    fn complete_interrupted_command_without_authority(&self, call_id: &str) -> (StatusCode, Value) {
+        self.command_replay
+            .lock()
+            .unwrap()
+            .complete_interrupted(call_id, Instant::now())
+            .unwrap_or_else(|| canceled_call_response(call_id))
+    }
+
+    /// Installs every exact-session fail-closed boundary before publishing the
+    /// interrupted call's replayable 504. A single settlement claim prevents
+    /// competing cancellation, handler-drop, and helper paths from publishing
+    /// an incomplete result; the RAII guard releases the claim if this future
+    /// is itself canceled while waiting for asynchronous state cleanup.
+    async fn settle_interrupted_command(&self, call_id: &str) -> (StatusCode, Value) {
+        let interruption = loop {
+            let claim = self
+                .command_replay
+                .lock()
+                .unwrap()
+                .claim_interruption(call_id);
+            match claim {
+                InterruptionClaim::Claimed(interruption) => break interruption,
+                InterruptionClaim::Settling => {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                InterruptionClaim::Completed(status, body) => return (status, body),
+                InterruptionClaim::Missing => return canceled_call_response(call_id),
+            }
+        };
+        let mut settlement = InterruptionSettlementGuard {
+            replay: self.command_replay.clone(),
+            call_id: Some(call_id.to_owned()),
+        };
+        self.settle_command_authority(&interruption).await;
+        let completed = self
+            .command_replay
+            .lock()
+            .unwrap()
+            .complete_interrupted(call_id, Instant::now())
+            .unwrap_or_else(|| canceled_call_response(call_id));
+        settlement.disarm();
+        completed
+    }
+
+    /// A browser action without a callId still owns page freshness while its
+    /// HTTP handler is alive. There is no replay entry to publish, but its
+    /// synchronous Drop latch and asynchronous public-state clear use the same
+    /// exact-session settlement as registered commands.
+    async fn settle_unregistered_command_interruption(&self, interruption: CommandInterruption) {
+        self.settle_command_authority(&interruption).await;
+    }
+
+    async fn settle_command_authority(&self, interruption: &CommandInterruption) {
+        if let Some(owner) = interruption.browser_owner.as_ref()
             && self
                 .clear_published_browser_freshness_after_cancel(&owner.session_id, &owner.method)
                 .await
@@ -268,16 +312,29 @@ impl AppState {
             self.log(
                 &owner.method,
                 "warning",
-                "Browser caller disconnected; observation cleared until a fresh page.observe",
+                if interruption.canceled_by_caller {
+                    "Cancellation requested; browser observation cleared until a fresh page.observe"
+                } else {
+                    "Browser caller disconnected; observation cleared until a fresh page.observe"
+                },
             )
             .await;
-            self.bump("browser-interrupted").await;
+            self.bump(if interruption.canceled_by_caller {
+                "browser-canceled"
+            } else {
+                "browser-interrupted"
+            })
+            .await;
         }
 
-        if let Some(owner) = interruption.computer_owner {
+        if let Some(owner) = interruption.computer_owner.as_ref() {
             let unknown = HubError::new(
                 "COMMAND_OUTCOME_UNKNOWN",
-                "The caller disconnected; the computer command outcome is unknown",
+                if interruption.canceled_by_caller {
+                    "The caller requested cancellation; the computer command outcome is unknown"
+                } else {
+                    "The REST handler ended after dispatch; the computer command outcome is unknown"
+                },
             );
             if self
                 .clear_published_computer_authority_after_unknown(
@@ -290,21 +347,48 @@ impl AppState {
                 self.log(
                     &owner.method,
                     "warning",
-                    "Computer caller disconnected; published authority was cleared",
+                    "Computer command outcome became unknown; authority cleared until a fresh observation",
                 )
                 .await;
-                self.bump("computer-interrupted").await;
+                self.bump(if interruption.canceled_by_caller {
+                    "computer-canceled"
+                } else {
+                    "computer-interrupted"
+                })
+                .await;
             }
         }
+    }
 
-        // Keep the registry entry in-flight until all asynchronous public
-        // state cleanup has committed. A same-callId retry therefore cannot
-        // observe the cached 504 before the synchronous browser gate and the
-        // corresponding public-state teardown exist.
-        if let Some(call_id) = call_id {
-            let (status, body) = error_response_for_call(interrupted_call_error(), &call_id);
-            let _ = self.complete_command_call(&call_id, status, body);
+    /// Extends computer serialization through replay publication. A previous
+    /// action can release `action_lock` just before its HTTP handler records
+    /// the outcome; the next waiter therefore waits for that owner to either
+    /// complete or become interrupted, helping install the latter's gate
+    /// before it reads frame or pointer authority.
+    async fn settle_prior_computer_commands(&self, current_call_id: Option<&str>) {
+        loop {
+            let call_ids = self
+                .command_replay
+                .lock()
+                .unwrap()
+                .interrupted_computer_calls();
+            for call_id in call_ids {
+                self.settle_interrupted_command(&call_id).await;
+            }
+            if !self
+                .command_replay
+                .lock()
+                .unwrap()
+                .has_other_computer_owner(current_call_id)
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
+    }
+
+    fn request_command_cancellation(&self, call_id: &str) -> Option<CommandCancellation> {
+        self.command_replay.lock().unwrap().cancel(call_id)
     }
 
     fn latch_browser_freshness_recovery(&self, owner: &BrowserCommandOwner) {
@@ -768,6 +852,12 @@ impl StateData {
         self.computer_authority_gate
             .as_ref()
             .is_some_and(|gate| gate.session_id == session_id)
+    }
+
+    fn computer_authority_requires_recovery(&self, session_id: &str) -> bool {
+        self.computer_authority_gate
+            .as_ref()
+            .is_some_and(|gate| gate.session_id == session_id && !gate.recovered)
     }
 
     fn computer_share_session_is_saturated(&self, session_id: &str) -> bool {
@@ -1274,9 +1364,14 @@ struct CommandReplay {
 struct InFlightEntry {
     fingerprint: String,
     cancellation: Option<oneshot::Sender<()>>,
-    interrupted: bool,
     browser_owner: Option<BrowserCommandOwner>,
     computer_owner: Option<ComputerCommandOwner>,
+    /// Set synchronously when cancellation or handler teardown wins. The
+    /// entry deliberately stays in-flight until every authority owner has
+    /// installed its fail-closed publication boundary.
+    interrupted: bool,
+    canceled_by_caller: bool,
+    settlement_claimed: bool,
 }
 
 #[derive(Clone)]
@@ -1308,10 +1403,17 @@ struct CommandCancellation {
     computer_owner: Option<ComputerCommandOwner>,
 }
 
-#[derive(Default)]
+impl CommandCancellation {
+    fn requires_async_authority_settlement(&self) -> bool {
+        self.browser_owner.is_some() || self.computer_owner.is_some()
+    }
+}
+
+#[derive(Clone, Default)]
 struct CommandInterruption {
     browser_owner: Option<BrowserCommandOwner>,
     computer_owner: Option<ComputerCommandOwner>,
+    canceled_by_caller: bool,
 }
 
 impl CommandInterruption {
@@ -1324,6 +1426,13 @@ impl CommandInterruption {
     fn is_empty(&self) -> bool {
         self.browser_owner.is_none() && self.computer_owner.is_none()
     }
+}
+
+enum InterruptionClaim {
+    Claimed(CommandInterruption),
+    Settling,
+    Completed(StatusCode, Value),
+    Missing,
 }
 
 struct ReplayEntry {
@@ -1380,9 +1489,11 @@ impl CommandReplay {
             InFlightEntry {
                 fingerprint: fingerprint.to_owned(),
                 cancellation: Some(cancellation),
-                interrupted: false,
                 browser_owner: None,
                 computer_owner: None,
+                interrupted: false,
+                canceled_by_caller: false,
+                settlement_claimed: false,
             },
         );
         ReplayAdmission::New { canceled }
@@ -1393,35 +1504,15 @@ impl CommandReplay {
     /// completion under the same mutex observes that cancellation won.
     fn cancel(&mut self, call_id: &str) -> Option<CommandCancellation> {
         let entry = self.in_flight.get_mut(call_id)?;
-        if entry.interrupted {
-            return None;
-        }
         let signal = entry.cancellation.take()?;
+        entry.interrupted = true;
+        entry.canceled_by_caller = true;
         let browser_owner = entry.browser_owner.clone();
         let computer_owner = entry.computer_owner.clone();
         Some(CommandCancellation {
             signal,
             browser_owner,
             computer_owner,
-        })
-    }
-
-    /// Starts fail-closed settlement when the HTTP handler disappears before
-    /// recording a response. The entry deliberately remains in `in_flight`:
-    /// asynchronous authority cleanup must finish before a replayable 504 is
-    /// published. Taking (or observing the prior taking of) the cancellation
-    /// sender also prevents a later cancel request or connector bind from
-    /// racing this settlement.
-    fn interrupt(&mut self, call_id: &str) -> Option<CommandInterruption> {
-        let entry = self.in_flight.get_mut(call_id)?;
-        if entry.interrupted {
-            return None;
-        }
-        entry.interrupted = true;
-        let _ = entry.cancellation.take();
-        Some(CommandInterruption {
-            browser_owner: entry.browser_owner.clone(),
-            computer_owner: entry.computer_owner.clone(),
         })
     }
 
@@ -1437,6 +1528,68 @@ impl CommandReplay {
         }
         entry.browser_owner = Some(owner);
         true
+    }
+
+    /// Marks a handler-owned call as interrupted without publishing a replay
+    /// result. This synchronous fence runs before the action future is
+    /// dropped, so a different call waiting on the action lock can observe
+    /// and help settle it before using any stale authority.
+    fn interrupt(&mut self, call_id: &str) -> Option<CommandInterruption> {
+        let entry = self.in_flight.get_mut(call_id)?;
+        entry.interrupted = true;
+        if let Some(cancellation) = entry.cancellation.take() {
+            let _ = cancellation.send(());
+        }
+        Some(CommandInterruption {
+            browser_owner: entry.browser_owner.clone(),
+            computer_owner: entry.computer_owner.clone(),
+            canceled_by_caller: entry.canceled_by_caller,
+        })
+    }
+
+    fn claim_interruption(&mut self, call_id: &str) -> InterruptionClaim {
+        if let Some(entry) = self.completed.get(call_id) {
+            return InterruptionClaim::Completed(entry.status, entry.body.clone());
+        }
+        let Some(entry) = self.in_flight.get_mut(call_id) else {
+            return InterruptionClaim::Missing;
+        };
+        if !entry.interrupted {
+            return InterruptionClaim::Missing;
+        }
+        if entry.settlement_claimed {
+            return InterruptionClaim::Settling;
+        }
+        entry.settlement_claimed = true;
+        InterruptionClaim::Claimed(CommandInterruption {
+            browser_owner: entry.browser_owner.clone(),
+            computer_owner: entry.computer_owner.clone(),
+            canceled_by_caller: entry.canceled_by_caller,
+        })
+    }
+
+    fn release_interruption_claim(&mut self, call_id: &str) {
+        if let Some(entry) = self
+            .in_flight
+            .get_mut(call_id)
+            .filter(|entry| entry.interrupted)
+        {
+            entry.settlement_claimed = false;
+        }
+    }
+
+    fn interrupted_computer_calls(&self) -> Vec<String> {
+        self.in_flight
+            .iter()
+            .filter(|(_, entry)| entry.interrupted && entry.computer_owner.is_some())
+            .map(|(call_id, _)| call_id.clone())
+            .collect()
+    }
+
+    fn has_other_computer_owner(&self, current_call_id: Option<&str>) -> bool {
+        self.in_flight.iter().any(|(call_id, entry)| {
+            Some(call_id.as_str()) != current_call_id && entry.computer_owner.is_some()
+        })
     }
 
     /// Binds a computer call to the helper session whose public authority it
@@ -1461,17 +1614,64 @@ impl CommandReplay {
         status: StatusCode,
         body: Value,
         now: Instant,
-    ) -> (StatusCode, Value) {
+    ) -> ReplayCompletion {
         // A completion without a registration has no fingerprint to pin, so
         // it is dropped instead of stored as an unverifiable entry.
-        let Some(in_flight) = self.in_flight.remove(call_id) else {
-            return (status, body);
+        let Some(in_flight) = self.in_flight.get(call_id) else {
+            if let Some(completed) = self.completed.get(call_id) {
+                return ReplayCompletion::Completed {
+                    status: completed.status,
+                    body: completed.body.clone(),
+                };
+            }
+            return ReplayCompletion::Completed { status, body };
         };
-        let (status, body) = if in_flight.cancellation.is_none() && !in_flight.interrupted {
-            canceled_call_response(call_id)
-        } else {
-            (status, body)
-        };
+        if in_flight.interrupted {
+            return ReplayCompletion::InterruptionPending;
+        }
+        let in_flight = self
+            .in_flight
+            .remove(call_id)
+            .expect("checked in-flight entry still exists");
+        let output = self.store_completed(call_id, in_flight.fingerprint, status, body, now);
+        ReplayCompletion::Completed {
+            status: output.0,
+            body: output.1,
+        }
+    }
+
+    /// Publishes the synthetic 504 only after the caller has installed every
+    /// exact-session authority quarantine. If another settlement already won,
+    /// return that cached response rather than reopening or redispatching it.
+    fn complete_interrupted(&mut self, call_id: &str, now: Instant) -> Option<(StatusCode, Value)> {
+        if let Some(entry) = self.in_flight.get(call_id) {
+            if !entry.interrupted {
+                return None;
+            }
+            let canceled_by_caller = entry.canceled_by_caller;
+            let fingerprint = entry.fingerprint.clone();
+            self.in_flight.remove(call_id);
+            let error = if canceled_by_caller {
+                canceled_call_error()
+            } else {
+                interrupted_call_error()
+            };
+            let (status, body) = error_response_for_call(error, call_id);
+            return Some(self.store_completed(call_id, fingerprint, status, body, now));
+        }
+        self.completed
+            .get(call_id)
+            .map(|entry| (entry.status, entry.body.clone()))
+    }
+
+    fn store_completed(
+        &mut self,
+        call_id: &str,
+        fingerprint: String,
+        status: StatusCode,
+        body: Value,
+        now: Instant,
+    ) -> (StatusCode, Value) {
         self.evict_expired(now);
         while self.completed.len() >= REPLAY_CACHE_ENTRIES {
             let Some(oldest) = self
@@ -1488,7 +1688,7 @@ impl CommandReplay {
         self.completed.insert(
             call_id.to_owned(),
             ReplayEntry {
-                fingerprint: in_flight.fingerprint,
+                fingerprint,
                 status,
                 body: body.clone(),
                 stored_at: now,
@@ -1501,6 +1701,36 @@ impl CommandReplay {
     fn evict_expired(&mut self, now: Instant) {
         self.completed
             .retain(|_, entry| now.duration_since(entry.stored_at) < REPLAY_CACHE_TTL);
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum ReplayCompletion {
+    Completed { status: StatusCode, body: Value },
+    InterruptionPending,
+}
+
+/// Releases an interrupted-call settlement claim if its async owner is
+/// canceled while waiting for the state lock. Another request can then help
+/// finish the fail-closed boundary instead of waiting forever.
+struct InterruptionSettlementGuard {
+    replay: Arc<Mutex<CommandReplay>>,
+    call_id: Option<String>,
+}
+
+impl InterruptionSettlementGuard {
+    fn disarm(&mut self) {
+        self.call_id = None;
+    }
+}
+
+impl Drop for InterruptionSettlementGuard {
+    fn drop(&mut self) {
+        if let Some(call_id) = self.call_id.take()
+            && let Ok(mut replay) = self.replay.lock()
+        {
+            replay.release_interruption_claim(&call_id);
+        }
     }
 }
 
@@ -1552,7 +1782,7 @@ fn canceled_call_response(call_id: &str) -> (StatusCode, Value) {
 /// without touching any connector.
 struct InFlightCallGuard {
     state: AppState,
-    runtime: tokio::runtime::Handle,
+    runtime: Option<tokio::runtime::Handle>,
     request_owners: SharedRequestCommandOwners,
     call_id: Option<String>,
     armed: bool,
@@ -1581,7 +1811,11 @@ impl Drop for InFlightCallGuard {
             CommandInterruption::default()
         };
         interruption.merge_request_owners(&self.request_owners.lock().unwrap());
-        if interruption.is_empty() && call_id.is_none() {
+        if interruption.is_empty() {
+            if let Some(call_id) = call_id.as_deref() {
+                self.state
+                    .complete_interrupted_command_without_authority(call_id);
+            }
             return;
         }
 
@@ -1592,12 +1826,26 @@ impl Drop for InFlightCallGuard {
             self.state.latch_browser_freshness_recovery(owner);
         }
 
+        // An owner-bound interruption must never expose its replayable 504
+        // before the async state-lock quarantine. If the runtime is already
+        // unavailable or shutting down, leave a callId entry in-flight; the
+        // synchronous browser latch above still protects an unregistered
+        // browser action until the server state itself is discarded.
+        let Some(runtime) = self.runtime.as_ref() else {
+            return;
+        };
         let state = self.state.clone();
-        self.runtime.spawn(async move {
-            state
-                .settle_interrupted_command(call_id, interruption)
-                .await;
-        });
+        if let Some(call_id) = call_id {
+            runtime.spawn(async move {
+                state.settle_interrupted_command(&call_id).await;
+            });
+        } else {
+            runtime.spawn(async move {
+                state
+                    .settle_unregistered_command_interruption(interruption)
+                    .await;
+            });
+        }
     }
 }
 
@@ -1817,7 +2065,7 @@ async fn api_action(
     ));
     let mut registration = InFlightCallGuard {
         state: state.clone(),
-        runtime: tokio::runtime::Handle::current(),
+        runtime: tokio::runtime::Handle::try_current().ok(),
         request_owners,
         call_id: None,
         armed: true,
@@ -1892,22 +2140,25 @@ async fn api_command(
         }
     }
 
-    // Construct the lazy action future before its fail-closed registration
-    // guard. Rust drops locals in reverse declaration order, so aborting this
-    // HTTP handler runs InFlightCallGuard::drop (and installs the exact-session
-    // recovery gate) before dropping `action`, whose action-lock guard may
-    // wake a fresh-callId waiter on another runtime thread.
+    // Construct the lazy action future before its fail-closed replay guard.
+    // Rust drops locals in reverse declaration order, so handler teardown
+    // marks the replay entry interrupted and synchronously latches browser
+    // recovery before dropping `action`, whose action-lock guard may wake a
+    // different-callId waiter on another runtime thread.
     let request_owners = Arc::new(Mutex::new(RequestCommandOwners::default()));
     let mut action =
         Box::pin(state.perform_action(&method, params, call_id.as_deref(), request_owners.clone()));
     let mut registration = InFlightCallGuard {
         state: state.clone(),
-        runtime: tokio::runtime::Handle::current(),
+        runtime: tokio::runtime::Handle::try_current().ok(),
         request_owners,
         call_id: call_id.clone(),
         armed: true,
     };
     let outcome = if let Some(mut canceled) = canceled {
+        // The explicit drop below releases the connector/action future as
+        // soon as cancellation wins. Any enqueued hub call then runs its
+        // exact pending-call Drop guard before this handler settles.
         tokio::select! {
             biased;
             _ = &mut canceled => None,
@@ -1916,6 +2167,9 @@ async fn api_command(
     } else {
         Some(action.as_mut().await)
     };
+    // Cancellation drops the hub pending-call guard now, emitting its exact
+    // connector cancel while the replay entry remains fenced as in-flight.
+    drop(action);
     let (mut status, mut response_body) = match outcome {
         Some(Ok(result)) => {
             let public = state.public_state().await;
@@ -1931,8 +2185,18 @@ async fn api_command(
         if let Some(object) = response_body.as_object_mut() {
             object.insert("callId".to_owned(), Value::String(call_id.to_owned()));
         }
-        (status, response_body) =
-            state.complete_command_call(call_id, status, response_body.clone());
+        match state.complete_command_call(call_id, status, response_body.clone()) {
+            ReplayCompletion::Completed {
+                status: completed_status,
+                body: completed_body,
+            } => {
+                status = completed_status;
+                response_body = completed_body;
+            }
+            ReplayCompletion::InterruptionPending => {
+                (status, response_body) = state.settle_interrupted_command(call_id).await;
+            }
+        }
     }
     registration.disarm();
     Ok((status, Json(response_body)).into_response())
@@ -1958,10 +2222,11 @@ async fn api_command_cancel(
         return Ok((status, Json(body)).into_response());
     };
 
+    let requires_async_authority_settlement = cancellation.requires_async_authority_settlement();
     let CommandCancellation {
         signal,
         browser_owner,
-        computer_owner,
+        computer_owner: _,
     } = cancellation;
     if let Some(owner) = browser_owner.as_ref() {
         // This synchronous latch is the server's cancellation linearization
@@ -1974,43 +2239,14 @@ async fn api_command_cancel(
     }
     let _ = signal.send(());
 
-    if let Some(owner) = browser_owner
-        && state
-            .clear_published_browser_freshness_after_cancel(&owner.session_id, &owner.method)
-            .await
-    {
-        state
-            .log(
-                &owner.method,
-                "warning",
-                "Cancellation requested; browser observation cleared until a fresh page.observe",
-            )
-            .await;
-        state.bump("browser-canceled").await;
-    }
-
-    if let Some(owner) = computer_owner {
-        let unknown = HubError::new(
-            "COMMAND_OUTCOME_UNKNOWN",
-            "The caller requested cancellation; the computer command outcome is unknown",
-        );
-        if state
-            .clear_published_computer_authority_after_unknown(
-                &owner.session_id,
-                &owner.method,
-                &unknown,
-            )
-            .await
-        {
-            state
-                .log(
-                    &owner.method,
-                    "warning",
-                    "Cancellation requested; computer authority cleared until a fresh observation",
-                )
-                .await;
-            state.bump("computer-canceled").await;
-        }
+    // Cancellation has already marked the replay entry interrupted, and the
+    // browser gate above was installed before the action task could release
+    // action_lock. Settle every owner before either the 202 or replayable 504
+    // becomes observable.
+    if requires_async_authority_settlement {
+        state.settle_interrupted_command(&call_id).await;
+    } else {
+        state.complete_interrupted_command_without_authority(&call_id);
     }
 
     Ok((
@@ -3658,10 +3894,12 @@ impl AppState {
         call_id: Option<&str>,
     ) -> Result<Value, ApiError> {
         let _guard = self.action_lock.lock().await;
-        let (computer, pointer_revision, frame_size) = {
+        self.settle_prior_computer_commands(call_id).await;
+        let (computer, pointer_revision, frame_size, recovery_required) = {
             let data = self.data.read().await;
+            let computer = data.public.computer.clone();
             (
-                data.public.computer.clone(),
+                computer.clone(),
                 data.public
                     .computer_observation
                     .as_ref()
@@ -3670,6 +3908,9 @@ impl AppState {
                     .computer_observation
                     .as_ref()
                     .map(|observation| (observation.image_width, observation.image_height)),
+                computer.as_ref().is_some_and(|computer| {
+                    data.computer_authority_requires_recovery(&computer.session_id)
+                }),
             )
         };
         let mut params = sanitize_computer_params(method, raw_params, frame_size)?;
@@ -3695,6 +3936,22 @@ impl AppState {
                 StatusCode::CONFLICT,
                 "COMPUTER_CAPABILITY_UNAVAILABLE",
                 format!("Computer helper did not advertise {method}"),
+            ));
+        }
+        if recovery_required
+            && !matches!(
+                method,
+                "computer.status"
+                    | "computer.observe"
+                    | "computer.share.start"
+                    | "computer.share.status"
+                    | "computer.share.stop"
+            )
+        {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "NO_COMPUTER_FRAME",
+                "Computer authority was revoked after an outcome-unknown command; explicitly observe a fresh one-shot frame or start a fresh share before acting again",
             ));
         }
         if !self.bind_computer_command_owner(call_id, &computer.session_id, method) {
@@ -7610,18 +7867,39 @@ mod tests {
         ));
         let _ = cancellation.signal.send(());
         assert_eq!(canceled.try_recv(), Ok(()));
-        let (status, body) = replay.complete(
-            "call-1",
-            StatusCode::OK,
-            json!({ "ok": true, "callId": "call-1" }),
-            now,
+        assert_eq!(
+            replay.complete(
+                "call-1",
+                StatusCode::OK,
+                json!({ "ok": true, "callId": "call-1" }),
+                now,
+            ),
+            ReplayCompletion::InterruptionPending
         );
+        assert!(matches!(
+            replay.admit("call-1", "fp-1", now),
+            ReplayAdmission::InFlight
+        ));
+        let (status, body) = replay.complete_interrupted("call-1", now).unwrap();
         assert_eq!(status, StatusCode::GATEWAY_TIMEOUT);
         assert_eq!(body["error"]["code"], "COMMAND_OUTCOME_UNKNOWN");
         assert_eq!(body["taxonomy"]["code"], "outcome_unknown");
         assert_eq!(body["taxonomy"]["retriable"], false);
         assert_eq!(body["taxonomy"]["recoveryHint"], "reobserve");
         assert_eq!(body["callId"], "call-1");
+        assert_eq!(
+            replay.complete(
+                "call-1",
+                StatusCode::OK,
+                json!({ "ok": true, "callId": "call-1" }),
+                now,
+            ),
+            ReplayCompletion::Completed {
+                status,
+                body: body.clone(),
+            },
+            "a late handler completion must return the already-settled cancellation outcome"
+        );
         match replay.admit("call-1", "fp-1", now) {
             ReplayAdmission::Replay {
                 status: replay_status,
@@ -7648,7 +7926,13 @@ mod tests {
         ));
         let expected = json!({ "ok": true, "callId": "call-1" });
         let completed = replay.complete("call-1", StatusCode::OK, expected.clone(), now);
-        assert_eq!(completed, (StatusCode::OK, expected));
+        assert_eq!(
+            completed,
+            ReplayCompletion::Completed {
+                status: StatusCode::OK,
+                body: expected,
+            }
+        );
         assert!(replay.cancel("call-1").is_none());
     }
 
@@ -8025,8 +8309,8 @@ mod tests {
         assert_eq!(after_screenshot.route, before_screenshot.route);
     }
 
-    #[tokio::test]
-    async fn dropped_in_flight_guard_keeps_call_in_flight_until_unknown_cleanup_finishes() {
+    #[test]
+    fn dropped_ownerless_in_flight_guard_caches_unknown_immediately() {
         let now = Instant::now();
         let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false);
         let replay = state.command_replay.clone();
@@ -8036,30 +8320,15 @@ mod tests {
         ));
         drop(InFlightCallGuard {
             state: state.clone(),
-            runtime: tokio::runtime::Handle::current(),
+            runtime: None,
             request_owners: Arc::new(Mutex::new(RequestCommandOwners::default())),
             call_id: Some("call-1".to_owned()),
             armed: true,
         });
-        assert!(matches!(
-            replay.lock().unwrap().admit("call-1", "fp-1", now),
-            ReplayAdmission::InFlight
-        ));
         // A retry of the interrupted command replays the synthetic
-        // outcome-unknown failure after asynchronous cleanup and is never
-        // admitted as New again.
-        let replayed = tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                tokio::task::yield_now().await;
-                match replay.lock().unwrap().admit("call-1", "fp-1", now) {
-                    ReplayAdmission::InFlight => continue,
-                    admission => break admission,
-                }
-            }
-        })
-        .await
-        .expect("interrupted settlement deadline");
-        match replayed {
+        // outcome-unknown failure immediately because no authority owner has
+        // an asynchronous quarantine to install.
+        match replay.lock().unwrap().admit("call-1", "fp-1", now) {
             ReplayAdmission::Replay { status, body } => {
                 assert_eq!(status, StatusCode::GATEWAY_TIMEOUT);
                 assert_eq!(body["ok"], false);
@@ -8079,7 +8348,7 @@ mod tests {
         // A disarmed guard leaves the real completion in charge.
         let mut guard = InFlightCallGuard {
             state,
-            runtime: tokio::runtime::Handle::current(),
+            runtime: None,
             request_owners: Arc::new(Mutex::new(RequestCommandOwners::default())),
             call_id: Some("call-2".to_owned()),
             armed: true,
@@ -8118,7 +8387,7 @@ mod tests {
             });
             let _registration = InFlightCallGuard {
                 state: guard_state,
-                runtime: tokio::runtime::Handle::current(),
+                runtime: tokio::runtime::Handle::try_current().ok(),
                 request_owners: Arc::new(Mutex::new(RequestCommandOwners {
                     browser_owner: Some(BrowserCommandOwner {
                         session_id: "browser-session-a".to_owned(),
@@ -8146,6 +8415,261 @@ mod tests {
             waiter.await.unwrap(),
             "a fresh-callId waiter acquired action_lock before browser recovery was latched"
         );
+    }
+
+    #[test]
+    fn owner_bound_guard_without_a_live_runtime_stays_fail_closed_in_flight() {
+        let now = Instant::now();
+        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false);
+        assert!(matches!(
+            state
+                .command_replay
+                .lock()
+                .unwrap()
+                .admit("owner", "fp-owner", now),
+            ReplayAdmission::New { .. }
+        ));
+        assert!(state.bind_computer_command_owner(
+            Some("owner"),
+            "computer-session",
+            "computer.click"
+        ));
+
+        drop(InFlightCallGuard {
+            state: state.clone(),
+            runtime: None,
+            request_owners: Arc::new(Mutex::new(RequestCommandOwners::default())),
+            call_id: Some("owner".to_owned()),
+            armed: true,
+        });
+        assert!(matches!(
+            state
+                .command_replay
+                .lock()
+                .unwrap()
+                .admit("owner", "fp-owner", now),
+            ReplayAdmission::InFlight
+        ));
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let stopped_handle = runtime.handle().clone();
+        drop(runtime);
+        assert!(matches!(
+            state
+                .command_replay
+                .lock()
+                .unwrap()
+                .admit("shutdown", "fp-shutdown", now),
+            ReplayAdmission::New { .. }
+        ));
+        assert!(state.bind_computer_command_owner(
+            Some("shutdown"),
+            "computer-session",
+            "computer.click"
+        ));
+        drop(InFlightCallGuard {
+            state: state.clone(),
+            runtime: Some(stopped_handle),
+            request_owners: Arc::new(Mutex::new(RequestCommandOwners::default())),
+            call_id: Some("shutdown".to_owned()),
+            armed: true,
+        });
+        assert!(matches!(
+            state
+                .command_replay
+                .lock()
+                .unwrap()
+                .admit("shutdown", "fp-shutdown", now),
+            ReplayAdmission::InFlight
+        ));
+    }
+
+    #[tokio::test]
+    async fn aborting_owner_fences_fresh_computer_waiter_across_action_and_replay_boundary() {
+        let now = Instant::now();
+        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false);
+        {
+            let mut data = state.data.write().await;
+            data.public.computer = Some(ComputerInfo {
+                version: VERSION.to_owned(),
+                protocol_version: PROTOCOL_VERSION,
+                session_id: "computer-session".to_owned(),
+                compatible: true,
+                platform: "test-os".to_owned(),
+                architecture: "test-arch".to_owned(),
+                backend: "test-backend".to_owned(),
+                session_mode: "background-window".to_owned(),
+                isolation: "exact-window".to_owned(),
+                input_ready: true,
+                semantic_ready: true,
+                capabilities: vec!["computer.click".to_owned()],
+                windows: Vec::new(),
+                share: json!({ "active": true, "id": "old-share" }),
+                connected_at: "2026-08-21T00:00:00Z".to_owned(),
+            });
+        }
+        assert!(matches!(
+            state
+                .command_replay
+                .lock()
+                .unwrap()
+                .admit("owner", "fp-owner", now),
+            ReplayAdmission::New { .. }
+        ));
+        assert!(state.bind_computer_command_owner(
+            Some("owner"),
+            "computer-session",
+            "computer.click"
+        ));
+
+        let (lock_held_tx, lock_held_rx) = oneshot::channel();
+        let owner_state = state.clone();
+        let owner = tokio::spawn(async move {
+            // This is the same declaration order used by api_command: its
+            // replay guard drops first, while the action future still owns
+            // action_lock.
+            let action = async {
+                let _action_lock = owner_state.action_lock.lock().await;
+                let _ = lock_held_tx.send(());
+                std::future::pending::<()>().await;
+            };
+            tokio::pin!(action);
+            let _registration = InFlightCallGuard {
+                state: owner_state.clone(),
+                runtime: tokio::runtime::Handle::try_current().ok(),
+                request_owners: Arc::new(Mutex::new(RequestCommandOwners::default())),
+                call_id: Some("owner".to_owned()),
+                armed: true,
+            };
+            action.await;
+        });
+        lock_held_rx.await.unwrap();
+
+        let waiter_state = state.clone();
+        let waiter = tokio::spawn(async move {
+            waiter_state
+                .perform_computer_action(
+                    "computer.click",
+                    json!({
+                        "frameId": "old-frame",
+                        "x": 10,
+                        "y": 10,
+                        "button": "left",
+                        "clickCount": 1
+                    }),
+                    None,
+                )
+                .await
+        });
+        tokio::task::yield_now().await;
+        owner.abort();
+        assert!(owner.await.unwrap_err().is_cancelled());
+
+        let error = waiter.await.unwrap().unwrap_err();
+        assert_eq!(error.status, StatusCode::CONFLICT);
+        assert_eq!(error.code, "NO_COMPUTER_FRAME");
+        let data = state.data.read().await;
+        assert!(data.computer_authority_requires_recovery("computer-session"));
+        assert_eq!(
+            data.public.computer.as_ref().unwrap().share["active"],
+            false
+        );
+        drop(data);
+        assert!(matches!(
+            state
+                .command_replay
+                .lock()
+                .unwrap()
+                .admit("owner", "fp-owner", now),
+            ReplayAdmission::Replay {
+                status: StatusCode::GATEWAY_TIMEOUT,
+                ..
+            }
+        ));
+
+        // Also cover the narrower post-action window: the connector/action
+        // future has returned and released action_lock, but its HTTP handler
+        // has not recorded the outcome yet. A fresh waiter must wait on the
+        // still-bound replay owner rather than passing the fence early.
+        {
+            let mut data = state.data.write().await;
+            data.computer_authority_gate = None;
+            data.public.computer.as_mut().unwrap().share =
+                json!({ "active": true, "id": "old-share-2" });
+        }
+        assert!(matches!(
+            state
+                .command_replay
+                .lock()
+                .unwrap()
+                .admit("owner-2", "fp-owner-2", now),
+            ReplayAdmission::New { .. }
+        ));
+        assert!(state.bind_computer_command_owner(
+            Some("owner-2"),
+            "computer-session",
+            "computer.click"
+        ));
+        let (action_returned_tx, action_returned_rx) = oneshot::channel();
+        let owner_state = state.clone();
+        let owner = tokio::spawn(async move {
+            let action = async {
+                let _action_lock = owner_state.action_lock.lock().await;
+            };
+            tokio::pin!(action);
+            let _registration = InFlightCallGuard {
+                state: owner_state.clone(),
+                runtime: tokio::runtime::Handle::try_current().ok(),
+                request_owners: Arc::new(Mutex::new(RequestCommandOwners::default())),
+                call_id: Some("owner-2".to_owned()),
+                armed: true,
+            };
+            action.await;
+            let _ = action_returned_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        action_returned_rx.await.unwrap();
+
+        let waiter_state = state.clone();
+        let waiter = tokio::spawn(async move {
+            waiter_state
+                .perform_computer_action(
+                    "computer.click",
+                    json!({
+                        "frameId": "old-frame-2",
+                        "x": 10,
+                        "y": 10,
+                        "button": "left",
+                        "clickCount": 1
+                    }),
+                    None,
+                )
+                .await
+        });
+        tokio::task::yield_now().await;
+        assert!(
+            !waiter.is_finished(),
+            "fresh waiter passed a bound owner before its outcome was recorded"
+        );
+        owner.abort();
+        assert!(owner.await.unwrap_err().is_cancelled());
+        let error = waiter.await.unwrap().unwrap_err();
+        assert_eq!(error.status, StatusCode::CONFLICT);
+        assert_eq!(error.code, "NO_COMPUTER_FRAME");
+        assert!(matches!(
+            state
+                .command_replay
+                .lock()
+                .unwrap()
+                .admit("owner-2", "fp-owner-2", now),
+            ReplayAdmission::Replay {
+                status: StatusCode::GATEWAY_TIMEOUT,
+                ..
+            }
+        ));
     }
 
     #[test]
