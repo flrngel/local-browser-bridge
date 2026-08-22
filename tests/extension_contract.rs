@@ -1179,6 +1179,52 @@ fn only_bridge_created_tabs_are_grouped() {
 #[test]
 fn server_cancel_is_session_bound_suppresses_late_results_and_preserves_explicit_lease() {
     let background = extension_source("background.js");
+    let freshness_methods = background
+        .split("const REQUEST_CANCEL_FRESHNESS_METHODS = new Set([")
+        .nth(1)
+        .unwrap()
+        .split("]);")
+        .next()
+        .unwrap();
+    for method in [
+        "browser.control.start",
+        "page.observe",
+        "page.navigate",
+        "page.back",
+        "page.forward",
+        "page.reload",
+        "page.click",
+        "page.fill",
+        "page.select",
+        "page.key",
+        "page.scroll",
+        "page.clickAt",
+        "page.typeText",
+        "page.evaluate",
+        "page.hover",
+        "page.batch",
+        "page.handleDialog",
+    ] {
+        assert!(
+            freshness_methods.contains(&format!("\"{method}\"")),
+            "{method} is missing from request-cancel freshness invalidation"
+        );
+    }
+    for method in [
+        "status",
+        "tabs.list",
+        "tabs.activate",
+        "tabs.new",
+        "tabs.close",
+        "browser.control.status",
+        "browser.control.stop",
+        "page.waitFor",
+    ] {
+        assert!(
+            !freshness_methods.contains(&format!("\"{method}\"")),
+            "{method} must not mutate controlled-page freshness"
+        );
+    }
     let session_guard = background
         .find("message.sessionId !== protocolServerSessionId")
         .unwrap();
@@ -1199,7 +1245,11 @@ fn server_cancel_is_session_bound_suppresses_late_results_and_preserves_explicit
     assert!(cancel.contains(
         "cancelCommandContext(context, requestCanceled ? \"request_canceled\" : \"server_timeout\")"
     ));
-    assert!(cancel.contains("if (!requestCanceled && context.started"));
+    assert!(
+        cancel
+            .contains("context.cancellationCleanup = invalidateCanceledCommandFreshness(context)")
+    );
+    assert!(cancel.contains("else if (context.started && commandUsesControl(context.method)"));
     assert!(cancel.contains("stopControl(\"command_canceled\", { requireExplicitStart: true })"));
 
     let chain_start = background[command_start..]
@@ -1214,9 +1264,598 @@ fn server_cancel_is_session_bound_suppresses_late_results_and_preserves_explicit
     assert!(chain.contains("dispatch(message.method, message.params ?? {}, false, context)"));
     assert!(chain.contains("assertCommandActive(context, \"result delivery\")"));
     assert!(chain.contains("if (context.canceled || canceledCommandKeys.has(context.key)) return"));
+    assert!(chain.contains("await context.cancellationCleanup"));
+    assert!(chain.contains("finalizeCanceledCommandFreshness(context)"));
     assert!(chain.contains("activeCommandContexts.delete(context.key)"));
     assert!(background.contains("context.cancelWaiters.add(rejectCancellation)"));
     assert!(background.contains("for (const reject of context.cancelWaiters ?? [])"));
+}
+
+#[test]
+fn canceled_deferred_cdp_mutation_invalidates_turn_and_generation_before_recovery() {
+    let script = r#"
+      import fs from "node:fs";
+
+      function extractFunction(source, name) {
+        const asyncMarker = `async function ${name}(`;
+        const plainMarker = `function ${name}(`;
+        const start = source.includes(asyncMarker)
+          ? source.indexOf(asyncMarker)
+          : source.indexOf(plainMarker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        const brace = source.indexOf("{", start);
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+
+      function deferred() {
+        let resolve, reject;
+        const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+        return { promise, resolve, reject };
+      }
+
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const functions = [
+        "requestCancelInvalidatesFreshness", "rememberCanceledCommand",
+        "commandCanceledError", "assertCommandActive", "withCommandCancellation",
+        "cancelCommandContext", "persistCanceledCommandFreshness",
+        "invalidateCanceledCommandFreshness", "assertControlBinding",
+        "assertFrameSnapshotFresh", "insertText", "observeControlledPage",
+      ].map((name) => extractFunction(source, name)).join("\n");
+
+      const bridge = new Function("deferred", `
+        const REQUEST_CANCEL_FRESHNESS_METHODS = new Set([
+          "browser.control.start", "page.observe", "page.navigate", "page.back",
+          "page.forward", "page.reload", "page.click", "page.fill", "page.select",
+          "page.key", "page.scroll", "page.clickAt", "page.typeText",
+          "page.evaluate", "page.hover", "page.batch", "page.handleDialog",
+        ]);
+        const canceledCommandKeys = new Set();
+        const attachedFrames = new Map();
+        const frameSkips = [];
+        let frameTreeRevision = 4;
+        let frameInvalidationReason = "";
+        let frameSnapshot = { generation: "g-old", frameTreeRevision, frames: new Map() };
+        let controlEpoch = 7;
+        let controlLease = {
+          sessionId: "lease-7", epoch: 7, tabId: 17, turn: 11,
+          moveSequence: 2, viewport: { width: 800, height: 600 },
+        };
+        let fieldValue = "";
+        let cdpDispatched = false;
+        const cdpGate = deferred();
+        const firstPersist = deferred();
+        let persistCount = 0;
+        const events = [];
+        let revocations = 0;
+
+        function persistControlState() {
+          persistCount += 1;
+          return persistCount === 1 ? firstPersist.promise : Promise.resolve();
+        }
+        function stopControl() { revocations += 1; controlEpoch += 1; controlLease = null; return Promise.resolve(); }
+        function send(message) { events.push(structuredClone(message)); return true; }
+        function publicControlState() {
+          return controlLease
+            ? { active: true, sessionId: controlLease.sessionId, tabId: controlLease.tabId,
+                turn: controlLease.turn, moveSequence: controlLease.moveSequence }
+            : { active: false };
+        }
+        function requireControl() { return Promise.resolve(controlLease); }
+        function captureLeaseAuthority(lease = controlLease) {
+          return { tabId: lease.tabId, sessionId: lease.sessionId, epoch: lease.epoch };
+        }
+        function assertLeaseAuthority(authority, context, boundary) {
+          assertCommandActive(context, boundary);
+          if (!controlLease || authority.sessionId !== controlLease.sessionId
+            || authority.epoch !== controlLease.epoch || authority.epoch !== controlEpoch) {
+            throw new Error("CONTROL_CANCELED");
+          }
+        }
+        function verifyDocumentAuthority() { return Promise.resolve(); }
+        function verifyDocumentAuthorityAfterDispatch() { return Promise.resolve(); }
+        function debuggerCommand(tabId, method, params, authority, context) {
+          if (method !== "Input.insertText") throw new Error("unexpected CDP method " + method);
+          assertLeaseAuthority(authority, context, "CDP text dispatch");
+          // Chrome has accepted the side effect, but its command promise is
+          // deliberately still pending when cancellation arrives.
+          fieldValue += params.text;
+          cdpDispatched = true;
+          return withCommandCancellation(cdpGate.promise, context, "deferred Input.insertText");
+        }
+        function assertDialogNotBlocking() {}
+        function showControlUi() { return Promise.resolve(); }
+        function contentRequest(tabId, message) {
+          if (message.method !== "snapshot") throw new Error("unexpected content request");
+          return Promise.resolve({
+            generation: "g-fresh", title: "Fresh", url: "https://example.test/",
+            viewport: { width: 800, height: 600 }, elements: [], frameOwners: [],
+          });
+        }
+        function collectFrameObservations(tabId, snapshot) {
+          return Promise.resolve({ elements: snapshot.elements, frames: [], frameSummary: {} });
+        }
+        function rethrowLeaseFatalFrameError(error) { throw error; }
+        function mergeFrameObservations(snapshot) {
+          return { elements: snapshot.elements, frames: [], frameSummary: {} };
+        }
+        function frameObservationIsSilent() { return true; }
+        function captureTab() { return Promise.resolve({ dataUrl: "fixture" }); }
+        function classifyRisk() { return "low"; }
+        ${functions}
+        return {
+          startType(context) { return insertText(17, "X", context); },
+          cancel(context) {
+            cancelCommandContext(context, "request_canceled");
+            context.cancellationCleanup = invalidateCanceledCommandFreshness(context);
+          },
+          oldBindingsFail() {
+            let staleTurn = false, staleGeneration = false;
+            try { assertControlBinding({ controlSessionId: "lease-7", turn: 11, moveSequence: 2 }); }
+            catch (error) { staleTurn = error.message.startsWith("STALE_CONTROL_TURN:"); }
+            try { assertFrameSnapshotFresh("g-old"); }
+            catch (error) { staleGeneration = error.message.startsWith("STALE_SNAPSHOT:"); }
+            return staleTurn && staleGeneration;
+          },
+          observe(context) { return observeControlledPage({ id: 17 }, context); },
+          freshBindingsPass() {
+            assertControlBinding({ controlSessionId: "lease-7", turn: 13, moveSequence: 2 });
+            assertFrameSnapshotFresh("g-fresh");
+          },
+          releaseCdp() { cdpGate.resolve({}); },
+          releasePersist() { firstPersist.resolve(); },
+          state() { return {
+            fieldValue, cdpDispatched, turn: controlLease?.turn, frame: frameSnapshot?.generation ?? null,
+            persistCount, events: structuredClone(events), revocations,
+          }; },
+        };
+      `)(deferred);
+
+      const context = {
+        key: "server-session:9:type-text", method: "page.typeText",
+        started: true, canceled: false, cancelWaiters: new Set(),
+        cancellationCleanup: Promise.resolve(false),
+      };
+      const pending = bridge.startType(context);
+      while (!bridge.state().cdpDispatched) await Promise.resolve();
+      if (bridge.state().fieldValue !== "X") throw new Error("fixture did not mutate before cancel");
+
+      bridge.cancel(context);
+      let nextQueuedCommandDispatched = false;
+      const nextQueuedCommand = context.cancellationCleanup.then(() => {
+        nextQueuedCommandDispatched = true;
+      });
+      const immediate = bridge.state();
+      if (immediate.turn !== 12 || immediate.frame !== null || !bridge.oldBindingsFail()) {
+        throw new Error(`cancel did not synchronously invalidate stale authority: ${JSON.stringify(immediate)}`);
+      }
+      if (immediate.events.length !== 0) throw new Error("freshness event published before durable turn");
+      if (nextQueuedCommandDispatched) throw new Error("next queued command passed the persistence barrier");
+
+      let canceled = false;
+      try { await pending; }
+      catch (error) { canceled = error.code === "COMMAND_CANCELED"; }
+      if (!canceled) throw new Error("deferred Input.insertText was not canceled");
+      bridge.releaseCdp();
+      bridge.releasePersist();
+      await context.cancellationCleanup;
+      await nextQueuedCommand;
+      if (!nextQueuedCommandDispatched) throw new Error("queued command did not resume after persistence");
+      const invalidated = bridge.state();
+      if (invalidated.events.length !== 1
+        || invalidated.events[0].name !== "browser.control.freshness_invalidated"
+        || invalidated.events[0].data.control.turn !== 12
+        || invalidated.revocations !== 0) {
+        throw new Error(`durable freshness event was wrong: ${JSON.stringify(invalidated)}`);
+      }
+
+      const observed = await bridge.observe({
+        key: "server-session:10:observe", method: "page.observe",
+        started: true, canceled: false, cancelWaiters: new Set(),
+      });
+      if (observed.snapshot.generation !== "g-fresh" || observed.control.turn !== 13) {
+        throw new Error(`explicit observation did not recover freshness: ${JSON.stringify(observed)}`);
+      }
+      bridge.freshBindingsPass();
+
+      const failureFunctions = [
+        "requestCancelInvalidatesFreshness", "persistCanceledCommandFreshness",
+        "invalidateCanceledCommandFreshness",
+      ].map((name) => extractFunction(source, name)).join("\n");
+      const failingPersistence = new Function(`
+        const REQUEST_CANCEL_FRESHNESS_METHODS = new Set(["page.typeText"]);
+        let controlEpoch = 3;
+        let controlLease = { sessionId: "fail-lease", epoch: 3, tabId: 3, turn: 5 };
+        let frameSnapshot = { generation: "fail-old" };
+        let frameInvalidationReason = "";
+        let stopCalls = 0;
+        const events = [];
+        function persistControlState() { return Promise.reject(new Error("storage unavailable")); }
+        function stopControl() { stopCalls += 1; controlEpoch += 1; controlLease = null; return Promise.resolve(); }
+        function send(message) { events.push(message); return true; }
+        function publicControlState() { return controlLease ? { active: true, turn: controlLease.turn } : { active: false }; }
+        ${failureFunctions}
+        return {
+          run() { return invalidateCanceledCommandFreshness({ started: true, method: "page.typeText" }); },
+          state() { return { active: Boolean(controlLease), stopCalls, events: events.length, frame: frameSnapshot }; },
+        };
+      `)();
+      await failingPersistence.run();
+      const failed = failingPersistence.state();
+      if (failed.active || failed.stopCalls !== 1 || failed.events !== 0 || failed.frame !== null) {
+        throw new Error(`failed freshness persistence did not revoke: ${JSON.stringify(failed)}`);
+      }
+    "#;
+
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run deferred CDP cancellation harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Deferred CDP cancellation harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn canceled_observe_cannot_republish_a_frame_snapshot_after_its_persist_await() {
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        for (const marker of [`async function ${name}(`, `function ${name}(`]) {
+          const start = source.indexOf(marker);
+          if (start < 0) continue;
+          const brace = source.indexOf("{", start);
+          let depth = 0, quote = "", escaped = false;
+          for (let index = brace; index < source.length; index += 1) {
+            const character = source[index];
+            if (quote) {
+              if (escaped) escaped = false;
+              else if (character === "\\") escaped = true;
+              else if (character === quote) quote = "";
+            } else if (["\"", "'", "`"].includes(character)) quote = character;
+            else if (character === "{") depth += 1;
+            else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+          }
+        }
+        throw new Error(`missing ${name}`);
+      }
+      function deferred() {
+        let resolve;
+        const promise = new Promise((yes) => { resolve = yes; });
+        return { promise, resolve };
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const functions = [
+        "requestCancelInvalidatesFreshness", "rememberCanceledCommand",
+        "commandCanceledError", "assertCommandActive", "cancelCommandContext",
+        "persistCanceledCommandFreshness", "invalidateCanceledCommandFreshness",
+        "finalizeCanceledCommandFreshness", "observeControlledPage",
+      ].map((name) => extractFunction(source, name)).join("\n");
+      const bridge = new Function("deferred", `
+        const REQUEST_CANCEL_FRESHNESS_METHODS = new Set(["page.observe"]);
+        const canceledCommandKeys = new Set();
+        const attachedFrames = new Map();
+        const frameSkips = [];
+        let frameTreeRevision = 2;
+        let frameInvalidationReason = "";
+        let frameSnapshot = { generation: "g-old", frames: new Map() };
+        let controlEpoch = 4;
+        let controlLease = { sessionId: "lease", epoch: 4, tabId: 7, turn: 4 };
+        const observationPersist = deferred();
+        const cancellationPersist = deferred();
+        let persistCalls = 0;
+        function persistControlState() {
+          persistCalls += 1;
+          return persistCalls === 1 ? observationPersist.promise : cancellationPersist.promise;
+        }
+        function stopControl() { controlLease = null; controlEpoch += 1; return Promise.resolve(); }
+        function send() { return true; }
+        function publicControlState() { return { active: true, turn: controlLease.turn }; }
+        function assertDialogNotBlocking() {}
+        function requireControl() { return Promise.resolve(controlLease); }
+        function captureLeaseAuthority() { return { tabId: 7, sessionId: "lease", epoch: 4 }; }
+        function assertLeaseAuthority(authority, context, boundary) {
+          assertCommandActive(context, boundary);
+          if (!controlLease || authority.sessionId !== controlLease.sessionId
+            || authority.epoch !== controlLease.epoch || authority.epoch !== controlEpoch) {
+            throw new Error("CONTROL_CANCELED");
+          }
+        }
+        function verifyDocumentAuthority() { return Promise.resolve(); }
+        function showControlUi() { return Promise.resolve(); }
+        function contentRequest() {
+          return Promise.resolve({
+            generation: "g-canceled", viewport: { width: 800, height: 600 },
+            elements: [], frameOwners: [],
+          });
+        }
+        function collectFrameObservations(tabId, snapshot) {
+          return Promise.resolve({ elements: snapshot.elements, frames: [], frameSummary: {} });
+        }
+        function rethrowLeaseFatalFrameError(error) { throw error; }
+        function mergeFrameObservations(snapshot) {
+          return { elements: snapshot.elements, frames: [], frameSummary: {} };
+        }
+        function frameObservationIsSilent() { return true; }
+        function captureTab() { throw new Error("capture must not run after cancellation"); }
+        function classifyRisk() { return "low"; }
+        ${functions}
+        return {
+          observe(context) { return observeControlledPage({ id: 7 }, context); },
+          cancel(context) {
+            cancelCommandContext(context, "request_canceled");
+            context.cancellationCleanup = invalidateCanceledCommandFreshness(context);
+          },
+          releaseObservationPersist() { observationPersist.resolve(); },
+          releaseCancellationPersist() { cancellationPersist.resolve(); },
+          finalize(context) { finalizeCanceledCommandFreshness(context); },
+          state() { return { persistCalls, turn: controlLease?.turn, frame: frameSnapshot?.generation ?? null }; },
+        };
+      `)(deferred);
+
+      const context = {
+        key: "session:observe", method: "page.observe", started: true,
+        canceled: false, cancelWaiters: new Set(), cancellationCleanup: Promise.resolve(false),
+      };
+      const pending = bridge.observe(context);
+      while (bridge.state().persistCalls < 1) await Promise.resolve();
+      bridge.cancel(context);
+      if (bridge.state().turn !== 6 || bridge.state().frame !== null) {
+        throw new Error(`cancel did not invalidate observe immediately: ${JSON.stringify(bridge.state())}`);
+      }
+      bridge.releaseObservationPersist();
+      let canceled = false;
+      try { await pending; } catch (error) { canceled = error.code === "COMMAND_CANCELED"; }
+      if (!canceled || bridge.state().frame !== "g-canceled") {
+        throw new Error(`fixture did not reproduce post-cancel frame reassignment: ${JSON.stringify(bridge.state())}`);
+      }
+      bridge.releaseCancellationPersist();
+      await context.cancellationCleanup;
+      bridge.finalize(context);
+      if (bridge.state().frame !== null || bridge.state().turn !== 6) {
+        throw new Error(`final queue barrier did not re-clear without a second turn bump: ${JSON.stringify(bridge.state())}`);
+      }
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run canceled-observe race harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Canceled-observe race harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn canceled_tab_creation_commits_safe_mode_reconciliation_provenance() {
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        for (const marker of [`async function ${name}(`, `function ${name}(`]) {
+          const start = source.indexOf(marker);
+          if (start < 0) continue;
+          const brace = source.indexOf("{", start);
+          let depth = 0, quote = "", escaped = false;
+          for (let index = brace; index < source.length; index += 1) {
+            const character = source[index];
+            if (quote) {
+              if (escaped) escaped = false;
+              else if (character === "\\") escaped = true;
+              else if (character === quote) quote = "";
+            } else if (["\"", "'", "`"].includes(character)) quote = character;
+            else if (character === "{") depth += 1;
+            else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+          }
+        }
+        throw new Error(`missing ${name}`);
+      }
+      function deferred() {
+        let resolve;
+        const promise = new Promise((yes) => { resolve = yes; });
+        return { promise, resolve };
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const functions = [
+        "rememberCanceledCommand", "commandCanceledError", "assertCommandActive",
+        "withCommandCancellation", "cancelCommandContext", "outcomeUnknownError",
+        "assertCommandActiveAfterDispatch", "commandSideEffect",
+        "groupBridgeCreatedTab", "appendCommandCleanup", "createBridgeTab",
+        "effectiveTabUrl", "isTrackedBridgeBlank",
+      ].map((name) => extractFunction(source, name)).join("\n");
+      const bridge = new Function("deferred", `
+        const canceledCommandKeys = new Set();
+        const bridgeCreatedTabs = new Set();
+        const creation = deferred();
+        const persistence = deferred();
+        let persistenceStarted = false;
+        let durable = false;
+        let groups = 0;
+        function initializeControlState() { return Promise.resolve(); }
+        function persistControlState() {
+          persistenceStarted = true;
+          return persistence.promise.then(() => { durable = true; });
+        }
+        function assertHumanControlAvailable() {}
+        function assertHumanControlAvailableAfterDispatch() {}
+        const chrome = {
+          tabs: {
+            create() { return creation.promise; },
+            group() { groups += 1; return Promise.resolve(9); },
+            remove() { return Promise.resolve(); },
+          },
+          tabGroups: { update() { return Promise.resolve(); } },
+        };
+        ${functions}
+        return {
+          create(context) { return createBridgeTab(context); },
+          cancel(context) { cancelCommandContext(context, "request_canceled"); },
+          resolveCreation() { creation.resolve({ id: 42, url: "about:blank", active: true }); },
+          releasePersistence() { persistence.resolve(); },
+          tracked() {
+            const tab = { id: 42, url: "about:blank", active: true };
+            return isTrackedBridgeBlank(tab) && bridgeCreatedTabs.has(42);
+          },
+          state() { return { persistenceStarted, durable, groups }; },
+        };
+      `)(deferred);
+      const context = {
+        key: "session:new", method: "tabs.new", started: true,
+        canceled: false, cancelWaiters: new Set(), cancellationCleanup: Promise.resolve(false),
+      };
+      const action = bridge.create(context);
+      bridge.cancel(context);
+      let outcomeUnknown = false;
+      try { await action; } catch (error) { outcomeUnknown = error.code === "ACTION_OUTCOME_UNKNOWN"; }
+      if (!outcomeUnknown) throw new Error("canceled tab creation was not outcome-unknown");
+      bridge.resolveCreation();
+      while (!bridge.state().persistenceStarted) await Promise.resolve();
+      let nextQueued = false;
+      const next = context.cancellationCleanup.then(() => { nextQueued = true; });
+      await Promise.resolve();
+      if (nextQueued || !bridge.tracked() || bridge.state().durable) {
+        throw new Error("tab provenance did not remain queue-blocked until durable persistence");
+      }
+      bridge.releasePersistence();
+      await context.cancellationCleanup;
+      await next;
+      if (!nextQueued || !bridge.tracked() || !bridge.state().durable || bridge.state().groups !== 1) {
+        throw new Error(`canceled tab was not safely reconcilable: ${JSON.stringify(bridge.state())}`);
+      }
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run canceled-tab provenance harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Canceled-tab provenance harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn control_state_writes_cannot_resurrect_an_older_turn() {
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `async function ${name}(`;
+        const start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        const brace = source.indexOf("{", start);
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      function deferred() {
+        let resolve;
+        const promise = new Promise((yes) => { resolve = yes; });
+        return { promise, resolve };
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const persist = extractFunction(source, "persistControlState");
+      const bridge = new Function("deferred", `
+        const CONTROL_STORAGE_KEY = "lease";
+        const CONTROL_REVOCATION_KEY = "revocation";
+        const CONTROL_CLEANUPS_KEY = "cleanups";
+        const CONTROL_INPUTS_KEY = "inputs";
+        const CREATED_TABS_KEY = "tabs";
+        let controlLease = { sessionId: "lease", epoch: 2, tabId: 2, turn: 4 };
+        let lastControlRevocation = null;
+        const pendingControlCleanups = new Map();
+        const heldMouseInputs = new Map();
+        const heldKeyInputs = new Map();
+        const bridgeCreatedTabs = new Set();
+        let controlStateWrite = Promise.resolve();
+        const calls = [];
+        const gates = [];
+        let durable = null;
+        const chrome = { storage: { session: { set(value) {
+          const gate = deferred();
+          calls.push(structuredClone(value));
+          gates.push(gate);
+          return gate.promise.then(() => { durable = structuredClone(value); });
+        } } } };
+        ${persist}
+        return {
+          persist: () => persistControlState(),
+          setTurn(turn) { controlLease.turn = turn; },
+          release(index) { gates[index].resolve(); },
+          state() { return { calls: structuredClone(calls), durable: structuredClone(durable) }; },
+        };
+      `)(deferred);
+
+      const oldWrite = bridge.persist();
+      while (bridge.state().calls.length === 0) await Promise.resolve();
+      bridge.setTurn(5);
+      const newWrite = bridge.persist();
+      await Promise.resolve();
+      if (bridge.state().calls.length !== 1) {
+        throw new Error("the newer durable write ran before the older write settled");
+      }
+      bridge.release(0);
+      await oldWrite;
+      while (bridge.state().calls.length < 2) await Promise.resolve();
+      if (bridge.state().calls[1].lease.turn !== 5) {
+        throw new Error("the serialized write did not capture the canceled-command turn");
+      }
+      bridge.release(1);
+      await newWrite;
+      if (bridge.state().durable.lease.turn !== 5) {
+        throw new Error("an older write resurrected the previous turn");
+      }
+    "#;
+
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run control-state persistence harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Control-state persistence harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -1901,7 +2540,6 @@ fn human_stop_wins_deferred_tab_mutations_and_debugger_attach() {
 
     for (method, chrome_call) in [
         ("tabs.activate", "chrome.tabs.update"),
-        ("tabs.new", "chrome.tabs.create"),
         ("tabs.close", "chrome.tabs.remove"),
     ] {
         let start = background.find(&format!("case \"{method}\"")).unwrap();
@@ -1913,6 +2551,34 @@ fn human_stop_wins_deferred_tab_mutations_and_debugger_attach() {
         assert!(body.contains("commandSideEffect"));
         assert!(body.contains(chrome_call));
     }
+    let new_start = background.find("case \"tabs.new\"").unwrap();
+    let new_end = background[new_start + 5..]
+        .find("\n    case \"")
+        .map(|offset| new_start + 5 + offset)
+        .unwrap_or(background.len());
+    assert!(background[new_start..new_end].contains("createBridgeTab(commandContext)"));
+    let create_start = background.find("async function createBridgeTab").unwrap();
+    let create_end = background[create_start..]
+        .find("async function clearPendingDialog")
+        .unwrap()
+        + create_start;
+    let create = &background[create_start..create_end];
+    assert!(create.contains("chrome.tabs.create"));
+    assert!(create.contains("assertHumanControlAvailable();"));
+    assert!(create.contains("assertHumanControlAvailableAfterDispatch"));
+    assert!(create.contains("appendCommandCleanup(commandContext, provenance)"));
+    let group_start = background
+        .find("async function groupBridgeCreatedTab")
+        .unwrap();
+    let group_end = background[group_start..]
+        .find("function appendCommandCleanup")
+        .unwrap()
+        + group_start;
+    let group = &background[group_start..group_end];
+    assert!(
+        group.find("bridgeCreatedTabs.add(tab.id)").unwrap()
+            < group.find("commandSideEffect").unwrap()
+    );
     let approve_start = background.find("case \"approve\"").unwrap();
     let approve_end = background[approve_start..].find("case \"reject\"").unwrap() + approve_start;
     assert!(
@@ -2596,6 +3262,7 @@ fn held_mouse_and_key_down_intents_survive_worker_restart() {
         const bridgeCreatedTabs = new Set();
         const heldMouseInputs = new Map();
         const heldKeyInputs = new Map();
+        let controlStateWrite = Promise.resolve();
         let durable = null;
         const chrome = { storage: { session: { set: async (value) => { durable = structuredClone(value); } } } };
         ${functions}

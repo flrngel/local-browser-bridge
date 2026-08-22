@@ -110,7 +110,7 @@ PiP automation, virtual displays, VM orchestration, RDP loopback, and separate O
 ## Stop and cleanup
 
 - Chrome Cancel, the in-page Stop button, popup release, timeout, target loss, or connector loss revokes the browser lease.
-- `POST /api/v1/command/cancel` is bearer- and `callId`-scoped. It drops the exact action future and sends one original-session connector cancel; it preserves the browser lease and reports the original call as outcome-unknown.
+- `POST /api/v1/command/cancel` is bearer- and `callId`-scoped. It drops the exact action future and sends one original-session connector cancel; it preserves the browser lease when safe and reports the original call as outcome-unknown. For a started controlled-page command, the server independently latches exact-session recovery and removes observation/screenshot authority before returning 202, so a dropped connector cancel cannot reopen the old turn. The same exact-session fence runs before a disconnected HTTP handler releases the action lock and on post-dispatch connector outcome-unknown errors, including no-`callId` and legacy dashboard requests. The extension synchronously advances and persists its turn, clears its frame snapshot both immediately and at the final queue barrier, and serializes that persistence before the next command; explicit `page.observe` is the only normal recovery.
 - `computer.share.stop`, helper shutdown, target closure, capture failure, or connector replacement stops the native share and clears frame authority.
 - Canceling a computer mutation immediately clears only the owning helper session's published share/frame/pointer/screenshot authority; replacement-session state survives.
 - Stopping the server breaks both outbound connector sessions.

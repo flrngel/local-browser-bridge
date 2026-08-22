@@ -73,6 +73,20 @@ const PAUSE_ALLOWED_COMMANDS = new Set([
 const DIALOG_TOLERANT_COMMANDS = new Set([
   "status", "tabs.list", "browser.control.status", "browser.control.stop", "page.handleDialog",
 ]);
+// A request cancel is not rollback: any one of these commands can either
+// advance the observation turn or cross a page/browser side-effect boundary
+// before the cancel arrives. Keep the visible lease, but make every binding
+// captured before that command unusable until page.observe publishes a new
+// turn. Keep this list explicit so a future read-only command cannot inherit
+// mutation semantics merely because its name starts with "page.".
+const REQUEST_CANCEL_FRESHNESS_METHODS = new Set([
+  "browser.control.start",
+  "page.observe",
+  "page.navigate", "page.back", "page.forward", "page.reload",
+  "page.click", "page.fill", "page.select", "page.key", "page.scroll",
+  "page.clickAt", "page.typeText", "page.evaluate", "page.hover",
+  "page.batch", "page.handleDialog",
+]);
 
 let socket = null;
 let pingTimer = null;
@@ -147,6 +161,7 @@ let outboundSequence = 0;
 let eventSequence = 0;
 let protocolIdentityPromise = null;
 let sequenceWrite = Promise.resolve();
+let controlStateWrite = Promise.resolve();
 let transportRotation = Promise.resolve();
 const expectedInternalSettings = new Map();
 const canceledCommandKeys = new Set();
@@ -216,6 +231,10 @@ function commandUsesControl(method) {
   // canceled wait must not revoke an unrelated control session.
   return method === "browser.control.start"
     || (method.startsWith("page.") && method !== "page.waitFor");
+}
+
+function requestCancelInvalidatesFreshness(method) {
+  return REQUEST_CANCEL_FRESHNESS_METHODS.has(method);
 }
 
 function assertNoPendingControlLifecycle() {
@@ -348,6 +367,70 @@ function cancelCommandContext(context, reason) {
   rememberCanceledCommand(context.key);
   for (const reject of context.cancelWaiters ?? []) reject(commandCanceledError(reason));
   context.cancelWaiters?.clear();
+}
+
+async function persistCanceledCommandFreshness(lease, invalidatedTurn, method) {
+  try {
+    await persistControlState();
+  } catch {
+    if (controlLease?.sessionId === lease.sessionId
+      && controlLease?.epoch === lease.epoch
+      && controlLease.turn >= invalidatedTurn) {
+      await stopControl("freshness_persist_failed", { requireExplicitStart: true });
+    }
+    return false;
+  }
+  if (controlLease?.sessionId !== lease.sessionId
+    || controlLease?.epoch !== lease.epoch
+    || controlLease.turn < invalidatedTurn) {
+    return false;
+  }
+  send({
+    type: "event",
+    name: "browser.control.freshness_invalidated",
+    data: {
+      reason: "request_canceled",
+      method,
+      control: publicControlState(),
+    },
+  });
+  return true;
+}
+
+// This function performs its security transition before its first await. The
+// command queue awaits the returned persistence task in its finally block,
+// so no later command can inspect the pre-cancel turn or frame snapshot. A
+// storage failure revokes control instead of recovering an older durable
+// turn after a service-worker restart.
+function invalidateCanceledCommandFreshness(context) {
+  if (!context?.started
+    || !requestCancelInvalidatesFreshness(context.method)
+    || !controlLease) {
+    return Promise.resolve(false);
+  }
+  const lease = controlLease;
+  const currentTurn = Number.isSafeInteger(lease.turn) && lease.turn >= 0 ? lease.turn : 0;
+  frameSnapshot = null;
+  frameInvalidationReason = "the owning request was canceled after command dispatch";
+  if (currentTurn >= Number.MAX_SAFE_INTEGER) {
+    controlEpoch += 1;
+    return stopControl("freshness_counter_exhausted", { requireExplicitStart: true }).then(() => false);
+  }
+  lease.turn = currentTurn + 1;
+  return persistCanceledCommandFreshness(lease, lease.turn, context.method);
+}
+
+function finalizeCanceledCommandFreshness(context) {
+  if (context?.canceled
+    && context.cancelReason === "request_canceled"
+    && requestCancelInvalidatesFreshness(context.method)) {
+    // A canceled page.observe can resume from an older non-cancel-aware
+    // persistence await and briefly assign frameSnapshot again before its
+    // next authority assertion fails. Re-clear at the serialized queue
+    // barrier without advancing the already-invalidated turn a second time.
+    frameSnapshot = null;
+    frameInvalidationReason = "the owning request was canceled after command dispatch";
+  }
 }
 
 function commandCanceledError(boundary) {
@@ -785,11 +868,16 @@ async function connect() {
         const requestCanceled = message.reason === "request_canceled";
         cancelCommandContext(context, requestCanceled ? "request_canceled" : "server_timeout");
         // An API caller canceled one command context, not the user's browser
-        // control lease. Connector loss and server timeout remain lease-fatal
-        // because their command outcome cannot be reconciled safely.
-        if (!requestCanceled && context.started && commandUsesControl(context.method) && controlLease) {
+        // control lease. It does synchronously invalidate observation/action
+        // freshness for a started mutation because its effect may already
+        // have crossed Chrome's boundary. Connector loss and server timeout
+        // remain lease-fatal because their command outcome cannot be
+        // reconciled safely.
+        if (requestCanceled) {
+          context.cancellationCleanup = invalidateCanceledCommandFreshness(context);
+        } else if (context.started && commandUsesControl(context.method) && controlLease) {
           void stopControl("command_canceled", { requireExplicitStart: true });
-        } else if (!requestCanceled && context.started && context.method === "browser.control.start") {
+        } else if (context.started && context.method === "browser.control.start") {
           controlEpoch += 1;
         }
       }
@@ -809,6 +897,7 @@ async function connect() {
       canceled: false,
       started: false,
       cancelWaiters: new Set(),
+      cancellationCleanup: Promise.resolve(false),
     };
     activeCommandContexts.set(context.key, context);
     commandChain = commandChain.then(async () => {
@@ -832,6 +921,8 @@ async function connect() {
           error: { code: error.code ?? error.message?.split(":")[0] ?? "COMMAND_FAILED", message: error.message },
         });
       } finally {
+        await context.cancellationCleanup;
+        finalizeCanceledCommandFreshness(context);
         activeCommandContexts.delete(context.key);
       }
     }).catch(() => protocolFailure("Command dispatch failed outside its result boundary."));
@@ -1266,7 +1357,10 @@ function publicControlState() {
 }
 
 async function persistControlState() {
-  await chrome.storage.session.set({
+  // Capture at call time, then serialize writes. Without this queue an older
+  // heartbeat write could complete after a canceled-command turn bump and
+  // resurrect stale durable authority on service-worker restart.
+  const snapshot = structuredClone({
     [CONTROL_STORAGE_KEY]: controlLease,
     [CONTROL_REVOCATION_KEY]: lastControlRevocation,
     [CONTROL_CLEANUPS_KEY]: [...pendingControlCleanups.values()],
@@ -1276,6 +1370,9 @@ async function persistControlState() {
     },
     [CREATED_TABS_KEY]: [...bridgeCreatedTabs],
   });
+  const operation = controlStateWrite.then(() => chrome.storage.session.set(snapshot));
+  controlStateWrite = operation.catch(() => {});
+  await operation;
 }
 
 async function persistHeldInputIntent(map, key, record) {
@@ -4068,17 +4165,70 @@ async function runBatchActions(actions, dispatchAction) {
 async function groupBridgeCreatedTab(tab, commandContext = null) {
   await initializeControlState();
   if (!Number.isInteger(tab?.id)) throw new Error("BAD_TAB: Chrome did not return a new tab identifier");
+  // Provenance is the first uncancellable commit after Chrome returns the
+  // created tab. In Safe mode this is what makes a canceled about:blank
+  // creation visible to tabs.list for reconciliation. Group decoration may
+  // still be canceled afterwards without losing that provenance.
+  bridgeCreatedTabs.add(tab.id);
+  try {
+    await persistControlState();
+  } catch (error) {
+    // Avoid leaving an untracked blank tab when durable provenance cannot be
+    // committed. If Chrome refuses cleanup, retain the in-memory marker so
+    // the current worker can still expose the tab to tabs.list.
+    bridgeCreatedTabs.delete(tab.id);
+    try {
+      await chrome.tabs.remove(tab.id);
+    } catch {
+      bridgeCreatedTabs.add(tab.id);
+    }
+    throw error;
+  }
   const groupId = await commandSideEffect(commandContext, "tab grouping", () => chrome.tabs.group({ tabIds: tab.id }));
   await commandSideEffect(commandContext, "tab group labeling", () => chrome.tabGroups.update(groupId, {
     title: "Local Browser Bridge",
     color: "green",
     collapsed: false,
   }));
-  assertCommandActive(commandContext, "bridge-created tab registration");
-  bridgeCreatedTabs.add(tab.id);
-  await persistControlState();
-  assertCommandActive(commandContext, "bridge-created tab registration commit");
   return groupId;
+}
+
+function appendCommandCleanup(commandContext, cleanup) {
+  if (!commandContext) {
+    void cleanup.catch(() => {});
+    return;
+  }
+  const previous = commandContext.cancellationCleanup ?? Promise.resolve(false);
+  commandContext.cancellationCleanup = previous
+    .then(() => cleanup)
+    .catch(() => false);
+}
+
+async function createBridgeTab(commandContext) {
+  assertCommandActive(commandContext, "tab creation dispatch");
+  assertHumanControlAvailable();
+  const creation = chrome.tabs.create({ url: "about:blank", active: true });
+  creation.catch(() => {});
+  let tab = null;
+  try {
+    tab = await withCommandCancellation(creation, commandContext, "tab creation");
+    assertCommandActiveAfterDispatch(commandContext, "tab creation");
+    assertHumanControlAvailableAfterDispatch("tab creation");
+    return tab;
+  } catch (error) {
+    if (error?.code === "COMMAND_CANCELED" || error?.code === "ACTION_OUTCOME_UNKNOWN") {
+      const provenance = (tab ? Promise.resolve(tab) : creation)
+        .then((created) => groupBridgeCreatedTab(created, null))
+        .then(() => true)
+        .catch(() => false);
+      // The serialized command queue cannot advance to tabs.list until a
+      // late Chrome creation has either become durably reconcilable or been
+      // cleaned up after a persistence failure.
+      appendCommandCleanup(commandContext, provenance);
+      throw outcomeUnknownError("tab creation", error);
+    }
+    throw error;
+  }
 }
 
 // Drops the pending-dialog record once the dialog is provably gone. The gate
@@ -4239,11 +4389,7 @@ async function dispatch(method, params, approved, commandContext = null, { batch
       return { tabId: tab.id, active: true };
     }
     case "tabs.new": {
-      const tab = await commandSideEffect(
-        commandContext,
-        "tab creation",
-        () => chrome.tabs.create({ url: "about:blank", active: true }),
-      );
+      const tab = await createBridgeTab(commandContext);
       const groupId = await groupBridgeCreatedTab(tab, commandContext);
       return { tabId: tab.id, groupId, bridgeCreated: true };
     }

@@ -188,6 +188,7 @@ struct AppState {
     data: Arc<RwLock<StateData>>,
     sessions: Arc<Mutex<HashMap<String, Session>>>,
     command_replay: Arc<Mutex<CommandReplay>>,
+    browser_freshness_recovery: Arc<Mutex<HashMap<String, BrowserFreshnessRecovery>>>,
     events: broadcast::Sender<ServerEvent>,
     action_lock: Arc<tokio::sync::Mutex<()>>,
     update_lock: Arc<tokio::sync::Mutex<()>>,
@@ -217,6 +218,7 @@ impl AppState {
             data: Arc::new(RwLock::new(data)),
             sessions: Arc::new(Mutex::new(HashMap::new())),
             command_replay: Arc::new(Mutex::new(CommandReplay::new())),
+            browser_freshness_recovery: Arc::new(Mutex::new(HashMap::new())),
             events,
             action_lock: Arc::new(tokio::sync::Mutex::new(())),
             update_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -248,6 +250,97 @@ impl AppState {
         self.command_replay.lock().unwrap().cancel(call_id)
     }
 
+    fn begin_command_interruption(&self, call_id: &str) -> Option<CommandInterruption> {
+        self.command_replay.lock().unwrap().interrupt(call_id)
+    }
+
+    async fn settle_interrupted_command(
+        &self,
+        call_id: Option<String>,
+        interruption: CommandInterruption,
+    ) {
+        if let Some(owner) = interruption.browser_owner
+            && self
+                .clear_published_browser_freshness_after_cancel(&owner.session_id, &owner.method)
+                .await
+        {
+            self.log(
+                &owner.method,
+                "warning",
+                "Browser caller disconnected; observation cleared until a fresh page.observe",
+            )
+            .await;
+            self.bump("browser-interrupted").await;
+        }
+
+        if let Some(owner) = interruption.computer_owner {
+            let unknown = HubError::new(
+                "COMMAND_OUTCOME_UNKNOWN",
+                "The caller disconnected; the computer command outcome is unknown",
+            );
+            if self
+                .clear_published_computer_authority_after_unknown(
+                    &owner.session_id,
+                    &owner.method,
+                    &unknown,
+                )
+                .await
+            {
+                self.log(
+                    &owner.method,
+                    "warning",
+                    "Computer caller disconnected; published authority was cleared",
+                )
+                .await;
+                self.bump("computer-interrupted").await;
+            }
+        }
+
+        // Keep the registry entry in-flight until all asynchronous public
+        // state cleanup has committed. A same-callId retry therefore cannot
+        // observe the cached 504 before the synchronous browser gate and the
+        // corresponding public-state teardown exist.
+        if let Some(call_id) = call_id {
+            let (status, body) = error_response_for_call(interrupted_call_error(), &call_id);
+            let _ = self.complete_command_call(&call_id, status, body);
+        }
+    }
+
+    fn latch_browser_freshness_recovery(&self, owner: &BrowserCommandOwner) {
+        if !request_cancel_invalidates_browser_freshness(&owner.method) {
+            return;
+        }
+        let mut recoveries = self.browser_freshness_recovery.lock().unwrap();
+        recoveries.insert(
+            owner.session_id.clone(),
+            BrowserFreshnessRecovery {
+                method: owner.method.clone(),
+            },
+        );
+    }
+
+    fn browser_freshness_recovery_blocks(&self, session_id: &str, method: &str) -> Option<String> {
+        let recoveries = self.browser_freshness_recovery.lock().unwrap();
+        let recovery = recoveries.get(session_id)?;
+        if !request_cancel_invalidates_browser_freshness(method)
+            || matches!(
+                method,
+                "page.observe" | "page.handleDialog" | "browser.control.start"
+            )
+        {
+            return None;
+        }
+        Some(recovery.method.clone())
+    }
+
+    fn clear_browser_freshness_recovery(&self, session_id: &str) -> bool {
+        self.browser_freshness_recovery
+            .lock()
+            .unwrap()
+            .remove(session_id)
+            .is_some()
+    }
+
     fn bind_computer_command_owner(
         &self,
         call_id: Option<&str>,
@@ -260,6 +353,24 @@ impl AppState {
         self.command_replay.lock().unwrap().bind_computer_owner(
             call_id,
             ComputerCommandOwner {
+                session_id: session_id.to_owned(),
+                method: method.to_owned(),
+            },
+        )
+    }
+
+    fn bind_browser_command_owner(
+        &self,
+        call_id: Option<&str>,
+        session_id: &str,
+        method: &str,
+    ) -> bool {
+        let Some(call_id) = call_id else {
+            return true;
+        };
+        self.command_replay.lock().unwrap().bind_browser_owner(
+            call_id,
+            BrowserCommandOwner {
                 session_id: session_id.to_owned(),
                 method: method.to_owned(),
             },
@@ -940,7 +1051,19 @@ struct CommandReplay {
 struct InFlightEntry {
     fingerprint: String,
     cancellation: Option<oneshot::Sender<()>>,
+    interrupted: bool,
+    browser_owner: Option<BrowserCommandOwner>,
     computer_owner: Option<ComputerCommandOwner>,
+}
+
+#[derive(Clone)]
+struct BrowserCommandOwner {
+    session_id: String,
+    method: String,
+}
+
+struct BrowserFreshnessRecovery {
+    method: String,
 }
 
 #[derive(Clone)]
@@ -949,8 +1072,35 @@ struct ComputerCommandOwner {
     method: String,
 }
 
+#[derive(Default)]
+struct RequestCommandOwners {
+    browser_owner: Option<BrowserCommandOwner>,
+}
+
+type SharedRequestCommandOwners = Arc<Mutex<RequestCommandOwners>>;
+
 struct CommandCancellation {
+    signal: oneshot::Sender<()>,
+    browser_owner: Option<BrowserCommandOwner>,
     computer_owner: Option<ComputerCommandOwner>,
+}
+
+#[derive(Default)]
+struct CommandInterruption {
+    browser_owner: Option<BrowserCommandOwner>,
+    computer_owner: Option<ComputerCommandOwner>,
+}
+
+impl CommandInterruption {
+    fn merge_request_owners(&mut self, owners: &RequestCommandOwners) {
+        if self.browser_owner.is_none() {
+            self.browser_owner.clone_from(&owners.browser_owner);
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.browser_owner.is_none() && self.computer_owner.is_none()
+    }
 }
 
 struct ReplayEntry {
@@ -1007,6 +1157,8 @@ impl CommandReplay {
             InFlightEntry {
                 fingerprint: fingerprint.to_owned(),
                 cancellation: Some(cancellation),
+                interrupted: false,
+                browser_owner: None,
                 computer_owner: None,
             },
         );
@@ -1018,10 +1170,50 @@ impl CommandReplay {
     /// completion under the same mutex observes that cancellation won.
     fn cancel(&mut self, call_id: &str) -> Option<CommandCancellation> {
         let entry = self.in_flight.get_mut(call_id)?;
-        let cancellation = entry.cancellation.take()?;
+        if entry.interrupted {
+            return None;
+        }
+        let signal = entry.cancellation.take()?;
+        let browser_owner = entry.browser_owner.clone();
         let computer_owner = entry.computer_owner.clone();
-        let _ = cancellation.send(());
-        Some(CommandCancellation { computer_owner })
+        Some(CommandCancellation {
+            signal,
+            browser_owner,
+            computer_owner,
+        })
+    }
+
+    /// Starts fail-closed settlement when the HTTP handler disappears before
+    /// recording a response. The entry deliberately remains in `in_flight`:
+    /// asynchronous authority cleanup must finish before a replayable 504 is
+    /// published. Taking (or observing the prior taking of) the cancellation
+    /// sender also prevents a later cancel request or connector bind from
+    /// racing this settlement.
+    fn interrupt(&mut self, call_id: &str) -> Option<CommandInterruption> {
+        let entry = self.in_flight.get_mut(call_id)?;
+        if entry.interrupted {
+            return None;
+        }
+        entry.interrupted = true;
+        let _ = entry.cancellation.take();
+        Some(CommandInterruption {
+            browser_owner: entry.browser_owner.clone(),
+            computer_owner: entry.computer_owner.clone(),
+        })
+    }
+
+    /// Binds a browser call to the extension session whose published
+    /// observation may become stale. A cancellation that linearized first
+    /// leaves no sender, so the command is refused before connector dispatch.
+    fn bind_browser_owner(&mut self, call_id: &str, owner: BrowserCommandOwner) -> bool {
+        let Some(entry) = self.in_flight.get_mut(call_id) else {
+            return false;
+        };
+        if entry.cancellation.is_none() {
+            return false;
+        }
+        entry.browser_owner = Some(owner);
+        true
     }
 
     /// Binds a computer call to the helper session whose public authority it
@@ -1052,7 +1244,7 @@ impl CommandReplay {
         let Some(in_flight) = self.in_flight.remove(call_id) else {
             return (status, body);
         };
-        let (status, body) = if in_flight.cancellation.is_none() {
+        let (status, body) = if in_flight.cancellation.is_none() && !in_flight.interrupted {
             canceled_call_response(call_id)
         } else {
             (status, body)
@@ -1136,28 +1328,53 @@ fn canceled_call_response(call_id: &str) -> (StatusCode, Value) {
 /// outcome-unknown failure makes every later replay of that callId return it
 /// without touching any connector.
 struct InFlightCallGuard {
-    replay: Arc<Mutex<CommandReplay>>,
+    state: AppState,
+    runtime: tokio::runtime::Handle,
+    request_owners: SharedRequestCommandOwners,
     call_id: Option<String>,
+    armed: bool,
 }
 
 impl InFlightCallGuard {
     fn disarm(&mut self) -> Option<String> {
+        self.armed = false;
         self.call_id.take()
     }
 }
 
 impl Drop for InFlightCallGuard {
     fn drop(&mut self) {
-        if let Some(call_id) = self.call_id.take()
-            && let Ok(mut replay) = self.replay.lock()
-        {
-            let error = interrupted_call_error();
-            let mut body = error.body();
-            if let Some(object) = body.as_object_mut() {
-                object.insert("callId".to_owned(), Value::String(call_id.clone()));
-            }
-            let _ = replay.complete(&call_id, error.status, body, Instant::now());
+        if !self.armed {
+            return;
         }
+        self.armed = false;
+        let call_id = self.call_id.take();
+        let mut interruption = if let Some(call_id) = call_id.as_deref() {
+            let Some(interruption) = self.state.begin_command_interruption(call_id) else {
+                return;
+            };
+            interruption
+        } else {
+            CommandInterruption::default()
+        };
+        interruption.merge_request_owners(&self.request_owners.lock().unwrap());
+        if interruption.is_empty() && call_id.is_none() {
+            return;
+        }
+
+        // This must happen in Drop, before the runtime can poll a later
+        // action after the interrupted action future releases action_lock.
+        // Async state cleanup and replay publication happen afterwards.
+        if let Some(owner) = interruption.browser_owner.as_ref() {
+            self.state.latch_browser_freshness_recovery(owner);
+        }
+
+        let state = self.state.clone();
+        self.runtime.spawn(async move {
+            state
+                .settle_interrupted_command(call_id, interruption)
+                .await;
+        });
     }
 }
 
@@ -1368,14 +1585,29 @@ async fn api_action(
     state.assert_ui_mutation(&headers)?;
     let body = parse_json_body(&body)?;
     let method = required_string(body.get("method"), "method", 80)?;
-    let result = state
-        .perform_action(
-            &method,
-            body.get("params").cloned().unwrap_or_else(|| json!({})),
-            None,
-        )
-        .await?;
+    let request_owners = Arc::new(Mutex::new(RequestCommandOwners::default()));
+    let mut action = Box::pin(state.perform_action(
+        &method,
+        body.get("params").cloned().unwrap_or_else(|| json!({})),
+        None,
+        request_owners.clone(),
+    ));
+    let mut registration = InFlightCallGuard {
+        state: state.clone(),
+        runtime: tokio::runtime::Handle::current(),
+        request_owners,
+        call_id: None,
+        armed: true,
+    };
+    let result = match action.as_mut().await {
+        Ok(result) => result,
+        Err(error) => {
+            registration.disarm();
+            return Err(error);
+        }
+    };
     let public = state.public_state().await;
+    registration.disarm();
     Ok(Json(json!({ "ok": true, "result": result, "state": public })).into_response())
 }
 
@@ -1437,25 +1669,29 @@ async fn api_command(
         }
     }
 
+    // Construct the lazy action future before its fail-closed registration
+    // guard. Rust drops locals in reverse declaration order, so aborting this
+    // HTTP handler runs InFlightCallGuard::drop (and installs the exact-session
+    // recovery gate) before dropping `action`, whose action-lock guard may
+    // wake a fresh-callId waiter on another runtime thread.
+    let request_owners = Arc::new(Mutex::new(RequestCommandOwners::default()));
+    let mut action =
+        Box::pin(state.perform_action(&method, params, call_id.as_deref(), request_owners.clone()));
     let mut registration = InFlightCallGuard {
-        replay: state.command_replay.clone(),
+        state: state.clone(),
+        runtime: tokio::runtime::Handle::current(),
+        request_owners,
         call_id: call_id.clone(),
+        armed: true,
     };
     let outcome = if let Some(mut canceled) = canceled {
-        // The inner scope ensures the connector/action future is dropped as
-        // soon as cancellation wins. Any enqueued hub call then runs its
-        // exact pending-call Drop guard before this handler settles.
-        {
-            let action = state.perform_action(&method, params, call_id.as_deref());
-            tokio::pin!(action);
-            tokio::select! {
-                biased;
-                _ = &mut canceled => None,
-                result = &mut action => Some(result),
-            }
+        tokio::select! {
+            biased;
+            _ = &mut canceled => None,
+            result = &mut action => Some(result),
         }
     } else {
-        Some(state.perform_action(&method, params, None).await)
+        Some(action.as_mut().await)
     };
     let (mut status, mut response_body) = match outcome {
         Some(Ok(result)) => {
@@ -1474,8 +1710,8 @@ async fn api_command(
         }
         (status, response_body) =
             state.complete_command_call(call_id, status, response_body.clone());
-        registration.disarm();
     }
+    registration.disarm();
     Ok((status, Json(response_body)).into_response())
 }
 
@@ -1499,7 +1735,38 @@ async fn api_command_cancel(
         return Ok((status, Json(body)).into_response());
     };
 
-    if let Some(owner) = cancellation.computer_owner {
+    let CommandCancellation {
+        signal,
+        browser_owner,
+        computer_owner,
+    } = cancellation;
+    if let Some(owner) = browser_owner.as_ref() {
+        // This synchronous latch is the server's cancellation linearization
+        // boundary. Install it before waking the action task, because that
+        // wake can drop the action lock on another runtime thread and admit a
+        // later command immediately. It also does not depend on the bounded
+        // connector outbound queue accepting the later cancel envelope or
+        // freshness event.
+        state.latch_browser_freshness_recovery(owner);
+    }
+    let _ = signal.send(());
+
+    if let Some(owner) = browser_owner
+        && state
+            .clear_published_browser_freshness_after_cancel(&owner.session_id, &owner.method)
+            .await
+    {
+        state
+            .log(
+                &owner.method,
+                "warning",
+                "Cancellation requested; browser observation cleared until a fresh page.observe",
+            )
+            .await;
+        state.bump("browser-canceled").await;
+    }
+
+    if let Some(owner) = computer_owner {
         let unknown = HubError::new(
             "COMMAND_OUTCOME_UNKNOWN",
             "The caller requested cancellation; the computer command outcome is unknown",
@@ -1768,6 +2035,12 @@ async fn handle_websocket(
             }
         };
     drop(auth_permit);
+    // Recovery latches are exact-session keys and intentionally survive
+    // connector replacement. Clearing them in the authenticate->attach gap
+    // would let an old perform_action that already copied its ExtensionInfo
+    // relay through the still-current old hub before replacement commits (or
+    // through the replacement afterwards). The new connection has a fresh
+    // session ID, so old latches cannot block it.
     let (connection_id, mut outgoing) = {
         let mut data = state.data.write().await;
         let connection = state.hub.attach_with_id(connection_id);
@@ -2564,6 +2837,39 @@ async fn handle_extension_event(state: &AppState, connection_id: Uuid, message: 
                     .await;
             }
         }
+        "browser.control.freshness_invalidated" => {
+            let method = data.get("method").and_then(Value::as_str).unwrap_or("");
+            let control = sanitize_browser_control(data.get("control").unwrap_or(&Value::Null));
+            if data.get("reason").and_then(Value::as_str) != Some("request_canceled")
+                || !request_cancel_invalidates_browser_freshness(method)
+                || control.get("active").and_then(Value::as_bool) != Some(true)
+            {
+                return;
+            }
+            {
+                let mut state_data = state.data.write().await;
+                if !state.hub.is_current_ready(connection_id) {
+                    return;
+                }
+                state_data.public.browser_control = control;
+                state_data.public.observation = None;
+                state_data.screenshot = None;
+            }
+            if state
+                .log_for_connection(
+                    &state.hub,
+                    connection_id,
+                    method,
+                    "warning",
+                    "Canceled browser command invalidated observation freshness; run page.observe before another action",
+                )
+                .await
+            {
+                state
+                    .bump_for_connection(&state.hub, connection_id, "browser-control")
+                    .await;
+            }
+        }
         "approval.resolved" => {
             let ok = data.get("ok").and_then(Value::as_bool) == Some(true);
             let detail = if ok {
@@ -2763,6 +3069,7 @@ impl AppState {
         method: &str,
         raw_params: Value,
         call_id: Option<&str>,
+        request_owners: SharedRequestCommandOwners,
     ) -> Result<Value, ApiError> {
         if COMPUTER_METHODS.contains(&method) {
             return self
@@ -2827,6 +3134,17 @@ impl AppState {
                 ),
             ));
         }
+        if let Some(canceled_method) =
+            self.browser_freshness_recovery_blocks(&extension.session_id, method)
+        {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "NO_BROWSER_OBSERVATION",
+                format!(
+                    "The canceled {canceled_method} outcome is unknown; run page.observe before {method} so no stale turn can authorize a duplicate action"
+                ),
+            ));
+        }
         let mut params = sanitize_params(method, raw_params, target_tab_id, viewport)?;
         // page.waitFor is read-only and runs without a control lease, so it
         // never carries control bindings.
@@ -2842,18 +3160,56 @@ impl AppState {
             bind_browser_control(&mut params, &browser_control, bind_freshness);
         }
 
+        let browser_owner =
+            request_cancel_invalidates_browser_freshness(method).then(|| BrowserCommandOwner {
+                session_id: extension.session_id.clone(),
+                method: method.to_owned(),
+            });
+        if let Some(owner) = browser_owner.as_ref() {
+            if !self.bind_browser_command_owner(call_id, &owner.session_id, &owner.method) {
+                return Err(canceled_call_error());
+            }
+            request_owners.lock().unwrap().browser_owner = Some(owner.clone());
+        }
+
         if method == "tabs.list" {
             return self.refresh_tabs().await;
         }
         if method == "page.observe" {
-            return self
+            let observed = self
                 .refresh_observation(params["tabId"].as_u64().unwrap())
                 .await;
+            if let Err(error) = observed.as_ref()
+                && classify(&error.code).code == TaxonomyCode::OutcomeUnknown
+                && let Some(owner) = browser_owner.as_ref()
+                && self.quarantine_browser_freshness_after_unknown(owner).await
+            {
+                self.log(
+                    method,
+                    "warning",
+                    "Observation outcome is unknown; browser freshness was quarantined",
+                )
+                .await;
+                self.bump("browser-outcome-unknown").await;
+            }
+            return observed;
         }
 
         let (connection_id, result) = match self.hub.call_scoped(method, params.clone()).await {
             Ok(result) => result,
             Err(error) => {
+                if error.code == "NO_PENDING_DIALOG" {
+                    if self
+                        .clear_stale_pending_dialog(&extension.session_id, method)
+                        .await
+                    {
+                        self.bump("dialog").await;
+                    }
+                } else if classify(&error.code).code == TaxonomyCode::OutcomeUnknown
+                    && let Some(owner) = browser_owner.as_ref()
+                {
+                    self.quarantine_browser_freshness_after_unknown(owner).await;
+                }
                 self.log(method, "error", &error.message).await;
                 self.bump("error").await;
                 return Err(error.into());
@@ -2972,6 +3328,14 @@ impl AppState {
                     .await;
                     self.bump("dialog").await;
                 } else {
+                    if classify(&error.code).code == TaxonomyCode::OutcomeUnknown {
+                        let observe_owner = BrowserCommandOwner {
+                            session_id: extension.session_id.clone(),
+                            method: "page.observe".to_owned(),
+                        };
+                        self.quarantine_browser_freshness_after_unknown(&observe_owner)
+                            .await;
+                    }
                     self.log("page.observe", "warning", &error.message).await;
                     self.bump("warning").await;
                 }
@@ -3217,6 +3581,69 @@ impl AppState {
         });
         data.public.computer_observation = None;
         data.computer_screenshot = None;
+        true
+    }
+
+    /// A canceled browser command may already have crossed a CDP/content
+    /// boundary even though its result is suppressed. Remove every
+    /// observation-derived server binding immediately, while preserving the
+    /// user-visible lease. The extension independently advances the lease
+    /// turn before it can dispatch another queued command and publishes that
+    /// new control state. Exact-session matching prevents an old request from
+    /// clearing a replacement extension's observation.
+    async fn clear_published_browser_freshness_after_cancel(
+        &self,
+        expected_session_id: &str,
+        method: &str,
+    ) -> bool {
+        if !request_cancel_invalidates_browser_freshness(method) {
+            return false;
+        }
+
+        let mut data = self.data.write().await;
+        let current_session_matches = data
+            .public
+            .extension
+            .as_ref()
+            .is_some_and(|extension| extension.session_id == expected_session_id);
+        if !current_session_matches {
+            return false;
+        }
+        data.public.observation = None;
+        data.screenshot = None;
+        true
+    }
+
+    async fn quarantine_browser_freshness_after_unknown(
+        &self,
+        owner: &BrowserCommandOwner,
+    ) -> bool {
+        // Install the synchronous admission fence before awaiting the public
+        // state write. This covers connector timeouts whose bounded cancel
+        // envelope can be dropped just like an HTTP-request cancellation.
+        self.latch_browser_freshness_recovery(owner);
+        self.clear_published_browser_freshness_after_cancel(&owner.session_id, &owner.method)
+            .await
+    }
+
+    async fn clear_stale_pending_dialog(&self, expected_session_id: &str, method: &str) -> bool {
+        if method != "page.handleDialog" {
+            return false;
+        }
+        let mut data = self.data.write().await;
+        let current_session_matches = data
+            .public
+            .extension
+            .as_ref()
+            .is_some_and(|extension| extension.session_id == expected_session_id);
+        if !current_session_matches || data.public.pending_dialog.is_null() {
+            return false;
+        }
+        // NO_PENDING_DIALOG is authoritative browser-process evidence that a
+        // canceled/lost handleDialog result already closed the dialog. Keep
+        // the freshness gate, but remove this stale server-only gate so an
+        // explicit page.observe can recover.
+        data.public.pending_dialog = Value::Null;
         true
     }
 
@@ -3472,6 +3899,13 @@ impl AppState {
                 data.public.browser_control = control;
             }
         }
+        // Only a caller-requested page.observe clears cancellation recovery.
+        // Automatic post-action observations pass an expected connection ID
+        // and cannot silently reopen mutation authority after an unknown
+        // outcome.
+        if expected_connection_id.is_none() {
+            self.clear_browser_freshness_recovery(&connection_id.to_string());
+        }
         if self
             .log_for_connection(
                 &self.hub,
@@ -3504,6 +3938,36 @@ fn observation_delay(method: &str) -> Option<Duration> {
         "page.scroll" | "page.evaluate" => 150,
         _ => return None,
     }))
+}
+
+/// Browser commands whose cancellation makes all earlier action bindings
+/// ambiguous. `page.observe` is read-only but advances the lease turn before
+/// its later capture awaits; `browser.control.start` can renew or establish a
+/// lease before its HTTP result is delivered. Every other entry can cross a
+/// page/CDP mutation boundary. Status, tab listing, and `page.waitFor` are
+/// deliberately absent because they neither consume nor advance controlled
+/// page freshness.
+fn request_cancel_invalidates_browser_freshness(method: &str) -> bool {
+    matches!(
+        method,
+        "browser.control.start"
+            | "page.observe"
+            | "page.navigate"
+            | "page.back"
+            | "page.forward"
+            | "page.reload"
+            | "page.click"
+            | "page.fill"
+            | "page.select"
+            | "page.key"
+            | "page.scroll"
+            | "page.clickAt"
+            | "page.typeText"
+            | "page.evaluate"
+            | "page.hover"
+            | "page.batch"
+            | "page.handleDialog"
+    )
 }
 
 fn computer_observation_delay(method: &str) -> Duration {
@@ -6642,8 +7106,13 @@ mod tests {
             _ => panic!("new call must be admitted"),
         };
 
-        assert!(replay.cancel("call-1").is_some());
+        let cancellation = replay.cancel("call-1").unwrap();
         assert!(replay.cancel("call-1").is_none());
+        assert!(matches!(
+            canceled.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        let _ = cancellation.signal.send(());
         assert_eq!(canceled.try_recv(), Ok(()));
         let (status, body) = replay.complete(
             "call-1",
@@ -6719,6 +7188,242 @@ mod tests {
                 method: "computer.click".to_owned(),
             },
         ));
+    }
+
+    #[test]
+    fn browser_owner_binding_and_freshness_classification_are_explicit() {
+        for method in [
+            "browser.control.start",
+            "page.observe",
+            "page.navigate",
+            "page.back",
+            "page.forward",
+            "page.reload",
+            "page.click",
+            "page.fill",
+            "page.select",
+            "page.key",
+            "page.scroll",
+            "page.clickAt",
+            "page.typeText",
+            "page.evaluate",
+            "page.hover",
+            "page.batch",
+            "page.handleDialog",
+        ] {
+            assert!(
+                request_cancel_invalidates_browser_freshness(method),
+                "{method} lost its cancellation freshness boundary"
+            );
+        }
+        for method in [
+            "status",
+            "tabs.list",
+            "tabs.activate",
+            "tabs.new",
+            "tabs.close",
+            "browser.control.status",
+            "browser.control.stop",
+            "page.waitFor",
+        ] {
+            assert!(
+                !request_cancel_invalidates_browser_freshness(method),
+                "{method} unexpectedly invalidates controlled-page freshness"
+            );
+        }
+
+        let now = Instant::now();
+        let mut replay = CommandReplay::new();
+        let mut canceled = match replay.admit("browser-bound", "fp-browser", now) {
+            ReplayAdmission::New { canceled } => canceled,
+            _ => panic!("new browser call must be admitted"),
+        };
+        assert!(replay.bind_browser_owner(
+            "browser-bound",
+            BrowserCommandOwner {
+                session_id: "browser-session-a".to_owned(),
+                method: "page.typeText".to_owned(),
+            },
+        ));
+        let accepted = replay.cancel("browser-bound").unwrap();
+        let CommandCancellation {
+            signal,
+            browser_owner,
+            computer_owner,
+        } = accepted;
+        assert!(computer_owner.is_none());
+        let owner = browser_owner.unwrap();
+        assert_eq!(owner.session_id, "browser-session-a");
+        assert_eq!(owner.method, "page.typeText");
+
+        // Mirror api_command_cancel's ordering: the gate exists while the
+        // action task is still asleep. Waking it can release action_lock on a
+        // different runtime thread, so doing these steps in the opposite
+        // order would create a stale-authority admission window.
+        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false);
+        state.latch_browser_freshness_recovery(&owner);
+        assert!(
+            state
+                .browser_freshness_recovery_blocks("browser-session-a", "page.click")
+                .is_some()
+        );
+        assert!(matches!(
+            canceled.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        let _ = signal.send(());
+        assert_eq!(canceled.try_recv(), Ok(()));
+
+        assert!(matches!(
+            replay.admit("browser-queued", "fp-queued", now),
+            ReplayAdmission::New { .. }
+        ));
+        assert!(replay.cancel("browser-queued").is_some());
+        assert!(!replay.bind_browser_owner(
+            "browser-queued",
+            BrowserCommandOwner {
+                session_id: "browser-session-b".to_owned(),
+                method: "page.observe".to_owned(),
+            },
+        ));
+
+        assert_eq!(
+            state
+                .browser_freshness_recovery_blocks("browser-session-a", "page.click")
+                .as_deref(),
+            Some("page.typeText")
+        );
+        for recovery_method in [
+            "page.observe",
+            "page.handleDialog",
+            "browser.control.start",
+            "status",
+            "tabs.list",
+            "page.waitFor",
+        ] {
+            assert!(
+                state
+                    .browser_freshness_recovery_blocks("browser-session-a", recovery_method,)
+                    .is_none(),
+                "{recovery_method} must remain usable during freshness recovery"
+            );
+        }
+        assert!(
+            state
+                .browser_freshness_recovery_blocks("replacement-session", "page.click")
+                .is_none(),
+            "an old-session gate must not block a replacement extension"
+        );
+        assert!(!state.clear_browser_freshness_recovery("replacement-session"));
+        assert!(state.clear_browser_freshness_recovery("browser-session-a"));
+        assert!(
+            state
+                .browser_freshness_recovery_blocks("browser-session-a", "page.click")
+                .is_none()
+        );
+        state.latch_browser_freshness_recovery(&BrowserCommandOwner {
+            session_id: "replacement-session".to_owned(),
+            method: "page.click".to_owned(),
+        });
+        // A late cancellation from the replaced session must not overwrite
+        // the replacement session's own recovery latch.
+        state.latch_browser_freshness_recovery(&BrowserCommandOwner {
+            session_id: "browser-session-a".to_owned(),
+            method: "page.typeText".to_owned(),
+        });
+        assert!(
+            state
+                .browser_freshness_recovery_blocks("replacement-session", "page.fill")
+                .is_some()
+        );
+        assert!(
+            state
+                .browser_freshness_recovery_blocks("browser-session-a", "page.fill")
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn old_browser_owner_cannot_clear_replacement_observation() {
+        const PIXEL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false);
+        let observation = Observation {
+            tab_id: 7,
+            captured_at: "2026-08-21T00:00:00Z".to_owned(),
+            title: "Replacement".to_owned(),
+            url: "https://example.test/".to_owned(),
+            generation: "replacement-generation".to_owned(),
+            viewport: json!({ "width": 800, "height": 600 }),
+            scroll: json!({ "x": 0, "y": 0 }),
+            selected_text: String::new(),
+            body_text: "replacement observation".to_owned(),
+            elements: Vec::new(),
+            frames: None,
+            frame_summary: None,
+            elements_truncated: None,
+        };
+        let mut screenshot = decode_screenshot(Some(&Value::String(PIXEL.to_owned())))
+            .unwrap()
+            .unwrap();
+        screenshot.bind(
+            "/api/screenshot",
+            "browser-tab-generation",
+            "7:replacement-generation",
+        );
+        {
+            let mut data = state.data.write().await;
+            data.public.extension = Some(ExtensionInfo {
+                version: VERSION.to_owned(),
+                protocol_version: PROTOCOL_VERSION,
+                session_id: "replacement-session".to_owned(),
+                controller_id: "replacement-controller".to_owned(),
+                connection_id: "replacement-connection".to_owned(),
+                compatible: true,
+                browser: "Test Chrome".to_owned(),
+                mode: "full-access".to_owned(),
+                capabilities: vec!["page.typeText".to_owned()],
+                connected_at: "2026-08-21T00:00:00Z".to_owned(),
+            });
+            data.public.browser_control = json!({
+                "active": true,
+                "sessionId": "replacement-lease",
+                "tabId": 7,
+                "turn": 9,
+                "moveSequence": 2,
+            });
+            data.public.observation = Some(observation);
+            data.screenshot = Some(screenshot);
+        }
+        let before = state.public_state().await;
+
+        assert!(
+            !state
+                .clear_published_browser_freshness_after_cancel("old-session", "page.typeText",)
+                .await
+        );
+        assert_eq!(state.public_state().await, before);
+        assert!(
+            !state
+                .clear_published_browser_freshness_after_cancel(
+                    "replacement-session",
+                    "browser.control.status",
+                )
+                .await
+        );
+        assert_eq!(state.public_state().await, before);
+
+        assert!(
+            state
+                .clear_published_browser_freshness_after_cancel(
+                    "replacement-session",
+                    "page.typeText",
+                )
+                .await
+        );
+        let after = state.public_state().await;
+        assert!(after["observation"].is_null());
+        assert_eq!(after["browserControl"], before["browserControl"]);
+        assert!(state.data.read().await.screenshot.is_none());
     }
 
     #[tokio::test]
@@ -6824,21 +7529,41 @@ mod tests {
         assert_eq!(after_screenshot.route, before_screenshot.route);
     }
 
-    #[test]
-    fn dropped_in_flight_guard_caches_an_outcome_unknown_failure() {
+    #[tokio::test]
+    async fn dropped_in_flight_guard_keeps_call_in_flight_until_unknown_cleanup_finishes() {
         let now = Instant::now();
-        let replay = Arc::new(Mutex::new(CommandReplay::new()));
+        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false);
+        let replay = state.command_replay.clone();
         assert!(matches!(
             replay.lock().unwrap().admit("call-1", "fp-1", now),
             ReplayAdmission::New { .. }
         ));
         drop(InFlightCallGuard {
-            replay: replay.clone(),
+            state: state.clone(),
+            runtime: tokio::runtime::Handle::current(),
+            request_owners: Arc::new(Mutex::new(RequestCommandOwners::default())),
             call_id: Some("call-1".to_owned()),
+            armed: true,
         });
+        assert!(matches!(
+            replay.lock().unwrap().admit("call-1", "fp-1", now),
+            ReplayAdmission::InFlight
+        ));
         // A retry of the interrupted command replays the synthetic
-        // outcome-unknown failure and is never admitted as New again.
-        match replay.lock().unwrap().admit("call-1", "fp-1", now) {
+        // outcome-unknown failure after asynchronous cleanup and is never
+        // admitted as New again.
+        let replayed = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                tokio::task::yield_now().await;
+                match replay.lock().unwrap().admit("call-1", "fp-1", now) {
+                    ReplayAdmission::InFlight => continue,
+                    admission => break admission,
+                }
+            }
+        })
+        .await
+        .expect("interrupted settlement deadline");
+        match replayed {
             ReplayAdmission::Replay { status, body } => {
                 assert_eq!(status, StatusCode::GATEWAY_TIMEOUT);
                 assert_eq!(body["ok"], false);
@@ -6857,8 +7582,11 @@ mod tests {
         ));
         // A disarmed guard leaves the real completion in charge.
         let mut guard = InFlightCallGuard {
-            replay: replay.clone(),
+            state,
+            runtime: tokio::runtime::Handle::current(),
+            request_owners: Arc::new(Mutex::new(RequestCommandOwners::default())),
             call_id: Some("call-2".to_owned()),
+            armed: true,
         };
         assert!(matches!(
             replay.lock().unwrap().admit("call-2", "fp-2", now),
@@ -6875,6 +7603,53 @@ mod tests {
             replay.lock().unwrap().admit("call-2", "fp-2", now),
             ReplayAdmission::Replay { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn dropped_no_call_id_handler_latches_gate_before_action_lock_wakes_fresh_waiter() {
+        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false);
+
+        let action_state = state.clone();
+        let guard_state = state.clone();
+        let (locked_tx, locked_rx) = oneshot::channel();
+        let owner = tokio::spawn(async move {
+            // This mirrors api_command's declaration order exactly: the lazy
+            // action future first, then the fail-closed registration guard.
+            let mut action = Box::pin(async move {
+                let _action_guard = action_state.action_lock.lock().await;
+                let _ = locked_tx.send(());
+                std::future::pending::<()>().await;
+            });
+            let _registration = InFlightCallGuard {
+                state: guard_state,
+                runtime: tokio::runtime::Handle::current(),
+                request_owners: Arc::new(Mutex::new(RequestCommandOwners {
+                    browser_owner: Some(BrowserCommandOwner {
+                        session_id: "browser-session-a".to_owned(),
+                        method: "page.typeText".to_owned(),
+                    }),
+                })),
+                call_id: None,
+                armed: true,
+            };
+            action.as_mut().await;
+        });
+        locked_rx.await.unwrap();
+
+        let waiter_state = state.clone();
+        let waiter = tokio::spawn(async move {
+            let _action_guard = waiter_state.action_lock.lock().await;
+            waiter_state
+                .browser_freshness_recovery_blocks("browser-session-a", "page.typeText")
+                .is_some()
+        });
+        tokio::task::yield_now().await;
+        owner.abort();
+        let _ = owner.await;
+        assert!(
+            waiter.await.unwrap(),
+            "a fresh-callId waiter acquired action_lock before browser recovery was latched"
+        );
     }
 
     #[test]

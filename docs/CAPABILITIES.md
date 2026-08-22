@@ -27,7 +27,7 @@ This page states what the current code can do, what the user must configure, and
 
 The extension never replaces trusted debugger input with an untrusted page-generated click. Chrome Cancel, the in-page **Stop** button, popup release, lease expiry, tab closure, or connector loss revokes control.
 
-Canceling one bearer API command stops only that command context and preserves the user's browser-control lease. Cancellation is cooperative and can race a dispatched side effect, so the original command is completed as outcome-unknown rather than reported as rolled back.
+Canceling one bearer API command stops only that command context and preserves the user's browser-control lease when it can be kept safely. Cancellation is cooperative and can race a dispatched side effect, so the original command is completed as outcome-unknown rather than reported as rolled back. A controlled-page command with an unknown outcome immediately clears the server's observation/screenshot and latches exact-session recovery; later page mutations are refused until an explicit `page.observe` succeeds, even if the extension never receives the cancel. This also covers a disconnected caller with or without `callId`, legacy dashboard actions, and connector timeouts. The extension advances and persists the lease turn before its next queued command, re-clears frame state at the queue barrier, and revokes the lease on persistence failure.
 
 ## Native application control
 

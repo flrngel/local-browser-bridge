@@ -460,6 +460,8 @@ async fn connect_fake_extension_with_dialog_race(
 
 struct ControlledBrowser {
     handle: JoinHandle<()>,
+    events: mpsc::UnboundedSender<(String, Value)>,
+    responses: mpsc::UnboundedSender<Value>,
     commands: mpsc::UnboundedReceiver<Value>,
 }
 
@@ -490,7 +492,7 @@ async fn connect_controlled_browser(base_url: &str, token: &str) -> ControlledBr
                 "connectionId": "controlled-connection",
                 "browser": "Test Chrome",
                 "mode": "full-access",
-                "capabilities": ["tabs.list", "page.observe", "page.typeText"]
+                "capabilities": ["tabs.list", "page.observe", "page.typeText", "page.handleDialog"]
             })
             .to_string()
             .into(),
@@ -498,8 +500,37 @@ async fn connect_controlled_browser(base_url: &str, token: &str) -> ControlledBr
         .await
         .unwrap();
     let (command_tx, command_rx) = mpsc::unbounded_channel();
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<(String, Value)>();
+    let (response_tx, mut response_rx) = mpsc::unbounded_channel::<Value>();
     let handle = tokio::spawn(async move {
-        while let Some(Ok(Message::Text(text))) = socket.next().await {
+        let (mut writer, mut reader) = socket.split();
+        let mut event_sequence = 0_u64;
+        loop {
+            let message = tokio::select! {
+                event = event_rx.recv() => {
+                    let Some((name, data)) = event else { break; };
+                    event_sequence += 1;
+                    let event = json!({
+                        "type": "event",
+                        "name": name,
+                        "data": data,
+                        "protocolVersion": PROTOCOL_VERSION,
+                        "sessionId": session_id,
+                        "eventSequence": event_sequence,
+                    });
+                    writer.send(Message::Text(event.to_string().into())).await.unwrap();
+                    continue;
+                }
+                response = response_rx.recv() => {
+                    let Some(response) = response else { break; };
+                    writer.send(Message::Text(response.to_string().into())).await.unwrap();
+                    continue;
+                }
+                message = reader.next() => message,
+            };
+            let Some(Ok(Message::Text(text))) = message else {
+                break;
+            };
             let message: Value = serde_json::from_str(text.as_str()).unwrap();
             if message["type"] == "cancel" {
                 command_tx.send(message).unwrap();
@@ -508,7 +539,10 @@ async fn connect_controlled_browser(base_url: &str, token: &str) -> ControlledBr
             if message["type"] != "command" {
                 continue;
             }
-            if message["method"] == "page.typeText" {
+            if matches!(
+                message["method"].as_str(),
+                Some("page.typeText" | "page.handleDialog")
+            ) {
                 command_tx.send(message).unwrap();
                 continue;
             }
@@ -556,7 +590,7 @@ async fn connect_controlled_browser(base_url: &str, token: &str) -> ControlledBr
                 "ok": true,
                 "result": result,
             });
-            socket
+            writer
                 .send(Message::Text(response.to_string().into()))
                 .await
                 .unwrap();
@@ -564,6 +598,8 @@ async fn connect_controlled_browser(base_url: &str, token: &str) -> ControlledBr
     });
     ControlledBrowser {
         handle,
+        events: event_tx,
+        responses: response_tx,
         commands: command_rx,
     }
 }
@@ -1055,6 +1091,29 @@ async fn wait_for_tabs(client: &Client, base_url: &str, token: &str) -> Value {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!("tabs did not arrive");
+}
+
+async fn wait_for_browser_observation_cleared(
+    client: &Client,
+    base_url: &str,
+    token: &str,
+) -> Value {
+    for _ in 0..100 {
+        let state: Value = client
+            .get(format!("{base_url}/api/state"))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if state["state"]["observation"].is_null() {
+            return state;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("browser observation was not cleared");
 }
 
 async fn wait_for_computer(client: &Client, base_url: &str, token: &str) -> Value {
@@ -2378,6 +2437,211 @@ async fn cancels_one_exact_browser_command_and_replays_the_conservative_outcome(
         state["state"]["browserControl"]["sessionId"], "controlled-lease",
         "canceling one browser command must not claim the user lease was released"
     );
+    assert!(
+        state["state"]["observation"].is_null(),
+        "a canceled browser mutation must remove the published observation"
+    );
+    let screenshot = client
+        .get(format!("{base_url}/api/screenshot"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        screenshot.status(),
+        404,
+        "the canceled observation screenshot must not remain public"
+    );
+
+    // This fixture deliberately sends no freshness event and never changes
+    // its lease turn when it receives the cancel. The server-side recovery
+    // latch must still reject a fresh-callId retry carrying the exact old
+    // generation/turn, so cancel-envelope or event delivery cannot be the
+    // only safety boundary.
+    let stale_retry = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.typeText",
+            "params": {
+                "tabId": 7,
+                "generation": "g-controlled",
+                "controlSessionId": "controlled-lease",
+                "turn": 3,
+                "moveSequence": 5,
+                "text": "duplicate"
+            },
+            "callId": "call-after-missing-freshness-event"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stale_retry.status(), 409);
+    let stale_retry: Value = stale_retry.json().await.unwrap();
+    assert_eq!(stale_retry["error"]["code"], "NO_BROWSER_OBSERVATION");
+    assert_eq!(stale_retry["taxonomy"]["recoveryHint"], "reobserve");
+    assert!(
+        browser.commands.try_recv().is_err(),
+        "the recovery latch must refuse the stale retry before connector relay"
+    );
+
+    let recovered: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "page.observe", "params": { "tabId": 7 } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(recovered["ok"], true);
+    assert_eq!(
+        recovered["state"]["observation"]["generation"],
+        "g-controlled"
+    );
+    assert!(
+        recovered["state"]["observation"]["screenshotUrl"].is_string(),
+        "only an explicit page.observe may republish the screenshot"
+    );
+
+    browser.handle.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn no_pending_dialog_after_canceled_handle_unblocks_explicit_observe_recovery() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let mut browser = connect_controlled_browser(&base_url, &token).await;
+    let client = Client::new();
+    wait_for_tabs(&client, &base_url, &token).await;
+    let observed: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "page.observe", "params": { "tabId": 7 } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(observed["ok"], true);
+
+    browser
+        .events
+        .send((
+            "page.dialogOpened".to_owned(),
+            json!({
+                "tabId": 7,
+                "type": "confirm",
+                "message": "Canceled dialog",
+                "hasPrompt": false,
+                "at": 1
+            }),
+        ))
+        .unwrap();
+    wait_for_pending_dialog(&client, &base_url, &token, Some("confirm")).await;
+
+    let first_request = json!({
+        "method": "page.handleDialog",
+        "params": { "tabId": 7, "accept": false },
+        "callId": "cancel-handle-dialog"
+    });
+    let first = {
+        let client = client.clone();
+        let base_url = base_url.clone();
+        let token = token.clone();
+        tokio::spawn(async move {
+            client
+                .post(format!("{base_url}/api/v1/command"))
+                .bearer_auth(token)
+                .json(&first_request)
+                .send()
+                .await
+                .unwrap()
+        })
+    };
+    let handled = browser.commands.recv().await.unwrap();
+    assert_eq!(handled["method"], "page.handleDialog");
+    let accepted = client
+        .post(format!("{base_url}/api/v1/command/cancel"))
+        .bearer_auth(&token)
+        .json(&json!({ "callId": "cancel-handle-dialog" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), 202);
+    let cancel = browser.commands.recv().await.unwrap();
+    assert_eq!(cancel["type"], "cancel");
+    assert_eq!(cancel["id"], handled["id"]);
+    assert_eq!(first.await.unwrap().status(), 504);
+
+    let still_stale = wait_for_browser_observation_cleared(&client, &base_url, &token).await;
+    assert_eq!(still_stale["state"]["pendingDialog"]["type"], "confirm");
+
+    // The extension/browser already closed the dialog, but both the original
+    // result and page.dialogClosed event were lost. Its authoritative
+    // NO_PENDING_DIALOG response must clear only the stale server dialog gate
+    // while leaving cancellation freshness quarantined until observe.
+    let retry = {
+        let client = client.clone();
+        let base_url = base_url.clone();
+        let token = token.clone();
+        tokio::spawn(async move {
+            client
+                .post(format!("{base_url}/api/v1/command"))
+                .bearer_auth(token)
+                .json(&json!({
+                    "method": "page.handleDialog",
+                    "params": { "tabId": 7, "accept": false }
+                }))
+                .send()
+                .await
+                .unwrap()
+        })
+    };
+    let retry_command = browser.commands.recv().await.unwrap();
+    assert_eq!(retry_command["method"], "page.handleDialog");
+    browser
+        .responses
+        .send(json!({
+            "id": retry_command["id"],
+            "type": "result",
+            "protocolVersion": retry_command["protocolVersion"],
+            "sessionId": retry_command["sessionId"],
+            "sequence": retry_command["sequence"],
+            "ok": false,
+            "error": {
+                "code": "NO_PENDING_DIALOG",
+                "message": "Chrome reports no JavaScript dialog"
+            }
+        }))
+        .unwrap();
+    let retry = retry.await.unwrap();
+    assert_eq!(retry.status(), 409);
+    assert_eq!(
+        retry.json::<Value>().await.unwrap()["error"]["code"],
+        "NO_PENDING_DIALOG"
+    );
+    wait_for_pending_dialog(&client, &base_url, &token, None).await;
+
+    let recovered: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "page.observe", "params": { "tabId": 7 } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(recovered["ok"], true);
+    assert_eq!(
+        recovered["state"]["observation"]["generation"],
+        "g-controlled"
+    );
 
     browser.handle.abort();
     let _ = shutdown.send(());
@@ -2466,6 +2730,18 @@ async fn caches_an_outcome_unknown_failure_when_the_client_disconnects_mid_comma
     let (fake, relayed_methods, _events) = connect_fake_extension(&base_url, &token).await;
     let client = Client::new();
     wait_for_tabs(&client, &base_url, &token).await;
+    let observed: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "page.observe", "params": { "tabId": 7 } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(observed["ok"], true);
+    assert!(observed["state"]["observation"]["screenshotUrl"].is_string());
 
     // The fixture's page.typeText arm stays in flight for 250ms; a 50ms
     // client timeout drops the connection mid-command, after the envelope
@@ -2529,7 +2805,265 @@ async fn caches_an_outcome_unknown_failure_when_the_client_disconnects_mid_comma
         "the interrupted command must reach the extension exactly once"
     );
 
+    let state: Value = client
+        .get(format!("{base_url}/api/state"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(state["state"]["browserControl"]["active"], true);
+    assert!(state["state"]["observation"].is_null());
+    let stale = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.typeText",
+            "params": { "tabId": 7, "generation": "g1", "text": "duplicate" },
+            "callId": "call-after-dropped-handler"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), 409);
+    assert_eq!(
+        stale.json::<Value>().await.unwrap()["error"]["code"],
+        "NO_BROWSER_OBSERVATION"
+    );
+    assert_eq!(
+        relayed_methods
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|method| method.as_str() == "page.typeText")
+            .count(),
+        1,
+        "a fresh-callId duplicate must be blocked before relay"
+    );
+
+    let recovered: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "page.observe", "params": { "tabId": 7 } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(recovered["ok"], true);
+    assert_eq!(recovered["state"]["observation"]["generation"], "g1");
+
     fake.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn dropped_no_call_id_and_legacy_actions_quarantine_browser_freshness() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let (fake, relayed_methods, _events) = connect_fake_extension(&base_url, &token).await;
+    let client = Client::new();
+    wait_for_tabs(&client, &base_url, &token).await;
+
+    let observe = || {
+        client
+            .post(format!("{base_url}/api/v1/command"))
+            .bearer_auth(&token)
+            .json(&json!({ "method": "page.observe", "params": { "tabId": 7 } }))
+    };
+    let observed: Value = observe().send().await.unwrap().json().await.unwrap();
+    assert_eq!(observed["ok"], true);
+
+    let dropped = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .timeout(Duration::from_millis(50))
+        .json(&json!({
+            "method": "page.typeText",
+            "params": { "tabId": 7, "generation": "g1", "text": "no call id" }
+        }))
+        .send()
+        .await;
+    assert!(dropped.is_err());
+    let cleared = wait_for_browser_observation_cleared(&client, &base_url, &token).await;
+    assert_eq!(cleared["state"]["browserControl"]["active"], true);
+
+    let blocked = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.typeText",
+            "params": { "tabId": 7, "generation": "g1", "text": "duplicate" },
+            "callId": "fresh-after-no-call-id-drop"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(blocked.status(), 409);
+    assert_eq!(
+        blocked.json::<Value>().await.unwrap()["error"]["code"],
+        "NO_BROWSER_OBSERVATION"
+    );
+    let recovered: Value = observe().send().await.unwrap().json().await.unwrap();
+    assert_eq!(recovered["ok"], true);
+
+    let session: Value = client
+        .get(format!("{base_url}/api/session"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let dropped_legacy = client
+        .post(format!("{base_url}/api/action"))
+        .header(
+            "Authorization",
+            format!("Session {}", session["sessionToken"].as_str().unwrap()),
+        )
+        .header("Origin", &base_url)
+        .header("X-CSRF-Token", session["csrfToken"].as_str().unwrap())
+        .timeout(Duration::from_millis(50))
+        .json(&json!({
+            "method": "page.typeText",
+            "params": { "tabId": 7, "generation": "g1", "text": "legacy" }
+        }))
+        .send()
+        .await;
+    assert!(dropped_legacy.is_err());
+    wait_for_browser_observation_cleared(&client, &base_url, &token).await;
+
+    let blocked_after_legacy = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.typeText",
+            "params": { "tabId": 7, "generation": "g1", "text": "legacy duplicate" },
+            "callId": "fresh-after-legacy-drop"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(blocked_after_legacy.status(), 409);
+    assert_eq!(
+        blocked_after_legacy.json::<Value>().await.unwrap()["error"]["code"],
+        "NO_BROWSER_OBSERVATION"
+    );
+    assert_eq!(
+        relayed_methods
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|method| method.as_str() == "page.typeText")
+            .count(),
+        2,
+        "each dropped request relays once and neither fresh duplicate relays"
+    );
+
+    fake.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn browser_transport_outcome_unknown_quarantines_without_a_freshness_event() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let mut browser = connect_controlled_browser(&base_url, &token).await;
+    let client = Client::new();
+    wait_for_tabs(&client, &base_url, &token).await;
+
+    let observed: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "page.observe", "params": { "tabId": 7 } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(observed["ok"], true);
+
+    let pending = {
+        let client = client.clone();
+        let base_url = base_url.clone();
+        let token = token.clone();
+        tokio::spawn(async move {
+            client
+                .post(format!("{base_url}/api/v1/command"))
+                .bearer_auth(token)
+                .json(&json!({
+                    "method": "page.typeText",
+                    "params": {
+                        "tabId": 7,
+                        "generation": "g-controlled",
+                        "text": "timeout"
+                    }
+                }))
+                .send()
+                .await
+                .unwrap()
+        })
+    };
+    let command = browser.commands.recv().await.unwrap();
+    assert_eq!(command["method"], "page.typeText");
+
+    let timed_out = pending.await.unwrap();
+    assert_eq!(timed_out.status(), 504);
+    let timed_out: Value = timed_out.json().await.unwrap();
+    assert_eq!(timed_out["error"]["code"], "COMMAND_OUTCOME_UNKNOWN");
+    let cancel = browser.commands.recv().await.unwrap();
+    assert_eq!(cancel["type"], "cancel");
+    assert_eq!(cancel["id"], command["id"]);
+    assert_eq!(cancel["reason"], "command_timeout");
+
+    // The controlled fixture deliberately emits no freshness event and does
+    // not advance its public turn. The server outcome-unknown branch is an
+    // independent safety boundary even if this bounded cancel is ignored or
+    // lost after enqueue.
+    let cleared = wait_for_browser_observation_cleared(&client, &base_url, &token).await;
+    assert_eq!(cleared["state"]["browserControl"]["active"], true);
+    let blocked = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.typeText",
+            "params": { "tabId": 7, "generation": "g-controlled", "text": "duplicate" },
+            "callId": "fresh-after-browser-timeout"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(blocked.status(), 409);
+    assert_eq!(
+        blocked.json::<Value>().await.unwrap()["error"]["code"],
+        "NO_BROWSER_OBSERVATION"
+    );
+    assert!(browser.commands.try_recv().is_err());
+
+    let recovered: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "page.observe", "params": { "tabId": 7 } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(recovered["ok"], true);
+    assert_eq!(
+        recovered["state"]["observation"]["generation"],
+        "g-controlled"
+    );
+
+    browser.handle.abort();
     let _ = shutdown.send(());
     handle.await.unwrap();
 }
