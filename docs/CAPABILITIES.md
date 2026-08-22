@@ -20,10 +20,11 @@ This page states what the current code can do, what the user must configure, and
 | Same-process frame observation | Available | Chrome or Edge 140+ |
 | Recursive cross-origin iframe observation and trusted point input | Available | Chrome or Edge 140+; bounded to 16 iframe targets and five levels |
 | Dialog handling, condition waits, and bounded action batches | Available | Commands remain tied to the current lease and observation epoch |
-| Browser-owned warning and extension-owned page indicator | Available | Chrome owns the debugger warning; the extension owns its pill and Stop button |
+| Browser-owned warning and extension-owned page indicator | Available | Chrome owns the authoritative warning/Cancel; the page pill has per-document randomized identity, fresh reuse paint checks, and a short fail-closed watchdog |
 | Full Access | Available and default | Broad authority over regular pages in the selected profile |
 | Safe mode | Available | Site allowlist, sensitive-field blocking, and selected one-time approvals |
 | Per-command API cancellation | Available | Bearer-authenticated in-flight `callId`; returns outcome-unknown and requires observation, never automatic retry |
+| Saved-token removal | Available | Trusted popup action revokes control, disconnects, removes the token from extension storage, and verifies the cleared state |
 
 The extension never replaces trusted debugger input with an untrusted page-generated click. Chrome Cancel, the in-page **Stop** button, popup release, lease expiry, tab closure, or connector loss revokes control.
 
@@ -41,6 +42,8 @@ The optional helper is a separate Rust process. It connects outbound to the loop
 | Captured cursor | System cursor disabled; helper cursor composited into returned frames | Same |
 | Semantic observation/action | macOS Accessibility | Windows UI Automation |
 | Background pixel/key route | Process/window-targeted route using dynamically resolved macOS facilities | UIA plus exact-HWND background messages where the application accepts them |
+| Native key subset | Navigation/editing keys, F1–F12, ASCII letters/digits, mapped US-keyboard punctuation, and Control/Alt/Shift/Meta modifiers | Navigation/editing keys, F1–F12, ASCII letters/digits, mapped punctuation, and Control/Alt/Shift; Windows/global and secure chords fail closed |
+| Readiness signal | Current permission and complete focus/input snapshot must be readable | Non-Session-0 process plus readable input desktop, foreground/focus HWNDs, and cursor; provider acceptance is still per action |
 | Target-activation disclosure | Focus-capable input may use and restore a transient exact-target `AXFrontmost` lease; no `AXRaise`, OS-front-process switch, or Space switch | No explicit target-activation or foreground API; provider behavior is still checked before/after |
 | Foreground/focus invariant | WindowServer-front process/window and saved user AX state must match before/after; no zero-transient guarantee | Foreground and GUI-thread focus HWNDs must match before/after; no zero-transient guarantee |
 | Automatic foreground fallback | Not included | Not included |

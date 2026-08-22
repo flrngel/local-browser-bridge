@@ -56,7 +56,9 @@
         <label for="token">Extension token</label>
         <input id="token" type="password" placeholder="Leave blank to keep the saved token" autocomplete="off">
         <button type="submit">Save and connect</button>
+        <button id="clear-token" class="reject" type="button">Clear saved token</button>
       </form>
+      <p class="muted token-copy">Clearing the saved token disconnects the extension. Paste the server token again to reconnect.</p>
     </section>
 
     <section id="approval-section" hidden>

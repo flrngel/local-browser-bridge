@@ -9,6 +9,7 @@ h2 { margin: 0 0 10px; font-size: 14px; }
 .status { margin: 0; }
 section { border-top: 1px solid #2d3832; padding: 14px 0; }
 form { display: grid; gap: 7px; }
+.token-copy { margin: 8px 0 0; font-size: 11px; line-height: 1.4; }
 label { color: #c9d5cd; font-size: 12px; font-weight: 700; }
 input { min-width: 0; width: 100%; background: #151b17; border: 1px solid #3b483f; border-radius: 7px; color: inherit; padding: 9px; }
 button { border: 0; border-radius: 7px; background: #b8f55d; color: #152007; font-weight: 750; padding: 9px 11px; cursor: pointer; }

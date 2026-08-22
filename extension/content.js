@@ -1,9 +1,14 @@
 if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
   globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__ = true;
 
-  const CONTROL_HOST_ID = "__local_browser_bridge_control__";
+  // A fresh identifier per document denies page scripts a stable selector for
+  // the page-owned safety surface. It is still page DOM, so the background
+  // independently requires paint acknowledgements and Chrome's own debugger
+  // warning remains the trusted, page-independent handback surface.
+  const CONTROL_HOST_ID = `__local_browser_bridge_control_${crypto.randomUUID().replaceAll("-", "")}__`;
   const CONTROL_LAST_SEEN_GRACE_MS = 35_000;
   const CONTROL_WATCHDOG_INTERVAL_MS = 2_500;
+  const CONTROL_UI_WATCHDOG_INTERVAL_MS = 500;
   const CAPTURE_STALE_MS = 15_000;
   const PAINT_ACK_TIMEOUT_MS = 250;
   const WAIT_POLL_INTERVAL_MS = 250;
@@ -31,6 +36,7 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
     : new Map();
   let captureDepth = activeCaptureIds.size;
   let stopFailureMessage = "";
+  let controlUiLossReportPendingSessionId = "";
   globalThis.__LOCAL_BROWSER_BRIDGE_CAPTURE_IDS__ = activeCaptureIds;
   globalThis.__LOCAL_BROWSER_BRIDGE_CAPTURE_STARTED_AT__ = captureStartedAt;
   globalThis.__LOCAL_BROWSER_BRIDGE_CAPTURE_DEPTH__ = captureDepth;
@@ -44,9 +50,12 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
   function reinsertControlUiWhenLost() {
     if (controlUi?.host && !controlUi.host.isConnected && lastControlState) {
       controlUi = null;
-      queueMicrotask(() => {
-        if (lastControlState) void showControl(lastControlState).catch(() => {});
-      });
+      // Outside the deliberately acknowledged capture interval, disappearing
+      // UI is a revoked safety condition, not something to paper over by
+      // silently recreating the surface after a page removed it.
+      if (activeControlSessionId && captureDepth === 0) {
+        queueMicrotask(() => void failClosedOnLostControlUi());
+      }
     }
   }
 
@@ -254,6 +263,9 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
     host.setAttribute("popover", "manual");
     host.setAttribute("aria-hidden", "false");
     host.setAttribute("aria-label", "Local Browser Bridge browser control");
+    host.addEventListener("toggle", (event) => {
+      if (event.newState === "closed") queueMicrotask(() => void failClosedOnLostControlUi());
+    });
     const shadow = host.attachShadow({ mode: "closed" });
     const style = document.createElement("style");
     style.textContent = `
@@ -353,7 +365,11 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
       && style.visibility !== "collapse"
       && Number(style.opacity) !== 0
       && rect.width > 1
-      && rect.height > 1;
+      && rect.height > 1
+      && rect.left >= 0
+      && rect.top >= 0
+      && rect.right <= innerWidth
+      && rect.bottom <= innerHeight;
   }
 
   function controlUiPaintState() {
@@ -362,6 +378,7 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
     return {
       hostConnected,
       popoverOpen,
+      hostVisible: Boolean(popoverOpen && rendered(controlUi?.host)),
       pillVisible: Boolean(popoverOpen && rendered(controlUi?.pill)),
       stopVisible: Boolean(popoverOpen && rendered(controlUi?.stop)),
       cursorVisible: Boolean(popoverOpen && rendered(controlUi?.cursor)),
@@ -393,6 +410,43 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
     applyCaptureVisibility();
     await waitForPaint();
     return controlUiPaintState();
+  }
+
+  function controlUiVisiblyAvailable(state = controlUiPaintState()) {
+    return state.hostConnected
+      && state.popoverOpen
+      && state.hostVisible
+      && state.pillVisible
+      && state.stopVisible;
+  }
+
+  async function failClosedOnLostControlUi() {
+    const sessionId = activeControlSessionId;
+    if (!sessionId || captureDepth > 0 || controlUiLossReportPendingSessionId === sessionId) {
+      return false;
+    }
+    if (controlUiVisiblyAvailable()) return false;
+    controlUiLossReportPendingSessionId = sessionId;
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: "LBB_CONTROL_UI",
+        action: "indicatorLost",
+        sessionId,
+      });
+      if (!response?.ok) throw new Error(response?.error || "Indicator-loss revocation failed");
+      if (response.result?.active !== false && activeControlSessionId === sessionId) {
+        throw new Error("Indicator-loss revocation was not acknowledged as inactive");
+      }
+      return true;
+    } catch {
+      // Failures retry on the next short watchdog tick. Never hide a still
+      // active warning merely because the revocation message was interrupted.
+      return false;
+    } finally {
+      if (controlUiLossReportPendingSessionId === sessionId) {
+        controlUiLossReportPendingSessionId = "";
+      }
+    }
   }
 
   function showControlStopFailure() {
@@ -487,6 +541,7 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
     controlExpiresAt = 0;
     controlLastSeenAt = 0;
     stopFailureMessage = "";
+    controlUiLossReportPendingSessionId = "";
     activeCaptureIds.clear();
     captureStartedAt.clear();
     syncCaptureGlobals();
@@ -659,5 +714,6 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
     expireStaleCaptures();
     void expireStaleControl();
   }, CONTROL_WATCHDOG_INTERVAL_MS);
+  setInterval(() => void failClosedOnLostControlUi(), CONTROL_UI_WATCHDOG_INTERVAL_MS);
   if (document.readyState === "complete") queueMicrotask(() => void reconcileControl());
 }

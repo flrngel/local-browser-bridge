@@ -107,6 +107,8 @@ The app bundle is ad-hoc signed for internal consistency, but it is not Develope
 5. Open the Local Browser Bridge popup and confirm that its version matches the server version.
 6. Paste the token printed by the server, keep port `17373`, and select **Save and connect**.
 
+The popup stores that token until the extension is removed or you select **Clear saved token** and confirm. Clearing first revokes active browser control and disconnects the connector, removes the `token` entry from extension storage, and reports the connection as not configured. Turning off **Bridge control** only pauses the connector; it deliberately keeps the saved token for later use.
+
 Chrome and Edge 140 or later are required. Older builds are refused by the manifest because they cannot enforce the extension's persisted-storage access boundary.
 
 The extension includes no remote code, analytics, cookie API, native messaging host, downloader, or external update endpoint. Chrome does not auto-update unpacked extensions on Windows or macOS. The server's metadata-only checker accepts only a canonical stable release marked immutable by GitHub with the exact five uploaded, nonempty assets and GitHub SHA-256 digests.
@@ -128,4 +130,4 @@ On macOS, focus-capable input may briefly release the saved user's Accessibility
 
 Exact-window capture and target-routed input still share the user's login session; they are not a VM, remote desktop, or separate input seat. Stop the helper whenever native application authority is not needed. Review the current [capability matrix](CAPABILITIES.md) and [limitations](LIMITATIONS.md) before using desktop control with consequential applications.
 
-Stopping the server immediately breaks both connections. You can also stop the helper, pause browser control in the extension popup, or remove the extension from `chrome://extensions`.
+Stopping the server immediately breaks both connections. You can also stop the helper, pause browser control in the extension popup, select **Clear saved token** there to disconnect and forget the extension credential, or remove the extension from `chrome://extensions`.

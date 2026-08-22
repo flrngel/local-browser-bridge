@@ -215,6 +215,16 @@ fn background_backend_has_no_global_or_foreground_input_fallback() {
     assert!(windows.contains("release_keys"));
     assert!(windows.contains("OpenInputDesktop"));
     assert!(windows.contains("GetUserObjectInformationW"));
+    assert!(windows.contains("ProcessIdToSessionId"));
+    assert!(windows.contains("matches!(process_session_id, Some(1..))"));
+    assert!(windows.contains("DesktopSnapshot::capture().is_ok()"));
+    assert!(
+        windows
+            .contains("pub fn input_ready() -> bool {\n    interactive_input_desktop_ready()\n}")
+    );
+    assert!(windows.contains(
+        "pub fn semantic_ready(_prompt: bool) -> bool {\n    interactive_input_desktop_ready()\n}"
+    ));
     assert!(windows.contains("self.input_desktop == after.input_desktop"));
     assert!(!windows.contains("space_unchanged: true"));
     assert!(windows.contains("GetForegroundWindow returned no readable window"));
@@ -227,6 +237,42 @@ fn background_backend_has_no_global_or_foreground_input_fallback() {
     ));
     assert!(macos.contains("&lease.previous_psn"));
     assert!(macos.contains("lease.previous_window_id"));
+}
+
+#[test]
+fn browser_and_native_key_grammars_are_documented_as_distinct_subsets() {
+    let protocol = fs::read_to_string("docs/PROTOCOL.md").unwrap();
+    let capabilities = fs::read_to_string("docs/CAPABILITIES.md").unwrap();
+    let macos = fs::read_to_string("src/computer/platform_macos.rs").unwrap();
+    let windows = fs::read_to_string("src/computer/platform_windows.rs").unwrap();
+
+    assert!(
+        protocol.contains("`page.key` and `computer.key` share only the server-side chord syntax")
+    );
+    assert!(protocol.contains("`computer.key` is narrower and platform-specific"));
+    assert!(protocol.contains("`ContextMenu`, `CapsLock`, `PrintScreen`, and `Pause`"));
+    assert!(protocol.contains("Windows-key chord"));
+    assert!(protocol.contains("COMPUTER_BACKGROUND_UNAVAILABLE"));
+    assert!(capabilities.contains("| Native key subset |"));
+    for key in ["\"f1\" => 122", "\"f12\" => 111", "\"pageup\" => 116"] {
+        assert!(
+            macos.contains(key),
+            "missing documented macOS key map: {key}"
+        );
+    }
+    for key in [
+        "value if value.starts_with('f')",
+        "\"pageup\" => 0x21",
+        "\"`\" => 0xC0",
+    ] {
+        assert!(
+            windows.contains(key),
+            "missing documented Windows key map: {key}"
+        );
+    }
+    assert!(windows.contains("let windows = chord.modifiers.contains(&VK_LWIN)"));
+    assert!(windows.contains("let global_switch = alt && matches!(chord.key, VK_TAB | VK_ESCAPE)"));
+    assert!(windows.contains("let secure_attention = control && alt && chord.key == VK_DELETE"));
 }
 
 #[test]

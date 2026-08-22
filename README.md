@@ -83,7 +83,9 @@ The server prints an authenticated control-page URL and an extension token. Open
 4. Select **Load unpacked** and choose the folder containing `manifest.json`.
 5. Open the extension popup, enter the printed token, keep port `17373`, and connect.
 
-When browser control starts, Chrome shows **Local Browser Bridge started debugging this browser**. The page also shows **Local Browser Bridge is using this tab**. Chrome's Cancel action, the page's **Stop** button, or **Release control** in the popup revokes authority.
+Use **Clear saved token** in the trusted popup when you want the extension to disconnect and forget that credential; pausing Bridge control alone keeps it saved.
+
+When browser control starts, Chrome shows **Local Browser Bridge started debugging this browser**. The page also shows **Local Browser Bridge is using this tab**. If that page indicator disappears, the bridge ends control; Chrome's Cancel action and **Release control** in the popup remain available. See [Limitations](docs/LIMITATIONS.md) for the page-indicator boundary.
 
 ### 3. Start desktop control only when needed
 

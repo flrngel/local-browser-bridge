@@ -349,6 +349,106 @@ fn transport_and_security_rotation_revoke_control_first() {
 }
 
 #[test]
+fn trusted_popup_can_remove_and_verify_the_saved_token() {
+    let background = extension_source("background.js");
+    let popup = extension_source("popup.html");
+    let popup_script = extension_source("popup.js");
+
+    assert!(popup.contains("id=\"clear-token\""));
+    assert!(popup.contains("Clear saved token"));
+    assert!(popup.contains("Clearing the saved token disconnects the extension"));
+    assert!(popup_script.contains("update(\"clearSavedToken\")"));
+    assert!(popup_script.contains("ui.clearToken.disabled = !next.tokenConfigured"));
+    assert!(background.contains("case \"clearSavedToken\""));
+    assert!(background.contains("assertTrustedPopupSender(sender)"));
+    assert!(background.contains("removeSecuritySettings([\"token\"], \"saved_token_cleared\")"));
+    assert!(background.contains("if (state.tokenConfigured)"));
+
+    let remove_start = background.find("function removeSecuritySettings").unwrap();
+    let remove_end = background[remove_start..]
+        .find("function queueTransportRotation")
+        .unwrap()
+        + remove_start;
+    let remove = &background[remove_start..remove_end];
+    assert!(
+        remove.find("await clearSocket(reason)").unwrap()
+            < remove.find("chrome.storage.local.remove(keys)").unwrap()
+    );
+    assert!(
+        remove.find("chrome.storage.local.remove(keys)").unwrap()
+            < remove.find("await connect()").unwrap()
+    );
+    assert!(!remove.contains("chrome.storage.local.set"));
+
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const brace = source.indexOf("{", start);
+        let depth = 0;
+        for (let index = brace; index < source.length; index += 1) {
+          if (source[index] === "{") depth += 1;
+          else if (source[index] === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const remove = extractFunction(source, "removeSecuritySettings");
+      const clear = extractFunction(source, "clearSavedTokenFromPopup");
+      const assertTrusted = extractFunction(source, "assertTrustedPopupSender");
+      const events = [];
+      const bridge = new Function("events", `
+        let transportRotation = Promise.resolve();
+        const chrome = {
+          runtime: { getURL: (path) => "chrome-extension://fixture/" + path },
+          storage: { local: { remove: async (keys) => events.push(["remove", ...keys]) } },
+        };
+        async function clearSocket(reason) { events.push(["disconnect", reason]); }
+        function markInternalSettings(updates) { events.push(["mark", Object.keys(updates)[0], updates.token]); }
+        async function connect() { events.push(["connect"]); }
+        let tokenConfigured = true;
+        async function popupState() { return { tokenConfigured }; }
+        ${remove}
+        ${assertTrusted}
+        ${clear}
+        return {
+          clear: async (url) => {
+            const result = clearSavedTokenFromPopup({ url });
+            await Promise.resolve();
+            tokenConfigured = false;
+            return result;
+          },
+        };
+      `)(events);
+      let refused = false;
+      try { await bridge.clear("chrome-extension://fixture/other.html"); }
+      catch (error) { refused = error.message.startsWith("TRUSTED_POPUP_REQUIRED"); }
+      if (!refused || events.length) throw new Error("non-popup token removal was not refused before mutation");
+      const result = await bridge.clear("chrome-extension://fixture/popup.html");
+      if (result.tokenConfigured) throw new Error("token removal did not verify the cleared state");
+      const order = events.map((event) => event[0]).join(",");
+      if (order !== "disconnect,mark,remove,connect") throw new Error(`unexpected token-clear order: ${order}`);
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run saved-token removal harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node saved-token removal harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn extension_storage_is_restricted_to_trusted_contexts_before_use() {
     let background = extension_source("background.js");
     let access = background
@@ -1060,6 +1160,143 @@ fn control_is_visible_and_user_stoppable_in_page_and_popup() {
     assert!(content.contains("expireStaleControl"));
     assert!(content.contains("addEventListener(\"pageshow\""));
     assert!(content.contains("action: \"reconcile\""));
+}
+
+#[test]
+fn control_indicator_reuse_and_loss_are_fail_closed() {
+    let background = extension_source("background.js");
+    let content = extension_source("content.js");
+
+    assert!(content.contains("crypto.randomUUID().replaceAll(\"-\", \"\")"));
+    assert!(!content.contains("const CONTROL_HOST_ID = \"__local_browser_bridge_control__\""));
+    assert!(content.contains("const CONTROL_UI_WATCHDOG_INTERVAL_MS = 500"));
+    assert!(content.contains("action: \"indicatorLost\""));
+    assert!(content.contains("controlUiLossReportPendingSessionId === sessionId"));
+    assert!(content.contains("captureDepth > 0"));
+    assert!(background.contains("await showControlUi(controlLease)"));
+    assert!(background.contains("reason !== \"page.handleDialog\""));
+    assert!(background.contains("message.sessionId !== controlLease.sessionId"));
+    assert!(background.contains("stopControl(\"control_ui_hidden\""));
+
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const brace = source.indexOf("{", start);
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+
+      const content = fs.readFileSync("extension/content.js", "utf8");
+      const lost = extractFunction(content, "failClosedOnLostControlUi");
+      const lossBridge = new Function(`
+        let activeControlSessionId = "lease-a";
+        let captureDepth = 0;
+        let controlUiLossReportPendingSessionId = "";
+        let visible = true;
+        let sends = 0;
+        let sender = async () => ({ ok: true, result: { active: false } });
+        const chrome = { runtime: { sendMessage: (...args) => { sends += 1; return sender(...args); } } };
+        function controlUiVisiblyAvailable() { return visible; }
+        ${lost}
+        return {
+          check: failClosedOnLostControlUi,
+          setVisible: (value) => { visible = value; },
+          setCapturing: (value) => { captureDepth = value ? 1 : 0; },
+          setSender: (value) => { sender = value; },
+          sends: () => sends,
+        };
+      `)();
+      if (await lossBridge.check() || lossBridge.sends() !== 0) throw new Error("visible indicator failed closed");
+      lossBridge.setVisible(false);
+      lossBridge.setCapturing(true);
+      if (await lossBridge.check() || lossBridge.sends() !== 0) throw new Error("intentional capture failed closed");
+      lossBridge.setCapturing(false);
+      let release;
+      lossBridge.setSender(() => new Promise((resolve) => { release = resolve; }));
+      const first = lossBridge.check();
+      await Promise.resolve();
+      if (await lossBridge.check() || lossBridge.sends() !== 1) throw new Error("loss report was duplicated");
+      release({ ok: true, result: { active: false } });
+      if (!await first) throw new Error("indicator loss was not acknowledged");
+      lossBridge.setSender(async () => { throw new Error("transient"); });
+      if (await lossBridge.check()) throw new Error("failed revocation was acknowledged");
+      const afterFailure = lossBridge.sends();
+      lossBridge.setSender(async () => ({ ok: true, result: { active: false } }));
+      if (!await lossBridge.check() || lossBridge.sends() !== afterFailure + 1) throw new Error("loss report did not retry");
+
+      const background = fs.readFileSync("extension/background.js", "utf8");
+      const requireControl = extractFunction(background, "requireControl");
+      const reuseBridge = new Function(`
+        let controlLease = { tabId: 7, sessionId: "lease-a", epoch: 2, expiresAt: Date.now() + 10000, ownerSessionId: "owner", pendingDialog: null };
+        let paints = 0;
+        function assertCommandActive() {}
+        async function initializeControlState() {}
+        function assertHumanControlAvailable() {}
+        async function initializeProtocolIdentity() {}
+        async function stopControl() { throw new Error("unexpected stop"); }
+        function currentControlOwner() { return "owner"; }
+        async function showControlUi() { paints += 1; }
+        function pendingDialogError() { return new Error("BLOCKED_BY_DIALOG"); }
+        async function startControl() { throw new Error("unexpected start"); }
+        ${requireControl}
+        return {
+          reuse: (reason) => requireControl(7, reason, null),
+          setDialog: (value) => { controlLease.pendingDialog = value; },
+          paints: () => paints,
+        };
+      `)();
+      await reuseBridge.reuse("page.click");
+      if (reuseBridge.paints() !== 1) throw new Error("same-tab reuse skipped fresh paint acknowledgement");
+      reuseBridge.setDialog({ type: "alert" });
+      await reuseBridge.reuse("page.handleDialog");
+      if (reuseBridge.paints() !== 1) throw new Error("dialog handler touched the frozen renderer");
+      let blocked = false;
+      try { await reuseBridge.reuse("page.click"); } catch (error) { blocked = error.message === "BLOCKED_BY_DIALOG"; }
+      if (!blocked) throw new Error("non-dialog action bypassed a pending dialog");
+
+      const handler = extractFunction(background, "handleControlUiMessage");
+      const handlerBridge = new Function(`
+        let controlLease = { tabId: 7, sessionId: "lease-a", expiresAt: Date.now() + 10000 };
+        const reasons = [];
+        async function initializeControlState() {}
+        async function stopControl(reason) { reasons.push(reason); controlLease = null; return { active: false }; }
+        function publicControlState() { return { active: Boolean(controlLease) }; }
+        ${handler}
+        return { handle: (message) => handleControlUiMessage(message, { tab: { id: 7 } }), reasons };
+      `)();
+      const stale = await handlerBridge.handle({ action: "indicatorLost", sessionId: "lease-old" });
+      if (!stale.active || handlerBridge.reasons.length) throw new Error("stale indicator report revoked a newer lease");
+      const exact = await handlerBridge.handle({ action: "indicatorLost", sessionId: "lease-a" });
+      if (exact.active || handlerBridge.reasons[0] !== "control_ui_hidden") throw new Error("exact indicator loss did not fail closed");
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run indicator fail-closed harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node indicator fail-closed harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -2516,7 +2753,8 @@ fn human_stop_globally_pauses_remote_control_until_trusted_popup_resume() {
         .unwrap()
         + resume_start;
     let resume = &background[resume_start..resume_end];
-    assert!(resume.contains("sender.url !== chrome.runtime.getURL(\"popup.html\")"));
+    assert!(resume.contains("assertTrustedPopupSender(sender)"));
+    assert!(background.contains("sender.url !== chrome.runtime.getURL(\"popup.html\")"));
     assert!(resume.contains("resumeHumanControlFromPopup"));
     assert!(!background.contains("\"resumeRemoteControl\","));
 
@@ -3026,6 +3264,7 @@ fn control_ui_paint_capture_and_stop_failures_are_fail_closed() {
     for acknowledgement in [
         "hostConnected",
         "popoverOpen",
+        "hostVisible",
         "pillVisible",
         "stopVisible",
         "captureDepth",

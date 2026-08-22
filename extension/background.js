@@ -631,6 +631,17 @@ function updateSecuritySettings(updates, reason) {
   return operation;
 }
 
+function removeSecuritySettings(keys, reason) {
+  const operation = transportRotation.then(async () => {
+    await clearSocket(reason);
+    markInternalSettings(Object.fromEntries(keys.map((key) => [key, undefined])));
+    await chrome.storage.local.remove(keys);
+    await connect();
+  });
+  transportRotation = operation.catch(() => {});
+  return operation;
+}
+
 function queueTransportRotation(reason) {
   transportRotation = transportRotation
     .then(async () => {
@@ -1428,7 +1439,7 @@ function endControlCapture(tabId, captureId) {
 }
 
 function controlUiAcknowledged(state, expectedCaptureIds, expectedCursorVisible) {
-  if (!state?.hostConnected || !state.popoverOpen) return false;
+  if (!state?.hostConnected || !state.popoverOpen || !state.hostVisible) return false;
   const expected = [...expectedCaptureIds].map(String).sort();
   const actual = Array.isArray(state.activeCaptureIds)
     ? state.activeCaptureIds.map(String).sort()
@@ -2379,7 +2390,17 @@ async function requireControl(tabId, reason, commandContext = null) {
     throw new Error("CONTROL_OWNER_MISMATCH: explicitly start a control session owned by the current server session");
   }
   if (controlLease?.tabId === tabId) {
-    assertCommandActive(commandContext, "control reuse");
+    // JavaScript dialogs freeze the renderer, so page.handleDialog is the one
+    // controlled action that cannot obtain a fresh content paint acknowledgement
+    // before resolving the dialog in the browser process. Every other same-tab
+    // reuse must prove the visible page-owned surface again immediately before
+    // the action continues.
+    if (controlLease.pendingDialog) {
+      if (reason !== "page.handleDialog") throw pendingDialogError(reason);
+    } else {
+      await showControlUi(controlLease);
+    }
+    assertCommandActive(commandContext, "control reuse indicator commit");
     return controlLease;
   }
   await startControl(tabId, { explicit: false, reason, ownerSessionId: requestedOwner, commandContext });
@@ -4828,19 +4849,45 @@ async function popupState() {
   };
 }
 
+function assertTrustedPopupSender(sender) {
+  if (sender.url !== chrome.runtime.getURL("popup.html")) {
+    throw new Error("TRUSTED_POPUP_REQUIRED: only the extension popup can perform this action");
+  }
+}
+
+async function clearSavedTokenFromPopup(sender) {
+  assertTrustedPopupSender(sender);
+  await removeSecuritySettings(["token"], "saved_token_cleared");
+  const state = await popupState();
+  if (state.tokenConfigured) {
+    throw new Error("TOKEN_CLEAR_FAILED: the saved extension token is still configured");
+  }
+  return state;
+}
+
+async function handleControlUiMessage(message, sender) {
+  await initializeControlState();
+  if (!Number.isInteger(sender.tab?.id)) throw new Error("Invalid control UI request");
+  if (message.action === "reconcile") {
+    if (controlLease?.expiresAt <= Date.now()) await stopControl("lease_expired", { requireExplicitStart: true });
+    return controlLease?.tabId === sender.tab.id ? publicControlState() : { active: false };
+  }
+  if (message.action === "indicatorLost") {
+    if (!controlLease
+      || controlLease.tabId !== sender.tab.id
+      || message.sessionId !== controlLease.sessionId) return publicControlState();
+    return stopControl("control_ui_hidden", { requireExplicitStart: true });
+  }
+  if (message.action !== "stop") throw new Error("Invalid control UI request");
+  if (!controlLease || controlLease.tabId !== sender.tab.id) return publicControlState();
+  return stopControl("released_by_user", { requireExplicitStart: true });
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.id === chrome.runtime.id && message?.type === "LBB_CONTROL_UI") {
-    (async () => {
-      await initializeControlState();
-      if (!Number.isInteger(sender.tab?.id)) throw new Error("Invalid control UI request");
-      if (message.action === "reconcile") {
-        if (controlLease?.expiresAt <= Date.now()) await stopControl("lease_expired", { requireExplicitStart: true });
-        return controlLease?.tabId === sender.tab.id ? publicControlState() : { active: false };
-      }
-      if (message.action !== "stop") throw new Error("Invalid control UI request");
-      if (!controlLease || controlLease.tabId !== sender.tab.id) return publicControlState();
-      return stopControl("released_by_user", { requireExplicitStart: true });
-    })().then((result) => sendResponse({ ok: true, result })).catch((error) => sendResponse({ ok: false, error: error.message }));
+    handleControlUiMessage(message, sender)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((error) => sendResponse({ ok: false, error: error.message }));
     return true;
   }
   if (sender.id !== chrome.runtime.id || message?.type !== "LBB_POPUP") return undefined;
@@ -4854,9 +4901,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return popupState();
       }
       case "resumeRemoteControl": {
-        if (sender.url !== chrome.runtime.getURL("popup.html")) {
-          throw new Error("TRUSTED_POPUP_REQUIRED: only the extension popup can resume browser control");
-        }
+        assertTrustedPopupSender(sender);
         await resumeHumanControlFromPopup();
         return popupState();
       }
@@ -4875,6 +4920,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await updateSecuritySettings(updates, "connection_settings_changed");
         return popupState();
       }
+      case "clearSavedToken":
+        return clearSavedTokenFromPopup(sender);
       case "toggleEnabled":
         await updateSecuritySettings({ enabled: Boolean(message.enabled) }, message.enabled ? "bridge_resumed" : "bridge_paused");
         return popupState();

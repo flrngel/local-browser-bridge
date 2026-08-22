@@ -86,6 +86,7 @@ unsafe extern "system" {
 unsafe extern "system" {
     fn GetLastError() -> u32;
     fn SetLastError(error: u32);
+    fn ProcessIdToSessionId(process_id: u32, session_id: *mut u32) -> i32;
 }
 
 const WM_MOUSEMOVE: u32 = 0x0200;
@@ -137,7 +138,7 @@ pub fn semantic_backend_name() -> &'static str {
 }
 
 pub fn semantic_ready(_prompt: bool) -> bool {
-    true
+    interactive_input_desktop_ready()
 }
 
 pub fn semantic_elements(target: &WindowDescriptor) -> Result<SemanticSnapshot, ComputerError> {
@@ -179,7 +180,30 @@ pub fn limitations() -> Vec<&'static str> {
 }
 
 pub fn input_ready() -> bool {
-    true
+    interactive_input_desktop_ready()
+}
+
+fn interactive_input_desktop_ready() -> bool {
+    let session_id = current_process_session_id();
+    if !readiness_from_observations(session_id, true) {
+        return false;
+    }
+    readiness_from_observations(session_id, DesktopSnapshot::capture().is_ok())
+}
+
+fn current_process_session_id() -> Option<u32> {
+    let mut session_id = 0_u32;
+    if unsafe { ProcessIdToSessionId(std::process::id(), &mut session_id) } == 0 {
+        return None;
+    }
+    Some(session_id)
+}
+
+fn readiness_from_observations(
+    process_session_id: Option<u32>,
+    desktop_snapshot_available: bool,
+) -> bool {
+    matches!(process_session_id, Some(1..)) && desktop_snapshot_available
 }
 
 pub fn windows(limit: usize) -> Result<Vec<WindowDescriptor>, ComputerError> {
@@ -1177,6 +1201,11 @@ impl DesktopSnapshot {
                 "GetGUIThreadInfo failed for the foreground thread",
             ));
         }
+        if unsafe { IsWindow(foreground) } == 0 || unsafe { IsWindow(info.hwnd_focus) } == 0 {
+            return Err(input_error(
+                "The foreground or focused window is no longer valid",
+            ));
+        }
         let mut cursor = Point::default();
         if unsafe { GetCursorPos(&mut cursor) } == 0 {
             return Err(input_error("GetCursorPos failed"));
@@ -1471,6 +1500,14 @@ mod invariant_tests {
 
     fn identity(name: &str) -> InputDesktopIdentity {
         InputDesktopIdentity(name.encode_utf16().collect())
+    }
+
+    #[test]
+    fn readiness_requires_a_nonzero_session_and_complete_desktop_probe() {
+        assert!(!readiness_from_observations(None, true));
+        assert!(!readiness_from_observations(Some(0), true));
+        assert!(!readiness_from_observations(Some(1), false));
+        assert!(readiness_from_observations(Some(1), true));
     }
 
     #[test]

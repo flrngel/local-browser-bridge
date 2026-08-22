@@ -4,7 +4,7 @@ const byId = (id) => document.getElementById(id);
 const ui = {
   version: byId("version"), status: byId("status"), enabled: byId("enabled"), fullAccess: byId("full-access"), modeStatus: byId("mode-status"),
   connectionForm: byId("connection-form"), port: byId("port"),
-  token: byId("token"), approvalSection: byId("approval-section"), approvalDetail: byId("approval-detail"),
+  token: byId("token"), clearToken: byId("clear-token"), approvalSection: byId("approval-section"), approvalDetail: byId("approval-detail"),
   approve: byId("approve"), reject: byId("reject"), currentSite: byId("current-site"), allowCurrent: byId("allow-current"),
   hostForm: byId("host-form"), host: byId("host"), hosts: byId("hosts"), allowedSitesSection: byId("allowed-sites-section"), message: byId("message"),
   controlSection: byId("control-section"), controlStatus: byId("control-status"), controlLive: byId("control-live"),
@@ -38,6 +38,7 @@ function render(next) {
   ui.allowedSitesSection.classList.toggle("inactive", next.fullAccess);
   ui.port.value = next.port;
   ui.token.placeholder = next.tokenConfigured ? "Saved — leave blank to keep it" : "Paste the server token";
+  ui.clearToken.disabled = !next.tokenConfigured;
   ui.currentSite.textContent = `Current site: ${next.currentHost || "unavailable"}${next.currentHostAllowed ? " (allowed)" : ""}`;
   ui.allowCurrent.disabled = !next.currentHost || next.currentHostAllowed;
   const control = next.control ?? { active: false };
@@ -85,6 +86,11 @@ ui.connectionForm.addEventListener("submit", (event) => {
   event.preventDefault();
   void update("saveConnection", { port: Number(ui.port.value), token: ui.token.value });
   ui.token.value = "";
+});
+ui.clearToken.addEventListener("click", () => {
+  if (!confirm("Clear the saved extension token and disconnect now? You can paste it again from the local server.")) return;
+  ui.token.value = "";
+  void update("clearSavedToken");
 });
 ui.enabled.addEventListener("change", () => void update("toggleEnabled", { enabled: ui.enabled.checked }));
 ui.fullAccess.addEventListener("change", () => void update("toggleFullAccess", { fullAccess: ui.fullAccess.checked }));
