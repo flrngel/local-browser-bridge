@@ -13,12 +13,15 @@ param(
     [string]$FinalSha,
 
     [string]$Repository,
+    [string]$TrustedGitExecutable,
+    [string]$TrustedEmptyHooksDirectory,
     [string]$ChecksumManifest,
 
     [ValidatePattern('^[0-9a-f]{64}$')]
     [string]$ChecksumManifestSha256,
 
     [string]$ServerExecutable,
+    [string]$ComputerHelperExecutable,
     [string]$ExtensionZip,
     [string]$ExtractedExtension,
     [string]$PreflightRecord,
@@ -45,6 +48,7 @@ $script:ExtensionFiles = @(
 $script:ExtensionPermissions = @("tabs", "scripting", "storage", "alarms", "debugger", "tabGroups")
 $script:ExtensionHostPermissions = @("http://*/*", "https://*/*", "file://*/*")
 $script:ExtensionDescription = "Connects browser tabs to a loopback-only control surface for local browser agents."
+$script:TrustedRepositoryOrigin = "https://github.com/flrngel/local-browser-bridge.git"
 $script:MaxExtensionEntryBytes = 2MB
 $script:MaxExtensionArchiveBytes = 8MB
 $script:SelfTestCleanupRetryMilliseconds = @(0, 50, 100, 250, 500, 1000)
@@ -73,6 +77,32 @@ function Resolve-RequiredFile {
         throw "$Label must not be a reparse point."
     }
     return $resolved
+}
+
+function Initialize-TrustedGitExecutable {
+    if ($Mode -cne "SelfTest" -and $Version -ceq "0.12.3") {
+        Assert-RequiredArgument $TrustedGitExecutable "TrustedGitExecutable"
+        if (-not [IO.Path]::IsPathRooted($TrustedGitExecutable)) {
+            throw "TrustedGitExecutable must be an absolute path for v0.12.3."
+        }
+        $script:GitExecutable = Resolve-RequiredFile $TrustedGitExecutable "TrustedGitExecutable"
+        Assert-RequiredArgument $TrustedEmptyHooksDirectory "TrustedEmptyHooksDirectory"
+        if (-not [IO.Path]::IsPathRooted($TrustedEmptyHooksDirectory)) {
+            throw "TrustedEmptyHooksDirectory must be an absolute path for v0.12.3."
+        }
+        $script:EmptyHooksDirectory = Resolve-RequiredDirectory $TrustedEmptyHooksDirectory "TrustedEmptyHooksDirectory"
+        if (@(Get-ChildItem -LiteralPath $script:EmptyHooksDirectory -Force).Count -ne 0) {
+            throw "TrustedEmptyHooksDirectory must be empty."
+        }
+        $script:UseHardenedGit = $true
+        return
+    }
+    $gitCommand = Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1
+    if ($null -eq $gitCommand -or -not [IO.Path]::IsPathRooted($gitCommand.Source)) {
+        throw "A trusted Git executable could not be resolved."
+    }
+    $script:GitExecutable = [IO.Path]::GetFullPath($gitCommand.Source)
+    $script:UseHardenedGit = $false
 }
 
 function Resolve-RequiredDirectory {
@@ -359,15 +389,102 @@ function Remove-ExactSelfTestDirectory {
 
 function Invoke-GitText {
     param([string]$RepositoryPath, [string[]]$Arguments)
-    $output = & git -C $RepositoryPath @Arguments 2>$null
+    if ($script:UseHardenedGit) {
+        # v0.12.3 accepts only a fresh isolated clone. These global switches
+        # prevent replacement-object substitution and lazy-fetch helpers;
+        # command-scoped settings neutralize monitor and hook execution.
+        $output = & $script:GitExecutable --no-replace-objects --no-lazy-fetch `
+            -c core.fsmonitor=false -c core.hooksPath=$script:EmptyHooksDirectory `
+            -C $RepositoryPath @Arguments 2>$null
+    }
+    else {
+        # Preserve the v0.12.2 contract, including compatibility with Git
+        # versions that predate --no-lazy-fetch.
+        $output = & $script:GitExecutable -C $RepositoryPath @Arguments 2>$null
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "The candidate Git identity could not be verified."
     }
     return (@($output) -join "`n").Trim()
 }
 
+function Assert-HardenedGitEnvironment {
+    if ($env:GIT_CONFIG_NOSYSTEM -cne "1" -or $env:GIT_CONFIG_GLOBAL -cne "NUL" -or
+        $env:GIT_ATTR_NOSYSTEM -cne "1" -or $env:GIT_ALLOW_PROTOCOL -cne "https" -or
+        $env:GIT_CONFIG_COUNT -cne "0" -or $env:GIT_TERMINAL_PROMPT -cne "0") {
+        throw "v0.12.3 requires the isolated Git environment declared by the acceptance protocol."
+    }
+    $allowedGitEnvironment = @(
+        "GIT_ALLOW_PROTOCOL", "GIT_ATTR_NOSYSTEM", "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_TERMINAL_PROMPT"
+    )
+    foreach ($entry in [Environment]::GetEnvironmentVariables("Process").GetEnumerator()) {
+        $name = [string]$entry.Key
+        if ($name -cmatch '^GIT_' -and $allowedGitEnvironment -cnotcontains $name) {
+            throw "v0.12.3 refuses unexpected Git process variables."
+        }
+    }
+    if (-not [String]::IsNullOrEmpty($env:SSH_ASKPASS)) {
+        throw "v0.12.3 refuses SSH_ASKPASS in the isolated HTTPS Git environment."
+    }
+    foreach ($name in @("HOME", "USERPROFILE")) {
+        $value = [Environment]::GetEnvironmentVariable($name, "Process")
+        if ([String]::IsNullOrWhiteSpace($value) -or -not [IO.Path]::IsPathRooted($value)) {
+            throw "v0.12.3 requires an isolated absolute $name directory."
+        }
+        $resolved = Resolve-RequiredDirectory $value $name
+        if (@(Get-ChildItem -LiteralPath $resolved -Force).Count -ne 0) {
+            throw "v0.12.3 requires the isolated $name directory to remain empty."
+        }
+    }
+}
+
+function Assert-HardenedRepositoryMetadata {
+    param([string]$RepositoryPath)
+    $gitDirectory = [IO.Path]::Combine($RepositoryPath, ".git")
+    if (-not [IO.Directory]::Exists($gitDirectory)) {
+        throw "v0.12.3 requires a fresh clone with an ordinary .git directory."
+    }
+    $gitDirectoryInfo = [IO.DirectoryInfo]::new($gitDirectory)
+    if (($gitDirectoryInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "v0.12.3 refuses a reparse-point Git directory."
+    }
+    $configPath = Resolve-RequiredFile ([IO.Path]::Combine($gitDirectory, "config")) "repository local Git config"
+    $configText = [IO.File]::ReadAllText($configPath, $script:Utf8NoBom)
+    $dangerousConfig = '(?im)^\s*\[(?:include(?:if)?|filter|diff|credential|protocol|url)(?:\s|\])|^\s*(?:fsmonitor|hooksPath|attributesFile|promisor|partialCloneFilter|uploadPack|receivePack)\s*='
+    if ([regex]::IsMatch($configText, $dangerousConfig)) {
+        throw "v0.12.3 refuses executable, included, rewritten, or promisor local Git configuration."
+    }
+    $originPattern = '(?im)^\s*url\s*=\s*' + [regex]::Escape($script:TrustedRepositoryOrigin) + '\s*$'
+    if (-not [regex]::IsMatch($configText, '^\s*\[remote\s+"origin"\]\s*$', [Text.RegularExpressions.RegexOptions]::Multiline) -or
+        -not [regex]::IsMatch($configText, $originPattern)) {
+        throw "v0.12.3 repository origin is not the fixed HTTPS release repository."
+    }
+    foreach ($forbiddenPath in @(
+        [IO.Path]::Combine($gitDirectory, "refs", "replace"),
+        [IO.Path]::Combine($gitDirectory, "objects", "info", "alternates"),
+        [IO.Path]::Combine($gitDirectory, "shallow")
+    )) {
+        if ([IO.File]::Exists($forbiddenPath) -or [IO.Directory]::Exists($forbiddenPath)) {
+            throw "v0.12.3 repository contains replacement, alternate, or shallow object state."
+        }
+    }
+    $packDirectory = [IO.Path]::Combine($gitDirectory, "objects", "pack")
+    if ([IO.Directory]::Exists($packDirectory)) {
+        $packInfo = [IO.DirectoryInfo]::new($packDirectory)
+        if (($packInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            @($packInfo.GetFiles("*.promisor", [IO.SearchOption]::TopDirectoryOnly)).Count -ne 0) {
+            throw "v0.12.3 repository contains promisor object state."
+        }
+    }
+}
+
 function Assert-CleanExactCheckout {
     param([string]$RepositoryPath, [string]$ExpectedSha)
+    if ($script:UseHardenedGit) {
+        Assert-HardenedGitEnvironment
+        Assert-HardenedRepositoryMetadata $RepositoryPath
+    }
     $inside = Invoke-GitText $RepositoryPath @("rev-parse", "--is-inside-work-tree")
     if ($inside -cne "true") {
         throw "Repository is not a Git worktree."
@@ -387,6 +504,12 @@ function Assert-CleanExactCheckout {
     $ignored = Invoke-GitText $RepositoryPath @("ls-files", "--others", "--ignored", "--exclude-standard")
     if (-not [String]::IsNullOrEmpty($ignored)) {
         throw "Repository must be an exact clean checkout without ignored files."
+    }
+    if ($script:UseHardenedGit) {
+        $indexFlags = @(Invoke-GitText $RepositoryPath @("ls-files", "-v") -split "`n")
+        if (@($indexFlags | Where-Object { $_ -cnotmatch '^H ' }).Count -ne 0) {
+            throw "v0.12.3 refuses assume-unchanged or skip-worktree index entries."
+        }
     }
 }
 
@@ -658,6 +781,7 @@ function Get-CandidateSnapshot {
         [string]$ManifestPath,
         [string]$ManifestExpectedSha,
         [string]$ServerPath,
+        [AllowNull()][string]$ComputerHelperPath,
         [string]$ZipPath,
         [string]$ExtractedPath
     )
@@ -683,6 +807,29 @@ function Get-CandidateSnapshot {
     if ($serverSha -cne $checksums.Hashes[$expectedServerName]) {
         throw "Server executable does not match the canonical checksum manifest."
     }
+    $helperBinding = $null
+    if ($ExpectedVersion -ceq "0.12.3") {
+        if ([String]::IsNullOrWhiteSpace($ComputerHelperPath)) {
+            throw "Computer helper executable is required for v0.12.3."
+        }
+        $expectedHelperName = "local-computer-helper-v$ExpectedVersion-windows-x86_64.exe"
+        if ([IO.Path]::GetFileName($ComputerHelperPath) -cne $expectedHelperName) {
+            throw "Computer helper executable does not use the canonical candidate filename."
+        }
+        $helperInfo = [IO.FileInfo]::new($ComputerHelperPath)
+        if ($helperInfo.Length -le 0 -or $helperInfo.Length -gt 100MB) {
+            throw "Computer helper executable has an invalid size."
+        }
+        $helperSha = Get-Sha256 $ComputerHelperPath
+        if ($helperSha -cne $checksums.Hashes[$expectedHelperName]) {
+            throw "Computer helper executable does not match the canonical checksum manifest."
+        }
+        $helperBinding = [ordered]@{
+            name = $expectedHelperName
+            bytes = $helperInfo.Length
+            sha256 = $helperSha
+        }
+    }
     $expectedZipName = "local-browser-bridge-extension-v$ExpectedVersion.zip"
     if ([IO.Path]::GetFileName($ZipPath) -cne $expectedZipName) {
         throw "Extension ZIP does not use the canonical candidate filename."
@@ -700,7 +847,7 @@ function Get-CandidateSnapshot {
     $checkoutInventory = @(Get-SafeInventory $checkoutPayload)
     $zipInventory = @(Get-SafeInventory $zipPayload)
     $extractedInventory = @(Get-SafeInventory $extractedPayload)
-    return [ordered]@{
+    $candidate = [ordered]@{
         version = $ExpectedVersion
         finalSha = $ExpectedSha
         gitClean = $true
@@ -717,7 +864,11 @@ function Get-CandidateSnapshot {
             bytes = $serverInfo.Length
             sha256 = $serverSha
         }
-        extension = [ordered]@{
+    }
+    if ($ExpectedVersion -ceq "0.12.3") {
+        $candidate.computerHelper = $helperBinding
+    }
+    $candidate.extension = [ordered]@{
             name = $expectedZipName
             bytes = ([IO.FileInfo]::new($ZipPath)).Length
             sha256 = $zipSha
@@ -730,21 +881,25 @@ function Get-CandidateSnapshot {
             extractedPayloadInventory = $extractedInventory
             checkoutPayloadInventory = $checkoutInventory
             combinedPayloadSha256 = Get-CombinedPayloadSha256 $checkoutInventory
-        }
     }
+    return $candidate
 }
 
 function Get-CandidateBindingDomain {
     param([string]$RunNonce, [string]$PreflightSha256, [object]$Candidate)
-    return [ordered]@{
+    $binding = [ordered]@{
         runNonce = $RunNonce
         preflightRecordSha256 = $PreflightSha256
         finalSha = [string]$Candidate.finalSha
         checksumManifestSha256 = [string]$Candidate.checksumManifest.sha256
         serverSha256 = [string]$Candidate.server.sha256
-        extensionZipSha256 = [string]$Candidate.extension.sha256
-        extractedPayloadSha256 = [string]$Candidate.extension.combinedPayloadSha256
     }
+    if ($Candidate.version -ceq "0.12.3") {
+        $binding.computerHelperSha256 = [string]$Candidate.computerHelper.sha256
+    }
+    $binding.extensionZipSha256 = [string]$Candidate.extension.sha256
+    $binding.extractedPayloadSha256 = [string]$Candidate.extension.combinedPayloadSha256
+    return $binding
 }
 
 function Assert-BindingRecord {
@@ -764,25 +919,43 @@ function Assert-BindingRecord {
         if ($Record.preflightRecordSha256 -isnot [string] -or $Record.preflightRecordSha256 -cnotmatch '^[0-9a-f]{64}$') {
             throw "Candidate postflight preflight digest is invalid."
         }
-        Assert-ExactKeys $Record.unchanged @(
+        $unchangedKeys = @(
             "checkoutHead", "checkoutClean", "checksumManifest", "serverExecutable", "extensionZip", "extractedPayload"
-        ) "candidate unchanged assertions"
+        )
+        if ($Record.candidate.version -ceq "0.12.3") {
+            $unchangedKeys = @(
+                "checkoutHead", "checkoutClean", "checksumManifest", "serverExecutable",
+                "computerHelperExecutable", "extensionZip", "extractedPayload"
+            )
+        }
+        Assert-ExactKeys $Record.unchanged $unchangedKeys "candidate unchanged assertions"
         foreach ($property in $Record.unchanged.PSObject.Properties) {
             if ($property.Value -ne $true) {
                 throw "Candidate unchanged assertion is not true."
             }
         }
-        Assert-ExactKeys $Record.candidateBinding @(
+        $bindingKeys = @(
             "runNonce", "preflightRecordSha256", "finalSha", "checksumManifestSha256",
             "serverSha256", "extensionZipSha256", "extractedPayloadSha256"
-        ) "candidate postflight domain"
+        )
+        if ($Record.candidate.version -ceq "0.12.3") {
+            $bindingKeys = @(
+                "runNonce", "preflightRecordSha256", "finalSha", "checksumManifestSha256",
+                "serverSha256", "computerHelperSha256", "extensionZipSha256", "extractedPayloadSha256"
+            )
+        }
+        Assert-ExactKeys $Record.candidateBinding $bindingKeys "candidate postflight domain"
         $expectedBinding = Get-CandidateBindingDomain $Record.runNonce $Record.preflightRecordSha256 $Record.candidate
         if (($Record.candidateBinding | ConvertTo-Json -Depth 5 -Compress) -cne
             ($expectedBinding | ConvertTo-Json -Depth 5 -Compress)) {
             throw "Candidate postflight domain does not match its candidate and preflight digest."
         }
     }
-    Assert-ExactKeys $Record.candidate @("version", "finalSha", "gitClean", "checksumManifest", "server", "extension") "candidate binding"
+    $candidateKeys = @("version", "finalSha", "gitClean", "checksumManifest", "server", "extension")
+    if ($Record.candidate.version -ceq "0.12.3") {
+        $candidateKeys = @("version", "finalSha", "gitClean", "checksumManifest", "server", "computerHelper", "extension")
+    }
+    Assert-ExactKeys $Record.candidate $candidateKeys "candidate binding"
     Assert-ExactKeys $Record.candidate.checksumManifest @(
         "name", "bytes", "sha256", "externallySuppliedSha256", "canonicalEntryCount", "canonicalNamesInOrder"
     ) "candidate checksum binding"
@@ -791,6 +964,9 @@ function Assert-BindingRecord {
         "permissions", "hostPermissions", "extractedPayloadInventory", "checkoutPayloadInventory", "combinedPayloadSha256"
     ) "candidate extension binding"
     Assert-ExactKeys $Record.candidate.server @("name", "bytes", "sha256") "candidate server binding"
+    if ($Record.candidate.version -ceq "0.12.3") {
+        Assert-ExactKeys $Record.candidate.computerHelper @("name", "bytes", "sha256") "candidate computer helper binding"
+    }
 }
 
 function Invoke-Preflight {
@@ -805,10 +981,15 @@ function Invoke-Preflight {
     $repositoryPath = Resolve-RequiredDirectory $Repository "Repository"
     $manifestPath = Resolve-RequiredFile $ChecksumManifest "ChecksumManifest"
     $serverPath = Resolve-RequiredFile $ServerExecutable "ServerExecutable"
+    $helperPath = $null
+    if ($Version -ceq "0.12.3") {
+        Assert-RequiredArgument $ComputerHelperExecutable "ComputerHelperExecutable"
+        $helperPath = Resolve-RequiredFile $ComputerHelperExecutable "ComputerHelperExecutable"
+    }
     $zipPath = Resolve-RequiredFile $ExtensionZip "ExtensionZip"
     $extractedPath = Resolve-RequiredDirectory $ExtractedExtension "ExtractedExtension"
     $outputPath = Resolve-NewOutputFile $OutputRecord "OutputRecord"
-    $candidate = Get-CandidateSnapshot $Version $FinalSha $repositoryPath $manifestPath $ChecksumManifestSha256 $serverPath $zipPath $extractedPath
+    $candidate = Get-CandidateSnapshot $Version $FinalSha $repositoryPath $manifestPath $ChecksumManifestSha256 $serverPath $helperPath $zipPath $extractedPath
     $record = [ordered]@{
         schemaVersion = 1
         evidenceType = "stock-user-chrome-candidate-binding"
@@ -834,6 +1015,11 @@ function Invoke-Postflight {
     $repositoryPath = Resolve-RequiredDirectory $Repository "Repository"
     $manifestPath = Resolve-RequiredFile $ChecksumManifest "ChecksumManifest"
     $serverPath = Resolve-RequiredFile $ServerExecutable "ServerExecutable"
+    $helperPath = $null
+    if ($Version -ceq "0.12.3") {
+        Assert-RequiredArgument $ComputerHelperExecutable "ComputerHelperExecutable"
+        $helperPath = Resolve-RequiredFile $ComputerHelperExecutable "ComputerHelperExecutable"
+    }
     $zipPath = Resolve-RequiredFile $ExtensionZip "ExtensionZip"
     $extractedPath = Resolve-RequiredDirectory $ExtractedExtension "ExtractedExtension"
     $preflightPath = Resolve-RequiredFile $PreflightRecord "PreflightRecord"
@@ -841,7 +1027,7 @@ function Invoke-Postflight {
     $preflight = [IO.File]::ReadAllText($preflightPath, $script:Utf8NoBom) | ConvertFrom-Json
     Assert-BindingRecord $preflight "preflight"
     $preflightSha256 = Get-Sha256 $preflightPath
-    $candidate = Get-CandidateSnapshot $Version $FinalSha $repositoryPath $manifestPath $ChecksumManifestSha256 $serverPath $zipPath $extractedPath
+    $candidate = Get-CandidateSnapshot $Version $FinalSha $repositoryPath $manifestPath $ChecksumManifestSha256 $serverPath $helperPath $zipPath $extractedPath
     $before = $preflight.candidate | ConvertTo-Json -Depth 20 -Compress
     $after = $candidate | ConvertTo-Json -Depth 20 -Compress
     if ($before -cne $after) {
@@ -862,15 +1048,25 @@ function Invoke-Postflight {
             checkoutClean = $true
             checksumManifest = $true
             serverExecutable = $true
-            extensionZip = $true
-            extractedPayload = $true
         }
     }
+    if ($Version -ceq "0.12.3") {
+        $record.unchanged.computerHelperExecutable = $true
+    }
+    $record.unchanged.extensionZip = $true
+    $record.unchanged.extractedPayload = $true
     Write-NewJson $outputPath $record
     Write-Output "Candidate postflight passed; checkout and payload match their preflight boundary hashes."
 }
 
 function Invoke-SelfTest {
+    $selfTestSource = [IO.File]::ReadAllText($PSCommandPath, $script:Utf8NoBom)
+    if (-not $selfTestSource.Contains('& $script:GitExecutable --no-replace-objects --no-lazy-fetch `') -or
+        -not $selfTestSource.Contains('-c core.fsmonitor=false -c core.hooksPath=$script:EmptyHooksDirectory `') -or
+        -not $selfTestSource.Contains('& $script:GitExecutable -C $RepositoryPath @Arguments') -or
+        -not $selfTestSource.Contains('Preserve the v0.12.2 contract')) {
+        throw "Candidate binding lost its version-scoped hardened and legacy Git dispatch."
+    }
     $root = [IO.Path]::Combine([IO.Path]::GetTempPath(), "lbb-browser-candidate-" + [Guid]::NewGuid().ToString("N"))
     $repositoryPath = [IO.Path]::Combine($root, "repository")
     $releasePath = [IO.Path]::Combine($root, "release")
@@ -912,13 +1108,55 @@ function Invoke-SelfTest {
             [IO.File]::WriteAllText($path, $contents, $script:Utf8NoBom)
             [IO.File]::WriteAllText([IO.Path]::Combine($extractedPath, $name), $contents, $script:Utf8NoBom)
         }
-        & git -C $repositoryPath init -q
-        & git -C $repositoryPath config user.email browser-evidence@example.invalid
-        & git -C $repositoryPath config user.name "Browser Evidence Self Test"
-        & git -C $repositoryPath add --all
-        & git -C $repositoryPath commit -q -m "test fixture"
+        & $script:GitExecutable -C $repositoryPath init -q
+        & $script:GitExecutable -C $repositoryPath config user.email browser-evidence@example.invalid
+        & $script:GitExecutable -C $repositoryPath config user.name "Browser Evidence Self Test"
+        & $script:GitExecutable -C $repositoryPath remote add origin $script:TrustedRepositoryOrigin
+        & $script:GitExecutable -C $repositoryPath add --all
+        & $script:GitExecutable -C $repositoryPath commit -q -m "test fixture"
         if ($LASTEXITCODE -ne 0) { throw "Self-test Git fixture failed." }
-        $testSha = (& git -C $repositoryPath rev-parse HEAD).Trim()
+        $testSha = (& $script:GitExecutable -C $repositoryPath rev-parse HEAD).Trim()
+
+        # Exercise the v0.12.3 metadata gate without enabling hardened dispatch
+        # for the recursive v0.12.2 compatibility fixture below.
+        Assert-HardenedRepositoryMetadata $repositoryPath
+        foreach ($adversarialConfig in @(
+            [pscustomobject]@{ Key = "core.fsmonitor"; Value = "malicious-monitor"; Label = "fsmonitor" },
+            [pscustomobject]@{ Key = "filter.malicious.process"; Value = "malicious-filter"; Label = "process filter" },
+            [pscustomobject]@{ Key = "remote.origin.promisor"; Value = "true"; Label = "promisor remote" }
+        )) {
+            & $script:GitExecutable -C $repositoryPath config $adversarialConfig.Key $adversarialConfig.Value
+            if ($LASTEXITCODE -ne 0) { throw "Self-test could not create adversarial Git config." }
+            $refused = $false
+            try { Assert-HardenedRepositoryMetadata $repositoryPath }
+            catch { $refused = $true }
+            if (-not $refused) {
+                throw "v0.12.3 metadata gate accepted adversarial $($adversarialConfig.Label) config."
+            }
+            & $script:GitExecutable -C $repositoryPath config --unset-all $adversarialConfig.Key
+            if ($LASTEXITCODE -ne 0) { throw "Self-test could not remove adversarial Git config." }
+        }
+        $replaceDirectory = [IO.Path]::Combine($repositoryPath, ".git", "refs", "replace")
+        [IO.Directory]::CreateDirectory($replaceDirectory) | Out-Null
+        [IO.File]::WriteAllText([IO.Path]::Combine($replaceDirectory, $testSha), $testSha + "`n", $script:AsciiStrict)
+        $replaceRefused = $false
+        try { Assert-HardenedRepositoryMetadata $repositoryPath }
+        catch { $replaceRefused = $true }
+        if (-not $replaceRefused) {
+            throw "v0.12.3 metadata gate accepted a replacement-object ref."
+        }
+        [IO.File]::Delete([IO.Path]::Combine($replaceDirectory, $testSha))
+        [IO.Directory]::Delete($replaceDirectory, $false)
+        $promisorPath = [IO.Path]::Combine($repositoryPath, ".git", "objects", "pack", "self-test.promisor")
+        [IO.File]::WriteAllBytes($promisorPath, [byte[]]::new(0))
+        $promisorRefused = $false
+        try { Assert-HardenedRepositoryMetadata $repositoryPath }
+        catch { $promisorRefused = $true }
+        if (-not $promisorRefused) {
+            throw "v0.12.3 metadata gate accepted a promisor object marker."
+        }
+        [IO.File]::Delete($promisorPath)
+        Assert-HardenedRepositoryMetadata $repositoryPath
 
         Add-Type -AssemblyName System.IO.Compression -ErrorAction Stop
         Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
@@ -1073,6 +1311,8 @@ function Invoke-SelfTest {
     }
     Write-Output "Browser candidate binding self-test passed."
 }
+
+Initialize-TrustedGitExecutable
 
 switch ($Mode) {
     "Preflight" { Invoke-Preflight }

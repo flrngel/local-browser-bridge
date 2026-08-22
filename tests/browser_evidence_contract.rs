@@ -3,6 +3,7 @@ use std::fs;
 
 use local_browser_bridge::server::ACTION_METHODS;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 fn source(path: &str) -> String {
     fs::read_to_string(path).unwrap().replace("\r\n", "\n")
@@ -86,12 +87,27 @@ fn candidate_binder_is_exact_external_and_immutable() {
         "Self-test cleanup missing-path probe failed.",
         "Self-test cleanup existing-path probe failed.",
         "$fixtureOwned = $true",
+        "function Initialize-TrustedGitExecutable",
+        "TrustedGitExecutable must be an absolute path for v0.12.3.",
+        "& $script:GitExecutable --no-replace-objects --no-lazy-fetch `",
+        "-c core.fsmonitor=false -c core.hooksPath=$script:EmptyHooksDirectory `",
+        "Preserve the v0.12.2 contract",
+        "Candidate binding lost its version-scoped hardened and legacy Git dispatch.",
     ] {
         assert!(
             script.contains(required),
             "candidate binder is missing {required}"
         );
     }
+
+    assert!(
+        !script.lines().any(|line| {
+            line.trim_start().starts_with("& git ")
+                || line.contains("= & git ")
+                || line.contains("= (& git ")
+        }),
+        "candidate binder must invoke only its resolved Git executable"
+    );
 
     assert!(
         !script.contains("[IO.Directory]::Delete($root, $true)"),
@@ -320,6 +336,299 @@ fn operator_template_reserves_api_coverage_for_the_machine_record() {
 }
 
 #[test]
+fn v0122_browser_protocol_is_byte_exact_while_v0123_uses_schema_two() {
+    let readme_bytes = fs::read("evidence/v0.12.2/browser/README.md").unwrap();
+    let template_bytes =
+        fs::read("evidence/v0.12.2/browser/operator-results.template.json").unwrap();
+    assert_eq!(
+        format!("{:x}", Sha256::digest(readme_bytes)),
+        "07a2088a3bf86188f8274b9651183578fa64ceefcba44bace73bbabfe4b27072"
+    );
+    assert_eq!(
+        format!("{:x}", Sha256::digest(template_bytes)),
+        "abc28e66f4a14426d9d3cca3370354300354bb07e3c973a4d965e0f3606b8ac4"
+    );
+
+    let template: Value = serde_json::from_str(&source(
+        "evidence/v0.12.3/browser/operator-results.template.json",
+    ))
+    .unwrap();
+    let schema: Value = serde_json::from_str(&source(
+        "evidence/v0.12.3/browser/operator-results.schema.json",
+    ))
+    .unwrap();
+    assert_eq!(template["schemaVersion"], 2);
+    assert_eq!(template["extension"]["version"], "0.12.3");
+    assert_eq!(
+        schema["$schema"],
+        "https://json-schema.org/draft/2020-12/schema"
+    );
+    assert_eq!(schema["additionalProperties"], false);
+    assert_eq!(schema["properties"]["schemaVersion"]["const"], 2);
+    assert_eq!(
+        keys(&template),
+        BTreeSet::from([
+            "actionSurfaces",
+            "candidateBinding",
+            "cleanup",
+            "computerHelperChain",
+            "consentCheckpoints",
+            "environment",
+            "evidenceType",
+            "extension",
+            "humanVisualReview",
+            "initialState",
+            "restoration",
+            "retainedEvidence",
+            "schemaVersion",
+            "screenshotCaptures",
+        ])
+    );
+    assert_eq!(template["screenshotCaptures"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        template["computerHelperChain"]["screenshotEndpoint"],
+        "/api/computer/screenshot"
+    );
+    assert_eq!(template["computerHelperChain"]["rawScreenshotCount"], 0);
+    assert_eq!(
+        template["actionSurfaces"]["bridgeApiMatrix"],
+        "local-browser-bridge-api"
+    );
+    assert_eq!(
+        template["actionSurfaces"]["debuggerOwnerDuringBridgeLease"],
+        "local-browser-bridge-extension"
+    );
+    assert_eq!(
+        template["actionSurfaces"]["competingDebuggerAttachmentAllowed"],
+        true
+    );
+    assert_eq!(
+        template["actionSurfaces"]["chromeMcpUsedDuringBridgeLease"],
+        true
+    );
+    assert_eq!(template["initialState"]["candidateExtensionPresent"], true);
+    assert_eq!(template["initialState"]["savedTokenConfigured"], true);
+    assert_eq!(
+        template["cleanup"]["savedTokenClear"]["confirmationDialogShown"],
+        false
+    );
+    assert_eq!(
+        template["cleanup"]["savedTokenClear"]["confirmationAcceptedByHuman"],
+        false
+    );
+    assert_eq!(
+        template["retainedEvidence"]["externalToolAndPlatformLogsScope"],
+        "not-asserted"
+    );
+    for field in [
+        "rawScreenshotScratchDeleted",
+        "pendingReviewRecordsDeleted",
+        "extractedExtensionInventoryVerifiedBeforeDeletion",
+        "extractedExtensionDirectoryDeleted",
+    ] {
+        assert_eq!(template["cleanup"][field], false);
+        assert_eq!(
+            schema["properties"]["cleanup"]["properties"][field]["const"],
+            true
+        );
+    }
+    for capture in template["screenshotCaptures"].as_array().unwrap() {
+        assert_ne!(capture["captureSurface"], "google-chrome-mcp-tab-viewport");
+    }
+}
+
+#[test]
+fn v0123_finalizer_enforces_surface_consent_restoration_and_retention_relations() {
+    let script = source("scripts/write-browser-evidence-record.ps1");
+    let readme = source("evidence/v0.12.3/browser/README.md");
+    for required in [
+        "$script:OperatorV2Version = \"0.12.3\"",
+        "Assert-OperatorResultsV1",
+        "Assert-OperatorResultsV2",
+        "No stock-user-Chrome operator schema is registered",
+        "v$templateVersion",
+        "bridgeApiMatrix",
+        "debuggerOwnerDuringBridgeLease",
+        "The Local Browser Bridge extension must be the exclusive debugger owner during its lease.",
+        "chromeMcpUsedDuringBridgeLease",
+        "chromeMcpReleaseEvidenceClaimed",
+        "Developer Mode change tracking",
+        "Developer Mode change consent",
+        "final value does not equal its captured initial value",
+        "initial candidate extension presence",
+        "final candidate-extension presence",
+        "initial saved token configured",
+        "final saved-token state",
+        "extension-disposition consent",
+        "confirmationDialogShown",
+        "confirmationAcceptedByHuman",
+        "v0.12.3 screenshot identity, helper surface, or visible-state criterion is invalid.",
+        "automationPausedForHumanReview",
+        "postSanitizationAttestationCreated",
+        "Assert-RetainedEvidenceDirectoryV2",
+        "exactly 11 unique inputs",
+        "externalToolAndPlatformLogsScope = \"not-asserted\"",
+        "rawScreenshotScratchDeleted",
+        "pendingReviewRecordsDeleted",
+        "extractedExtensionInventoryVerifiedBeforeDeletion",
+        "extractedExtensionDirectoryDeleted",
+        "Evidence finalizer accepted missing Developer Mode change tracking.",
+        "Evidence finalizer accepted a Developer Mode change without action-time consent.",
+        "Evidence finalizer accepted a Developer Mode change when the required test state already matched.",
+        "Evidence finalizer accepted a Developer Mode restoration mismatch.",
+        "Evidence finalizer accepted a Full Access restoration mismatch.",
+        "Evidence finalizer accepted test-copy removal without ownership consent.",
+        "Evidence finalizer accepted candidate installation without ownership consent.",
+        "Evidence finalizer accepted an existing candidate extension identity.",
+        "Evidence finalizer accepted an initially configured saved token.",
+        "Evidence finalizer accepted a configured final saved token.",
+        "Evidence finalizer accepted a retained test-owned extension identity.",
+        "Evidence finalizer accepted a non-removal disposition for the test-owned identity.",
+        "Evidence finalizer accepted a browser-chrome screenshot from Chrome MCP.",
+        "Evidence finalizer accepted a screenshot surface inconsistent with the declared capture surface.",
+        "Evidence finalizer accepted Chrome MCP use during an active bridge debugger lease.",
+        "Evidence finalizer accepted a Chrome MCP release-evidence claim.",
+        "Evidence finalizer accepted a competing debugger attachment during the bridge lease.",
+        "Evidence finalizer accepted an incomplete clear-token confirmation.",
+        "Evidence finalizer accepted an automated visual-review assertion.",
+        "Evidence finalizer accepted review asserted before post-sanitization attestation.",
+        "Evidence finalizer accepted retained raw screenshot scratch data.",
+        "Evidence finalizer accepted retained pending-review records.",
+        "Evidence finalizer accepted unverified extracted-extension cleanup.",
+        "Evidence finalizer accepted a retained extracted-extension directory.",
+        "Evidence finalizer complete v0.12.3 self-test failed.",
+    ] {
+        assert!(
+            script.contains(required),
+            "v0.12.3 finalizer is missing {required}"
+        );
+    }
+    for required in [
+        "Local Browser Bridge attaches `chrome.debugger`",
+        "Chrome permits only one debugger client",
+        "Chrome MCP cannot coexist",
+        "Windows Computer Use application sharing",
+        "The Local Browser Bridge API executes the browser method matrix.",
+        "chromeMcpUsedDuringBridgeLease:false",
+        "competingDebuggerAttachmentAllowed:false",
+        "chromeMcpReleaseEvidenceClaimed:false",
+        "chromeMcpReleasedOrNotUsed:true",
+        "native **Load unpacked** picker",
+        "Browser Bridge popup",
+        "Consent cannot be collected as one blanket approval",
+        "new-install-only",
+        "card exists before **Load unpacked**",
+        "initially unconfigured",
+        "confirmationAcceptedByHuman:true",
+        "Automation must then pause.",
+        "Exact purpose-and-image-digest-bound human review receipt",
+        "AttestReview refused a missing or mismatched per-image human receipt.",
+        "-Mode AttestReview",
+        "manualVisualReviewConfirmed:false",
+        "acceptance-evidence-directory-only",
+        "imported or cited as release evidence",
+        "Repository HEAD does not equal FINAL_SHA.",
+        "Repository HEAD must be detached.",
+        "Repository checkout must be clean, including untracked files.",
+        "Repository checkout must not contain ignored files.",
+        "A repository evidence script does not byte-match FINAL_SHA.",
+        "Export-ExactTrustedBlob",
+        "Materialized trusted blob does not byte-match FINAL_SHA.",
+        "GITHUB_",
+        "Independent least-privilege GitHub acceptance token",
+        "-NoLogo -NoProfile -File",
+        "LBB_CLEAN_COORDINATOR_NONCE",
+        "self-spawned 64-bit -NoProfile child",
+        "$SecureGhToken.Dispose()",
+        "$Info.EnvironmentVariables[\"GH_TOKEN\"] = $ChildToken",
+        "--hostname github.com",
+        "try {\n$Repository = New-PrivateEmptyDirectory",
+        "Remove-ExactFlatOwnedDirectory $RawScreenshotDirectory",
+        "Remove-ExactFlatOwnedDirectory $ExtensionDirectory",
+        "Acceptance cleanup failed and passing output was invalidated",
+        "-PassThruOwnedTarget",
+        "-ComputerHelperRecord",
+        "browser-computer-helper-chain.json",
+        "browser-01-extension-loaded.png",
+        "browser-02-api-action-result.png",
+        "browser-03-computer-share-action.png",
+        "computer.status` results before and after `Control+N",
+        "-Mode Postflight",
+        "rawScreenshotScratchDeleted:true",
+        "pendingReviewRecordsDeleted:true",
+        "extractedExtensionDirectoryDeleted:true",
+    ] {
+        assert!(
+            readme.contains(required),
+            "v0.12.3 protocol is missing {required}"
+        );
+    }
+    let asset_hash = readme.find("$ObservedAssetSha =").unwrap();
+    let attest = readme
+        .find("$Info.Arguments = \"attestation verify")
+        .unwrap();
+    let head = readme.find("$ObservedHead =").unwrap();
+    let detached = readme.find("$SymbolicHead =").unwrap();
+    let clean = readme.find("$Dirty =").unwrap();
+    let ignored = readme.find("$Ignored =").unwrap();
+    let blob = readme.find("$ExpectedBlob =").unwrap();
+    let materialized = readme
+        .find("Export-ExactTrustedBlob $ExpectedBlob $Relative")
+        .unwrap();
+    let extraction = readme
+        .find("[IO.Compression.ZipFile]::ExtractToDirectory")
+        .unwrap();
+    let first_repo_script = readme
+        .find("& \"$Scripts\\browser-evidence-candidate.ps1\"")
+        .unwrap();
+    assert!(
+        asset_hash < attest
+            && attest < head
+            && head < detached
+            && detached < clean
+            && clean < ignored
+            && ignored < blob
+            && blob < materialized
+            && materialized < extraction
+            && blob < extraction
+            && extraction < first_repo_script,
+        "all external trust gates and direct blob materialization must precede extraction and trusted-script execution"
+    );
+    assert_eq!(
+        readme
+            .matches("[IO.Compression.ZipFile]::ExtractToDirectory")
+            .count(),
+        1
+    );
+    assert!(!readme.contains("For an upgrade"));
+    assert!(!readme.contains("install/upgrade"));
+    assert!(!readme.contains("verify-release-assets.sh"));
+    assert!(!readme.contains("& git -C $Repository"));
+    assert!(!readme.contains("& gh "));
+    let directory_creation = readme
+        .find("$Repository = New-PrivateEmptyDirectory")
+        .unwrap();
+    let outer_try = readme[..directory_creation].rfind("try {").unwrap();
+    let finalizer = readme
+        .find("& \"$Scripts\\write-browser-evidence-record.ps1\" -Mode Finalize")
+        .unwrap();
+    let outer_finally = readme[finalizer..].find("finally {").unwrap() + finalizer;
+    assert!(
+        outer_try < directory_creation
+            && directory_creation < finalizer
+            && finalizer < outer_finally
+    );
+
+    let sanitize = readme.find("-Mode Sanitize").unwrap();
+    let pause = readme.find("Automation must then pause.").unwrap();
+    let review_receipt = readme
+        .find("Exact purpose-and-image-digest-bound human review receipt")
+        .unwrap();
+    let attest_review = readme.find("-Mode AttestReview").unwrap();
+    assert!(sanitize < pause && pause < review_receipt && review_receipt < attest_review);
+}
+
+#[test]
 fn finalizer_is_allowlisted_and_requires_handback_polling_cleanup_and_review() {
     let script = source("scripts/write-browser-evidence-record.ps1");
     for required in [
@@ -343,7 +652,7 @@ fn finalizer_is_allowlisted_and_requires_handback_polling_cleanup_and_review() {
         "resultVerified",
         "postconditionVerified",
         "machine-command-result-postcondition",
-        "$script:MethodScreenshots[$item.name]",
+        "$expectedScreenshotMap[$item.name]",
         "Evidence finalizer accepted a boolean as an integer.",
         "Evidence finalizer accepted an undersized screenshot.",
         "Evidence finalizer accepted a matrix method without a verified postcondition.",
@@ -390,8 +699,22 @@ fn screenshot_tool_strips_metadata_but_never_claims_unknown_pixel_redaction() {
     let script = source("scripts/sanitize-browser-evidence-screenshot.ps1");
     let finalizer = source("scripts/write-browser-evidence-record.ps1");
     let readme = source("evidence/v0.12.2/browser/README.md");
+    let v013_readme = source("evidence/v0.12.3/browser/README.md");
     for required in [
-        "ManualVisualReviewConfirmed is mandatory",
+        "ManualVisualReviewConfirmed is mandatory for v0.12.2 compatibility.",
+        "ManualVisualReviewConfirmed is valid only for AttestReview after a human has inspected the sanitized PNG.",
+        "AttestReview requires action-time confirmation after a human inspected the sanitized PNG.",
+        "stock-user-chrome-screenshot-review-pending",
+        "manualVisualReviewConfirmed = $legacyOnePhase",
+        "$pending.manualVisualReviewConfirmed -ne $false",
+        "$script:PendingReviewStatement",
+        "$script:CompletedReviewStatement",
+        "$script:LegacyReviewStatement",
+        "$script:CandidateVersionFromPreflight",
+        "AttestReview is available only for the v0.12.3 two-phase screenshot protocol.",
+        "The sanitized PNG changed after its pending review record was created.",
+        "Screenshot sanitizer accepted review confirmation before creating the sanitized crop.",
+        "Legacy v0.12.2 screenshot sanitization compatibility failed.",
         "metadataStrippedByDecodeAndReencode = $true",
         "forbiddenMetadataChunksPresent = $false",
         "automaticPixelRedactionPerformed = $false",
@@ -440,6 +763,15 @@ fn screenshot_tool_strips_metadata_but_never_claims_unknown_pixel_redaction() {
     assert!(!script.contains("unknownPixelSafetyClaimed = $true"));
     assert!(!script.contains("popup-release-after"));
     assert!(!script.contains("popup-release-paused-popup"));
+    let sanitize = v013_readme.find("-Mode Sanitize").unwrap();
+    let human_pause = v013_readme.find("Automation must then pause.").unwrap();
+    let review_receipt = v013_readme
+        .find("Exact purpose-and-image-digest-bound human review receipt")
+        .unwrap();
+    let attest = v013_readme.find("-Mode AttestReview").unwrap();
+    assert!(sanitize < human_pause && human_pause < review_receipt && review_receipt < attest);
+    assert!(readme.contains("-Mode Sanitize"));
+    assert!(readme.contains("-ManualVisualReviewConfirmed"));
 }
 
 #[test]
@@ -602,6 +934,7 @@ fn token_cleanup_proof_is_bound_to_the_trusted_popup_and_reduced_state() {
     let popup_script = source("extension/popup.js");
     let finalizer = source("scripts/write-browser-evidence-record.ps1");
     let readme = source("evidence/v0.12.2/browser/README.md");
+    let v013_readme = source("evidence/v0.12.3/browser/README.md");
 
     for required in [
         "id=\"clear-token\"",
@@ -611,6 +944,7 @@ fn token_cleanup_proof_is_bound_to_the_trusted_popup_and_reduced_state() {
         assert!(popup.contains(required), "popup is missing {required}");
     }
     for required in [
+        "confirm(\"Clear the saved extension token and disconnect now?",
         "update(\"clearSavedToken\")",
         "ui.clearToken.disabled = !next.tokenConfigured",
     ] {
@@ -648,6 +982,100 @@ fn token_cleanup_proof_is_bound_to_the_trusted_popup_and_reduced_state() {
     }
     assert!(readme.contains("Do not inspect `chrome.storage`"));
     assert!(readme.contains("never the token or raw extension storage"));
+    assert!(v013_readme.contains("wait for the popup's native `confirm()` dialog"));
+    assert!(v013_readme.contains("confirmationAcceptedByHuman:true"));
+}
+
+#[test]
+fn v0123_computer_helper_chain_is_live_exact_window_and_three_capture_bound() {
+    let recorder = source("scripts/record-computer-helper-chain.ps1");
+    let finalizer = source("scripts/write-browser-evidence-record.ps1");
+    let schema: Value = serde_json::from_str(&source(
+        "evidence/v0.12.3/browser/computer-helper-chain.schema.json",
+    ))
+    .unwrap();
+
+    for required in [
+        "$script:Source = \"local-browser-bridge-computer-helper-via-loopback-api\"",
+        "Invoke-LoopbackJson \"/api/v1/command\"",
+        "computer.share.start",
+        "computer.share.stop",
+        "[void](Bind-NewDedicatedChromeWindow)",
+        "Control+N did not produce exactly one new stock-Chrome window",
+        "Get-ExactChromeWindow $script:DedicatedWindowId $script:DedicatedWindowPid",
+        "Test-ExactObservationIdentity",
+        "Test-ExactSharedFrame",
+        "Get-FreshSharedFrame $Context \"the $Purpose screenshot\"",
+        "Never accept response-state observation as post-action authority",
+        "accepted an observation from a reused HWND/wrong PID",
+        "accepted an observation from a non-Chrome application",
+        "Set-MutationDisposition $mutation \"DedicatedWindow\" \"outcome_unknown\"",
+        "not_attempted",
+        "verified_applied",
+        "outcome_unknown",
+        "Read-RollbackCandidateCardState",
+        "Select Folder button in Chrome's native picker",
+        "the exact existing chrome://extensions tab",
+        "Stop-Process -Id $helperProcess.Id -Force",
+        "UI rollback was unavailable because the exact helper/server transport was not alive",
+    ] {
+        assert!(
+            recorder.contains(required),
+            "live helper recorder is missing {required}"
+        );
+    }
+    let screenshot_recorder = recorder
+        .split("function Save-RecordedScreenshot")
+        .nth(1)
+        .unwrap()
+        .split("function Invoke-BrowserCommand")
+        .next()
+        .unwrap();
+    assert!(screenshot_recorder.contains("Get-FreshSharedFrame"));
+    assert!(!screenshot_recorder.contains("Get-FreshObservation"));
+    for forbidden in [
+        "[string]$JournalRecord",
+        "MayBeChanged",
+        "MayExist",
+        "computer.helper.shutdown",
+    ] {
+        assert!(
+            !recorder.contains(forbidden),
+            "live helper recorder retains self-asserted or unsafe state: {forbidden}"
+        );
+    }
+
+    assert_eq!(schema["properties"]["screenshots"]["minItems"], 3);
+    assert_eq!(schema["properties"]["screenshots"]["maxItems"], 3);
+    assert_eq!(schema["properties"]["windowEpochs"]["minItems"], 9);
+    assert_eq!(schema["properties"]["windowEpochs"]["maxItems"], 9);
+    assert_eq!(schema["properties"]["actions"]["minItems"], 19);
+    assert_eq!(schema["properties"]["actions"]["maxItems"], 19);
+    assert_eq!(
+        schema["properties"]["windowBinding"]["properties"]["dedicatedCreatedAsOnlyNewChromeWindow"]
+            ["const"],
+        true
+    );
+    assert_eq!(
+        schema["$defs"]["epoch"]["properties"]["application"]["const"],
+        "google-chrome"
+    );
+
+    for required in [
+        "Dedicated Chrome epochs must bind the same exact native window and process.",
+        "computer-helper sole-new dedicated target creation",
+        "The native picker action must type the exact directory and invoke Select Folder.",
+        "Cleanup must switch to chrome://extensions before the exact card removal and confirmation.",
+        "The computer-helper record must bind exactly three raw exact-window screenshots.",
+        "A sanitized screenshot sidecar does not bind its exact helper-captured raw PNG.",
+        "Evidence finalizer accepted a different dedicated Chrome window in a later epoch.",
+        "Evidence finalizer accepted a dedicated window without a sole-new status delta.",
+    ] {
+        assert!(
+            finalizer.contains(required),
+            "helper finalizer is missing {required}"
+        );
+    }
 }
 
 #[test]
@@ -657,8 +1085,13 @@ fn new_browser_evidence_files_are_english_only() {
         "scripts/sanitize-browser-evidence-screenshot.ps1",
         "scripts/test-windows-browser-api.ps1",
         "scripts/write-browser-evidence-record.ps1",
+        "scripts/record-computer-helper-chain.ps1",
         "evidence/v0.12.2/browser/README.md",
         "evidence/v0.12.2/browser/operator-results.template.json",
+        "evidence/v0.12.3/browser/README.md",
+        "evidence/v0.12.3/browser/operator-results.template.json",
+        "evidence/v0.12.3/browser/operator-results.schema.json",
+        "evidence/v0.12.3/browser/computer-helper-chain.schema.json",
     ] {
         let text = source(path);
         assert!(

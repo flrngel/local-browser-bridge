@@ -125,6 +125,33 @@ $MethodScreenshots = [ordered]@{
     "page.batch"             = "N/A"
     "page.handleDialog"      = "N/A"
 }
+$MethodScreenshotsV2 = [ordered]@{
+    "status"                 = "N/A"
+    "browser.control.start"  = "browser-01-extension-loaded.png"
+    "browser.control.status" = "N/A"
+    "browser.control.stop"   = "N/A"
+    "tabs.list"              = "N/A"
+    "tabs.activate"          = "N/A"
+    "tabs.new"               = "N/A"
+    "tabs.close"             = "N/A"
+    "page.observe"           = "N/A"
+    "page.navigate"          = "N/A"
+    "page.back"              = "N/A"
+    "page.forward"           = "N/A"
+    "page.reload"            = "N/A"
+    "page.click"             = "browser-02-api-action-result.png"
+    "page.fill"              = "browser-02-api-action-result.png"
+    "page.select"            = "browser-02-api-action-result.png"
+    "page.key"               = "N/A"
+    "page.scroll"            = "N/A"
+    "page.clickAt"           = "N/A"
+    "page.typeText"          = "N/A"
+    "page.evaluate"          = "browser-02-api-action-result.png"
+    "page.waitFor"           = "N/A"
+    "page.hover"             = "N/A"
+    "page.batch"             = "N/A"
+    "page.handleDialog"      = "N/A"
+}
 
 $AssertionNames = @(
     "serverVersionMatched",
@@ -231,20 +258,25 @@ function Get-CandidateBindingFromPreflight {
         foreach ($value in @(
             [string]$record.candidate.checksumManifest.sha256,
             [string]$record.candidate.server.sha256,
+            $(if ($Version -ceq "0.12.3") { [string]$record.candidate.computerHelper.sha256 } else { [string]$record.candidate.server.sha256 }),
             [string]$record.candidate.extension.sha256,
             [string]$record.candidate.extension.combinedPayloadSha256
         )) {
             Assert-Acceptance ($value -cmatch '^[0-9a-f]{64}$') "preflight-candidate-hash"
         }
-        return [pscustomobject][ordered]@{
+        $binding = [ordered]@{
             runNonce = [string]$record.runNonce
             preflightRecordSha256 = Get-BytesSha256 $bytes
             finalSha = [string]$record.candidate.finalSha
             checksumManifestSha256 = [string]$record.candidate.checksumManifest.sha256
             serverSha256 = [string]$record.candidate.server.sha256
-            extensionZipSha256 = [string]$record.candidate.extension.sha256
-            extractedPayloadSha256 = [string]$record.candidate.extension.combinedPayloadSha256
         }
+        if ($Version -ceq "0.12.3") {
+            $binding.computerHelperSha256 = [string]$record.candidate.computerHelper.sha256
+        }
+        $binding.extensionZipSha256 = [string]$record.candidate.extension.sha256
+        $binding.extractedPayloadSha256 = [string]$record.candidate.extension.combinedPayloadSha256
+        return [pscustomobject]$binding
     }
     finally {
         [Array]::Clear($bytes, 0, $bytes.Length)
@@ -297,13 +329,20 @@ function Assert-ReducedEvidenceRecord {
     Assert-Acceptance ($Record.evidenceType -ceq "stock-user-chrome-api-matrix") "record-type"
     Assert-Acceptance ($Record.version -match '^[0-9]+\.[0-9]+\.[0-9]+$') "record-version"
     Assert-Acceptance ($Record.target -ceq "loopback-demo") "record-target"
-    Assert-ExactPropertyOrder $Record.candidateBinding @(
+    $bindingFields = @(
         "runNonce", "preflightRecordSha256", "finalSha", "checksumManifestSha256",
         "serverSha256", "extensionZipSha256", "extractedPayloadSha256"
-    ) "record-candidate-binding"
+    )
+    if ($Version -ceq "0.12.3") {
+        $bindingFields = @(
+            "runNonce", "preflightRecordSha256", "finalSha", "checksumManifestSha256",
+            "serverSha256", "computerHelperSha256", "extensionZipSha256", "extractedPayloadSha256"
+        )
+    }
+    Assert-ExactPropertyOrder $Record.candidateBinding $bindingFields "record-candidate-binding"
     Assert-Acceptance ([string]$Record.candidateBinding.runNonce -cmatch '^[0-9a-f]{64}$') "record-run-nonce"
     Assert-Acceptance ([string]$Record.candidateBinding.finalSha -cmatch '^[0-9a-f]{40}$') "record-final-sha"
-    foreach ($name in @("preflightRecordSha256", "checksumManifestSha256", "serverSha256", "extensionZipSha256", "extractedPayloadSha256")) {
+    foreach ($name in @($bindingFields | Where-Object { $_ -like "*Sha256" })) {
         Assert-Acceptance ([string]$Record.candidateBinding.$name -cmatch '^[0-9a-f]{64}$') "record-candidate-hash"
     }
     Assert-Acceptance (($Record.candidateBinding | ConvertTo-Json -Depth 5 -Compress) -ceq
@@ -378,15 +417,19 @@ function Test-RejectedEvidence {
 }
 
 function Invoke-RecordSelfTest {
-    $script:CandidateBinding = [pscustomobject][ordered]@{
+    $selfTestBinding = [ordered]@{
         runNonce = [String]::new([char]"a", 64)
         preflightRecordSha256 = [String]::new([char]"b", 64)
         finalSha = [String]::new([char]"c", 40)
         checksumManifestSha256 = [String]::new([char]"d", 64)
         serverSha256 = [String]::new([char]"e", 64)
-        extensionZipSha256 = [String]::new([char]"f", 64)
-        extractedPayloadSha256 = [String]::new([char]"0", 64)
     }
+    if ($Version -ceq "0.12.3") {
+        $selfTestBinding.computerHelperSha256 = [String]::new([char]"1", 64)
+    }
+    $selfTestBinding.extensionZipSha256 = [String]::new([char]"f", 64)
+    $selfTestBinding.extractedPayloadSha256 = [String]::new([char]"0", 64)
+    $script:CandidateBinding = [pscustomobject]$selfTestBinding
     foreach ($method in $ActionMethods) {
         $MethodPassed[$method] = $true
         $MethodCommandInvoked[$method] = $true
@@ -443,6 +486,9 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 }
 if ([String]::IsNullOrWhiteSpace($Version) -or $Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
     throw "Version must be an explicit stable semantic version."
+}
+if ($Version -ceq "0.12.3") {
+    $MethodScreenshots = $MethodScreenshotsV2
 }
 if ([String]::IsNullOrWhiteSpace($PreflightRecord)) {
     throw "PreflightRecord must name the exact candidate preflight record."
