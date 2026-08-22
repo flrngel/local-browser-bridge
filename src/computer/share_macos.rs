@@ -51,6 +51,12 @@ pub(crate) struct NativeShareFrame {
     pub(crate) captured_at: Instant,
 }
 
+pub(crate) fn bind_frame_geometry(_frame: &NativeShareFrame, _target: &mut WindowDescriptor) {
+    // ScreenCaptureKit's macOS path keeps its existing current-window
+    // revalidation. Windows supplies a capture-time DWM geometry sample
+    // because WGC frame size and later HWND enumeration can otherwise race.
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct NativeShareMetadata {
     pub(crate) backend: &'static str,

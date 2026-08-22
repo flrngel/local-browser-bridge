@@ -1,8 +1,15 @@
+use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
 use std::env;
+#[cfg(target_os = "windows")]
+use std::ffi::c_void;
+#[cfg(target_os = "windows")]
+use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+#[cfg(target_os = "windows")]
+use std::time::Instant;
 
 use futures_util::{SinkExt as _, StreamExt as _};
 use local_browser_bridge::computer::{
@@ -20,12 +27,161 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tokio_tungstenite::{WebSocketStream, connect_async};
 
+const COMMAND_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(12);
+const FATAL_REPORT_TIMEOUT: Duration = Duration::from_millis(250);
+const FATAL_CAPTURE_STOP_CODE: &str = "COMPUTER_CAPTURE_STOP_FATAL";
+const FATAL_CAPTURE_STOP_DETAIL: &str = "COMPUTER_CAPTURE_STOP_FATAL:";
+const WATCHDOG_EXIT_CODE: i32 = 70;
+const CAPTURE_STOP_EXIT_CODE: i32 = 71;
+#[cfg(target_os = "windows")]
+const TRANSPORT_EXIT_CODE: i32 = 72;
+const OUTCOME_UNKNOWN_EXIT_CODE: i32 = 73;
+
+#[cfg(target_os = "windows")]
+const SUPERVISOR_POLL_INTERVAL: Duration = Duration::from_millis(100);
+#[cfg(target_os = "windows")]
+const SUPERVISOR_INITIAL_BACKOFF: Duration = Duration::from_millis(250);
+#[cfg(target_os = "windows")]
+const SUPERVISOR_MAX_BACKOFF: Duration = Duration::from_secs(5);
+#[cfg(target_os = "windows")]
+const SUPERVISOR_STABLE_RUN: Duration = Duration::from_secs(30);
+
+#[cfg(target_os = "windows")]
+const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION: i32 = 9;
+#[cfg(target_os = "windows")]
+const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x0000_2000;
+#[cfg(target_os = "windows")]
+const CREATE_SUSPENDED: u32 = 0x0000_0004;
+#[cfg(target_os = "windows")]
+const WAIT_OBJECT_0: u32 = 0;
+#[cfg(target_os = "windows")]
+const WAIT_TIMEOUT: u32 = 258;
+#[cfg(target_os = "windows")]
+const WAIT_FAILED: u32 = u32::MAX;
+#[cfg(target_os = "windows")]
+const PROCESS_TERMINATION_TIMEOUT_MS: u32 = 5_000;
+#[cfg(target_os = "windows")]
+const EVENT_MODIFY_STATE: u32 = 0x0002;
+#[cfg(target_os = "windows")]
+const SYNCHRONIZE: u32 = 0x0010_0000;
+
+#[cfg(target_os = "windows")]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn CreateJobObjectW(attributes: *const c_void, name: *const u16) -> *mut c_void;
+    fn SetInformationJobObject(
+        job: *mut c_void,
+        information_class: i32,
+        information: *const c_void,
+        information_length: u32,
+    ) -> i32;
+    fn AssignProcessToJobObject(job: *mut c_void, process: *mut c_void) -> i32;
+    fn CreateEventW(
+        event_attributes: *const c_void,
+        manual_reset: i32,
+        initial_state: i32,
+        name: *const u16,
+    ) -> *mut c_void;
+    fn OpenEventW(desired_access: u32, inherit_handle: i32, name: *const u16) -> *mut c_void;
+    fn SetEvent(event: *mut c_void) -> i32;
+    fn CreateProcessW(
+        application_name: *const u16,
+        command_line: *mut u16,
+        process_attributes: *const c_void,
+        thread_attributes: *const c_void,
+        inherit_handles: i32,
+        creation_flags: u32,
+        environment: *const c_void,
+        current_directory: *const u16,
+        startup_info: *const StartupInfoW,
+        process_information: *mut ProcessInformation,
+    ) -> i32;
+    fn ResumeThread(thread: *mut c_void) -> u32;
+    fn WaitForSingleObject(handle: *mut c_void, milliseconds: u32) -> u32;
+    fn GetExitCodeProcess(process: *mut c_void, exit_code: *mut u32) -> i32;
+    fn TerminateProcess(process: *mut c_void, exit_code: u32) -> i32;
+    fn CloseHandle(handle: *mut c_void) -> i32;
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+#[derive(Default)]
+struct JobBasicLimitInformation {
+    per_process_user_time_limit: i64,
+    per_job_user_time_limit: i64,
+    limit_flags: u32,
+    minimum_working_set_size: usize,
+    maximum_working_set_size: usize,
+    active_process_limit: u32,
+    affinity: usize,
+    priority_class: u32,
+    scheduling_class: u32,
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+#[derive(Default)]
+struct IoCounters {
+    read_operation_count: u64,
+    write_operation_count: u64,
+    other_operation_count: u64,
+    read_transfer_count: u64,
+    write_transfer_count: u64,
+    other_transfer_count: u64,
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+#[derive(Default)]
+struct JobExtendedLimitInformation {
+    basic_limit_information: JobBasicLimitInformation,
+    io_info: IoCounters,
+    process_memory_limit: usize,
+    job_memory_limit: usize,
+    peak_process_memory_used: usize,
+    peak_job_memory_used: usize,
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct StartupInfoW {
+    cb: u32,
+    reserved: *mut u16,
+    desktop: *mut u16,
+    title: *mut u16,
+    x: u32,
+    y: u32,
+    x_size: u32,
+    y_size: u32,
+    x_count_chars: u32,
+    y_count_chars: u32,
+    fill_attribute: u32,
+    flags: u32,
+    show_window: u16,
+    reserved_size: u16,
+    reserved_bytes: *mut u8,
+    standard_input: *mut c_void,
+    standard_output: *mut c_void,
+    standard_error: *mut c_void,
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct ProcessInformation {
+    process: *mut c_void,
+    thread: *mut c_void,
+    process_id: u32,
+    thread_id: u32,
+}
+
 #[derive(Default)]
 struct Cli {
     show_help: bool,
     show_version: bool,
     request_permissions: bool,
     benchmark: bool,
+    #[cfg(target_os = "windows")]
+    worker: bool,
 }
 
 #[tokio::main]
@@ -46,6 +202,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .into());
     }
+
+    #[cfg(target_os = "windows")]
+    if !cli.worker && !cli.request_permissions && !cli.benchmark {
+        return supervise_worker().await;
+    }
+
     let mut controller = ComputerController::new();
     if cli.request_permissions {
         println!(
@@ -62,6 +224,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    run_worker(controller).await
+}
+
+async fn run_worker(controller: ComputerController) -> Result<(), Box<dyn std::error::Error>> {
     let port = parse_port(env::var("LBB_PORT").ok().as_deref())?;
     let token_path = env::var_os("LBB_TOKEN_PATH")
         .map(PathBuf::from)
@@ -80,30 +246,385 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let controller = Arc::new(Mutex::new(controller));
-    let mut backoff = Duration::from_millis(250);
-    loop {
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
-                println!("Stopping...");
-                break;
+    #[cfg(target_os = "windows")]
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            println!("Stopping...");
+            terminate_worker(0);
+        }
+        result = run_session(port, &token, Arc::clone(&controller)) => {
+            match result {
+                Ok(()) => eprintln!("Bridge connection closed; restarting the disposable worker."),
+                Err(error) => eprintln!("Bridge session ended: {error}; restarting the disposable worker."),
             }
-            result = run_session(port, &token, Arc::clone(&controller)) => {
-                match result {
-                    Ok(()) => {
-                        backoff = Duration::from_millis(250);
-                        eprintln!("Bridge connection closed; reconnecting.");
+            terminate_worker(TRANSPORT_EXIT_CODE);
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let mut backoff = Duration::from_millis(250);
+        loop {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    println!("Stopping...");
+                    break;
+                }
+                result = run_session(port, &token, Arc::clone(&controller)) => {
+                    match result {
+                        Ok(()) => {
+                            backoff = Duration::from_millis(250);
+                            eprintln!("Bridge connection closed; reconnecting.");
+                        }
+                        Err(error) => eprintln!("Bridge unavailable: {error}; reconnecting."),
                     }
-                    Err(error) => eprintln!("Bridge unavailable: {error}; reconnecting."),
                 }
             }
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => break,
+                _ = tokio::time::sleep(backoff) => {}
+            }
+            backoff = (backoff * 2).min(Duration::from_secs(5));
         }
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => break,
-            _ = tokio::time::sleep(backoff) => {}
-        }
-        backoff = (backoff * 2).min(Duration::from_secs(5));
+        Ok(())
     }
-    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+async fn supervise_worker() -> Result<(), Box<dyn std::error::Error>> {
+    let mut backoff = SUPERVISOR_INITIAL_BACKOFF;
+    // The acceptance-only event is owned by the supervisor so its signaled
+    // state survives the deliberately terminated first worker. It is selected
+    // only by launch-time environment, never by the bridge protocol.
+    let _test_share_pump_fault = TestSharePumpFaultEvent::create_from_environment()?;
+
+    println!("Local Computer Helper {VERSION}");
+    println!("Supervising the disposable computer-control worker; press Ctrl+C to stop.");
+
+    loop {
+        let mut child = match spawn_worker() {
+            Ok(child) => child,
+            Err(error) => {
+                eprintln!("Could not start the computer-control worker: {error}");
+                if wait_for_restart(backoff).await {
+                    println!("Stopping...");
+                    return Ok(());
+                }
+                backoff = (backoff * 2).min(SUPERVISOR_MAX_BACKOFF);
+                continue;
+            }
+        };
+        let started_at = Instant::now();
+
+        let status = loop {
+            tokio::select! {
+                biased;
+                signal = tokio::signal::ctrl_c() => {
+                    signal?;
+                    child.terminate();
+                    println!("Stopping...");
+                    return Ok(());
+                }
+                _ = tokio::time::sleep(SUPERVISOR_POLL_INTERVAL) => {
+                    if let Some(status) = child.try_wait()? {
+                        break status;
+                    }
+                }
+            }
+        };
+
+        let runtime = started_at.elapsed();
+        eprintln!("Computer-control worker exited with {status}; restarting.");
+        if runtime >= SUPERVISOR_STABLE_RUN {
+            backoff = SUPERVISOR_INITIAL_BACKOFF;
+        }
+        if wait_for_restart(backoff).await {
+            println!("Stopping...");
+            return Ok(());
+        }
+        backoff = (backoff * 2).min(SUPERVISOR_MAX_BACKOFF);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_worker() -> std::io::Result<SupervisedWorker> {
+    let job = KillOnCloseJob::new()?;
+    let mut child = SuspendedWorkerProcess::create()?;
+    if let Err(error) = job.assign(&child) {
+        child.terminate();
+        return Err(error);
+    }
+    if let Err(error) = child.resume() {
+        child.terminate();
+        return Err(error);
+    }
+    Ok(SupervisedWorker::new(child, job))
+}
+
+#[cfg(target_os = "windows")]
+async fn wait_for_restart(backoff: Duration) -> bool {
+    tokio::select! {
+        biased;
+        _ = tokio::signal::ctrl_c() => true,
+        _ = tokio::time::sleep(backoff) => false,
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct SupervisedWorker {
+    child: Option<SuspendedWorkerProcess>,
+    job: Option<KillOnCloseJob>,
+}
+
+#[cfg(target_os = "windows")]
+impl SupervisedWorker {
+    fn new(child: SuspendedWorkerProcess, job: KillOnCloseJob) -> Self {
+        Self {
+            child: Some(child),
+            job: Some(job),
+        }
+    }
+
+    fn try_wait(&mut self) -> std::io::Result<Option<u32>> {
+        self.child
+            .as_mut()
+            .expect("supervised child is present")
+            .try_wait()
+    }
+
+    fn terminate(&mut self) {
+        // Closing the supervisor's last job handle terminates the worker (and
+        // any descendants) even if the ordinary process handle is stale.
+        drop(self.job.take());
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        child.terminate();
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct KillOnCloseJob {
+    handle: usize,
+}
+
+#[cfg(target_os = "windows")]
+impl KillOnCloseJob {
+    fn new() -> std::io::Result<Self> {
+        let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if handle.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        let job = Self {
+            handle: handle as usize,
+        };
+        let limits = kill_on_close_limits();
+        let information_length = u32::try_from(std::mem::size_of_val(&limits))
+            .expect("Windows job information size fits in u32");
+        let configured = unsafe {
+            SetInformationJobObject(
+                job.raw(),
+                JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+                std::ptr::from_ref(&limits).cast(),
+                information_length,
+            )
+        };
+        if configured == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(job)
+    }
+
+    fn assign(&self, child: &SuspendedWorkerProcess) -> std::io::Result<()> {
+        let assigned = unsafe { AssignProcessToJobObject(self.raw(), child.raw_process()) };
+        if assigned == 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn raw(&self) -> *mut c_void {
+        self.handle as *mut c_void
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for KillOnCloseJob {
+    fn drop(&mut self) {
+        let _ = unsafe { CloseHandle(self.raw()) };
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct TestSharePumpFaultEvent {
+    handle: usize,
+}
+
+#[cfg(target_os = "windows")]
+impl TestSharePumpFaultEvent {
+    fn create_from_environment() -> std::io::Result<Option<Self>> {
+        let Some(name) = test_share_pump_fault_event_name() else {
+            return Ok(None);
+        };
+        let handle = unsafe { CreateEventW(std::ptr::null(), 1, 0, name.as_ptr()) };
+        if handle.is_null() {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(Some(Self {
+                handle: handle as usize,
+            }))
+        }
+    }
+
+    fn raw(&self) -> *mut c_void {
+        self.handle as *mut c_void
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for TestSharePumpFaultEvent {
+    fn drop(&mut self) {
+        let _ = unsafe { CloseHandle(self.raw()) };
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn kill_on_close_limits() -> JobExtendedLimitInformation {
+    let mut limits = JobExtendedLimitInformation::default();
+    limits.basic_limit_information.limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    limits
+}
+
+#[cfg(target_os = "windows")]
+struct SuspendedWorkerProcess {
+    process: usize,
+    thread: Option<usize>,
+}
+
+#[cfg(target_os = "windows")]
+impl SuspendedWorkerProcess {
+    fn create() -> std::io::Result<Self> {
+        let executable = env::current_exe()?;
+        let executable_wide: Vec<u16> = executable.as_os_str().encode_wide().collect();
+        if executable_wide.contains(&0) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Current executable path contains an embedded NUL",
+            ));
+        }
+
+        let mut application_name = executable_wide.clone();
+        application_name.push(0);
+        let mut command_line = Vec::with_capacity(executable_wide.len() + 13);
+        command_line.push(u16::from(b'"'));
+        command_line.extend(executable_wide);
+        command_line.extend("\" --worker".encode_utf16());
+        command_line.push(0);
+
+        let mut startup: StartupInfoW = unsafe { std::mem::zeroed() };
+        startup.cb = u32::try_from(std::mem::size_of::<StartupInfoW>())
+            .expect("Windows startup information size fits in u32");
+        let mut process: ProcessInformation = unsafe { std::mem::zeroed() };
+        let created = unsafe {
+            CreateProcessW(
+                application_name.as_ptr(),
+                command_line.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                CREATE_SUSPENDED,
+                std::ptr::null(),
+                std::ptr::null(),
+                &startup,
+                &mut process,
+            )
+        };
+        if created == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if process.process.is_null() || process.thread.is_null() {
+            if !process.thread.is_null() {
+                let _ = unsafe { CloseHandle(process.thread) };
+            }
+            if !process.process.is_null() {
+                let _ = unsafe { TerminateProcess(process.process, TRANSPORT_EXIT_CODE as u32) };
+                let _ = unsafe { CloseHandle(process.process) };
+            }
+            return Err(std::io::Error::other(
+                "Windows returned incomplete worker process handles",
+            ));
+        }
+
+        Ok(Self {
+            process: process.process as usize,
+            thread: Some(process.thread as usize),
+        })
+    }
+
+    fn resume(&mut self) -> std::io::Result<()> {
+        let thread = self
+            .thread
+            .take()
+            .expect("new Windows worker has a suspended primary thread");
+        let resumed = unsafe { ResumeThread(thread as *mut c_void) };
+        let error = (resumed == u32::MAX).then(std::io::Error::last_os_error);
+        let _ = unsafe { CloseHandle(thread as *mut c_void) };
+        match error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    fn try_wait(&self) -> std::io::Result<Option<u32>> {
+        match unsafe { WaitForSingleObject(self.raw_process(), 0) } {
+            WAIT_TIMEOUT => Ok(None),
+            WAIT_OBJECT_0 => {
+                let mut exit_code = 0;
+                let read = unsafe { GetExitCodeProcess(self.raw_process(), &mut exit_code) };
+                if read == 0 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(Some(exit_code))
+                }
+            }
+            WAIT_FAILED => Err(std::io::Error::last_os_error()),
+            status => Err(std::io::Error::other(format!(
+                "Unexpected Windows worker wait result: {status}"
+            ))),
+        }
+    }
+
+    fn terminate(&mut self) {
+        if let Some(thread) = self.thread.take() {
+            let _ = unsafe { CloseHandle(thread as *mut c_void) };
+        }
+        let _ = unsafe { TerminateProcess(self.raw_process(), TRANSPORT_EXIT_CODE as u32) };
+        let _ = unsafe { WaitForSingleObject(self.raw_process(), PROCESS_TERMINATION_TIMEOUT_MS) };
+    }
+
+    fn raw_process(&self) -> *mut c_void {
+        self.process as *mut c_void
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for SuspendedWorkerProcess {
+    fn drop(&mut self) {
+        if self.thread.is_some() {
+            // A process that never reached ResumeThread must not escape if an
+            // intermediate setup step unwinds before job containment completes.
+            self.terminate();
+        }
+        let _ = unsafe { CloseHandle(self.raw_process()) };
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for SupervisedWorker {
+    fn drop(&mut self) {
+        self.terminate();
+    }
 }
 
 async fn run_session(
@@ -118,6 +639,10 @@ async fn run_session(
     let (mut socket, _) = connect_async(request).await?;
     let session_id = authenticate_bridge(&mut socket, token).await?;
     let authority = SessionAuthorityGuard::new(Arc::clone(&controller));
+    if let Some(error) = ComputerController::take_fatal_capture_stop_error() {
+        eprintln!("{}: {}", error.code, error.message);
+        terminate_worker(CAPTURE_STOP_EXIT_CODE);
+    }
     println!("Authenticated Local Browser Bridge.");
     let mut hello = controller
         .lock()
@@ -268,13 +793,130 @@ async fn run_authenticated_session(
     share_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut event_sequence = 0_u64;
     let mut last_command_sequence = 0_u64;
-    let mut pending = VecDeque::new();
+    let mut pending: VecDeque<QueuedCommand> = VecDeque::new();
     let mut pending_share_acks = VecDeque::new();
     let mut active: Option<ActiveCommand> = None;
     let (completion_tx, mut completion_rx) = mpsc::unbounded_channel();
+    let mut active_share_pump: Option<ActiveSharePump> = None;
+    let (share_pump_tx, mut share_pump_rx) = mpsc::unbounded_channel::<SharePumpCompletion>();
     loop {
+        let command_deadline = active.as_ref().and_then(|command| command.deadline);
+        let share_pump_deadline = active_share_pump.as_ref().and_then(|pump| pump.deadline);
         tokio::select! {
             biased;
+            _ = wait_for_command_deadline(command_deadline), if command_deadline.is_some() => {
+                let finished = active.take().expect("watchdog is armed only for an active command");
+                finished.cancellation.cancel();
+                authority.cancel_all();
+                for command in &pending {
+                    command.cancellation.cancel();
+                }
+                let mut response = result_envelope(
+                    &finished.key.id,
+                    command_watchdog_result(&finished.cancellation),
+                );
+                bind_result_envelope(&mut response, &session_id, finished.key.sequence);
+                let _ = tokio::time::timeout(
+                    FATAL_REPORT_TIMEOUT,
+                    writer.send(Message::Text(response.to_string().into())),
+                )
+                .await;
+                eprintln!(
+                    "Computer command {} exceeded the hard worker deadline; terminating the disposable worker.",
+                    finished.key.id
+                );
+                terminate_worker(WATCHDOG_EXIT_CODE);
+            }
+            _ = wait_for_command_deadline(share_pump_deadline), if share_pump_deadline.is_some() => {
+                active_share_pump
+                    .take()
+                    .expect("share watchdog is armed only for an active pump");
+                authority.cancel_all();
+                for command in &pending {
+                    command.cancellation.cancel();
+                }
+                event_sequence = event_sequence.saturating_add(1);
+                let mut message = json!({
+                    "type": "event",
+                    "name": "computer.share.error",
+                    "data": {
+                        "code": "COMPUTER_HELPER_WATCHDOG",
+                        "message": format!(
+                            "The disposable computer worker exceeded its {} second live-share pump deadline and will restart",
+                            COMMAND_WATCHDOG_TIMEOUT.as_secs()
+                        )
+                    }
+                });
+                bind_event_envelope(
+                    &mut message,
+                    &session_id,
+                    event_sequence,
+                );
+                let _ = tokio::time::timeout(
+                    FATAL_REPORT_TIMEOUT,
+                    writer.send(Message::Text(message.to_string().into())),
+                )
+                .await;
+                eprintln!(
+                    "The live-share observation/PNG pump exceeded the hard worker deadline; terminating the disposable worker."
+                );
+                terminate_worker(WATCHDOG_EXIT_CODE);
+            }
+            completion = share_pump_rx.recv(), if active_share_pump.is_some() => {
+                let Some(completion) = completion else { break };
+                active_share_pump.take();
+                let emissions = completion.emissions;
+                let fatal_capture_stop = emissions.iter().any(|(name, data)| {
+                    *name == "computer.share.error"
+                        && data.get("code").and_then(Value::as_str)
+                            == Some(FATAL_CAPTURE_STOP_CODE)
+                });
+                if fatal_capture_stop {
+                    authority.cancel_all();
+                    for command in &pending {
+                        command.cancellation.cancel();
+                    }
+                    if let Some((name, data)) = emissions.into_iter().find(|(name, data)| {
+                        *name == "computer.share.error"
+                            && data.get("code").and_then(Value::as_str)
+                                == Some(FATAL_CAPTURE_STOP_CODE)
+                    }) {
+                        event_sequence = event_sequence.saturating_add(1);
+                        let mut message = json!({ "type": "event", "name": name, "data": data });
+                        bind_event_envelope(
+                            &mut message,
+                            &session_id,
+                            event_sequence,
+                        );
+                        let _ = tokio::time::timeout(
+                            FATAL_REPORT_TIMEOUT,
+                            writer.send(Message::Text(message.to_string().into())),
+                        )
+                        .await;
+                    }
+                    eprintln!(
+                        "Windows Graphics Capture shutdown could not be confirmed; terminating the disposable worker."
+                    );
+                    terminate_worker(CAPTURE_STOP_EXIT_CODE);
+                }
+                for (name, data) in emissions {
+                    event_sequence = event_sequence.saturating_add(1);
+                    let mut message = json!({ "type": "event", "name": name, "data": data });
+                    bind_event_envelope(
+                        &mut message,
+                        &session_id,
+                        event_sequence,
+                    );
+                    writer.send(Message::Text(message.to_string().into())).await?;
+                }
+                dispatch_next_command(
+                    &controller,
+                    &mut pending,
+                    &mut active,
+                    &completion_tx,
+                    false,
+                );
+            }
             message = reader.next() => {
                 let Some(message) = message else { break };
                 match message? {
@@ -376,6 +1018,7 @@ async fn run_authenticated_session(
                             &mut pending,
                             &mut active,
                             &completion_tx,
+                            active_share_pump.is_some(),
                         );
                     }
                     Message::Ping(bytes) => writer.send(Message::Pong(bytes)).await?,
@@ -392,25 +1035,60 @@ async fn run_authenticated_session(
                         "Computer worker returned a mismatched command identity",
                     ).into());
                 }
+                if let Some(error) = completion.fatal_capture_stop.take() {
+                    completion.result = Err(error);
+                }
+                let fatal_capture_stop = is_fatal_capture_stop(&completion.result);
+                let restart_for_outcome_unknown = Cell::new(false);
                 completion.result = finish_worker_result(
                     &finished.cancellation,
                     completion.result,
                     || {
-                        // Cancellation can arrive after the blocking worker has
-                        // returned but before its result is serialized. If that
-                        // changes the result to outcome-unknown, revoke the same
-                        // authority the controller revokes for an unknown result
-                        // detected inside the worker. Ack negotiation belongs to
-                        // the still-live transport session and is retained.
-                        controller
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            .revoke_command_authority();
+                        if !fatal_capture_stop {
+                            #[cfg(target_os = "windows")]
+                            restart_for_outcome_unknown.set(true);
+                            // Cancellation can arrive after the blocking worker has
+                            // returned but before its result is serialized. If that
+                            // changes the result to outcome-unknown, revoke the same
+                            // authority the controller revokes for an unknown result
+                            // detected inside the worker. Ack negotiation belongs to
+                            // the still-live transport session and is retained.
+                            #[cfg(not(target_os = "windows"))]
+                            controller
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .revoke_command_authority();
+                        }
                     },
                 );
                 authority.retire(&completion.key);
+                let fatal_capture_stop =
+                    fatal_capture_stop || is_fatal_capture_stop(&completion.result);
                 let mut response = result_envelope(&completion.key.id, completion.result);
                 bind_result_envelope(&mut response, &session_id, completion.key.sequence);
+                if fatal_capture_stop || restart_for_outcome_unknown.get() {
+                    authority.cancel_all();
+                    for command in &pending {
+                        command.cancellation.cancel();
+                    }
+                    let _ = tokio::time::timeout(
+                        FATAL_REPORT_TIMEOUT,
+                        writer.send(Message::Text(response.to_string().into())),
+                    )
+                    .await;
+                    let exit_code = if fatal_capture_stop {
+                        eprintln!(
+                            "Windows Graphics Capture shutdown could not be confirmed; terminating the disposable worker."
+                        );
+                        CAPTURE_STOP_EXIT_CODE
+                    } else {
+                        eprintln!(
+                            "A computer command ended with an unknown outcome; restarting the disposable worker to revoke authority."
+                        );
+                        OUTCOME_UNKNOWN_EXIT_CODE
+                    };
+                    terminate_worker(exit_code);
+                }
                 writer
                     .send(Message::Text(response.to_string().into()))
                     .await?;
@@ -419,23 +1097,17 @@ async fn run_authenticated_session(
                     &mut pending,
                     &mut active,
                     &completion_tx,
+                    false,
                 );
             }
             _ = share_tick.tick() => {
-                let emissions = collect_share_emissions(
+                dispatch_share_pump(
                     &controller,
                     &mut pending_share_acks,
+                    &mut active_share_pump,
+                    &share_pump_tx,
+                    active.is_some() || !pending.is_empty(),
                 );
-                for (name, data) in emissions {
-                    event_sequence = event_sequence.saturating_add(1);
-                    let mut message = json!({ "type": "event", "name": name, "data": data });
-                    if let Some(object) = message.as_object_mut() {
-                        object.insert("protocolVersion".to_owned(), json!(PROTOCOL_VERSION));
-                        object.insert("sessionId".to_owned(), json!(session_id));
-                        object.insert("eventSequence".to_owned(), json!(event_sequence));
-                    }
-                    writer.send(Message::Text(message.to_string().into())).await?;
-                }
             }
         }
     }
@@ -458,11 +1130,21 @@ struct QueuedCommand {
 struct ActiveCommand {
     key: CommandKey,
     cancellation: CommandCancellation,
+    deadline: Option<tokio::time::Instant>,
 }
 
 struct CommandCompletion {
     key: CommandKey,
     result: Result<Value, ComputerError>,
+    fatal_capture_stop: Option<ComputerError>,
+}
+
+struct ActiveSharePump {
+    deadline: Option<tokio::time::Instant>,
+}
+
+struct SharePumpCompletion {
+    emissions: Vec<(&'static str, Value)>,
 }
 
 fn command_key(message: &Value) -> Option<CommandKey> {
@@ -520,6 +1202,12 @@ impl SessionAuthorityGuard {
     fn retire(&mut self, key: &CommandKey) {
         self.commands.remove(key);
     }
+
+    fn cancel_all(&self) {
+        for cancellation in self.commands.values() {
+            cancellation.cancel();
+        }
+    }
 }
 
 impl Drop for SessionAuthorityGuard {
@@ -527,6 +1215,14 @@ impl Drop for SessionAuthorityGuard {
         for cancellation in self.commands.values() {
             cancellation.cancel();
         }
+        // A production Windows worker is disposable: its caller terminates it
+        // as soon as this transport future returns. Do not synchronously wait
+        // for a controller lock or WGC shutdown here, because either may be the
+        // platform call whose failure caused transport teardown.
+        #[cfg(all(target_os = "windows", not(test)))]
+        let _ = &self.controller;
+
+        #[cfg(any(not(target_os = "windows"), test))]
         self.controller
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -561,23 +1257,76 @@ fn finish_worker_result(
     result
 }
 
+fn is_fatal_capture_stop(result: &Result<Value, ComputerError>) -> bool {
+    result.as_ref().err().is_some_and(|error| {
+        error.code == FATAL_CAPTURE_STOP_CODE
+            || (error.code == "COMPUTER_OUTCOME_UNKNOWN"
+                && error.message.contains(FATAL_CAPTURE_STOP_DETAIL))
+    })
+}
+
+fn command_watchdog_result(cancellation: &CommandCancellation) -> Result<Value, ComputerError> {
+    cancellation.finish(Err(ComputerError::new(
+        "COMPUTER_HELPER_WATCHDOG",
+        format!(
+            "The disposable computer worker exceeded its {} second command deadline and will restart",
+            COMMAND_WATCHDOG_TIMEOUT.as_secs()
+        ),
+    )))
+}
+
+async fn wait_for_command_deadline(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        None => std::future::pending().await,
+    }
+}
+
+fn terminate_worker(exit_code: i32) -> ! {
+    std::process::exit(exit_code)
+}
+
+fn new_command_deadline() -> Option<tokio::time::Instant> {
+    #[cfg(target_os = "windows")]
+    {
+        Some(tokio::time::Instant::now() + COMMAND_WATCHDOG_TIMEOUT)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        None
+    }
+}
+
+fn new_share_pump_deadline() -> Option<tokio::time::Instant> {
+    new_command_deadline()
+}
+
 /// Applies queued share acknowledgements, then drains at most one parked
 /// frame and one capture error for emission.
 ///
-/// A busy controller lock defers protocol conversion to the next tick without
-/// blocking. The platform capture callback continues replacing its native
-/// latest-frame slot while an input command owns the controller.
+/// This contains the platform capture pump, UI Automation snapshot, and PNG
+/// conversion. Production calls it only from the serialized `spawn_blocking`
+/// share-pump operation, never from the async WebSocket transport future.
 fn collect_share_emissions(
-    controller: &Arc<Mutex<ComputerController>>,
+    controller: &mut ComputerController,
     pending_share_acks: &mut VecDeque<ShareFrameAck>,
 ) -> Vec<(&'static str, Value)> {
-    let Ok(mut controller) = controller.try_lock() else {
-        return Vec::new();
-    };
+    if let Some(error) = ComputerController::take_fatal_capture_stop_error() {
+        return vec![(
+            "computer.share.error",
+            json!({ "code": error.code, "message": error.message }),
+        )];
+    }
     while let Some(ack) = pending_share_acks.pop_front() {
         controller.acknowledge_share_frame(&ack.share_id, ack.sequence);
     }
     let capture_error = controller.pump_share_capture();
+    if let Some(error) = ComputerController::take_fatal_capture_stop_error() {
+        return vec![(
+            "computer.share.error",
+            json!({ "code": error.code, "message": error.message }),
+        )];
+    }
     let mut emissions = Vec::new();
     if let Some((_, frame)) = controller.take_share_emission() {
         emissions.push(("computer.share.frame", frame));
@@ -591,13 +1340,117 @@ fn collect_share_emissions(
     emissions
 }
 
+fn dispatch_share_pump(
+    controller: &Arc<Mutex<ComputerController>>,
+    pending_share_acks: &mut VecDeque<ShareFrameAck>,
+    active: &mut Option<ActiveSharePump>,
+    completion_tx: &mpsc::UnboundedSender<SharePumpCompletion>,
+    command_owns_controller: bool,
+) {
+    if active.is_some() || command_owns_controller {
+        return;
+    }
+    *active = Some(ActiveSharePump {
+        deadline: new_share_pump_deadline(),
+    });
+    let controller = Arc::clone(controller);
+    let completion_tx = completion_tx.clone();
+    let mut pending_share_acks = std::mem::take(pending_share_acks);
+    tokio::task::spawn_blocking(move || {
+        let emissions = match controller.lock() {
+            Ok(mut controller) => {
+                if controller.has_active_share() {
+                    maybe_stall_share_pump_for_fixture();
+                }
+                collect_share_emissions(&mut controller, &mut pending_share_acks)
+            }
+            Err(_) => vec![(
+                "computer.share.error",
+                json!({
+                    "code": "COMPUTER_HELPER_FAILED",
+                    "message": "Computer controller lock was poisoned"
+                }),
+            )],
+        };
+        let _ = completion_tx.send(SharePumpCompletion { emissions });
+    });
+}
+
+#[cfg(target_os = "windows")]
+const TEST_SHARE_PUMP_STALL_EVENT_ENV: &str = "LBB_TEST_STALL_SHARE_PUMP_ONCE_EVENT";
+#[cfg(target_os = "windows")]
+const TEST_SHARE_PUMP_STALL_EVENT_PREFIX: &str = "Local\\LBBTestSharePump-";
+
+#[cfg(target_os = "windows")]
+fn maybe_stall_share_pump_for_fixture() {
+    let Some(name) = test_share_pump_fault_event_name() else {
+        return;
+    };
+    let event = unsafe { OpenEventW(EVENT_MODIFY_STATE | SYNCHRONIZE, 0, name.as_ptr()) };
+    if event.is_null() {
+        eprintln!(
+            "Could not open the acceptance-only share-pump fault event: {}",
+            std::io::Error::last_os_error()
+        );
+        return;
+    }
+    let wait = unsafe { WaitForSingleObject(event, 0) };
+    if wait == WAIT_TIMEOUT {
+        if unsafe { SetEvent(event) } == 0 {
+            eprintln!(
+                "Could not signal the acceptance-only share-pump fault event: {}",
+                std::io::Error::last_os_error()
+            );
+        } else {
+            // This is a launch-time, local-DoS-only acceptance hook. The hard
+            // share-pump deadline must terminate this disposable process.
+            loop {
+                std::thread::park();
+            }
+        }
+    } else if wait != WAIT_OBJECT_0 {
+        eprintln!("Unexpected acceptance-only fault-event wait result: {wait}");
+    }
+    let _ = unsafe { CloseHandle(event) };
+}
+
+#[cfg(target_os = "windows")]
+fn test_share_pump_fault_event_name() -> Option<Vec<u16>> {
+    let name = env::var(TEST_SHARE_PUMP_STALL_EVENT_ENV).ok()?;
+    if !valid_test_share_pump_fault_event_name(&name) {
+        eprintln!(
+            "Ignoring invalid {TEST_SHARE_PUMP_STALL_EVENT_ENV}; expected a unique {TEST_SHARE_PUMP_STALL_EVENT_PREFIX}<id> name"
+        );
+        return None;
+    }
+    let mut wide: Vec<u16> = name.encode_utf16().collect();
+    wide.push(0);
+    Some(wide)
+}
+
+#[cfg(target_os = "windows")]
+fn valid_test_share_pump_fault_event_name(name: &str) -> bool {
+    let Some(suffix) = name.strip_prefix(TEST_SHARE_PUMP_STALL_EVENT_PREFIX) else {
+        return false;
+    };
+    !suffix.is_empty()
+        && suffix.len() <= 80
+        && suffix
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+}
+
+#[cfg(not(target_os = "windows"))]
+fn maybe_stall_share_pump_for_fixture() {}
+
 fn dispatch_next_command(
     controller: &Arc<Mutex<ComputerController>>,
     pending: &mut VecDeque<QueuedCommand>,
     active: &mut Option<ActiveCommand>,
     completion_tx: &mpsc::UnboundedSender<CommandCompletion>,
+    share_pump_owns_controller: bool,
 ) {
-    if active.is_some() {
+    if active.is_some() || share_pump_owns_controller {
         return;
     }
     let Some(command) = pending.pop_front() else {
@@ -606,6 +1459,7 @@ fn dispatch_next_command(
     *active = Some(ActiveCommand {
         key: command.key.clone(),
         cancellation: command.cancellation.clone(),
+        deadline: new_command_deadline(),
     });
     let controller = Arc::clone(controller);
     let completion_tx = completion_tx.clone();
@@ -621,9 +1475,11 @@ fn dispatch_next_command(
                 "Computer controller lock was poisoned",
             )),
         };
+        let fatal_capture_stop = ComputerController::take_fatal_capture_stop_error();
         let _ = completion_tx.send(CommandCompletion {
             key: command.key,
             result,
+            fatal_capture_stop,
         });
     });
 }
@@ -633,6 +1489,14 @@ fn bind_result_envelope(response: &mut Value, session_id: &str, sequence: u64) {
         object.insert("protocolVersion".to_owned(), json!(PROTOCOL_VERSION));
         object.insert("sessionId".to_owned(), json!(session_id));
         object.insert("sequence".to_owned(), json!(sequence));
+    }
+}
+
+fn bind_event_envelope(event: &mut Value, session_id: &str, sequence: u64) {
+    if let Some(object) = event.as_object_mut() {
+        object.insert("protocolVersion".to_owned(), json!(PROTOCOL_VERSION));
+        object.insert("sessionId".to_owned(), json!(session_id));
+        object.insert("eventSequence".to_owned(), json!(sequence));
     }
 }
 
@@ -649,6 +1513,8 @@ fn parse_args(arguments: impl Iterator<Item = String>) -> Result<Cli, String> {
             "--version" | "-V" => cli.show_version = true,
             "--request-permissions" => cli.request_permissions = true,
             "--benchmark" => cli.benchmark = true,
+            #[cfg(target_os = "windows")]
+            "--worker" => cli.worker = true,
             _ => {
                 return Err(format!(
                     "Unknown argument: {argument}. Use --help for usage."
@@ -660,7 +1526,11 @@ fn parse_args(arguments: impl Iterator<Item = String>) -> Result<Cli, String> {
 }
 
 fn print_help() {
-    println!(
+    println!("{}", help_text());
+}
+
+fn help_text() -> String {
+    format!(
         "Local Computer Helper {VERSION}\n\n\
 Usage: local-computer-helper [OPTIONS]\n\n\
 Options:\n\
@@ -669,7 +1539,7 @@ Options:\n\
   -V, --version           Print the installed version and exit\n\
   -h, --help              Print this help\n\n\
 Without options, the helper connects to Local Browser Bridge on loopback."
-    );
+    )
 }
 
 fn parse_port(raw: Option<&str>) -> Result<u16, String> {
@@ -700,7 +1570,7 @@ mod tests {
 
     #[test]
     fn share_tick_drains_queued_acks_when_no_share_is_active() {
-        let controller = Arc::new(Mutex::new(ComputerController::new()));
+        let mut controller = ComputerController::new();
         let mut pending_share_acks = VecDeque::from([
             ShareFrameAck {
                 share_id: "share-old".to_owned(),
@@ -711,12 +1581,12 @@ mod tests {
                 sequence: 4,
             },
         ]);
-        assert!(collect_share_emissions(&controller, &mut pending_share_acks).is_empty());
+        assert!(collect_share_emissions(&mut controller, &mut pending_share_acks).is_empty());
         assert!(
             pending_share_acks.is_empty(),
             "queued acknowledgements must always be drained when the controller is available"
         );
-        assert!(collect_share_emissions(&controller, &mut pending_share_acks).is_empty());
+        assert!(collect_share_emissions(&mut controller, &mut pending_share_acks).is_empty());
     }
 
     #[test]
@@ -788,12 +1658,146 @@ mod tests {
     }
 
     #[test]
+    fn command_watchdog_precedes_the_bridge_timeout() {
+        assert!(COMMAND_WATCHDOG_TIMEOUT < Duration::from_secs(15));
+        assert!(FATAL_REPORT_TIMEOUT < Duration::from_secs(1));
+        #[cfg(target_os = "windows")]
+        {
+            assert!(new_command_deadline().is_some());
+            assert!(new_share_pump_deadline().is_some());
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(new_command_deadline().is_none());
+            assert!(new_share_pump_deadline().is_none());
+        }
+    }
+
+    #[test]
+    fn command_watchdog_preserves_outcome_unknown_after_dispatch() {
+        let before_dispatch = CommandCancellation::new();
+        before_dispatch.cancel();
+        let retry_safe = command_watchdog_result(&before_dispatch).unwrap_err();
+        assert_eq!(retry_safe.code, "COMPUTER_HELPER_WATCHDOG");
+
+        let after_dispatch = CommandCancellation::new();
+        after_dispatch
+            .begin_side_effect("fixture action")
+            .expect("fixture action should cross its side-effect boundary");
+        after_dispatch.cancel();
+        let outcome_unknown = command_watchdog_result(&after_dispatch).unwrap_err();
+        assert_eq!(outcome_unknown.code, "COMPUTER_OUTCOME_UNKNOWN");
+        assert!(outcome_unknown.message.contains("COMPUTER_HELPER_WATCHDOG"));
+    }
+
+    #[test]
+    fn fatal_capture_stop_survives_outcome_unknown_wrapping() {
+        assert!(is_fatal_capture_stop(&Err(ComputerError::new(
+            FATAL_CAPTURE_STOP_CODE,
+            "capture stop was not confirmed",
+        ))));
+        let cancellation = CommandCancellation::new();
+        cancellation
+            .begin_side_effect("fixture capture stop")
+            .expect("fixture stop should cross its side-effect boundary");
+        let wrapped = cancellation.finish(Err::<Value, _>(ComputerError::new(
+            FATAL_CAPTURE_STOP_CODE,
+            "capture stop was not confirmed",
+        )));
+        assert_eq!(
+            wrapped.as_ref().unwrap_err().code,
+            "COMPUTER_OUTCOME_UNKNOWN",
+        );
+        assert!(is_fatal_capture_stop(&wrapped));
+        assert!(!is_fatal_capture_stop(&Err(ComputerError::new(
+            "COMPUTER_CAPTURE_FAILED",
+            "ordinary capture failure",
+        ))));
+    }
+
+    #[test]
     fn parses_helper_flags_and_ports() {
         let cli = parse_args(["--benchmark".to_owned()].into_iter()).unwrap();
         assert!(cli.benchmark);
         assert_eq!(parse_port(None).unwrap(), 17_373);
         assert!(parse_port(Some("0")).is_err());
         assert!(parse_args(["--unknown".to_owned()].into_iter()).is_err());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn hidden_worker_flag_is_accepted_but_not_advertised() {
+        let cli = parse_args(["--worker".to_owned()].into_iter()).unwrap();
+        assert!(cli.worker);
+        assert!(!help_text().contains("--worker"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn supervisor_job_contract_is_kill_on_close() {
+        let limits = kill_on_close_limits();
+        assert_eq!(
+            limits.basic_limit_information.limit_flags,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        );
+        assert!(std::mem::size_of_val(&limits) <= u32::MAX as usize);
+        let job =
+            KillOnCloseJob::new().expect("Windows must allow an unprivileged kill-on-close job");
+        assert!(!job.raw().is_null());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn share_pump_stall_fault_event_names_are_strictly_local_and_bounded() {
+        assert!(valid_test_share_pump_fault_event_name(
+            "Local\\LBBTestSharePump-acceptance-123"
+        ));
+        assert!(!valid_test_share_pump_fault_event_name(
+            "Global\\LBBTestSharePump-acceptance-123"
+        ));
+        assert!(!valid_test_share_pump_fault_event_name(
+            "Local\\LBBTestSharePump-..\\escape"
+        ));
+        assert!(!valid_test_share_pump_fault_event_name(
+            "Local\\LBBTestSharePump-"
+        ));
+    }
+
+    #[tokio::test]
+    async fn command_dispatch_waits_for_the_serialized_share_pump() {
+        let controller = Arc::new(Mutex::new(ComputerController::new()));
+        let cancellation = CommandCancellation::new();
+        let mut pending = VecDeque::from([QueuedCommand {
+            key: CommandKey {
+                id: "queued-behind-share".to_owned(),
+                sequence: 1,
+            },
+            method: "computer.status".to_owned(),
+            params: json!({}),
+            cancellation: cancellation.clone(),
+        }]);
+        let mut active = None;
+        let (completion_tx, mut completion_rx) = mpsc::unbounded_channel();
+
+        dispatch_next_command(&controller, &mut pending, &mut active, &completion_tx, true);
+        assert!(active.is_none());
+        assert_eq!(pending.len(), 1);
+        assert!(completion_rx.try_recv().is_err());
+
+        cancellation.cancel();
+        dispatch_next_command(
+            &controller,
+            &mut pending,
+            &mut active,
+            &completion_tx,
+            false,
+        );
+        let completion = tokio::time::timeout(Duration::from_secs(1), completion_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(completion.key.id, "queued-behind-share");
+        assert_eq!(completion.result.unwrap_err().code, "COMPUTER_CANCELED");
     }
 
     #[tokio::test]
@@ -821,7 +1825,13 @@ mod tests {
         assert!(authority.cancel_exact(&key));
 
         let (completion_tx, mut completion_rx) = mpsc::unbounded_channel();
-        dispatch_next_command(&controller, &mut pending, &mut active, &completion_tx);
+        dispatch_next_command(
+            &controller,
+            &mut pending,
+            &mut active,
+            &completion_tx,
+            false,
+        );
         let completion = tokio::time::timeout(Duration::from_secs(1), completion_rx.recv())
             .await
             .unwrap()

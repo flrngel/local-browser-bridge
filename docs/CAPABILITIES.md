@@ -32,8 +32,8 @@ The optional helper is a separate Rust process. It connects outbound to the loop
 
 | Capability | macOS | Windows |
 |---|---|---|
-| One-shot exact-window observation | Available through the existing exact-window snapshot backend | Available through the existing exact-window snapshot backend |
-| Persistent exact-window live share | ScreenCaptureKit `SCStream` bound to an exact `(PID, CGWindowID)` | Free-threaded Windows Graphics Capture bound to an exact `(PID, HWND)` |
+| One-shot exact-window observation | Available through the exact-window snapshot backend | Starts the same bounded, exact-HWND Windows Graphics Capture backend used by live sharing and stops it after one fresh frame |
+| Persistent exact-window live share | ScreenCaptureKit `SCStream` bound to an exact `(PID, CGWindowID)` | Project-owned Windows Graphics Capture `CreateFreeThreaded` frame pool on a dedicated MTA owner thread, bound to an exact `(PID, HWND)` |
 | Live-share transport | Requested 1–10 FPS maximum cadence, PNG frames capped at 1,000,000 pixels, monotonic sequence, bounded latest-frame slot, optional acknowledgement pacing | Same protocol and bounds |
 | Captured cursor | System cursor disabled; helper cursor composited into returned frames | Same |
 | Semantic observation/action | macOS Accessibility | Windows UI Automation |
@@ -83,6 +83,6 @@ Transport success is diagnostic evidence. A native action is supported only when
 - [Chrome debugger API](https://developer.chrome.com/docs/extensions/reference/api/debugger)
 - [Apple: Take ScreenCaptureKit to the next level](https://developer.apple.com/videos/play/wwdc2022/10155/)
 - [Microsoft: create a Windows Graphics Capture item for a window](https://learn.microsoft.com/en-us/windows/win32/api/windows.graphics.capture.interop/nf-windows-graphics-capture-interop-igraphicscaptureiteminterop-createforwindow)
-- [Pinned Cua macOS implementation](https://github.com/trycua/cua/tree/9a61050e3474fc9488d7adc85184299f02514d0e/libs/cua-driver/rust/crates/platform-macos)
+- [Pinned Cua implementation](https://github.com/trycua/cua/tree/0213cd82fd8f5f35d530e7b3eda5286511bbbc10)
 
 See [Computer-use research](COMPUTER_USE_RESEARCH.md) for the complete source comparison and the distinction between capture, input routing, and isolation.

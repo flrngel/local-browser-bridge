@@ -34,14 +34,8 @@ elif command -v cargo-xwin >/dev/null 2>&1 || cargo xwin --version >/dev/null 2>
   cargo xwin build --locked --release --bins --target x86_64-pc-windows-msvc
   windows_server_exe="target/x86_64-pc-windows-msvc/release/local-browser-bridge.exe"
   windows_helper_exe="target/x86_64-pc-windows-msvc/release/local-computer-helper.exe"
-elif command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
-  rustup target add x86_64-pc-windows-gnu
-  CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
-    cargo build --locked --release --bins --target x86_64-pc-windows-gnu
-  windows_server_exe="target/x86_64-pc-windows-gnu/release/local-browser-bridge.exe"
-  windows_helper_exe="target/x86_64-pc-windows-gnu/release/local-computer-helper.exe"
 else
-  echo "Windows build unavailable. Use the tagged GitHub release workflow or install cargo-xwin." >&2
+  echo "Official Windows artifacts require the x86_64-pc-windows-msvc target. Use the tagged GitHub release workflow or install cargo-xwin." >&2
   exit 1
 fi
 
@@ -56,8 +50,26 @@ for output in "$windows_output" "$windows_helper_output"; do
   fi
 done
 if [[ "${OS:-}" == "Windows_NT" ]]; then
-  test "$("$windows_output" --version)" = "local-browser-bridge $version"
-  test "$("$windows_helper_output" --version)" = "local-computer-helper $version"
+  pwsh -NoProfile -File scripts/verify-windows-artifacts.ps1 \
+    -Version "$version" \
+    -ServerPath "$windows_output" \
+    -HelperPath "$windows_helper_output"
+else
+  if ! command -v llvm-readobj >/dev/null 2>&1; then
+    echo "llvm-readobj is required to inspect cross-compiled Windows release artifacts." >&2
+    exit 1
+  fi
+  for output in "$windows_output" "$windows_helper_output"; do
+    pe_report="$(llvm-readobj --coff-imports --coff-resources "$output")"
+    if grep -Eqi 'VCRUNTIME|MSVCP|api-ms-win-crt' <<<"$pe_report"; then
+      echo "Windows executable still imports a separately distributed Visual C++ runtime: $output" >&2
+      exit 1
+    fi
+    if ! grep -Eqi 'MANIFEST|RT_MANIFEST|Type: 0x18|Type: 24' <<<"$pe_report"; then
+      echo "Windows executable is missing its embedded application manifest: $output" >&2
+      exit 1
+    fi
+  done
 fi
 
 if [[ "$(uname -s)" != "Darwin" ]]; then

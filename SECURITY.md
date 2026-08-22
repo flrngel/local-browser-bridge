@@ -15,7 +15,7 @@ Browser **Full Access mode is enabled by default**, and the native computer help
 - The bridge control page cannot be selected as a target, preventing recursive self-control.
 - The server and control UI are compiled into one Rust binary; no Node.js runtime or package installation is involved.
 - The extension contains no remote code, download API, cookie API, native messaging host, telemetry, or update endpoint.
-- The native computer helper is a separate, visibly connected process. It opens no listener and connects outbound to the server with token-free mutual authentication and an exact private Origin.
+- The native computer helper is a separate, visibly connected program. It opens no listener and connects outbound to the server with token-free mutual authentication and an exact private Origin. On Windows, the user-facing process supervises a disposable same-binary worker in a kill-on-close Job Object; hard operation deadlines, unknown outcomes, transport loss, and unconfirmed capture shutdown terminate that worker before authority is reacquired. This contains a wedged provider process but does not create a separate desktop, account, or security principal.
 - One-shot native observation and live sharing are separate. Live sharing binds a persistent ScreenCaptureKit stream on macOS or Windows Graphics Capture session on Windows to one exact `(process, native window)` target, disables the system cursor, and forwards bounded PNG frames through a single latest-frame slot under a requested 1–10 FPS cap.
 - The operating system owns native capture indication and stopping behavior. The helper does not suppress macOS capture UI or request borderless WGC, but it also does not present either platform's system content picker; window selection occurs in the authenticated bridge control page.
 - The server intersects helper-advertised capabilities with a fixed allowlist. No shell, filesystem, process-launch, clipboard, downloader, or telemetry method is accepted or implemented.
@@ -60,6 +60,7 @@ For the current on-screen, minimized-window, cross-Space, keyboard-routing, and 
 - Screen Recording is required on macOS 13 or later to capture desktop pixels and start the ScreenCaptureKit live stream.
 - Accessibility is required on macOS to expose semantic elements, invoke supported actions, set control values, and help route input to an exact process/window. Pixel delivery also dynamically resolves undocumented SkyLight symbols; platform updates can disable that route, in which case the helper reports input unavailable rather than using global HID input.
 - Windows input must run in the signed-in interactive session; the helper is not installed as a service and requests no administrator elevation for normal use.
+- Windows UI Automation traversal is cache-backed and bounded to 1,500 visited controls, 25 levels, 500 actionable controls, and 750 milliseconds between provider calls. A provider call itself is not cancellable, so the disposable worker's 12-second hard deadline is the outer containment boundary.
 - The macOS release uses a named `.app` bundle because TCC grants attach to application identity. Run that packaged helper rather than copying its inner executable to an arbitrary location.
 
 ## Permission rationale

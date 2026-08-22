@@ -30,6 +30,8 @@ browser-based agent -> localhost control page -> Rust server
 
 The agent must use a browser running on the same computer. A cloud-hosted browser cannot reach your local `127.0.0.1` server.
 
+Use the extension for Chrome and Edge web content. Use the optional helper for one already-open desktop window when that application's background route is supported. A separate Windows login/input seat is a different mode that requires an RDP child session or VM; it is not implied by exact-window sharing.
+
 ## Requirements
 
 | Use | Requirement |
@@ -45,7 +47,7 @@ See [Capabilities](docs/CAPABILITIES.md) for the exact platform matrix and [Limi
 
 Download one version-matched set from [GitHub Releases](https://github.com/flrngel/local-browser-bridge/releases/latest):
 
-> The `main` branch currently describes the unreleased 0.12.0 source candidate. The latest public release remains 0.11.1 until a versioned 0.12 build, live platform evidence, and downloadable artifacts are published. Follow the capability claims in the release notes for the version you install.
+> Version 0.12.1 is the current source and release target. Release artifacts, evidence, and capability claims are versioned; install the server, extension, and helper from one matching release.
 
 - the server for your platform;
 - `local-browser-bridge-extension-vVERSION.zip`; and

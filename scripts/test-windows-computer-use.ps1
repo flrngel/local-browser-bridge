@@ -1,0 +1,2078 @@
+#requires -Version 5.1
+
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [string]$ServerPath,
+
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [string]$HelperPath,
+
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [string]$FixturePath,
+
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [string]$EvidenceDirectory,
+
+    [string]$Token,
+
+    [ValidateSet("Smoke", "Capture", "Recovery", "Semantic", "Keyboard", "Pixel", "All")]
+    [string[]]$Suite = @("Smoke"),
+
+    [ValidateRange(0, 65535)]
+    [int]$Port = 0,
+
+    [ValidateRange(10, 180)]
+    [int]$TimeoutSeconds = 45,
+
+    [switch]$ShowOccluder
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
+
+if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
+    throw "The Windows acceptance runner can run only on Windows."
+}
+
+function Resolve-RequiredFile {
+    param([string]$Path, [string]$Label)
+    $resolved = [IO.Path]::GetFullPath($Path)
+    if (-not [IO.File]::Exists($resolved)) {
+        throw "$Label does not exist."
+    }
+    $downloadZone = Get-Item -LiteralPath $resolved -Stream "Zone.Identifier" -ErrorAction SilentlyContinue
+    if ($null -ne $downloadZone) {
+        throw "$Label carries Windows download-zone metadata. Inspect the file and resolve any Windows warning manually; this runner never bypasses it."
+    }
+    return $resolved
+}
+
+function Test-BridgeToken {
+    param([string]$Value)
+    if ([String]::IsNullOrEmpty($Value) -or $Value.Length -ne 43 -or $Value -notmatch '^[A-Za-z0-9_-]{43}$') {
+        return $false
+    }
+    try {
+        $base64 = $Value.Replace('-', '+').Replace('_', '/') + "="
+        $bytes = [Convert]::FromBase64String($base64)
+        if ($bytes.Length -ne 32) {
+            return $false
+        }
+        return (@($bytes | Select-Object -Unique).Count -ge 16)
+    }
+    catch {
+        return $false
+    }
+}
+
+$environmentToken = [Environment]::GetEnvironmentVariable("LBB_TOKEN", "Process")
+# Consume the inherited secret immediately even when an in-memory -Token was
+# supplied. This keeps the fixture and every other non-bridge child from
+# inheriting a stale or duplicate bearer token.
+[Environment]::SetEnvironmentVariable("LBB_TOKEN", $null, "Process")
+if ([String]::IsNullOrWhiteSpace($Token)) {
+    $Token = $environmentToken
+}
+$environmentToken = $null
+if (-not (Test-BridgeToken $Token)) {
+    throw "Token must be a canonical, high-entropy 43-character Local Browser Bridge token."
+}
+
+$resolvedServer = Resolve-RequiredFile $ServerPath "ServerPath"
+$resolvedHelper = Resolve-RequiredFile $HelperPath "HelperPath"
+$resolvedFixture = Resolve-RequiredFile $FixturePath "FixturePath"
+$evidenceRoot = [IO.Path]::GetFullPath($EvidenceDirectory)
+
+if ([IO.Directory]::Exists($evidenceRoot)) {
+    if (@([IO.Directory]::EnumerateFileSystemEntries($evidenceRoot)).Count -ne 0) {
+        throw "EvidenceDirectory must be new or empty; existing evidence is never overwritten."
+    }
+}
+else {
+    [IO.Directory]::CreateDirectory($evidenceRoot) | Out-Null
+}
+
+$fixtureEvidence = [IO.Path]::Combine($evidenceRoot, "fixture")
+$stepEvidence = [IO.Path]::Combine($evidenceRoot, "steps")
+$screenshotEvidence = [IO.Path]::Combine($evidenceRoot, "screenshots")
+[IO.Directory]::CreateDirectory($fixtureEvidence) | Out-Null
+[IO.Directory]::CreateDirectory($stepEvidence) | Out-Null
+[IO.Directory]::CreateDirectory($screenshotEvidence) | Out-Null
+
+$probeSource = @'
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
+
+namespace LbbWindowsAcceptance
+{
+    public sealed class ProbeSnapshot
+    {
+        public long ForegroundHwnd;
+        public long FocusHwnd;
+        public int CursorX;
+        public int CursorY;
+        public string InputDesktop;
+    }
+
+    public static class NativeProbe
+    {
+        private const uint DESKTOP_READOBJECTS = 0x0001;
+        private const int UOI_NAME = 2;
+        private const uint TH32CS_SNAPPROCESS = 0x00000002;
+        private const uint SYNCHRONIZE = 0x00100000;
+        private const uint WAIT_OBJECT_0 = 0x00000000;
+        private const uint WAIT_TIMEOUT = 0x00000102;
+        private static readonly IntPtr InvalidHandle = new IntPtr(-1);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct POINT
+        {
+            internal int X;
+            internal int Y;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct GUITHREADINFO
+        {
+            internal int cbSize;
+            internal uint flags;
+            internal IntPtr hwndActive;
+            internal IntPtr hwndFocus;
+            internal IntPtr hwndCapture;
+            internal IntPtr hwndMenuOwner;
+            internal IntPtr hwndMoveSize;
+            internal IntPtr hwndCaret;
+            internal RECT rcCaret;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT
+        {
+            internal int Left;
+            internal int Top;
+            internal int Right;
+            internal int Bottom;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct PROCESSENTRY32
+        {
+            internal uint Size;
+            internal uint Usage;
+            internal uint ProcessId;
+            internal IntPtr DefaultHeapId;
+            internal uint ModuleId;
+            internal uint Threads;
+            internal uint ParentProcessId;
+            internal int BasePriority;
+            internal uint Flags;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+            internal string ExeFile;
+        }
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr window, IntPtr processId);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetGUIThreadInfo(uint threadId, ref GUITHREADINFO info);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetCursorPos(out POINT point);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint desiredAccess);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetUserObjectInformation(IntPtr handle, int index, StringBuilder info, uint length, out uint needed);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CloseDesktop(IntPtr desktop);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool Process32First(IntPtr snapshot, ref PROCESSENTRY32 entry);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool Process32Next(IntPtr snapshot, ref PROCESSENTRY32 entry);
+
+        [DllImport("kernel32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CloseHandle(IntPtr value);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr OpenEvent(uint desiredAccess, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, string name);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
+        public static bool HasInteractiveInputDesktop()
+        {
+            IntPtr desktop = OpenInputDesktop(0, false, DESKTOP_READOBJECTS);
+            if (desktop == IntPtr.Zero)
+            {
+                return false;
+            }
+            CloseDesktop(desktop);
+            return true;
+        }
+
+        public static ProbeSnapshot Capture()
+        {
+            ProbeSnapshot output = new ProbeSnapshot();
+            IntPtr foreground = GetForegroundWindow();
+            output.ForegroundHwnd = foreground.ToInt64();
+            GUITHREADINFO info = new GUITHREADINFO();
+            info.cbSize = Marshal.SizeOf(typeof(GUITHREADINFO));
+            uint threadId = GetWindowThreadProcessId(foreground, IntPtr.Zero);
+            if (threadId != 0 && GetGUIThreadInfo(threadId, ref info))
+            {
+                output.FocusHwnd = info.hwndFocus.ToInt64();
+            }
+            POINT cursor;
+            if (GetCursorPos(out cursor))
+            {
+                output.CursorX = cursor.X;
+                output.CursorY = cursor.Y;
+            }
+            output.InputDesktop = ReadInputDesktopName();
+            return output;
+        }
+
+        public static int[] GetDirectChildProcessIds(int parentProcessId)
+        {
+            List<int> output = new List<int>();
+            IntPtr snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if (snapshot == InvalidHandle)
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not inspect runner-owned helper descendants");
+            }
+            try
+            {
+                PROCESSENTRY32 entry = new PROCESSENTRY32();
+                entry.Size = (uint)Marshal.SizeOf(typeof(PROCESSENTRY32));
+                if (!Process32First(snapshot, ref entry))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not enumerate runner-owned helper descendants");
+                }
+                do
+                {
+                    if (entry.ParentProcessId == (uint)parentProcessId)
+                    {
+                        output.Add((int)entry.ProcessId);
+                    }
+                    entry.Size = (uint)Marshal.SizeOf(typeof(PROCESSENTRY32));
+                }
+                while (Process32Next(snapshot, ref entry));
+                return output.ToArray();
+            }
+            finally
+            {
+                CloseHandle(snapshot);
+            }
+        }
+
+        public static int GetKernelEventState(string name)
+        {
+            IntPtr eventHandle = OpenEvent(SYNCHRONIZE, false, name);
+            if (eventHandle == IntPtr.Zero)
+            {
+                return 0;
+            }
+            try
+            {
+                uint result = WaitForSingleObject(eventHandle, 0);
+                if (result == WAIT_OBJECT_0) { return 2; }
+                if (result == WAIT_TIMEOUT) { return 1; }
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not inspect the local one-shot recovery event");
+            }
+            finally
+            {
+                CloseHandle(eventHandle);
+            }
+        }
+
+        private static string ReadInputDesktopName()
+        {
+            IntPtr desktop = OpenInputDesktop(0, false, DESKTOP_READOBJECTS);
+            if (desktop == IntPtr.Zero)
+            {
+                return "unavailable";
+            }
+            try
+            {
+                uint needed;
+                GetUserObjectInformation(desktop, UOI_NAME, null, 0, out needed);
+                if (needed == 0)
+                {
+                    return "unavailable";
+                }
+                StringBuilder buffer = new StringBuilder((int)(needed / 2) + 1);
+                if (!GetUserObjectInformation(desktop, UOI_NAME, buffer, needed, out needed))
+                {
+                    return "unavailable";
+                }
+                return buffer.ToString();
+            }
+            finally
+            {
+                CloseDesktop(desktop);
+            }
+        }
+    }
+
+    public sealed class OwnedProcessJob : IDisposable
+    {
+        private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+        private const int JobObjectBasicAccountingInformation = 1;
+        private const int JobObjectExtendedLimitInformation = 9;
+        private const uint CREATE_SUSPENDED = 0x00000004;
+        private const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
+        private const uint CREATE_NO_WINDOW = 0x08000000;
+        private const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
+        private const uint STARTF_USESTDHANDLES = 0x00000100;
+        private const uint PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002;
+        private const uint GENERIC_READ = 0x80000000;
+        private const uint GENERIC_WRITE = 0x40000000;
+        private const uint FILE_SHARE_READ = 0x00000001;
+        private const uint FILE_SHARE_WRITE = 0x00000002;
+        private const uint OPEN_EXISTING = 3;
+        private const int ERROR_INSUFFICIENT_BUFFER = 122;
+        private const uint WAIT_OBJECT_0 = 0x00000000;
+        private const uint WAIT_TIMEOUT = 0x00000102;
+        private const uint WAIT_FAILED = 0xFFFFFFFF;
+        private const uint PROCESS_TERMINATION_WAIT_MS = 5000;
+        private static readonly IntPtr InvalidHandle = new IntPtr(-1);
+        private IntPtr handle;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct SECURITY_ATTRIBUTES
+        {
+            internal int Length;
+            internal IntPtr SecurityDescriptor;
+            [MarshalAs(UnmanagedType.Bool)]
+            internal bool InheritHandle;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct STARTUPINFO
+        {
+            internal int cb;
+            internal string Reserved;
+            internal string Desktop;
+            internal string Title;
+            internal int X;
+            internal int Y;
+            internal int XSize;
+            internal int YSize;
+            internal int XCountChars;
+            internal int YCountChars;
+            internal int FillAttribute;
+            internal uint Flags;
+            internal short ShowWindow;
+            internal short Reserved2Count;
+            internal IntPtr Reserved2;
+            internal IntPtr StdInput;
+            internal IntPtr StdOutput;
+            internal IntPtr StdError;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct STARTUPINFOEX
+        {
+            internal STARTUPINFO StartupInfo;
+            internal IntPtr AttributeList;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PROCESS_INFORMATION
+        {
+            internal IntPtr Process;
+            internal IntPtr Thread;
+            internal int ProcessId;
+            internal int ThreadId;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct JOBOBJECT_BASIC_LIMIT_INFORMATION
+        {
+            internal long PerProcessUserTimeLimit;
+            internal long PerJobUserTimeLimit;
+            internal uint LimitFlags;
+            internal UIntPtr MinimumWorkingSetSize;
+            internal UIntPtr MaximumWorkingSetSize;
+            internal uint ActiveProcessLimit;
+            internal UIntPtr Affinity;
+            internal uint PriorityClass;
+            internal uint SchedulingClass;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct IO_COUNTERS
+        {
+            internal ulong ReadOperationCount;
+            internal ulong WriteOperationCount;
+            internal ulong OtherOperationCount;
+            internal ulong ReadTransferCount;
+            internal ulong WriteTransferCount;
+            internal ulong OtherTransferCount;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+        {
+            internal JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+            internal IO_COUNTERS IoInfo;
+            internal UIntPtr ProcessMemoryLimit;
+            internal UIntPtr JobMemoryLimit;
+            internal UIntPtr PeakProcessMemoryUsed;
+            internal UIntPtr PeakJobMemoryUsed;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct JOBOBJECT_BASIC_ACCOUNTING_INFORMATION
+        {
+            internal long TotalUserTime;
+            internal long TotalKernelTime;
+            internal long ThisPeriodTotalUserTime;
+            internal long ThisPeriodTotalKernelTime;
+            internal uint TotalPageFaultCount;
+            internal uint TotalProcesses;
+            internal uint ActiveProcesses;
+            internal uint TotalTerminatedProcesses;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr CreateJobObject(IntPtr attributes, string name);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool SetInformationJobObject(IntPtr job, int informationClass, ref JOBOBJECT_EXTENDED_LIMIT_INFORMATION information, int length);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool QueryInformationJobObject(IntPtr job, int informationClass, ref JOBOBJECT_BASIC_ACCOUNTING_INFORMATION information, int length, IntPtr returnLength);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool TerminateJobObject(IntPtr job, uint exitCode);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CreateProcess(
+            string applicationName,
+            StringBuilder commandLine,
+            IntPtr processAttributes,
+            IntPtr threadAttributes,
+            [MarshalAs(UnmanagedType.Bool)] bool inheritHandles,
+            uint creationFlags,
+            IntPtr environment,
+            string currentDirectory,
+            ref STARTUPINFOEX startupInfo,
+            out PROCESS_INFORMATION processInformation);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool InitializeProcThreadAttributeList(
+            IntPtr attributeList,
+            int attributeCount,
+            int flags,
+            ref UIntPtr size);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool UpdateProcThreadAttribute(
+            IntPtr attributeList,
+            uint flags,
+            UIntPtr attribute,
+            IntPtr value,
+            UIntPtr size,
+            IntPtr previousValue,
+            IntPtr returnSize);
+
+        [DllImport("kernel32.dll")]
+        private static extern void DeleteProcThreadAttributeList(IntPtr attributeList);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr CreateFile(
+            string fileName,
+            uint desiredAccess,
+            uint shareMode,
+            ref SECURITY_ATTRIBUTES securityAttributes,
+            uint creationDisposition,
+            uint flagsAndAttributes,
+            IntPtr templateFile);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern uint ResumeThread(IntPtr thread);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool TerminateProcess(IntPtr process, uint exitCode);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
+        [DllImport("kernel32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CloseHandle(IntPtr value);
+
+        public OwnedProcessJob()
+        {
+            handle = CreateJobObject(IntPtr.Zero, null);
+            if (handle == IntPtr.Zero)
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not create the private acceptance-test Job Object");
+            }
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if (!SetInformationJobObject(handle, JobObjectExtendedLimitInformation, ref limits, Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION))))
+            {
+                int error = Marshal.GetLastWin32Error();
+                CloseHandle(handle);
+                handle = IntPtr.Zero;
+                throw new Win32Exception(error, "Could not configure private process-tree cleanup");
+            }
+        }
+
+        public int StartProcess(string applicationName, string commandLine, string currentDirectory, IDictionary overrides)
+        {
+            EnsureOpen();
+            IntPtr environment = IntPtr.Zero;
+            IntPtr nullHandle = IntPtr.Zero;
+            IntPtr inheritedHandleList = IntPtr.Zero;
+            IntPtr attributeList = IntPtr.Zero;
+            bool attributeListInitialized = false;
+            PROCESS_INFORMATION process = new PROCESS_INFORMATION();
+            bool suspendedProcessNeedsTermination = false;
+            bool processAssignedToJob = false;
+            Exception primaryFailure = null;
+            try
+            {
+                environment = BuildEnvironment(overrides);
+                SECURITY_ATTRIBUTES security = new SECURITY_ATTRIBUTES();
+                security.Length = Marshal.SizeOf(typeof(SECURITY_ATTRIBUTES));
+                security.InheritHandle = true;
+                nullHandle = CreateFile("NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, ref security, OPEN_EXISTING, 0, IntPtr.Zero);
+                if (nullHandle == InvalidHandle)
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not open the null device for sanitized child output");
+                }
+
+                UIntPtr attributeListSize = UIntPtr.Zero;
+                bool sizingUnexpectedlySucceeded = InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref attributeListSize);
+                int sizingError = Marshal.GetLastWin32Error();
+                ulong attributeBytes = attributeListSize.ToUInt64();
+                if (sizingUnexpectedlySucceeded || sizingError != ERROR_INSUFFICIENT_BUFFER || attributeBytes == 0 || attributeBytes > Int32.MaxValue)
+                {
+                    throw new Win32Exception(sizingError, "Could not size the restricted child handle list");
+                }
+                attributeList = Marshal.AllocHGlobal(checked((int)attributeBytes));
+                if (!InitializeProcThreadAttributeList(attributeList, 1, 0, ref attributeListSize))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not initialize the restricted child handle list");
+                }
+                attributeListInitialized = true;
+
+                inheritedHandleList = Marshal.AllocHGlobal(IntPtr.Size);
+                Marshal.WriteIntPtr(inheritedHandleList, nullHandle);
+                if (!UpdateProcThreadAttribute(
+                    attributeList,
+                    0,
+                    new UIntPtr(PROC_THREAD_ATTRIBUTE_HANDLE_LIST),
+                    inheritedHandleList,
+                    new UIntPtr((uint)IntPtr.Size),
+                    IntPtr.Zero,
+                    IntPtr.Zero))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not restrict child handle inheritance to the null device");
+                }
+
+                STARTUPINFOEX startup = new STARTUPINFOEX();
+                startup.StartupInfo.cb = Marshal.SizeOf(typeof(STARTUPINFOEX));
+                startup.StartupInfo.Flags = STARTF_USESTDHANDLES;
+                startup.StartupInfo.StdInput = nullHandle;
+                startup.StartupInfo.StdOutput = nullHandle;
+                startup.StartupInfo.StdError = nullHandle;
+                startup.AttributeList = attributeList;
+                // CreateProcess requires inheritHandles=true for HANDLE_LIST,
+                // but the extended attribute restricts inheritance to NUL.
+                bool created = CreateProcess(
+                    applicationName,
+                    new StringBuilder(commandLine),
+                    IntPtr.Zero,
+                    IntPtr.Zero,
+                    true,
+                    CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
+                    environment,
+                    currentDirectory,
+                    ref startup,
+                    out process);
+                if (!created)
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "A required acceptance-test process did not start");
+                }
+                suspendedProcessNeedsTermination = true;
+                if (!AssignProcessToJobObject(handle, process.Process))
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    throw new Win32Exception(error, "A child could not be assigned to the private acceptance-test Job Object");
+                }
+                processAssignedToJob = true;
+                if (ResumeThread(process.Thread) == UInt32.MaxValue)
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    throw new Win32Exception(error, "A Job-owned child could not be resumed");
+                }
+                suspendedProcessNeedsTermination = false;
+                return process.ProcessId;
+            }
+            catch (Exception error)
+            {
+                primaryFailure = error;
+                throw;
+            }
+            finally
+            {
+                Exception terminationFailure = null;
+                if (suspendedProcessNeedsTermination && process.Process != IntPtr.Zero)
+                {
+                    terminationFailure = TerminateSuspendedProcess(process.Process, processAssignedToJob);
+                }
+                if (process.Thread != IntPtr.Zero) { CloseHandle(process.Thread); }
+                if (process.Process != IntPtr.Zero) { CloseHandle(process.Process); }
+                if (attributeListInitialized) { DeleteProcThreadAttributeList(attributeList); }
+                if (attributeList != IntPtr.Zero) { Marshal.FreeHGlobal(attributeList); }
+                if (inheritedHandleList != IntPtr.Zero) { Marshal.FreeHGlobal(inheritedHandleList); }
+                if (nullHandle != IntPtr.Zero && nullHandle != InvalidHandle) { CloseHandle(nullHandle); }
+                if (environment != IntPtr.Zero) { Marshal.FreeHGlobal(environment); }
+                if (terminationFailure != null)
+                {
+                    if (primaryFailure != null)
+                    {
+                        throw new AggregateException(
+                            "A required child launch failed and its suspended-process cleanup also failed",
+                            new Exception[] { primaryFailure, terminationFailure });
+                    }
+                    throw terminationFailure;
+                }
+            }
+        }
+
+        private static Exception TerminateSuspendedProcess(IntPtr process, bool assignedToJob)
+        {
+            bool terminationRequested = TerminateProcess(process, 1);
+            int terminationError = Marshal.GetLastWin32Error();
+            uint wait = WaitForSingleObject(process, terminationRequested ? PROCESS_TERMINATION_WAIT_MS : 0);
+            if (wait == WAIT_OBJECT_0)
+            {
+                return null;
+            }
+            string ownership = assignedToJob ? "Job-owned" : "unassigned";
+            if (!terminationRequested)
+            {
+                return new Win32Exception(
+                    terminationError,
+                    ownership + " suspended child could not be terminated during failed launch cleanup");
+            }
+            if (wait == WAIT_TIMEOUT)
+            {
+                return new TimeoutException(
+                    ownership + " suspended child did not exit within the bounded failed-launch cleanup window");
+            }
+            int waitError = wait == WAIT_FAILED ? Marshal.GetLastWin32Error() : unchecked((int)wait);
+            return new Win32Exception(
+                waitError,
+                ownership + " suspended child termination could not be verified during failed launch cleanup");
+        }
+
+        public uint ActiveProcessCount
+        {
+            get
+            {
+                EnsureOpen();
+                JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting = new JOBOBJECT_BASIC_ACCOUNTING_INFORMATION();
+                if (!QueryInformationJobObject(handle, JobObjectBasicAccountingInformation, ref accounting, Marshal.SizeOf(typeof(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION)), IntPtr.Zero))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not query private process-tree cleanup state");
+                }
+                return accounting.ActiveProcesses;
+            }
+        }
+
+        public void Terminate()
+        {
+            EnsureOpen();
+            if (!TerminateJobObject(handle, 1))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not terminate the private acceptance-test process tree");
+            }
+        }
+
+        public void Dispose()
+        {
+            if (handle != IntPtr.Zero)
+            {
+                CloseHandle(handle);
+                handle = IntPtr.Zero;
+            }
+            GC.SuppressFinalize(this);
+        }
+
+        ~OwnedProcessJob()
+        {
+            Dispose();
+        }
+
+        private void EnsureOpen()
+        {
+            if (handle == IntPtr.Zero)
+            {
+                throw new ObjectDisposedException("OwnedProcessJob");
+            }
+        }
+
+        private static IntPtr BuildEnvironment(IDictionary overrides)
+        {
+            SortedDictionary<string, string> environment = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (DictionaryEntry item in Environment.GetEnvironmentVariables())
+            {
+                string key = item.Key as string;
+                string value = item.Value as string;
+                if (!String.IsNullOrEmpty(key) && key.IndexOf('=') < 0 && key.IndexOf('\0') < 0 && value != null && value.IndexOf('\0') < 0)
+                {
+                    environment[key] = value;
+                }
+            }
+            if (overrides != null)
+            {
+                foreach (DictionaryEntry item in overrides)
+                {
+                    string key = item.Key as string;
+                    string value = item.Value as string;
+                    if (String.IsNullOrEmpty(key) || key.IndexOf('=') >= 0 || key.IndexOf('\0') >= 0 || value == null || value.IndexOf('\0') >= 0)
+                    {
+                        throw new ArgumentException("A child environment override was invalid");
+                    }
+                    environment[key] = value;
+                }
+            }
+            StringBuilder block = new StringBuilder();
+            foreach (KeyValuePair<string, string> item in environment)
+            {
+                block.Append(item.Key).Append('=').Append(item.Value).Append('\0');
+            }
+            block.Append('\0');
+            return Marshal.StringToHGlobalUni(block.ToString());
+        }
+    }
+}
+'@
+
+$probeNamespace = "LbbWindowsAcceptance_" + [Guid]::NewGuid().ToString("N")
+$probeSource = $probeSource.Replace("namespace LbbWindowsAcceptance", "namespace $probeNamespace")
+Add-Type -TypeDefinition $probeSource -Language CSharp
+$script:nativeProbeType = ("$probeNamespace.NativeProbe" -as [type])
+$script:ownedJobType = ("$probeNamespace.OwnedProcessJob" -as [type])
+if ($null -eq $script:nativeProbeType -or $null -eq $script:ownedJobType) {
+    throw "The isolated Windows acceptance probe types did not load."
+}
+
+$sessionId = (Get-Process -Id $PID).SessionId
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+if (-not [Environment]::UserInteractive -or $sessionId -eq 0 -or $identity.IsSystem) {
+    throw "A signed-in, non-System interactive Windows session is required; service and Session 0 runs are invalid evidence."
+}
+if (-not $script:nativeProbeType::HasInteractiveInputDesktop()) {
+    throw "The current process cannot open the interactive input desktop."
+}
+$initialProbe = $script:nativeProbeType::Capture()
+if ($initialProbe.ForegroundHwnd -eq 0 -or $initialProbe.InputDesktop -eq "unavailable") {
+    throw "The interactive foreground or input desktop is unavailable."
+}
+
+function Get-EphemeralPort {
+    $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+    try {
+        $listener.Start()
+        return ([Net.IPEndPoint]$listener.LocalEndpoint).Port
+    }
+    finally {
+        $listener.Stop()
+    }
+}
+
+function Test-PortBindable {
+    param([int]$Candidate)
+    $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $Candidate)
+    try {
+        $listener.Start()
+        return $true
+    }
+    catch {
+        return $false
+    }
+    finally {
+        $listener.Stop()
+    }
+}
+
+if ($Port -eq 0) {
+    $Port = Get-EphemeralPort
+}
+elseif (-not (Test-PortBindable $Port)) {
+    throw "The requested loopback port is already in use. The runner will not disturb its owner."
+}
+
+function ConvertTo-NativeArgument {
+    param([AllowEmptyString()][string]$Value)
+    if ($Value.Length -gt 0 -and $Value -notmatch '[\s"]') {
+        return $Value
+    }
+    $builder = [Text.StringBuilder]::new()
+    [void]$builder.Append('"')
+    $slashes = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -eq '\') {
+            $slashes++
+            continue
+        }
+        if ($character -eq '"') {
+            [void]$builder.Append(('\' * (($slashes * 2) + 1)))
+            [void]$builder.Append('"')
+            $slashes = 0
+            continue
+        }
+        if ($slashes -gt 0) {
+            [void]$builder.Append(('\' * $slashes))
+            $slashes = 0
+        }
+        [void]$builder.Append($character)
+    }
+    if ($slashes -gt 0) {
+        [void]$builder.Append(('\' * ($slashes * 2)))
+    }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+function Start-IsolatedProcess {
+    param(
+        [string]$Path,
+        [string[]]$Arguments,
+        [hashtable]$Environment
+    )
+    $quotedApplication = ConvertTo-NativeArgument $Path
+    $quotedArguments = (($Arguments | ForEach-Object { ConvertTo-NativeArgument $_ }) -join ' ')
+    $commandLine = if ([String]::IsNullOrEmpty($quotedArguments)) {
+        $quotedApplication
+    }
+    else {
+        $quotedApplication + " " + $quotedArguments
+    }
+    # CreateProcess starts suspended; the private Job Object owns the process
+    # before ResumeThread, so supervisors cannot race by spawning an unowned
+    # worker. All standard handles point at NUL because server stdout contains
+    # the bearer token and must never become evidence.
+    $processId = $script:ownedJob.StartProcess(
+        $Path,
+        $commandLine,
+        [IO.Path]::GetDirectoryName($Path),
+        $Environment
+    )
+    return [Diagnostics.Process]::GetProcessById($processId)
+}
+
+function Request-FixtureStop {
+    param([Diagnostics.Process]$Process)
+    if ($null -eq $Process) {
+        return $true
+    }
+    try {
+        $Process.Refresh()
+        if ($Process.HasExited) {
+            return $true
+        }
+        if ($null -ne $script:fixtureReady) {
+            $handle = [Int64]$script:fixtureReady.targetHwnd
+            if ($handle -ne 0) {
+                [void]$script:nativeProbeType::PostMessage([IntPtr]$handle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+                if ($Process.WaitForExit(2500)) {
+                    return $true
+                }
+            }
+        }
+        return $false
+    }
+    catch [InvalidOperationException] {
+        # The exact process exited between Refresh and cleanup.
+        return $true
+    }
+}
+
+function Read-JsonFile {
+    param([string]$Path)
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        if ([IO.File]::Exists($Path)) {
+            try {
+                return ([IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8) | ConvertFrom-Json)
+            }
+            catch {
+                # The fixture replaces this small state document in place; retry a partial read.
+            }
+        }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Timed out waiting for fixture evidence."
+}
+
+function Wait-Condition {
+    param([scriptblock]$Condition, [string]$Description)
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        try {
+            $value = & $Condition
+            if ($null -ne $value -and $value -ne $false) {
+                return $value
+            }
+        }
+        catch {
+            # Startup state can be absent or briefly incomplete.
+        }
+        Start-Sleep -Milliseconds 150
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Timed out waiting for $Description."
+}
+
+function Write-EvidenceJson {
+    param([string]$Path, [object]$Value)
+    $json = $Value | ConvertTo-Json -Depth 40
+    [IO.File]::WriteAllText($Path, $json + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+}
+
+function Test-FileContainsSecret {
+    param([string]$Path, [string]$Secret)
+    if ([String]::IsNullOrEmpty($Secret)) {
+        return $false
+    }
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    # ISO-8859-1 maps each byte to one character, so an ordinal search finds
+    # the ASCII token even inside a binary file without interpreting the file.
+    $binaryView = [Text.Encoding]::GetEncoding(28591).GetString($bytes)
+    return $binaryView.IndexOf($Secret, [StringComparison]::Ordinal) -ge 0
+}
+
+function ConvertTo-SafeObject {
+    param([object]$Value)
+    if ($null -eq $Value) {
+        return $null
+    }
+    if ($Value -is [string]) {
+        return ConvertTo-SafeFailureText $Value
+    }
+    if ($Value -is [ValueType]) {
+        return $Value
+    }
+    if ($Value -is [Collections.IDictionary]) {
+        $output = [ordered]@{}
+        foreach ($key in $Value.Keys) {
+            $name = [string]$key
+            if ($name.ToLowerInvariant() -in @("token", "sessiontoken", "csrf", "authorization", "windows", "tabs", "events", "dataurl", "screenshotdata", "value")) {
+                continue
+            }
+            $output[$name] = ConvertTo-SafeObject $Value[$key]
+        }
+        return $output
+    }
+    if ($Value -is [Collections.IEnumerable]) {
+        return @($Value | ForEach-Object { ConvertTo-SafeObject $_ })
+    }
+    $properties = @($Value.PSObject.Properties | Where-Object { $_.MemberType -in @("NoteProperty", "Property", "AliasProperty") })
+    if ($properties.Count -eq 0) {
+        return [string]$Value
+    }
+    $objectOutput = [ordered]@{}
+    foreach ($property in $properties) {
+        $name = $property.Name
+        if ($name.ToLowerInvariant() -in @("token", "sessiontoken", "csrf", "authorization", "windows", "tabs", "events", "dataurl", "screenshotdata", "value")) {
+            continue
+        }
+        $objectOutput[$name] = ConvertTo-SafeObject $property.Value
+    }
+    return $objectOutput
+}
+
+function Get-PropertyValue {
+    param([object]$Object, [string]$Name)
+    if ($null -eq $Object) {
+        return $null
+    }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) {
+        return $null
+    }
+    return $property.Value
+}
+
+function ConvertTo-SafeResponse {
+    param([object]$Response)
+    $result = Get-PropertyValue $Response "result"
+    $errorObject = Get-PropertyValue $Response "error"
+    $taxonomy = Get-PropertyValue $Response "taxonomy"
+    $state = Get-PropertyValue $Response "state"
+    $safe = [ordered]@{
+        result = ConvertTo-SafeObject $result
+        error = ConvertTo-SafeObject $errorObject
+        taxonomy = ConvertTo-SafeObject $taxonomy
+    }
+    if ($null -ne $Response.PSObject.Properties["callId"]) {
+        $safe.callId = $Response.callId
+    }
+    if ($null -ne $state) {
+        $safe.targetState = [ordered]@{
+            computerConnected = Get-PropertyValue $state "computerConnected"
+            computer = ConvertTo-SafeObject (Get-PropertyValue $state "computer")
+            computerObservation = ConvertTo-SafeObject (Get-PropertyValue $state "computerObservation")
+        }
+    }
+    return $safe
+}
+
+function ConvertTo-SafeFailureText {
+    param([string]$Message)
+    $safe = if ($null -eq $Message) { "Unknown failure" } else { $Message }
+    foreach ($replacement in @(
+        @($Token, "[REDACTED_TOKEN]"),
+        @($evidenceRoot, "[EVIDENCE_DIRECTORY]"),
+        @($resolvedServer, "[SERVER]"),
+        @($resolvedHelper, "[HELPER]"),
+        @($resolvedFixture, "[FIXTURE]")
+    )) {
+        if (-not [String]::IsNullOrEmpty([string]$replacement[0])) {
+            $safe = $safe.Replace([string]$replacement[0], [string]$replacement[1])
+        }
+    }
+    if ($safe.Length -gt 1200) {
+        $safe = $safe.Substring(0, 1200)
+    }
+    return $safe
+}
+
+$script:stepNumber = 0
+$script:stepResults = [Collections.Generic.List[object]]::new()
+
+function Save-StepResponse {
+    param([string]$Name, [object]$Response)
+    $script:stepNumber++
+    $slug = ($Name.ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-')
+    $fileName = "{0:D2}-{1}.json" -f $script:stepNumber, $slug
+    Write-EvidenceJson ([IO.Path]::Combine($stepEvidence, $fileName)) (ConvertTo-SafeResponse $Response)
+    $script:stepResults.Add([ordered]@{ name = $Name; passed = $true; evidence = $fileName })
+}
+
+function Save-StepRecord {
+    param([string]$Name, [object]$Record)
+    $script:stepNumber++
+    $slug = ($Name.ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-')
+    $fileName = "{0:D2}-{1}.json" -f $script:stepNumber, $slug
+    Write-EvidenceJson ([IO.Path]::Combine($stepEvidence, $fileName)) (ConvertTo-SafeObject $Record)
+    $script:stepResults.Add([ordered]@{ name = $Name; passed = $true; evidence = $fileName })
+}
+
+function Assert-True {
+    param([bool]$Condition, [string]$Message)
+    if (-not $Condition) {
+        throw $Message
+    }
+}
+
+function Invoke-LbbCommand {
+    param([string]$Method, [hashtable]$Params)
+    $callId = "windows-fixture-" + [Guid]::NewGuid().ToString("N")
+    $body = [ordered]@{ method = $Method; params = $Params; callId = $callId } | ConvertTo-Json -Depth 15 -Compress
+    try {
+        $response = Invoke-RestMethod -UseBasicParsing -Uri "$script:baseUrl/api/v1/command" -Method Post -Headers @{ Authorization = "Bearer $Token" } -ContentType "application/json" -Body $body -TimeoutSec $TimeoutSeconds
+    }
+    catch {
+        $detail = $_.ErrorDetails.Message
+        if ([String]::IsNullOrWhiteSpace($detail)) {
+            $detail = $_.Exception.Message
+        }
+        throw "Loopback command $Method failed: $(ConvertTo-SafeFailureText $detail)"
+    }
+    $responseError = Get-PropertyValue $response "error"
+    if ($null -ne $responseError) {
+        throw "Loopback command $Method returned $($responseError.code): $($responseError.message)"
+    }
+    return $response
+}
+
+function Get-LbbState {
+    $response = Invoke-RestMethod -UseBasicParsing -Uri "$script:baseUrl/api/state" -Method Get -Headers @{ Authorization = "Bearer $Token" } -TimeoutSec 5
+    return $response.state
+}
+
+function Get-CurrentObservation {
+    $state = Get-LbbState
+    if ($null -eq $state.computerObservation) {
+        throw "The bridge has no current computer observation."
+    }
+    return $state.computerObservation
+}
+
+function Save-ObservationScreenshot {
+    param([object]$Observation, [string]$Name)
+    $relative = [string]$Observation.screenshotUrl
+    if (-not $relative.StartsWith("/api/computer/screenshot?id=", [StringComparison]::Ordinal) -or $relative.Contains("://")) {
+        throw "The bridge returned an invalid computer screenshot URL."
+    }
+    $fileName = (($Name.ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-')) + ".png"
+    $path = [IO.Path]::Combine($screenshotEvidence, $fileName)
+    Invoke-WebRequest -UseBasicParsing -Uri ($script:baseUrl + $relative) -Method Get -Headers @{ Authorization = "Bearer $Token" } -OutFile $path -TimeoutSec $TimeoutSeconds | Out-Null
+    $bytes = [IO.File]::ReadAllBytes($path)
+    Assert-True ($bytes.Length -gt 1000) "The exact-window screenshot was unexpectedly small."
+    Assert-True ($bytes[0] -eq 0x89 -and $bytes[1] -eq 0x50 -and $bytes[2] -eq 0x4E -and $bytes[3] -eq 0x47) "The screenshot was not a PNG."
+    return [ordered]@{
+        file = $fileName
+        bytes = $bytes.Length
+        sha256 = (Get-FileHash -Algorithm SHA256 -Path $path).Hash.ToLowerInvariant()
+        frameId = $Observation.frameId
+        contentHash = $Observation.contentHash
+    }
+}
+
+function Get-FixtureState {
+    return Read-JsonFile ([IO.Path]::Combine($fixtureEvidence, "fixture-state.json"))
+}
+
+function Get-TextHash {
+    param([string]$Value)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [Text.Encoding]::UTF8.GetBytes($Value)
+        return (($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString("x2") }) -join '')
+    }
+    finally {
+        $sha.Dispose()
+    }
+}
+
+function Capture-InvariantProbe {
+    $native = $script:nativeProbeType::Capture()
+    $fixture = Get-FixtureState
+    return [ordered]@{
+        foregroundHwnd = $native.ForegroundHwnd.ToString()
+        focusHwnd = $native.FocusHwnd.ToString()
+        cursor = [ordered]@{ x = $native.CursorX; y = $native.CursorY }
+        inputDesktop = $native.InputDesktop
+        targetActivatedCount = $fixture.targetActivatedCount
+        sentinelActivatedCount = $fixture.sentinelActivatedCount
+        sentinelDeactivatedCount = $fixture.sentinelDeactivatedCount
+    }
+}
+
+function Assert-InvariantsHeld {
+    param([object]$Before, [string]$Step)
+    # The fixture snapshots its cross-thread activation counters every 200 ms.
+    # Wait through one complete publication interval before reading the oracle.
+    Start-Sleep -Milliseconds 300
+    $after = Capture-InvariantProbe
+    Assert-True ($after.foregroundHwnd -eq $Before.foregroundHwnd) "$Step changed the foreground HWND."
+    Assert-True ($after.focusHwnd -eq $Before.focusHwnd) "$Step changed the foreground focus HWND."
+    Assert-True ($after.cursor.x -eq $Before.cursor.x -and $after.cursor.y -eq $Before.cursor.y) "$Step moved the hardware cursor."
+    Assert-True ($after.inputDesktop -eq $Before.inputDesktop) "$Step changed the input desktop."
+    Assert-True ($after.targetActivatedCount -eq $Before.targetActivatedCount) "$Step activated the background target."
+    Assert-True ($after.sentinelDeactivatedCount -eq $Before.sentinelDeactivatedCount) "$Step deactivated the foreground sentinel."
+    return $after
+}
+
+function Convert-ScreenPointToImage {
+    param([object]$Observation, [double]$ScreenX, [double]$ScreenY)
+    $x = [Math]::Round(($ScreenX - [double]$Observation.screenX) * [double]$Observation.transportScaleX)
+    $y = [Math]::Round(($ScreenY - [double]$Observation.screenY) * [double]$Observation.transportScaleY)
+    $x = [Math]::Max(0, [Math]::Min(([double]$Observation.imageWidth - 1), $x))
+    $y = [Math]::Max(0, [Math]::Min(([double]$Observation.imageHeight - 1), $y))
+    return [ordered]@{ x = [double]$x; y = [double]$y }
+}
+
+function Get-SurfacePoint {
+    param([object]$Observation, [double]$FractionX, [double]$FractionY)
+    $fixture = Get-FixtureState
+    $bounds = $fixture.surfaceScreenBounds
+    return Convert-ScreenPointToImage $Observation ([double]$bounds.x + ([double]$bounds.width * $FractionX)) ([double]$bounds.y + ([double]$bounds.height * $FractionY))
+}
+
+function Get-MagentaPixelCount {
+    param([string]$FileName)
+    Add-Type -AssemblyName System.Drawing
+    $bitmap = [Drawing.Bitmap]::FromFile([IO.Path]::Combine($screenshotEvidence, $FileName))
+    try {
+        $count = 0
+        for ($y = 0; $y -lt $bitmap.Height; $y += 2) {
+            for ($x = 0; $x -lt $bitmap.Width; $x += 2) {
+                $pixel = $bitmap.GetPixel($x, $y)
+                if ($pixel.R -ge 240 -and $pixel.G -le 20 -and $pixel.B -ge 240) {
+                    $count++
+                }
+            }
+        }
+        return $count
+    }
+    finally {
+        $bitmap.Dispose()
+    }
+}
+
+function Save-SanitizedDesktopCrop {
+    param([string]$Name)
+    Add-Type -AssemblyName System.Drawing
+    Add-Type -AssemblyName System.Windows.Forms
+    $fixture = Get-FixtureState
+    $target = $fixture.targetBounds
+    $margin = 16
+    $virtual = [Windows.Forms.SystemInformation]::VirtualScreen
+    $left = [Math]::Max($virtual.Left, [int]$target.x - $margin)
+    $top = [Math]::Max($virtual.Top, [int]$target.y - $margin)
+    $right = [Math]::Min($virtual.Right, [int]$target.x + [int]$target.width + $margin)
+    $bottom = [Math]::Min($virtual.Bottom, [int]$target.y + [int]$target.height + $margin)
+    $width = $right - $left
+    $height = $bottom - $top
+    Assert-True ($width -gt 100 -and $height -gt 100) "The fixture crop bounds were invalid."
+    $fileName = (($Name.ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-')) + ".png"
+    $path = [IO.Path]::Combine($screenshotEvidence, $fileName)
+    $bitmap = [Drawing.Bitmap]::new($width, $height, [Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    try {
+        $graphics = [Drawing.Graphics]::FromImage($bitmap)
+        try {
+            $graphics.CopyFromScreen($left, $top, 0, 0, [Drawing.Size]::new($width, $height), [Drawing.CopyPixelOperation]::SourceCopy)
+        }
+        finally {
+            $graphics.Dispose()
+        }
+        # The fixture owns a #101820 topmost backdrop that extends 28 pixels
+        # beyond the target. More than 95% of the crop's outermost perimeter
+        # must match it, or the crop is deleted rather than risking unrelated
+        # desktop content in the evidence bundle.
+        $perimeter = 0
+        $matchingBackdrop = 0
+        for ($x = 0; $x -lt $width; $x++) {
+            foreach ($y in @(0, 1, ($height - 2), ($height - 1))) {
+                $pixel = $bitmap.GetPixel($x, $y)
+                $perimeter++
+                if ([Math]::Abs([int]$pixel.R - 16) -le 2 -and [Math]::Abs([int]$pixel.G - 24) -le 2 -and [Math]::Abs([int]$pixel.B - 32) -le 2) {
+                    $matchingBackdrop++
+                }
+            }
+        }
+        for ($y = 2; $y -lt ($height - 2); $y++) {
+            foreach ($x in @(0, 1, ($width - 2), ($width - 1))) {
+                $pixel = $bitmap.GetPixel($x, $y)
+                $perimeter++
+                if ([Math]::Abs([int]$pixel.R - 16) -le 2 -and [Math]::Abs([int]$pixel.G - 24) -le 2 -and [Math]::Abs([int]$pixel.B - 32) -le 2) {
+                    $matchingBackdrop++
+                }
+            }
+        }
+        $backdropRatio = [double]$matchingBackdrop / [double]$perimeter
+        if ($backdropRatio -lt 0.95) {
+            throw "The desktop crop perimeter was not fixture-owned; no desktop-level evidence was retained."
+        }
+        $bitmap.Save($path, [Drawing.Imaging.ImageFormat]::Png)
+    }
+    catch {
+        if ([IO.File]::Exists($path)) {
+            [IO.File]::Delete($path)
+        }
+        throw
+    }
+    finally {
+        $bitmap.Dispose()
+    }
+    return [ordered]@{
+        file = $fileName
+        bytes = ([IO.FileInfo]::new($path)).Length
+        sha256 = (Get-FileHash -Algorithm SHA256 -Path $path).Hash.ToLowerInvariant()
+        crop = [ordered]@{ x = $left; y = $top; width = $width; height = $height; targetMargin = $margin }
+        fixtureBackdropRgb = "#101820"
+        backdropPerimeterRatio = $backdropRatio
+        scope = "fixture-owned target plus 16-pixel indicator band"
+        fullDesktopCaptured = $false
+    }
+}
+
+function Compare-IndicatorBand {
+    param([string]$BeforeFile, [string]$DuringFile, [int]$Margin = 16, [int]$InnerBand = 8)
+    Add-Type -AssemblyName System.Drawing
+    $before = [Drawing.Bitmap]::FromFile([IO.Path]::Combine($screenshotEvidence, $BeforeFile))
+    $during = [Drawing.Bitmap]::FromFile([IO.Path]::Combine($screenshotEvidence, $DuringFile))
+    try {
+        Assert-True ($before.Width -eq $during.Width -and $before.Height -eq $during.Height) "Desktop indicator crops changed dimensions."
+        $changed = 0
+        $sampled = 0
+        $band = $Margin + $InnerBand
+        for ($y = 0; $y -lt $before.Height; $y++) {
+            for ($x = 0; $x -lt $before.Width; $x++) {
+                if ($x -ge $band -and $x -lt ($before.Width - $band) -and $y -ge $band -and $y -lt ($before.Height - $band)) {
+                    continue
+                }
+                $first = $before.GetPixel($x, $y)
+                $second = $during.GetPixel($x, $y)
+                $sampled++
+                if ([Math]::Abs([int]$first.R - [int]$second.R) -gt 8 -or [Math]::Abs([int]$first.G - [int]$second.G) -gt 8 -or [Math]::Abs([int]$first.B - [int]$second.B) -gt 8) {
+                    $changed++
+                }
+            }
+        }
+        return [ordered]@{
+            changedPixels = $changed
+            sampledPixels = $sampled
+            changedRatio = [double]$changed / [double]$sampled
+            comparison = "pre-share versus active-share outer 16px plus inner 8px target-edge band"
+        }
+    }
+    finally {
+        $before.Dispose()
+        $during.Dispose()
+    }
+}
+
+function Get-SanitizedFileProvenance {
+    param([string]$Path)
+    $file = [IO.FileInfo]::new($Path)
+    $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($Path).FileVersion
+    return [ordered]@{
+        bytes = $file.Length
+        sha256 = (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLowerInvariant()
+        fileVersion = if ([String]::IsNullOrWhiteSpace($version)) { $null } else { $version }
+        pathRecorded = $false
+    }
+}
+
+function Get-SanitizedHostProvenance {
+    param([object]$Share, [object]$DesktopCrop, [object]$IndicatorDifference)
+    $probe = $script:nativeProbeType::Capture()
+    return [ordered]@{
+        platform = "Windows"
+        osVersion = [Environment]::OSVersion.Version.ToString()
+        osVersionString = [Environment]::OSVersion.VersionString
+        is64BitOperatingSystem = [Environment]::Is64BitOperatingSystem
+        processArchitecture = [Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString()
+        powershellVersion = $PSVersionTable.PSVersion.ToString()
+        powershellEdition = $PSVersionTable.PSEdition
+        interactiveSessionId = $sessionId
+        inputDesktop = $probe.InputDesktop
+        captureBackend = $Share.captureBackend
+        selectionMode = $Share.selectionMode
+        systemIndicatorPolicy = $Share.systemIndicator
+        artifacts = [ordered]@{
+            server = Get-SanitizedFileProvenance $resolvedServer
+            helper = Get-SanitizedFileProvenance $resolvedHelper
+            fixture = Get-SanitizedFileProvenance $resolvedFixture
+            runner = Get-SanitizedFileProvenance $PSCommandPath
+        }
+        desktopCrop = $DesktopCrop
+        indicatorDifference = $IndicatorDifference
+        hostnameRecorded = $false
+        usernameRecorded = $false
+        fullDesktopRecorded = $false
+    }
+}
+
+function Wait-ForFixtureProof {
+    param([scriptblock]$Condition, [string]$Description)
+    return Wait-Condition {
+        $state = Get-FixtureState
+        if (& $Condition $state) { return $state }
+        return $false
+    } $Description
+}
+
+function Wait-ForDirectHelperWorker {
+    param([int]$SupervisorPid, [string]$Description)
+    return Wait-Condition {
+        $children = @($script:nativeProbeType::GetDirectChildProcessIds($SupervisorPid))
+        if ($children.Count -eq 1) {
+            return [int]$children[0]
+        }
+        return $false
+    } $Description
+}
+
+function New-WatchdogCausalityProof {
+    param(
+        [DateTime]$FaultTriggeredAtUtc,
+        [int64]$EventObservedAfterShareStartMs,
+        [int64]$ReplacementObservedAfterShareStartMs,
+        [bool]$WatchdogErrorObserved,
+        [int64]$ElapsedLowerBoundMs
+    )
+    $replacementAfterEventMs = $ReplacementObservedAfterShareStartMs - $EventObservedAfterShareStartMs
+    $elapsedLowerBoundSatisfied = $replacementAfterEventMs -ge $ElapsedLowerBoundMs
+    $causalityProven = $WatchdogErrorObserved -or $elapsedLowerBoundSatisfied
+    $causalityMode = if ($WatchdogErrorObserved) {
+        "observed-COMPUTER_HELPER_WATCHDOG"
+    }
+    elseif ($elapsedLowerBoundSatisfied) {
+        "elapsed-lower-bound"
+    }
+    else {
+        "unproven"
+    }
+    return [ordered]@{
+        faultTriggeredAtUtc = $FaultTriggeredAtUtc.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
+        eventObservedAfterShareStartMs = $EventObservedAfterShareStartMs
+        replacementObservedAfterShareStartMs = $ReplacementObservedAfterShareStartMs
+        replacementObservedAfterEventMs = $replacementAfterEventMs
+        watchdogErrorObserved = $WatchdogErrorObserved
+        elapsedLowerBoundMs = $ElapsedLowerBoundMs
+        elapsedLowerBoundSatisfied = $elapsedLowerBoundSatisfied
+        causalityMode = $causalityMode
+        causalityProven = $causalityProven
+    }
+}
+
+$selectedSuites = if ($Suite -contains "All") {
+    @("Smoke", "Recovery", "Semantic", "Keyboard", "Pixel", "Capture")
+}
+else {
+    @($Suite | Select-Object -Unique)
+}
+if ($selectedSuites.Count -eq 0) {
+    throw "At least one suite is required."
+}
+if ($selectedSuites -contains "Recovery" -and $TimeoutSeconds -lt 25) {
+    throw "Recovery requires TimeoutSeconds of at least 25 for the 12-second worker watchdog and bounded supervisor reconnect."
+}
+
+$fixtureProcess = $null
+$serverProcess = $null
+$helperProcess = $null
+$script:ownedJob = $null
+$script:fixtureReady = $null
+$script:baseUrl = "http://127.0.0.1:$Port"
+$shareStarted = $false
+$runPassed = $false
+$failureText = $null
+$cleanupIssues = [Collections.Generic.List[string]]::new()
+$startedAt = [DateTime]::UtcNow
+$baselineProbe = $null
+$targetWindowId = $null
+$targetPid = 0
+$recoveryEventName = "Local\LBBTestSharePump-" + [Guid]::NewGuid().ToString("N")
+$initialWorkerPid = $null
+$initialHelperSessionId = $null
+$recoveryEventReleased = $true
+$watchdogCausalityMinimumMs = 11500
+$tokenPersistenceVerified = $false
+$tokenBearingEvidenceRemoved = 0
+
+try {
+    $script:ownedJob = $script:ownedJobType::new()
+    $hostPath = (Get-Process -Id $PID).Path
+    $fixtureArguments = @("-NoLogo", "-NoProfile", "-NonInteractive", "-File", $resolvedFixture, "-EvidenceDirectory", $fixtureEvidence)
+    if ($ShowOccluder) {
+        $fixtureArguments += "-ShowOccluder"
+    }
+    $fixtureProcess = Start-IsolatedProcess $hostPath $fixtureArguments @{}
+    $script:fixtureReady = Wait-Condition {
+        if ($fixtureProcess.HasExited) { throw "The fixture exited during startup." }
+        $path = [IO.Path]::Combine($fixtureEvidence, "fixture-ready.json")
+        if ([IO.File]::Exists($path)) { return Read-JsonFile $path }
+        return $false
+    } "the Windows fixture"
+    $targetPid = [int]$script:fixtureReady.processId
+
+    $processEnvironment = @{
+        LBB_PORT = $Port.ToString([Globalization.CultureInfo]::InvariantCulture)
+        LBB_TOKEN = $Token
+        LBB_DISABLE_UPDATE_CHECK = "1"
+    }
+    $serverProcess = Start-IsolatedProcess $resolvedServer @("--no-update-check") $processEnvironment
+    Wait-Condition {
+        if ($serverProcess.HasExited) { throw "The server exited during startup." }
+        try {
+            $null = Get-LbbState
+            return $true
+        }
+        catch { return $false }
+    } "the loopback server" | Out-Null
+
+    $helperEnvironment = @{}
+    foreach ($item in $processEnvironment.GetEnumerator()) {
+        $helperEnvironment[[string]$item.Key] = [string]$item.Value
+    }
+    if ($selectedSuites -contains "Recovery") {
+        Assert-True ($script:nativeProbeType::GetKernelEventState($recoveryEventName) -eq 0) "The unique one-shot recovery event already existed."
+        $helperEnvironment["LBB_TEST_STALL_SHARE_PUMP_ONCE_EVENT"] = $recoveryEventName
+    }
+    $helperProcess = Start-IsolatedProcess $resolvedHelper @() $helperEnvironment
+    $bridgeState = Wait-Condition {
+        if ($helperProcess.HasExited) { throw "The computer helper exited during startup." }
+        $candidate = Get-LbbState
+        if ($candidate.computerConnected -eq $true -and $null -ne $candidate.computer) { return $candidate }
+        return $false
+    } "the authenticated computer helper"
+    $initialWorkerPid = Wait-ForDirectHelperWorker $helperProcess.Id "the initial disposable helper worker"
+    $initialHelperSessionId = [string]$bridgeState.computer.sessionId
+    Assert-True (-not [String]::IsNullOrWhiteSpace($initialHelperSessionId)) "The initial helper session identity was missing."
+    if ($selectedSuites -contains "Recovery") {
+        $null = Wait-Condition {
+            if ($script:nativeProbeType::GetKernelEventState($recoveryEventName) -eq 1) { return $true }
+            return $false
+        } "the supervisor-owned unsignaled one-shot recovery event"
+    }
+
+    $matchingWindows = @($bridgeState.computer.windows | Where-Object {
+        [int]$_.pid -eq $targetPid -and $_.title -eq "LBB Windows Fixture Target"
+    })
+    Assert-True ($matchingWindows.Count -eq 1) "The helper did not enumerate exactly one fixture target window."
+    $targetWindowId = [string]$matchingWindows[0].id
+    Assert-True ($targetWindowId -eq [string]$script:fixtureReady.targetHwnd) "The helper window ID did not match the fixture-owned HWND."
+
+    $fixtureForeground = Wait-ForFixtureProof {
+        param($state)
+        return [string]$state.foregroundHwnd -eq [string]$state.sentinelHwnd
+    } "the foreground sentinel"
+    $baselineProbe = Capture-InvariantProbe
+    Assert-True ($baselineProbe.foregroundHwnd -eq [string]$script:fixtureReady.sentinelHwnd) "The test-owned sentinel is not the foreground window."
+
+    $statusResponse = Invoke-LbbCommand "computer.status" @{}
+    Save-StepResponse "computer status" $statusResponse
+    Assert-True ($statusResponse.result.inputReady -eq $true) "The helper did not report pixel input readiness."
+    Assert-True ($statusResponse.result.semanticReady -eq $true) "The helper did not report semantic input readiness."
+
+    $observationResponse = Invoke-LbbCommand "computer.observe" @{ windowId = $targetWindowId }
+    Save-StepResponse "baseline exact window observe" $observationResponse
+    $observation = $observationResponse.state.computerObservation
+    Assert-True ([string]$observation.windowId -eq $targetWindowId) "Observation escaped the exact fixture HWND."
+    Assert-True ([int]$observation.pid -eq $targetPid) "Observation escaped the fixture process."
+    $baselineShot = Save-ObservationScreenshot $observation "00-baseline-observe"
+    Save-StepRecord "baseline screenshot" $baselineShot
+    $null = Assert-InvariantsHeld $baselineProbe "Baseline observation"
+
+    if ($selectedSuites -contains "Recovery") {
+        $supervisorPidBefore = $helperProcess.Id
+        $serverPidBefore = $serverProcess.Id
+        $faultTriggeredAtUtc = [DateTime]::UtcNow
+        $faultStopwatch = [Diagnostics.Stopwatch]::StartNew()
+        $faultStart = Invoke-LbbCommand "computer.share.start" @{ windowId = $targetWindowId; fps = 4 }
+        $shareStarted = $true
+        Save-StepResponse "one-shot share pump stall start" $faultStart
+        $null = Wait-Condition {
+            if ($script:nativeProbeType::GetKernelEventState($recoveryEventName) -eq 2) { return $true }
+            return $false
+        } "the signaled launch-time-only share-pump stall event"
+        $faultEventObservedElapsedMs = [int64]$faultStopwatch.ElapsedMilliseconds
+
+        $recoveryDeadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+        $statePolls = 0
+        $statePollFailures = 0
+        $disconnectObserved = $false
+        $watchdogErrorObserved = $false
+        $recoveredBridgeState = $null
+        $replacementObservedElapsedMs = $null
+        do {
+            Assert-True (-not $serverProcess.HasExited -and $serverProcess.Id -eq $serverPidBefore) "The loopback server exited during disposable-worker recovery."
+            Assert-True (-not $helperProcess.HasExited -and $helperProcess.Id -eq $supervisorPidBefore) "The helper supervisor exited instead of replacing only its disposable worker."
+            try {
+                $candidate = Get-LbbState
+                $statePolls++
+                if ($candidate.computerConnected -ne $true) {
+                    $disconnectObserved = $true
+                }
+                $candidateComputer = Get-PropertyValue $candidate "computer"
+                $candidateShare = Get-PropertyValue $candidateComputer "share"
+                if ((Get-PropertyValue $candidateShare "code") -eq "COMPUTER_HELPER_WATCHDOG") {
+                    $watchdogErrorObserved = $true
+                }
+                $candidateSession = [string](Get-PropertyValue $candidateComputer "sessionId")
+                if ($candidate.computerConnected -eq $true -and -not [String]::IsNullOrWhiteSpace($candidateSession) -and $candidateSession -ne $initialHelperSessionId) {
+                    $recoveredBridgeState = $candidate
+                    $replacementObservedElapsedMs = [int64]$faultStopwatch.ElapsedMilliseconds
+                    break
+                }
+            }
+            catch {
+                $statePollFailures++
+                throw "The loopback server API stopped responding during disposable-worker recovery."
+            }
+            Start-Sleep -Milliseconds 200
+        } while ([DateTime]::UtcNow -lt $recoveryDeadline)
+
+        Assert-True ($null -ne $recoveredBridgeState) "The helper supervisor did not reconnect a replacement worker within the bounded recovery window."
+        $faultStopwatch.Stop()
+        $watchdogCausalityProof = New-WatchdogCausalityProof `
+            -FaultTriggeredAtUtc $faultTriggeredAtUtc `
+            -EventObservedAfterShareStartMs $faultEventObservedElapsedMs `
+            -ReplacementObservedAfterShareStartMs $replacementObservedElapsedMs `
+            -WatchdogErrorObserved $watchdogErrorObserved `
+            -ElapsedLowerBoundMs $watchdogCausalityMinimumMs
+        Save-StepRecord "share pump watchdog causality proof" $watchdogCausalityProof
+        Assert-True $watchdogCausalityProof.causalityProven "Worker replacement lacked COMPUTER_HELPER_WATCHDOG evidence and occurred too early to prove the 12-second share-pump watchdog caused it."
+        $shareStarted = $false
+        $replacementWorkerPid = Wait-ForDirectHelperWorker $helperProcess.Id "the replacement disposable helper worker"
+        $replacementSessionId = [string]$recoveredBridgeState.computer.sessionId
+        Assert-True ($replacementWorkerPid -ne $initialWorkerPid) "The helper supervisor did not replace the stalled worker process."
+        Assert-True ($replacementSessionId -ne $initialHelperSessionId) "The replacement worker reused the stale protocol session."
+        Assert-True ($helperProcess.Id -eq $supervisorPidBefore -and -not $helperProcess.HasExited) "The helper supervisor identity did not survive worker replacement."
+        Assert-True ($serverProcess.Id -eq $serverPidBefore -and -not $serverProcess.HasExited) "The loopback server identity did not survive worker replacement."
+        Assert-True ($statePolls -gt 0 -and $statePollFailures -eq 0) "The loopback server was not continuously queryable during worker replacement."
+
+        $recoveryObserve = Invoke-LbbCommand "computer.observe" @{ windowId = $targetWindowId }
+        Save-StepResponse "replacement worker fresh observe" $recoveryObserve
+        $observation = $recoveryObserve.state.computerObservation
+        $recoveryObserveShot = Save-ObservationScreenshot $observation "05-recovery-fresh-observe"
+        Save-StepRecord "replacement worker fresh observe screenshot" $recoveryObserveShot
+
+        $recoveryShareStart = Invoke-LbbCommand "computer.share.start" @{ windowId = $targetWindowId; fps = 4 }
+        $shareStarted = $true
+        Save-StepResponse "replacement worker fresh share start" $recoveryShareStart
+        $recoveryShareFrame = Wait-Condition {
+            $candidate = Get-CurrentObservation
+            if ($candidate.share.active -eq $true -and [int64]$candidate.share.sequence -gt 0) { return $candidate }
+            return $false
+        } "a live native frame from the replacement worker"
+        $recoveryShareShot = Save-ObservationScreenshot $recoveryShareFrame "06-recovery-fresh-share"
+        Save-StepRecord "replacement worker fresh share screenshot" $recoveryShareShot
+        $recoveryShareStop = Invoke-LbbCommand "computer.share.stop" @{}
+        $shareStarted = $false
+        Save-StepResponse "replacement worker fresh share stop" $recoveryShareStop
+
+        Save-StepRecord "disposable worker recovery proof" ([ordered]@{
+            faultHook = "launch-time-only one-shot share-pump stall kernel event"
+            eventSignaled = $script:nativeProbeType::GetKernelEventState($recoveryEventName) -eq 2
+            eventName = $recoveryEventName
+            serverPidBefore = $serverPidBefore
+            serverPidAfter = $serverProcess.Id
+            supervisorPidBefore = $supervisorPidBefore
+            supervisorPidAfter = $helperProcess.Id
+            workerPidBefore = $initialWorkerPid
+            workerPidAfter = $replacementWorkerPid
+            helperSessionBefore = $initialHelperSessionId
+            helperSessionAfter = $replacementSessionId
+            disconnectObserved = $disconnectObserved
+            watchdogErrorObserved = $watchdogErrorObserved
+            watchdogCausality = $watchdogCausalityProof
+            successfulServerStatePolls = $statePolls
+            failedServerStatePolls = $statePollFailures
+            recoveredObserveFrameId = $observation.frameId
+            recoveredShareFrameId = $recoveryShareFrame.frameId
+            remoteProtocolFaultMethodAdded = $false
+        })
+        $null = Assert-InvariantsHeld $baselineProbe "Disposable worker recovery"
+    }
+
+    if ($selectedSuites -contains "Semantic") {
+        $semanticElement = @($observation.elements | Where-Object {
+            $_.name -eq "Fixture Value Input" -and $_.actions -contains "setValue"
+        })
+        Assert-True ($semanticElement.Count -eq 1) "UI Automation did not expose the fixture ValuePattern field exactly once."
+        $semanticText = "semantic-background-proof"
+        $response = Invoke-LbbCommand "computer.setValue" @{
+            frameId = [string]$observation.frameId
+            elementRef = [string]$semanticElement[0].ref
+            value = $semanticText
+        }
+        Save-StepResponse "semantic set value" $response
+        $semanticState = Wait-ForFixtureProof {
+            param($state)
+            return [string]$state.semanticValue.sha256 -eq (Get-TextHash $semanticText)
+        } "the fixture ValuePattern postcondition"
+        $observation = $response.state.computerObservation
+        $semanticShot = Save-ObservationScreenshot $observation "10-semantic-set-value"
+        Save-StepRecord "semantic set value screenshot" $semanticShot
+        $null = Assert-InvariantsHeld $baselineProbe "computer.setValue"
+
+        $button = @($observation.elements | Where-Object {
+            $_.name -eq "Increment Counter" -and $_.actions -contains "press"
+        })
+        Assert-True ($button.Count -eq 1) "UI Automation did not expose the fixture InvokePattern button exactly once."
+        $beforeInvoke = [int]$semanticState.invokeCount
+        $response = Invoke-LbbCommand "computer.invoke" @{
+            frameId = [string]$observation.frameId
+            elementRef = [string]$button[0].ref
+            action = "press"
+        }
+        Save-StepResponse "semantic invoke" $response
+        $null = Wait-ForFixtureProof {
+            param($state)
+            return [int]$state.invokeCount -eq ($beforeInvoke + 1)
+        } "the fixture InvokePattern postcondition"
+        $observation = $response.state.computerObservation
+        $invokeShot = Save-ObservationScreenshot $observation "11-semantic-invoke"
+        Save-StepRecord "semantic invoke screenshot" $invokeShot
+        $null = Assert-InvariantsHeld $baselineProbe "computer.invoke"
+    }
+
+    if ($selectedSuites -contains "Keyboard") {
+        $typedText = "typed-background-proof"
+        $response = Invoke-LbbCommand "computer.typeText" @{
+            frameId = [string]$observation.frameId
+            text = $typedText
+        }
+        Save-StepResponse "background type text" $response
+        $keyboardState = Wait-ForFixtureProof {
+            param($state)
+            return [string]$state.focusedText.sha256 -eq (Get-TextHash $typedText)
+        } "the focused text postcondition"
+        $observation = $response.state.computerObservation
+        $typeShot = Save-ObservationScreenshot $observation "20-background-type-text"
+        Save-StepRecord "background type text screenshot" $typeShot
+        $null = Assert-InvariantsHeld $baselineProbe "computer.typeText"
+
+        $beforeKeys = $keyboardState.messageCounters
+        $response = Invoke-LbbCommand "computer.key" @{
+            frameId = [string]$observation.frameId
+            key = "F6"
+        }
+        Save-StepResponse "background key" $response
+        $observation = $response.state.computerObservation
+        $keyShot = Save-ObservationScreenshot $observation "21-background-key-f6"
+        Save-StepRecord "background key F6 screenshot" $keyShot
+        $null = Wait-ForFixtureProof {
+            param($state)
+            return [int]$state.messageCounters.keyDown -gt [int]$beforeKeys.keyDown -and [int]$state.messageCounters.keyUp -gt [int]$beforeKeys.keyUp
+        } "WM_KEYDOWN and WM_KEYUP"
+        $null = Assert-InvariantsHeld $baselineProbe "computer.key F6"
+
+        $beforeSystemKeys = (Get-FixtureState).messageCounters
+        $response = Invoke-LbbCommand "computer.key" @{
+            frameId = [string]$observation.frameId
+            key = "Alt+A"
+        }
+        Save-StepResponse "background system key" $response
+        $observation = $response.state.computerObservation
+        $systemKeyShot = Save-ObservationScreenshot $observation "22-background-system-key-alt-a"
+        Save-StepRecord "background system key Alt+A screenshot" $systemKeyShot
+        $null = Wait-ForFixtureProof {
+            param($state)
+            return [int]$state.messageCounters.sysKeyDown -gt [int]$beforeSystemKeys.sysKeyDown -and [int]$state.messageCounters.sysKeyUp -gt [int]$beforeSystemKeys.sysKeyUp
+        } "WM_SYSKEYDOWN and WM_SYSKEYUP"
+        $events = @([IO.File]::ReadAllLines([IO.Path]::Combine($fixtureEvidence, "fixture-events.ndjson")) | ForEach-Object { $_ | ConvertFrom-Json })
+        $systemDown = @($events | Where-Object { $_.event -eq "sysKeyDown" -and $_.source -eq "focusedTextInput" } | Select-Object -Last 1)
+        $systemUp = @($events | Where-Object { $_.event -eq "sysKeyUp" -and $_.source -eq "focusedTextInput" } | Select-Object -Last 1)
+        Assert-True ($systemDown.Count -eq 1 -and $systemDown[0].repeatCount -eq 1 -and $systemDown[0].scanCode -gt 0 -and $systemDown[0].altContext -eq $true -and $systemDown[0].previousState -eq $false -and $systemDown[0].transitionState -eq $false) "WM_SYSKEYDOWN carried an invalid lParam."
+        Assert-True ($systemUp.Count -eq 1 -and $systemUp[0].repeatCount -eq 1 -and $systemUp[0].scanCode -gt 0 -and $systemUp[0].altContext -eq $true -and $systemUp[0].previousState -eq $true -and $systemUp[0].transitionState -eq $true) "WM_SYSKEYUP carried an invalid lParam."
+        Save-StepRecord "key message lparam proof" ([ordered]@{
+            wmKey = "observed"
+            wmSysKeyDown = ConvertTo-SafeObject $systemDown[0]
+            wmSysKeyUp = ConvertTo-SafeObject $systemUp[0]
+        })
+        $null = Assert-InvariantsHeld $baselineProbe "computer.key Alt+A"
+    }
+
+    if ($selectedSuites -contains "Pixel") {
+        $from = Get-SurfacePoint $observation 0.30 0.45
+        $to = Get-SurfacePoint $observation 0.72 0.68
+        $beforePixel = (Get-FixtureState).messageCounters
+
+        $response = Invoke-LbbCommand "computer.move" @{
+            frameId = [string]$observation.frameId
+            x = $from.x
+            y = $from.y
+            coordinateSpace = "image"
+            durationMs = 120
+        }
+        Save-StepResponse "pixel move" $response
+        $observation = $response.state.computerObservation
+        $moveShot = Save-ObservationScreenshot $observation "30-pixel-move"
+        Save-StepRecord "pixel move screenshot" $moveShot
+        $null = Wait-ForFixtureProof { param($state) return [int]$state.messageCounters.mouseMove -gt [int]$beforePixel.mouseMove } "WM_MOUSEMOVE"
+        $null = Assert-InvariantsHeld $baselineProbe "computer.move"
+
+        $beforeClick = (Get-FixtureState).messageCounters
+        $response = Invoke-LbbCommand "computer.click" @{
+            frameId = [string]$observation.frameId
+            x = $from.x
+            y = $from.y
+            coordinateSpace = "image"
+            button = "left"
+            clickCount = 1
+            durationMs = 80
+        }
+        Save-StepResponse "pixel click" $response
+        $observation = $response.state.computerObservation
+        $clickShot = Save-ObservationScreenshot $observation "31-pixel-click"
+        Save-StepRecord "pixel click screenshot" $clickShot
+        $null = Wait-ForFixtureProof {
+            param($state)
+            return [int]$state.messageCounters.mouseDown -gt [int]$beforeClick.mouseDown -and [int]$state.messageCounters.mouseUp -gt [int]$beforeClick.mouseUp
+        } "mouse down and up"
+        $null = Assert-InvariantsHeld $baselineProbe "computer.click"
+
+        $beforeDouble = (Get-FixtureState).messageCounters
+        $response = Invoke-LbbCommand "computer.click" @{
+            frameId = [string]$observation.frameId
+            x = $from.x
+            y = $from.y
+            coordinateSpace = "image"
+            button = "left"
+            clickCount = 2
+            durationMs = 80
+        }
+        Save-StepResponse "pixel double click" $response
+        $observation = $response.state.computerObservation
+        $doubleShot = Save-ObservationScreenshot $observation "32-pixel-double-click"
+        Save-StepRecord "pixel double click screenshot" $doubleShot
+        $null = Wait-ForFixtureProof { param($state) return [int]$state.messageCounters.mouseDoubleClick -gt [int]$beforeDouble.mouseDoubleClick } "WM_LBUTTONDBLCLK"
+        $null = Assert-InvariantsHeld $baselineProbe "computer.click count 2"
+
+        $beforeDrag = (Get-FixtureState).messageCounters
+        $response = Invoke-LbbCommand "computer.drag" @{
+            frameId = [string]$observation.frameId
+            fromX = $from.x
+            fromY = $from.y
+            toX = $to.x
+            toY = $to.y
+            coordinateSpace = "image"
+            durationMs = 240
+        }
+        Save-StepResponse "pixel drag" $response
+        $observation = $response.state.computerObservation
+        $dragShot = Save-ObservationScreenshot $observation "33-pixel-drag"
+        Save-StepRecord "pixel drag screenshot" $dragShot
+        $null = Wait-ForFixtureProof { param($state) return [int]$state.messageCounters.dragMove -gt [int]$beforeDrag.dragMove } "a pressed WM_MOUSEMOVE drag path"
+        $null = Assert-InvariantsHeld $baselineProbe "computer.drag"
+
+        $beforeScroll = (Get-FixtureState).messageCounters
+        $response = Invoke-LbbCommand "computer.scroll" @{
+            frameId = [string]$observation.frameId
+            x = $to.x
+            y = $to.y
+            coordinateSpace = "image"
+            deltaX = 1
+            deltaY = -1
+        }
+        Save-StepResponse "pixel scroll" $response
+        $observation = $response.state.computerObservation
+        $scrollShot = Save-ObservationScreenshot $observation "34-pixel-scroll"
+        Save-StepRecord "pixel scroll screenshot" $scrollShot
+        $null = Wait-ForFixtureProof {
+            param($state)
+            return [int]$state.messageCounters.mouseWheel -gt [int]$beforeScroll.mouseWheel -and [int]$state.messageCounters.mouseHWheel -gt [int]$beforeScroll.mouseHWheel
+        } "vertical and horizontal wheel messages"
+        $null = Assert-InvariantsHeld $baselineProbe "computer.scroll"
+    }
+
+    if ($selectedSuites -contains "Capture") {
+        $desktopBeforeShare = Save-SanitizedDesktopCrop "39-desktop-crop-before-share"
+        Save-StepRecord "sanitized desktop crop before share" $desktopBeforeShare
+        $response = Invoke-LbbCommand "computer.share.start" @{ windowId = $targetWindowId; fps = 4 }
+        $shareStarted = $true
+        Save-StepResponse "native share start" $response
+        $firstShare = Wait-Condition {
+            $candidate = Get-CurrentObservation
+            if ($candidate.share.active -eq $true -and [int64]$candidate.share.sequence -gt 0) { return $candidate }
+            return $false
+        } "the first native share frame"
+        Assert-True ($firstShare.share.nativeStream -eq $true) "The share did not report a native stream."
+        Assert-True ($firstShare.share.captureScope -eq "exact-window") "The share did not report exact-window scope."
+        Assert-True ($firstShare.share.systemIndicator -eq $true) "The helper did not report its required no-suppression capture-indicator policy."
+        $shareShot1 = Save-ObservationScreenshot $firstShare "40-native-share-frame-1"
+        Start-Sleep -Milliseconds 700
+        $secondShare = Wait-Condition {
+            $candidate = Get-CurrentObservation
+            if ([int64]$candidate.share.sequence -gt [int64]$firstShare.share.sequence) { return $candidate }
+            return $false
+        } "a later native share frame"
+        $shareShot2 = Save-ObservationScreenshot $secondShare "41-native-share-frame-2"
+        Assert-True ($shareShot2.sha256 -ne $shareShot1.sha256) "Animated native-share frames did not change."
+        $desktopDuringShare = Save-SanitizedDesktopCrop "41-desktop-crop-during-share"
+        $indicatorDifference = Compare-IndicatorBand $desktopBeforeShare.file $desktopDuringShare.file
+        Assert-True ([int]$indicatorDifference.changedPixels -ge 20) "The sanitized desktop-level crop did not visibly prove a Windows-owned capture indicator around the fixture target."
+        $hostProvenance = Get-SanitizedHostProvenance $secondShare.share $desktopDuringShare $indicatorDifference
+        Save-StepRecord "windows capture indicator and host provenance" $hostProvenance
+        $magentaPixels = $null
+        if ($ShowOccluder) {
+            $magentaPixels = Get-MagentaPixelCount $shareShot2.file
+            Assert-True ($magentaPixels -eq 0) "The exact-window capture leaked the magenta occluder."
+        }
+        Save-StepRecord "native share frame progression" ([ordered]@{
+            first = $shareShot1
+            second = $shareShot2
+            firstSequence = $firstShare.share.sequence
+            secondSequence = $secondShare.share.sequence
+            sourceDroppedFrames = $secondShare.share.sourceDroppedFrames
+            transportDroppedFrames = $secondShare.share.transportDroppedFrames
+            magentaSampleCount = $magentaPixels
+            indicatorPolicyReported = $firstShare.share.systemIndicator
+            indicatorVisibleRuntimeProof = [ordered]@{
+                before = $desktopBeforeShare.file
+                during = $desktopDuringShare.file
+                changedPixels = $indicatorDifference.changedPixels
+                sampledPixels = $indicatorDifference.sampledPixels
+            }
+            indicatorEvidenceBoundary = "The exact-window screenshots are non-proof; the separately sanitized fixture-region desktop crop provides the runtime border comparison."
+        })
+        $null = Assert-InvariantsHeld $baselineProbe "computer.share.start"
+
+        $sharePoint = Get-SurfacePoint $secondShare 0.50 0.50
+        $sequenceBeforeAction = [int64]$secondShare.share.sequence
+        $response = Invoke-LbbCommand "computer.move" @{
+            frameId = [string]$secondShare.frameId
+            x = $sharePoint.x
+            y = $sharePoint.y
+            coordinateSpace = "image"
+            durationMs = 160
+        }
+        Save-StepResponse "native share action" $response
+        $afterShareAction = Wait-Condition {
+            $candidate = Get-CurrentObservation
+            if ($candidate.share.active -eq $true -and [int64]$candidate.share.sequence -gt $sequenceBeforeAction) { return $candidate }
+            return $false
+        } "native share progression after an action"
+        $shareActionShot = Save-ObservationScreenshot $afterShareAction "42-native-share-after-action"
+        Save-StepRecord "native share after action screenshot" $shareActionShot
+        $null = Assert-InvariantsHeld $baselineProbe "native-share computer.move"
+
+        $response = Invoke-LbbCommand "computer.share.stop" @{}
+        $shareStarted = $false
+        Save-StepResponse "native share stop" $response
+    }
+
+    $finalProbe = Assert-InvariantsHeld $baselineProbe "Full acceptance run"
+    Save-StepRecord "foreground cursor focus desktop invariants" ([ordered]@{
+        before = $baselineProbe
+        after = $finalProbe
+        fixtureForegroundHwnd = $fixtureForeground.foregroundHwnd
+        fixtureSentinelHwnd = $fixtureForeground.sentinelHwnd
+    })
+    $runPassed = $true
+}
+catch {
+    $failureText = ConvertTo-SafeFailureText $_.Exception.Message
+}
+finally {
+    if ($shareStarted -and $null -ne $serverProcess -and -not $serverProcess.HasExited -and $null -ne $helperProcess -and -not $helperProcess.HasExited) {
+        try {
+            $null = Invoke-LbbCommand "computer.share.stop" @{}
+        }
+        catch {
+            $cleanupIssues.Add("The active share did not acknowledge stop before process cleanup.")
+        }
+    }
+    if ($null -ne $fixtureProcess) {
+        try {
+            $null = Request-FixtureStop $fixtureProcess
+        }
+        catch {
+            $cleanupIssues.Add("The runner-owned fixture did not complete graceful shutdown before Job cleanup.")
+        }
+    }
+    if ($null -ne $script:ownedJob) {
+        try {
+            $script:ownedJob.Terminate()
+            $jobDeadline = [DateTime]::UtcNow.AddSeconds(5)
+            do {
+                $ownedActive = [uint32]$script:ownedJob.ActiveProcessCount
+                if ($ownedActive -eq 0) {
+                    break
+                }
+                Start-Sleep -Milliseconds 100
+            } while ([DateTime]::UtcNow -lt $jobDeadline)
+            if ($ownedActive -ne 0) {
+                $cleanupIssues.Add("The private Job Object still reported runner-owned descendants after termination.")
+            }
+        }
+        catch {
+            $cleanupIssues.Add("Private Job Object termination or descendant verification failed; closing the kill-on-close handle was still attempted.")
+        }
+        finally {
+            # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE is the final fail-safe even if
+            # explicit TerminateJobObject or accounting verification failed.
+            $script:ownedJob.Dispose()
+            $script:ownedJob = $null
+        }
+    }
+    if ($selectedSuites -contains "Recovery") {
+        $recoveryEventReleased = $script:nativeProbeType::GetKernelEventState($recoveryEventName) -eq 0
+        if (-not $recoveryEventReleased) {
+            $cleanupIssues.Add("The supervisor-owned one-shot recovery event remained after Job cleanup.")
+        }
+    }
+    try {
+        foreach ($evidenceFile in [IO.Directory]::EnumerateFiles($evidenceRoot, "*", [IO.SearchOption]::AllDirectories)) {
+            if (Test-FileContainsSecret $evidenceFile $Token) {
+                [IO.File]::Delete($evidenceFile)
+                $tokenBearingEvidenceRemoved++
+            }
+        }
+        $tokenPersistenceVerified = $true
+        if ($tokenBearingEvidenceRemoved -gt 0) {
+            $cleanupIssues.Add("Bearer-token evidence was removed; the run is invalid even though the retained bundle is sanitized.")
+        }
+    }
+    catch {
+        $cleanupIssues.Add("Bearer-token evidence scanning or removal failed.")
+    }
+    Start-Sleep -Milliseconds 250
+    if (-not (Test-PortBindable $Port)) {
+        $cleanupIssues.Add("The runner-owned loopback port was not bindable after cleanup; no unrelated listener was terminated.")
+    }
+    if ($cleanupIssues.Count -gt 0) {
+        $runPassed = $false
+        if ([String]::IsNullOrWhiteSpace($failureText)) {
+            $failureText = "Cleanup verification failed."
+        }
+    }
+    $summary = [ordered]@{
+        schemaVersion = 1
+        passed = $runPassed
+        suites = $selectedSuites
+        startedAtUtc = $startedAt.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
+        finishedAtUtc = [DateTime]::UtcNow.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
+        interactiveSessionId = $sessionId
+        loopbackPort = $Port
+        targetPid = $targetPid
+        targetWindowId = $targetWindowId
+        steps = $script:stepResults
+        failure = $failureText
+        cleanupIssues = @($cleanupIssues)
+        childHandleInheritancePolicy = "PROC_THREAD_ATTRIBUTE_HANDLE_LIST:NUL-only"
+        allowedInheritedHandleCount = 1
+        tokenPersistenceVerified = $tokenPersistenceVerified
+        tokenPersisted = if ($tokenPersistenceVerified) { $false } else { $null }
+        tokenBearingEvidenceRemoved = $tokenBearingEvidenceRemoved
+        unrelatedProcessesTerminated = $false
+        recoveryEventReleased = $recoveryEventReleased
+    }
+    Write-EvidenceJson ([IO.Path]::Combine($evidenceRoot, "summary.json")) $summary
+    Remove-Variable Token -ErrorAction SilentlyContinue
+}
+
+if (-not $runPassed) {
+    Write-Error "Windows computer-use acceptance failed. Review the sanitized summary and step evidence."
+    exit 1
+}
+
+Write-Output "Windows computer-use acceptance passed. Evidence was written to the caller-selected directory."

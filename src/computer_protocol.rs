@@ -1,7 +1,8 @@
 //! Target-neutral computer-helper protocol and cancellation primitives.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use serde_json::{Map, Value, json};
 use thiserror::Error;
@@ -61,6 +62,13 @@ impl ComputerError {
 pub struct CommandCancellation {
     canceled: Arc<AtomicBool>,
     dispatched: Arc<AtomicBool>,
+    dispatch_phase: Arc<Mutex<DispatchPhase>>,
+}
+
+#[derive(Default)]
+struct DispatchPhase {
+    epoch: u64,
+    verification_started: Option<(u64, Instant)>,
 }
 
 impl CommandCancellation {
@@ -92,8 +100,53 @@ impl CommandCancellation {
     /// retry-safe refusal from an outcome that may already have changed state.
     pub fn begin_side_effect(&self, boundary: &str) -> Result<(), ComputerError> {
         self.check(boundary)?;
+        {
+            let mut phase = self
+                .dispatch_phase
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            phase.epoch = phase.epoch.checked_add(1).ok_or_else(|| {
+                ComputerError::new(
+                    "COMPUTER_DISPATCH_EXHAUSTED",
+                    "The command exceeded its side-effect accounting range",
+                )
+            })?;
+            // A later side effect in a compound action supersedes an earlier
+            // verification boundary. The final platform mutation owns the
+            // action-level dispatch/verification split.
+            phase.verification_started = None;
+        }
         self.dispatched.store(true, Ordering::Release);
         self.check(boundary)
+    }
+
+    /// Records the transition from the final native mutation into target-side
+    /// and non-interruption verification. Providers with an exact read-back
+    /// call this immediately after the OS mutation; platform guards provide a
+    /// fallback after their dispatch closure returns.
+    pub(crate) fn mark_verification_started(&self) {
+        if !self.was_dispatched() {
+            return;
+        }
+        let mut phase = self
+            .dispatch_phase
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if phase.verification_started.is_none() {
+            let epoch = phase.epoch;
+            phase.verification_started = Some((epoch, Instant::now()));
+        }
+    }
+
+    pub(crate) fn verification_started_at(&self) -> Option<Instant> {
+        let phase = self
+            .dispatch_phase
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        phase
+            .verification_started
+            .filter(|(epoch, _)| *epoch == phase.epoch)
+            .map(|(_, instant)| instant)
     }
 
     pub fn finish<T>(&self, result: Result<T, ComputerError>) -> Result<T, ComputerError> {
@@ -272,6 +325,21 @@ mod tests {
         let error = cancellation.begin_side_effect("test dispatch").unwrap_err();
         assert_eq!(error.code, "COMPUTER_CANCELED");
         assert!(!cancellation.was_dispatched());
+    }
+
+    #[test]
+    fn verification_boundary_tracks_the_final_compound_side_effect() {
+        let cancellation = CommandCancellation::new();
+        cancellation.begin_side_effect("pointer approach").unwrap();
+        cancellation.mark_verification_started();
+        let first = cancellation.verification_started_at().unwrap();
+
+        cancellation.begin_side_effect("click dispatch").unwrap();
+        assert!(cancellation.verification_started_at().is_none());
+        cancellation.mark_verification_started();
+        let final_boundary = cancellation.verification_started_at().unwrap();
+
+        assert!(final_boundary >= first);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use std::ffi::{c_char, c_void};
 use std::sync::OnceLock;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use core_graphics::event::{CGEvent, CGEventFlags, CGEventType, CGMouseButton, ScrollEventUnit};
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
@@ -12,8 +12,8 @@ use libc::pid_t;
 use xcap::Window;
 
 use super::{
-    CommandCancellation, ComputerError, InvariantReport, SemanticTarget, TargetPoint,
-    WindowDescriptor, ax_macos,
+    CommandCancellation, ComputerError, InvariantReport, SemanticSnapshot, SemanticTarget,
+    TargetPoint, WindowDescriptor, ax_macos,
 };
 
 type PostToPidFn = unsafe extern "C" fn(pid_t, *mut c_void);
@@ -59,8 +59,11 @@ pub fn semantic_ready(prompt: bool) -> bool {
     ax_macos::accessibility_ready(prompt)
 }
 
-pub fn semantic_elements(target: &WindowDescriptor) -> Result<Vec<SemanticTarget>, ComputerError> {
-    ax_macos::snapshot(target)
+pub fn semantic_elements(target: &WindowDescriptor) -> Result<SemanticSnapshot, ComputerError> {
+    ax_macos::snapshot(target).map(|elements| SemanticSnapshot {
+        elements,
+        truncation_reason: None,
+    })
 }
 
 pub fn invoke(
@@ -122,17 +125,20 @@ pub fn windows(limit: usize) -> Result<Vec<WindowDescriptor>, ComputerError> {
         .collect())
 }
 
-pub fn capture_window(target: &WindowDescriptor) -> Result<RgbaImage, ComputerError> {
-    exact_window(target)?
-        .capture_image()
-        .map_err(|error| {
+pub fn capture_window(
+    target: &mut WindowDescriptor,
+) -> Result<(RgbaImage, Instant), ComputerError> {
+    let window = exact_window(target)?;
+    let captured_at = Instant::now();
+    let image = window.capture_image().map_err(|error| {
             ComputerError::new(
                 "COMPUTER_CAPTURE_FAILED",
                 format!(
                     "Exact-window capture failed. Grant Screen Recording to Local Computer Helper. {error}"
                 ),
             )
-        })
+        })?;
+    Ok((image, captured_at))
 }
 
 pub fn move_pointer_path(
@@ -456,6 +462,7 @@ fn guarded(
         .transpose()?
         .flatten();
     let action_result = action();
+    cancellation.mark_verification_started();
     let restore_result = focus.map(FocusLease::restore).transpose();
     thread::sleep(Duration::from_millis(35));
     let report = before.compare(&DesktopSnapshot::capture()?);
@@ -474,6 +481,7 @@ fn guarded_semantic<T>(
     exact_window(target)?;
     cancellation.check("semantic resolution")?;
     let action_result = action();
+    cancellation.mark_verification_started();
     thread::sleep(Duration::from_millis(35));
     let report = before.compare(&DesktopSnapshot::capture()?).assert_held()?;
     let backend_effect = action_result?;

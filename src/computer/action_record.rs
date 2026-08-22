@@ -4,7 +4,7 @@ use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
 
-use super::{ComputerError, InvariantReport};
+use super::{CommandCancellation, ComputerError, InvariantReport};
 
 /// The strongest conclusion that can be drawn about a requested mutation.
 ///
@@ -166,25 +166,21 @@ pub(crate) struct ActionTimer {
     action_id: String,
     started: Instant,
     resolved: Option<Instant>,
-    dispatched: Option<Instant>,
+    cancellation: CommandCancellation,
 }
 
 impl ActionTimer {
-    pub(crate) fn start() -> Self {
+    pub(crate) fn start(cancellation: &CommandCancellation) -> Self {
         Self {
             action_id: Uuid::new_v4().to_string(),
             started: Instant::now(),
             resolved: None,
-            dispatched: None,
+            cancellation: cancellation.clone(),
         }
     }
 
     pub(crate) fn resolved(&mut self) {
         self.resolved = Some(Instant::now());
-    }
-
-    pub(crate) fn dispatched(&mut self) {
-        self.dispatched = Some(Instant::now());
     }
 
     pub(crate) fn finish(
@@ -194,15 +190,19 @@ impl ActionTimer {
     ) -> Result<ActionRecord, ComputerError> {
         let finished = Instant::now();
         let resolved = self.resolved.unwrap_or(self.started);
-        let dispatched = self.dispatched.unwrap_or(resolved);
+        let verification_started = self
+            .cancellation
+            .verification_started_at()
+            .filter(|instant| *instant >= resolved && *instant <= finished)
+            .unwrap_or(resolved);
         ActionRecord::new(
             self.action_id,
             effect,
             evidence,
             ActionTimings {
                 resolve_ms: milliseconds(resolved.duration_since(self.started)),
-                dispatch_ms: milliseconds(dispatched.duration_since(resolved)),
-                verify_ms: milliseconds(finished.duration_since(dispatched)),
+                dispatch_ms: milliseconds(verification_started.duration_since(resolved)),
+                verify_ms: milliseconds(finished.duration_since(verification_started)),
                 total_ms: milliseconds(finished.duration_since(self.started)),
             },
         )
@@ -273,8 +273,18 @@ pub(crate) fn semantic_evidence(effect: &Value) -> (ActionEffect, Vec<ActionEvid
     }
 
     let confirms_effect = evidence.iter().any(|item| item.supports_confirmation);
+    let has_nonconfirming_observation = observed
+        && !matches!(
+            postcondition,
+            "no-observable-change"
+                | "value-not-confirmed"
+                | "postcondition-not-reported"
+                | "effect-not-observed"
+        );
     let effect = if confirms_effect {
         ActionEffect::Confirmed
+    } else if delivered && has_nonconfirming_observation {
+        ActionEffect::Partial
     } else if delivered && has_postcondition {
         ActionEffect::SuspectedNoop
     } else if delivered {
@@ -290,12 +300,13 @@ fn milliseconds(duration: std::time::Duration) -> f64 {
 }
 
 fn is_confirming_postcondition(claim: &str) -> bool {
-    !matches!(
+    matches!(
         claim,
-        "no-observable-change"
-            | "value-not-confirmed"
-            | "postcondition-not-reported"
-            | "effect-not-observed"
+        "value-confirmed"
+            | "masked-length-confirmed"
+            | "toggle-state-changed"
+            | "selection-state-changed"
+            | "expand-collapse-state-changed"
     )
 }
 
@@ -375,6 +386,17 @@ mod tests {
             "postcondition": "no-observable-change"
         }));
         assert_eq!(effect, ActionEffect::SuspectedNoop);
+        assert!(evidence.iter().all(|item| !item.supports_confirmation));
+    }
+
+    #[test]
+    fn an_unknown_positive_sounding_claim_cannot_confirm_an_effect() {
+        let (effect, evidence) = semantic_evidence(&serde_json::json!({
+            "delivered": true,
+            "effectObserved": true,
+            "postcondition": "window-state-changed"
+        }));
+        assert_eq!(effect, ActionEffect::Partial);
         assert!(evidence.iter().all(|item| !item.supports_confirmation));
     }
 

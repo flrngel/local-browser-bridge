@@ -90,14 +90,54 @@ cargo run --locked --release --bin local-computer-helper
 
 On macOS, request permissions through the packaged app identity when testing release behavior. A raw `cargo run` process is useful for development but is not evidence for the packaged TCC flow.
 
-Test one-shot observation and persistent sharing separately:
+Test one-shot observation and persistent sharing as separate lifecycles:
 
-- `computer.observe` exercises the exact-window snapshot path.
+- On macOS, `computer.observe` exercises the snapshot backend. On Windows, it starts the same bounded WGC implementation as live sharing, consumes one fresh frame, and proves shutdown.
 - `computer.share.start` exercises ScreenCaptureKit `SCStream` on macOS or Windows Graphics Capture on Windows.
 - Share tests must cover start, first useful frame, monotonic sequences, bounded replacement, dropped-frame accounting, target closure, explicit stop, and connector replacement.
 - Input tests must prove an application-owned result plus unchanged platform-specific foreground/window-focus oracle, hardware pointer, and active desktop. The before/after samples do not prove the absence of an unobserved transient change.
 
 Do not report cross-Space, minimized, protected, elevated, or framework-specific behavior as supported merely because a stream or message API returned success.
+
+### Deterministic Windows live acceptance
+
+`tests/fixtures/windows/WindowsComputerUseFixture.ps1` creates an animated target with a same-thread capture-evidence backdrop, a foreground sentinel on its own UI thread, and an optional magenta occluder on another UI thread. The target exposes a UI Automation `ValuePattern` edit and `InvokePattern` button, a retained-focus text edit, and a custom surface that records mouse, drag, wheel, `WM_KEY*`, and `WM_SYSKEY*` messages without recording character contents. Its state stores lengths and SHA-256 proofs instead of typed text.
+
+Run it through `scripts/test-windows-computer-use.ps1` from a signed-in interactive Windows session. Use a dedicated test session: the fixture intentionally makes its own sentinel the foreground window during setup so subsequent background-control invariants have a deterministic oracle. The runner accepts only explicit server, helper, fixture, evidence-directory, and ephemeral-token inputs; it never installs software, changes security or network settings, dismisses warnings, or terminates processes it did not start. It refuses files carrying Windows download-zone metadata instead of unblocking them or bypassing a Windows warning.
+
+```powershell
+$server = (Resolve-Path .\dist\local-browser-bridge-vVERSION-windows-x86_64.exe).Path
+$helper = (Resolve-Path .\dist\local-computer-helper-vVERSION-windows-x86_64.exe).Path
+$fixture = (Resolve-Path .\tests\fixtures\windows\WindowsComputerUseFixture.ps1).Path
+$evidence = Join-Path ([IO.Path]::GetTempPath()) ("lbb-windows-" + [Guid]::NewGuid().ToString("N"))
+$bytes = New-Object byte[] 32
+$random = [Security.Cryptography.RandomNumberGenerator]::Create()
+$random.GetBytes($bytes)
+$random.Dispose()
+$token = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+$env:LBB_TOKEN = $token
+
+try {
+  .\scripts\test-windows-computer-use.ps1 `
+    -ServerPath $server `
+    -HelperPath $helper `
+    -FixturePath $fixture `
+    -EvidenceDirectory $evidence `
+    -Suite All `
+    -ShowOccluder
+} finally {
+  Remove-Item Env:LBB_TOKEN -ErrorAction SilentlyContinue
+  $token = $null
+}
+```
+
+The independently runnable suites are `Smoke`, `Recovery`, `Semantic`, `Keyboard`, `Pixel`, and `Capture`; pass more than one as `-Suite Semantic,Pixel`, or use `All`. `Recovery` requires `-TimeoutSeconds 25` or greater; the default is 45. `Capture -ShowOccluder` verifies animated native-frame progression, exact-window occlusion exclusion, stream progression across an action, explicit stop, and the sanitized desktop-level indicator proof described below. Every action suite saves exact-target screenshots plus app-owned result/state evidence and compares the foreground HWND, focused HWND, hardware cursor, input desktop, target activation count, and sentinel deactivation count before and after delivery.
+
+`Recovery` is a launch-time-only fault proof, not a remotely callable protocol capability. The runner gives the helper supervisor a unique validated `Local\\LBBTestSharePump-*` manual-reset kernel-event name through `LBB_TEST_STALL_SHARE_PUMP_ONCE_EVENT`. The supervisor creates and holds the initially unsignaled event before launching a worker. The first disposable Windows worker signals it and stalls its first active-share conversion task; the worker's hard deadline emits a best-effort `COMPUTER_HELPER_WATCHDOG` error and exits, while the supervisor remains alive and replaces it. The suite requires the event to become signaled, a new direct-child worker PID and helper session ID, unchanged supervisor and server PIDs, continuously successful server-state polls, then a fresh exact-window observation and live native-share frame from the replacement worker. Replacement is accepted only when the server exposed `COMPUTER_HELPER_WATCHDOG` or at least 11.5 seconds elapsed after the runner observed the signaled fault event, providing a conservative timing lower bound for the 12-second watchdog; both share-start and event-relative durations are retained. Later workers observe the supervisor-held signaled event and do not stall. Closing the private Job releases the event; the runner verifies that it no longer exists. The hook neither creates a file nor adds a remotely triggerable protocol method.
+
+The evidence directory must be new or empty. Prefer the process-scoped `LBB_TOKEN` environment input shown above: the runner consumes and clears it immediately, then passes the value to its children through explicit environment blocks. An optional `-Token` remains available for programmatic callers that already hold the value in memory, but placing a literal token in a new process command line or shell history is unsafe. The runner intentionally discards child-process stdout because the server prints its bearer token and filters unrelated window and tab collections plus raw text values from saved API responses. Each child starts suspended with `STARTUPINFOEX`; `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` restricts inheritance to the single intended NUL handle used for standard input, output, and error. The child enters a private Windows Job Object configured with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` before it resumes, so neither unrelated PowerShell handles nor helper worker descendants escape the runner's boundary. A failed pre-resume launch terminates the suspended child and verifies bounded process exit before releasing its only process handles; a cleanup failure is surfaced together with the original launch error. The runner's outer `finally` block stops an active share, requests fixture shutdown, terminates and verifies zero active Job-owned descendants, closes the kill-on-close handle, verifies that the selected loopback port is bindable again, scans every retained evidence file for the raw token and deletes any offending test-owned file while failing the run, removes the in-memory token variable, and writes `summary.json` on success or failure.
+
+This harness is live Windows evidence, not a substitute for extension testing in real Chrome, clean-VM artifact verification, mixed-DPI coverage, UIPI negative tests, resize/minimize/close races, or long-duration endurance. `systemIndicator: true` is recorded only as the helper's no-suppression policy metadata; the exact-window screenshots remain non-proof. The `Capture` suite therefore compares separate pre-share and active-share desktop-level crops limited to the fixture target plus a 16-pixel band. A fixture-owned topmost `#101820` backdrop extends beyond that crop, and the runner deletes the crop unless at least 95% of its outer perimeter matches the backdrop. The saved provenance includes OS/session/capture metadata and SHA-256 proofs for the supplied server, helper, fixture, and runner, but intentionally omits artifact paths, hostname, username, and the rest of the desktop. The active-share border band must differ visibly from the baseline. A failed foreground invariant can also mean the human used the session during the run; preserve that negative result and rerun only in a controlled interactive session.
 
 ## Required checks
 
@@ -155,7 +195,7 @@ Run `bash scripts/audit-versions.sh` before packaging. Commit finished work with
 
 In this repository, `deploy` means more than a local build. It means committing and pushing the intended version, building the Windows server and helper, building the universal macOS server/helper archive, packaging the matching extension, publishing all artifacts plus `SHA256SUMS.txt` and GitHub provenance in an immutable public GitHub Release, then downloading and verifying every published asset.
 
-The canonical release path is `.github/workflows/deploy.yml` from a matching `vVERSION` tag. On a suitably configured macOS host, `scripts/deploy.sh` performs the local cross-platform build; Windows cross-compilation requires `cargo-xwin` or a supported MinGW fallback.
+The canonical release path is `.github/workflows/deploy.yml` from a matching `vVERSION` tag. On a suitably configured macOS host, `scripts/deploy.sh` performs the local cross-platform build; official Windows artifacts require the MSVC target through `cargo-xwin` or a native Windows build.
 
 Verify a downloaded release set with:
 

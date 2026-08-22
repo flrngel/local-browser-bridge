@@ -22,7 +22,7 @@ Setup requirements such as browser loading, matching versions, macOS permissions
 - The selected window must be on screen, non-minimized, and have nonzero size when a live share starts.
 - Protected or DRM content can be blank. Secure surfaces and some GPU-rendered applications can stop or refuse capture.
 - The live feed uses bounded PNG events with a requested 1–10 FPS maximum cadence and a 1,000,000-pixel image cap, not a video codec, WebRTC stream, or audio stream. Actual delivery can be lower when the compositor is change-driven, semantic enumeration or encoding takes longer, acknowledgement pacing applies backpressure, or an action temporarily owns the serialized helper controller.
-- `computer.observe` remains a one-shot exact-window snapshot. `computer.share.start` uses the persistent native stream. Success in one path does not prove the other path on every application.
+- On macOS, `computer.observe` remains a one-shot snapshot while `computer.share.start` uses `SCStream`. On Windows, one-shot observation starts the same bounded WGC implementation as live sharing and stops it after one fresh frame. The different lifetimes and shutdown paths still require separate tests.
 - The system cursor is excluded. The visible helper pointer is composited into returned images and is not a native desktop cursor overlay.
 - Native capture callbacks continue replacing a one-frame source slot while an action runs, but PNG conversion and protocol publication resume after that serialized action completes. Shared frames show the settled helper pointer; they are not guaranteed to reproduce every intermediate pointer-animation sample.
 
@@ -36,7 +36,9 @@ Capture dimensions are fixed when `SCStream` starts, so restart a share after a 
 
 ### Windows
 
-The live-share backend uses free-threaded Windows Graphics Capture for an exact `(PID, HWND)`. It leaves the normal capture border setting under Windows control and does not request a borderless entitlement. The exact indicator or border depends on Windows version and policy.
+The capture backend is project-owned Windows Graphics Capture using a `CreateFreeThreaded` frame pool on a dedicated MTA owner thread for an exact `(PID, HWND)`. It leaves the normal capture border setting under Windows control and does not request a borderless entitlement. The exact indicator or border depends on Windows version and policy.
+
+The Windows transport currently requests SDR `B8G8R8A8UIntNormalized` frames and converts BGRA8 to PNG. [Microsoft recommends a full `R16G16B16A16_FLOAT` pipeline when HDR is enabled](https://learn.microsoft.com/en-us/windows/uwp/audio-video-camera/screen-capture); until that color-management path is implemented, HDR content can look washed out or clipped. This affects color fidelity, not the exact-window identity boundary.
 
 Minimized windows and applications that stop rendering can freeze or stop producing useful frames. Protected content, secure desktops, elevated targets, and some graphics frameworks remain unsupported or unverified.
 
@@ -53,7 +55,8 @@ Minimized windows and applications that stop rendering can freeze or stop produc
 
 ### Windows
 
-- UI Automation works only when the target exposes a useful pattern and accepts it without disruptive focus changes.
+- UI Automation works only when the target exposes a useful pattern and accepts it without disruptive focus changes. A snapshot visits at most 1,500 Control View nodes, 25 levels, and 500 actionable controls, with a 750 ms traversal budget checked between provider calls. Elements collected before a limit remain usable, while `semanticTruncated` and its closed-vocabulary reason disclose that later controls can be absent.
+- Individual UI Automation provider calls cannot be cancelled safely. Windows therefore performs controller work in a disposable supervised worker with a 12-second hard operation deadline. If a provider stalls, the worker is terminated and restarted; an action that crossed its side-effect boundary is reported as outcome-unknown and is never retried automatically.
 - Exact-HWND messages are application-framework behavior, not a universal trusted input API. A successful [`PostMessage`](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-postmessagew) call proves only that the message was queued.
 - Chromium, Electron, WPF, WinUI, GTK, games, canvas, elevated processes, and UIPI boundaries can reject background delivery. Browser web content should use the extension instead.
 - The helper does not use global [`SendInput`](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput) as an automatic fallback. Unsupported actions fail closed.
@@ -73,7 +76,7 @@ Hostile or destructive workloads require an explicitly managed VM, RDP desktop, 
 
 [OpenAI's current documentation](https://learn.chatgpt.com/docs/computer-use) says macOS Computer Use can run a scoped task in the background and says Windows Computer Use runs on the active desktop. OpenAI publishes the macOS Screen Recording and Accessibility prerequisites, but it does not publish its native capture or input implementation. Any claim that Codex specifically uses ScreenCaptureKit, SkyLight, or a particular private symbol is inference, not an official implementation detail.
 
-The closest pinned open-source comparison is [Cua commit `9a61050e`](https://github.com/trycua/cua/tree/9a61050e3474fc9488d7adc85184299f02514d0e). Its code and write-ups inform compatibility tests, but this project does not claim Cua feature parity or copy its protocol.
+The closest pinned shared-session comparison is [Cua commit `0213cd8`](https://github.com/trycua/cua/tree/0213cd82fd8f5f35d530e7b3eda5286511bbbc10). Its code and write-ups inform compatibility tests, but this project does not claim Cua feature parity or copy its protocol. Microsoft's [Windows child-session documentation](https://learn.microsoft.com/en-us/windows/win32/termserv/child-sessions) defines the separate-session boundary; exact-window WGC alone does not create that seat.
 
 ## Evidence gaps
 

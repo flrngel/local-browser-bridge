@@ -130,6 +130,7 @@ pub fn invoke(
                 format!("{native_action} failed with macOS AX error {result}"),
             ));
         }
+        cancellation.mark_verification_started();
     }
     cancellation.check("macOS AX action observation")?;
     thread::sleep(Duration::from_millis(90));
@@ -186,6 +187,7 @@ pub fn set_value(
                 format!("AXValue write failed with macOS AX error {result}"),
             ));
         }
+        cancellation.mark_verification_started();
     }
     cancellation.check("macOS AX value observation")?;
     thread::sleep(Duration::from_millis(60));
@@ -531,6 +533,7 @@ unsafe fn element_signature(element: AXUIElementRef, reference: &str) -> Option<
         bounds: unsafe { element_bounds(element) },
         coordinate_space: "screen-points".to_owned(),
         screen_bounds: None,
+        native_identity: None,
     })
 }
 

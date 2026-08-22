@@ -103,7 +103,7 @@ The connector must validate `protocolVersion`, `serverVersion`, `sessionId`, and
   "controllerSequence": 81,
   "controllerId": "38a72d1f-d124-4335-8f1e-9cb85777df14",
   "connectionId": "2f9ad9af-5bb7-42b3-a77d-a0c83a625792",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "browser": "Google Chrome",
   "mode": "full-access",
   "capabilities": ["tabs.list", "page.observe", "browser.control.start"]
@@ -432,6 +432,9 @@ An observation is shaped like:
     "transportScaleY": 0.8394308943,
     "sessionMode": "background-window",
     "deliveryMode": "exact-window-background",
+    "semanticMode": "windows-ui-automation",
+    "semanticAvailable": true,
+    "semanticTruncated": false,
     "pointer": {
       "id": "6bd182be-f4ca-4737-921a-08661110b55f",
       "visible": true,
@@ -471,6 +474,8 @@ An observation is shaped like:
 
 Agent-supplied coordinates and semantic `bounds` use delivered image pixels. `screenBounds` are diagnostic OS coordinates. The two transport scales are explicit because a resized image can have slightly different X and Y ratios after integer rounding.
 
+Windows UI Automation observations preserve every actionable element collected before a bounded traversal stops. In that case `semanticAvailable` remains `true`, `semanticTruncated` is `true`, and `semanticTruncationReason` is exactly one of `node_budget`, `depth_budget`, `actionable_budget`, `deadline`, or `provider_error`. The reason is omitted when `semanticTruncated` is `false`. A root/setup failure instead reports semantic data as unavailable rather than presenting an empty result as a complete tree.
+
 ### Coordinate spaces
 
 Coordinate commands accept an optional `coordinateSpace`. The default is the existing pixel space (`image` for computer commands, `viewport` for `page.clickAt`); `normalized1000` instead expresses each coordinate as 0–1000 across the current frame. The server converts normalized values against the stored sanitized frame's `imageWidth`/`imageHeight` (or, for `page.clickAt`, the last browser observation's viewport) and clamps to the last addressable pixel—the boundary value 1000 converts to `extent - 1`, because connectors validate coordinates as strictly inside the frame—so connectors only ever receive pixels and `coordinateSpace` is never relayed. Without a stored frame or observation to convert against, the command fails with `NO_COMPUTER_FRAME` or `NO_BROWSER_OBSERVATION` instead of guessing. To let a client pin decisions to an exact frame, `/api/state` exposes a SHA-256 `contentHash` plus decoded `screenshotWidth`/`screenshotHeight` for both the browser observation and the computer observation.
@@ -479,7 +484,7 @@ Native password elements are always emitted with `sensitive: true`, `valueRedact
 
 The synthetic pointer is helper-session state, not the hardware cursor. Its bounded cubic Bézier/minimum-jerk trajectory is delivered to the exact window, and its final state is composited into subsequent exact-window PNGs. It is not a native click-through desktop overlay.
 
-`computer.share.start` creates one persistent native source bound to the selected `(pid, native window id)`: ScreenCaptureKit `SCStream` on macOS or a free-threaded Windows Graphics Capture session on Windows. The helper advertises `computer.capture.native-stream.v1` for this implementation. The system cursor is excluded, and the bridge uses each platform's default capture-indication behavior without requesting a borderless or hidden mode. `systemIndicator: true` means indication was not suppressed by the helper; it is not runtime proof that a particular banner or border was visible. Selection is programmatic from the authenticated control page; there is no native system content picker.
+`computer.share.start` creates one persistent native source bound to the selected `(pid, native window id)`: ScreenCaptureKit `SCStream` on macOS or a project-owned Windows Graphics Capture `CreateFreeThreaded` frame pool on a dedicated MTA owner thread. The helper advertises `computer.capture.native-stream.v1` for this implementation. The system cursor is excluded, and the bridge uses each platform's default capture-indication behavior without requesting a borderless or hidden mode. `systemIndicator: true` means indication was not suppressed by the helper; it is not runtime proof that a particular banner or border was visible. Selection is programmatic from the authenticated control page; there is no native system content picker.
 
 The native callback owns a capacity-one latest-frame slot. Each accepted source frame has a monotonic `sourceSequence` and callback timestamp; replacement increments `sourceDroppedFrames`. The helper converts only the newest available native image into the regular observation shape, caps it at 1,000,000 pixels, composites its synthetic pointer, and PNG-encodes it. The requested 1–10 FPS value is a maximum cadence rather than a guaranteed rate. Source capture continues while an input command owns the controller, although protocol conversion and publication resume only after that command releases the controller; returned frames promise settled synthetic-pointer state, not every intermediate animation sample.
 
@@ -501,6 +506,8 @@ Stale, duplicate, unknown, and wrong-share acknowledgements are ignored, and bot
 To avoid a live-share render/action race, the helper keeps a bounded recent-frame lease: a rendered `frameId` remains usable for at most three seconds only while the current share ID, PID, native window ID, and complete window geometry still match. Everything else is stale. A native exact-window stream still shares the user's login and input environment; it is not an OS virtual display, remote-desktop session, VM, sandbox, or independent input seat.
 
 The helper re-enumerates the exact `(pid, native window id)` target before input and returns `COMPUTER_STALE_FRAME` if identity or geometry changed. On macOS it compares frontmost process/window identity, hardware cursor, and active Space before and after delivery; Windows additionally compares foreground and focused HWND identities plus the input desktop. It returns `COMPUTER_BACKGROUND_CONTRACT_VIOLATION` if that non-interruption oracle changes. These post-dispatch samples are not transactional rollback and cannot prove no shorter transient change occurred. There is no implicit global-HID or foreground fallback. The server serializes actions and requests a new exact-window observation after successful input.
+
+Each successful mutation includes an `actionId`, conservative `effect`, structured `evidence`, and `timings`. `resolveMs` ends when frame/target/action resolution is complete. `dispatchMs` ends immediately after the final native side effect in a compound action. `verifyMs` covers exact postcondition reads, non-interruption sampling, and result finalization after that boundary. `totalMs` spans the complete helper action. A later side effect, such as the click after a pointer approach, supersedes the earlier boundary so preparation is never mislabeled as final verification.
 
 Legacy `displayId` and display-shaped aliases identify the selected window, not a physical display, and remain deprecated compatibility fields.
 

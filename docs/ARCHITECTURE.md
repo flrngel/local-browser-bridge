@@ -40,6 +40,8 @@ The helper is a separate compiled process because operating-system capture and i
 
 The helper owns native window enumeration, exact-window observations, persistent live sharing, semantic accessibility state, target-routed input, and the computer synthetic cursor. Stopping it removes native application authority without stopping browser control.
 
+On Windows, the executable users start is also a supervisor. It launches the same version-matched executable in a hidden worker mode, places that worker in a kill-on-close Job Object, and restarts it after a transport loss, an unknown action outcome, an unconfirmed capture shutdown, or a hard operation deadline. This is process-failure containment inside the same interactive desktop, not a sandbox or separate input seat. macOS keeps the existing single helper process because its Accessibility and Screen Recording grants are attached to the packaged app identity.
+
 ## Browser state and authority
 
 Browser actions are tied to several changing identities:
@@ -67,11 +69,11 @@ One-shot observation and live sharing are deliberately separate paths.
 `computer.share.start` validates one selected, non-minimized window and starts a persistent native capture source:
 
 - macOS uses ScreenCaptureKit `SCStream` with `SCContentFilter(desktopIndependentWindow:)`, bound to the exact `(PID, CGWindowID)`.
-- Windows uses a free-threaded Windows Graphics Capture session bound to the exact `(PID, HWND)`.
+- Windows uses a project-owned Windows Graphics Capture `CreateFreeThreaded` frame pool on a dedicated MTA owner thread bound to the exact `(PID, HWND)`.
 
 Both sources disable capture of the system cursor. Native callbacks publish only the newest accepted frame into a one-slot handoff, so a slow consumer cannot create an unbounded native-frame backlog. The helper then composites its window-scoped synthetic pointer and emits PNG `computer.share.frame` events with the requested 1–10 FPS as a maximum cadence, not a guaranteed delivery rate. Delivered images are capped at 1,000,000 pixels.
 
-The native producer remains live while an input action owns the serialized controller, but PNG conversion and protocol publication resume only after the action completes. This preserves a bounded newest frame without promising every intermediate synthetic-pointer animation sample.
+The native producer remains live while an input action owns the serialized controller, but semantic enumeration, PNG conversion, and protocol publication resume only after the action completes. On Windows, share pumping runs outside the transport loop under the disposable worker's hard deadline, so a stalled UI Automation provider cannot wedge authentication, cancellation, or worker replacement. This preserves a bounded newest frame without promising every intermediate synthetic-pointer animation sample.
 
 When acknowledgement pacing is negotiated, only one encoded frame is in flight. A newer frame replaces an unsent frame, increments `droppedFrames`, and keeps the sequence monotonic. Older helpers retain the bounded producer-timed contract rather than receiving an unknown acknowledgement message.
 

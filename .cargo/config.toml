@@ -3,3 +3,8 @@
 # Cargo contract aligned with the packaged helper's Info.plist on native and
 # cross-architecture macOS builds.
 MACOSX_DEPLOYMENT_TARGET = { value = "13.0", force = true }
+
+[target.x86_64-pc-windows-msvc]
+# Official Windows artifacts must not depend on a separately installed Visual
+# C++ Redistributable. The release workflow also inspects the final PE imports.
+rustflags = ["-C", "target-feature=+crt-static"]

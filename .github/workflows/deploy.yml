@@ -79,9 +79,15 @@ jobs:
       - name: Install the minimum supported Rust toolchain
         shell: pwsh
         run: |
-          rustup toolchain install 1.88.0 --profile minimal
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
           rustup default 1.88.0
           rustup target add x86_64-pc-windows-msvc
+      - name: Run Windows formatting, lint, and tests
+        shell: pwsh
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --target x86_64-pc-windows-msvc --all-targets -- -D warnings
+          cargo test --locked --target x86_64-pc-windows-msvc --all-targets
       - name: Build and verify the standalone executables
         shell: pwsh
         run: |
@@ -93,15 +99,7 @@ jobs:
           $helper = "dist/local-computer-helper-v${version}-windows-x86_64.exe"
           Copy-Item target/x86_64-pc-windows-msvc/release/local-browser-bridge.exe $server
           Copy-Item target/x86_64-pc-windows-msvc/release/local-computer-helper.exe $helper
-          if ((& $server --version) -ne "local-browser-bridge $version") { throw "Unexpected server version" }
-          if ((& $helper --version) -ne "local-computer-helper $version") { throw "Unexpected helper version" }
-          foreach ($output in @($server, $helper)) {
-            $bytes = [System.IO.File]::ReadAllBytes($output)
-            if ($bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) { throw "$output does not have an MZ header" }
-            $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
-            $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
-            if ($machine -ne 0x8664) { throw "$output is not an x86_64 PE executable" }
-          }
+          ./scripts/verify-windows-artifacts.ps1 -Version $version -ServerPath $server -HelperPath $helper
       - name: Attest Windows build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

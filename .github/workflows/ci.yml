@@ -36,6 +36,45 @@ jobs:
       - name: Run all tests
         run: cargo test --locked --all-targets
 
+  windows:
+    name: Windows compile, tests, and artifact policy
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the minimum supported Rust toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
+          rustup default 1.88.0
+          rustup target add x86_64-pc-windows-msvc
+      - name: Audit distributed versions
+        shell: bash
+        run: bash scripts/audit-versions.sh
+      - name: Check Windows formatting, lint, and tests
+        shell: pwsh
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --target x86_64-pc-windows-msvc --all-targets -- -D warnings
+          cargo test --locked --target x86_64-pc-windows-msvc --all-targets
+      - name: Build and inspect standalone Windows executables
+        shell: pwsh
+        run: |
+          cargo build --locked --release --bins --target x86_64-pc-windows-msvc
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"$').Matches[0].Groups[1].Value
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/local-browser-bridge.exe "dist/local-browser-bridge-v${version}-windows-x86_64.exe"
+          Copy-Item target/x86_64-pc-windows-msvc/release/local-computer-helper.exe "dist/local-computer-helper-v${version}-windows-x86_64.exe"
+          ./scripts/verify-windows-artifacts.ps1 -Version $version
+          Get-FileHash dist/*.exe -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLowerInvariant())  $(Split-Path $_.Path -Leaf)" } | Set-Content -Encoding ascii dist/SHA256SUMS-windows.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-ci-${{ github.sha }}
+          path: |
+            dist/*.exe
+            dist/SHA256SUMS-windows.txt
+          if-no-files-found: error
+          retention-days: 7
+
   extension:
     name: Extension static and contract tests (Node-free)
     runs-on: ubuntu-latest

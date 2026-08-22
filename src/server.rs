@@ -571,6 +571,9 @@ struct ComputerObservation {
     semantic_available: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     semantic_error: Option<String>,
+    semantic_truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    semantic_truncation_reason: Option<String>,
     pointer: ComputerPointer,
     elements: Vec<ComputerElement>,
     share: Value,
@@ -3640,6 +3643,44 @@ fn sanitize_computer_observation(value: Option<&Value>) -> Result<ComputerObserv
             .unwrap_or("Window"),
         200,
     );
+    let elements = sanitize_computer_elements(frame.get("elements"));
+    let semantic_available = frame
+        .get("semanticAvailable")
+        .and_then(Value::as_bool)
+        .unwrap_or(!elements.is_empty());
+    let invalid_semantic_metadata = || {
+        ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "COMPUTER_INVALID_OBSERVATION",
+            "Computer frame semantic truncation metadata is invalid",
+        )
+    };
+    let semantic_truncated = match frame.get("semanticTruncated") {
+        None => false,
+        Some(Value::Bool(value)) => *value,
+        Some(_) => return Err(invalid_semantic_metadata()),
+    };
+    let semantic_truncation_reason = match frame.get("semanticTruncationReason") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(reason))
+            if matches!(
+                reason.as_str(),
+                "node_budget"
+                    | "depth_budget"
+                    | "actionable_budget"
+                    | "deadline"
+                    | "provider_error"
+            ) =>
+        {
+            Some(reason.clone())
+        }
+        Some(_) => return Err(invalid_semantic_metadata()),
+    };
+    if semantic_truncated != semantic_truncation_reason.is_some()
+        || (semantic_truncated && !semantic_available)
+    {
+        return Err(invalid_semantic_metadata());
+    }
     Ok(ComputerObservation {
         frame_id: required_string(frame.get("id"), "frame.id", 100)?,
         captured_at: bounded(
@@ -3737,16 +3778,15 @@ fn sanitize_computer_observation(value: Option<&Value>) -> Result<ComputerObserv
                 .unwrap_or("unavailable"),
             80,
         ),
-        semantic_available: frame
-            .get("semanticAvailable")
-            .and_then(Value::as_bool)
-            .unwrap_or_else(|| !sanitize_computer_elements(frame.get("elements")).is_empty()),
+        semantic_available,
         semantic_error: frame
             .get("semanticError")
             .and_then(Value::as_str)
             .map(|message| bounded(message, 500)),
+        semantic_truncated,
+        semantic_truncation_reason,
         pointer: sanitize_computer_pointer(frame.get("pointer"), &window_id)?,
-        elements: sanitize_computer_elements(frame.get("elements")),
+        elements,
         share: sanitize_share_status(frame.get("share")),
     })
 }
@@ -6510,8 +6550,10 @@ mod tests {
             "screenHeight": 492,
             "scaleFactor": 1.0,
             "rotation": 0.0,
-            "semanticMode": "macos-accessibility",
+            "semanticMode": "windows-ui-automation",
             "semanticAvailable": true,
+            "semanticTruncated": true,
+            "semanticTruncationReason": "node_budget",
             "pointer": pointer,
             "elements": [{
                 "ref": "a1",
@@ -6533,12 +6575,25 @@ mod tests {
         );
         assert_eq!(observation.session_mode, "background-window");
         assert_eq!(observation.delivery_mode, "exact-window-background");
-        assert_eq!(observation.semantic_mode, "macos-accessibility");
+        assert_eq!(observation.semantic_mode, "windows-ui-automation");
         assert!(observation.semantic_available);
+        assert!(observation.semantic_truncated);
+        assert_eq!(
+            observation.semantic_truncation_reason.as_deref(),
+            Some("node_budget")
+        );
         assert_eq!(observation.elements.len(), 1);
         assert_eq!(observation.elements[0].reference, "a1");
         assert!(observation.pointer.visible);
         assert_eq!(observation.pointer.sequence, 3);
+
+        let mut invalid_truncation = frame.clone();
+        invalid_truncation["semanticTruncationReason"] = json!("future_budget");
+        let error = match sanitize_computer_observation(Some(&invalid_truncation)) {
+            Ok(_) => panic!("an unknown semantic truncation reason must be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "COMPUTER_INVALID_OBSERVATION");
 
         let invoke = sanitize_computer_params(
             "computer.invoke",

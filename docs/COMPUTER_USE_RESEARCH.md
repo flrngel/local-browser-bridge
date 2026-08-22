@@ -1,6 +1,6 @@
 # Session-visible browser control and non-interrupting computer use
 
-Research snapshot: 2026-08-20. Historical version references below identify when a design property entered the project. [Capabilities](CAPABILITIES.md) and [Limitations](LIMITATIONS.md) are authoritative for the current implementation boundary.
+Research snapshot: 2026-08-21. Historical version references below identify when a design property entered the project. [Capabilities](CAPABILITIES.md) and [Limitations](LIMITATIONS.md) are authoritative for the current implementation boundary.
 
 ## The corrected target
 
@@ -13,6 +13,15 @@ The corrected design separates two properties that must not be conflated:
 
 Neither property creates an isolated operating-system session. A shared image of a background window is not a VM, remote desktop, virtual display, sandbox, or separate input seat.
 
+Windows therefore has two honest architectural modes, even when a product eventually presents them through one UI:
+
+| Mode | Capture and input boundary | Can operate an already-open main-session app? | Independent real input seat? |
+|---|---|---:|---:|
+| `shared-window` | Exact-HWND WGC plus a capability router across UIA, verified window messages, and browser CDP | Yes, only for proven routes | No |
+| `isolated-child-session` | Loopback RDP child session with its own helper, browser profile, focus, cursor, and input queue | No; it launches a separate app instance | Yes |
+
+WGC solves exact-window pixels. UIA solves supported semantic control patterns. `PostMessageW` queues HWND messages but does not create trusted physical input or prove application acceptance. Windows child sessions solve the independent-seat problem, with edition/policy, one-active-child, lifecycle, profile, and cleanup constraints. A child session is also not a hostile-workload sandbox because it inherits the user's identity and access; use Windows Sandbox or a VM for that boundary.
+
 ## Evidence reviewed
 
 The review used pinned source code, vendor source/documentation, primary papers, empirical public-extension packages, and community reports. Popularity was used only for discovery. Architecture claims come from source or primary documentation; community reports identify failure modes but do not establish platform guarantees.
@@ -23,12 +32,14 @@ The review used pinned source code, vendor source/documentation, primary papers,
 | [OpenAI Computer Use documentation](https://learn.chatgpt.com/docs/computer-use) and [Codex announcement](https://openai.com/index/codex-for-almost-everything/) | official pages reviewed 2026-08-20 | Documents macOS background behavior, Screen Recording and Accessibility prerequisites, and Windows foreground behavior; it does not disclose the native API implementation, so ScreenCaptureKit or SkyLight attribution remains inference |
 | Public ChatGPT Chrome extension package | `1.2.27259.19709`; ID `hehggadaopoacecdllhhajmbjkdcmajg`; SHA-256 `f9ba06c44525b53a0189d0ad97cf1d457987970063aea0609dec31b1d6782c96` | Empirical benchmark: held debugger sessions, exclusive tab ownership, managed tab group, serialized target work, session/turn/move state, and acknowledged synthetic-cursor arrival |
 | Public Claude Chrome extension package | `1.0.85`; ID `fcoeoabgfenejglbffodgkkbkcdhcgfn`; SHA-256 `5c1c1318acf10bb4638be129ae34f9dfe728b867a70c603382f89e66a5d08be3` | Empirical benchmark: clear page indicator, trusted Stop path, heartbeat, page glow, and a simpler CSS synthetic cursor |
-| [Cua Driver](https://github.com/trycua/cua/tree/9a61050e3474fc9488d7adc85184299f02514d0e/libs/cua-driver/rust) and [macOS internals review](https://github.com/trycua/cua/blob/9a61050e3474fc9488d7adc85184299f02514d0e/blog/inside-macos-window-internals.md) | `9a61050e3474fc9488d7adc85184299f02514d0e` | ScreenCaptureKit exact-window capture, semantic-first actions, private SkyLight process routing, focus-without-raise, Space discovery, and native cursor/overlay work; also records Chromium and HID-only application limits |
+| [Cua](https://github.com/trycua/cua/tree/0213cd82fd8f5f35d530e7b3eda5286511bbbc10) | `0213cd82fd8f5f35d530e7b3eda5286511bbbc10` | Interactive-session daemon, UIA CacheRequest, UIA/MSAA routing, framework-specific refusals, checked outcomes, and repository-owned Windows fixtures; shared-session background routing remains distinct from an isolated input seat |
+| [winappCli](https://github.com/microsoft/winappCli/tree/2280dfd4f628451a0c729f8fe40cd39a1f93be64) | `2280dfd4f628451a0c729f8fe40cd39a1f93be64` | Stable Windows selectors, key-message construction, WGC `CreateFreeThreaded`, RangeValue/LegacyIAccessible fallbacks, and explicit foreground/locked-session limits |
 | [Apple ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit) and [exact-window session](https://developer.apple.com/videos/play/wwdc2022/10155/) | official documentation reviewed 2026-08-20 | Desktop-independent exact-window streams, occlusion/offscreen behavior, minimized-stream pause, child-window boundary, frame metadata, and bounded surface queues; capture does not supply a second input seat |
 | [Windows Graphics Capture `CreateForWindow`](https://learn.microsoft.com/en-us/windows/win32/api/windows.graphics.capture.interop/nf-windows-graphics-capture-interop-igraphicscaptureiteminterop-createforwindow) | official documentation reviewed 2026-08-20 | Exact-HWND capture item and OS-owned capture indication; this is capture, not universal background input |
 | [agent-browser](https://github.com/vercel-labs/agent-browser/tree/548b159b30eef119ccf6846c8bc807d0eaa3f6f8) | `548b159b30eef119ccf6846c8bc807d0eaa3f6f8` | Persistent browser sessions, serialized CDP interaction, live screencast input, monotonic frame IDs, latest-frame-wins delivery, and optional renderer acknowledgements |
 | [pi-computer-use](https://github.com/injaneity/pi-computer-use/tree/de725835d3b0e3bd13aa8885d6c3f3a9dc23bcdc) | `de725835d3b0e3bd13aa8885d6c3f3a9dc23bcdc` | Immutable state-scoped observations, resource epochs, per-resource serialization, successor state/diffs, checked action outcomes, and an optional non-blocking native ghost cursor on macOS |
 | [OSWorld](https://arxiv.org/abs/2404.07972) | 2024 paper | Long-horizon desktop evaluation and environment diversity; its reference execution path uses the physical desktop/cursor and is not a concurrent-user isolation design |
+| [OSWorld 2.0](https://arxiv.org/abs/2606.29537) | 2026 paper | Adds streaming interaction, dynamic environments, hidden-state recovery, partial scoring, and safety reports; it reinforces continuous observation and explicit verification, but still does not define a background-input transport |
 | [Microsoft UFO](https://github.com/microsoft/UFO/tree/96983c73ed09e884a5f1d7ff8936c953b234b684) and [UFO²](https://arxiv.org/abs/2504.14603) | source `96983c7`; 2025 paper / 2026 TMLR | UIA/Win32 automation in shipped source; the paper's RDP-loopback Picture-in-Picture architecture is the strongest reviewed separate-input-session design, but the reviewed public repository still described PiP Desktop as coming soon |
 | [UI-TARS](https://github.com/bytedance/UI-TARS/tree/582f3a7ea5d285ee8ed9e2e84048d1ab01453c49) | `582f3a7ea5d285ee8ed9e2e84048d1ab01453c49` | Vision-language grounding and screenshot/action history; this improves the planner/model, while its normal desktop operator remains physical screen input rather than a non-interrupting transport |
 | [Temporal UI State Inconsistency / PUSV](https://arxiv.org/abs/2604.18860) | 2026 paper | Formalizes observation-to-action TOCTOU and rechecks local pixels, the global frame, and window identity immediately before action; also shows that visual checks alone miss zero-visual-footprint DOM replacement |
@@ -88,7 +99,7 @@ Local Browser Bridge applies the same class of invariant at narrower layers: Web
 
 ### UI-TARS and OSWorld: planner quality is not transport isolation
 
-UI-TARS focuses on vision-language grounding, action vocabulary, and prior screenshot/action context. OSWorld focuses on representative, long-horizon task evaluation. Both are essential to end-task quality, but neither makes physical desktop input non-interrupting. This project uses them to shape action coverage and verification, not as evidence for a background-input mechanism.
+UI-TARS focuses on vision-language grounding, action vocabulary, and prior screenshot/action context. OSWorld focuses on representative, long-horizon task evaluation. OSWorld 2.0 further emphasizes streaming state, dynamic environments, constraint tracking, hidden-state recovery, and verification rather than optimistic completion. These properties shape the bridge's persistent streams, explicit state epochs, application-owned postconditions, and evidence runner, but none makes physical desktop input non-interrupting or creates a separate input seat.
 
 ### PUSV: observe-then-act is a security gap
 
@@ -143,7 +154,7 @@ The helper opens no listening socket. It authenticates outbound to loopback and 
 ### Computer share and pointer lifecycle
 
 - `computer.share.start` binds one share ID to one non-minimized native window and a requested 1–10 FPS maximum cadence.
-- The live-share path starts a persistent ScreenCaptureKit `SCStream` on macOS or free-threaded Windows Graphics Capture session on Windows. One-shot `computer.observe` remains a separate snapshot path.
+- The live-share path starts a persistent ScreenCaptureKit `SCStream` on macOS or a project-owned Windows Graphics Capture `CreateFreeThreaded` frame pool on a dedicated MTA owner thread. macOS one-shot observation remains a separate snapshot path; Windows one-shot observation starts the same bounded WGC implementation and proves its own shutdown after one frame.
 - Native callbacks keep only the newest accepted exact-window frame; the helper composites its pointer and emits bounded `computer.share.frame` PNG events with monotonic sequence metadata.
 - The server keeps the latest sanitized computer observation and screenshot. It does not queue an unbounded video history.
 - Pointer state is owned by the helper session and remains window-specific. A move to another window reseeds it rather than implying a global desktop location.

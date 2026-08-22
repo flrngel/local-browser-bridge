@@ -136,12 +136,54 @@ pub(crate) struct SemanticElement {
     pub coordinate_space: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub screen_bounds: Option<SemanticBounds>,
+    /// Provider identity used only to revalidate a native element before an
+    /// action. This must never become part of the browser-facing protocol.
+    #[serde(skip)]
+    pub(crate) native_identity: Option<NativeElementIdentity>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NativeElementIdentity {
+    pub(crate) automation_id: String,
+    pub(crate) class_name: String,
+    pub(crate) framework_id: String,
+    pub(crate) control_type: i32,
+    pub(crate) provider_process_id: i32,
+    pub(crate) capability_mask: u8,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct SemanticTarget {
     pub element: SemanticElement,
     pub path: Vec<usize>,
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SemanticTruncationReason {
+    NodeBudget,
+    DepthBudget,
+    ActionableBudget,
+    Deadline,
+    ProviderError,
+}
+
+impl SemanticTruncationReason {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::NodeBudget => "node_budget",
+            Self::DepthBudget => "depth_budget",
+            Self::ActionableBudget => "actionable_budget",
+            Self::Deadline => "deadline",
+            Self::ProviderError => "provider_error",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SemanticSnapshot {
+    pub(crate) elements: Vec<SemanticTarget>,
+    pub(crate) truncation_reason: Option<SemanticTruncationReason>,
 }
 
 pub struct ComputerController {
@@ -179,6 +221,21 @@ impl ComputerController {
             cursor: SyntheticCursor::new(Uuid::new_v4().to_string()),
             share: None,
             share_ack_paced: false,
+        }
+    }
+
+    /// Drains a process-fatal native capture shutdown failure for the
+    /// disposable helper worker. This is separate from command results because
+    /// best-effort lease rollback paths deliberately discard ordinary errors.
+    #[doc(hidden)]
+    pub fn take_fatal_capture_stop_error() -> Option<ComputerError> {
+        #[cfg(target_os = "windows")]
+        {
+            native_share::take_fatal_stop_error()
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            None
         }
     }
 
@@ -299,6 +356,15 @@ impl ComputerController {
         self.share_ack_paced = enabled;
     }
 
+    /// Reports whether this transport session currently owns a live share.
+    ///
+    /// The helper checks this while holding the controller lock so its
+    /// acceptance-only watchdog fixture cannot fire before `share.start` has
+    /// committed the share authority epoch.
+    pub fn has_active_share(&self) -> bool {
+        self.share.is_some()
+    }
+
     /// Revokes share and frame authority after a canceled in-flight command
     /// whose outcome is unknown, without touching the transport session's
     /// negotiated share ack pacing: the session itself is unchanged, so a
@@ -315,7 +381,8 @@ impl ComputerController {
         let windows = available_windows().unwrap_or_default();
         let capture_ready = windows
             .first()
-            .is_some_and(|window| platform::capture_window(window).is_ok());
+            .cloned()
+            .is_some_and(|mut window| platform::capture_window(&mut window).is_ok());
         json!({
             "platform": std::env::consts::OS,
             "screenCaptureReady": capture_ready,
@@ -389,7 +456,7 @@ impl ComputerController {
             .or_else(|| params.get("displayId"))
             .and_then(Value::as_str);
         let windows = available_windows()?;
-        let target = match requested_id {
+        let mut target = match requested_id {
             Some(id) => windows
                 .iter()
                 .find(|window| window.id == id)
@@ -412,8 +479,8 @@ impl ComputerController {
                     )
                 })?,
         };
-        let image = platform::capture_window(&target)?;
-        self.build_observation(target, windows, image, Instant::now(), None)
+        let (image, captured_at) = platform::capture_window(&mut target)?;
+        self.build_observation(target, windows, image, captured_at, None)
     }
 
     fn build_observation(
@@ -431,10 +498,17 @@ impl ComputerController {
             ));
         }
         let mut image = resize_for_transport(image);
-        let (elements, semantic_available, semantic_error) =
+        let (elements, semantic_available, semantic_error, semantic_truncation_reason) =
             match platform::semantic_elements(&target) {
-                Ok(elements) => (elements, true, None),
-                Err(error) => (Vec::new(), false, Some(error.message)),
+                Ok(snapshot) => (
+                    snapshot.elements,
+                    true,
+                    None,
+                    snapshot
+                        .truncation_reason
+                        .map(SemanticTruncationReason::as_str),
+                ),
+                Err(error) => (Vec::new(), false, Some(error.message), None),
             };
         let image_width = image.width();
         let image_height = image.height();
@@ -493,7 +567,7 @@ impl ComputerController {
             self.recent_frames.truncate(32);
         }
         let capture_age_ms = captured_at.elapsed().as_secs_f64() * 1_000.0;
-        let result = json!({
+        let mut result = json!({
             "screenshot": format!("data:image/png;base64,{}", BASE64_STANDARD.encode(png.into_inner())),
             "frame": {
                 "id": frame_id,
@@ -533,6 +607,12 @@ impl ComputerController {
             },
             "windows": windows,
         });
+        set_semantic_truncation_metadata(
+            result
+                .get_mut("frame")
+                .expect("the observation frame was constructed above"),
+            semantic_truncation_reason,
+        );
         Ok(result)
     }
 
@@ -719,7 +799,7 @@ impl ComputerController {
             Ok(windows) => windows,
             Err(error) => return Some(self.fail_share_capture(error)),
         };
-        let Some(target) = windows
+        let Some(mut target) = windows
             .iter()
             .find(|window| window.id == window_id && window.pid == target_pid && !window.minimized)
             .cloned()
@@ -731,6 +811,11 @@ impl ComputerController {
             return Some(self.fail_share_capture(error));
         };
         debug_assert!(native_frame.source_sequence > last_source_sequence);
+        // Let a native backend bind pixels to capture-time geometry when it
+        // can prove that sample. Windows samples DWM bounds on both sides of
+        // the WGC frame copy so later input rejects a moved/resized stale frame
+        // instead of silently using newly enumerated coordinates.
+        native_share::bind_frame_geometry(&native_frame, &mut target);
         match self.build_observation(
             target,
             windows,
@@ -766,7 +851,7 @@ impl ComputerController {
         params: &Value,
         cancellation: &CommandCancellation,
     ) -> Result<Value, ComputerError> {
-        let mut timer = ActionTimer::start();
+        let mut timer = ActionTimer::start(cancellation);
         let (frame, point) = self.point(params, "x", "y")?;
         let duration_ms = optional_duration(params, "durationMs", 50, MAX_CURSOR_DURATION_MS)?;
         let trajectory = self.cursor.plan(&frame, point, duration_ms, "move");
@@ -789,7 +874,6 @@ impl ComputerController {
             self.cursor.mark_unknown("moveCanceled");
             return Err(error);
         }
-        timer.dispatched();
         self.cursor.commit(&frame, &trajectory, "move");
         self.cursor.settle("move");
         let evidence = invariant_evidence(&invariants);
@@ -812,7 +896,7 @@ impl ComputerController {
         params: &Value,
         cancellation: &CommandCancellation,
     ) -> Result<Value, ComputerError> {
-        let mut timer = ActionTimer::start();
+        let mut timer = ActionTimer::start(cancellation);
         let (frame, point) = self.point(params, "x", "y")?;
         let button = params
             .get("button")
@@ -852,7 +936,6 @@ impl ComputerController {
         let invariants =
             platform::click(&frame.target, point, button, count, cancellation)?.assert_held()?;
         cancellation.check("click result commit")?;
-        timer.dispatched();
         self.cursor.settle(action);
         let evidence = invariant_evidence(&invariants);
         recorded_action_result(
@@ -876,7 +959,7 @@ impl ComputerController {
         params: &Value,
         cancellation: &CommandCancellation,
     ) -> Result<Value, ComputerError> {
-        let mut timer = ActionTimer::start();
+        let mut timer = ActionTimer::start(cancellation);
         let frame = self.verify_frame(params)?;
         let from = self.frame_point(&frame, params, "fromX", "fromY")?;
         let to = self.frame_point(&frame, params, "toX", "toY")?;
@@ -912,7 +995,6 @@ impl ComputerController {
             }
         };
         cancellation.check("drag result commit")?;
-        timer.dispatched();
         let arrival = self.cursor.plan(&frame, to, Some(50), "drag");
         self.cursor.commit(&frame, &arrival, "drag");
         self.cursor.settle("drag");
@@ -943,7 +1025,7 @@ impl ComputerController {
         params: &Value,
         cancellation: &CommandCancellation,
     ) -> Result<Value, ComputerError> {
-        let mut timer = ActionTimer::start();
+        let mut timer = ActionTimer::start(cancellation);
         let (frame, point) = self.point(params, "x", "y")?;
         let delta_x = integer(params, "deltaX", 0)?.clamp(-50, 50) as i32;
         let delta_y = integer(params, "deltaY", 0)?.clamp(-50, 50) as i32;
@@ -965,7 +1047,6 @@ impl ComputerController {
         let invariants = platform::scroll(&frame.target, point, delta_x, delta_y, cancellation)?
             .assert_held()?;
         cancellation.check("scroll result commit")?;
-        timer.dispatched();
         self.cursor.settle("scroll");
         let evidence = invariant_evidence(&invariants);
         recorded_action_result(
@@ -989,7 +1070,7 @@ impl ComputerController {
         params: &Value,
         cancellation: &CommandCancellation,
     ) -> Result<Value, ComputerError> {
-        let mut timer = ActionTimer::start();
+        let mut timer = ActionTimer::start(cancellation);
         let frame = self.verify_frame(params)?;
         let text = params
             .get("text")
@@ -998,7 +1079,6 @@ impl ComputerController {
         timer.resolved();
         let invariants = platform::type_text(&frame.target, text, cancellation)?.assert_held()?;
         cancellation.check("text result commit")?;
-        timer.dispatched();
         let evidence = invariant_evidence(&invariants);
         let result = json!({
             "deliveryMode": "exact-window-background",
@@ -1014,7 +1094,7 @@ impl ComputerController {
         params: &Value,
         cancellation: &CommandCancellation,
     ) -> Result<Value, ComputerError> {
-        let mut timer = ActionTimer::start();
+        let mut timer = ActionTimer::start(cancellation);
         let frame = self.verify_frame(params)?;
         let chord = params
             .get("key")
@@ -1024,7 +1104,6 @@ impl ComputerController {
         timer.resolved();
         let invariants = platform::key(&frame.target, chord, cancellation)?.assert_held()?;
         cancellation.check("key result commit")?;
-        timer.dispatched();
         let evidence = invariant_evidence(&invariants);
         let result = json!({
             "deliveryMode": "exact-window-background",
@@ -1040,7 +1119,7 @@ impl ComputerController {
         params: &Value,
         cancellation: &CommandCancellation,
     ) -> Result<Value, ComputerError> {
-        let mut timer = ActionTimer::start();
+        let mut timer = ActionTimer::start(cancellation);
         let frame = self.verify_frame(params)?;
         let target = semantic_target(&frame, params)?;
         let action = params
@@ -1062,7 +1141,6 @@ impl ComputerController {
         let (backend_effect, invariants) =
             platform::invoke(&frame.target, &target, action, cancellation)?;
         cancellation.check("semantic invoke result commit")?;
-        timer.dispatched();
         let (effect, mut evidence) = semantic_evidence(&backend_effect);
         evidence.extend(invariant_evidence(&invariants));
         let result = json!({
@@ -1081,7 +1159,7 @@ impl ComputerController {
         params: &Value,
         cancellation: &CommandCancellation,
     ) -> Result<Value, ComputerError> {
-        let mut timer = ActionTimer::start();
+        let mut timer = ActionTimer::start(cancellation);
         let frame = self.verify_frame(params)?;
         let target = semantic_target(&frame, params)?;
         let value = params
@@ -1109,7 +1187,6 @@ impl ComputerController {
         let (backend_effect, invariants) =
             platform::set_value(&frame.target, &target, value, cancellation)?;
         cancellation.check("semantic value result commit")?;
-        timer.dispatched();
         let (effect, mut evidence) = semantic_evidence(&backend_effect);
         evidence.extend(invariant_evidence(&invariants));
         let result = json!({
@@ -1448,11 +1525,69 @@ fn now_iso() -> String {
         .unwrap_or_else(|_| "unknown".to_owned())
 }
 
+fn set_semantic_truncation_metadata(frame: &mut Value, reason: Option<&str>) {
+    let frame = frame
+        .as_object_mut()
+        .expect("semantic truncation metadata requires a frame object");
+    frame.insert(
+        "semanticTruncated".to_owned(),
+        Value::Bool(reason.is_some()),
+    );
+    if let Some(reason) = reason {
+        frame.insert(
+            "semanticTruncationReason".to_owned(),
+            Value::String(reason.to_owned()),
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn native_element_identity_is_never_serialized() {
+        let element = SemanticElement {
+            reference: "u1".to_owned(),
+            role: "button".to_owned(),
+            name: "Apply".to_owned(),
+            value: None,
+            sensitive: false,
+            value_redacted: false,
+            enabled: Some(true),
+            actions: vec!["press".to_owned()],
+            bounds: None,
+            coordinate_space: "screen-pixels".to_owned(),
+            screen_bounds: None,
+            native_identity: Some(NativeElementIdentity {
+                automation_id: "native-automation-secret".to_owned(),
+                class_name: "Button".to_owned(),
+                framework_id: "Win32".to_owned(),
+                control_type: 50_000,
+                provider_process_id: 42,
+                capability_mask: 1,
+            }),
+        };
+        let encoded = serde_json::to_value(element).unwrap();
+        assert!(encoded.get("nativeIdentity").is_none());
+        assert!(!encoded.to_string().contains("automation_id"));
+        assert!(!encoded.to_string().contains("native-automation-secret"));
+    }
+
+    #[test]
+    fn complete_semantic_snapshots_omit_a_truncation_reason() {
+        let mut complete = json!({});
+        set_semantic_truncation_metadata(&mut complete, None);
+        assert_eq!(complete["semanticTruncated"], false);
+        assert!(complete.get("semanticTruncationReason").is_none());
+
+        let mut partial = json!({});
+        set_semantic_truncation_metadata(&mut partial, Some("node_budget"));
+        assert_eq!(partial["semanticTruncated"], true);
+        assert_eq!(partial["semanticTruncationReason"], "node_budget");
+    }
 
     fn frame() -> FrameState {
         FrameState {
@@ -1749,9 +1884,13 @@ mod tests {
 
     #[test]
     fn unverified_delivery_result_carries_a_non_confirming_action_record() {
-        let mut timer = ActionTimer::start();
+        let cancellation = CommandCancellation::new();
+        let mut timer = ActionTimer::start(&cancellation);
         timer.resolved();
-        timer.dispatched();
+        cancellation
+            .begin_side_effect("test action dispatch")
+            .unwrap();
+        cancellation.mark_verification_started();
         let invariants = InvariantReport {
             foreground_unchanged: true,
             user_focus_unchanged: true,
