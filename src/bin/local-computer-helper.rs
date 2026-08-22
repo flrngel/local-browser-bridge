@@ -20,7 +20,7 @@ use local_browser_bridge::ws_auth::{
     AUTH_TIMEOUT, COMPUTER_CONNECTOR, ClientHello, MAX_AUTH_MESSAGE_BYTES, MAX_AUTH_MESSAGES,
 };
 use local_browser_bridge::{
-    PROTOCOL_VERSION, VERSION, home_dir, load_or_create_token, print_license_report,
+    PROTOCOL_VERSION, VERSION, default_token_path, load_or_create_token, print_license_report,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -1581,13 +1581,6 @@ fn parse_port(raw: Option<&str>) -> Result<u16, String> {
         return Err("LBB_PORT must be an integer between 1 and 65535".to_owned());
     }
     Ok(port)
-}
-
-fn default_token_path() -> PathBuf {
-    home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".local-browser-bridge")
-        .join("token")
 }
 
 #[cfg(test)]

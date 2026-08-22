@@ -16,7 +16,7 @@ pub mod ws_auth;
 pub use home::home_dir;
 pub use licenses::{PROJECT_LICENSE_TEXT, THIRD_PARTY_LICENSE_TEXT, print_license_report};
 pub use server::{BridgeServer, ServerConfig};
-pub use token::{create_token, load_or_create_token, tokens_equal};
+pub use token::{create_token, default_token_path, load_or_create_token, tokens_equal};
 pub use update::{UpdateState, UpdateStatus, check_for_update};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

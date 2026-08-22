@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use local_browser_bridge::{
-    BridgeServer, ServerConfig, UpdateState, VERSION, check_for_update, home_dir,
+    BridgeServer, ServerConfig, UpdateState, VERSION, check_for_update, default_token_path,
     load_or_create_token, print_license_report,
 };
 
@@ -139,13 +139,6 @@ fn parse_port(raw: Option<&str>) -> Result<u16, String> {
         return Err("LBB_PORT must be an integer between 1 and 65535".to_owned());
     }
     Ok(port)
-}
-
-fn default_token_path() -> PathBuf {
-    home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".local-browser-bridge")
-        .join("token")
 }
 
 #[cfg(test)]

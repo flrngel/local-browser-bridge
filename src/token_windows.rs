@@ -21,12 +21,13 @@ use windows::Win32::Security::{
     SetSecurityDescriptorDacl, SetSecurityDescriptorOwner, TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
 use windows::Win32::Storage::FileSystem::{
-    CREATE_NEW, CreateFileW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
-    FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_FLAGS_AND_ATTRIBUTES, FILE_GENERIC_WRITE, FILE_INFO_BY_HANDLE_CLASS, FILE_READ_ATTRIBUTES,
-    FILE_SHARE_DELETE, FILE_SHARE_MODE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO,
-    FileAttributeTagInfo, FileStandardInfo, GetFileInformationByHandleEx,
-    MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW, READ_CONTROL, WRITE_DAC,
+    CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL,
+    FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAGS_AND_ATTRIBUTES, FILE_GENERIC_WRITE,
+    FILE_INFO_BY_HANDLE_CLASS, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_MODE,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO, FileAttributeTagInfo, FileStandardInfo,
+    GetFileInformationByHandleEx, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    READ_CONTROL, WRITE_DAC,
 };
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows::core::{Error as WindowsError, PCWSTR};
@@ -98,6 +99,31 @@ pub(super) fn replace_token_file(source: &Path, destination: &Path) -> io::Resul
     .map_err(windows_error)
 }
 
+pub(super) fn create_private_token_directory(path: &Path) -> io::Result<()> {
+    let mut security = PrivateSecurity::new(CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE)?;
+    let attributes = security.attributes();
+    let wide_path = wide_path(path)?;
+    unsafe { CreateDirectoryW(PCWSTR(wide_path.as_ptr()), Some(&attributes)) }
+        .map_err(windows_error)?;
+    validate_private_token_directory(path)
+}
+
+pub(super) fn validate_private_token_directory(path: &Path) -> io::Result<()> {
+    let file = open_path_no_follow(
+        path,
+        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+    )?;
+    let identity = CurrentUser::load()?;
+    if handle_is_exact_private_path(handle_for(&file), true, &identity)? {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the token parent must already have a protected current-user-only DACL",
+        ))
+    }
+}
+
 fn ensure_safe_replacement_target(path: &Path) -> io::Result<()> {
     let file = match open_path_for_replacement_check(path) {
         Ok(file) => file,
@@ -124,6 +150,9 @@ pub(super) fn harden_token_directory(path: &Path) -> io::Result<()> {
     let file = open_path_for_acl_update(path)?;
     let security = PrivateSecurity::new(CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE)?;
     let handle = handle_for(&file);
+    if handle_is_exact_private_path(handle, true, &security.identity)? {
+        return Ok(());
+    }
     if !handle_has_expected_kind(handle, true)? {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,

@@ -307,6 +307,17 @@ fn native_desktop_dependencies_are_not_built_on_unsupported_hosts() {
         );
     }
     assert!(!cargo.contains("enigo"));
+    let unix_section = cargo
+        .split("[target.'cfg(unix)'.dependencies]")
+        .nth(1)
+        .unwrap()
+        .split("[target.'cfg(target_os = \"macos\")'.dependencies]")
+        .next()
+        .unwrap();
+    assert!(
+        unix_section.contains("libc"),
+        "libc must stay Unix-gated for no-follow token-path validation"
+    );
     let mac_section = cargo
         .split("[target.'cfg(target_os = \"macos\")'.dependencies]")
         .nth(1)
@@ -317,7 +328,6 @@ fn native_desktop_dependencies_are_not_built_on_unsupported_hosts() {
     for dependency in [
         "core-graphics",
         "foreign-types",
-        "libc",
         "screencapturekit = { version = \"=8.0.1\", features = [\"macos_14_2\"] }",
     ] {
         assert!(
