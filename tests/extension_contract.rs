@@ -19,8 +19,16 @@ const EXTENSION_FILES: &[&str] = &[
     "popup.js",
 ];
 
+fn normalize_newlines(source: String) -> String {
+    source.replace("\r\n", "\n")
+}
+
+fn extension_source(file: impl AsRef<Path>) -> String {
+    normalize_newlines(fs::read_to_string(Path::new("extension").join(file)).unwrap())
+}
+
 fn manifest() -> Value {
-    serde_json::from_str(&fs::read_to_string("extension/manifest.json").unwrap()).unwrap()
+    serde_json::from_str(&extension_source("manifest.json")).unwrap()
 }
 
 fn strings(value: &Value) -> BTreeSet<String> {
@@ -55,6 +63,14 @@ fn quoted_strings(source: &str) -> BTreeSet<String> {
         }
     }
     strings
+}
+
+#[test]
+fn source_contract_reader_normalizes_windows_line_endings() {
+    let lf = "async function example() {\n  return true;\n}\n";
+    let crlf = lf.replace('\n', "\r\n");
+    assert_eq!(normalize_newlines(lf.to_owned()), lf);
+    assert_eq!(normalize_newlines(crlf), lf);
 }
 
 #[test]
@@ -123,7 +139,7 @@ fn package_contains_only_declared_local_assets() {
             "missing {path}"
         );
     }
-    let popup = fs::read_to_string("extension/popup.html").unwrap();
+    let popup = extension_source("popup.html");
     assert!(popup.contains("href=\"popup.css\""));
     assert!(popup.contains("src=\"popup.js\""));
 
@@ -158,7 +174,7 @@ fn extension_executes_no_remote_code_or_update_client() {
     let source = EXTENSION_FILES
         .iter()
         .filter(|file| file.ends_with(".js") || file.ends_with(".html"))
-        .map(|file| fs::read_to_string(Path::new("extension").join(file)).unwrap())
+        .map(|file| extension_source(file))
         .collect::<Vec<_>>()
         .join("\n");
     for forbidden in [
@@ -175,14 +191,14 @@ fn extension_executes_no_remote_code_or_update_client() {
             "found forbidden source: {forbidden}"
         );
     }
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
     assert!(background.contains("new WebSocket(`ws://127.0.0.1:"));
     assert!(!background.contains("wss://"));
 }
 
 #[test]
 fn extension_allows_only_the_demo_on_the_bridge_origin() {
-    let library = fs::read_to_string("extension/lib.js").unwrap();
+    let library = extension_source("lib.js");
     assert!(library.contains("bridgeOrigin && url.pathname !== \"/demo\""));
     assert!(library.contains("The bridge cannot control its own control surface"));
     assert!(!library.contains("url.pathname.startsWith(\"/api\")"));
@@ -190,9 +206,9 @@ fn extension_allows_only_the_demo_on_the_bridge_origin() {
 
 #[test]
 fn observations_are_non_activating_bounded_and_composed() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
-    let content = fs::read_to_string("extension/content.js").unwrap();
-    let core = fs::read_to_string("extension/dom-core.js").unwrap();
+    let background = extension_source("background.js");
+    let content = extension_source("content.js");
+    let core = extension_source("dom-core.js");
     let capture_start = background.find("async function captureTab").unwrap();
     let capture_end = background[capture_start..]
         .find("async function debuggerCommand")
@@ -213,8 +229,8 @@ fn observations_are_non_activating_bounded_and_composed() {
 
 #[test]
 fn direct_input_requires_a_fresh_snapshot() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
-    let content = fs::read_to_string("extension/content.js").unwrap();
+    let background = extension_source("background.js");
+    let content = extension_source("content.js");
     for method in ["page.key", "page.clickAt", "page.typeText"] {
         let start = background.find(&format!("case \"{method}\"")).unwrap();
         let end = background[start + 5..]
@@ -234,8 +250,8 @@ fn direct_input_requires_a_fresh_snapshot() {
 
 #[test]
 fn debugger_control_is_persistent_bounded_and_revocable() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
-    let content = fs::read_to_string("extension/content.js").unwrap();
+    let background = extension_source("background.js");
+    let content = extension_source("content.js");
     for method in [
         "browser.control.start",
         "browser.control.status",
@@ -273,7 +289,7 @@ fn debugger_control_is_persistent_bounded_and_revocable() {
 
 #[test]
 fn transport_and_security_rotation_revoke_control_first() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
     let clear_start = background.find("async function clearSocket").unwrap();
     let clear_end = background[clear_start..]
         .find("function settingFingerprint")
@@ -321,7 +337,7 @@ fn transport_and_security_rotation_revoke_control_first() {
 
 #[test]
 fn control_lease_is_owned_by_the_authenticated_server_session() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
     assert!(background.contains("currentControlOwner"));
     assert!(background.contains("protocolSessionReady && protocolServerSessionId"));
     assert!(background.contains("`server:${protocolServerSessionId}`"));
@@ -334,9 +350,9 @@ fn control_lease_is_owned_by_the_authenticated_server_session() {
 
 #[test]
 fn trusted_pointer_has_dynamic_motion_and_two_phase_target_validation() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
-    let content = fs::read_to_string("extension/content.js").unwrap();
-    let core = fs::read_to_string("extension/dom-core.js").unwrap();
+    let background = extension_source("background.js");
+    let content = extension_source("content.js");
+    let core = extension_source("dom-core.js");
 
     assert!(background.contains("boundedBezierSpringPath"));
     assert!(background.contains("POINTER_CANDIDATE_COUNT = 20"));
@@ -366,7 +382,7 @@ fn trusted_pointer_has_dynamic_motion_and_two_phase_target_validation() {
 
 #[test]
 fn background_pointer_teleports_once_without_focus_or_animation_latency() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
     let presentation_start = background
         .find("async function pointerPresentationState")
         .unwrap();
@@ -697,8 +713,8 @@ fn background_pointer_teleports_once_without_focus_or_animation_latency() {
 
 #[test]
 fn snapshots_invalidate_on_mutation_scroll_and_resize() {
-    let content = fs::read_to_string("extension/content.js").unwrap();
-    let core = fs::read_to_string("extension/dom-core.js").unwrap();
+    let content = extension_source("content.js");
+    let core = extension_source("dom-core.js");
     assert!(core.contains("new MutationObserver"));
     assert!(core.contains("the document mutated"));
     assert!(core.contains("the page scrolled"));
@@ -709,9 +725,9 @@ fn snapshots_invalidate_on_mutation_scroll_and_resize() {
 
 #[test]
 fn snapshots_and_target_proofs_never_embed_live_text_input_values() {
-    let content = fs::read_to_string("extension/content.js").unwrap();
-    let core = fs::read_to_string("extension/dom-core.js").unwrap();
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let content = extension_source("content.js");
+    let core = extension_source("dom-core.js");
+    let background = extension_source("background.js");
     assert!(core.contains("const safeInputValue = element instanceof HTMLInputElement"));
     assert!(core.contains("[\"button\", \"submit\", \"reset\"].includes(element.type)"));
     assert!(
@@ -867,8 +883,8 @@ fn snapshots_and_target_proofs_never_embed_live_text_input_values() {
 
 #[test]
 fn safe_mode_blocks_sensitive_selects_before_page_mutation() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
-    let content = fs::read_to_string("extension/content.js").unwrap();
+    let background = extension_source("background.js");
+    let content = extension_source("content.js");
     let select_start = background.find("case \"page.select\"").unwrap();
     let select_end = background[select_start + 5..]
         .find("\n    case \"")
@@ -979,9 +995,9 @@ fn safe_mode_blocks_sensitive_selects_before_page_mutation() {
 
 #[test]
 fn control_is_visible_and_user_stoppable_in_page_and_popup() {
-    let content = fs::read_to_string("extension/content.js").unwrap();
-    let popup = fs::read_to_string("extension/popup.html").unwrap();
-    let popup_script = fs::read_to_string("extension/popup.js").unwrap();
+    let content = extension_source("content.js");
+    let popup = extension_source("popup.html");
+    let popup_script = extension_source("popup.js");
 
     assert!(content.contains("Local Browser Bridge is using this tab"));
     assert!(content.contains("setAttribute(\"popover\", \"manual\")"));
@@ -1006,8 +1022,8 @@ fn control_is_visible_and_user_stoppable_in_page_and_popup() {
 
 #[test]
 fn capture_visibility_survives_overlay_reinsertion_and_nested_capture() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
-    let content = fs::read_to_string("extension/content.js").unwrap();
+    let background = extension_source("background.js");
+    let content = extension_source("content.js");
     assert!(background.contains("const captureId = crypto.randomUUID()"));
     assert!(background.contains("method: \"control.capture.begin\", captureId"));
     assert!(background.contains("method: \"control.capture.end\""));
@@ -1141,7 +1157,7 @@ fn capture_visibility_survives_overlay_reinsertion_and_nested_capture() {
 
 #[test]
 fn only_bridge_created_tabs_are_grouped() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
     let grouping_start = background
         .find("async function groupBridgeCreatedTab")
         .unwrap();
@@ -1162,7 +1178,7 @@ fn only_bridge_created_tabs_are_grouped() {
 
 #[test]
 fn timeout_cancel_is_session_bound_and_suppresses_late_results() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
     let session_guard = background
         .find("message.sessionId !== protocolServerSessionId")
         .unwrap();
@@ -1201,8 +1217,8 @@ fn timeout_cancel_is_session_bound_and_suppresses_late_results() {
 
 #[test]
 fn renderer_and_debugger_lifecycle_waits_are_bounded_and_cancel_aware() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
-    let content = fs::read_to_string("extension/content.js").unwrap();
+    let background = extension_source("background.js");
+    let content = extension_source("content.js");
 
     let bounded_start = background
         .find("async function boundedContentOperation")
@@ -1362,8 +1378,8 @@ fn deferred_renderer_delivery_is_canceled_before_late_mutation() {
 
 #[test]
 fn lease_epoch_guards_page_actions_and_content_authority() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
-    let content = fs::read_to_string("extension/content.js").unwrap();
+    let background = extension_source("background.js");
+    let content = extension_source("content.js");
     assert!(background.contains("let controlEpoch = 0"));
     assert!(background.contains("controlEpoch += 1"));
     assert!(background.contains("controlLease.epoch !== authority.epoch"));
@@ -1417,7 +1433,7 @@ fn lease_epoch_guards_page_actions_and_content_authority() {
 
 #[test]
 fn cdp_timeout_and_held_input_cleanup_fail_closed() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
     let debugger_start = background.find("async function debuggerCommand").unwrap();
     let debugger_end = background[debugger_start..]
         .find("const POINTER_CANDIDATE_COUNT")
@@ -1459,8 +1475,8 @@ fn cdp_timeout_and_held_input_cleanup_fail_closed() {
 
 #[test]
 fn failed_release_or_detach_stays_cleanup_pending_until_verified() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
-    let popup = fs::read_to_string("extension/popup.js").unwrap();
+    let background = extension_source("background.js");
+    let popup = extension_source("popup.js");
     let stop_start = background.find("async function stopControl").unwrap();
     let stop_end = background[stop_start..]
         .find("async function confirmPendingControlCleanup")
@@ -1484,7 +1500,7 @@ fn failed_release_or_detach_stays_cleanup_pending_until_verified() {
 
 #[test]
 fn cleanup_on_tab_a_blocks_tab_b_and_survives_worker_restart() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
     assert!(background.contains("const CONTROL_CLEANUPS_KEY = \"browserControlCleanups\""));
     assert!(background.contains("[CONTROL_CLEANUPS_KEY]: [...pendingControlCleanups.values()]"));
     assert!(background.contains("[CONTROL_CLEANUPS_KEY]: []"));
@@ -1540,7 +1556,7 @@ fn cleanup_on_tab_a_blocks_tab_b_and_survives_worker_restart() {
 
 #[test]
 fn late_attach_detach_failure_remains_durable_and_globally_quarantined() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
     let start = background.find("async function startControl").unwrap();
     let end = background[start..]
         .find("async function requireControl")
@@ -1598,8 +1614,8 @@ fn late_attach_detach_failure_remains_durable_and_globally_quarantined() {
 
 #[test]
 fn human_stop_globally_pauses_remote_control_until_trusted_popup_resume() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
-    let popup = fs::read_to_string("extension/popup.js").unwrap();
+    let background = extension_source("background.js");
+    let popup = extension_source("popup.js");
     assert!(background.contains("const HUMAN_CONTROL_PAUSE_KEY = \"browserControlHumanPause\""));
     assert!(background.contains("new Set([\"released_by_user\", \"canceled_by_user\"])"));
     assert!(background.contains("chrome.storage.local.get({ [HUMAN_CONTROL_PAUSE_KEY]: null })"));
@@ -1861,7 +1877,7 @@ fn human_pause_behavior_survives_restart_and_resume_reauthorizes() {
 
 #[test]
 fn human_stop_wins_deferred_tab_mutations_and_debugger_attach() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
     let side_effect_start = background.find("async function commandSideEffect").unwrap();
     let side_effect_end = background[side_effect_start..]
         .find("async function leaseSideEffect")
@@ -2111,7 +2127,7 @@ fn human_stop_wins_deferred_tab_mutations_and_debugger_attach() {
 
 #[test]
 fn restored_unknown_attach_needs_repeated_detach_confirmation() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
     assert!(background.contains("operationSettled: Boolean(cleanup.operationSettled)"));
     assert!(background.contains("detachConfirmations: Math.max(0"));
     assert!(background.contains("unresolvedRestoredAttach"));
@@ -2123,8 +2139,8 @@ fn restored_unknown_attach_needs_repeated_detach_confirmation() {
 
 #[test]
 fn control_ui_paint_capture_and_stop_failures_are_fail_closed() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
-    let content = fs::read_to_string("extension/content.js").unwrap();
+    let background = extension_source("background.js");
+    let content = extension_source("content.js");
 
     let show_start = background.find("async function showControlUi").unwrap();
     let show_end = background[show_start..]
@@ -2267,8 +2283,8 @@ fn start_then_stop_records_explicit_revocation_without_runtime_reference_errors(
 
 #[test]
 fn safe_mode_blank_tabs_require_bridge_provenance() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
-    let library = fs::read_to_string("extension/lib.js").unwrap();
+    let background = extension_source("background.js");
+    let library = extension_source("lib.js");
     assert!(library.contains("fullAccess || trustedBlank"));
     assert!(library.contains("Untracked blank tabs are blocked in Safe mode"));
     assert!(background.contains("bridgeCreatedTabs.has(tab.id)"));
@@ -2313,7 +2329,7 @@ fn safe_mode_blank_tabs_require_bridge_provenance() {
 
 #[test]
 fn document_epoch_revokes_unexpected_navigation_before_capture_or_input() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
     assert!(background.contains("chrome.debugger.onEvent.addListener"));
     assert!(background.contains("Page.frameNavigated"));
     assert!(background.contains("Page.navigatedWithinDocument"));
@@ -2482,7 +2498,7 @@ fn document_epoch_revokes_unexpected_navigation_before_capture_or_input() {
 
 #[test]
 fn held_mouse_and_key_down_intents_survive_worker_restart() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
     assert!(background.contains("const CONTROL_INPUTS_KEY = \"browserControlHeldInputs\""));
     assert!(background.contains("[CONTROL_INPUTS_KEY]: {"));
     assert!(background.contains("mouse: [...heldMouseInputs]"));
@@ -2622,7 +2638,7 @@ fn held_mouse_and_key_down_intents_survive_worker_restart() {
 
 #[test]
 fn websocket_auth_uses_token_free_mutual_hmac_challenge() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
     assert!(background.contains("new WebSocket(`ws://127.0.0.1:${config.port}/bridge`)"));
     assert!(!background.contains("/bridge?token="));
     assert!(background.contains("type: \"authHello\""));
@@ -2716,8 +2732,8 @@ fn websocket_auth_uses_token_free_mutual_hmac_challenge() {
 
 #[test]
 fn websocket_envelopes_are_versioned_ordered_and_session_bound() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
-    let library = fs::read_to_string("extension/lib.js").unwrap();
+    let background = extension_source("background.js");
+    let library = extension_source("lib.js");
     assert!(library.contains("export const PROTOCOL_VERSION = 1"));
     assert!(background.contains("protocolVersion: PROTOCOL_VERSION"));
     assert!(background.contains("message.type !== \"authChallenge\""));
@@ -2735,8 +2751,8 @@ fn websocket_envelopes_are_versioned_ordered_and_session_bound() {
 
 #[test]
 fn wait_for_is_read_only_pause_allowed_and_time_bounded() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
-    let content = fs::read_to_string("extension/content.js").unwrap();
+    let background = extension_source("background.js");
+    let content = extension_source("content.js");
 
     // page.waitFor is read-only, so it stays usable during a human pause.
     let pause_allowed = background
@@ -2899,7 +2915,7 @@ fn wait_for_is_read_only_pause_allowed_and_time_bounded() {
 
 #[test]
 fn epoch_embedded_refs_fail_stale_with_coaching_before_any_lookup() {
-    let content = fs::read_to_string("extension/content.js").unwrap();
+    let content = extension_source("content.js");
     assert!(content.contains("const ref = `${generation}.${key}`"));
     assert!(
         content.contains("superseded by ${generation}; observe the page again and use fresh refs")
@@ -2988,7 +3004,7 @@ fn epoch_embedded_refs_fail_stale_with_coaching_before_any_lookup() {
 
 #[test]
 fn hover_moves_the_trusted_pointer_without_press_events() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
     let case_start = background.find("case \"page.hover\"").unwrap();
     let case_end = background[case_start + 5..]
         .find("\n    case \"")
@@ -3094,7 +3110,7 @@ fn hover_moves_the_trusted_pointer_without_press_events() {
 
 #[test]
 fn click_pointer_options_stay_gated_and_proof_ordered() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
     assert!(
         background
             .contains("const POINTER_MODIFIER_BITS = { Alt: 1, Control: 2, Meta: 4, Shift: 8 }")
@@ -3184,7 +3200,7 @@ fn click_pointer_options_stay_gated_and_proof_ordered() {
 
 #[test]
 fn batch_delegates_sequentially_and_stops_at_the_first_failure() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
 
     // page.batch and page.handleDialog are mutating commands, so neither may
     // run while a human has paused remote control.
@@ -3378,7 +3394,7 @@ fn batch_delegates_sequentially_and_stops_at_the_first_failure() {
 
 #[test]
 fn dialog_interception_records_events_and_handles_dialogs_lease_bound() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
 
     // The Page domain is enabled once per lease, so dialog lifecycle events
     // are already flowing whenever a lease is active.
@@ -3446,7 +3462,7 @@ fn dialog_interception_records_events_and_handles_dialogs_lease_bound() {
 
 #[test]
 fn pending_dialogs_fail_fast_and_never_revoke_the_lease_by_timeout() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
 
     // The extension mirrors the server's dialog gate exactly: only these
     // five renderer-free commands stay dispatchable while a dialog blocks
@@ -3798,7 +3814,7 @@ fn pending_dialogs_fail_fast_and_never_revoke_the_lease_by_timeout() {
 /// the dialog mid-flight, between the capture call and the completion check.
 #[test]
 fn a_dialog_that_opens_mid_observation_is_never_paid_for_with_the_lease() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
 
     // The observation reads the dialog record at its own start, because the
     // dispatch gate only proves the state at command entry, and again after
@@ -4115,7 +4131,7 @@ fn a_dialog_that_opens_mid_observation_is_never_paid_for_with_the_lease() {
 /// `BLOCKED_BY_DIALOG` and revoke anyway.
 #[test]
 fn a_dialog_revokes_the_lease_through_neither_input_release_nor_worker_recovery() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
 
     // Both release cleanups consult the dialog record immediately before
     // revoking, exactly like every other revocation boundary.
@@ -4350,7 +4366,7 @@ fn a_dialog_revokes_the_lease_through_neither_input_release_nor_worker_recovery(
 
 #[test]
 fn server_and_extension_command_allowlists_match() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
     let start = background.find("const COMMANDS = new Set([").unwrap();
     let end = background[start..].find("]);").unwrap() + start;
     let extension_commands = quoted_strings(&background[start..end]);
@@ -4418,7 +4434,7 @@ const FRAME_LEASE_FATAL_CODES: &[&str] = &[
 
 #[test]
 fn frame_targets_auto_attach_is_flat_bounded_and_iframe_only() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
     assert!(background.contains("const FRAME_MAX_ATTACHED = 16"));
     assert!(background.contains("const FRAME_MAX_DEPTH = 5"));
     assert!(background.contains("const FRAME_PER_FRAME_ELEMENT_CAP = 120"));
@@ -4526,7 +4542,7 @@ fn frame_targets_auto_attach_is_flat_bounded_and_iframe_only() {
 
 #[test]
 fn child_debugger_events_route_only_nested_target_lifecycle() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
     let listener_start = background
         .find("chrome.debugger.onEvent.addListener(")
         .unwrap();
@@ -4583,7 +4599,7 @@ fn child_debugger_events_route_only_nested_target_lifecycle() {
 
 #[test]
 fn frame_sessions_are_cleared_on_every_lease_teardown() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let background = extension_source("background.js");
     // One choke point: stopControl and hardRevokeDetached both pass through
     // synchronouslyTakeControlLease, and only clearFrameSessions empties the
     // session map for a teardown.
@@ -4616,9 +4632,9 @@ fn frame_sessions_are_cleared_on_every_lease_teardown() {
 
 #[test]
 fn frame_agent_is_read_only_and_isolated() {
-    let agent = fs::read_to_string("extension/frame-agent.js").unwrap();
-    let core = fs::read_to_string("extension/dom-core.js").unwrap();
-    let background = fs::read_to_string("extension/background.js").unwrap();
+    let agent = extension_source("frame-agent.js");
+    let core = extension_source("dom-core.js");
+    let background = extension_source("background.js");
     for forbidden in [
         ".click(",
         ".focus(",
@@ -4655,20 +4671,14 @@ fn frame_agent_is_read_only_and_isolated() {
 
 #[test]
 fn frame_agent_and_content_share_one_dom_core() {
-    let core = fs::read_to_string("extension/dom-core.js").unwrap();
+    let core = extension_source("dom-core.js");
     let sources = [
-        (
-            "extension/background.js",
-            fs::read_to_string("extension/background.js").unwrap(),
-        ),
-        (
-            "extension/content.js",
-            fs::read_to_string("extension/content.js").unwrap(),
-        ),
+        ("extension/background.js", extension_source("background.js")),
+        ("extension/content.js", extension_source("content.js")),
         ("extension/dom-core.js", core.clone()),
         (
             "extension/frame-agent.js",
-            fs::read_to_string("extension/frame-agent.js").unwrap(),
+            extension_source("frame-agent.js"),
         ),
     ];
     for name in [
@@ -4727,8 +4737,8 @@ fn frame_agent_and_content_share_one_dom_core() {
 
 #[test]
 fn frame_refs_are_refused_by_every_action_except_click_and_hover() {
-    let background = fs::read_to_string("extension/background.js").unwrap();
-    let content = fs::read_to_string("extension/content.js").unwrap();
+    let background = extension_source("background.js");
+    let content = extension_source("content.js");
     for method in ["page.fill", "page.select"] {
         let start = background.find(&format!("case \"{method}\"")).unwrap();
         let end = background[start + 5..]
@@ -6489,7 +6499,7 @@ fn frame_agent_proofs_run_in_frame_local_coordinates() {
 /// exactly the third-party iframes this feature targets.
 #[test]
 fn frame_agent_installs_exactly_one_observer_per_isolated_world() {
-    let agent = fs::read_to_string("extension/frame-agent.js").unwrap();
+    let agent = extension_source("frame-agent.js");
     let builder = agent
         .find("globalThis.__LBB_FRAME_AGENT_SOURCE__ = () =>")
         .expect("the installable frame source builder is gone");

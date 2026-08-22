@@ -1,9 +1,35 @@
 use std::fs;
 
+fn source(path: &str) -> String {
+    fs::read_to_string(path).unwrap().replace("\r\n", "\n")
+}
+
+#[test]
+fn extension_package_sources_are_lf_stable_on_every_checkout() {
+    let attributes = source(".gitattributes");
+    assert!(
+        attributes
+            .lines()
+            .any(|line| line.trim() == "* text=auto eol=lf"),
+        ".gitattributes must keep every text source LF-stable for cross-platform contract tests and release packages"
+    );
+    for pattern in [
+        "extension/*.css text eol=lf",
+        "extension/*.html text eol=lf",
+        "extension/*.js text eol=lf",
+        "extension/*.json text eol=lf",
+    ] {
+        assert!(
+            attributes.lines().any(|line| line.trim() == pattern),
+            ".gitattributes must contain `{pattern}` so Windows checkouts cannot rewrite packaged extension sources or break source-contract tests"
+        );
+    }
+}
+
 #[test]
 fn release_workflow_and_local_builder_package_both_processes() {
-    let workflow = fs::read_to_string(".github/workflows/deploy.yml").unwrap();
-    let local = fs::read_to_string("scripts/deploy.sh").unwrap();
+    let workflow = source(".github/workflows/deploy.yml");
+    let local = source("scripts/deploy.sh");
     for required in [
         "local-browser-bridge-v${version}-windows-x86_64.exe",
         "local-computer-helper-v${version}-windows-x86_64.exe",
@@ -27,7 +53,7 @@ fn release_workflow_and_local_builder_package_both_processes() {
 
 #[test]
 fn mac_helper_bundle_has_a_stable_visible_identity() {
-    let plist = fs::read_to_string("packaging/macos/Info.plist.in").unwrap();
+    let plist = source("packaging/macos/Info.plist.in");
     for required in [
         "dev.flrngel.local-browser-bridge.computer-helper",
         "<string>local-computer-helper</string>",
@@ -44,14 +70,14 @@ fn mac_helper_bundle_has_a_stable_visible_identity() {
 
 #[test]
 fn windows_artifacts_are_self_contained_dpi_aware_and_inspected() {
-    let cargo = fs::read_to_string("Cargo.toml").unwrap();
-    let cargo_config = fs::read_to_string(".cargo/config.toml").unwrap();
-    let build_script = fs::read_to_string("build.rs").unwrap();
-    let manifest = fs::read_to_string("packaging/windows/app.manifest").unwrap();
-    let verifier = fs::read_to_string("scripts/verify-windows-artifacts.ps1").unwrap();
-    let ci = fs::read_to_string(".github/workflows/ci.yml").unwrap();
-    let release = fs::read_to_string(".github/workflows/deploy.yml").unwrap();
-    let local = fs::read_to_string("scripts/deploy.sh").unwrap();
+    let cargo = source("Cargo.toml");
+    let cargo_config = source(".cargo/config.toml");
+    let build_script = source("build.rs");
+    let manifest = source("packaging/windows/app.manifest");
+    let verifier = source("scripts/verify-windows-artifacts.ps1");
+    let ci = source(".github/workflows/ci.yml");
+    let release = source(".github/workflows/deploy.yml");
+    let local = source("scripts/deploy.sh");
 
     assert!(cargo.contains("embed-manifest = \"1.5.0\""));
     assert!(cargo.contains("embed-resource = \"3.0.11\""));
@@ -111,7 +137,7 @@ fn windows_artifacts_are_self_contained_dpi_aware_and_inspected() {
 
 #[test]
 fn native_desktop_dependencies_are_not_built_on_unsupported_hosts() {
-    let cargo = fs::read_to_string("Cargo.toml").unwrap();
+    let cargo = source("Cargo.toml");
     let target_section = cargo
         .split("[target.'cfg(any(target_os = \"macos\", target_os = \"windows\"))'.dependencies]")
         .nth(1)
@@ -166,17 +192,17 @@ fn native_desktop_dependencies_are_not_built_on_unsupported_hosts() {
     }
     assert!(!windows_section.contains("windows-capture"));
 
-    let cargo_config = fs::read_to_string(".cargo/config.toml").unwrap();
+    let cargo_config = source(".cargo/config.toml");
     assert!(cargo_config.contains("MACOSX_DEPLOYMENT_TARGET"));
     assert!(cargo_config.contains("value = \"13.0\""));
-    let build_script = fs::read_to_string("build.rs").unwrap();
+    let build_script = source("build.rs");
     assert!(build_script.contains("xcrun"));
     assert!(build_script.contains("lib/swift/macosx"));
 
-    let library = fs::read_to_string("src/lib.rs").unwrap();
+    let library = source("src/lib.rs");
     assert!(library.contains("cfg(any(target_os = \"macos\", target_os = \"windows\"))"));
     assert!(library.contains("path = \"computer_unsupported.rs\""));
-    let unsupported = fs::read_to_string("src/computer_unsupported.rs").unwrap();
+    let unsupported = source("src/computer_unsupported.rs");
     assert!(unsupported.contains("COMPUTER_UNSUPPORTED_PLATFORM"));
     assert!(unsupported.contains("NATIVE_COMPUTER_SUPPORTED: bool = false"));
     for forbidden in ["image::", "xcap::", "platform_macos", "platform_windows"] {
@@ -186,7 +212,7 @@ fn native_desktop_dependencies_are_not_built_on_unsupported_hosts() {
         );
     }
 
-    let ci = fs::read_to_string(".github/workflows/ci.yml").unwrap();
+    let ci = source(".github/workflows/ci.yml");
     assert!(ci.contains("runs-on: ubuntu-latest"));
     assert!(ci.contains("cargo clippy --locked --all-targets -- -D warnings"));
     assert!(ci.contains("cargo test --locked --all-targets"));

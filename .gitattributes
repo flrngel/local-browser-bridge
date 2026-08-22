@@ -1,2 +1,11 @@
+# Source contracts and release packages must be byte-stable on every host.
+* text=auto eol=lf
+
+# Keep extension packages and source-contract tests byte-stable on Windows.
+extension/*.css text eol=lf
+extension/*.html text eol=lf
+extension/*.js text eol=lf
+extension/*.json text eol=lf
+
 # Preserve audited upstream vendor bytes; local changes remain visible in diffs.
 vendor/screencapturekit-8.0.1/** whitespace=-trailing-space,-blank-at-eof
