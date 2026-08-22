@@ -1,6 +1,6 @@
 # Research findings and design rationale
 
-Research date: 2026-08-18
+Research date: 2026-08-22
 
 Native desktop-agent research is documented separately in [COMPUTER_USE_RESEARCH.md](COMPUTER_USE_RESEARCH.md) and the current [SOTA audit](SOTA_AUDIT.md), including active repository comparisons, pinned code-reading revisions, academic benchmarks, community evidence, and the helper-process decision.
 
@@ -50,9 +50,11 @@ Public browser-bridge implementations and community discussions repeatedly conve
 
 - [vitalysim/browser-bridge](https://github.com/vitalysim/browser-bridge) — MIT-licensed local server, Manifest V3 extension, and outbound WebSocket
 - [koltyakov/browser-bridge](https://github.com/koltyakov/browser-bridge) — explicitly enabled browser scopes and structured browser access
+- [anomalyco/browser-control at `f12441c`](https://github.com/anomalyco/browser-control/tree/f12441cb4de55967f2c5ce31ae05b5a3a2875dac) — reconnect alarms, attached-target reannouncement, target ownership, debugger-detach reason forwarding, tab grouping, and page status in a real-profile extension relay
+- [Browy at `2f71ee9`](https://github.com/BrowyHQ/browy/tree/2f71ee907c5f571ff759ca9c0cb2f9c880366a5c) — session-to-tab multiplexing, alarm-driven orphan debugger cleanup, and opener-popup attachment through a real-profile MV3/native-host bridge
 - [Community discussion: Browser Bridge](https://www.reddit.com/r/ClaudeAI/comments/1v5fz09/browser_bridge_an_mcp_server_that_drives_your/) — demand for real-session bridges, per-site controls, and risky-action confirmations
 
-No code was copied from those projects. This repository was implemented independently using public architecture patterns and official platform APIs.
+The two pinned 2026 code readings also expose a safety distinction. Both recover transport and debugger lifecycle, but neither reviewed snapshot converts Chrome's Cancel into a durable global mutation pause cleared only by a trusted extension UI; Browy's visible Stop cancels model generation rather than browser authority. This project keeps the stronger Cancel/page-Stop/popup-Release latch and verifies it in real stock Chrome. No code was copied from those projects. This repository was implemented independently using public architecture patterns and official platform APIs.
 
 ## Release and update evidence
 
