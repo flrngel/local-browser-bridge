@@ -725,6 +725,7 @@ fn screenshot_tool_strips_metadata_but_never_claims_unknown_pixel_redaction() {
         "Get-Sha256 $temporaryImage",
         "$Object -is [Collections.IDictionary]",
         "Screenshot sanitizer exact ordered dictionary key self-test failed.",
+        "Screenshot sanitizer self-test raw fixture does not satisfy the production byte floor.",
         "[switch]$AllowCanonicalBindingHex",
         "[switch]$AllowCanonicalEvidenceType",
         "Test-ForbiddenText $serialized $denyValues -AllowCanonicalBindingHex -AllowCanonicalEvidenceType",

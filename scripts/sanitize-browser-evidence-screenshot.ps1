@@ -705,14 +705,20 @@ function Invoke-SelfTest {
         $recordPath = [IO.Path]::Combine($root, "browser-02-api-action-result.json")
         $bitmap = [Drawing.Bitmap]::new(320, 180)
         try {
-            $graphics = [Drawing.Graphics]::FromImage($bitmap)
-            try {
-                $graphics.Clear([Drawing.Color]::FromArgb(255, 20, 90, 160))
+            for ($y = 0; $y -lt $bitmap.Height; $y += 1) {
+                for ($x = 0; $x -lt $bitmap.Width; $x += 1) {
+                    $red = ($x * 73 + $y * 151 + (($x * $y) % 251)) -band 255
+                    $green = ($x * 197 + $y * 43 + (($x + $y) * 29)) -band 255
+                    $blue = (($x -bxor $y) * 89 + $x * 17 + $y * 61) -band 255
+                    $bitmap.SetPixel($x, $y, [Drawing.Color]::FromArgb(255, $red, $green, $blue))
+                }
             }
-            finally { $graphics.Dispose() }
             $bitmap.Save($inputPath, [Drawing.Imaging.ImageFormat]::Png)
         }
         finally { $bitmap.Dispose() }
+        if ([IO.FileInfo]::new($inputPath).Length -le 1000) {
+            throw "Screenshot sanitizer self-test raw fixture does not satisfy the production byte floor."
+        }
         $bindingHash = [String]::new([char]"0", 64)
         $preflightPath = [IO.Path]::Combine($root, "candidate-preflight.json")
         $preflight = [ordered]@{
