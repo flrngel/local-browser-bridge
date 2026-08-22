@@ -986,6 +986,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
         "archive checksum is bound by the canonical manifest",
         "checksumManifest: manifestBinding",
         "packageBinding: manifestBinding",
+        "Candidate parsing and the first invocation of either supplied executable",
     ] {
         assert!(
             rig.contains(required),
@@ -997,12 +998,37 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
         "mandatory SHA-256 supplied",
         "exactly the four v0.12.2",
         "expected and actual manifest hashes",
+        "Before invoking either supplied candidate executable—even with `--version`",
+        "No supplied server or helper code executes before",
     ] {
         assert!(
             readme.contains(required),
             "macOS evidence manifest handoff is undocumented: {required}"
         );
     }
+
+    let main = rig.split("async function main() {").nth(1).unwrap();
+    let binding_complete = main
+        .find("requireCheck(\"supplied helper is archive-exact\"")
+        .unwrap();
+    let first_candidate_inspection = main
+        .find("const serverArchitectures = architectures(serverPath)")
+        .unwrap();
+    let first_target_execution = [
+        "exactVersion(serverPath, \"local-browser-bridge\")",
+        "exactVersion(helperPath, \"local-computer-helper\")",
+        "spawn(serverPath, [\"--no-update-check\"]",
+        "startHelperOnce(helperEnvironment)",
+    ]
+    .into_iter()
+    .map(|needle| main.find(needle).unwrap())
+    .min()
+    .unwrap();
+    assert!(
+        binding_complete < first_candidate_inspection
+            && first_candidate_inspection < first_target_execution,
+        "candidate package was inspected or executed before exact archive binding"
+    );
 }
 
 #[test]

@@ -14,6 +14,14 @@ helper process. Its fixture creates two clearly titled, visible, genuine
 `NSWindow` instances in one process from startup: the primary capture/action
 target and a magenta same-PID sibling receiver sentinel.
 
+Before invoking either supplied candidate executable—even with `--version`—the
+rig verifies the independently handed-off checksum-manifest hash and canonical
+format, binds the exact archive checksum, rejects unsafe archive entries,
+extracts into fresh scratch storage, and proves both supplied executable byte
+hashes equal their archived counterparts. Only then does package inspection
+with `lipo`, `codesign`, and `plutil` run; those tools do not execute the
+candidate binaries.
+
 ## What the run proves
 
 - The server and helper report exactly v0.12.2, are universal
@@ -23,7 +31,8 @@ target and a magenta same-PID sibling receiver sentinel.
   bound by a canonical `SHA256SUMS.txt` containing exactly the four v0.12.2
   release assets, and that manifest must match a mandatory SHA-256 supplied
   out of band; a locally rebuilt archive plus a substituted manifest is
-  refused.
+  refused. No supplied server or helper code executes before all of those
+  checks and the safe extraction/byte-equality proof have succeeded.
 - Existing Screen Recording and Accessibility permission are present. The rig
   never requests or changes either permission.
 - The exact primary fixture window and a distinct sibling window are both

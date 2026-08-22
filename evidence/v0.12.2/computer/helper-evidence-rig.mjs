@@ -718,28 +718,9 @@ async function main() {
   );
   requireCheck("canonical checksum-manifest name", basename(sumsPath) === "SHA256SUMS.txt", basename(sumsPath));
   requireCheck("exact archive name", basename(archivePath) === EXPECTED_ARCHIVE, basename(archivePath));
-  requireCheck("server version", exactVersion(serverPath, "local-browser-bridge") === EXPECTED_VERSION, EXPECTED_VERSION);
-  requireCheck("helper version", exactVersion(helperPath, "local-computer-helper") === EXPECTED_VERSION, EXPECTED_VERSION);
 
   const serverSha256 = await sha256(serverPath);
   const helperSha256 = await sha256(helperPath);
-  const serverArchitectures = architectures(serverPath);
-  const helperArchitectures = architectures(helperPath);
-  requireCheck("server universal architecture", serverArchitectures.join(",") === "arm64,x86_64", serverArchitectures.join(","));
-  requireCheck("helper universal architecture", helperArchitectures.join(",") === "arm64,x86_64", helperArchitectures.join(","));
-
-  const helperApp = dirname(dirname(dirname(helperPath)));
-  requireCheck("helper uses packaged app layout", basename(helperApp) === "Local Computer Helper.app", basename(helperApp));
-  run("codesign", ["--verify", "--strict", serverPath]);
-  run("codesign", ["--verify", "--strict", helperPath]);
-  run("codesign", ["--verify", "--deep", "--strict", helperApp]);
-  check("strict code-signature verification", true, "server, helper executable, and helper app bundle passed strict verification");
-  const bundleVersion = run("plutil", ["-extract", "CFBundleShortVersionString", "raw", "-o", "-", join(helperApp, "Contents", "Info.plist")]);
-  const bundleBuildVersion = run("plutil", ["-extract", "CFBundleVersion", "raw", "-o", "-", join(helperApp, "Contents", "Info.plist")]);
-  requireCheck("helper bundle version",
-    bundleVersion === EXPECTED_VERSION && bundleBuildVersion === EXPECTED_VERSION,
-    `${bundleVersion}/${bundleBuildVersion}`,
-  );
 
   const archiveSha256 = await sha256(archivePath);
   manifestBinding.archiveSha256 = archiveSha256;
@@ -786,6 +767,29 @@ async function main() {
   const archivedHelperPath = join(archiveExtractRoot, "Local Computer Helper.app", "Contents", "MacOS", "local-computer-helper");
   requireCheck("supplied server is archive-exact", (await sha256(archivedServerPath)) === serverSha256, serverSha256);
   requireCheck("supplied helper is archive-exact", (await sha256(archivedHelperPath)) === helperSha256, helperSha256);
+
+  // Candidate parsing and the first invocation of either supplied executable
+  // are delayed until the out-of-band manifest, canonical archive checksum,
+  // traversal-safe extraction, and byte-for-byte binding have all passed.
+  const serverArchitectures = architectures(serverPath);
+  const helperArchitectures = architectures(helperPath);
+  requireCheck("server universal architecture", serverArchitectures.join(",") === "arm64,x86_64", serverArchitectures.join(","));
+  requireCheck("helper universal architecture", helperArchitectures.join(",") === "arm64,x86_64", helperArchitectures.join(","));
+
+  const helperApp = dirname(dirname(dirname(helperPath)));
+  requireCheck("helper uses packaged app layout", basename(helperApp) === "Local Computer Helper.app", basename(helperApp));
+  run("codesign", ["--verify", "--strict", serverPath]);
+  run("codesign", ["--verify", "--strict", helperPath]);
+  run("codesign", ["--verify", "--deep", "--strict", helperApp]);
+  check("strict code-signature verification", true, "server, helper executable, and helper app bundle passed strict verification");
+  const bundleVersion = run("plutil", ["-extract", "CFBundleShortVersionString", "raw", "-o", "-", join(helperApp, "Contents", "Info.plist")]);
+  const bundleBuildVersion = run("plutil", ["-extract", "CFBundleVersion", "raw", "-o", "-", join(helperApp, "Contents", "Info.plist")]);
+  requireCheck("helper bundle version",
+    bundleVersion === EXPECTED_VERSION && bundleBuildVersion === EXPECTED_VERSION,
+    `${bundleVersion}/${bundleBuildVersion}`,
+  );
+  requireCheck("server version", exactVersion(serverPath, "local-browser-bridge") === EXPECTED_VERSION, EXPECTED_VERSION);
+  requireCheck("helper version", exactVersion(helperPath, "local-computer-helper") === EXPECTED_VERSION, EXPECTED_VERSION);
 
   run("xcrun", ["swiftc", fixtureSource, "-o", fixtureBinary]);
   run("xcrun", ["swiftc", systemProbeSource, "-o", systemProbeBinary]);
