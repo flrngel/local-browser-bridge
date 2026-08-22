@@ -4869,11 +4869,11 @@ impl AppState {
     async fn clear_revoked_computer_transport_state(&self, session_id: &str, detail: &str) {
         let cleared = {
             let mut data = self.data.write().await;
-            if !data
+            if data
                 .public
                 .computer
                 .as_ref()
-                .is_some_and(|computer| computer.session_id == session_id)
+                .is_none_or(|computer| computer.session_id != session_id)
             {
                 false
             } else {
