@@ -723,6 +723,8 @@ fn screenshot_tool_strips_metadata_but_never_claims_unknown_pixel_redaction() {
         "tesseract.exe, tesseract",
         "Get-PngChunkTypes",
         "Get-Sha256 $temporaryImage",
+        "$Object -is [Collections.IDictionary]",
+        "Screenshot sanitizer exact ordered dictionary key self-test failed.",
         "[switch]$AllowCanonicalBindingHex",
         "[switch]$AllowCanonicalEvidenceType",
         "Test-ForbiddenText $serialized $denyValues -AllowCanonicalBindingHex -AllowCanonicalEvidenceType",

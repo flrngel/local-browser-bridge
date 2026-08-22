@@ -276,7 +276,14 @@ function Write-NewJson {
 function Assert-ExactKeys {
     param([object]$Object, [string[]]$Expected, [string]$Label)
     if ($null -eq $Object) { throw "$Label must be an object." }
-    $actual = @($Object.PSObject.Properties.Name)
+    $actual = @(
+        if ($Object -is [Collections.IDictionary]) {
+            foreach ($key in $Object.Keys) { [string]$key }
+        }
+        else {
+            $Object.PSObject.Properties.Name
+        }
+    )
     if (($actual -join "`n") -cne ($Expected -join "`n")) {
         throw "$Label contains missing, unexpected, or reordered fields."
     }
@@ -659,7 +666,7 @@ function Invoke-AttestReview {
         height = [int64]$pending.sourceCapture.height
     })
     $serialized = $record | ConvertTo-Json -Depth 12 -Compress
-    if (Test-ForbiddenText $serialized $denyValues -AllowCanonicalBindingHex -AllowCanonicalEvidenceType) {
+    if (Test-ForbiddenText $serialized $denyValues -AllowCanonicalBindingHex) {
         throw "Final screenshot review attestation failed its text safety check."
     }
     $temporaryRecord = "$recordPath.new"
@@ -676,6 +683,19 @@ function Invoke-AttestReview {
 
 function Invoke-SelfTest {
     Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+    $orderedKeyProbe = [ordered]@{ first = 1; second = 2 }
+    Assert-ExactKeys $orderedKeyProbe @("first", "second") "ordered dictionary probe"
+    foreach ($invalidProbe in @(
+        [ordered]@{ second = 2; first = 1 },
+        [ordered]@{ first = 1; second = 2; third = 3 }
+    )) {
+        $invalidKeysRejected = $false
+        try { Assert-ExactKeys $invalidProbe @("first", "second") "invalid dictionary probe" }
+        catch { $invalidKeysRejected = $true }
+        if (-not $invalidKeysRejected) {
+            throw "Screenshot sanitizer exact ordered dictionary key self-test failed."
+        }
+    }
     $root = [IO.Path]::Combine([IO.Path]::GetTempPath(), "lbb-browser-shot-" + [Guid]::NewGuid().ToString("N"))
     [IO.Directory]::CreateDirectory($root) | Out-Null
     try {
