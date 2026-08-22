@@ -8,6 +8,11 @@ use local_browser_bridge::computer::ComputerController;
 use local_browser_bridge::computer::{
     COMPUTER_METHODS, COMPUTER_TYPE_TEXT_MAX_DISPATCH_MS, COMPUTER_TYPE_TEXT_MAX_UTF16_UNITS,
 };
+use sha2::{Digest as _, Sha256};
+
+fn file_sha256(path: &str) -> String {
+    format!("{:x}", Sha256::digest(fs::read(path).unwrap()))
+}
 
 #[test]
 fn helper_exposes_only_bounded_observation_and_input_methods() {
@@ -834,7 +839,7 @@ fn background_invariant_failures_use_stage_bound_closed_vocabulary() {
 
 #[test]
 fn macos_negative_evidence_keeps_only_equality_and_fixture_counters() {
-    let rig = fs::read_to_string("evidence/v0.12.1/computer/helper-evidence-rig.mjs").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.2/computer/helper-evidence-rig.mjs").unwrap();
     assert!(rig.contains("failureProbeBaseline"));
     assert!(rig.contains("collectFailureDiagnostics"));
     assert!(rig.contains("systemInvariants(failureProbeBaseline.system, after)"));
@@ -869,11 +874,98 @@ fn macos_negative_evidence_keeps_only_equality_and_fixture_counters() {
 }
 
 #[test]
-fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
-    let rig = fs::read_to_string("evidence/v0.12.1/computer/helper-evidence-rig.mjs")
+fn historical_macos_v0_12_1_evidence_sources_remain_byte_exact() {
+    for (path, expected) in [
+        (
+            "evidence/v0.12.1/computer/HelperEvidenceFixture.swift",
+            "5a99ad27d5bc80388a8697c0aac9b3c3b4af25e5840aee9e32a3cb9a8c7142ff",
+        ),
+        (
+            "evidence/v0.12.1/computer/SystemProbe.swift",
+            "c9a46e556b87d21bb7db414ba6fa00457928c8ab661be6d596a4fe650ddf6dde",
+        ),
+        (
+            "evidence/v0.12.1/computer/helper-evidence-rig.mjs",
+            "cac8ae8daeedce4f8d6a8cf440ccc5161637a2486f4e8cccca62c29a393883cc",
+        ),
+        (
+            "evidence/v0.12.1/computer/README.md",
+            "b9e91e9f3f9940a0c55b7d86c02cc97d33b0b50a6eb5bae716d2fa08c55d72a1",
+        ),
+    ] {
+        assert_eq!(
+            file_sha256(path),
+            expected,
+            "historical evidence changed: {path}"
+        );
+    }
+}
+
+#[test]
+fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
+    let rig = fs::read_to_string("evidence/v0.12.2/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.1/computer/README.md")
+    let fixture =
+        fs::read_to_string("evidence/v0.12.2/computer/HelperEvidenceFixture.swift").unwrap();
+    let readme = fs::read_to_string("evidence/v0.12.2/computer/README.md").unwrap();
+
+    assert!(rig.contains(&format!("const EXPECTED_VERSION = \"{VERSION}\";")));
+    assert!(rig.contains("const EXPECTED_ARCHIVE = `local-browser-bridge-v${EXPECTED_VERSION}-macos-universal.tar.gz`;"));
+    assert!(rig.contains("status: \"passed-release-candidate\""));
+    assert!(rig.contains("evidenceClass: \"exact-release-candidate-package-live-observation\""));
+    assert!(rig.contains("candidateNotice:"));
+    assert!(fixture.contains(&format!("LBB v{VERSION} Persistent SCStream Evidence")));
+    assert!(readme.contains(&format!("macOS v{VERSION} server and helper")));
+    assert!(readme.contains(&format!(
+        "local-browser-bridge-v{VERSION}-macos-universal.tar.gz"
+    )));
+    assert!(!rig.contains("v0.12.1"));
+    assert!(!fixture.contains("v0.12.1"));
+    let current_readme = readme
+        .split("## Historical v0.12.1 negative attempts")
+        .next()
+        .unwrap();
+    assert!(!current_readme.contains("v0.12.1"));
+    assert!(readme.contains("../../v0.12.1/computer/attempts/"));
+
+    let generated = rig
+        .split("const GENERATED_OUTPUT_NAMES = [")
+        .nth(1)
+        .unwrap()
+        .split("];\n")
+        .next()
+        .unwrap();
+    let output_names = generated
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix('"'))
+        .filter_map(|line| line.strip_suffix("\","))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        output_names,
+        BTreeSet::from([
+            "helper-results.json",
+            "helper-rig.log",
+            "computer-01-exact-window-observe.png",
+            "computer-02-semantic-set-value.png",
+            "computer-03-semantic-invoke.png",
+            "computer-04-persistent-scstream-start.png",
+            "computer-05-live-share-pixel-action.png",
+            "computer-06-persistent-share-resize.png",
+        ])
+    );
+    assert!(rig.contains("assertNoToken(serialized, \"machine-readable result\")"));
+    assert!(rig.contains("assertNoRetainedNativeTextPayload(serialized"));
+    assert!(rig.contains("every retained screenshot is bound only to the primary exact window"));
+    assert!(!rig.contains("computer-07-"));
+}
+
+#[test]
+fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
+    let rig = fs::read_to_string("evidence/v0.12.2/computer/helper-evidence-rig.mjs")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let readme = fs::read_to_string("evidence/v0.12.2/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -903,7 +995,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
     for required in [
         "$EXPECTED_SHA256SUMS_SHA256",
         "mandatory SHA-256 supplied",
-        "exactly the four v0.12.1",
+        "exactly the four v0.12.2",
         "expected and actual manifest hashes",
     ] {
         assert!(
@@ -915,7 +1007,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
 
 #[test]
 fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
-    let rig = fs::read_to_string("evidence/v0.12.1/computer/helper-evidence-rig.mjs").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.2/computer/helper-evidence-rig.mjs").unwrap();
     assert!(rig.contains("capturedFrameMatchesWindowGeometry"));
     assert!(rig.contains("share-resize-settled"));
     assert!(rig.contains("sample.sourceSequence > resizeTransition.sample.sourceSequence"));
@@ -927,12 +1019,12 @@ fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
 
 #[test]
 fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.1/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.2/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     assert!(rig.contains("function childEnvironment(overrides = {})"));
     assert!(!rig.contains("...process.env"));
-    let fixture = fs::read_to_string("evidence/v0.12.1/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.2/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1095,10 +1187,10 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
 
 #[test]
 fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.1/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.2/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.1/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.2/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1195,21 +1287,21 @@ fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() 
 
 #[test]
 fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negative() {
-    let fixture = fs::read_to_string("evidence/v0.12.1/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.2/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.1/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.2/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.1/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.2/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.1/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.2/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
     for required in [
-        "private let siblingFixtureTitle = \"LBB v0.12.1 Same-PID Sibling Receiver\"",
+        "private let siblingFixtureTitle = \"LBB v0.12.2 Same-PID Sibling Receiver\"",
         "var primaryWindowId = 0",
         "var siblingWindowId = 0",
         "var siblingTextLength = 0",
