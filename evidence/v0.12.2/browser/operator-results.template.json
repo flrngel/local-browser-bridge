@@ -1,0 +1,151 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "stock-user-chrome-operator-observations",
+  "candidateBinding": {
+    "runNonce": "REPLACE_WITH_INITIALIZER",
+    "preflightRecordSha256": "REPLACE_WITH_INITIALIZER",
+    "finalSha": "REPLACE_WITH_INITIALIZER",
+    "checksumManifestSha256": "REPLACE_WITH_INITIALIZER",
+    "serverSha256": "REPLACE_WITH_INITIALIZER",
+    "extensionZipSha256": "REPLACE_WITH_INITIALIZER",
+    "extractedPayloadSha256": "REPLACE_WITH_INITIALIZER"
+  },
+  "environment": {
+    "platform": "windows-x86_64",
+    "browserProduct": "Google Chrome",
+    "browserVersion": "REPLACE_WITH_FOUR_PART_VERSION",
+    "stockUserChrome": false,
+    "chromeMcpUsed": false,
+    "manualChromeExtensionsLoad": false,
+    "developerMode": false,
+    "dedicatedWindowBoundToOwnedTarget": false,
+    "browserLaunchFlagsUsed": true,
+    "cdpInstallUsed": true,
+    "automationTestProfileUsed": true,
+    "localDemoOnly": false
+  },
+  "extension": {
+    "cardCount": 0,
+    "idPatternValid": false,
+    "version": "0.12.2",
+    "enabled": false,
+    "loadErrors": 1,
+    "loadedVia": "chrome://extensions-load-unpacked",
+    "loadedDirectoryByteMatchesCandidateZip": false,
+    "permissionsUiReviewed": false,
+    "hostAccessUiReviewed": false,
+    "popupConnected": false,
+    "nativeDebuggerWarningSeen": false,
+    "pageControlPillSeen": false,
+    "pageStopButtonSeen": false
+  },
+  "handback": {
+    "stop": {
+      "trigger": "in-page-stop",
+      "statusPollMethod": "browser.control.status",
+      "statusPolledAfterTrigger": false,
+      "reducedStatus": {
+        "active": true,
+        "humanPaused": false,
+        "reason": "released_by_user",
+        "revocationPending": true
+      },
+      "controlStartRefusal": {
+        "httpStatus": 0,
+        "errorCode": "HUMAN_CONTROL_PAUSED",
+        "taxonomyState": "needs_user",
+        "taxonomyAction": "handback",
+        "retriable": true
+      },
+      "tabMutationRefusal": {
+        "httpStatus": 0,
+        "errorCode": "HUMAN_CONTROL_PAUSED",
+        "taxonomyState": "needs_user",
+        "taxonomyAction": "handback",
+        "retriable": true
+      },
+      "indicatorsRemoved": false,
+      "resume": {
+        "trustedPopupClick": false,
+        "statusPollMethod": "browser.control.status",
+        "statusPolledAfterResume": false,
+        "reducedStatus": {
+          "active": true,
+          "humanPaused": true,
+          "revocationPending": true
+        },
+        "postResumeStartSucceeded": false,
+        "activeStatusPolled": false,
+        "activeStatus": {
+          "active": false,
+          "humanPaused": true,
+          "revocationPending": true
+        }
+      }
+    },
+    "cancel": {
+      "trigger": "chrome-native-cancel",
+      "statusPollMethod": "browser.control.status",
+      "statusPolledAfterTrigger": false,
+      "reducedStatus": {
+        "active": true,
+        "humanPaused": false,
+        "reason": "canceled_by_user",
+        "revocationPending": true
+      },
+      "controlStartRefusal": {
+        "httpStatus": 0,
+        "errorCode": "HUMAN_CONTROL_PAUSED",
+        "taxonomyState": "needs_user",
+        "taxonomyAction": "handback",
+        "retriable": true
+      },
+      "tabMutationRefusal": {
+        "httpStatus": 0,
+        "errorCode": "HUMAN_CONTROL_PAUSED",
+        "taxonomyState": "needs_user",
+        "taxonomyAction": "handback",
+        "retriable": true
+      },
+      "indicatorsRemoved": false,
+      "resume": {
+        "trustedPopupClick": false,
+        "statusPollMethod": "browser.control.status",
+        "statusPolledAfterResume": false,
+        "reducedStatus": {
+          "active": true,
+          "humanPaused": true,
+          "revocationPending": true
+        },
+        "postResumeStartSucceeded": false,
+        "activeStatusPolled": false,
+        "activeStatus": {
+          "active": false,
+          "humanPaused": true,
+          "revocationPending": true
+        }
+      }
+    }
+  },
+  "cleanup": {
+    "controlReleased": false,
+    "testTabsClosed": false,
+    "testWindowClosed": false,
+    "popupDisconnected": false,
+    "serverStopped": false,
+    "portReleased": false,
+    "acceptanceCredentialClearedFromShell": false,
+    "savedTokenClear": {
+      "trustedPopupClick": false,
+      "popupStateVerifiedAfterClear": false,
+      "tokenConfigured": true,
+      "clearButtonDisabled": false
+    },
+    "chromeMcpReleased": false,
+    "developerModeRestored": false,
+    "extensionDisposition": "REPLACE_WITH_DISPOSITION",
+    "unrelatedTabsOrWindowsChanged": true,
+    "unrelatedExtensionsChanged": true,
+    "rawBrowserDataRetained": true
+  }
+}

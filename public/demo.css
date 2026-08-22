@@ -23,3 +23,141 @@ button { background: #174c2d; color: white; border: 0; border-radius: 8px; }
 .spacer { min-height: 900px; background: linear-gradient(#fff, #dff0e3); }
 #scroll-marker { border: 3px solid #174c2d; }
 #event-log { font-family: ui-monospace, monospace; font-weight: 700; }
+#stop-guard-fixture { font: 700 14px/1.4 ui-monospace, monospace; color: #6f281c; }
+#top-layer-child-frame { width: 100%; min-height: 96px; border: 2px solid #304f9f; border-radius: 8px; }
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 8s !important;
+  animation-timing-function: linear !important;
+}
+
+html.view-transition-acceptance-state { background: #d7e4ff; }
+
+/*
+ * Deliberately hostile, preinstalled page CSS for the stock-Chrome control-UI
+ * acceptance cell. It is loaded before the extension creates its anonymous
+ * popover host. A safe bridge host must neutralize these declarations inside
+ * its shadow boundary; the named page fixtures are restored below so they
+ * can independently exercise top-layer ordering and fail-closed occlusion.
+ */
+[popover] {
+  opacity: 0 !important;
+  filter: opacity(0) !important;
+  mask-image: linear-gradient(transparent, transparent) !important;
+  transform: scale(0) !important;
+}
+
+[popover]::before,
+[popover]::after {
+  content: "" !important;
+  display: block !important;
+  position: fixed !important;
+  inset: 0 !important;
+  background: #000 !important;
+  opacity: 1 !important;
+  pointer-events: none !important;
+}
+
+[popover]::backdrop {
+  background: #000 !important;
+  opacity: 1 !important;
+  pointer-events: none !important;
+}
+
+#top-layer-control-fixture,
+#top-layer-late-occluder,
+#top-layer-perpetual-occluder,
+.top-layer-sparse-occluder,
+.top-layer-host-forgery {
+  position: fixed;
+  inset: 0;
+  box-sizing: border-box;
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  border: 0;
+  opacity: 1 !important;
+  filter: none !important;
+  mask-image: none !important;
+  transform: none !important;
+}
+
+#top-layer-control-fixture::before,
+#top-layer-control-fixture::after,
+#top-layer-late-occluder::before,
+#top-layer-late-occluder::after,
+#top-layer-perpetual-occluder::before,
+#top-layer-perpetual-occluder::after,
+.top-layer-sparse-occluder::before,
+.top-layer-sparse-occluder::after,
+.top-layer-host-forgery::before,
+.top-layer-host-forgery::after {
+  content: none !important;
+  display: none !important;
+}
+
+#top-layer-control-fixture::backdrop,
+#top-layer-late-occluder::backdrop,
+#top-layer-perpetual-occluder::backdrop,
+.top-layer-sparse-occluder::backdrop,
+.top-layer-host-forgery::backdrop {
+  background: transparent !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+#top-layer-control-fixture {
+  padding: 64px 20px 20px;
+  background: rgba(23, 76, 45, .24);
+  color: #102016;
+  pointer-events: auto;
+}
+
+#top-layer-control-fixture.pass-through { pointer-events: none; }
+
+.top-layer-fixture-card {
+  display: grid;
+  gap: 4px;
+  width: min(440px, calc(100vw - 40px));
+  padding: 12px 16px;
+  border: 2px solid #174c2d;
+  border-radius: 12px;
+  background: rgba(239, 248, 241, .94);
+  box-shadow: 0 8px 30px rgba(16, 32, 22, .28);
+}
+
+#top-layer-late-occluder {
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(55, 18, 18, .97);
+  color: white;
+  pointer-events: auto;
+}
+
+#top-layer-perpetual-occluder,
+.top-layer-host-forgery {
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: #111827;
+  color: white;
+  pointer-events: none;
+}
+
+.top-layer-sparse-occluder {
+  position: fixed;
+  inset: auto;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  max-width: none;
+  max-height: none;
+  background: #000;
+  color: transparent;
+  pointer-events: none;
+}

@@ -66,6 +66,31 @@ jobs:
       - name: Audit distributed versions
         shell: bash
         run: bash scripts/audit-versions.sh
+      - name: Validate stock-user Chrome evidence tooling
+        shell: pwsh
+        run: |
+          $scripts = @(
+            "scripts/browser-evidence-candidate.ps1",
+            "scripts/sanitize-browser-evidence-screenshot.ps1",
+            "scripts/test-windows-browser-api.ps1",
+            "scripts/write-browser-evidence-record.ps1"
+          )
+          foreach ($script in $scripts) {
+            $tokens = $null
+            $errors = $null
+            [Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $script).Path,
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -ne 0) {
+              throw ($errors | ForEach-Object { $_.Message } | Out-String)
+            }
+          }
+          & ./scripts/browser-evidence-candidate.ps1 -Mode SelfTest
+          & ./scripts/sanitize-browser-evidence-screenshot.ps1 -Mode SelfTest
+          & ./scripts/test-windows-browser-api.ps1 -SelfTest
+          & ./scripts/write-browser-evidence-record.ps1 -Mode SelfTest
       - name: Check Windows formatting, lint, and tests
         shell: pwsh
         run: |
