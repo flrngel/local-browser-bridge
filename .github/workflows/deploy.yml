@@ -391,6 +391,11 @@ jobs:
           gh release upload "$RELEASE_TAG" dist/*
           remote_tag_sha="$(git ls-remote --refs origin "refs/tags/$RELEASE_TAG" | awk '{ print $1 }')"
           test "$remote_tag_sha" = "$VERIFIED_TAG_SHA"
+          test "$(gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/immutable-releases" \
+            --jq '.enabled')" = true
           gh release edit "$RELEASE_TAG" --draft=false
           gh release view "$RELEASE_TAG" --json url,tagName,isDraft,isPrerelease
       - name: Re-download and verify the immutable published release

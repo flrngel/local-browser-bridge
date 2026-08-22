@@ -190,8 +190,22 @@ fn release_gates_javascript_macos_and_published_provenance() {
     let final_tag_recheck = release[..publish_draft]
         .rfind("remote_tag_sha=\"$(git ls-remote --refs origin")
         .unwrap();
+    let final_immutable_recheck = release[..publish_draft]
+        .rfind("\"repos/$GITHUB_REPOSITORY/immutable-releases\"")
+        .unwrap();
     assert!(publish < final_tag_recheck);
-    assert!(final_tag_recheck < publish_draft);
+    assert!(final_tag_recheck < final_immutable_recheck);
+    assert!(final_immutable_recheck < publish_draft);
+    assert_eq!(
+        release
+            .matches("\"repos/$GITHUB_REPOSITORY/immutable-releases\"")
+            .count(),
+        2,
+        "release immutability must be checked both before approval and immediately before draft publication"
+    );
+    let final_publication_gate = &release[final_tag_recheck..publish_draft];
+    assert!(final_publication_gate.contains("X-GitHub-Api-Version: 2026-03-10"));
+    assert!(final_publication_gate.contains("--jq '.enabled')\" = true"));
     let published_attestation = release
         .find("release_verification=\"$(gh release verify")
         .unwrap();
