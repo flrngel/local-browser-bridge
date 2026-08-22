@@ -397,6 +397,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERIFIED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          VERIFIED_TAG_SHA: ${{ needs.verify.outputs.tag_sha }}
         shell: bash
         run: |
           version="${RELEASE_TAG#v}"

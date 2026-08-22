@@ -200,6 +200,17 @@ fn release_gates_javascript_macos_and_published_provenance() {
         .unwrap();
     assert!(publish_draft < published_attestation);
     assert!(published_attestation < tag_subject_check);
+    let published_verification_step = release
+        .split("- name: Re-download and verify the immutable published release")
+        .nth(1)
+        .unwrap()
+        .split("shell: bash")
+        .next()
+        .unwrap();
+    assert!(
+        published_verification_step
+            .contains("VERIFIED_TAG_SHA: ${{ needs.verify.outputs.tag_sha }}")
+    );
 }
 
 #[test]
