@@ -594,6 +594,16 @@ mod tests {
         MultiplyLinkedTokenMarker,
     }
 
+    #[cfg(target_os = "windows")]
+    struct WindowsJunctionSwapFixture {
+        public_ancestor: PathBuf,
+        decoy_ancestor: PathBuf,
+        moved_ancestor: PathBuf,
+        public_parent: PathBuf,
+        original_parent: PathBuf,
+        decoy_parent: PathBuf,
+    }
+
     #[test]
     fn default_token_path_requires_an_absolute_user_profile() {
         for home in [None, Some(PathBuf::from("relative-profile"))] {
@@ -1234,22 +1244,13 @@ mod tests {
     #[tokio::test]
     async fn windows_relative_read_does_not_follow_an_ancestor_path_swap() {
         let directory = tempfile::tempdir().expect("temp directory");
-        let replaceable_ancestor = directory.path().join("replaceable-ancestor");
-        std::fs::create_dir(&replaceable_ancestor).expect("create replaceable ancestor");
-        let parent = private_test_parent(&replaceable_ancestor).await;
-        let path = parent.join("token");
+        let fixture = windows_junction_swap_fixture(directory.path()).await;
+        let path = fixture.public_parent.join("token");
         let token = replace_token_for_windows_swap_test(&path).await;
         let capability = prepare_token_parent(&path, None)
             .await
             .expect("retain validated parent directory");
-        let moved_ancestor = directory.path().join("moved-ancestor");
-        let barrier = arm_windows_token_path_swap(
-            "read",
-            &replaceable_ancestor,
-            &moved_ancestor,
-            &parent,
-            WindowsSwapDecoy::Empty,
-        );
+        let barrier = arm_windows_token_path_swap("read", &fixture, WindowsSwapDecoy::Empty);
 
         let error = load_valid_persisted_token(&capability, &path)
             .await
@@ -1257,10 +1258,11 @@ mod tests {
 
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
         barrier.assert_consumed();
+        assert_windows_path_swap_handoff(&fixture);
         assert!(!path.exists(), "the decoy parent must remain untouched");
         assert_eq!(
-            std::fs::read_to_string(moved_ancestor.join(MANAGED_TOKEN_DIRECTORY).join("token"))
-                .expect("read token through the moved original parent")
+            std::fs::read_to_string(fixture.original_parent.join("token"))
+                .expect("read token through the original parent identity")
                 .trim(),
             token
         );
@@ -1271,38 +1273,28 @@ mod tests {
     #[tokio::test]
     async fn windows_relative_create_cleans_its_exact_handle_after_an_ancestor_path_swap() {
         let directory = tempfile::tempdir().expect("temp directory");
-        let replaceable_ancestor = directory.path().join("replaceable-ancestor");
-        std::fs::create_dir(&replaceable_ancestor).expect("create replaceable ancestor");
-        let parent = private_test_parent(&replaceable_ancestor).await;
-        let path = parent.join("token");
+        let fixture = windows_junction_swap_fixture(directory.path()).await;
+        let path = fixture.public_parent.join("token");
         let capability = prepare_token_parent(&path, None)
             .await
             .expect("retain validated parent directory");
-        let temporary_path = parent.join("safe-temp");
-        let moved_ancestor = directory.path().join("moved-ancestor");
-        let barrier = arm_windows_token_path_swap(
-            "create",
-            &replaceable_ancestor,
-            &moved_ancestor,
-            &parent,
-            WindowsSwapDecoy::SafeTemporaryMarker,
-        );
+        let temporary_path = fixture.public_parent.join("safe-temp");
+        let barrier =
+            arm_windows_token_path_swap("create", &fixture, WindowsSwapDecoy::SafeTemporaryMarker);
 
         let error = windows_security::create_private_token_file(&capability, &temporary_path)
             .expect_err("a changed public path must fail the post-create binding check");
 
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
         barrier.assert_consumed();
+        assert_windows_path_swap_handoff(&fixture);
         assert_eq!(
             std::fs::read_to_string(&temporary_path).expect("read decoy temporary marker"),
             WINDOWS_SWAP_TEMP_MARKER,
             "relative creation or cleanup must not alter the same-named decoy leaf"
         );
         assert!(
-            !moved_ancestor
-                .join(MANAGED_TOKEN_DIRECTORY)
-                .join("safe-temp")
-                .exists(),
+            !fixture.original_parent.join("safe-temp").exists(),
             "post-create failure must delete the exact newly created handle"
         );
         drop(capability);
@@ -1429,15 +1421,13 @@ mod tests {
     async fn windows_relative_target_check_and_rename_do_not_follow_ancestor_path_swaps() {
         for stage in ["target_check", "rename"] {
             let directory = tempfile::tempdir().expect("temp directory");
-            let replaceable_ancestor = directory.path().join("replaceable-ancestor");
-            std::fs::create_dir(&replaceable_ancestor).expect("create replaceable ancestor");
-            let parent = private_test_parent(&replaceable_ancestor).await;
-            let path = parent.join("token");
+            let fixture = windows_junction_swap_fixture(directory.path()).await;
+            let path = fixture.public_parent.join("token");
             let _initial = replace_token_for_windows_swap_test(&path).await;
             let capability = prepare_token_parent(&path, None)
                 .await
                 .expect("retain validated parent directory");
-            let temporary_path = parent.join("safe-temp");
+            let temporary_path = fixture.public_parent.join("safe-temp");
             let replacement = create_token();
             let mut source =
                 windows_security::create_private_token_file(&capability, &temporary_path)
@@ -1445,23 +1435,21 @@ mod tests {
             source
                 .write_and_sync(format!("{replacement}\n").as_bytes())
                 .expect("write and flush replacement token");
-            let moved_ancestor = directory.path().join("moved-ancestor");
             let barrier = arm_windows_token_path_swap(
                 stage,
-                &replaceable_ancestor,
-                &moved_ancestor,
-                &parent,
+                &fixture,
                 WindowsSwapDecoy::MultiplyLinkedTokenMarker,
             );
 
             windows_security::replace_token_file(&capability, &mut source, &path)
                 .expect("the handle-relative atomic rename must stay on the original directory");
             barrier.assert_consumed();
+            assert_windows_path_swap_handoff(&fixture);
             let error = windows_security::verify_replaced_token_file(&capability, &source, &path)
                 .expect_err("the public path replacement must fail the post-rename check");
 
             assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
-            let decoy_source = parent.join("decoy-token-source");
+            let decoy_source = fixture.public_parent.join("decoy-token-source");
             assert_eq!(
                 std::fs::read_to_string(&path).expect("read decoy token marker"),
                 WINDOWS_SWAP_TOKEN_MARKER,
@@ -1478,8 +1466,8 @@ mod tests {
                 "the deliberately unsafe path-based target must remain multiply linked"
             );
             assert_eq!(
-                std::fs::read_to_string(moved_ancestor.join(MANAGED_TOKEN_DIRECTORY).join("token"))
-                    .expect("read token through the moved original parent")
+                std::fs::read_to_string(fixture.original_parent.join("token"))
+                    .expect("read token through the original parent identity")
                     .trim(),
                 replacement
             );
@@ -1492,29 +1480,22 @@ mod tests {
     #[tokio::test]
     async fn windows_temporary_cleanup_deletes_the_exact_handle_after_an_ancestor_path_swap() {
         let directory = tempfile::tempdir().expect("temp directory");
-        let replaceable_ancestor = directory.path().join("replaceable-ancestor");
-        std::fs::create_dir(&replaceable_ancestor).expect("create replaceable ancestor");
-        let parent = private_test_parent(&replaceable_ancestor).await;
-        let path = parent.join("token");
+        let fixture = windows_junction_swap_fixture(directory.path()).await;
+        let path = fixture.public_parent.join("token");
         let capability = prepare_token_parent(&path, None)
             .await
             .expect("retain validated parent directory");
-        let temporary_path = parent.join("safe-temp");
+        let temporary_path = fixture.public_parent.join("safe-temp");
         let source = windows_security::create_private_token_file(&capability, &temporary_path)
             .expect("create retained private temporary handle");
-        let moved_ancestor = directory.path().join("moved-ancestor");
-        let barrier = arm_windows_token_path_swap(
-            "cleanup",
-            &replaceable_ancestor,
-            &moved_ancestor,
-            &parent,
-            WindowsSwapDecoy::SafeTemporaryMarker,
-        );
+        let barrier =
+            arm_windows_token_path_swap("cleanup", &fixture, WindowsSwapDecoy::SafeTemporaryMarker);
 
         source
             .discard()
             .expect("delete the exact retained temporary handle");
         barrier.assert_consumed();
+        assert_windows_path_swap_handoff(&fixture);
 
         assert_eq!(
             std::fs::read_to_string(&temporary_path).expect("read decoy temporary marker"),
@@ -1522,11 +1503,8 @@ mod tests {
             "exact-handle cleanup must not reopen or delete the path-swapped decoy"
         );
         assert!(
-            !moved_ancestor
-                .join(MANAGED_TOKEN_DIRECTORY)
-                .join("safe-temp")
-                .exists(),
-            "cleanup must delete the moved original rather than reopen a leaf"
+            !fixture.original_parent.join("safe-temp").exists(),
+            "cleanup must delete the retained original rather than reopen a leaf"
         );
         drop(capability);
     }
@@ -1636,38 +1614,98 @@ mod tests {
     #[cfg(target_os = "windows")]
     fn arm_windows_token_path_swap(
         stage: &'static str,
-        replaceable_ancestor: &Path,
-        moved_ancestor: &Path,
-        parent: &Path,
+        fixture: &WindowsJunctionSwapFixture,
         decoy: WindowsSwapDecoy,
     ) -> windows_security::TestBarrierGuard {
-        let replaceable_ancestor = replaceable_ancestor.to_path_buf();
-        let moved_ancestor = moved_ancestor.to_path_buf();
-        let parent = parent.to_path_buf();
-        windows_security::install_test_barrier(stage, move || {
-            std::fs::rename(&replaceable_ancestor, &moved_ancestor)
-                .expect("replace the token-path ancestor during the native operation");
-            std::fs::create_dir(&replaceable_ancestor)
-                .expect("create replacement token-path ancestor");
-            drop(
-                windows_security::create_private_token_directory(&parent)
-                    .expect("create TokenUser-owned decoy parent"),
-            );
-            match decoy {
-                WindowsSwapDecoy::Empty => {}
-                WindowsSwapDecoy::SafeTemporaryMarker => {
-                    std::fs::write(parent.join("safe-temp"), WINDOWS_SWAP_TEMP_MARKER)
-                        .expect("seed same-named decoy temporary marker");
-                }
-                WindowsSwapDecoy::MultiplyLinkedTokenMarker => {
-                    let source = parent.join("decoy-token-source");
-                    std::fs::write(&source, WINDOWS_SWAP_TOKEN_MARKER)
-                        .expect("seed unsafe decoy token source");
-                    std::fs::hard_link(&source, parent.join("token"))
-                        .expect("create multiply linked path-based token decoy");
-                }
+        match decoy {
+            WindowsSwapDecoy::Empty => {}
+            WindowsSwapDecoy::SafeTemporaryMarker => {
+                std::fs::write(
+                    fixture.decoy_parent.join("safe-temp"),
+                    WINDOWS_SWAP_TEMP_MARKER,
+                )
+                .expect("seed same-named decoy temporary marker");
             }
+            WindowsSwapDecoy::MultiplyLinkedTokenMarker => {
+                let source = fixture.decoy_parent.join("decoy-token-source");
+                std::fs::write(&source, WINDOWS_SWAP_TOKEN_MARKER)
+                    .expect("seed unsafe decoy token source");
+                std::fs::hard_link(&source, fixture.decoy_parent.join("token"))
+                    .expect("create multiply linked path-based token decoy");
+            }
+        }
+        assert_windows_junction_binding(&fixture.public_ancestor, &fixture.original_parent);
+        assert_windows_junction_binding(&fixture.decoy_ancestor, &fixture.decoy_parent);
+        assert!(
+            !windows_security::resolved_directory_paths_have_same_identity_for_test(
+                &fixture.original_parent,
+                &fixture.decoy_parent,
+            )
+            .expect("compare original and decoy parent identities"),
+            "the original and decoy token parents must have distinct file identities"
+        );
+        let public_ancestor = fixture.public_ancestor.clone();
+        let decoy_ancestor = fixture.decoy_ancestor.clone();
+        let moved_ancestor = fixture.moved_ancestor.clone();
+        windows_security::install_test_barrier(stage, move || {
+            std::fs::rename(&public_ancestor, &moved_ancestor)
+                .expect("move the original token-path ancestor junction aside");
+            std::fs::rename(&decoy_ancestor, &public_ancestor)
+                .expect("move the prebuilt decoy junction into the public token path");
         })
+    }
+
+    #[cfg(target_os = "windows")]
+    async fn windows_junction_swap_fixture(root: &Path) -> WindowsJunctionSwapFixture {
+        let original_root = root.join("original-root");
+        std::fs::create_dir(&original_root).expect("create original junction target");
+        let original_parent = private_test_parent(&original_root).await;
+        let decoy_root = root.join("decoy-root");
+        std::fs::create_dir(&decoy_root).expect("create decoy junction target");
+        let decoy_parent = private_test_parent(&decoy_root).await;
+        let public_ancestor = root.join("public-ancestor");
+        windows_security::create_directory_junction_for_test(&public_ancestor, &original_root)
+            .expect("create replaceable token-path ancestor junction");
+        let decoy_ancestor = root.join("decoy-ancestor");
+        windows_security::create_directory_junction_for_test(&decoy_ancestor, &decoy_root)
+            .expect("create prebuilt decoy ancestor junction");
+        let moved_ancestor = root.join("moved-ancestor");
+        let public_parent = public_ancestor.join(MANAGED_TOKEN_DIRECTORY);
+        assert!(
+            public_parent.is_dir(),
+            "the original ancestor junction must expose the private token parent"
+        );
+        WindowsJunctionSwapFixture {
+            public_ancestor,
+            decoy_ancestor,
+            moved_ancestor,
+            public_parent,
+            original_parent,
+            decoy_parent,
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn assert_windows_junction_binding(junction: &Path, expected_parent: &Path) {
+        assert!(
+            windows_security::path_is_mount_point_for_test(junction)
+                .expect("inspect no-follow ancestor reparse tag"),
+            "the swap fixture must use a local mount-point junction"
+        );
+        assert!(
+            windows_security::resolved_directory_paths_have_same_identity_for_test(
+                &junction.join(MANAGED_TOKEN_DIRECTORY),
+                expected_parent,
+            )
+            .expect("compare resolved junction target identity"),
+            "the ancestor junction must resolve to the intended token parent identity"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    fn assert_windows_path_swap_handoff(fixture: &WindowsJunctionSwapFixture) {
+        assert_windows_junction_binding(&fixture.moved_ancestor, &fixture.original_parent);
+        assert_windows_junction_binding(&fixture.public_ancestor, &fixture.decoy_parent);
     }
 
     async fn private_test_parent(root: &Path) -> std::path::PathBuf {

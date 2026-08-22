@@ -105,6 +105,10 @@ fn token_transactions_remain_bound_to_the_validated_parent_capability() {
         "windows_relative_create_cleans_its_exact_handle_after_an_ancestor_path_swap",
         "windows_relative_target_check_and_rename_do_not_follow_ancestor_path_swaps",
         "windows_temporary_cleanup_deletes_the_exact_handle_after_an_ancestor_path_swap",
+        "windows_junction_swap_fixture",
+        "std::fs::rename(&public_ancestor, &moved_ancestor)",
+        "std::fs::rename(&decoy_ancestor, &public_ancestor)",
+        "assert_windows_path_swap_handoff",
     ] {
         assert!(
             shared.contains(required),
@@ -129,9 +133,16 @@ fn token_transactions_remain_bound_to_the_validated_parent_capability() {
         "RootDirectory: handle_for(&directory.file)",
         "Attributes: OBJ_DONT_REPARSE",
         "FILE_TRAVERSE",
+        "NtSetInformationFile(",
+        "FileRenameInformation",
+        "FILE_RENAME_INFORMATION",
         "SetFileInformationByHandle(",
-        "FileRenameInfo",
         "FileDispositionInfo",
+        "FSCTL_SET_REPARSE_POINT",
+        "path_is_mount_point_for_test",
+        "resolved_directory_paths_have_same_identity_for_test",
+        "let mut bytes_returned = 0u32",
+        "Some(&mut bytes_returned)",
         "impl Drop for PrivateTemporaryFile",
         "let result = delete_file_handle(&self.file)",
         "fn ensure_uncommitted(&self)",
@@ -152,6 +163,11 @@ fn token_transactions_remain_bound_to_the_validated_parent_capability() {
     assert!(shared.contains("file.discard()"));
     assert!(shared.contains("verify_replaced_token_file(directory, &file, path)"));
     assert!(shared.contains("The rename is the commit boundary"));
+    assert!(
+        windows
+            .contains("#[cfg(test)]\nuse windows::Win32::System::Ioctl::FSCTL_SET_REPARSE_POINT;"),
+        "the junction mutation API must remain test-only"
+    );
     assert!(
         !windows.contains("OBJ_CASE_INSENSITIVE"),
         "case-insensitive native lookup can select an unintended case-only sibling"
@@ -177,6 +193,8 @@ fn token_transactions_remain_bound_to_the_validated_parent_capability() {
         "MoveFileExW(",
         "open_ancestor_directory_leases",
         "_ancestor_leases",
+        "FILE_RENAME_INFO,",
+        "FileRenameInfo,",
         "std::fs::remove_file(",
         "CreateFileW(",
     ] {
@@ -193,11 +211,11 @@ fn windows_token_replacement_is_atomic_and_write_through() {
     let shared = source("src/token.rs");
 
     assert!(windows.contains("FILE_WRITE_THROUGH"));
-    assert!(windows.contains("SetFileInformationByHandle("));
-    assert!(windows.contains("FileRenameInfo"));
+    assert!(windows.contains("NtSetInformationFile("));
+    assert!(windows.contains("FileRenameInformation"));
     assert!(windows.contains("(*information).RootDirectory = handle_for(&directory.file)"));
     assert!(windows.contains("(*information).Anonymous.ReplaceIfExists = BOOLEAN(1)"));
-    assert!(windows.contains("size_of::<FILE_RENAME_INFO>()"));
+    assert!(windows.contains("size_of::<FILE_RENAME_INFORMATION>()"));
     assert!(windows.contains(".checked_add(name_bytes)"));
     assert!(windows.contains("let source_identity: FILE_ID_INFO"));
     assert!(

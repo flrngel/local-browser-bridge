@@ -14,8 +14,9 @@ use std::cell::RefCell;
 use windows::Wdk::Foundation::OBJECT_ATTRIBUTES;
 use windows::Wdk::Storage::FileSystem::{
     FILE_CREATE, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_REPARSE_POINT,
-    FILE_SYNCHRONOUS_IO_NONALERT, FILE_WRITE_THROUGH, NTCREATEFILE_CREATE_DISPOSITION,
-    NTCREATEFILE_CREATE_OPTIONS, NtCreateFile,
+    FILE_RENAME_INFORMATION, FILE_SYNCHRONOUS_IO_NONALERT, FILE_WRITE_THROUGH,
+    FileRenameInformation, NTCREATEFILE_CREATE_DISPOSITION, NTCREATEFILE_CREATE_OPTIONS,
+    NtCreateFile, NtSetInformationFile,
 };
 use windows::Win32::Foundation::{
     BOOL, BOOLEAN, CloseHandle, ERROR_SUCCESS, HANDLE, NTSTATUS, RtlNtStatusToDosError,
@@ -36,17 +37,22 @@ use windows::Win32::Storage::FileSystem::{
     CreateDirectoryW, DELETE, FILE_ACCESS_RIGHTS, FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL,
     FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO, FILE_DISPOSITION_INFO,
     FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_WRITE, FILE_ID_INFO,
-    FILE_INFO_BY_HANDLE_CLASS, FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_RENAME_INFO,
-    FILE_SHARE_DELETE, FILE_SHARE_MODE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO,
-    FILE_TRAVERSE, FileAttributeTagInfo, FileDispositionInfo, FileIdInfo, FileRenameInfo,
-    FileStandardInfo, GetFileInformationByHandleEx, READ_CONTROL, SYNCHRONIZE,
-    SetFileInformationByHandle, WRITE_DAC,
+    FILE_INFO_BY_HANDLE_CLASS, FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_DELETE,
+    FILE_SHARE_MODE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO, FILE_TRAVERSE,
+    FileAttributeTagInfo, FileDispositionInfo, FileIdInfo, FileStandardInfo,
+    GetFileInformationByHandleEx, READ_CONTROL, SYNCHRONIZE, SetFileInformationByHandle, WRITE_DAC,
 };
 #[cfg(test)]
 use windows::Win32::Storage::FileSystem::{
     FILE_FLAGS_AND_ATTRIBUTES, FILE_WRITE_ATTRIBUTES, FileCaseSensitiveInfo,
 };
+#[cfg(test)]
+use windows::Win32::System::IO::DeviceIoControl;
 use windows::Win32::System::IO::IO_STATUS_BLOCK;
+#[cfg(test)]
+use windows::Win32::System::Ioctl::FSCTL_SET_REPARSE_POINT;
+#[cfg(test)]
+use windows::Win32::System::SystemServices::IO_REPARSE_TAG_MOUNT_POINT;
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows::core::{Error as WindowsError, PCWSTR, PWSTR};
 
@@ -528,9 +534,10 @@ fn rename_relative_file(
                 "Windows child name is too long",
             )
         })?;
-    // FILE_RENAME_INFO is a variable-length structure whose documented input size is the full
-    // fixed structure plus the filename bytes, even though FileName already declares one WCHAR.
-    let buffer_bytes = size_of::<FILE_RENAME_INFO>()
+    // FILE_RENAME_INFORMATION is a variable-length structure whose documented input size is the
+    // full fixed structure plus the filename bytes, even though FileName already declares one
+    // WCHAR.
+    let buffer_bytes = size_of::<FILE_RENAME_INFORMATION>()
         .checked_add(name_bytes)
         .ok_or_else(|| {
             io::Error::new(
@@ -539,7 +546,7 @@ fn rename_relative_file(
             )
         })?;
     let mut buffer = AlignedBuffer::new(buffer_bytes)?;
-    let information = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+    let information = buffer.as_mut_ptr().cast::<FILE_RENAME_INFORMATION>();
     unsafe {
         (*information).Anonymous.ReplaceIfExists = BOOLEAN(1);
         (*information).RootDirectory = handle_for(&directory.file);
@@ -554,9 +561,12 @@ fn rename_relative_file(
             ptr::addr_of_mut!((*information).FileName).cast::<u16>(),
             destination_name.len(),
         );
-        SetFileInformationByHandle(
+    }
+    let mut status_block = IO_STATUS_BLOCK::default();
+    let status = unsafe {
+        NtSetInformationFile(
             handle_for(source),
-            FileRenameInfo,
+            &mut status_block,
             information.cast(),
             u32::try_from(buffer_bytes).map_err(|_| {
                 io::Error::new(
@@ -564,9 +574,14 @@ fn rename_relative_file(
                     "Windows rename buffer is too large",
                 )
             })?,
+            FileRenameInformation,
         )
+    };
+    if status.0 < 0 {
+        Err(ntstatus_error(status))
+    } else {
+        Ok(())
     }
-    .map_err(windows_error)
 }
 
 fn delete_file_handle(file: &File) -> io::Result<()> {
@@ -1275,4 +1290,148 @@ pub(super) fn number_of_links_for_test(path: &Path) -> io::Result<u32> {
     )?;
     let standard: FILE_STANDARD_INFO = query_file_information(handle_for(&file), FileStandardInfo)?;
     Ok(standard.NumberOfLinks)
+}
+
+#[cfg(test)]
+pub(super) fn path_is_mount_point_for_test(path: &Path) -> io::Result<bool> {
+    let file = open_path_no_follow(
+        path,
+        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+    )?;
+    let information: FILE_ATTRIBUTE_TAG_INFO =
+        query_file_information(handle_for(&file), FileAttributeTagInfo)?;
+    Ok(
+        information.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0
+            && information.ReparseTag == IO_REPARSE_TAG_MOUNT_POINT,
+    )
+}
+
+#[cfg(test)]
+pub(super) fn resolved_directory_paths_have_same_identity_for_test(
+    left: &Path,
+    right: &Path,
+) -> io::Result<bool> {
+    let left = open_token_directory_for_validation(left)?;
+    let right = open_token_directory_for_validation(right)?;
+    Ok(
+        query_file_information::<FILE_ID_INFO>(handle_for(&left), FileIdInfo)?
+            == query_file_information::<FILE_ID_INFO>(handle_for(&right), FileIdInfo)?,
+    )
+}
+
+#[cfg(test)]
+pub(super) fn create_directory_junction_for_test(link: &Path, target: &Path) -> io::Result<()> {
+    #[repr(C)]
+    struct MountPointReparseData {
+        tag: u32,
+        data_length: u16,
+        reserved: u16,
+        substitute_name_offset: u16,
+        substitute_name_length: u16,
+        print_name_offset: u16,
+        print_name_length: u16,
+        path_buffer: [u16; 1],
+    }
+
+    const REPARSE_DATA_HEADER_BYTES: usize = 8;
+
+    let target = std::path::absolute(target)?;
+    if !target.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a Windows test junction target must be absolute",
+        ));
+    }
+    let print_name: Vec<u16> = target.as_os_str().encode_wide().collect();
+    let mut substitute_name: Vec<u16> = OsStr::new(r"\??\").encode_wide().collect();
+    substitute_name.extend_from_slice(&print_name);
+    let print_name_offset = substitute_name
+        .len()
+        .checked_add(1)
+        .and_then(|units| units.checked_mul(size_of::<u16>()))
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "junction target is too long")
+        })?;
+    let path_units = substitute_name
+        .len()
+        .checked_add(1)
+        .and_then(|units| units.checked_add(print_name.len()))
+        .and_then(|units| units.checked_add(1))
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "junction target is too long")
+        })?;
+    let buffer_bytes = offset_of!(MountPointReparseData, path_buffer)
+        .checked_add(path_units.checked_mul(size_of::<u16>()).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "junction target is too long")
+        })?)
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "junction target is too long")
+        })?;
+    let data_length = buffer_bytes
+        .checked_sub(REPARSE_DATA_HEADER_BYTES)
+        .and_then(|length| u16::try_from(length).ok())
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "junction target is too long")
+        })?;
+    let substitute_name_length = substitute_name
+        .len()
+        .checked_mul(size_of::<u16>())
+        .and_then(|length| u16::try_from(length).ok())
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "junction target is too long")
+        })?;
+    let print_name_offset = u16::try_from(print_name_offset)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "junction target is too long"))?;
+    let print_name_length = print_name
+        .len()
+        .checked_mul(size_of::<u16>())
+        .and_then(|length| u16::try_from(length).ok())
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "junction target is too long")
+        })?;
+
+    std::fs::create_dir(link)?;
+    let result = (|| {
+        let mut options = OpenOptions::new();
+        options
+            .access_mode(FILE_GENERIC_WRITE.0)
+            .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE).0)
+            .custom_flags((FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS).0);
+        let junction = options.open(link)?;
+        let mut buffer = AlignedBuffer::new(buffer_bytes)?;
+        let information = buffer.as_mut_ptr().cast::<MountPointReparseData>();
+        let mut bytes_returned = 0u32;
+        unsafe {
+            (*information).tag = IO_REPARSE_TAG_MOUNT_POINT;
+            (*information).data_length = data_length;
+            (*information).substitute_name_offset = 0;
+            (*information).substitute_name_length = substitute_name_length;
+            (*information).print_name_offset = print_name_offset;
+            (*information).print_name_length = print_name_length;
+            let path_buffer = ptr::addr_of_mut!((*information).path_buffer).cast::<u16>();
+            ptr::copy_nonoverlapping(substitute_name.as_ptr(), path_buffer, substitute_name.len());
+            ptr::copy_nonoverlapping(
+                print_name.as_ptr(),
+                path_buffer.add(usize::from(print_name_offset) / size_of::<u16>()),
+                print_name.len(),
+            );
+            DeviceIoControl(
+                handle_for(&junction),
+                FSCTL_SET_REPARSE_POINT,
+                Some(information.cast()),
+                u32::try_from(buffer_bytes).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "junction target is too long")
+                })?,
+                None,
+                0,
+                Some(&mut bytes_returned),
+                None,
+            )
+        }
+        .map_err(windows_error)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_dir(link);
+    }
+    result
 }
