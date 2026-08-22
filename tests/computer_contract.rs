@@ -816,6 +816,53 @@ fn windows_live_runner_causally_proves_cancel_quarantine_and_recovery() {
 }
 
 #[test]
+fn windows_live_runner_is_bound_to_one_frozen_release_candidate() {
+    let runner = fs::read_to_string("scripts/test-windows-computer-use.ps1")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let development = fs::read_to_string("docs/DEVELOPMENT.md").unwrap();
+
+    for required in [
+        "[string]$Version",
+        "[string]$ChecksumManifest",
+        "[string]$ChecksumManifestSha256",
+        "ChecksumManifest must use the canonical SHA256SUMS.txt filename",
+        "externally recorded frozen-candidate SHA-256",
+        "Read-ExactCandidateChecksums",
+        "exactly the four canonical release assets",
+        "local-browser-bridge-v$Version-windows-x86_64.exe",
+        "local-computer-helper-v$Version-windows-x86_64.exe",
+        "local-browser-bridge-v$Version-macos-universal.tar.gz",
+        "local-browser-bridge-extension-v$Version.zip",
+        "Get-VerifiedCandidateArtifact",
+        "does not match its exact ChecksumManifest entry",
+        "$versionInfo.FileVersion -cne $Version",
+        "$versionInfo.ProductVersion -cne $Version",
+        "Get-BoundedReportedVersion",
+        "local-browser-bridge $Version",
+        "local-computer-helper $Version",
+        "checksumManifestMatched = $true",
+        "exactAssetSetMatched = $true",
+        "candidateBinding = $candidateBinding",
+    ] {
+        assert!(
+            runner.contains(required),
+            "Windows candidate binding is missing {required}"
+        );
+    }
+    assert!(development.contains("out-of-band binding value"));
+    assert!(development.contains("candidateBinding.checksumManifestMatched: true"));
+
+    let candidate_binding = runner.find("$candidateBinding = [ordered]@{").unwrap();
+    let evidence_creation = runner
+        .find("[IO.Directory]::CreateDirectory($evidenceRoot)")
+        .unwrap();
+    let first_process_launch = runner.find("Start-IsolatedProcess $hostPath").unwrap();
+    assert!(candidate_binding < evidence_creation);
+    assert!(candidate_binding < first_process_launch);
+}
+
+#[test]
 fn vendored_screen_capture_patch_preserves_macos_13_resize_support() {
     let manifest = fs::read_to_string("Cargo.toml").unwrap();
     let vendor_manifest = fs::read_to_string("vendor/screencapturekit-8.0.1/Cargo.toml").unwrap();

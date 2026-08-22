@@ -3,12 +3,24 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
+    [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+$')]
+    [string]$Version,
+
+    [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
     [string]$ServerPath,
 
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
     [string]$HelperPath,
+
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [string]$ChecksumManifest,
+
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^[0-9A-Fa-f]{64}$')]
+    [string]$ChecksumManifestSha256,
 
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
@@ -73,6 +85,113 @@ function Test-BridgeToken {
     }
 }
 
+function Get-BoundedReportedVersion {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $Path
+    $startInfo.Arguments = "--version"
+    $startInfo.WorkingDirectory = [IO.Path]::GetDirectoryName($Path)
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw "$Label did not start for its bounded version query."
+        }
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(5000)) {
+            $process.Kill()
+            $process.WaitForExit()
+            throw "$Label did not finish its bounded version query."
+        }
+        $reported = $stdout.GetAwaiter().GetResult().Trim()
+        $errorText = $stderr.GetAwaiter().GetResult().Trim()
+        if ($process.ExitCode -ne 0 -or -not [String]::IsNullOrEmpty($errorText)) {
+            throw "$Label failed its bounded version query."
+        }
+        return $reported
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+
+function Read-ExactCandidateChecksums {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string[]]$ExpectedNames
+    )
+    $entries = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
+    $lines = [IO.File]::ReadAllLines($Path)
+    if ($lines.Count -ne $ExpectedNames.Count) {
+        throw "ChecksumManifest must contain exactly the four canonical release assets."
+    }
+    foreach ($line in $lines) {
+        $match = [Text.RegularExpressions.Regex]::Match(
+            $line,
+            '^(?<hash>[0-9A-Fa-f]{64})[\x20\t]+[*]?(?<name>[^\\/:]+)$',
+            [Text.RegularExpressions.RegexOptions]::CultureInvariant
+        )
+        if (-not $match.Success) {
+            throw "ChecksumManifest contains a malformed entry."
+        }
+        $name = $match.Groups['name'].Value
+        if ($name -cnotin $ExpectedNames -or $entries.ContainsKey($name)) {
+            throw "ChecksumManifest contains an unexpected or duplicate asset entry."
+        }
+        $entries.Add($name, $match.Groups['hash'].Value.ToLowerInvariant())
+    }
+    foreach ($name in $ExpectedNames) {
+        if (-not $entries.ContainsKey($name)) {
+            throw "ChecksumManifest is missing a canonical release asset entry."
+        }
+    }
+    return ,$entries
+}
+
+function Get-VerifiedCandidateArtifact {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$ExpectedName,
+        [Parameter(Mandatory = $true)][string]$ExpectedSha256,
+        [Parameter(Mandatory = $true)][string]$ExpectedReportedVersion,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+    if ([IO.Path]::GetFileName($Path) -cne $ExpectedName) {
+        throw "$Label must use the canonical frozen-candidate filename."
+    }
+    $actualSha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualSha256 -cne $ExpectedSha256) {
+        throw "$Label does not match its exact ChecksumManifest entry."
+    }
+    $versionInfo = [Diagnostics.FileVersionInfo]::GetVersionInfo($Path)
+    if ($versionInfo.FileVersion -cne $Version -or $versionInfo.ProductVersion -cne $Version) {
+        throw "$Label VERSIONINFO does not match Version $Version."
+    }
+    $reportedVersion = Get-BoundedReportedVersion -Path $Path -Label $Label
+    if ($reportedVersion -cne $ExpectedReportedVersion) {
+        throw "$Label --version output does not match Version $Version."
+    }
+    return [ordered]@{
+        name = $ExpectedName
+        bytes = ([IO.FileInfo]::new($Path)).Length
+        sha256 = $actualSha256
+        checksumManifestMatched = $true
+        fileVersion = $versionInfo.FileVersion
+        productVersion = $versionInfo.ProductVersion
+        reportedVersion = $reportedVersion
+        versionMatched = $true
+        pathRecorded = $false
+    }
+}
+
 $environmentToken = [Environment]::GetEnvironmentVariable("LBB_TOKEN", "Process")
 # Consume the inherited secret immediately even when an in-memory -Token was
 # supplied. This keeps the fixture and every other non-bridge child from
@@ -88,8 +207,51 @@ if (-not (Test-BridgeToken $Token)) {
 
 $resolvedServer = Resolve-RequiredFile $ServerPath "ServerPath"
 $resolvedHelper = Resolve-RequiredFile $HelperPath "HelperPath"
+$resolvedChecksumManifest = Resolve-RequiredFile $ChecksumManifest "ChecksumManifest"
 $resolvedFixture = Resolve-RequiredFile $FixturePath "FixturePath"
 $evidenceRoot = [IO.Path]::GetFullPath($EvidenceDirectory)
+
+if ([IO.Path]::GetFileName($resolvedChecksumManifest) -cne "SHA256SUMS.txt") {
+    throw "ChecksumManifest must use the canonical SHA256SUMS.txt filename."
+}
+$manifestSha256 = (Get-FileHash -LiteralPath $resolvedChecksumManifest -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($manifestSha256 -cne $ChecksumManifestSha256.ToLowerInvariant()) {
+    throw "ChecksumManifest does not match the externally recorded frozen-candidate SHA-256."
+}
+$expectedServerName = "local-browser-bridge-v$Version-windows-x86_64.exe"
+$expectedHelperName = "local-computer-helper-v$Version-windows-x86_64.exe"
+$expectedCandidateNames = @(
+    $expectedServerName,
+    $expectedHelperName,
+    "local-browser-bridge-v$Version-macos-universal.tar.gz",
+    "local-browser-bridge-extension-v$Version.zip"
+)
+$candidateChecksums = Read-ExactCandidateChecksums -Path $resolvedChecksumManifest -ExpectedNames $expectedCandidateNames
+$candidateBinding = [ordered]@{
+    version = $Version
+    checksumManifestMatched = $true
+    exactAssetSetMatched = $true
+    checksumManifest = [ordered]@{
+        name = "SHA256SUMS.txt"
+        bytes = ([IO.FileInfo]::new($resolvedChecksumManifest)).Length
+        sha256 = $manifestSha256
+        expectedSha256 = $ChecksumManifestSha256.ToLowerInvariant()
+        exactEntryCount = $candidateChecksums.Count
+        pathRecorded = $false
+    }
+    server = Get-VerifiedCandidateArtifact `
+        -Path $resolvedServer `
+        -ExpectedName $expectedServerName `
+        -ExpectedSha256 $candidateChecksums[$expectedServerName] `
+        -ExpectedReportedVersion "local-browser-bridge $Version" `
+        -Label "ServerPath"
+    helper = Get-VerifiedCandidateArtifact `
+        -Path $resolvedHelper `
+        -ExpectedName $expectedHelperName `
+        -ExpectedSha256 $candidateChecksums[$expectedHelperName] `
+        -ExpectedReportedVersion "local-computer-helper $Version" `
+        -Label "HelperPath"
+}
 
 if ([IO.Directory]::Exists($evidenceRoot)) {
     if (@([IO.Directory]::EnumerateFileSystemEntries($evidenceRoot)).Count -ne 0) {
@@ -1515,11 +1677,12 @@ function Get-SanitizedHostProvenance {
         selectionMode = $Share.selectionMode
         systemIndicatorPolicy = $Share.systemIndicator
         artifacts = [ordered]@{
-            server = Get-SanitizedFileProvenance $resolvedServer
-            helper = Get-SanitizedFileProvenance $resolvedHelper
+            server = $candidateBinding.server
+            helper = $candidateBinding.helper
             fixture = Get-SanitizedFileProvenance $resolvedFixture
             runner = Get-SanitizedFileProvenance $PSCommandPath
         }
+        candidateBinding = $candidateBinding
         desktopCrop = $DesktopCrop
         indicatorDifference = $IndicatorDifference
         hostnameRecorded = $false
@@ -2389,6 +2552,7 @@ finally {
         tokenBearingEvidenceRemoved = $tokenBearingEvidenceRemoved
         unrelatedProcessesTerminated = $false
         recoveryEventReleased = $recoveryEventReleased
+        candidateBinding = $candidateBinding
     }
     Write-EvidenceJson ([IO.Path]::Combine($evidenceRoot, "summary.json")) $summary
     Remove-Variable Token -ErrorAction SilentlyContinue
