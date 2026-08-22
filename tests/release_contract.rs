@@ -139,7 +139,11 @@ fn release_gates_javascript_macos_and_published_provenance() {
         "Re-download and verify the immutable published release",
         "gh release download \"$RELEASE_TAG\"",
         "gh release verify \"$RELEASE_TAG\"",
+        "gh release verify \"$RELEASE_TAG\" --repo \"$GITHUB_REPOSITORY\" --format json",
         "gh release verify-asset \"$RELEASE_TAG\"",
+        "expected_purl=\"pkg:github/${GITHUB_REPOSITORY}@${RELEASE_TAG}\"",
+        ".digest.sha1",
+        "test \"$release_tag_sha\" = \"$VERIFIED_TAG_SHA\"",
         "bash scripts/verify-release-assets.sh \"$version\" published",
         "gh release verify-asset $RELEASE_TAG <file>",
         "--source-ref refs/tags/$RELEASE_TAG",
@@ -180,6 +184,22 @@ fn release_gates_javascript_macos_and_published_provenance() {
     let approval = release.find("environment:\n      name: release").unwrap();
     assert!(freeze < approval);
     assert!(approval < publish);
+    let publish_draft = release
+        .find("gh release edit \"$RELEASE_TAG\" --draft=false")
+        .unwrap();
+    let final_tag_recheck = release[..publish_draft]
+        .rfind("remote_tag_sha=\"$(git ls-remote --refs origin")
+        .unwrap();
+    assert!(publish < final_tag_recheck);
+    assert!(final_tag_recheck < publish_draft);
+    let published_attestation = release
+        .find("release_verification=\"$(gh release verify")
+        .unwrap();
+    let tag_subject_check = release
+        .find("test \"$release_tag_sha\" = \"$VERIFIED_TAG_SHA\"")
+        .unwrap();
+    assert!(publish_draft < published_attestation);
+    assert!(published_attestation < tag_subject_check);
 }
 
 #[test]
