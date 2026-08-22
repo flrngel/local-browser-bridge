@@ -300,8 +300,7 @@ jobs:
       name: release
     permissions:
       contents: write # Creates the immutable release and uploads accepted assets.
-      id-token: write # Required to verify GitHub artifact attestations.
-      attestations: write # Required by the attestation verification service.
+      attestations: read # Verifies provenance without minting or publishing attestations.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
