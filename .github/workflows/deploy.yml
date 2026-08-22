@@ -182,6 +182,10 @@ jobs:
           codesign --verify --strict stage/local-browser-bridge
           codesign --force --deep --sign - "stage/Local Computer Helper.app"
           codesign --verify --deep --strict "stage/Local Computer Helper.app"
+          bash scripts/verify-macos-artifacts.sh \
+            "$version" \
+            stage/local-browser-bridge \
+            "stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"
           COPYFILE_DISABLE=1 tar -czf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" -C stage local-browser-bridge "Local Computer Helper.app" LICENSE THIRD_PARTY_LICENSES.txt
           tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | grep -Fxq local-browser-bridge
           tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | grep -Fxq "Local Computer Helper.app/Contents/MacOS/local-computer-helper"
@@ -368,7 +372,7 @@ jobs:
           ## Install
 
           1. Download the server and computer-helper artifacts for your operating system plus the extension ZIP.
-          2. Verify every file against \`SHA256SUMS.txt\` or with \`gh attestation verify <file> -R $GITHUB_REPOSITORY\`.
+          2. Verify every file with \`gh release verify-asset $RELEASE_TAG <file> -R $GITHUB_REPOSITORY\` or against \`SHA256SUMS.txt\`. For provenance, also run \`gh attestation verify <file> -R $GITHUB_REPOSITORY --source-ref refs/tags/$RELEASE_TAG --signer-workflow $GITHUB_REPOSITORY/.github/workflows/deploy.yml --deny-self-hosted-runners\`.
           3. Run the server. Run the separate helper only when desktop control is wanted; macOS will request Screen Recording and Accessibility.
           4. Extract the extension ZIP, load it from \`chrome://extensions\` with Developer mode enabled, and paste the token printed by the server into its popup.
           5. Keep the server, helper, and extension on this same version.

@@ -115,6 +115,10 @@ codesign --force --sign - "$mac_stage/local-browser-bridge"
 codesign --verify --strict "$mac_stage/local-browser-bridge"
 codesign --force --deep --sign - "$mac_stage/Local Computer Helper.app"
 codesign --verify --deep --strict "$mac_stage/Local Computer Helper.app"
+bash scripts/verify-macos-artifacts.sh \
+  "$version" \
+  "$mac_stage/local-browser-bridge" \
+  "$mac_stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"
 mac_output="$release_stage/local-browser-bridge-v${version}-macos-universal.tar.gz"
 COPYFILE_DISABLE=1 tar -czf "$mac_output" -C "$mac_stage" local-browser-bridge "Local Computer Helper.app" LICENSE THIRD_PARTY_LICENSES.txt
 

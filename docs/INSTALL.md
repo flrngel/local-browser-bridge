@@ -21,14 +21,15 @@ The release page is public, its workflow is reviewable, and each artifact has Gi
 
 ```bash
 gh release verify vVERSION -R flrngel/local-browser-bridge
-gh attestation verify PATH_TO_DOWNLOADED_FILE -R flrngel/local-browser-bridge
-```
-
-You can also compare a downloaded artifact with the immutable release or checksum manifest:
-
-```bash
 gh release verify-asset vVERSION PATH_TO_DOWNLOADED_FILE -R flrngel/local-browser-bridge
+gh attestation verify PATH_TO_DOWNLOADED_FILE \
+  -R flrngel/local-browser-bridge \
+  --source-ref refs/tags/vVERSION \
+  --signer-workflow flrngel/local-browser-bridge/.github/workflows/deploy.yml \
+  --deny-self-hosted-runners
 ```
+
+The first two commands bind the download to the immutable GitHub release. The last command additionally requires provenance from this repository's tagged release workflow on a GitHub-hosted runner. You can also compare the local SHA-256 value with the release's `SHA256SUMS.txt` manifest.
 
 On macOS, `shasum -a 256 FILE` prints the local SHA-256 value. On Windows PowerShell, use `Get-FileHash FILE -Algorithm SHA256`.
 

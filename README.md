@@ -1,6 +1,6 @@
 # Local Browser Bridge
 
-Local Browser Bridge lets a browser-based AI agent work with real Chrome or Edge tabs on your computer. An optional companion helper also lets the agent view and operate one selected macOS or Windows application window without taking over your foreground pointer.
+Local Browser Bridge lets a browser-based AI agent work with real Chrome or Edge tabs on your computer. An optional companion helper can also view and operate one selected window from a supported macOS or Windows application without taking over your foreground pointer.
 
 Everything runs locally through `127.0.0.1`. The server and computer helper are compiled Rust programs; end users do not need Node.js, Rust, or a package manager.
 

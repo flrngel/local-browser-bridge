@@ -157,21 +157,7 @@ if [[ "$(grep -Fc "<string>$version</string>" "$plist")" -lt 2 ]]; then
 fi
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
-  for executable in "$mac_server" "$mac_helper"; do
-    architectures="$(lipo -archs "$executable")"
-    if [[ "$architectures" != *"arm64"* || "$architectures" != *"x86_64"* ]]; then
-      echo "macOS universal binary has unexpected architectures: $executable ($architectures)" >&2
-      exit 1
-    fi
-  done
-  test "$("$mac_server" --version)" = "local-browser-bridge $version"
-  test "$("$mac_helper" --version)" = "local-computer-helper $version"
-  for executable in "$mac_server" "$mac_helper"; do
-    license_report="$("$executable" --licenses)"
-    grep -Fq 'Local Browser Bridge third-party licenses' <<<"$license_report"
-    grep -Fq 'MIT License' <<<"$license_report"
-    grep -Fq 'Apache License' <<<"$license_report"
-  done
+  bash scripts/verify-macos-artifacts.sh "$version" "$mac_server" "$mac_helper"
 fi
 
 if [[ ! -f "$checksum_manifest" || -L "$checksum_manifest" || ! -s "$checksum_manifest" ]]; then

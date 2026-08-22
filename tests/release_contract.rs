@@ -39,6 +39,7 @@ fn release_workflow_and_local_builder_package_both_processes() {
         "THIRD_PARTY_LICENSES.txt",
         "--licenses",
         "codesign --verify --deep --strict",
+        "bash scripts/verify-macos-artifacts.sh",
     ] {
         assert!(
             workflow.contains(required),
@@ -67,6 +68,7 @@ fn release_license_inventory_is_locked_sanitized_and_shipped() {
     let checker = source("scripts/check-licenses.sh");
     let package = source("scripts/package-extension.sh");
     let verifier = source("scripts/verify-release-assets.sh");
+    let macos_verifier = source("scripts/verify-macos-artifacts.sh");
 
     assert!(!cargo.contains("dirs ="));
     assert!(!lockfile.contains("name = \"option-ext\""));
@@ -92,13 +94,14 @@ fn release_license_inventory_is_locked_sanitized_and_shipped() {
         "unzip -p \"$extension_archive\" LICENSE",
         "cmp -s \"$mac_stage/$notice\" \"$notice\"",
         "THIRD_PARTY_LICENSES.txt",
-        "--licenses",
     ] {
         assert!(
             verifier.contains(required),
             "release verifier is missing license check: {required}"
         );
     }
+    assert!(verifier.contains("bash scripts/verify-macos-artifacts.sh"));
+    assert!(macos_verifier.contains("--licenses"));
 }
 
 #[test]
@@ -138,6 +141,8 @@ fn release_gates_javascript_macos_and_published_provenance() {
         "gh release verify \"$RELEASE_TAG\"",
         "gh release verify-asset \"$RELEASE_TAG\"",
         "bash scripts/verify-release-assets.sh \"$version\" published",
+        "gh release verify-asset $RELEASE_TAG <file>",
+        "--source-ref refs/tags/$RELEASE_TAG",
     ] {
         assert!(
             release.contains(required),
@@ -175,6 +180,33 @@ fn release_gates_javascript_macos_and_published_provenance() {
     let approval = release.find("environment:\n      name: release").unwrap();
     assert!(freeze < approval);
     assert!(approval < publish);
+}
+
+#[test]
+fn macos_artifacts_enforce_the_supported_floor_per_macho_slice() {
+    let verifier = source("scripts/verify-macos-artifacts.sh");
+    let release = source(".github/workflows/deploy.yml");
+    let local = source("scripts/deploy.sh");
+    let archive = source("scripts/verify-release-assets.sh");
+
+    for required in [
+        "lipo -archs",
+        "otool -l -arch",
+        "LC_BUILD_VERSION",
+        "LC_VERSION_MIN_MACOSX",
+        "deployment_target_for_slice",
+        "deployment_target\" != \"13.0",
+        "for architecture in arm64 x86_64",
+        "codesign --verify --strict",
+    ] {
+        assert!(
+            verifier.contains(required),
+            "macOS verifier is missing {required}"
+        );
+    }
+    for caller in [release, local, archive] {
+        assert!(caller.contains("bash scripts/verify-macos-artifacts.sh"));
+    }
 }
 
 #[test]
