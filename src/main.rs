@@ -3,13 +3,15 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use local_browser_bridge::{
-    BridgeServer, ServerConfig, UpdateState, VERSION, check_for_update, load_or_create_token,
+    BridgeServer, ServerConfig, UpdateState, VERSION, check_for_update, home_dir,
+    load_or_create_token, print_license_report,
 };
 
 #[derive(Default)]
 struct Cli {
     show_help: bool,
     show_version: bool,
+    show_licenses: bool,
     check_updates: bool,
     no_update_check: bool,
 }
@@ -23,6 +25,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if cli.show_version {
         println!("local-browser-bridge {VERSION}");
+        return Ok(());
+    }
+    if cli.show_licenses {
+        print_license_report("Local Browser Bridge");
         return Ok(());
     }
     if cli.check_updates {
@@ -86,6 +92,7 @@ fn parse_args(arguments: impl Iterator<Item = String>) -> Result<Cli, String> {
         match argument.as_str() {
             "--help" | "-h" => cli.show_help = true,
             "--version" | "-V" => cli.show_version = true,
+            "--licenses" => cli.show_licenses = true,
             "--check-updates" => cli.check_updates = true,
             "--no-update-check" => cli.no_update_check = true,
             _ => {
@@ -105,6 +112,7 @@ Usage: local-browser-bridge [OPTIONS]\n\n\
 Options:\n\
   --check-updates     Check official GitHub release metadata and exit\n\
   --no-update-check   Start without the one-time background metadata check\n\
+  --licenses          Print project and third-party license notices, then exit\n\
   -V, --version       Print the installed version and exit\n\
   -h, --help          Print this help\n\n\
 The update checker never downloads or installs files."
@@ -134,7 +142,7 @@ fn parse_port(raw: Option<&str>) -> Result<u16, String> {
 }
 
 fn default_token_path() -> PathBuf {
-    dirs::home_dir()
+    home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".local-browser-bridge")
         .join("token")
@@ -159,6 +167,11 @@ mod tests {
                 .unwrap();
         assert!(cli.check_updates);
         assert!(cli.no_update_check);
+        assert!(
+            parse_args(["--licenses".to_owned()].into_iter())
+                .unwrap()
+                .show_licenses
+        );
         assert!(parse_args(["--unknown".to_owned()].into_iter()).is_err());
     }
 }

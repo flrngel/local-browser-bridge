@@ -5,7 +5,7 @@ use futures_util::{SinkExt as _, StreamExt as _};
 use local_browser_bridge::ws_auth::{
     AUTH_TIMEOUT, BROWSER_CONNECTOR, ClientHello, MAX_AUTH_MESSAGE_BYTES, MAX_AUTH_MESSAGES,
 };
-use local_browser_bridge::{PROTOCOL_VERSION, VERSION, load_or_create_token};
+use local_browser_bridge::{PROTOCOL_VERSION, VERSION, home_dir, load_or_create_token};
 use serde_json::{Value, json};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
@@ -19,7 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let token_path = env::var_os("LBB_TOKEN_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            dirs::home_dir()
+            home_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(".local-browser-bridge")
                 .join("token")

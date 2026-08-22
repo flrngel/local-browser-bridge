@@ -30,10 +30,11 @@ The random token authenticates local protocol clients; it is not a sandbox. Malw
 
 ## Release and update trust
 
-- The server makes one bounded HTTPS request to the fixed GitHub Releases API at startup. It sends only a generic product/version `User-Agent`, accepts stable semantic versions and official repository release links, and does not download or install files.
+- The server makes one bounded HTTPS request to the fixed GitHub Releases API at startup. It sends only a generic product/version `User-Agent`, accepts only a canonical `vMAJOR.MINOR.PATCH` stable release whose exact official-repository URL matches and whose API record is immutable, and does not download or install files.
 - `--no-update-check` or `LBB_DISABLE_UPDATE_CHECK=1` prevents that request. `--check-updates` performs the same metadata-only check and exits.
 - The extension never performs update checks. Unpacked extensions do not silently update on Windows or macOS; the control UI reports a server/extension mismatch so the user can replace both from one release.
 - Tagged release builds run on separate GitHub-hosted Windows and macOS workers. Every binary/archive and checksum manifest receives GitHub build provenance, and release immutability prevents later asset or tag replacement.
+- Both executables embed the project license and the generated notices for the exact locked production dependency graph behind `--licenses`. The macOS archive carries both notice files, and the extension ZIP carries the project license; CI regenerates and compares the dependency report before release.
 - Unless a release explicitly states otherwise, artifacts are not Microsoft publisher-signed or Apple Developer ID-signed/notarized. The macOS helper app is ad-hoc signed so its bundle is structurally valid, not to claim a verified publisher identity. Platform warnings and permission re-prompts are therefore possible. Checksums and GitHub provenance detect release tampering but do not replace OS publisher signing or malware notarization.
 
 ## Modes and human approval

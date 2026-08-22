@@ -55,6 +55,8 @@ Download one version-matched set from [GitHub Releases](https://github.com/flrng
 
 Checksums and GitHub build provenance are published with each release. The complete verification and permission flow is in the [installation guide](docs/INSTALL.md).
 
+The extension ZIP includes the project `LICENSE`; the macOS archive includes both `LICENSE` and `THIRD_PARTY_LICENSES.txt`. Either executable prints the same embedded project and dependency notices with `--licenses`.
+
 ### 1. Start the server
 
 Windows:
@@ -107,7 +109,7 @@ Full Access is enabled by default and can act in signed-in sessions, sensitive f
 
 ## Updates
 
-At startup the server checks only the fixed public GitHub Releases metadata endpoint. It does not download or install anything. Disable the check with `--no-update-check` or `LBB_DISABLE_UPDATE_CHECK=1`.
+At startup the server checks only the fixed public GitHub Releases metadata endpoint and accepts only a canonical stable release that GitHub reports as immutable. It does not download or install anything. Disable the check with `--no-update-check` or `LBB_DISABLE_UPDATE_CHECK=1`.
 
 Unpacked extensions do not update automatically. Replace the server, extension, and helper together with files from the same release. Do not mix versions.
 
@@ -137,4 +139,4 @@ This project independently implements documented browser and operating-system ca
 
 ## License
 
-See [LICENSE](LICENSE).
+See [LICENSE](LICENSE) for this project and [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt) for the exact locked production dependencies.

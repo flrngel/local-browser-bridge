@@ -118,7 +118,7 @@ PiP automation, virtual displays, VM orchestration, RDP loopback, and separate O
 
 ## Release and update flow
 
-The server performs a metadata-only check against the fixed public GitHub Releases API. It never downloads or installs an update. Release artifacts are built as a Windows server executable, Windows helper executable, macOS universal archive with helper app, matching extension ZIP, checksum manifest, and GitHub provenance.
+The server performs a metadata-only check against the fixed public GitHub Releases API. It accepts only a canonical stable release marked immutable by GitHub and never downloads or installs an update. Release artifacts are built as a Windows server executable, Windows helper executable, macOS universal archive with helper app, matching extension ZIP, checksum manifest, and GitHub provenance. Project and locked dependency licenses are embedded in both executables; the macOS archive and extension package also carry their applicable notice files.
 
 See [Security](../SECURITY.md) for trust details, [Protocol](PROTOCOL.md) for envelopes and commands, and [Limitations](LIMITATIONS.md) for platform-specific boundaries.
 

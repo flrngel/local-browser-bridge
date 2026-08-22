@@ -66,6 +66,10 @@ jobs:
         run: |
           cargo install cargo-audit --locked --version 0.22.2
           cargo audit
+      - name: Verify locked dependency licenses
+        run: |
+          cargo install cargo-about --locked --version 0.9.2 --features cli
+          bash scripts/check-licenses.sh
 
   windows:
     name: Build Windows x86_64
@@ -148,6 +152,8 @@ jobs:
           cargo build --locked --release --bins --target aarch64-apple-darwin
           cargo build --locked --release --bins --target x86_64-apple-darwin
           mkdir -p dist stage "stage/Local Computer Helper.app/Contents/MacOS"
+          cp LICENSE THIRD_PARTY_LICENSES.txt stage/
+          chmod 644 stage/LICENSE stage/THIRD_PARTY_LICENSES.txt
           lipo -create \
             target/aarch64-apple-darwin/release/local-browser-bridge \
             target/x86_64-apple-darwin/release/local-browser-bridge \
@@ -164,13 +170,21 @@ jobs:
           done
           test "$(stage/local-browser-bridge --version)" = "local-browser-bridge $version"
           test "$("stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper" --version)" = "local-computer-helper $version"
+          for executable in stage/local-browser-bridge "stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"; do
+            license_report="$("$executable" --licenses)"
+            grep -Fq 'Local Browser Bridge third-party licenses' <<<"$license_report"
+            grep -Fq 'MIT License' <<<"$license_report"
+            grep -Fq 'Apache License' <<<"$license_report"
+          done
           codesign --force --sign - stage/local-browser-bridge
           codesign --verify --strict stage/local-browser-bridge
           codesign --force --deep --sign - "stage/Local Computer Helper.app"
           codesign --verify --deep --strict "stage/Local Computer Helper.app"
-          COPYFILE_DISABLE=1 tar -czf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" -C stage local-browser-bridge "Local Computer Helper.app"
+          COPYFILE_DISABLE=1 tar -czf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" -C stage local-browser-bridge "Local Computer Helper.app" LICENSE THIRD_PARTY_LICENSES.txt
           tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | grep -Fxq local-browser-bridge
           tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | grep -Fxq "Local Computer Helper.app/Contents/MacOS/local-computer-helper"
+          tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | grep -Fxq LICENSE
+          tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | grep -Fxq THIRD_PARTY_LICENSES.txt
       - name: Attest macOS build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

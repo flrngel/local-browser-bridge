@@ -11,6 +11,7 @@ trap 'rm -rf "$release_stage"' EXIT
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
+bash scripts/check-licenses.sh
 
 extension_output="$release_stage/local-browser-bridge-extension-v${version}.zip"
 bash scripts/package-extension.sh "$extension_output" >/dev/null
@@ -83,6 +84,8 @@ cargo build --locked --release --bins --target x86_64-apple-darwin
 mac_stage="$(mktemp -d)"
 trap 'rm -rf "$release_stage" "$mac_stage"' EXIT
 mkdir -p "$mac_stage/Local Computer Helper.app/Contents/MacOS"
+cp LICENSE THIRD_PARTY_LICENSES.txt "$mac_stage/"
+chmod 644 "$mac_stage/LICENSE" "$mac_stage/THIRD_PARTY_LICENSES.txt"
 lipo -create \
   target/aarch64-apple-darwin/release/local-browser-bridge \
   target/x86_64-apple-darwin/release/local-browser-bridge \
@@ -102,12 +105,18 @@ for executable in "$mac_stage/local-browser-bridge" "$mac_stage/Local Computer H
 done
 test "$("$mac_stage/local-browser-bridge" --version)" = "local-browser-bridge $version"
 test "$("$mac_stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper" --version)" = "local-computer-helper $version"
+for executable in "$mac_stage/local-browser-bridge" "$mac_stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"; do
+  license_report="$("$executable" --licenses)"
+  grep -Fq 'Local Browser Bridge third-party licenses' <<<"$license_report"
+  grep -Fq 'MIT License' <<<"$license_report"
+  grep -Fq 'Apache License' <<<"$license_report"
+done
 codesign --force --sign - "$mac_stage/local-browser-bridge"
 codesign --verify --strict "$mac_stage/local-browser-bridge"
 codesign --force --deep --sign - "$mac_stage/Local Computer Helper.app"
 codesign --verify --deep --strict "$mac_stage/Local Computer Helper.app"
 mac_output="$release_stage/local-browser-bridge-v${version}-macos-universal.tar.gz"
-COPYFILE_DISABLE=1 tar -czf "$mac_output" -C "$mac_stage" local-browser-bridge "Local Computer Helper.app"
+COPYFILE_DISABLE=1 tar -czf "$mac_output" -C "$mac_stage" local-browser-bridge "Local Computer Helper.app" LICENSE THIRD_PARTY_LICENSES.txt
 
 checksum_output="$release_stage/SHA256SUMS.txt"
 assets=("$(basename "$windows_output")" "$(basename "$windows_helper_output")" "$(basename "$mac_output")" "$(basename "$extension_output")")

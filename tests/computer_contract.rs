@@ -57,6 +57,24 @@ fn helper_binary_reports_the_aligned_version_without_starting_a_daemon() {
     );
 }
 
+#[test]
+fn distributed_binaries_expose_project_and_locked_dependency_licenses() {
+    for executable in [
+        env!("CARGO_BIN_EXE_local-browser-bridge"),
+        env!("CARGO_BIN_EXE_local-computer-helper"),
+    ] {
+        let output = Command::new(executable).arg("--licenses").output().unwrap();
+        assert!(output.status.success());
+        let report = String::from_utf8(output.stdout).unwrap();
+        assert!(report.contains("MIT License"));
+        assert!(report.contains("Local Browser Bridge third-party licenses"));
+        assert!(report.contains("Apache License"));
+        assert!(!report.contains("option-ext"));
+        assert!(!report.contains("Mozilla Public License"));
+        assert!(!report.contains("/Users/"));
+    }
+}
+
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[test]
 fn unsupported_host_helper_fails_before_connecting() {
@@ -288,6 +306,8 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
     let rig = fs::read_to_string("evidence/v0.12.1/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
+    assert!(rig.contains("function childEnvironment(overrides = {})"));
+    assert!(!rig.contains("...process.env"));
     let fixture = fs::read_to_string("evidence/v0.12.1/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");

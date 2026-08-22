@@ -32,6 +32,12 @@ gh release verify-asset vVERSION PATH_TO_DOWNLOADED_FILE -R flrngel/local-browse
 
 On macOS, `shasum -a 256 FILE` prints the local SHA-256 value. On Windows PowerShell, use `Get-FileHash FILE -Algorithm SHA256`.
 
+The macOS archive contains `LICENSE` and `THIRD_PARTY_LICENSES.txt`, and the extension ZIP contains `LICENSE`. Both Windows executables and both macOS executables expose the same embedded notices without starting the server or helper:
+
+```text
+PROGRAM --licenses
+```
+
 ## 3. Run the server
 
 ### Windows 11
@@ -96,7 +102,7 @@ The app bundle is ad-hoc signed for internal consistency, but it is not Develope
 
 Chrome and Edge 118–124 support the core tab and top-level-page features. Use version 125 or later when the task must observe or click through cross-origin iframes.
 
-The extension includes no remote code, analytics, cookie API, native messaging host, downloader, or external update endpoint. Chrome does not auto-update unpacked extensions on Windows or macOS. When the local UI reports a new release, repeat the download and verification steps and replace the server, helper, and extension together.
+The extension includes no remote code, analytics, cookie API, native messaging host, downloader, or external update endpoint. Chrome does not auto-update unpacked extensions on Windows or macOS. The server's metadata-only checker accepts only a canonical stable release marked immutable by GitHub. When the local UI reports a new release, repeat the download and verification steps and replace the server, helper, and extension together.
 
 ## 6. Understand the authority granted
 

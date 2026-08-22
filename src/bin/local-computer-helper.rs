@@ -19,7 +19,9 @@ use local_browser_bridge::computer::{
 use local_browser_bridge::ws_auth::{
     AUTH_TIMEOUT, COMPUTER_CONNECTOR, ClientHello, MAX_AUTH_MESSAGE_BYTES, MAX_AUTH_MESSAGES,
 };
-use local_browser_bridge::{PROTOCOL_VERSION, VERSION, load_or_create_token};
+use local_browser_bridge::{
+    PROTOCOL_VERSION, VERSION, home_dir, load_or_create_token, print_license_report,
+};
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
@@ -178,6 +180,7 @@ struct ProcessInformation {
 struct Cli {
     show_help: bool,
     show_version: bool,
+    show_licenses: bool,
     request_permissions: bool,
     benchmark: bool,
     #[cfg(target_os = "windows")]
@@ -193,6 +196,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if cli.show_version {
         println!("local-computer-helper {VERSION}");
+        return Ok(());
+    }
+    if cli.show_licenses {
+        print_license_report("Local Computer Helper");
         return Ok(());
     }
     if !NATIVE_COMPUTER_SUPPORTED {
@@ -1532,6 +1539,7 @@ fn parse_args(arguments: impl Iterator<Item = String>) -> Result<Cli, String> {
         match argument.as_str() {
             "--help" | "-h" => cli.show_help = true,
             "--version" | "-V" => cli.show_version = true,
+            "--licenses" => cli.show_licenses = true,
             "--request-permissions" => cli.request_permissions = true,
             "--benchmark" => cli.benchmark = true,
             #[cfg(target_os = "windows")]
@@ -1557,6 +1565,7 @@ Usage: local-computer-helper [OPTIONS]\n\n\
 Options:\n\
   --request-permissions   Request/check screen-capture and input permissions, then exit\n\
   --benchmark             Benchmark five screen observations, then exit\n\
+  --licenses              Print project and third-party license notices, then exit\n\
   -V, --version           Print the installed version and exit\n\
   -h, --help              Print this help\n\n\
 Without options, the helper connects to Local Browser Bridge on loopback."
@@ -1575,7 +1584,7 @@ fn parse_port(raw: Option<&str>) -> Result<u16, String> {
 }
 
 fn default_token_path() -> PathBuf {
-    dirs::home_dir()
+    home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".local-browser-bridge")
         .join("token")
@@ -1740,6 +1749,11 @@ mod tests {
     fn parses_helper_flags_and_ports() {
         let cli = parse_args(["--benchmark".to_owned()].into_iter()).unwrap();
         assert!(cli.benchmark);
+        assert!(
+            parse_args(["--licenses".to_owned()].into_iter())
+                .unwrap()
+                .show_licenses
+        );
         assert_eq!(parse_port(None).unwrap(), 17_373);
         assert!(parse_port(Some("0")).is_err());
         assert!(parse_args(["--unknown".to_owned()].into_iter()).is_err());

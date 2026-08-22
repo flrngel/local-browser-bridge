@@ -1,0 +1,24 @@
+Local Browser Bridge third-party licenses
+=========================================
+
+This file is generated from the exact locked production dependency graph by
+cargo-about. The project itself is licensed separately in LICENSE.
+
+Components
+----------
+{{#each crates}}
+{{package.name}} {{package.version}} — {{license}}
+Source: {{#if package.repository}}{{{package.repository}}}{{else}}https://crates.io/crates/{{package.name}}/{{package.version}}{{/if}}
+{{/each}}
+
+License texts
+-------------
+{{#each licenses}}
+
+{{{name}}}
+{{#each used_by}}
+Used by: {{crate.name}} {{crate.version}}
+{{/each}}
+
+{{{text}}}
+{{/each}}

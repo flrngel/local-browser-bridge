@@ -53,7 +53,7 @@ for executable in "$windows_server" "$windows_helper"; do
   fi
 done
 
-expected_extension_files=(background.js content.js dom-core.js frame-agent.js lib.js manifest.json popup.css popup.html popup.js)
+expected_extension_files=(background.js content.js dom-core.js frame-agent.js lib.js manifest.json popup.css popup.html popup.js LICENSE)
 expected_extension_listing="$(printf '%s\n' "${expected_extension_files[@]}" | LC_ALL=C sort)"
 actual_extension_listing="$(unzip -Z1 "$extension_archive" | LC_ALL=C sort)"
 if [[ "$actual_extension_listing" != "$expected_extension_listing" ]]; then
@@ -68,6 +68,10 @@ if [[ "$(printf '%s\n' "$extension_entry_types" | wc -l | tr -d ' ')" != "${#exp
   exit 1
 fi
 unzip -tq "$extension_archive" >/dev/null
+if ! unzip -p "$extension_archive" LICENSE | cmp -s - LICENSE; then
+  echo "Extension archive project license differs from LICENSE." >&2
+  exit 1
+fi
 archive_manifest_version="$(unzip -p "$extension_archive" manifest.json | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
 archive_library_version="$(unzip -p "$extension_archive" lib.js | sed -n 's/^export const VERSION = "\([^"]*\)";$/\1/p' | head -n 1)"
 if [[ "$archive_manifest_version" != "$version" || "$archive_library_version" != "$version" ]]; then
@@ -82,6 +86,8 @@ if printf '%s\n' "$macos_listing" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
 fi
 for required in \
   local-browser-bridge \
+  LICENSE \
+  THIRD_PARTY_LICENSES.txt \
   "Local Computer Helper.app/Contents/Info.plist" \
   "Local Computer Helper.app/Contents/MacOS/local-computer-helper"; do
   if ! printf '%s\n' "$macos_listing" | grep -Fxq "$required"; then
@@ -101,6 +107,8 @@ if ! tar -tvzf "$macos_archive" | awk '
 fi
 expected_macos_listing="$(printf '%s\n' \
   local-browser-bridge \
+  LICENSE \
+  THIRD_PARTY_LICENSES.txt \
   "Local Computer Helper.app" \
   "Local Computer Helper.app/Contents" \
   "Local Computer Helper.app/Contents/Info.plist" \
@@ -136,6 +144,13 @@ if [[ ! -f "$plist" || -L "$plist" ]]; then
   echo "macOS helper metadata is not a regular file." >&2
   exit 1
 fi
+for notice in LICENSE THIRD_PARTY_LICENSES.txt; do
+  if [[ ! -f "$mac_stage/$notice" || -L "$mac_stage/$notice" ]] \
+    || ! cmp -s "$mac_stage/$notice" "$notice"; then
+    echo "macOS archive has a missing, linked, or changed notice: $notice" >&2
+    exit 1
+  fi
+done
 if [[ "$(grep -Fc "<string>$version</string>" "$plist")" -lt 2 ]]; then
   echo "macOS helper metadata does not contain version $version." >&2
   exit 1
@@ -151,6 +166,12 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   done
   test "$("$mac_server" --version)" = "local-browser-bridge $version"
   test "$("$mac_helper" --version)" = "local-computer-helper $version"
+  for executable in "$mac_server" "$mac_helper"; do
+    license_report="$("$executable" --licenses)"
+    grep -Fq 'Local Browser Bridge third-party licenses' <<<"$license_report"
+    grep -Fq 'MIT License' <<<"$license_report"
+    grep -Fq 'Apache License' <<<"$license_report"
+  done
 fi
 
 if [[ ! -f "$checksum_manifest" || -L "$checksum_manifest" || ! -s "$checksum_manifest" ]]; then

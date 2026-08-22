@@ -147,6 +147,7 @@ cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
 bash scripts/audit-versions.sh
+bash scripts/check-licenses.sh
 ```
 
 For documentation changes, also run:
@@ -166,7 +167,19 @@ Create the deterministic, allowlisted extension ZIP with:
 bash scripts/package-extension.sh
 ```
 
-The script rejects missing, linked, or unexpected package files and verifies that archive contents match `extension/` byte for byte.
+The script rejects missing, linked, or unexpected package files and verifies that archive contents match the allowlisted extension sources plus the root project `LICENSE` byte for byte.
+
+## Dependency licenses
+
+`THIRD_PARTY_LICENSES.txt` is generated from the exact locked macOS and Windows production graphs with pinned `cargo-about 0.9.2`; build-only and test-only crates are excluded. Regenerate and verify it with:
+
+```bash
+cargo install cargo-about --locked --version 0.9.2 --features cli
+bash scripts/check-licenses.sh --write
+bash scripts/check-licenses.sh
+```
+
+The generator canonicalizes trailing whitespace and the final newline before writing. The gate rejects host paths, stale output, and the removed MPL-only dependency. Both distributed executables must print the checked-in report with `--licenses`; release-package verification also compares the archived notice files byte for byte.
 
 ## Evidence discipline
 

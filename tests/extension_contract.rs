@@ -159,7 +159,7 @@ fn package_contains_only_declared_local_assets() {
     // Both release scripts hardcode the packaged file list. Pinning them to
     // the same set here is what stops a new extension file from shipping in a
     // zip that silently omits it.
-    let declared = EXTENSION_FILES.join(" ");
+    let declared = format!("{} LICENSE", EXTENSION_FILES.join(" "));
     let package = fs::read_to_string("scripts/package-extension.sh").unwrap();
     let verify = fs::read_to_string("scripts/verify-release-assets.sh").unwrap();
     assert!(

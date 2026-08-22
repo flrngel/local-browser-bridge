@@ -74,6 +74,16 @@ let fixtureTargetPid;
 let fixtureSiblingWindowId;
 let nativeTextPayloadMayBeVisible = false;
 
+function childEnvironment(overrides = {}) {
+  const environment = {};
+  for (const name of ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "__CF_USER_TEXT_ENCODING"]) {
+    if (typeof process.env[name] === "string" && process.env[name].length > 0) {
+      environment[name] = process.env[name];
+    }
+  }
+  return { ...environment, ...overrides };
+}
+
 function sanitizePathDetail(value) {
   let text = String(value);
   if (text.includes(bearerToken)) return "Sensitive failure detail withheld";
@@ -679,11 +689,10 @@ async function main() {
   );
 
   fixtureProcess = spawn(fixtureBinary, [], {
-    env: {
-      ...process.env,
+    env: childEnvironment({
       LBB_FIXTURE_STATE: fixtureStatePath,
       LBB_FIXTURE_CONTROL: fixtureControlPath,
-    },
+    }),
     stdio: "ignore",
   });
   const fixtureReady = await waitFor("fixture state", async () => {
@@ -710,22 +719,20 @@ async function main() {
   );
 
   port = await freePort();
-  const serverEnvironment = {
-    ...process.env,
+  const serverEnvironment = childEnvironment({
     LBB_DISABLE_UPDATE_CHECK: "true",
     LBB_PORT: String(port),
     LBB_TOKEN: bearerToken,
-  };
+  });
   serverProcess = spawn(serverPath, ["--no-update-check"], { env: serverEnvironment, stdio: "ignore" });
   delete serverEnvironment.LBB_TOKEN;
   await waitFor("server health", healthReachable);
 
-  const helperEnvironment = {
-    ...process.env,
+  const helperEnvironment = childEnvironment({
     LBB_DISABLE_UPDATE_CHECK: "true",
     LBB_PORT: String(port),
     LBB_TOKEN: bearerToken,
-  };
+  });
   startHelperOnce(helperEnvironment);
   delete helperEnvironment.LBB_TOKEN;
 

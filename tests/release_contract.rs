@@ -36,6 +36,8 @@ fn release_workflow_and_local_builder_package_both_processes() {
         "local-browser-bridge-v${version}-macos-universal.tar.gz",
         "local-browser-bridge-extension-v${version}.zip",
         "Local Computer Helper.app/Contents/MacOS/local-computer-helper",
+        "THIRD_PARTY_LICENSES.txt",
+        "--licenses",
         "codesign --verify --deep --strict",
     ] {
         assert!(
@@ -54,6 +56,49 @@ fn release_workflow_and_local_builder_package_both_processes() {
         local.contains("bash scripts/verify-release-assets.sh \"$version\" \"$release_stage\"")
     );
     assert!(local.contains("cp \"$release_stage/$asset\" \"dist/$asset\""));
+}
+
+#[test]
+fn release_license_inventory_is_locked_sanitized_and_shipped() {
+    let cargo = source("Cargo.toml");
+    let lockfile = source("Cargo.lock");
+    let about = source("about.toml");
+    let notices = source("THIRD_PARTY_LICENSES.txt");
+    let checker = source("scripts/check-licenses.sh");
+    let package = source("scripts/package-extension.sh");
+    let verifier = source("scripts/verify-release-assets.sh");
+
+    assert!(!cargo.contains("dirs ="));
+    assert!(!lockfile.contains("name = \"option-ext\""));
+    assert!(about.contains("ignore-build-dependencies = true"));
+    assert!(about.contains("ignore-dev-dependencies = true"));
+    assert!(checker.contains("cargo about generate about.hbs --locked --fail"));
+    assert!(checker.contains("LC_ALL=C awk"));
+    assert!(checker.contains("if [[ \"$mode\" == --write ]]"));
+    assert!(notices.contains("Local Browser Bridge third-party licenses"));
+    for forbidden in [
+        "option-ext",
+        "Mozilla Public License",
+        "/Users/",
+        "\\Users\\",
+    ] {
+        assert!(
+            !notices.contains(forbidden),
+            "dependency notice contains forbidden text: {forbidden}"
+        );
+    }
+    assert!(package.contains("source_path=\"LICENSE\""));
+    for required in [
+        "unzip -p \"$extension_archive\" LICENSE",
+        "cmp -s \"$mac_stage/$notice\" \"$notice\"",
+        "THIRD_PARTY_LICENSES.txt",
+        "--licenses",
+    ] {
+        assert!(
+            verifier.contains(required),
+            "release verifier is missing license check: {required}"
+        );
+    }
 }
 
 #[test]

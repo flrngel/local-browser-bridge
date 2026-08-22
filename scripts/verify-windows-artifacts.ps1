@@ -196,6 +196,17 @@ $results = foreach ($artifact in $artifacts) {
     if ($LASTEXITCODE -ne 0 -or $reportedVersion -ne $artifact.ExpectedVersion) {
         throw "$resolved reported an unexpected version: $reportedVersion"
     }
+    $licenseReport = (& $resolved --licenses | Out-String)
+    if ($LASTEXITCODE -ne 0 -or
+        -not $licenseReport.Contains('Local Browser Bridge third-party licenses') -or
+        -not $licenseReport.Contains('MIT License') -or
+        -not $licenseReport.Contains('Apache License') -or
+        $licenseReport.Contains('option-ext') -or
+        $licenseReport.Contains('Mozilla Public License') -or
+        $licenseReport.Contains('/Users/') -or
+        $licenseReport.Contains('\Users\')) {
+        throw "$resolved does not expose the expected sanitized project and dependency licenses."
+    }
     Assert-Manifest -Path $resolved -MtPath $mt
     Assert-VersionResource -Path $resolved -ExpectedVersion $Version -ExpectedDescription $artifact.Description -ExpectedOriginalFilename $artifact.OriginalFilename
     Assert-StaticCrt -Path $resolved -DumpBinPath $dumpbin
@@ -206,6 +217,7 @@ $results = foreach ($artifact in $artifacts) {
         Manifest = 'asInvoker; uiAccess=false; PerMonitorV2; longPathAware'
         VersionResource = "$($artifact.Description); FileVersion=$Version; ProductVersion=$Version"
         Runtime = 'static CRT'
+        Licenses = '--licenses embedded'
     }
 }
 

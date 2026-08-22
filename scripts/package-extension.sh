@@ -12,9 +12,13 @@ output_dir="$(cd "$(dirname "$output")" && pwd -P)"
 output="$output_dir/$(basename "$output")"
 rm -f "$output"
 
-files=(background.js content.js dom-core.js frame-agent.js lib.js manifest.json popup.css popup.html popup.js)
+files=(background.js content.js dom-core.js frame-agent.js lib.js manifest.json popup.css popup.html popup.js LICENSE)
 for file in "${files[@]}"; do
-  if [[ ! -f "extension/$file" || -L "extension/$file" ]]; then
+  source_path="extension/$file"
+  if [[ "$file" == LICENSE ]]; then
+    source_path="LICENSE"
+  fi
+  if [[ ! -f "$source_path" || -L "$source_path" ]]; then
     echo "Missing extension package file: $file" >&2
     exit 1
   fi
@@ -23,7 +27,11 @@ done
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
 for file in "${files[@]}"; do
-  cp "extension/$file" "$stage/$file"
+  source_path="extension/$file"
+  if [[ "$file" == LICENSE ]]; then
+    source_path="LICENSE"
+  fi
+  cp "$source_path" "$stage/$file"
   chmod 644 "$stage/$file"
   touch -t 198001010000.00 "$stage/$file"
 done
@@ -43,8 +51,12 @@ if [[ "$actual" != "$expected" ]]; then
 fi
 
 for file in "${files[@]}"; do
-  if ! unzip -p "$output" "$file" | cmp -s - "extension/$file"; then
-    echo "Extension archive payload differs from extension/$file." >&2
+  source_path="extension/$file"
+  if [[ "$file" == LICENSE ]]; then
+    source_path="LICENSE"
+  fi
+  if ! unzip -p "$output" "$file" | cmp -s - "$source_path"; then
+    echo "Extension archive payload differs from $source_path." >&2
     exit 1
   fi
 done
