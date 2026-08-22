@@ -4,8 +4,9 @@ use serde_json::{Value, json};
 
 pub use crate::computer_protocol::{
     COMPUTER_HELPER_ORIGIN, COMPUTER_METHODS, COMPUTER_NATIVE_SHARE_CAPABILITY,
-    COMPUTER_SHARE_ACK_CAPABILITY, CommandCancellation, ComputerError, ShareFrameAck, ShareMailbox,
-    command_parts, result_envelope,
+    COMPUTER_SHARE_ACK_CAPABILITY, COMPUTER_TYPE_TEXT_MAX_DISPATCH_MS,
+    COMPUTER_TYPE_TEXT_MAX_UTF16_UNITS, CommandCancellation, ComputerError, ShareFrameAck,
+    ShareMailbox, command_parts, result_envelope, validate_computer_type_text,
 };
 
 pub const NATIVE_COMPUTER_SUPPORTED: bool = false;

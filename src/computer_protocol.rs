@@ -17,6 +17,15 @@ pub const COMPUTER_SHARE_ACK_CAPABILITY: &str = "computer.share.ack";
 /// persistent OS exact-window capture stream instead of polling snapshot APIs.
 /// It is metadata, not a dispatchable command method.
 pub const COMPUTER_NATIVE_SHARE_CAPABILITY: &str = "computer.capture.native-stream.v1";
+/// Native text delivery is intentionally much smaller than browser or
+/// accessibility value writes. Windows posts one message per UTF-16 code unit
+/// and permits a per-queue minimum as low as 4,000 posted messages, so one
+/// command may consume at most half of that minimum while paced delivery gives
+/// the target time to drain its queue.
+pub const COMPUTER_TYPE_TEXT_MAX_UTF16_UNITS: usize = 2_000;
+/// A native text action must finish well before the helper/server watchdogs.
+/// Platform loops enforce this budget cooperatively between dispatched units.
+pub const COMPUTER_TYPE_TEXT_MAX_DISPATCH_MS: u64 = 2_500;
 pub const COMPUTER_METHODS: &[&str] = &[
     "computer.status",
     "computer.share.start",
@@ -57,6 +66,35 @@ impl ComputerError {
             message: message.into(),
         }
     }
+}
+
+/// Validates the cost of a native text command in the unit used by the
+/// Windows delivery primitive. Counting UTF-16 also gives supplementary-plane
+/// text the same cross-platform bound instead of under-counting surrogate
+/// pairs as one Rust `char`.
+pub fn validate_computer_type_text(text: &str) -> Result<usize, ComputerError> {
+    if text.is_empty() {
+        return Err(ComputerError::new(
+            "COMPUTER_INVALID_REQUEST",
+            "text must not be empty",
+        ));
+    }
+    if text.contains('\0') {
+        return Err(ComputerError::new(
+            "COMPUTER_INVALID_REQUEST",
+            "text must not contain U+0000",
+        ));
+    }
+    let utf16_units = text.encode_utf16().count();
+    if utf16_units > COMPUTER_TYPE_TEXT_MAX_UTF16_UNITS {
+        return Err(ComputerError::new(
+            "COMPUTER_INVALID_REQUEST",
+            format!(
+                "text exceeds the {COMPUTER_TYPE_TEXT_MAX_UTF16_UNITS} UTF-16 code-unit native delivery limit"
+            ),
+        ));
+    }
+    Ok(utf16_units)
 }
 
 #[derive(Clone, Default)]
@@ -347,6 +385,29 @@ mod tests {
         let error = cancellation.begin_side_effect("test dispatch").unwrap_err();
         assert_eq!(error.code, "COMPUTER_CANCELED");
         assert!(!cancellation.was_dispatched());
+    }
+
+    #[test]
+    fn native_text_budget_counts_utf16_and_rejects_empty_or_nul() {
+        assert_eq!(
+            validate_computer_type_text(&"a".repeat(COMPUTER_TYPE_TEXT_MAX_UTF16_UNITS)).unwrap(),
+            COMPUTER_TYPE_TEXT_MAX_UTF16_UNITS
+        );
+        assert_eq!(
+            validate_computer_type_text(&"😀".repeat(COMPUTER_TYPE_TEXT_MAX_UTF16_UNITS / 2))
+                .unwrap(),
+            COMPUTER_TYPE_TEXT_MAX_UTF16_UNITS
+        );
+
+        for invalid in [
+            String::new(),
+            "before\0after".to_owned(),
+            "a".repeat(COMPUTER_TYPE_TEXT_MAX_UTF16_UNITS + 1),
+            "😀".repeat(COMPUTER_TYPE_TEXT_MAX_UTF16_UNITS / 2 + 1),
+        ] {
+            let error = validate_computer_type_text(&invalid).unwrap_err();
+            assert_eq!(error.code, "COMPUTER_INVALID_REQUEST");
+        }
     }
 
     #[test]

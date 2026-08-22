@@ -3,7 +3,9 @@ use std::fs;
 use std::process::Command;
 
 use local_browser_bridge::VERSION;
-use local_browser_bridge::computer::COMPUTER_METHODS;
+use local_browser_bridge::computer::{
+    COMPUTER_METHODS, COMPUTER_TYPE_TEXT_MAX_DISPATCH_MS, COMPUTER_TYPE_TEXT_MAX_UTF16_UNITS,
+};
 
 #[test]
 fn helper_exposes_only_bounded_observation_and_input_methods() {
@@ -138,6 +140,35 @@ fn background_backend_has_no_global_or_foreground_input_fallback() {
     ));
     assert!(macos.contains("&lease.previous_psn"));
     assert!(macos.contains("lease.previous_window_id"));
+}
+
+#[test]
+fn native_text_delivery_is_bounded_paced_and_cancellable() {
+    assert_eq!(COMPUTER_TYPE_TEXT_MAX_UTF16_UNITS, 2_000);
+    assert_eq!(COMPUTER_TYPE_TEXT_MAX_DISPATCH_MS, 2_500);
+
+    let protocol = fs::read_to_string("src/computer_protocol.rs").unwrap();
+    let controller = fs::read_to_string("src/computer.rs").unwrap();
+    let server = fs::read_to_string("src/server.rs").unwrap();
+    let macos = fs::read_to_string("src/computer/platform_macos.rs").unwrap();
+    let windows = fs::read_to_string("src/computer/platform_windows.rs").unwrap();
+
+    assert!(protocol.contains("validate_computer_type_text"));
+    assert!(protocol.contains("text.encode_utf16().count()"));
+    assert!(controller.contains("let utf16_units = validate_computer_type_text(text)?"));
+    assert!(server.contains("validate_computer_type_text(text)"));
+
+    assert!(macos.contains("const TEXT_EVENT_PACE: Duration = Duration::from_millis(1)"));
+    assert!(macos.contains("pace_text_dispatch(cancellation, deadline, TEXT_EVENT_PACE)"));
+    assert!(macos.contains("TEXT_TARGET_REVALIDATE_SCALARS"));
+    assert!(windows.contains("const TEXT_MESSAGE_BURST: usize = 16"));
+    assert!(windows.contains("ensure_unicode_keyboard_recipient(recipient)?"));
+    assert!(windows.contains("WM_CHAR_REPEAT_COUNT"));
+    assert!(windows.contains("pace_text_dispatch(cancellation, deadline, TEXT_MESSAGE_PACE)"));
+    for source in [macos, windows] {
+        assert!(source.contains("cancellation.check(\"native text dispatch\")"));
+        assert!(source.contains("COMPUTER_OUTCOME_UNKNOWN"));
+    }
 }
 
 #[test]

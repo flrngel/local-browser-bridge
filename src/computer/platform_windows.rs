@@ -6,9 +6,13 @@ use image::RgbaImage;
 use xcap::Window;
 
 use super::{
-    CommandCancellation, ComputerError, InvariantReport, InvariantStage, SemanticSnapshot,
-    SemanticTarget, TargetPoint, WindowDescriptor, uia_windows,
+    COMPUTER_TYPE_TEXT_MAX_DISPATCH_MS, CommandCancellation, ComputerError, InvariantReport,
+    InvariantStage, SemanticSnapshot, SemanticTarget, TargetPoint, WindowDescriptor, uia_windows,
 };
+
+const TEXT_MESSAGE_BURST: usize = 16;
+const TEXT_MESSAGE_PACE: Duration = Duration::from_millis(1);
+const WM_CHAR_REPEAT_COUNT: isize = 1;
 
 type Hwnd = isize;
 type Hdesk = isize;
@@ -54,6 +58,7 @@ unsafe extern "system" {
     fn GetAncestor(window: Hwnd, flags: u32) -> Hwnd;
     fn GetGUIThreadInfo(thread_id: u32, info: *mut GuiThreadInfo) -> i32;
     fn IsWindow(window: Hwnd) -> i32;
+    fn IsWindowUnicode(window: Hwnd) -> i32;
     fn GetKeyboardLayout(thread_id: u32) -> isize;
     fn MapVirtualKeyExW(code: u32, map_type: u32, keyboard_layout: isize) -> u32;
     fn OpenInputDesktop(flags: u32, inherit: i32, desired_access: u32) -> Hdesk;
@@ -411,21 +416,83 @@ pub fn type_text(
     text: &str,
     cancellation: &CommandCancellation,
 ) -> Result<InvariantReport, ComputerError> {
+    let deadline = Instant::now() + Duration::from_millis(COMPUTER_TYPE_TEXT_MAX_DISPATCH_MS);
     guarded(target, InvariantStage::TextDispatch, cancellation, || {
         let recipient = keyboard_recipient(target)?;
-        for unit in text.encode_utf16() {
+        ensure_unicode_keyboard_recipient(recipient)?;
+        let mut units = text.encode_utf16().peekable();
+        let mut dispatched = 0_usize;
+        while let Some(unit) = units.next() {
+            text_dispatch_checkpoint(cancellation, deadline)?;
             post(
                 target,
                 recipient,
                 WM_CHAR,
                 unit as usize,
-                0,
+                WM_CHAR_REPEAT_COUNT,
                 cancellation,
                 "text dispatch",
             )?;
+            dispatched += 1;
+            // PostMessageW acknowledges queueing, not target processing. A
+            // small bounded burst plus a scheduler pause prevents one command
+            // from flooding even a responsive UI thread while avoiding a
+            // per-unit Windows timer-granularity penalty.
+            if should_pace_text_message(dispatched, units.peek().is_some()) {
+                pace_text_dispatch(cancellation, deadline, TEXT_MESSAGE_PACE)?;
+            }
         }
         Ok(())
     })
+}
+
+fn should_pace_text_message(dispatched: usize, more: bool) -> bool {
+    more && dispatched.is_multiple_of(TEXT_MESSAGE_BURST)
+}
+
+fn ensure_unicode_keyboard_recipient(recipient: Hwnd) -> Result<(), ComputerError> {
+    if unsafe { IsWindowUnicode(recipient) } != 0 {
+        return Ok(());
+    }
+    Err(ComputerError::new(
+        "COMPUTER_BACKGROUND_UNAVAILABLE",
+        "The exact Windows keyboard recipient is not a Unicode window; native text delivery was refused",
+    ))
+}
+
+fn text_dispatch_checkpoint(
+    cancellation: &CommandCancellation,
+    deadline: Instant,
+) -> Result<(), ComputerError> {
+    cancellation.check("native text dispatch")?;
+    if Instant::now() < deadline {
+        return Ok(());
+    }
+    Err(if cancellation.was_dispatched() {
+        ComputerError::new(
+            "COMPUTER_OUTCOME_UNKNOWN",
+            format!(
+                "Native text dispatch exceeded its {COMPUTER_TYPE_TEXT_MAX_DISPATCH_MS} ms delivery budget after input began; observe again and do not automatically retry"
+            ),
+        )
+    } else {
+        ComputerError::new(
+            "COMPUTER_BACKGROUND_UNAVAILABLE",
+            format!(
+                "Native text dispatch could not begin within its {COMPUTER_TYPE_TEXT_MAX_DISPATCH_MS} ms delivery budget"
+            ),
+        )
+    })
+}
+
+fn pace_text_dispatch(
+    cancellation: &CommandCancellation,
+    deadline: Instant,
+    delay: Duration,
+) -> Result<(), ComputerError> {
+    text_dispatch_checkpoint(cancellation, deadline)?;
+    thread::sleep(delay);
+    text_dispatch_checkpoint(cancellation, deadline)
 }
 
 pub fn key(
@@ -1220,6 +1287,38 @@ mod message_tests {
             key_lparam(0x53, true, true, true) as u32,
             1 | (0x53 << 16) | (1 << 24) | (1 << 29) | (1 << 30) | (1 << 31)
         );
+    }
+
+    #[test]
+    fn text_messages_use_a_real_repeat_count_and_bounded_bursts() {
+        assert_eq!(WM_CHAR_REPEAT_COUNT, 1);
+        assert!(!should_pace_text_message(15, true));
+        assert!(should_pace_text_message(16, true));
+        assert!(!should_pace_text_message(16, false));
+        assert_eq!(
+            (1..=2_000)
+                .filter(|dispatched| should_pace_text_message(*dispatched, *dispatched < 2_000))
+                .count(),
+            124
+        );
+    }
+
+    #[test]
+    fn text_deadline_and_cancellation_fail_at_cooperative_boundaries() {
+        let cancellation = CommandCancellation::new();
+        let expired = Instant::now() - Duration::from_millis(1);
+        let before = text_dispatch_checkpoint(&cancellation, expired).unwrap_err();
+        assert_eq!(before.code, "COMPUTER_BACKGROUND_UNAVAILABLE");
+
+        cancellation.begin_side_effect("fixture text").unwrap();
+        let after = text_dispatch_checkpoint(&cancellation, expired).unwrap_err();
+        assert_eq!(after.code, "COMPUTER_OUTCOME_UNKNOWN");
+
+        cancellation.cancel();
+        let canceled =
+            text_dispatch_checkpoint(&cancellation, Instant::now() + Duration::from_secs(1))
+                .unwrap_err();
+        assert_eq!(canceled.code, "COMPUTER_OUTCOME_UNKNOWN");
     }
 
     #[test]

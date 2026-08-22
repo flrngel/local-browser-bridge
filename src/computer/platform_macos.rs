@@ -12,10 +12,13 @@ use libc::pid_t;
 use xcap::Window;
 
 use super::{
-    CommandCancellation, ComputerError, InvariantFailure, InvariantReport, InvariantStage,
-    SemanticSnapshot, SemanticTarget, TargetPoint, WindowDescriptor, ax_macos,
-    background_contract_violation,
+    COMPUTER_TYPE_TEXT_MAX_DISPATCH_MS, CommandCancellation, ComputerError, InvariantFailure,
+    InvariantReport, InvariantStage, SemanticSnapshot, SemanticTarget, TargetPoint,
+    WindowDescriptor, ax_macos, background_contract_violation,
 };
+
+const TEXT_EVENT_PACE: Duration = Duration::from_millis(1);
+const TEXT_TARGET_REVALIDATE_SCALARS: usize = 256;
 
 type PostToPidFn = unsafe extern "C" fn(pid_t, *mut c_void);
 type SetWindowLocationFn = unsafe extern "C" fn(*mut c_void, f64, f64);
@@ -361,15 +364,66 @@ pub fn type_text(
     cancellation: &CommandCancellation,
 ) -> Result<InvariantReport, ComputerError> {
     ensure_unique_keyboard_destination(target)?;
+    let deadline = Instant::now() + Duration::from_millis(COMPUTER_TYPE_TEXT_MAX_DISPATCH_MS);
     guarded(target, InvariantStage::TextDispatch, cancellation, || {
-        for character in text.chars() {
+        let mut characters = text.chars().peekable();
+        let mut dispatched = 0_usize;
+        while let Some(character) = characters.next() {
+            text_dispatch_checkpoint(cancellation, deadline)?;
             let value = character.to_string();
             let down = keyboard_event(target, 0, true, CGEventFlags::empty(), Some(&value))?;
             let up = keyboard_event(target, 0, false, CGEventFlags::empty(), Some(&value))?;
             held_event_sequence(target, cancellation, &down, || Ok(()), &up)?;
+            dispatched += 1;
+
+            // Keyboard events are process-routed on macOS. Re-prove that the
+            // captured window is still the process's sole eligible destination
+            // during a long real text action, not only before its first event.
+            if dispatched.is_multiple_of(TEXT_TARGET_REVALIDATE_SCALARS) {
+                ensure_unique_keyboard_destination(target)?;
+            }
+            if characters.peek().is_some() {
+                pace_text_dispatch(cancellation, deadline, TEXT_EVENT_PACE)?;
+            }
         }
+        ensure_unique_keyboard_destination(target)?;
         Ok(())
     })
+}
+
+fn text_dispatch_checkpoint(
+    cancellation: &CommandCancellation,
+    deadline: Instant,
+) -> Result<(), ComputerError> {
+    cancellation.check("native text dispatch")?;
+    if Instant::now() < deadline {
+        return Ok(());
+    }
+    Err(if cancellation.was_dispatched() {
+        ComputerError::new(
+            "COMPUTER_OUTCOME_UNKNOWN",
+            format!(
+                "Native text dispatch exceeded its {COMPUTER_TYPE_TEXT_MAX_DISPATCH_MS} ms delivery budget after input began; observe again and do not automatically retry"
+            ),
+        )
+    } else {
+        ComputerError::new(
+            "COMPUTER_BACKGROUND_UNAVAILABLE",
+            format!(
+                "Native text dispatch could not begin within its {COMPUTER_TYPE_TEXT_MAX_DISPATCH_MS} ms delivery budget"
+            ),
+        )
+    })
+}
+
+fn pace_text_dispatch(
+    cancellation: &CommandCancellation,
+    deadline: Instant,
+    delay: Duration,
+) -> Result<(), ComputerError> {
+    text_dispatch_checkpoint(cancellation, deadline)?;
+    thread::sleep(delay);
+    text_dispatch_checkpoint(cancellation, deadline)
 }
 
 pub fn key(
@@ -404,22 +458,40 @@ pub fn key(
 }
 
 fn ensure_unique_keyboard_destination(target: &WindowDescriptor) -> Result<(), ComputerError> {
-    let destinations = Window::all()
+    let mut destinations = Window::all()
         .map_err(capture_error)?
         .into_iter()
         .filter(|window| {
             window.pid().ok() == Some(target.pid) && !window.is_minimized().unwrap_or(false)
         })
-        .take(2)
-        .count();
-    if destinations == 1 {
-        Ok(())
-    } else {
-        Err(ComputerError::new(
+        .take(2);
+    let Some(destination) = destinations.next() else {
+        return Err(ComputerError::new(
+            "COMPUTER_STALE_FRAME",
+            "The captured macOS keyboard target is no longer available",
+        ));
+    };
+    if destinations.next().is_some() {
+        return Err(ComputerError::new(
             "COMPUTER_BACKGROUND_UNAVAILABLE",
             "Process-scoped macOS keyboard delivery is ambiguous because the target process has multiple eligible windows",
-        ))
+        ));
     }
+    let destination = descriptor(&destination)?;
+    if destination.id != target.id
+        || destination.pid != target.pid
+        || destination.x != target.x
+        || destination.y != target.y
+        || destination.width != target.width
+        || destination.height != target.height
+        || destination.minimized
+    {
+        return Err(ComputerError::new(
+            "COMPUTER_STALE_FRAME",
+            "The exact macOS keyboard target changed after the captured frame",
+        ));
+    }
+    Ok(())
 }
 
 fn descriptor(window: &Window) -> Result<WindowDescriptor, ComputerError> {
@@ -1056,5 +1128,23 @@ mod invariant_tests {
         assert!(resolved_front_identity(Some(0), Some(7)).is_err());
         assert!(resolved_front_identity(Some(42), Some(0)).is_err());
         assert_eq!(resolved_front_identity(Some(42), Some(7)).unwrap(), (42, 7));
+    }
+
+    #[test]
+    fn text_deadline_and_cancellation_fail_at_cooperative_boundaries() {
+        let cancellation = CommandCancellation::new();
+        let expired = Instant::now() - Duration::from_millis(1);
+        let before = text_dispatch_checkpoint(&cancellation, expired).unwrap_err();
+        assert_eq!(before.code, "COMPUTER_BACKGROUND_UNAVAILABLE");
+
+        cancellation.begin_side_effect("fixture text").unwrap();
+        let after = text_dispatch_checkpoint(&cancellation, expired).unwrap_err();
+        assert_eq!(after.code, "COMPUTER_OUTCOME_UNKNOWN");
+
+        cancellation.cancel();
+        let canceled =
+            text_dispatch_checkpoint(&cancellation, Instant::now() + Duration::from_secs(1))
+                .unwrap_err();
+        assert_eq!(canceled.code, "COMPUTER_OUTCOME_UNKNOWN");
     }
 }

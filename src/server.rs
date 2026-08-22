@@ -34,7 +34,7 @@ use uuid::Uuid;
 
 use crate::computer::{
     COMPUTER_HELPER_ORIGIN, COMPUTER_METHODS, COMPUTER_NATIVE_SHARE_CAPABILITY,
-    COMPUTER_SHARE_ACK_CAPABILITY, ShareFrameAck,
+    COMPUTER_SHARE_ACK_CAPABILITY, ShareFrameAck, validate_computer_type_text,
 };
 use crate::error_taxonomy::{TaxonomyCode, classify};
 use crate::hub::{ExtensionHub, HubError};
@@ -3450,10 +3450,13 @@ fn sanitize_computer_params(
         }
         "computer.typeText" => {
             let mut output = computer_frame_params(&source)?;
-            output.insert(
-                "text".to_owned(),
-                Value::String(required_string(source.get("text"), "text", 100_000)?),
-            );
+            let text = source
+                .get("text")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ApiError::bad_request("text must be a string"))?;
+            validate_computer_type_text(text)
+                .map_err(|error| ApiError::bad_request(error.message))?;
+            output.insert("text".to_owned(), Value::String(text.to_owned()));
             Ok(Value::Object(output))
         }
         "computer.key" => {
@@ -6142,6 +6145,66 @@ mod tests {
                 Some((640, 400)),
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn native_text_sanitizer_uses_a_utf16_delivery_budget() {
+        let max = crate::computer::COMPUTER_TYPE_TEXT_MAX_UTF16_UNITS;
+        for accepted in ["a".repeat(max), "😀".repeat(max / 2)] {
+            let params = sanitize_computer_params(
+                "computer.typeText",
+                json!({ "frameId": "frame-1", "text": accepted }),
+                None,
+            )
+            .unwrap();
+            assert_eq!(params["text"].as_str().unwrap().encode_utf16().count(), max);
+        }
+
+        for rejected in [
+            String::new(),
+            "before\0after".to_owned(),
+            "a".repeat(max + 1),
+            "😀".repeat(max / 2 + 1),
+        ] {
+            let error = sanitize_computer_params(
+                "computer.typeText",
+                json!({ "frameId": "frame-1", "text": rejected }),
+                None,
+            )
+            .unwrap_err();
+            assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        }
+
+        let larger_bulk_text = "b".repeat(max + 500);
+        assert_eq!(
+            sanitize_params(
+                "page.typeText",
+                json!({ "tabId": 7, "generation": "g1", "text": larger_bulk_text }),
+                None,
+                None,
+            )
+            .unwrap()["text"]
+                .as_str()
+                .unwrap()
+                .len(),
+            max + 500
+        );
+        assert_eq!(
+            sanitize_computer_params(
+                "computer.setValue",
+                json!({
+                    "frameId": "frame-1",
+                    "elementRef": "a1",
+                    "value": "b".repeat(max + 500),
+                }),
+                None,
+            )
+            .unwrap()["value"]
+                .as_str()
+                .unwrap()
+                .len(),
+            max + 500
         );
     }
 

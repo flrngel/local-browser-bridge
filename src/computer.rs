@@ -19,8 +19,9 @@ use uuid::Uuid;
 
 pub use crate::computer_protocol::{
     COMPUTER_HELPER_ORIGIN, COMPUTER_METHODS, COMPUTER_NATIVE_SHARE_CAPABILITY,
-    COMPUTER_SHARE_ACK_CAPABILITY, CommandCancellation, ComputerError, ShareFrameAck, ShareMailbox,
-    command_parts, result_envelope,
+    COMPUTER_SHARE_ACK_CAPABILITY, COMPUTER_TYPE_TEXT_MAX_DISPATCH_MS,
+    COMPUTER_TYPE_TEXT_MAX_UTF16_UNITS, CommandCancellation, ComputerError, ShareFrameAck,
+    ShareMailbox, command_parts, result_envelope, validate_computer_type_text,
 };
 
 mod action_record;
@@ -1185,11 +1186,15 @@ impl ComputerController {
         cancellation: &CommandCancellation,
     ) -> Result<Value, ComputerError> {
         let mut timer = ActionTimer::start(cancellation);
-        let frame = self.verify_frame(params)?;
         let text = params
             .get("text")
             .and_then(Value::as_str)
             .ok_or_else(|| invalid("text must be a string"))?;
+        // The helper repeats the server's native-only bound before consulting
+        // frame authority, so an authenticated but incompatible peer cannot
+        // turn one request into an unbounded native event/message burst.
+        let utf16_units = validate_computer_type_text(text)?;
+        let frame = self.verify_frame(params)?;
         timer.resolved();
         let invariants = platform::type_text(&frame.target, text, cancellation)?
             .assert_held(InvariantStage::TextDispatch)?;
@@ -1199,6 +1204,7 @@ impl ComputerController {
             "deliveryMode": "exact-window-background",
             "frameId": frame.id,
             "characters": text.chars().count(),
+            "utf16CodeUnits": utf16_units,
             "invariants": invariants,
         });
         finish_action_record(timer, ActionEffect::Unverifiable, evidence, result)
@@ -1662,6 +1668,24 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn helper_rejects_unbounded_native_text_before_frame_resolution() {
+        let cancellation = CommandCancellation::new();
+        let mut controller = ComputerController::new();
+        let error = controller
+            .execute_cancellable(
+                "computer.typeText",
+                &json!({
+                    "frameId": "missing",
+                    "text": "a".repeat(COMPUTER_TYPE_TEXT_MAX_UTF16_UNITS + 1),
+                }),
+                &cancellation,
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "COMPUTER_INVALID_REQUEST");
+        assert!(!cancellation.was_dispatched());
+    }
 
     #[test]
     fn native_element_identity_is_never_serialized() {

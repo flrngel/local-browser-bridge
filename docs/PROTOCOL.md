@@ -406,10 +406,12 @@ A dialog can also open *after* a command has passed both gates, while an observa
 | `computer.click` | `frameId`, `x`, `y`, optional `button`, `clickCount`, `durationMs`, `coordinateSpace` | Moves the synthetic pointer, then sends exact-window left/middle/right input |
 | `computer.drag` | `frameId`, `fromX`, `fromY`, `toX`, `toY`, optional `durationMs`, `coordinateSpace` | Left-button drag; duration is 50–2000 ms |
 | `computer.scroll` | `frameId`, `x`, `y`, `deltaX`, `deltaY`, optional `coordinateSpace` | Routes pointer attention, then exact-window scroll with deltas clamped to ±50 |
-| `computer.typeText` | `frameId`, `text` | Routes Unicode text to the exact target process/window |
+| `computer.typeText` | `frameId`, `text` | Routes 1–2,000 UTF-16 code units (excluding U+0000) to the exact target process/window through a paced, cooperatively cancellable native action |
 | `computer.key` | `frameId`, `key` | Sends one named key or a bounded chord in either dialect, such as `Meta+L` or `ctrl+shift+t` |
 | `computer.invoke` | `frameId`, `elementRef`, optional `action` | Invokes an advertised frame-bound accessibility action and reports an observed postcondition |
 | `computer.setValue` | `frameId`, `elementRef`, `value` | Writes through the platform accessibility value pattern and requires read-back or masked-length proof |
+
+The `computer.typeText` bound is intentionally separate from the 100,000-character limits on browser `page.typeText` and semantic `computer.setValue`. Native macOS delivery emits targeted keyboard events, while Windows emits one `WM_CHAR` per UTF-16 code unit; neither primitive is a bulk string setter. The helper repeats the HTTP sanitizer's UTF-16 validation, checks cancellation between dispatched units, paces the platform queue, and stops the native dispatch loop after 2,500 ms. If cancellation or that deadline occurs after the first native mutation, the result is `COMPUTER_OUTCOME_UNKNOWN`, all observation-derived computer authority is revoked, and the client must observe again without automatically retrying. Successful native text remains `effect: Unverifiable`; use `computer.setValue` when an advertised accessibility value pattern can provide exact read-back, or `page.typeText` for controlled browser content.
 
 An observation is shaped like:
 
