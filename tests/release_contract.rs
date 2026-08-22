@@ -39,6 +39,7 @@ fn release_workflow_and_local_builder_package_both_processes() {
         "THIRD_PARTY_LICENSES.txt",
         "--licenses",
         "codesign --verify --deep --strict",
+        "bash scripts/verify-macos-build-host.sh",
         "bash scripts/verify-macos-artifacts.sh",
     ] {
         assert!(

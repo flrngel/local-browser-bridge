@@ -78,6 +78,7 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "A macOS host is required for the universal binary. Use the tagged GitHub release workflow." >&2
   exit 1
 fi
+bash scripts/verify-macos-build-host.sh
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 cargo build --locked --release --bins --target aarch64-apple-darwin
 cargo build --locked --release --bins --target x86_64-apple-darwin
