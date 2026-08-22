@@ -185,7 +185,8 @@ function Test-ForbiddenText {
     param(
         [string]$Text,
         [string[]]$ExactValues,
-        [switch]$AllowCanonicalBindingHex
+        [switch]$AllowCanonicalBindingHex,
+        [switch]$AllowCanonicalEvidenceType
     )
     foreach ($value in $ExactValues) {
         if ($Text.IndexOf($value, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
@@ -196,6 +197,9 @@ function Test-ForbiddenText {
         [regex]::Replace($Text, '"(?:[0-9a-f]{40}|[0-9a-f]{64})"', '""', [Text.RegularExpressions.RegexOptions]::CultureInvariant)
     }
     else { $Text }
+    if ($AllowCanonicalEvidenceType) {
+        $textToScan = $textToScan.Replace('"stock-user-chrome-screenshot-review-pending"', '""')
+    }
     foreach ($pattern in @(
         '(?i)\b(?:authorization|bearer|access[_ -]?token|api[_ -]?key|client[_ -]?secret)\b',
         '(?i)[a-z]:\\users\\',
@@ -473,7 +477,7 @@ function Invoke-Sanitize {
             $record.Insert(4, "sourceCapture", $sourceCapture)
         }
         $serialized = $record | ConvertTo-Json -Depth 12 -Compress
-        if (Test-ForbiddenText $serialized $denyValues -AllowCanonicalBindingHex) {
+        if (Test-ForbiddenText $serialized $denyValues -AllowCanonicalBindingHex -AllowCanonicalEvidenceType) {
             throw "Screenshot evidence record failed its text safety check."
         }
         Write-NewJson $temporaryRecord $record
@@ -655,7 +659,7 @@ function Invoke-AttestReview {
         height = [int64]$pending.sourceCapture.height
     })
     $serialized = $record | ConvertTo-Json -Depth 12 -Compress
-    if (Test-ForbiddenText $serialized $denyValues -AllowCanonicalBindingHex) {
+    if (Test-ForbiddenText $serialized $denyValues -AllowCanonicalBindingHex -AllowCanonicalEvidenceType) {
         throw "Final screenshot review attestation failed its text safety check."
     }
     $temporaryRecord = "$recordPath.new"
@@ -790,11 +794,16 @@ function Invoke-SelfTest {
             throw "Legacy v0.12.2 screenshot sanitization compatibility failed."
         }
         $canonicalHash = '"' + ("0123456789abcdef" * 4) + '"'
+        $canonicalPendingType = '"stock-user-chrome-screenshot-review-pending"'
+        $canonicalPendingLookalike = '"stock-user-chrome-screenshot-review-pending-extra"'
         $tokenShape = '"' + [String]::new([char]"A", 43) + '"'
         if (-not (Test-ForbiddenText $canonicalHash @()) -or
             (Test-ForbiddenText $canonicalHash @() -AllowCanonicalBindingHex) -or
+            -not (Test-ForbiddenText $canonicalPendingType @()) -or
+            (Test-ForbiddenText $canonicalPendingType @() -AllowCanonicalEvidenceType) -or
+            -not (Test-ForbiddenText $canonicalPendingLookalike @() -AllowCanonicalEvidenceType) -or
             -not (Test-ForbiddenText $tokenShape @()) -or
-            -not (Test-ForbiddenText $tokenShape @() -AllowCanonicalBindingHex)) {
+            -not (Test-ForbiddenText $tokenShape @() -AllowCanonicalBindingHex -AllowCanonicalEvidenceType)) {
             throw "Screenshot sanitizer secret/hash distinction self-test failed."
         }
         Write-Output "Browser screenshot sanitizer self-test passed."

@@ -61,6 +61,37 @@ fn release_workflow_and_local_builder_package_both_processes() {
 }
 
 #[test]
+fn windows_ci_and_release_validate_the_complete_browser_evidence_toolchain() {
+    for path in [".github/workflows/ci.yml", ".github/workflows/deploy.yml"] {
+        let workflow = source(path);
+        for script in [
+            "scripts/browser-evidence-candidate.ps1",
+            "scripts/record-computer-helper-chain.ps1",
+            "scripts/sanitize-browser-evidence-screenshot.ps1",
+            "scripts/test-windows-browser-api.ps1",
+            "scripts/write-browser-evidence-record.ps1",
+        ] {
+            assert!(
+                workflow.contains(&format!("\"{script}\"")),
+                "Windows validation in {path} does not parse {script}"
+            );
+        }
+        for invocation in [
+            "./scripts/browser-evidence-candidate.ps1 -Mode SelfTest",
+            "./scripts/record-computer-helper-chain.ps1 -Mode SelfTest",
+            "./scripts/sanitize-browser-evidence-screenshot.ps1 -Mode SelfTest",
+            "./scripts/test-windows-browser-api.ps1 -SelfTest",
+            "./scripts/write-browser-evidence-record.ps1 -Mode SelfTest",
+        ] {
+            assert!(
+                workflow.contains(invocation),
+                "Windows validation in {path} does not run {invocation}"
+            );
+        }
+    }
+}
+
+#[test]
 fn release_license_inventory_is_locked_sanitized_and_shipped() {
     let cargo = source("Cargo.toml");
     let lockfile = source("Cargo.lock");

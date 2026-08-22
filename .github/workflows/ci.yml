@@ -71,6 +71,7 @@ jobs:
         run: |
           $scripts = @(
             "scripts/browser-evidence-candidate.ps1",
+            "scripts/record-computer-helper-chain.ps1",
             "scripts/sanitize-browser-evidence-screenshot.ps1",
             "scripts/test-windows-browser-api.ps1",
             "scripts/write-browser-evidence-record.ps1"
@@ -88,6 +89,7 @@ jobs:
             }
           }
           & ./scripts/browser-evidence-candidate.ps1 -Mode SelfTest
+          & ./scripts/record-computer-helper-chain.ps1 -Mode SelfTest
           & ./scripts/sanitize-browser-evidence-screenshot.ps1 -Mode SelfTest
           & ./scripts/test-windows-browser-api.ps1 -SelfTest
           & ./scripts/write-browser-evidence-record.ps1 -Mode SelfTest
