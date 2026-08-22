@@ -318,6 +318,10 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
         "window.makeFirstResponder(semanticField)",
         "editor.setSelectedRange",
         "control.action == \"focus-semantic-field\"",
+        "var moveEvents = 0",
+        "override func mouseMoved(with event: NSEvent)",
+        "state.moveEvents < 1_000_000",
+        "window.acceptsMouseMovedEvents = true",
     ] {
         assert!(
             fixture.contains(required),
@@ -361,8 +365,11 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
         .unwrap();
     for required in [
         "commandResponse(\n    \"computer.move\"",
-        "await delay(CANCEL_AFTER_START_MS)",
         "CALL_IN_PROGRESS",
+        "fixture target-routed cancellation move dispatch",
+        "snapshot.moveEvents > cancellationFixtureBefore.moveEvents",
+        "CANCELLATION_DISPATCH_PROOF_TIMEOUT_MS",
+        "cancellation waits for target-routed native move delivery",
         "cancelCommandResponse(cancellationCallId)",
         "cancelAccepted.status === 202",
         "COMMAND_OUTCOME_UNKNOWN",
@@ -379,7 +386,7 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
         "explicitStop.reason === \"not-active\"",
         "COMPUTER_STALE_FRAME",
         "rejected stale action cannot recreate a computer surface",
-        "canceled move, replay, and stale refusal caused no fixture mutation",
+        "canceled move, replay, and stale refusal caused no functional fixture mutation",
         "cancellation/stop foreground/focus/cursor/Space invariants",
     ] {
         assert!(
@@ -390,9 +397,12 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
     for forbidden in [
         "CANCELLATION_TEXT_CHARACTERS",
         "PRODUCTION_COMMAND_TIMEOUT_FLOOR_MS",
+        "CANCEL_AFTER_START_MS",
+        "await delay(CANCEL_AFTER_START_MS)",
         "LBB_COMPUTER_TEST",
         "mock cancellation",
         "semanticValue: finalFixtureState.semanticValue",
+        "payloadPersisted",
     ] {
         assert!(
             !rig.contains(forbidden),
@@ -400,7 +410,15 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
         );
     }
     assert!(rig.contains("schemaVersion: 3"));
-    assert!(rig.contains("payloadPersisted: false"));
+    assert!(
+        rig.contains("const NATIVE_TEXT_SUFFIX = `-native-${randomBytes(6).toString(\"hex\")}`;")
+    );
+    assert!(rig.contains("contentRetainedInEvidenceOutputs: false"));
+    assert!(rig.contains("temporaryScratchFixtureStateUsed: true"));
+    assert!(rig.contains("assertNoRetainedNativeTextPayload(serialized"));
+    assert!(rig.contains("assertNoRetainedNativeTextPayload(persistedLog"));
+    assert!(rig.contains("text.split(NATIVE_TEXT_SUFFIX).join(\"[NATIVE_TEXT_PAYLOAD]\")"));
+    assert!(rig.contains("nativeTextPayloadMayBeVisible = true"));
 }
 
 #[test]

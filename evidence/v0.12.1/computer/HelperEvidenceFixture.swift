@@ -11,6 +11,7 @@ private struct FixtureState: Codable {
     var animationTick = 0
     var resizeCount = 0
     var focusCount = 0
+    var moveEvents = 0
     var appliedControlSequence = 0
     var contentWidth = 720
     var contentHeight = 460
@@ -72,6 +73,17 @@ private final class FixtureView: NSView, NSTextFieldDelegate {
         state.clicks += 1
         state.lastAction = "click"
         persistAndRedraw()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        // This is evidence-only target-side instrumentation. Keep it bounded,
+        // leave every functional fixture field untouched, and persist without
+        // redrawing so a cancellation can wait for actual routed delivery
+        // instead of assuming that a fixed sleep reached the native backend.
+        if state.moveEvents < 1_000_000 {
+            state.moveEvents += 1
+        }
+        writeState()
     }
 
     func controlTextDidChange(_ notification: Notification) {
@@ -207,6 +219,7 @@ private final class FixtureDelegate: NSObject, NSApplicationDelegate {
         )
         window.title = fixtureTitle
         window.isReleasedWhenClosed = false
+        window.acceptsMouseMovedEvents = true
         window.minSize = NSSize(width: 700, height: 440)
         window.maxSize = NSSize(width: 900, height: 620)
 

@@ -19,8 +19,8 @@ const SHARE_FPS = 10;
 const LONG_PIXEL_ACTION_MS = 900;
 const POST_RESIZE_PIXEL_ACTION_MS = 120;
 const CANCELED_MOVE_DURATION_MS = 2_000;
-const CANCEL_AFTER_START_MS = 250;
-const NATIVE_TEXT_SUFFIX = "-native";
+const CANCELLATION_DISPATCH_PROOF_TIMEOUT_MS = 10_000;
+const NATIVE_TEXT_SUFFIX = `-native-${randomBytes(6).toString("hex")}`;
 const GENERATED_OUTPUT_NAMES = [
   "helper-results.json",
   "helper-rig.log",
@@ -67,10 +67,12 @@ let outputReserved = false;
 let systemProbeBinary;
 let fixtureStatePath;
 let failureProbeBaseline;
+let nativeTextPayloadMayBeVisible = false;
 
 function sanitizePathDetail(value) {
   let text = String(value);
   if (text.includes(bearerToken)) return "Sensitive failure detail withheld";
+  text = text.split(NATIVE_TEXT_SUFFIX).join("[NATIVE_TEXT_PAYLOAD]");
   for (const [path, replacement] of [
     [scratchDir, "[SCRATCH]"],
     [serverPath, basename(serverPath)],
@@ -87,6 +89,12 @@ function sanitizePathDetail(value) {
 function assertNoToken(text, label) {
   if (text.includes(bearerToken)) {
     throw new Error(`refusing to persist the bearer token in ${label}`);
+  }
+}
+
+function assertNoRetainedNativeTextPayload(text, label) {
+  if (text.includes(NATIVE_TEXT_SUFFIX)) {
+    throw new Error(`refusing to retain the native text payload in ${label}`);
   }
 }
 
@@ -215,6 +223,7 @@ function fixtureCounterSnapshot(snapshot) {
     animationTick: boundedCounter(snapshot?.animationTick),
     resizeCount: boundedCounter(snapshot?.resizeCount),
     focusCount: boundedCounter(snapshot?.focusCount),
+    moveEvents: boundedCounter(snapshot?.moveEvents),
     appliedControlSequence: boundedCounter(snapshot?.appliedControlSequence),
     semanticValueMatchesExpected: snapshot?.semanticValue === SEMANTIC_VALUE,
     lastAction: FIXTURE_ACTIONS.has(snapshot?.lastAction) ? snapshot.lastAction : "unrecognized",
@@ -343,6 +352,9 @@ async function fixtureState(path) {
 }
 
 async function saveCurrentScreenshot(publicState, filename, expectedWindowId) {
+  if (nativeTextPayloadMayBeVisible) {
+    throw new Error("refusing to create a retained screenshot after native text delivery began");
+  }
   const observation = publicState.computerObservation;
   if (!observation?.screenshotUrl) throw new Error("current computer observation has no screenshot URL");
   if (observation.windowId !== expectedWindowId || observation.windowTitle !== FIXTURE_TITLE) {
@@ -506,6 +518,7 @@ function startHelperOnce(environment) {
 async function persistResult(result) {
   const serialized = `${JSON.stringify(result, null, 2)}\n`;
   assertNoToken(serialized, "machine-readable result");
+  assertNoRetainedNativeTextPayload(serialized, "machine-readable result");
   await writeFile(resultsPath, serialized);
 }
 
@@ -897,7 +910,7 @@ async function main() {
       postResizeFixtureAfter.focusCount === postResizeFixtureBefore.focusCount &&
       postResizeFixtureAfter.appliedControlSequence === postResizeFixtureBefore.appliedControlSequence &&
       postResizeFixtureAfter.contentWidth === 820 && postResizeFixtureAfter.contentHeight === 520,
-    "only the exact fixture click counter advanced after resize",
+    "only the exact fixture click counter changed functional state after resize",
   );
   requireCheck("post-resize action bound to settled persistent share",
     postResizeClick.frameId === observation.frameId &&
@@ -961,6 +974,7 @@ async function main() {
       nativeTextFocusedState.semanticValue === SEMANTIC_VALUE &&
       nativeTextFocusedState.semanticValue === nativeTextSetupFixtureBefore.semanticValue &&
       nativeTextFocusedState.resizeCount === nativeTextSetupFixtureBefore.resizeCount &&
+      nativeTextFocusedState.moveEvents === nativeTextSetupFixtureBefore.moveEvents &&
       nativeTextFocusedState.contentWidth === nativeTextSetupFixtureBefore.contentWidth &&
       nativeTextFocusedState.contentHeight === nativeTextSetupFixtureBefore.contentHeight,
     "only the fixture's internal first-responder counter advanced",
@@ -986,6 +1000,7 @@ async function main() {
     system: nativeTextSystemBefore,
     fixture: nativeTextFocusedState,
   };
+  nativeTextPayloadMayBeVisible = true;
   const nativeTextBody = await command("computer.typeText", {
     frameId: observation.frameId,
     text: NATIVE_TEXT_SUFFIX,
@@ -1000,7 +1015,8 @@ async function main() {
       nativeTextFixtureState.clicks === nativeTextFocusedState.clicks &&
       nativeTextFixtureState.semanticPresses === nativeTextFocusedState.semanticPresses &&
       nativeTextFixtureState.resizeCount === nativeTextFocusedState.resizeCount &&
-      nativeTextFixtureState.focusCount === nativeTextFocusedState.focusCount,
+      nativeTextFixtureState.focusCount === nativeTextFocusedState.focusCount &&
+      nativeTextFixtureState.moveEvents === nativeTextFocusedState.moveEvents,
     `appended ${NATIVE_TEXT_SUFFIX.length} ASCII characters to the prepared exact-window field`,
   );
   requireCheck("native typeText bounded product result",
@@ -1048,7 +1064,8 @@ async function main() {
       nativeTextRestoredFixtureState.clicks === nativeTextFixtureState.clicks &&
       nativeTextRestoredFixtureState.semanticPresses === nativeTextFixtureState.semanticPresses &&
       nativeTextRestoredFixtureState.resizeCount === nativeTextFixtureState.resizeCount &&
-      nativeTextRestoredFixtureState.focusCount === nativeTextFixtureState.focusCount,
+      nativeTextRestoredFixtureState.focusCount === nativeTextFixtureState.focusCount &&
+      nativeTextRestoredFixtureState.moveEvents === nativeTextFixtureState.moveEvents,
     "only the deterministic semantic value was restored",
   );
   current = await waitForNextShareState(
@@ -1092,6 +1109,12 @@ async function main() {
   };
   const cancellationFixtureBefore = await fixtureState(fixtureStatePath);
   const cancellationSystemBefore = processProbe(systemProbeBinary);
+  requireCheck("bounded fixture mouse-move instrumentation ready",
+    Number.isSafeInteger(cancellationFixtureBefore.moveEvents) &&
+      cancellationFixtureBefore.moveEvents >= 0 &&
+      cancellationFixtureBefore.moveEvents < 1_000_000,
+    `baseline=${boundedCounter(cancellationFixtureBefore.moveEvents)}`,
+  );
   failureProbeBaseline = {
     stage: "explicitCommandCancellation",
     system: cancellationSystemBefore,
@@ -1104,13 +1127,34 @@ async function main() {
     cancellationParams,
     cancellationCallId,
   );
-  await delay(CANCEL_AFTER_START_MS);
+  const cancellationDispatchProofStartedAt = Date.now();
+  const cancellationDispatchedFixtureState = await waitFor(
+    "fixture target-routed cancellation move dispatch",
+    async () => {
+      const snapshot = await fixtureState(fixtureStatePath);
+      return snapshot.moveEvents > cancellationFixtureBefore.moveEvents && snapshot;
+    },
+    CANCELLATION_DISPATCH_PROOF_TIMEOUT_MS,
+  );
+  const cancellationDispatchProofElapsedMs = Date.now() - cancellationDispatchProofStartedAt;
+  requireCheck("cancellation waits for target-routed native move delivery",
+    cancellationDispatchedFixtureState.moveEvents > cancellationFixtureBefore.moveEvents &&
+      cancellationDispatchedFixtureState.moveEvents <= 1_000_000 &&
+      cancellationDispatchedFixtureState.clicks === cancellationFixtureBefore.clicks &&
+      cancellationDispatchedFixtureState.semanticPresses === cancellationFixtureBefore.semanticPresses &&
+      cancellationDispatchedFixtureState.semanticValue === cancellationFixtureBefore.semanticValue &&
+      cancellationDispatchedFixtureState.resizeCount === cancellationFixtureBefore.resizeCount &&
+      cancellationDispatchedFixtureState.focusCount === cancellationFixtureBefore.focusCount &&
+      cancellationDispatchedFixtureState.appliedControlSequence === cancellationFixtureBefore.appliedControlSequence,
+    `moveEvents=${cancellationFixtureBefore.moveEvents}->${cancellationDispatchedFixtureState.moveEvents}, wait=${cancellationDispatchProofElapsedMs}ms`,
+  );
+
   const inProgressDuplicate = await commandResponse(
     "computer.move",
     cancellationParams,
     cancellationCallId,
   );
-  requireCheck("exact duplicate observes one in-flight product action",
+  requireCheck("exact duplicate observes one causally dispatched product action",
     inProgressDuplicate.status === 409 && inProgressDuplicate.ok === false &&
       inProgressDuplicate.body.error?.code === "CALL_IN_PROGRESS" &&
       inProgressDuplicate.body.callId === cancellationCallId &&
@@ -1135,8 +1179,7 @@ async function main() {
       canceledOriginal.body.taxonomy?.retriable === false &&
       canceledOriginal.body.taxonomy?.recoveryHint === "reobserve" &&
       canceledOriginal.body.callId === cancellationCallId &&
-      canceledOriginal.body.replayed === undefined &&
-      cancellationElapsedMs >= CANCEL_AFTER_START_MS,
+      canceledOriginal.body.replayed === undefined,
     `HTTP ${canceledOriginal.status}, ${canceledOriginal.body.error?.code}/${canceledOriginal.body.taxonomy?.code}, elapsed=${cancellationElapsedMs}ms`,
   );
 
@@ -1250,6 +1293,8 @@ async function main() {
     finalFixtureState.clicks === 2 && finalFixtureState.semanticPresses === 1 &&
       finalFixtureState.semanticValue === SEMANTIC_VALUE &&
       finalFixtureState.resizeCount === 1 && finalFixtureState.focusCount === 1 &&
+      finalFixtureState.moveEvents >= cancellationDispatchedFixtureState.moveEvents &&
+      finalFixtureState.moveEvents <= 1_000_000 &&
       finalFixtureState.appliedControlSequence === 2 &&
       finalFixtureState.contentWidth === 820 && finalFixtureState.contentHeight === 520,
     JSON.stringify({
@@ -1258,19 +1303,23 @@ async function main() {
       semanticValueMatchesExpected: finalFixtureState.semanticValue === SEMANTIC_VALUE,
       resizeCount: finalFixtureState.resizeCount,
       focusCount: finalFixtureState.focusCount,
+      moveEvents: finalFixtureState.moveEvents,
       appliedControlSequence: finalFixtureState.appliedControlSequence,
       contentWidth: finalFixtureState.contentWidth,
       contentHeight: finalFixtureState.contentHeight,
     }),
   );
-  requireCheck("canceled move, replay, and stale refusal caused no fixture mutation",
+  requireCheck("canceled move, replay, and stale refusal caused no functional fixture mutation",
     finalFixtureState.clicks === cancellationFixtureBefore.clicks &&
       finalFixtureState.semanticPresses === cancellationFixtureBefore.semanticPresses &&
       finalFixtureState.semanticValue === cancellationFixtureBefore.semanticValue &&
       finalFixtureState.resizeCount === cancellationFixtureBefore.resizeCount &&
       finalFixtureState.focusCount === cancellationFixtureBefore.focusCount &&
-      finalFixtureState.appliedControlSequence === cancellationFixtureBefore.appliedControlSequence,
-    "fixture mutation counters and restored semantic value stayed exact",
+      finalFixtureState.appliedControlSequence === cancellationFixtureBefore.appliedControlSequence &&
+      finalFixtureState.contentWidth === cancellationFixtureBefore.contentWidth &&
+      finalFixtureState.contentHeight === cancellationFixtureBefore.contentHeight &&
+      finalFixtureState.moveEvents >= cancellationDispatchedFixtureState.moveEvents,
+    "functional fixture state stayed exact; only bounded move-delivery instrumentation advanced",
   );
   const cancellationInvariants = systemInvariants(
     cancellationSystemBefore,
@@ -1363,6 +1412,7 @@ async function main() {
         animationTick: finalFixtureState.animationTick,
         resizeCount: finalFixtureState.resizeCount,
         focusCount: finalFixtureState.focusCount,
+        moveEvents: finalFixtureState.moveEvents,
         appliedControlSequence: finalFixtureState.appliedControlSequence,
         contentWidth: finalFixtureState.contentWidth,
         contentHeight: finalFixtureState.contentHeight,
@@ -1401,14 +1451,15 @@ async function main() {
         resizedWindowHeight: afterPostResizeAction.windowHeight,
         capturedImageWidth: afterPostResizeAction.imageWidth,
         capturedImageHeight: afterPostResizeAction.imageHeight,
-        independentFixturePostcondition: "only the exact fixture click counter advanced after resize",
+        independentFixturePostcondition: "only the exact fixture click counter changed functional state after resize",
         independentNonInterruptionSample: postResizeActionInvariants,
       },
       nativeTextDelivery: {
         ...nativeText,
         requestCharacters: NATIVE_TEXT_SUFFIX.length,
         requestUtf16CodeUnits: NATIVE_TEXT_SUFFIX.length,
-        payloadPersisted: false,
+        contentRetainedInEvidenceOutputs: false,
+        temporaryScratchFixtureStateUsed: true,
         fixtureFieldFocusCount: nativeTextFocusedState.focusCount,
         exactFixtureReadBack: nativeTextFixtureState.semanticValue === `${SEMANTIC_VALUE}${NATIVE_TEXT_SUFFIX}`,
         restoredToExpectedValue: nativeTextRestoredFixtureState.semanticValue === SEMANTIC_VALUE,
@@ -1420,8 +1471,14 @@ async function main() {
         callId: cancellationCallId,
         method: "computer.move",
         durationMs: CANCELED_MOVE_DURATION_MS,
-        cancelAfterStartMs: CANCEL_AFTER_START_MS,
         elapsedMs: cancellationElapsedMs,
+        dispatchProof: {
+          type: "target-routed-fixture-mouse-move",
+          timeoutMs: CANCELLATION_DISPATCH_PROOF_TIMEOUT_MS,
+          waitElapsedMs: cancellationDispatchProofElapsedMs,
+          moveEventsBefore: cancellationFixtureBefore.moveEvents,
+          moveEventsObserved: cancellationDispatchedFixtureState.moveEvents,
+        },
         inProgressDuplicate: {
           httpStatus: inProgressDuplicate.status,
           code: inProgressDuplicate.body.error.code,
@@ -1485,6 +1542,10 @@ async function main() {
           resizeCountAfter: finalFixtureState.resizeCount,
           focusCountBefore: cancellationFixtureBefore.focusCount,
           focusCountAfter: finalFixtureState.focusCount,
+          moveEventsBefore: cancellationFixtureBefore.moveEvents,
+          moveEventsAfter: finalFixtureState.moveEvents,
+          expectedMoveInstrumentationAdvanced:
+            finalFixtureState.moveEvents > cancellationFixtureBefore.moveEvents,
           semanticValueMatchedBefore: cancellationFixtureBefore.semanticValue === SEMANTIC_VALUE,
           semanticValueMatchedAfter: finalFixtureState.semanticValue === SEMANTIC_VALUE,
         },
@@ -1545,9 +1606,9 @@ async function main() {
       "The helper uses target-routed background input on the active user Space, not a separate login session, VM, virtual display, sandbox, or independent input seat.",
       "The fixture-only post-resize proof combines exact PID/window/frame/share binding, fixture counters, and non-interruption identities; the rig deliberately does not capture or fingerprint unrelated window contents.",
       "Generic AX invocation remains Partial in the product result; this deterministic fixture supplies separate target-side evidence and does not upgrade that product classification.",
-      "Native typeText remains Unverifiable in the product result. This deterministic fixture adds an independent exact read-back, then restores the prior value through confirmed Accessibility setValue without persisting the typed payload.",
+      "Native typeText remains Unverifiable in the product result. This deterministic fixture adds an independent exact read-back, then restores the prior value through confirmed Accessibility setValue. The ephemeral test content is not retained in evidence outputs, but it exists temporarily in process memory and the scratch fixture-state file until cleanup.",
       "The long live-share click intentionally creates native source-frame replacement. A zero transport-drop count is valid when server acknowledgements keep pace.",
-      "Explicit cancellation deliberately reports the in-flight move outcome as unknown. The rig proves authority teardown and no fixture mutation; it does not relabel the canceled native trajectory as a confirmed no-op.",
+      "Explicit cancellation deliberately reports the in-flight move outcome as unknown. The rig proves target-routed dispatch, authority teardown, and no functional fixture mutation beyond its bounded move-delivery counter; it does not relabel the canceled native trajectory as a confirmed no-op.",
       "Screen Recording and Accessibility permissions were already present. The rig did not request, approve, or modify macOS permissions.",
     ],
   };
@@ -1595,6 +1656,7 @@ try {
   if (outputReserved) {
     const persistedLog = `${logLines.join("\n")}\n`;
     assertNoToken(persistedLog, "evidence log");
+    assertNoRetainedNativeTextPayload(persistedLog, "evidence log");
     await mkdir(outputDir, { recursive: true });
     await writeFile(logPath, persistedLog);
   }

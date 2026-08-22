@@ -33,9 +33,10 @@ helper process.
 - After that settled resize frame and screenshot, the runner sends another real
   `computer.click` through the product API. The result must bind to the exact
   resized frame, original share ID, and post-resize source sequence. Only the
-  fixture click counter may advance; its semantic, focus, and resize counters
-  plus independent foreground-process, front-window, hardware-cursor, and
-  Space identities must stay unchanged.
+  fixture click counter may change functional state; its bounded mouse-move
+  delivery counter may also advance as instrumentation. Semantic, focus, and
+  resize counters plus independent foreground-process, front-window,
+  hardware-cursor, and Space identities must stay unchanged.
 - The fixture then makes its own background text field first responder without
   becoming the foreground app. A short, bounded native `computer.typeText`
   action must append to that exact field, report `Unverifiable`, and satisfy
@@ -54,18 +55,22 @@ helper process.
   keep pace.
 - Foreground process, front window, hardware cursor, and active Space remain
   unchanged, both in each product action record and in an independent probe.
-- A real two-second `computer.move` starts under one fresh `callId`. An exact
-  duplicate must report HTTP 409 `CALL_IN_PROGRESS`; authenticated
-  `/api/v1/command/cancel` must return 202 for that ID; and the original must
-  settle as HTTP 504 `COMMAND_OUTCOME_UNKNOWN` with the non-retriable
-  `outcome_unknown`/`reobserve` contract. A second cancel is refused,
-  an exact retry replays the cached 504 without redispatch, and changed params
-  under the same ID are refused as `CALL_ID_REUSED`.
+- A real two-second `computer.move` starts under one fresh `callId`. The runner
+  waits until the fixture's bounded `mouseMoved` counter proves a newly
+  delivered target-routed native event; an exact duplicate must then report
+  HTTP 409 `CALL_IN_PROGRESS`. The wait has a failure timeout, never a fixed
+  sleep that assumes dispatch. Authenticated `/api/v1/command/cancel` must then
+  return 202 for that ID; and the original must settle as HTTP 504
+  `COMMAND_OUTCOME_UNKNOWN` with the non-retriable
+  `outcome_unknown`/`reobserve` contract. A second cancel is refused, an exact
+  retry replays the cached 504 without redispatch, and changed params under the
+  same ID are refused as `CALL_ID_REUSED`.
 - Explicit cancellation revokes only the owning helper session's share,
   observation, screenshot, pointer, and frame authority. The old screenshot
   URL returns 404, an idempotent share stop reports `not-active`, and a click
   carrying the old frame is refused as `COMPUTER_STALE_FRAME` without changing
-  fixture counters or recreating a surface. Helper exit then clears its server
+  functional fixture state or recreating a surface. The expected bounded move
+  instrumentation is reported separately. Helper exit then clears its server
   session, and server exit closes the selected loopback listener.
 
 `systemIndicator: true` is policy evidence that the helper did not suppress
@@ -124,12 +129,16 @@ entire scratch directory in cleanup. A failure still writes a sanitized
 machine-readable negative result instead of silently discarding partial
 evidence.
 
-The generated native-text suffix and move coordinates are never written to
-results or logs; evidence retains only bounded counts, booleans, and the fresh
-non-secret `callId` needed to audit replay identity. The bearer token is also
-excluded. The cancellation stage uses the product's normal authenticated
-endpoint and a naturally long real action—never a shortened server deadline,
-test-only delay, fault hook, or connector mock.
+The generated native-text suffix and move coordinates are never retained in
+results, logs, or screenshots; evidence retains only bounded counts, booleans,
+and the fresh non-secret `callId` needed to audit replay identity. The runner
+enforces payload exclusion again when serializing both result and log. The text
+exists temporarily in process memory and the scratch fixture-state file so the
+fixture can provide exact read-back; the scratch directory is removed during
+cleanup. The bearer token is also excluded. The cancellation stage uses the
+product's normal authenticated endpoint and a naturally long real action—never
+a shortened server deadline, test-only dispatch delay, fault hook, or connector
+mock.
 
 After the run, inspect every screenshot, confirm `assertions.failed` is zero,
 and compare the recorded archive SHA-256 with the published release asset
