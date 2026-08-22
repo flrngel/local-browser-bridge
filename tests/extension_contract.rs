@@ -1177,7 +1177,7 @@ fn only_bridge_created_tabs_are_grouped() {
 }
 
 #[test]
-fn timeout_cancel_is_session_bound_and_suppresses_late_results() {
+fn server_cancel_is_session_bound_suppresses_late_results_and_preserves_explicit_lease() {
     let background = extension_source("background.js");
     let session_guard = background
         .find("message.sessionId !== protocolServerSessionId")
@@ -1195,7 +1195,11 @@ fn timeout_cancel_is_session_bound_and_suppresses_late_results() {
     assert!(cancel.contains("commandKey(protocolServerSessionId, message.id, message.sequence)"));
     assert!(cancel.contains("rememberCanceledCommand(key)"));
     assert!(cancel.contains("activeCommandContexts.get(key)"));
-    assert!(cancel.contains("cancelCommandContext(context, \"server_timeout\")"));
+    assert!(cancel.contains("message.reason === \"request_canceled\""));
+    assert!(cancel.contains(
+        "cancelCommandContext(context, requestCanceled ? \"request_canceled\" : \"server_timeout\")"
+    ));
+    assert!(cancel.contains("if (!requestCanceled && context.started"));
     assert!(cancel.contains("stopControl(\"command_canceled\", { requireExplicitStart: true })"));
 
     let chain_start = background[command_start..]

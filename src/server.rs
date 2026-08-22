@@ -28,7 +28,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 use time::OffsetDateTime;
 use tokio::net::TcpListener;
-use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore, broadcast};
+use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore, broadcast, oneshot};
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
@@ -232,11 +232,51 @@ impl AppState {
             .admit(call_id, fingerprint, Instant::now())
     }
 
-    fn complete_command_call(&self, call_id: &str, status: StatusCode, body: Value) {
+    fn complete_command_call(
+        &self,
+        call_id: &str,
+        status: StatusCode,
+        body: Value,
+    ) -> (StatusCode, Value) {
         self.command_replay
             .lock()
             .unwrap()
-            .complete(call_id, status, body, Instant::now());
+            .complete(call_id, status, body, Instant::now())
+    }
+
+    fn request_command_cancellation(&self, call_id: &str) -> Option<CommandCancellation> {
+        self.command_replay.lock().unwrap().cancel(call_id)
+    }
+
+    fn bind_computer_command_owner(
+        &self,
+        call_id: Option<&str>,
+        session_id: &str,
+        method: &str,
+    ) -> bool {
+        let Some(call_id) = call_id else {
+            return true;
+        };
+        self.command_replay.lock().unwrap().bind_computer_owner(
+            call_id,
+            ComputerCommandOwner {
+                session_id: session_id.to_owned(),
+                method: method.to_owned(),
+            },
+        )
+    }
+
+    fn assert_command_api_boundary(&self, headers: &HeaderMap) -> Result<(), ApiError> {
+        let supplied = bearer_token(headers);
+        if !tokens_equal(supplied, &self.token) {
+            return Err(ApiError::new(
+                StatusCode::UNAUTHORIZED,
+                "UNAUTHORIZED",
+                "Bearer token required",
+            ));
+        }
+        assert_command_origin(headers)?;
+        assert_json_content_type(headers)
     }
 
     async fn refresh_update(&self) -> UpdateStatus {
@@ -892,9 +932,25 @@ impl IntoResponse for ApiError {
 /// for, so a callId reused for a different command is refused instead of
 /// silently replaying (or waiting on) the other command's outcome.
 struct CommandReplay {
-    in_flight: HashMap<String, String>,
+    in_flight: HashMap<String, InFlightEntry>,
     completed: HashMap<String, ReplayEntry>,
     ticks: u64,
+}
+
+struct InFlightEntry {
+    fingerprint: String,
+    cancellation: Option<oneshot::Sender<()>>,
+    computer_owner: Option<ComputerCommandOwner>,
+}
+
+#[derive(Clone)]
+struct ComputerCommandOwner {
+    session_id: String,
+    method: String,
+}
+
+struct CommandCancellation {
+    computer_owner: Option<ComputerCommandOwner>,
 }
 
 struct ReplayEntry {
@@ -906,7 +962,7 @@ struct ReplayEntry {
 }
 
 enum ReplayAdmission {
-    New,
+    New { canceled: oneshot::Receiver<()> },
     InFlight,
     Replay { status: StatusCode, body: Value },
     Reused,
@@ -939,24 +995,67 @@ impl CommandReplay {
             };
         }
         if let Some(registered) = self.in_flight.get(call_id) {
-            return if registered == fingerprint {
+            return if registered.fingerprint == fingerprint {
                 ReplayAdmission::InFlight
             } else {
                 ReplayAdmission::Reused
             };
         }
-        self.in_flight
-            .insert(call_id.to_owned(), fingerprint.to_owned());
-        ReplayAdmission::New
+        let (cancellation, canceled) = oneshot::channel();
+        self.in_flight.insert(
+            call_id.to_owned(),
+            InFlightEntry {
+                fingerprint: fingerprint.to_owned(),
+                cancellation: Some(cancellation),
+                computer_owner: None,
+            },
+        );
+        ReplayAdmission::New { canceled }
+    }
+
+    /// Accepts cancellation only while the exact call still owns an unused
+    /// cancellation sender. Taking the sender is the linearization point:
+    /// completion under the same mutex observes that cancellation won.
+    fn cancel(&mut self, call_id: &str) -> Option<CommandCancellation> {
+        let entry = self.in_flight.get_mut(call_id)?;
+        let cancellation = entry.cancellation.take()?;
+        let computer_owner = entry.computer_owner.clone();
+        let _ = cancellation.send(());
+        Some(CommandCancellation { computer_owner })
+    }
+
+    /// Binds a computer call to the helper session whose public authority it
+    /// may mutate. A cancellation that linearized first leaves no sender, so
+    /// the command is refused before dispatch.
+    fn bind_computer_owner(&mut self, call_id: &str, owner: ComputerCommandOwner) -> bool {
+        let Some(entry) = self.in_flight.get_mut(call_id) else {
+            return false;
+        };
+        if entry.cancellation.is_none() {
+            return false;
+        }
+        entry.computer_owner = Some(owner);
+        true
     }
 
     /// Stores the exact final response for a registered callId so later
     /// duplicates replay it without re-dispatching to any connector.
-    fn complete(&mut self, call_id: &str, status: StatusCode, body: Value, now: Instant) {
+    fn complete(
+        &mut self,
+        call_id: &str,
+        status: StatusCode,
+        body: Value,
+        now: Instant,
+    ) -> (StatusCode, Value) {
         // A completion without a registration has no fingerprint to pin, so
         // it is dropped instead of stored as an unverifiable entry.
-        let Some(fingerprint) = self.in_flight.remove(call_id) else {
-            return;
+        let Some(in_flight) = self.in_flight.remove(call_id) else {
+            return (status, body);
+        };
+        let (status, body) = if in_flight.cancellation.is_none() {
+            canceled_call_response(call_id)
+        } else {
+            (status, body)
         };
         self.evict_expired(now);
         while self.completed.len() >= REPLAY_CACHE_ENTRIES {
@@ -974,13 +1073,14 @@ impl CommandReplay {
         self.completed.insert(
             call_id.to_owned(),
             ReplayEntry {
-                fingerprint,
+                fingerprint: in_flight.fingerprint,
                 status,
-                body,
+                body: body.clone(),
                 stored_at: now,
                 last_used: self.ticks,
             },
         );
+        (status, body)
     }
 
     fn evict_expired(&mut self, now: Instant) {
@@ -1007,6 +1107,26 @@ fn interrupted_call_error() -> ApiError {
         "COMMAND_OUTCOME_UNKNOWN",
         "The original command with this callId was interrupted before its outcome was recorded; observe the current state before deciding whether to act again",
     )
+}
+
+fn canceled_call_error() -> ApiError {
+    ApiError::new(
+        StatusCode::GATEWAY_TIMEOUT,
+        "COMMAND_OUTCOME_UNKNOWN",
+        "Cancellation was requested for this command, but its outcome cannot be proven; observe the current state before deciding whether to act again",
+    )
+}
+
+fn error_response_for_call(error: ApiError, call_id: &str) -> (StatusCode, Value) {
+    let mut body = error.body();
+    if let Some(object) = body.as_object_mut() {
+        object.insert("callId".to_owned(), Value::String(call_id.to_owned()));
+    }
+    (error.status, body)
+}
+
+fn canceled_call_response(call_id: &str) -> (StatusCode, Value) {
+    error_response_for_call(canceled_call_error(), call_id)
 }
 
 /// Completes an admitted callId with a synthetic outcome-unknown failure if
@@ -1036,7 +1156,7 @@ impl Drop for InFlightCallGuard {
             if let Some(object) = body.as_object_mut() {
                 object.insert("callId".to_owned(), Value::String(call_id.clone()));
             }
-            replay.complete(&call_id, error.status, body, Instant::now());
+            let _ = replay.complete(&call_id, error.status, body, Instant::now());
         }
     }
 }
@@ -1052,6 +1172,7 @@ fn build_router(state: AppState) -> Router {
         .route("/api/action", post(api_action))
         .route("/api/update/check", post(api_update_check))
         .route("/api/v1/command", post(api_command))
+        .route("/api/v1/command/cancel", post(api_command_cancel))
         .route("/bridge", get(websocket_upgrade))
         .route("/computer", get(computer_websocket_upgrade))
         .fallback(get(static_asset))
@@ -1251,6 +1372,7 @@ async fn api_action(
         .perform_action(
             &method,
             body.get("params").cloned().unwrap_or_else(|| json!({})),
+            None,
         )
         .await?;
     let public = state.public_state().await;
@@ -1272,24 +1394,16 @@ async fn api_command(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    let supplied = bearer_token(&headers);
-    if !tokens_equal(supplied, &state.token) {
-        return Err(ApiError::new(
-            StatusCode::UNAUTHORIZED,
-            "UNAUTHORIZED",
-            "Bearer token required",
-        ));
-    }
-    assert_command_origin(&headers)?;
-    assert_json_content_type(&headers)?;
+    state.assert_command_api_boundary(&headers)?;
     let body = parse_json_body(&body)?;
     let method = required_string(body.get("method"), "method", 80)?;
     let params = body.get("params").cloned().unwrap_or_else(|| json!({}));
     let call_id = optional_call_id(body.get("callId"))?;
+    let mut canceled = None;
 
     if let Some(call_id) = call_id.as_deref() {
         match state.admit_command_call(call_id, &command_fingerprint(&method, &params)) {
-            ReplayAdmission::New => {}
+            ReplayAdmission::New { canceled: receiver } => canceled = Some(receiver),
             ReplayAdmission::InFlight => {
                 let error = ApiError::new(
                     StatusCode::CONFLICT,
@@ -1327,39 +1441,114 @@ async fn api_command(
         replay: state.command_replay.clone(),
         call_id: call_id.clone(),
     };
-    let outcome = state.perform_action(&method, params).await;
-    let (status, mut response_body) = match outcome {
-        Ok(result) => {
+    let outcome = if let Some(mut canceled) = canceled {
+        // The inner scope ensures the connector/action future is dropped as
+        // soon as cancellation wins. Any enqueued hub call then runs its
+        // exact pending-call Drop guard before this handler settles.
+        {
+            let action = state.perform_action(&method, params, call_id.as_deref());
+            tokio::pin!(action);
+            tokio::select! {
+                biased;
+                _ = &mut canceled => None,
+                result = &mut action => Some(result),
+            }
+        }
+    } else {
+        Some(state.perform_action(&method, params, None).await)
+    };
+    let (mut status, mut response_body) = match outcome {
+        Some(Ok(result)) => {
             let public = state.public_state().await;
             (
                 StatusCode::OK,
                 json!({ "ok": true, "result": result, "state": public }),
             )
         }
-        Err(error) => (error.status, error.body()),
+        Some(Err(error)) => (error.status, error.body()),
+        None => canceled_call_response(call_id.as_deref().expect("cancelable call has callId")),
     };
-    if let Some(call_id) = registration.disarm() {
+    if let Some(call_id) = call_id.as_deref() {
         if let Some(object) = response_body.as_object_mut() {
-            object.insert("callId".to_owned(), Value::String(call_id.clone()));
+            object.insert("callId".to_owned(), Value::String(call_id.to_owned()));
         }
-        state.complete_command_call(&call_id, status, response_body.clone());
+        (status, response_body) =
+            state.complete_command_call(call_id, status, response_body.clone());
+        registration.disarm();
     }
     Ok((status, Json(response_body)).into_response())
+}
+
+async fn api_command_cancel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    state.assert_command_api_boundary(&headers)?;
+    let body = parse_json_body(&body)?;
+    let call_id = required_call_id(body.get("callId"))?;
+    let Some(cancellation) = state.request_command_cancellation(&call_id) else {
+        let (status, body) = error_response_for_call(
+            ApiError::new(
+                StatusCode::CONFLICT,
+                "CALL_NOT_IN_PROGRESS",
+                "No cancellable command with this callId is currently in progress",
+            ),
+            &call_id,
+        );
+        return Ok((status, Json(body)).into_response());
+    };
+
+    if let Some(owner) = cancellation.computer_owner {
+        let unknown = HubError::new(
+            "COMMAND_OUTCOME_UNKNOWN",
+            "The caller requested cancellation; the computer command outcome is unknown",
+        );
+        if state
+            .clear_published_computer_authority_after_unknown(
+                &owner.session_id,
+                &owner.method,
+                &unknown,
+            )
+            .await
+        {
+            state
+                .log(
+                    &owner.method,
+                    "warning",
+                    "Cancellation requested; computer authority cleared until a fresh observation",
+                )
+                .await;
+            state.bump("computer-canceled").await;
+        }
+    }
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "ok": true,
+            "callId": call_id,
+            "cancellationRequested": true,
+        })),
+    )
+        .into_response())
 }
 
 fn optional_call_id(value: Option<&Value>) -> Result<Option<String>, ApiError> {
     match value {
         None | Some(Value::Null) => Ok(None),
-        Some(value) => {
-            let call_id = required_string(Some(value), "callId", CALL_ID_MAX_CHARS)?;
-            if call_id.is_empty() {
-                return Err(ApiError::bad_request(
-                    "callId must be between 1 and 128 characters",
-                ));
-            }
-            Ok(Some(call_id))
-        }
+        Some(value) => required_call_id(Some(value)).map(Some),
     }
+}
+
+fn required_call_id(value: Option<&Value>) -> Result<String, ApiError> {
+    let call_id = required_string(value, "callId", CALL_ID_MAX_CHARS)?;
+    if call_id.is_empty() {
+        return Err(ApiError::bad_request(
+            "callId must be between 1 and 128 characters",
+        ));
+    }
+    Ok(call_id)
 }
 
 fn assert_command_origin(headers: &HeaderMap) -> Result<(), ApiError> {
@@ -2569,9 +2758,16 @@ async fn static_asset(request: Request) -> Result<Response, ApiError> {
 }
 
 impl AppState {
-    async fn perform_action(&self, method: &str, raw_params: Value) -> Result<Value, ApiError> {
+    async fn perform_action(
+        &self,
+        method: &str,
+        raw_params: Value,
+        call_id: Option<&str>,
+    ) -> Result<Value, ApiError> {
         if COMPUTER_METHODS.contains(&method) {
-            return self.perform_computer_action(method, raw_params).await;
+            return self
+                .perform_computer_action(method, raw_params, call_id)
+                .await;
         }
         if !ACTION_METHODS.contains(&method) {
             return Err(ApiError::bad_request("Unsupported action"));
@@ -2789,6 +2985,7 @@ impl AppState {
         &self,
         method: &str,
         raw_params: Value,
+        call_id: Option<&str>,
     ) -> Result<Value, ApiError> {
         let _guard = self.action_lock.lock().await;
         let (computer, pointer_revision, frame_size) = {
@@ -2829,6 +3026,9 @@ impl AppState {
                 "COMPUTER_CAPABILITY_UNAVAILABLE",
                 format!("Computer helper did not advertise {method}"),
             ));
+        }
+        if !self.bind_computer_command_owner(call_id, &computer.session_id, method) {
+            return Err(canceled_call_error());
         }
         if method == "computer.observe" {
             return self
@@ -2991,13 +3191,13 @@ impl AppState {
         expected_session_id: &str,
         method: &str,
         error: &HubError,
-    ) {
+    ) -> bool {
         if matches!(
             method,
             "computer.status" | "computer.observe" | "computer.share.status"
         ) || classify(&error.code).code != TaxonomyCode::OutcomeUnknown
         {
-            return;
+            return false;
         }
 
         let mut data = self.data.write().await;
@@ -3007,7 +3207,7 @@ impl AppState {
             .as_mut()
             .filter(|computer| computer.session_id == expected_session_id)
         else {
-            return;
+            return false;
         };
         computer.share = json!({
             "active": false,
@@ -3017,6 +3217,7 @@ impl AppState {
         });
         data.public.computer_observation = None;
         data.computer_screenshot = None;
+        true
     }
 
     async fn refresh_computer_observation(
@@ -6369,7 +6570,7 @@ mod tests {
         let mut replay = CommandReplay::new();
         assert!(matches!(
             replay.admit("call-1", "fp-1", now),
-            ReplayAdmission::New
+            ReplayAdmission::New { .. }
         ));
         assert!(matches!(
             replay.admit("call-1", "fp-1", now),
@@ -6377,9 +6578,9 @@ mod tests {
         ));
         assert!(matches!(
             replay.admit("call-2", "fp-2", now),
-            ReplayAdmission::New
+            ReplayAdmission::New { .. }
         ));
-        replay.complete("call-1", StatusCode::OK, json!({ "ok": true }), now);
+        let _ = replay.complete("call-1", StatusCode::OK, json!({ "ok": true }), now);
         match replay.admit("call-1", "fp-1", now) {
             ReplayAdmission::Replay { status, body } => {
                 assert_eq!(status, StatusCode::OK);
@@ -6397,7 +6598,7 @@ mod tests {
         // duplicate of the pending command.
         assert!(matches!(
             replay.admit("call-1", "fp-a", now),
-            ReplayAdmission::New
+            ReplayAdmission::New { .. }
         ));
         assert!(matches!(
             replay.admit("call-1", "fp-b", now),
@@ -6409,7 +6610,7 @@ mod tests {
         ));
         // A completed callId replays only the exact same command; any other
         // fingerprint is refused instead of returning the cached outcome.
-        replay.complete("call-1", StatusCode::OK, json!({ "ok": true }), now);
+        let _ = replay.complete("call-1", StatusCode::OK, json!({ "ok": true }), now);
         assert!(matches!(
             replay.admit("call-1", "fp-b", now),
             ReplayAdmission::Reused
@@ -6433,12 +6634,203 @@ mod tests {
     }
 
     #[test]
+    fn cancellation_linearizes_before_completion_and_selects_the_cached_unknown_outcome() {
+        let now = Instant::now();
+        let mut replay = CommandReplay::new();
+        let mut canceled = match replay.admit("call-1", "fp-1", now) {
+            ReplayAdmission::New { canceled } => canceled,
+            _ => panic!("new call must be admitted"),
+        };
+
+        assert!(replay.cancel("call-1").is_some());
+        assert!(replay.cancel("call-1").is_none());
+        assert_eq!(canceled.try_recv(), Ok(()));
+        let (status, body) = replay.complete(
+            "call-1",
+            StatusCode::OK,
+            json!({ "ok": true, "callId": "call-1" }),
+            now,
+        );
+        assert_eq!(status, StatusCode::GATEWAY_TIMEOUT);
+        assert_eq!(body["error"]["code"], "COMMAND_OUTCOME_UNKNOWN");
+        assert_eq!(body["taxonomy"]["code"], "outcome_unknown");
+        assert_eq!(body["taxonomy"]["retriable"], false);
+        assert_eq!(body["taxonomy"]["recoveryHint"], "reobserve");
+        assert_eq!(body["callId"], "call-1");
+        match replay.admit("call-1", "fp-1", now) {
+            ReplayAdmission::Replay {
+                status: replay_status,
+                body: replay_body,
+            } => {
+                assert_eq!(replay_status, status);
+                assert_eq!(replay_body, body);
+            }
+            _ => panic!("canceled call must replay its unknown outcome"),
+        }
+        assert!(matches!(
+            replay.admit("call-1", "different", now),
+            ReplayAdmission::Reused
+        ));
+    }
+
+    #[test]
+    fn completion_linearizes_before_cancellation_and_keeps_the_real_outcome() {
+        let now = Instant::now();
+        let mut replay = CommandReplay::new();
+        assert!(matches!(
+            replay.admit("call-1", "fp-1", now),
+            ReplayAdmission::New { .. }
+        ));
+        let expected = json!({ "ok": true, "callId": "call-1" });
+        let completed = replay.complete("call-1", StatusCode::OK, expected.clone(), now);
+        assert_eq!(completed, (StatusCode::OK, expected));
+        assert!(replay.cancel("call-1").is_none());
+    }
+
+    #[test]
+    fn computer_owner_binding_is_refused_after_cancellation_and_preserves_exact_session() {
+        let now = Instant::now();
+        let mut replay = CommandReplay::new();
+        assert!(matches!(
+            replay.admit("bound", "fp-bound", now),
+            ReplayAdmission::New { .. }
+        ));
+        assert!(replay.bind_computer_owner(
+            "bound",
+            ComputerCommandOwner {
+                session_id: "old-session".to_owned(),
+                method: "computer.click".to_owned(),
+            },
+        ));
+        let accepted = replay.cancel("bound").unwrap();
+        let owner = accepted.computer_owner.unwrap();
+        assert_eq!(owner.session_id, "old-session");
+        assert_eq!(owner.method, "computer.click");
+
+        assert!(matches!(
+            replay.admit("queued", "fp-queued", now),
+            ReplayAdmission::New { .. }
+        ));
+        assert!(replay.cancel("queued").is_some());
+        assert!(!replay.bind_computer_owner(
+            "queued",
+            ComputerCommandOwner {
+                session_id: "unrelated-session".to_owned(),
+                method: "computer.click".to_owned(),
+            },
+        ));
+    }
+
+    #[tokio::test]
+    async fn old_owner_cancellation_cannot_clear_replacement_computer_authority() {
+        const PIXEL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false);
+        let observation = sanitize_computer_observation(Some(&json!({
+            "id": "replacement-frame",
+            "capturedAt": "2026-08-21T00:00:00Z",
+            "windowId": "replacement-window",
+            "displayId": "replacement-window",
+            "displayIndex": 0,
+            "displayName": "Replacement",
+            "imageWidth": 640,
+            "imageHeight": 400,
+            "screenX": 0,
+            "screenY": 0,
+            "screenWidth": 640,
+            "screenHeight": 400,
+            "scaleFactor": 1.0,
+            "rotation": 0.0,
+            "pointer": {
+                "id": "replacement-pointer",
+                "visible": true,
+                "windowId": "replacement-window",
+                "imageX": 25.0,
+                "imageY": 30.0,
+                "screenX": 25,
+                "screenY": 30,
+                "headingDegrees": 45.0,
+                "action": "idle",
+                "pressed": false,
+                "sequence": 7,
+                "revision": 9,
+                "buttonsMask": 0,
+                "updatedAt": "2026-08-21T00:00:00Z",
+                "coordinateSpace": "image-pixels",
+                "style": { "theme": "test" }
+            },
+            "share": { "active": true, "shareId": "replacement-share" }
+        })))
+        .unwrap();
+        let mut screenshot = decode_screenshot(Some(&Value::String(PIXEL.to_owned())))
+            .unwrap()
+            .unwrap();
+        screenshot.bind(
+            "/api/computer/screenshot",
+            "computer-window-frame",
+            "replacement-window:replacement-frame",
+        );
+        {
+            let mut data = state.data.write().await;
+            data.public.computer = Some(ComputerInfo {
+                version: VERSION.to_owned(),
+                protocol_version: PROTOCOL_VERSION,
+                session_id: "replacement-session".to_owned(),
+                compatible: true,
+                platform: "test-os".to_owned(),
+                architecture: "test-arch".to_owned(),
+                backend: "test-backend".to_owned(),
+                session_mode: "background-window".to_owned(),
+                isolation: "exact-window".to_owned(),
+                input_ready: true,
+                semantic_ready: true,
+                capabilities: vec!["computer.click".to_owned()],
+                windows: Vec::new(),
+                share: json!({ "active": true, "shareId": "replacement-share" }),
+                connected_at: "2026-08-21T00:00:00Z".to_owned(),
+            });
+            data.public.computer_observation = Some(observation);
+            data.computer_screenshot = Some(screenshot);
+        }
+        let (before_public, before_screenshot) = {
+            let data = state.data.read().await;
+            (
+                serde_json::to_vec(&data.public).unwrap(),
+                data.computer_screenshot.clone().unwrap(),
+            )
+        };
+
+        let changed = state
+            .clear_published_computer_authority_after_unknown(
+                "old-session",
+                "computer.click",
+                &HubError::new(
+                    "COMMAND_OUTCOME_UNKNOWN",
+                    "old command completed after replacement",
+                ),
+            )
+            .await;
+        assert!(!changed);
+
+        let data = state.data.read().await;
+        assert_eq!(serde_json::to_vec(&data.public).unwrap(), before_public);
+        let after_screenshot = data.computer_screenshot.as_ref().unwrap();
+        assert_eq!(after_screenshot.bytes, before_screenshot.bytes);
+        assert_eq!(
+            after_screenshot.content_hash,
+            before_screenshot.content_hash
+        );
+        assert_eq!(after_screenshot.id, before_screenshot.id);
+        assert_eq!(after_screenshot.binding, before_screenshot.binding);
+        assert_eq!(after_screenshot.route, before_screenshot.route);
+    }
+
+    #[test]
     fn dropped_in_flight_guard_caches_an_outcome_unknown_failure() {
         let now = Instant::now();
         let replay = Arc::new(Mutex::new(CommandReplay::new()));
         assert!(matches!(
             replay.lock().unwrap().admit("call-1", "fp-1", now),
-            ReplayAdmission::New
+            ReplayAdmission::New { .. }
         ));
         drop(InFlightCallGuard {
             replay: replay.clone(),
@@ -6470,14 +6862,15 @@ mod tests {
         };
         assert!(matches!(
             replay.lock().unwrap().admit("call-2", "fp-2", now),
-            ReplayAdmission::New
+            ReplayAdmission::New { .. }
         ));
         assert_eq!(guard.disarm().as_deref(), Some("call-2"));
         drop(guard);
-        replay
-            .lock()
-            .unwrap()
-            .complete("call-2", StatusCode::OK, json!({ "ok": true }), now);
+        let _ =
+            replay
+                .lock()
+                .unwrap()
+                .complete("call-2", StatusCode::OK, json!({ "ok": true }), now);
         assert!(matches!(
             replay.lock().unwrap().admit("call-2", "fp-2", now),
             ReplayAdmission::Replay { .. }
@@ -6490,9 +6883,9 @@ mod tests {
         let mut replay = CommandReplay::new();
         assert!(matches!(
             replay.admit("call-1", "fp-1", now),
-            ReplayAdmission::New
+            ReplayAdmission::New { .. }
         ));
-        replay.complete("call-1", StatusCode::OK, json!({ "ok": true }), now);
+        let _ = replay.complete("call-1", StatusCode::OK, json!({ "ok": true }), now);
         let before_expiry = now + REPLAY_CACHE_TTL - Duration::from_secs(1);
         assert!(matches!(
             replay.admit("call-1", "fp-1", before_expiry),
@@ -6501,7 +6894,7 @@ mod tests {
         let after_expiry = now + REPLAY_CACHE_TTL;
         assert!(matches!(
             replay.admit("call-1", "fp-1", after_expiry),
-            ReplayAdmission::New
+            ReplayAdmission::New { .. }
         ));
     }
 
@@ -6513,9 +6906,9 @@ mod tests {
             let call_id = format!("call-{index}");
             assert!(matches!(
                 replay.admit(&call_id, "fp", now),
-                ReplayAdmission::New
+                ReplayAdmission::New { .. }
             ));
-            replay.complete(&call_id, StatusCode::OK, json!({ "index": index }), now);
+            let _ = replay.complete(&call_id, StatusCode::OK, json!({ "index": index }), now);
         }
         // Touch the oldest entry so the second-oldest becomes least recent.
         assert!(matches!(
@@ -6524,16 +6917,16 @@ mod tests {
         ));
         assert!(matches!(
             replay.admit("call-overflow", "fp", now),
-            ReplayAdmission::New
+            ReplayAdmission::New { .. }
         ));
-        replay.complete("call-overflow", StatusCode::OK, json!({ "ok": true }), now);
+        let _ = replay.complete("call-overflow", StatusCode::OK, json!({ "ok": true }), now);
         assert!(matches!(
             replay.admit("call-0", "fp", now),
             ReplayAdmission::Replay { .. }
         ));
         assert!(matches!(
             replay.admit("call-1", "fp", now),
-            ReplayAdmission::New
+            ReplayAdmission::New { .. }
         ));
         assert!(matches!(
             replay.admit("call-2", "fp", now),

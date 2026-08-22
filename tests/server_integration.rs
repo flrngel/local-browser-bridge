@@ -458,6 +458,116 @@ async fn connect_fake_extension_with_dialog_race(
     (handle, relayed_methods, event_tx, observe_blocked)
 }
 
+struct ControlledBrowser {
+    handle: JoinHandle<()>,
+    commands: mpsc::UnboundedReceiver<Value>,
+}
+
+/// Browser fixture whose `page.typeText` command stays unresolved while the
+/// socket continues reading, allowing the test to observe the exact cancel
+/// envelope without timers or production-only hooks.
+async fn connect_controlled_browser(base_url: &str, token: &str) -> ControlledBrowser {
+    let mut request = format!("{}/bridge", base_url.replace("http", "ws"))
+        .into_client_request()
+        .unwrap();
+    request.headers_mut().insert(
+        "Origin",
+        "chrome-extension://cccccccccccccccccccccccccccccccc"
+            .parse()
+            .unwrap(),
+    );
+    let (mut socket, _) = connect_async(request).await.unwrap();
+    let welcome = authenticate_test_connector(&mut socket, token, BROWSER_CONNECTOR).await;
+    let session_id = welcome["sessionId"].as_str().unwrap().to_owned();
+    socket
+        .send(Message::Text(
+            json!({
+                "type": "hello",
+                "version": VERSION,
+                "protocolVersion": PROTOCOL_VERSION,
+                "sessionId": session_id,
+                "controllerId": "controlled-browser",
+                "connectionId": "controlled-connection",
+                "browser": "Test Chrome",
+                "mode": "full-access",
+                "capabilities": ["tabs.list", "page.observe", "page.typeText"]
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let (command_tx, command_rx) = mpsc::unbounded_channel();
+    let handle = tokio::spawn(async move {
+        while let Some(Ok(Message::Text(text))) = socket.next().await {
+            let message: Value = serde_json::from_str(text.as_str()).unwrap();
+            if message["type"] == "cancel" {
+                command_tx.send(message).unwrap();
+                continue;
+            }
+            if message["type"] != "command" {
+                continue;
+            }
+            if message["method"] == "page.typeText" {
+                command_tx.send(message).unwrap();
+                continue;
+            }
+            let result = match message["method"].as_str().unwrap_or("") {
+                "tabs.list" => json!({
+                    "activeTabId": 7,
+                    "tabs": [{
+                        "id": 7,
+                        "title": "Controlled tab",
+                        "url": "https://example.test/",
+                        "active": true
+                    }]
+                }),
+                "page.observe" => json!({
+                    "screenshot": PIXEL,
+                    "control": {
+                        "active": true,
+                        "sessionId": "controlled-lease",
+                        "tabId": 7,
+                        "startedAt": 1,
+                        "expiresAt": 9999999999999_u64,
+                        "lastHeartbeatAt": 2,
+                        "turn": 3,
+                        "moveSequence": 5,
+                        "cursor": { "x": 10, "y": 20, "visible": true, "updatedAt": 2 }
+                    },
+                    "snapshot": {
+                        "generation": "g-controlled",
+                        "title": "Controlled tab",
+                        "url": "https://example.test/",
+                        "bodyText": "Ready",
+                        "viewport": { "width": 800, "height": 600 },
+                        "scroll": { "x": 0, "y": 0, "maxY": 0 },
+                        "elements": []
+                    }
+                }),
+                method => panic!("unexpected controlled browser method: {method}"),
+            };
+            let response = json!({
+                "id": message["id"],
+                "type": "result",
+                "protocolVersion": message["protocolVersion"],
+                "sessionId": message["sessionId"],
+                "sequence": message["sequence"],
+                "ok": true,
+                "result": result,
+            });
+            socket
+                .send(Message::Text(response.to_string().into()))
+                .await
+                .unwrap();
+        }
+    });
+    ControlledBrowser {
+        handle,
+        commands: command_rx,
+    }
+}
+
 async fn connect_incompatible_extension(base_url: &str, token: &str) -> JoinHandle<()> {
     let mut request = format!("{}/bridge", base_url.replace("http", "ws"))
         .into_client_request()
@@ -498,6 +608,122 @@ struct FakeComputer {
     handle: JoinHandle<()>,
     events: mpsc::UnboundedSender<(String, Value)>,
     server_messages: Arc<Mutex<Vec<Value>>>,
+}
+
+struct ControlledComputer {
+    handle: JoinHandle<()>,
+    events: mpsc::UnboundedSender<(String, Value)>,
+    commands: mpsc::UnboundedReceiver<Value>,
+}
+
+/// Computer fixture that holds `computer.click` open but remains responsive
+/// to exact cancellation envelopes and test-driven share-frame events.
+async fn connect_controlled_computer(base_url: &str, token: &str) -> ControlledComputer {
+    let mut request = format!("{}/computer", base_url.replace("http", "ws"))
+        .into_client_request()
+        .unwrap();
+    request
+        .headers_mut()
+        .insert("Origin", COMPUTER_HELPER_ORIGIN.parse().unwrap());
+    let (mut socket, _) = connect_async(request).await.unwrap();
+    let welcome = authenticate_test_connector(&mut socket, token, COMPUTER_CONNECTOR).await;
+    let session_id = welcome["sessionId"].as_str().unwrap().to_owned();
+    socket
+        .send(Message::Text(
+            json!({
+                "type": "hello",
+                "version": VERSION,
+                "protocolVersion": PROTOCOL_VERSION,
+                "sessionId": session_id,
+                "platform": "test-os",
+                "architecture": "test-arch",
+                "backend": "controlled-capture+input",
+                "inputReady": true,
+                "semanticReady": true,
+                "capabilities": [
+                    "computer.status",
+                    "computer.observe",
+                    "computer.click",
+                    "computer.share.status",
+                    "computer.capture.native-stream.v1"
+                ]
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<(String, Value)>();
+    let (command_tx, command_rx) = mpsc::unbounded_channel();
+    let handle = tokio::spawn(async move {
+        let (mut writer, mut reader) = socket.split();
+        let mut event_sequence = 0_u64;
+        let mut events_open = true;
+        loop {
+            let message = tokio::select! {
+                event = event_rx.recv(), if events_open => {
+                    let Some((name, data)) = event else {
+                        events_open = false;
+                        continue;
+                    };
+                    event_sequence += 1;
+                    let event = json!({
+                        "type": "event",
+                        "name": name,
+                        "data": data,
+                        "protocolVersion": PROTOCOL_VERSION,
+                        "sessionId": session_id,
+                        "eventSequence": event_sequence,
+                    });
+                    writer.send(Message::Text(event.to_string().into())).await.unwrap();
+                    continue;
+                }
+                message = reader.next() => message,
+            };
+            let Some(Ok(Message::Text(text))) = message else {
+                break;
+            };
+            let message: Value = serde_json::from_str(text.as_str()).unwrap();
+            if message["type"] == "cancel" {
+                command_tx.send(message).unwrap();
+                continue;
+            }
+            if message["type"] != "command" {
+                continue;
+            }
+            if message["method"] == "computer.click" {
+                command_tx.send(message).unwrap();
+                continue;
+            }
+            let result = match message["method"].as_str().unwrap_or("") {
+                "computer.status" => json!({
+                    "inputReady": true,
+                    "semanticReady": true,
+                    "share": { "active": true }
+                }),
+                "computer.observe" => json!({}),
+                method => panic!("unexpected controlled computer method: {method}"),
+            };
+            let response = json!({
+                "id": message["id"],
+                "type": "result",
+                "protocolVersion": message["protocolVersion"],
+                "sessionId": message["sessionId"],
+                "sequence": message["sequence"],
+                "ok": true,
+                "result": result,
+            });
+            writer
+                .send(Message::Text(response.to_string().into()))
+                .await
+                .unwrap();
+        }
+    });
+    ControlledComputer {
+        handle,
+        events: event_tx,
+        commands: command_rx,
+    }
 }
 
 async fn connect_fake_computer(base_url: &str, token: &str, version: &str) -> JoinHandle<()> {
@@ -873,6 +1099,100 @@ async fn serves_embedded_ui_and_defensive_headers() {
             .is_none()
     );
     assert!(response.text().await.unwrap().contains("Browser Bridge"));
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn command_cancel_enforces_the_command_api_security_boundary_and_required_call_id() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let client = Client::new();
+    let endpoint = format!("{base_url}/api/v1/command/cancel");
+
+    let unauthorized = client
+        .post(&endpoint)
+        .json(&json!({ "callId": "missing" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), 401);
+
+    let cross_origin = client
+        .post(&endpoint)
+        .bearer_auth(&token)
+        .header("origin", "https://attacker.example")
+        .json(&json!({ "callId": "missing" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cross_origin.status(), 403);
+    assert_eq!(
+        cross_origin.json::<Value>().await.unwrap()["error"]["code"],
+        "ORIGIN_REJECTED"
+    );
+
+    let wrong_media = client
+        .post(&endpoint)
+        .bearer_auth(&token)
+        .header("content-type", "text/plain")
+        .body(r#"{"callId":"missing"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong_media.status(), 415);
+
+    let wrong_host = client
+        .post(&endpoint)
+        .bearer_auth(&token)
+        .header("host", "attacker.example")
+        .json(&json!({ "callId": "missing" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong_host.status(), 403);
+    assert_eq!(
+        wrong_host.json::<Value>().await.unwrap()["error"]["code"],
+        "HOST_REJECTED"
+    );
+
+    for invalid in [
+        json!({}),
+        json!({ "callId": "" }),
+        json!({ "callId": null }),
+    ] {
+        let response = client
+            .post(&endpoint)
+            .bearer_auth(&token)
+            .json(&invalid)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 400, "invalid body: {invalid}");
+    }
+    let too_long = client
+        .post(&endpoint)
+        .bearer_auth(&token)
+        .json(&json!({ "callId": "x".repeat(129) }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(too_long.status(), 400);
+
+    let nonexistent = client
+        .post(&endpoint)
+        .bearer_auth(&token)
+        .json(&json!({ "callId": "not-in-flight" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(nonexistent.status(), 409);
+    let nonexistent: Value = nonexistent.json().await.unwrap();
+    assert_eq!(nonexistent["ok"], false);
+    assert_eq!(nonexistent["error"]["code"], "CALL_NOT_IN_PROGRESS");
+    assert_eq!(nonexistent["taxonomy"]["code"], "invalid_request");
+    assert_eq!(nonexistent["callId"], "not-in-flight");
+
     let _ = shutdown.send(());
     handle.await.unwrap();
 }
@@ -1917,6 +2237,154 @@ async fn replays_completed_commands_with_the_same_call_id_without_redispatching(
 }
 
 #[tokio::test]
+async fn cancels_one_exact_browser_command_and_replays_the_conservative_outcome() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let mut browser = connect_controlled_browser(&base_url, &token).await;
+    let client = Client::new();
+    wait_for_tabs(&client, &base_url, &token).await;
+
+    let observed: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "page.observe", "params": { "tabId": 7 } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(observed["ok"], true);
+    assert_eq!(observed["state"]["browserControl"]["active"], true);
+
+    let request = json!({
+        "method": "page.typeText",
+        "params": { "tabId": 7, "generation": "g-controlled", "text": "hello" },
+        "callId": "call-cancel-browser-1"
+    });
+    let original = {
+        let client = client.clone();
+        let base_url = base_url.clone();
+        let token = token.clone();
+        let request = request.clone();
+        tokio::spawn(async move {
+            client
+                .post(format!("{base_url}/api/v1/command"))
+                .bearer_auth(token)
+                .json(&request)
+                .send()
+                .await
+                .unwrap()
+        })
+    };
+    let command = browser.commands.recv().await.unwrap();
+    assert_eq!(command["type"], "command");
+    assert_eq!(command["method"], "page.typeText");
+
+    let accepted = client
+        .post(format!("{base_url}/api/v1/command/cancel"))
+        .bearer_auth(&token)
+        .json(&json!({ "callId": "call-cancel-browser-1" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), 202);
+    assert_eq!(
+        accepted.json::<Value>().await.unwrap(),
+        json!({
+            "ok": true,
+            "callId": "call-cancel-browser-1",
+            "cancellationRequested": true
+        })
+    );
+
+    let duplicate = client
+        .post(format!("{base_url}/api/v1/command/cancel"))
+        .bearer_auth(&token)
+        .json(&json!({ "callId": "call-cancel-browser-1" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), 409);
+    assert_eq!(
+        duplicate.json::<Value>().await.unwrap()["error"]["code"],
+        "CALL_NOT_IN_PROGRESS"
+    );
+
+    let cancel = browser.commands.recv().await.unwrap();
+    assert_eq!(cancel["type"], "cancel");
+    assert_eq!(cancel["id"], command["id"]);
+    assert_eq!(cancel["protocolVersion"], command["protocolVersion"]);
+    assert_eq!(cancel["sessionId"], command["sessionId"]);
+    assert_eq!(cancel["sequence"], command["sequence"]);
+    assert_eq!(cancel["reason"], "request_canceled");
+
+    let original = original.await.unwrap();
+    assert_eq!(original.status(), 504);
+    let original: Value = original.json().await.unwrap();
+    assert_eq!(original["ok"], false);
+    assert_eq!(original["error"]["code"], "COMMAND_OUTCOME_UNKNOWN");
+    assert_eq!(original["taxonomy"]["code"], "outcome_unknown");
+    assert_eq!(original["taxonomy"]["retriable"], false);
+    assert_eq!(original["taxonomy"]["recoveryHint"], "reobserve");
+    assert_eq!(original["callId"], "call-cancel-browser-1");
+    assert!(original.get("replayed").is_none());
+
+    let replay = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&request)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), 504);
+    let replay: Value = replay.json().await.unwrap();
+    assert_eq!(replay["error"]["code"], "COMMAND_OUTCOME_UNKNOWN");
+    assert_eq!(replay["callId"], "call-cancel-browser-1");
+    assert_eq!(replay["replayed"], true);
+
+    let reused = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "page.typeText",
+            "params": { "tabId": 7, "generation": "g-controlled", "text": "different" },
+            "callId": "call-cancel-browser-1"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reused.status(), 409);
+    assert_eq!(
+        reused.json::<Value>().await.unwrap()["error"]["code"],
+        "CALL_ID_REUSED"
+    );
+    assert!(
+        browser.commands.try_recv().is_err(),
+        "cancel/replay/reuse must emit only one cancel and no redispatch"
+    );
+
+    let state: Value = client
+        .get(format!("{base_url}/api/state"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(state["state"]["browserControl"]["active"], true);
+    assert_eq!(
+        state["state"]["browserControl"]["sessionId"], "controlled-lease",
+        "canceling one browser command must not claim the user lease was released"
+    );
+
+    browser.handle.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
 async fn refuses_a_concurrent_duplicate_call_id_with_a_conflict() {
     let token = create_token();
     let (base_url, shutdown, handle) = start_server(&token).await;
@@ -2151,6 +2619,327 @@ async fn refuses_a_call_id_reused_for_a_different_command() {
     assert_eq!(relayed_methods.lock().unwrap().len(), relayed_before);
 
     fake.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn canceling_a_computer_mutation_clears_only_its_helper_session_authority() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let mut computer = connect_controlled_computer(&base_url, &token).await;
+    let client = Client::new();
+    let initial = wait_for_computer(&client, &base_url, &token).await;
+    let old_session = initial["state"]["computer"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    computer
+        .events
+        .send((
+            "computer.share.frame".to_owned(),
+            computer_share_frame_data(
+                "frame-cancel-1",
+                json!({
+                    "active": true,
+                    "shareId": "share-old",
+                    "windowId": "window-9",
+                    "sourceSequence": 1,
+                    "transportSequence": 1
+                }),
+            ),
+        ))
+        .unwrap();
+    wait_for_computer_frame(&client, &base_url, &token, "frame-cancel-1").await;
+
+    let request = json!({
+        "method": "computer.click",
+        "params": {
+            "frameId": "frame-cancel-1",
+            "x": 25,
+            "y": 30,
+            "button": "left",
+            "clickCount": 1
+        },
+        "callId": "call-cancel-computer-1"
+    });
+    let original = {
+        let client = client.clone();
+        let base_url = base_url.clone();
+        let token = token.clone();
+        let request = request.clone();
+        tokio::spawn(async move {
+            client
+                .post(format!("{base_url}/api/v1/command"))
+                .bearer_auth(token)
+                .json(&request)
+                .send()
+                .await
+                .unwrap()
+        })
+    };
+    let command = computer.commands.recv().await.unwrap();
+    assert_eq!(command["method"], "computer.click");
+    assert_eq!(command["sessionId"], old_session);
+
+    let accepted = client
+        .post(format!("{base_url}/api/v1/command/cancel"))
+        .bearer_auth(&token)
+        .json(&json!({ "callId": "call-cancel-computer-1" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), 202);
+    assert_eq!(
+        accepted.json::<Value>().await.unwrap(),
+        json!({
+            "ok": true,
+            "callId": "call-cancel-computer-1",
+            "cancellationRequested": true
+        })
+    );
+
+    let cancel = computer.commands.recv().await.unwrap();
+    assert_eq!(cancel["type"], "cancel");
+    assert_eq!(cancel["id"], command["id"]);
+    assert_eq!(cancel["sessionId"], command["sessionId"]);
+    assert_eq!(cancel["sequence"], command["sequence"]);
+    assert_eq!(cancel["reason"], "request_canceled");
+    assert!(computer.commands.try_recv().is_err());
+
+    let original = original.await.unwrap();
+    assert_eq!(original.status(), 504);
+    let original: Value = original.json().await.unwrap();
+    assert_eq!(original["error"]["code"], "COMMAND_OUTCOME_UNKNOWN");
+    assert_eq!(original["taxonomy"]["code"], "outcome_unknown");
+    assert_eq!(original["taxonomy"]["retriable"], false);
+    assert_eq!(original["callId"], "call-cancel-computer-1");
+
+    let cleared: Value = client
+        .get(format!("{base_url}/api/state"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(cleared["state"]["computer"]["sessionId"], old_session);
+    assert_eq!(cleared["state"]["computer"]["share"]["active"], false);
+    assert_eq!(
+        cleared["state"]["computer"]["share"]["reason"],
+        "outcome-unknown"
+    );
+    assert!(cleared["state"]["computerObservation"].is_null());
+    let screenshot = client
+        .get(format!("{base_url}/api/computer/screenshot"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(screenshot.status(), 404);
+
+    // A replacement helper publishes fresh authority after the canceled
+    // call's owner was captured. The old call and its late state transitions
+    // must never clear this different helper session.
+    let replacement = connect_fake_computer_with_share_ack(&base_url, &token, VERSION, false).await;
+    let replacement_session = loop {
+        let state: Value = client
+            .get(format!("{base_url}/api/state"))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if let Some(session) = state["state"]["computer"]["sessionId"].as_str()
+            && session != old_session
+        {
+            break session.to_owned();
+        }
+        tokio::task::yield_now().await;
+    };
+    replacement
+        .events
+        .send((
+            "computer.share.frame".to_owned(),
+            computer_share_frame_data(
+                "frame-replacement-1",
+                json!({
+                    "active": true,
+                    "shareId": "share-replacement",
+                    "windowId": "window-9",
+                    "sourceSequence": 1,
+                    "transportSequence": 1
+                }),
+            ),
+        ))
+        .unwrap();
+    let replaced = wait_for_computer_frame(&client, &base_url, &token, "frame-replacement-1").await;
+    assert_eq!(
+        replaced["state"]["computer"]["sessionId"],
+        replacement_session
+    );
+    assert_eq!(replaced["state"]["computer"]["share"]["active"], true);
+    assert_eq!(
+        replaced["state"]["computerObservation"]["frameId"],
+        "frame-replacement-1"
+    );
+
+    computer.handle.abort();
+    replacement.handle.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn canceling_a_computer_command_queued_on_the_action_lock_never_dispatches_or_clears_state() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let mut browser = connect_controlled_browser(&base_url, &token).await;
+    let mut computer = connect_controlled_computer(&base_url, &token).await;
+    let client = Client::new();
+    wait_for_tabs(&client, &base_url, &token).await;
+    wait_for_computer(&client, &base_url, &token).await;
+    let _: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "page.observe", "params": { "tabId": 7 } }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    computer
+        .events
+        .send((
+            "computer.share.frame".to_owned(),
+            computer_share_frame_data(
+                "frame-queued-1",
+                json!({
+                    "active": true,
+                    "shareId": "share-queued",
+                    "windowId": "window-9",
+                    "sourceSequence": 1,
+                    "transportSequence": 1
+                }),
+            ),
+        ))
+        .unwrap();
+    let before = wait_for_computer_frame(&client, &base_url, &token, "frame-queued-1").await;
+
+    let blocker_request = json!({
+        "method": "page.typeText",
+        "params": { "tabId": 7, "generation": "g-controlled", "text": "hold lock" },
+        "callId": "call-action-lock-blocker"
+    });
+    let blocker = {
+        let client = client.clone();
+        let base_url = base_url.clone();
+        let token = token.clone();
+        let request = blocker_request.clone();
+        tokio::spawn(async move {
+            client
+                .post(format!("{base_url}/api/v1/command"))
+                .bearer_auth(token)
+                .json(&request)
+                .send()
+                .await
+                .unwrap()
+        })
+    };
+    let blocker_command = browser.commands.recv().await.unwrap();
+    assert_eq!(blocker_command["method"], "page.typeText");
+
+    let queued_request = json!({
+        "method": "computer.click",
+        "params": {
+            "frameId": "frame-queued-1",
+            "x": 10,
+            "y": 10,
+            "button": "left",
+            "clickCount": 1
+        },
+        "callId": "call-computer-queued"
+    });
+    let queued = {
+        let client = client.clone();
+        let base_url = base_url.clone();
+        let token = token.clone();
+        let request = queued_request.clone();
+        tokio::spawn(async move {
+            client
+                .post(format!("{base_url}/api/v1/command"))
+                .bearer_auth(token)
+                .json(&request)
+                .send()
+                .await
+                .unwrap()
+        })
+    };
+    // Cancellation stays responsive outside the action lock. A 409 can only
+    // mean the spawned HTTP handler has not registered yet; once 202 arrives,
+    // the call was admitted while still unable to reach the helper.
+    let mut accepted = false;
+    for _ in 0..100 {
+        let response = client
+            .post(format!("{base_url}/api/v1/command/cancel"))
+            .bearer_auth(&token)
+            .json(&json!({ "callId": "call-computer-queued" }))
+            .send()
+            .await
+            .unwrap();
+        if response.status() == 202 {
+            accepted = true;
+            break;
+        }
+        assert_eq!(response.status(), 409);
+        tokio::task::yield_now().await;
+    }
+    assert!(accepted, "queued call was never admitted for cancellation");
+    let queued = queued.await.unwrap();
+    assert_eq!(queued.status(), 504);
+    assert_eq!(
+        queued.json::<Value>().await.unwrap()["error"]["code"],
+        "COMMAND_OUTCOME_UNKNOWN"
+    );
+    assert!(
+        computer.commands.try_recv().is_err(),
+        "cancel-before-owner-bind must emit no helper command or cancel"
+    );
+    let after: Value = client
+        .get(format!("{base_url}/api/state"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(after["state"]["computer"], before["state"]["computer"]);
+    assert_eq!(
+        after["state"]["computerObservation"],
+        before["state"]["computerObservation"]
+    );
+
+    let blocker_cancel = client
+        .post(format!("{base_url}/api/v1/command/cancel"))
+        .bearer_auth(&token)
+        .json(&json!({ "callId": "call-action-lock-blocker" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(blocker_cancel.status(), 202);
+    let cancel = browser.commands.recv().await.unwrap();
+    assert_eq!(cancel["id"], blocker_command["id"]);
+    assert_eq!(cancel["reason"], "request_canceled");
+    assert_eq!(blocker.await.unwrap().status(), 504);
+
+    browser.handle.abort();
+    computer.handle.abort();
     let _ = shutdown.send(());
     handle.await.unwrap();
 }

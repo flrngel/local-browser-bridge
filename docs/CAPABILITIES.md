@@ -23,8 +23,11 @@ This page states what the current code can do, what the user must configure, and
 | Browser-owned warning and extension-owned page indicator | Available | Chrome owns the debugger warning; the extension owns its pill and Stop button |
 | Full Access | Available and default | Broad authority over regular pages in the selected profile |
 | Safe mode | Available | Site allowlist, sensitive-field blocking, and selected one-time approvals |
+| Per-command API cancellation | Available | Bearer-authenticated in-flight `callId`; returns outcome-unknown and requires observation, never automatic retry |
 
 The extension never replaces trusted debugger input with an untrusted page-generated click. Chrome Cancel, the in-page **Stop** button, popup release, lease expiry, tab closure, or connector loss revokes control.
+
+Canceling one bearer API command stops only that command context and preserves the user's browser-control lease. Cancellation is cooperative and can race a dispatched side effect, so the original command is completed as outcome-unknown rather than reported as rolled back.
 
 ## Native application control
 

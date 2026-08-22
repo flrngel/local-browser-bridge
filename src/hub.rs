@@ -54,6 +54,60 @@ struct PendingCall {
     sender: oneshot::Sender<Result<Value, HubError>>,
 }
 
+/// Owns one exact pending connector call for as long as its caller future is
+/// alive. Dropping that future removes only the matching registration and
+/// sends one cancellation envelope to the connection that received the
+/// command, even if a replacement connection has since become current.
+struct PendingCallGuard {
+    inner: Arc<HubInner>,
+    id: String,
+    connection_id: Uuid,
+    sequence: u64,
+    sender: mpsc::Sender<Message>,
+    armed: bool,
+}
+
+impl PendingCallGuard {
+    fn remove_exact(&self) -> bool {
+        let mut pending = self.inner.pending.lock().unwrap();
+        let matches = pending.get(&self.id).is_some_and(|call| {
+            call.connection_id == self.connection_id && call.sequence == self.sequence
+        });
+        if matches {
+            pending.remove(&self.id);
+        }
+        matches
+    }
+
+    fn disarm_without_cancel(&mut self) {
+        self.remove_exact();
+        self.armed = false;
+    }
+
+    fn cancel(&mut self, reason: &str) {
+        if self.armed && self.remove_exact() {
+            let cancel = json!({
+                "id": self.id,
+                "type": "cancel",
+                "protocolVersion": crate::PROTOCOL_VERSION,
+                "sessionId": self.connection_id.to_string(),
+                "sequence": self.sequence,
+                "reason": reason,
+            });
+            let _ = self
+                .sender
+                .try_send(Message::Text(cancel.to_string().into()));
+        }
+        self.armed = false;
+    }
+}
+
+impl Drop for PendingCallGuard {
+    fn drop(&mut self) {
+        self.cancel("request_canceled");
+    }
+}
+
 impl ExtensionHub {
     pub fn new(call_timeout: Duration) -> Self {
         Self::connector(call_timeout, "Browser extension", "EXTENSION")
@@ -346,6 +400,14 @@ impl ExtensionHub {
                 sender,
             },
         );
+        let mut pending_guard = PendingCallGuard {
+            inner: self.inner.clone(),
+            id: id.clone(),
+            connection_id: connection.id,
+            sequence,
+            sender: connection.sender.clone(),
+            armed: true,
+        };
 
         let command = json!({
             "id": id,
@@ -360,7 +422,7 @@ impl ExtensionHub {
             .sender
             .try_send(Message::Text(command.to_string().into()))
         {
-            self.inner.pending.lock().unwrap().remove(&id);
+            pending_guard.disarm_without_cancel();
             let saturated = matches!(error, TrySendError::Full(_));
             return Err(HubError::new(
                 if saturated {
@@ -377,7 +439,10 @@ impl ExtensionHub {
         }
 
         match tokio::time::timeout(self.inner.call_timeout, receiver).await {
-            Ok(Ok(result)) => result.map(|result| (connection.id, result)),
+            Ok(Ok(result)) => {
+                pending_guard.armed = false;
+                result.map(|result| (connection.id, result))
+            }
             Ok(Err(_)) => Err(HubError::new(
                 "COMMAND_OUTCOME_UNKNOWN",
                 format!(
@@ -386,18 +451,7 @@ impl ExtensionHub {
                 ),
             )),
             Err(_) => {
-                self.inner.pending.lock().unwrap().remove(&id);
-                let cancel = json!({
-                    "id": id,
-                    "type": "cancel",
-                    "protocolVersion": crate::PROTOCOL_VERSION,
-                    "sessionId": connection.id.to_string(),
-                    "sequence": sequence,
-                    "reason": "command_timeout",
-                });
-                let _ = connection
-                    .sender
-                    .try_send(Message::Text(cancel.to_string().into()));
+                pending_guard.cancel("command_timeout");
                 Err(HubError::new(
                     "COMMAND_OUTCOME_UNKNOWN",
                     format!(
@@ -593,10 +647,48 @@ mod tests {
         assert_eq!(cancel["id"], command["id"]);
         assert_eq!(cancel["sequence"], command["sequence"]);
         assert_eq!(cancel["sessionId"], connection_id.to_string());
+        assert_eq!(cancel["reason"], "command_timeout");
         assert_eq!(
             caller.await.unwrap().unwrap_err().code,
             "COMMAND_OUTCOME_UNKNOWN"
         );
+        assert!(receiver.try_recv().is_err(), "timeout must emit one cancel");
+    }
+
+    #[tokio::test]
+    async fn dropping_a_call_emits_one_exact_request_cancel_and_rejects_late_results() {
+        let hub = ExtensionHub::new(Duration::from_secs(1));
+        let (connection_id, mut receiver) = hub.attach();
+        assert!(hub.mark_ready(connection_id));
+        let caller = {
+            let hub = hub.clone();
+            tokio::spawn(async move { hub.call("page.click", json!({})).await })
+        };
+        let command = next_json(&mut receiver).await;
+
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+        let cancel = next_json(&mut receiver).await;
+        assert_eq!(cancel["type"], "cancel");
+        assert_eq!(cancel["id"], command["id"]);
+        assert_eq!(cancel["protocolVersion"], crate::PROTOCOL_VERSION);
+        assert_eq!(cancel["sessionId"], connection_id.to_string());
+        assert_eq!(cancel["sequence"], command["sequence"]);
+        assert_eq!(cancel["reason"], "request_canceled");
+        assert!(receiver.try_recv().is_err(), "drop must emit one cancel");
+
+        assert!(!hub.resolve(
+            connection_id,
+            &json!({
+                "id": command["id"],
+                "type": "result",
+                "protocolVersion": crate::PROTOCOL_VERSION,
+                "sessionId": connection_id.to_string(),
+                "sequence": command["sequence"],
+                "ok": true,
+                "result": { "clicked": true }
+            }),
+        ));
     }
 
     #[tokio::test]

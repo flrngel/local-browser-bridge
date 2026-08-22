@@ -365,6 +365,7 @@ pub fn classify(legacy_code: &str) -> Taxonomy {
         | "BAD_KEY"
         | "BAD_MODIFIER"
         | "CALL_ID_REUSED"
+        | "CALL_NOT_IN_PROGRESS"
         | "BODY_TOO_LARGE"
         | "UNSUPPORTED_MEDIA_TYPE"
         | "NOT_FOUND"
@@ -542,6 +543,9 @@ pub(crate) const LEGACY_CODES: &[(&str, TaxonomyCode)] = &[
     // A callId reused for a different command: the request itself is
     // wrong, so the fix is a fresh callId, never a retry.
     ("CALL_ID_REUSED", TaxonomyCode::InvalidRequest),
+    // Cancellation is scoped to a currently in-flight callId. Missing,
+    // completed, and already-canceled calls are all the same safe refusal.
+    ("CALL_NOT_IN_PROGRESS", TaxonomyCode::InvalidRequest),
     ("BODY_TOO_LARGE", TaxonomyCode::InvalidRequest),
     ("UNSUPPORTED_MEDIA_TYPE", TaxonomyCode::InvalidRequest),
     ("NOT_FOUND", TaxonomyCode::InvalidRequest),

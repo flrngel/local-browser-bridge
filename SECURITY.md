@@ -7,6 +7,7 @@ Browser **Full Access mode is enabled by default**, and the native computer help
 ## Trust boundaries
 
 - The HTTP/WebSocket server binds only to loopback and rejects non-loopback Host headers.
+- The sole bearer token authorizes both command dispatch and exact `callId` cancellation. Any token holder can cancel any currently in-flight bearer command, so `callId` is an idempotency/request identity, not a secret or a separate authorization capability; there is no global or unauthenticated cancel.
 - The extension authenticates with a canonical URL-safe encoding of 32 random bytes stored outside the repository. Empty, weak, malformed, permissive, or symlinked persisted token files are rotated atomically.
 - Connector WebSockets carry no bearer, query, or raw token. The extension and helper use a three-second, size-bounded mutual HMAC-SHA256 handshake that binds role, connector, a fresh client nonce, a fresh server nonce, and the server-created session ID. A connector verifies server proof before sending its own proof or reading browser/native state; the server attaches it to the active hub only after constant-time client-proof verification.
 - The extension additionally requires an exact Chrome-extension Origin, and the helper requires exact Origin `lbb-computer-helper://local`. Provisional unauthenticated sockets are concurrency-bounded and cannot replace an active connector.

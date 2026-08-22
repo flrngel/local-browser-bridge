@@ -12,7 +12,7 @@ Protocol version: `1`. Package version examples below use `0.11.0`.
 - One active extension transport and one active helper transport; a new authenticated connection replaces the old connector of the same type
 - Provisional authentication: three-second total deadline, 8 KiB text-message limit, four inbound frames, and four concurrent provisional sockets per connector
 - JSON WebSocket message limit: 8 MB
-- Command timeout: 15 seconds by default; timeout emits an exact-session cancel and returns `COMMAND_OUTCOME_UNKNOWN`, never a retry-safe success/failure claim
+- Command timeout: 15 seconds by default; timeout or explicit request cancellation emits an exact-session cancel and returns `COMMAND_OUTCOME_UNKNOWN`, never a retry-safe success/failure claim
 - Server-to-connector queue: 64 messages; saturation returns an overload error instead of growing without bound
 
 The shared token is the raw 32-byte HMAC key after canonical base64url-no-pad decoding. It never appears in a WebSocket URI or header and is never sent on the socket. Origin validation narrows the transport source; mutual proof authenticates both peers and binds every accepted message to one fresh server-created connection session. An unauthenticated provisional socket never attaches to the hub or replaces a ready connector. Browser-control leases and computer frames add narrower action authority inside that transport session.
@@ -195,7 +195,7 @@ Failed result:
 
 Commands are serialized by each connector and have a strictly increasing server sequence. A result must echo the command's exact `id`, `sessionId`, `protocolVersion`, and `sequence`; a stale or cross-connection result resolves as a protocol violation rather than completing a pending call.
 
-If the server deadline expires, it removes the pending result and sends a cancel bound to the same command identity:
+If the server deadline expires, or the HTTP request that owns an enqueued command is canceled, the server removes the exact pending result and sends one cancel bound to the original connector session and command identity:
 
 ```json
 {
@@ -208,7 +208,7 @@ If the server deadline expires, it removes the pending result and sends a cancel
 }
 ```
 
-The connector checks cancellation before side-effect boundaries and during bounded multi-step input, performs best-effort held-input cleanup, and never lets a late result satisfy another request. Because a cancel can race an already dispatched operating-system or CDP event, the client receives `COMMAND_OUTCOME_UNKNOWN` and must observe before making a new decision; it must not automatically retry.
+Timeout uses reason `command_timeout`; dropping the owning request uses `request_canceled`. The connector checks cancellation before side-effect boundaries and during bounded multi-step input, performs best-effort held-input cleanup, and never lets a late result satisfy another request. Because a cancel can race an already dispatched operating-system or CDP event, the client receives `COMMAND_OUTCOME_UNKNOWN` and must observe before making a new decision; it must not automatically retry. A `request_canceled` browser command cancels only that command context and does not claim that the user-visible browser control lease was released; timeout, disconnection, and replacement remain lease-fatal.
 
 Unsolicited connector events use an independent monotonic `eventSequence`:
 
@@ -521,6 +521,26 @@ Legacy `displayId` and display-shaped aliases identify the selected window, not 
 
 `POST /api/v1/command` accepts an optional `callId` (1–128 characters). Admission is atomic: while a command with that `callId` is in flight, a duplicate returns HTTP 409 `CALL_IN_PROGRESS` and nothing is dispatched twice. After completion, the exact final body and HTTP status—success or failure, with `callId` echoed top-level—are cached (256 entries, ten-minute TTL); a replay returns the cached response with `"replayed": true` without touching any connector. If the HTTP client disconnects before a command's outcome is recorded, the action may still execute, so the `callId` is completed with a cached HTTP 504 `COMMAND_OUTCOME_UNKNOWN` failure (taxonomy `outcome_unknown`, hint `reobserve`): retries of that `callId` replay this failure and never re-dispatch, and the caller must observe before acting again. Each registration is fingerprinted over the method and canonical parameters; reusing a `callId` for a different command returns HTTP 409 `CALL_ID_REUSED` (taxonomy `invalid_request`) instead of replaying the other command's outcome. The bridge has exactly one bearer token, so all commands share one replay namespace.
 
+### Explicit command cancellation
+
+`POST /api/v1/command/cancel` accepts JSON `{ "callId": "..." }` under the same loopback Host, bearer-token, Origin, body-size, and JSON Content-Type boundary as the command endpoint. Only a currently in-flight command that was atomically registered with that exact `callId` is cancellable. Acceptance returns HTTP 202 `{ "ok": true, "callId": "...", "cancellationRequested": true }`; a missing, completed, or already-canceled ID returns HTTP 409 `CALL_NOT_IN_PROGRESS`. There is no unauthenticated or global cancel.
+
+```http
+POST /api/v1/command/cancel HTTP/1.1
+Authorization: Bearer <bridge-token>
+Content-Type: application/json
+
+{"callId":"agent-request-42"}
+```
+
+```json
+{"ok":true,"callId":"agent-request-42","cancellationRequested":true}
+```
+
+Cancellation and normal completion linearize under the replay registry's mutex. If cancellation wins, the exact action future is dropped, one session/id/sequence-bound connector cancel is emitted if dispatch occurred, and the original HTTP response deterministically completes as cached HTTP 504 `COMMAND_OUTCOME_UNKNOWN` with the `callId`. The same payload then replays that 504 without redispatch; a different payload remains `CALL_ID_REUSED`. The 202 confirms a cancellation request, not rollback or proof that no side effect occurred. Canceled computer mutations immediately invalidate the owning helper session's published share, frame, pointer, and screenshot authority; a replacement helper session is never cleared. Browser cancellation preserves the user's browser-control lease while canceling the command context.
+
+The identity model follows the same request-scoped shape used by MCP's canceled-request notification and LSP's `$/cancelRequest`: cancellation names one caller request ID and never means “stop everything.” `callId` remains this REST API's idempotency/cancellation identity; the connector's internal UUID plus session and sequence remain separate transport identity and are never supplied by the caller.
+
 ### Error taxonomy
 
 Every failed JSON API response carries a `taxonomy` object next to the untouched legacy `error`:
@@ -560,6 +580,6 @@ A connector failure therefore never answers 500: an unclassified code is the con
 
 Three connector codes deliberately answer a narrower status than their class, because the class is right about the recovery and the status is more precise about the cause: `BAD_COORDINATES` answers 400 (the number itself is wrong, not the observation), `COMPUTER_PERMISSION_REQUIRED` answers 403 (a missing operating-system permission is a standing refusal, not a lock a handback resumes), and `NO_PENDING_DIALOG` answers 409 (the request is well formed; only the page state does not match). There are no other exceptions.
 
-Statuses the server produces for its **own** refusals are unaffected by this contract and unchanged: 400 `BAD_REQUEST`, 401 `UNAUTHORIZED`, 403 `HOST_REJECTED`/`CSRF_REJECTED`/`ORIGIN_REJECTED`, 404 `NOT_FOUND`/`NO_SCREENSHOT`/`NO_COMPUTER_SCREENSHOT`, 409 `CALL_IN_PROGRESS`/`CALL_ID_REUSED`/`EXTENSION_PROTOCOL_MISMATCH`/`EXTENSION_CAPABILITY_UNAVAILABLE`/`COMPUTER_PROTOCOL_MISMATCH`/`COMPUTER_CAPABILITY_UNAVAILABLE`/`BLOCKED_BY_DIALOG`/`STALE_SCREENSHOT`/`NO_COMPUTER_FRAME`/`NO_BROWSER_OBSERVATION`, 413 `BODY_TOO_LARGE`, 415 `UNSUPPORTED_MEDIA_TYPE`, 429 `AUTH_BUSY`, 502 `COMPUTER_INVALID_OBSERVATION`, 503 `EXTENSION_HANDSHAKE_PENDING`/`COMPUTER_HANDSHAKE_PENDING`/`EXTENSION_DISCONNECTED`/`COMPUTER_DISCONNECTED`, and the 504 `COMMAND_OUTCOME_UNKNOWN` cached for an interrupted `callId`. The only 500 the API can still answer is `INVALID_SANITIZER_STATE`, a broken internal invariant of the server itself, which is exactly what a 500 should mean.
+Statuses the server produces for its **own** refusals are unaffected by this contract and unchanged: 400 `BAD_REQUEST`, 401 `UNAUTHORIZED`, 403 `HOST_REJECTED`/`CSRF_REJECTED`/`ORIGIN_REJECTED`, 404 `NOT_FOUND`/`NO_SCREENSHOT`/`NO_COMPUTER_SCREENSHOT`, 409 `CALL_IN_PROGRESS`/`CALL_ID_REUSED`/`CALL_NOT_IN_PROGRESS`/`EXTENSION_PROTOCOL_MISMATCH`/`EXTENSION_CAPABILITY_UNAVAILABLE`/`COMPUTER_PROTOCOL_MISMATCH`/`COMPUTER_CAPABILITY_UNAVAILABLE`/`BLOCKED_BY_DIALOG`/`STALE_SCREENSHOT`/`NO_COMPUTER_FRAME`/`NO_BROWSER_OBSERVATION`, 413 `BODY_TOO_LARGE`, 415 `UNSUPPORTED_MEDIA_TYPE`, 429 `AUTH_BUSY`, 502 `COMPUTER_INVALID_OBSERVATION`, 503 `EXTENSION_HANDSHAKE_PENDING`/`COMPUTER_HANDSHAKE_PENDING`/`EXTENSION_DISCONNECTED`/`COMPUTER_DISCONNECTED`, and the 504 `COMMAND_OUTCOME_UNKNOWN` cached for an interrupted or canceled `callId`. The only 500 the API can still answer is `INVALID_SANITIZER_STATE`, a broken internal invariant of the server itself, which is exactly what a 500 should mean.
 
 The native allowlist intentionally contains no shell, filesystem, process-launch, clipboard, downloader, arbitrary-code, credential-store, user-management, or telemetry method.

@@ -782,10 +782,14 @@ async function connect() {
       rememberCanceledCommand(key);
       const context = activeCommandContexts.get(key);
       if (context) {
-        cancelCommandContext(context, "server_timeout");
-        if (context.started && commandUsesControl(context.method) && controlLease) {
+        const requestCanceled = message.reason === "request_canceled";
+        cancelCommandContext(context, requestCanceled ? "request_canceled" : "server_timeout");
+        // An API caller canceled one command context, not the user's browser
+        // control lease. Connector loss and server timeout remain lease-fatal
+        // because their command outcome cannot be reconciled safely.
+        if (!requestCanceled && context.started && commandUsesControl(context.method) && controlLease) {
           void stopControl("command_canceled", { requireExplicitStart: true });
-        } else if (context.started && context.method === "browser.control.start") {
+        } else if (!requestCanceled && context.started && context.method === "browser.control.start") {
           controlEpoch += 1;
         }
       }
