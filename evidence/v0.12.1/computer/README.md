@@ -10,7 +10,9 @@ SHA-256 is later published in the v0.12.1 GitHub release.
 The harness talks to the real loopback server API and launches the supplied
 `Local Computer Helper.app` executable exactly once. It does not use a mock
 connector, a polling screenshot replacement, global HID input, or a second
-helper process.
+helper process. Its fixture creates two clearly titled, visible, genuine
+`NSWindow` instances in one process from startup: the primary capture/action
+target and a magenta same-PID sibling receiver sentinel.
 
 ## What the run proves
 
@@ -21,7 +23,10 @@ helper process.
   `SHA256SUMS.txt`.
 - Existing Screen Recording and Accessibility permission are present. The rig
   never requests or changes either permission.
-- The exact fixture window is observed through the authenticated server API.
+- The exact primary fixture window and a distinct sibling window are both
+  enumerated through the authenticated server API with the same PID and their
+  independently reported native window IDs. Primary selection remains exact;
+  sibling count is never treated as receiver authority.
 - Accessibility `setValue` is confirmed by read-back. Generic Accessibility
   invocation remains conservatively `Partial`; the fixture's own counter is
   recorded as separate target-side proof.
@@ -55,6 +60,23 @@ helper process.
   keep pace.
 - Foreground process, front window, hardware cursor, and active Space remain
   unchanged, both in each product action record and in an independent probe.
+  The probe now sandwiches a read-only foreground `AXFocusedWindow` and
+  `AXFrontmost` read between foreground-PID samples; WindowServer ordering is
+  retained as a secondary equality check, not trusted as the receiver oracle.
+- Before representative primary pixel and native-text actions, an independent
+  read-only Accessibility probe confirms that the target app remembers its
+  secondary window as `AXFocusedWindow` while a different user app remains
+  frontmost. The actions must mutate only the primary fixture counters/field,
+  leave sibling text and click counters at zero, and restore the same sibling
+  as the target app's focused window before returning. The user's sandwiched
+  foreground PID/AX window/`AXFrontmost`, WindowServer front row, cursor, and
+  Space must all remain unchanged.
+- A live wrong-sibling-at-dispatch negative is explicitly **unproven**. After
+  helper preparation, forcing the sibling would require a timing race or a
+  production-only hook; making the fixture foreground would interrupt the user.
+  The rig uses none of those techniques. Exact receiver mismatch refusal stays
+  covered by production unit/source contracts until a deterministic,
+  non-activating mechanism exists.
 - A real two-second `computer.move` starts under one fresh `callId`. The runner
   waits until the fixture's bounded `mouseMoved` counter proves a newly
   delivered target-routed native event; an exact duplicate must then report
@@ -109,7 +131,10 @@ login session, or independent input seat.
 Every image is fetched from `/api/computer/screenshot` only after the public
 observation is bound to the fixture's exact PID, native window ID, and title.
 The machine-readable screenshot manifest records each PNG's dimensions,
-SHA-256, frame ID, source sequence, and transport sequence.
+SHA-256, frame ID, source sequence, and transport sequence. The runner also
+requires all six manifest entries to name the primary window ID and never the
+sibling ID. The sibling exists to test routing and is deliberately excluded
+from retained screenshots.
 
 Screenshot 06 is intentionally captured before the post-resize click, native
 text proof, and cancellation flow. It is the visual proof that the same share
@@ -128,7 +153,7 @@ negative result and must be retained. The runner refuses to overwrite any
 existing result, log, or expected screenshot. Move a completed or failed
 attempt to a separately named evidence directory before starting another one.
 The runner deliberately closes its own fixture during the target-close stage;
-it never closes an unrelated application or window.
+both same-PID fixture windows therefore exit together. It never closes an unrelated application or window.
 
 ```sh
 mkdir -p "$SCRATCH_PARENT/v0.12.1-package"
@@ -161,6 +186,14 @@ cleanup. The bearer token is also excluded. The cancellation stage uses the
 product's normal authenticated endpoint and a naturally long real action—never
 a shortened server deadline, test-only dispatch delay, fault hook, or connector
 mock.
+
+The sibling field's content is never serialized. The scratch fixture state and
+retained result record only its bounded UTF-16 length and click/focus counters;
+a passing run requires zero sibling text and pointer mutation. The external AX
+probe's raw foreground IDs are reduced to equality booleans in evidence output.
+On failure, the same probe receives the exact fixture PID to evaluate sibling
+focus, but diagnostics retain only availability, expected-focus, observed-focus,
+and equality booleans—never the target PID or either native window ID.
 
 macOS can report the exact-target loss first through window enumeration
 (`COMPUTER_NO_WINDOW`) or through the ScreenCaptureKit stop callback

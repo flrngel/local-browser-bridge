@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 
 private let fixtureTitle = "LBB v0.12.1 Persistent SCStream Evidence"
+private let siblingFixtureTitle = "LBB v0.12.1 Same-PID Sibling Receiver"
 
 private struct FixtureState: Codable {
     var pid: Int32
@@ -15,6 +16,12 @@ private struct FixtureState: Codable {
     var appliedControlSequence = 0
     var contentWidth = 720
     var contentHeight = 460
+    var primaryWindowId = 0
+    var siblingWindowId = 0
+    var appKeyWindowId = 0
+    var siblingTextLength = 0
+    var siblingClicks = 0
+    var siblingFocusCount = 0
     var lastAction = "ready"
 }
 
@@ -99,16 +106,41 @@ private final class FixtureView: NSView, NSTextFieldDelegate {
         persistAndRedraw()
     }
 
-    func focusSemanticField(controlSequence: Int) -> Bool {
-        guard let window, window.makeFirstResponder(semanticField) else { return false }
+    func bindWindowTopology(primaryWindowId: Int, siblingWindowId: Int) {
+        state.primaryWindowId = primaryWindowId
+        state.siblingWindowId = siblingWindowId
+        refreshAppKeyWindow()
+        writeState()
+    }
+
+    func recordSiblingTextLength(_ length: Int) {
+        guard state.siblingTextLength != length else { return }
+        state.siblingTextLength = length
+        state.lastAction = "sibling-text"
+        writeState()
+    }
+
+    func recordSiblingClick() {
+        state.siblingClicks += 1
+        state.lastAction = "sibling-click"
+        writeState()
+    }
+
+    func focusSemanticField(controlSequence: Int, siblingView: SiblingView) -> Bool {
+        guard let window else { return false }
+        window.makeKey()
+        guard window.makeFirstResponder(semanticField) else { return false }
         if let editor = window.fieldEditor(false, for: semanticField) as? NSTextView {
             editor.setSelectedRange(NSRange(
                 location: (semanticField.stringValue as NSString).length,
                 length: 0
             ))
         }
+        guard siblingView.prepareAsFocusedSibling() else { return false }
         state.focusCount += 1
+        state.siblingFocusCount += 1
         state.appliedControlSequence = controlSequence
+        refreshAppKeyWindow()
         state.lastAction = "focus-field"
         persistAndRedraw()
         return true
@@ -171,6 +203,7 @@ private final class FixtureView: NSView, NSTextFieldDelegate {
 
     @objc private func advanceFixture() {
         synchronizeSemanticValue()
+        refreshAppKeyWindow()
         state.animationTick += 1
         persistAndRedraw()
     }
@@ -191,11 +224,96 @@ private final class FixtureView: NSView, NSTextFieldDelegate {
             fputs("fixture state write failed: \(error)\n", stderr)
         }
     }
+
+    private func refreshAppKeyWindow() {
+        state.appKeyWindowId = NSApp.keyWindow?.windowNumber ?? 0
+    }
+}
+
+private final class SiblingView: NSView, NSTextFieldDelegate {
+    private let recordTextLength: (Int) -> Void
+    private let recordClick: () -> Void
+    private let siblingField = NSTextField()
+
+    init(
+        frame: NSRect,
+        recordTextLength: @escaping (Int) -> Void,
+        recordClick: @escaping () -> Void
+    ) {
+        self.recordTextLength = recordTextLength
+        self.recordClick = recordClick
+        super.init(frame: frame)
+
+        autoresizingMask = [.width, .height]
+        siblingField.frame = NSRect(x: 24, y: 92, width: 370, height: 34)
+        siblingField.placeholderString = "Sibling receiver sentinel"
+        siblingField.setAccessibilityLabel("Sibling receiver sentinel")
+        siblingField.delegate = self
+        addSubview(siblingField)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        recordClick()
+        needsDisplay = true
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        recordTextLength((siblingField.stringValue as NSString).length)
+    }
+
+    func prepareAsFocusedSibling() -> Bool {
+        guard let window else { return false }
+        window.makeKey()
+        guard window.makeFirstResponder(siblingField) else { return false }
+        if let editor = window.fieldEditor(false, for: siblingField) as? NSTextView {
+            editor.setSelectedRange(NSRange(
+                location: (siblingField.stringValue as NSString).length,
+                length: 0
+            ))
+        }
+        return true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor(calibratedRed: 0.21, green: 0.04, blue: 0.25, alpha: 1).setFill()
+        dirtyRect.fill()
+
+        let titleAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 18, weight: .bold),
+            .foregroundColor: NSColor.systemPink,
+        ]
+        let bodyAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 14, weight: .medium),
+            .foregroundColor: NSColor.white,
+        ]
+        "SAME-PID SIBLING".draw(
+            at: NSPoint(x: 24, y: bounds.height - 52),
+            withAttributes: titleAttributes
+        )
+        "Must remain the restored receiver.".draw(
+            at: NSPoint(x: 24, y: bounds.height - 84),
+            withAttributes: bodyAttributes
+        )
+        "Primary-only screenshots must exclude this window.".draw(
+            at: NSPoint(x: 24, y: 42),
+            withAttributes: bodyAttributes
+        )
+    }
 }
 
 private final class FixtureDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow?
+    private var siblingWindow: NSWindow?
     private var fixtureView: FixtureView?
+    private var siblingView: SiblingView?
     private var controlURL: URL?
     private var lastControlSequence = 0
 
@@ -231,8 +349,38 @@ private final class FixtureDelegate: NSObject, NSApplicationDelegate {
         window.makeFirstResponder(view)
         window.orderFrontRegardless()
 
+        let siblingContentRect = NSRect(x: 760, y: 300, width: 480, height: 260)
+        let siblingWindow = NSWindow(
+            contentRect: siblingContentRect,
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        siblingWindow.title = siblingFixtureTitle
+        siblingWindow.isReleasedWhenClosed = false
+        siblingWindow.minSize = NSSize(width: 440, height: 240)
+        siblingWindow.maxSize = NSSize(width: 620, height: 360)
+        let siblingView = SiblingView(
+            frame: NSRect(origin: .zero, size: siblingContentRect.size),
+            recordTextLength: { [weak view] length in view?.recordSiblingTextLength(length) },
+            recordClick: { [weak view] in view?.recordSiblingClick() }
+        )
+        siblingWindow.contentView = siblingView
+        siblingWindow.orderFrontRegardless()
+        guard siblingView.prepareAsFocusedSibling() else {
+            fputs("fixture could not establish its startup sibling receiver\n", stderr)
+            NSApp.terminate(nil)
+            return
+        }
+        view.bindWindowTopology(
+            primaryWindowId: window.windowNumber,
+            siblingWindowId: siblingWindow.windowNumber
+        )
+
         self.window = window
+        self.siblingWindow = siblingWindow
         fixtureView = view
+        self.siblingView = siblingView
         controlURL = URL(fileURLWithPath: controlPath)
 
         Timer.scheduledTimer(
@@ -245,7 +393,7 @@ private final class FixtureDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func pollControl() {
-        guard let controlURL, let window, let fixtureView else { return }
+        guard let controlURL, let window, let fixtureView, let siblingView else { return }
         guard
             let data = try? Data(contentsOf: controlURL),
             let control = try? JSONDecoder().decode(FixtureControl.self, from: data),
@@ -253,7 +401,10 @@ private final class FixtureDelegate: NSObject, NSApplicationDelegate {
         else { return }
 
         if control.action == "focus-semantic-field" {
-            guard fixtureView.focusSemanticField(controlSequence: control.sequence) else {
+            guard fixtureView.focusSemanticField(
+                controlSequence: control.sequence,
+                siblingView: siblingView
+            ) else {
                 fputs("fixture could not focus its semantic field\n", stderr)
                 return
             }

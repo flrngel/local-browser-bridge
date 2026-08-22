@@ -259,6 +259,10 @@ fn macos_negative_evidence_keeps_only_equality_and_fixture_counters() {
         "cursorY:",
         "activeSpace:",
         "pid:",
+        "targetFocusedWindowID:",
+        "primaryWindowId:",
+        "siblingWindowId:",
+        "fixtureTargetPid:",
     ] {
         assert!(
             !diagnostics.contains(raw_identity),
@@ -330,8 +334,9 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
 
     for required in [
         "var focusCount = 0",
-        "func focusSemanticField(controlSequence: Int) -> Bool",
+        "func focusSemanticField(controlSequence: Int, siblingView: SiblingView) -> Bool",
         "window.makeFirstResponder(semanticField)",
+        "siblingView.prepareAsFocusedSibling()",
         "editor.setSelectedRange",
         "control.action == \"focus-semantic-field\"",
         "var moveEvents = 0",
@@ -540,6 +545,193 @@ fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() 
         assert!(
             readme.contains(required),
             "evidence README is missing target-close contract: {required}"
+        );
+    }
+}
+
+#[test]
+fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negative() {
+    let fixture = fs::read_to_string("evidence/v0.12.1/computer/HelperEvidenceFixture.swift")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let probe = fs::read_to_string("evidence/v0.12.1/computer/SystemProbe.swift")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let rig = fs::read_to_string("evidence/v0.12.1/computer/helper-evidence-rig.mjs")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let readme = fs::read_to_string("evidence/v0.12.1/computer/README.md")
+        .unwrap()
+        .replace("\r\n", "\n");
+
+    for required in [
+        "private let siblingFixtureTitle = \"LBB v0.12.1 Same-PID Sibling Receiver\"",
+        "var primaryWindowId = 0",
+        "var siblingWindowId = 0",
+        "var siblingTextLength = 0",
+        "var siblingClicks = 0",
+        "var siblingFocusCount = 0",
+        "private final class SiblingView: NSView, NSTextFieldDelegate",
+        "siblingField.setAccessibilityLabel(\"Sibling receiver sentinel\")",
+        "let siblingWindow = NSWindow(",
+        "siblingWindow.title = siblingFixtureTitle",
+        "view.bindWindowTopology(",
+        "primaryWindowId: window.windowNumber",
+        "siblingWindowId: siblingWindow.windowNumber",
+        "siblingWindow.orderFrontRegardless()",
+    ] {
+        assert!(
+            fixture.contains(required),
+            "fixture is missing genuine same-PID sibling topology: {required}"
+        );
+    }
+    assert_eq!(fixture.matches("= NSWindow(").count(), 2);
+    assert!(!fixture.contains("Process("));
+    assert!(!fixture.contains("NSWorkspace.shared.launch"));
+
+    let primary_preparation = fixture
+        .split("func focusSemanticField(controlSequence: Int, siblingView: SiblingView) -> Bool")
+        .nth(1)
+        .unwrap()
+        .split("override func draw")
+        .next()
+        .unwrap();
+    for required in [
+        "window.makeKey()",
+        "window.makeFirstResponder(semanticField)",
+        "siblingView.prepareAsFocusedSibling()",
+        "state.siblingFocusCount += 1",
+    ] {
+        assert!(primary_preparation.contains(required));
+    }
+    for forbidden in ["NSApp.activate", "orderFront", "makeKeyAndOrderFront"] {
+        assert!(
+            !primary_preparation.contains(forbidden),
+            "same-PID receiver preparation must not activate or raise: {forbidden}"
+        );
+    }
+
+    for required in [
+        "@_silgen_name(\"_AXUIElementGetWindow\")",
+        "kAXFocusedWindowAttribute",
+        "kAXFrontmostAttribute",
+        "foregroundPIDBefore",
+        "foregroundPIDAfter",
+        "foregroundIdentityStable",
+        "targetFocusedWindowID",
+    ] {
+        assert!(
+            probe.contains(required),
+            "system probe is missing read-only AX focus evidence: {required}"
+        );
+    }
+    let invariants = rig
+        .split("function systemInvariants(before, after)")
+        .nth(1)
+        .unwrap()
+        .split("function allInvariantsHeld")
+        .next()
+        .unwrap();
+    for required in [
+        "foregroundIdentitySandwichHeld",
+        "foregroundAXFocusedWindowID",
+        "foregroundAxFocusUnchanged",
+        "foregroundAXFrontmost",
+        "foregroundAxFrontmostHeld",
+        "before.frontWindowID === after.frontWindowID",
+    ] {
+        assert!(
+            invariants.contains(required),
+            "independent non-interruption oracle is missing: {required}"
+        );
+    }
+
+    for required in [
+        "const targetAfter = processProbe(systemProbeBinary, fixtureTargetPid)",
+        "targetAfter.targetFocusedWindowID === fixtureSiblingWindowId",
+        "targetSiblingExpectedAfter: true",
+        "targetSiblingExpectedAfter: false",
+        "expectedFocusedAfter: targetSiblingExpectedAfter",
+        "expectationMet",
+    ] {
+        assert!(
+            rig.contains(required),
+            "bounded same-PID failure diagnostics are missing: {required}"
+        );
+    }
+
+    let discovery = rig
+        .find("const siblingWindows = status.windows.filter")
+        .unwrap();
+    let first_observe = rig
+        .find("let observed = await freshObserve(targetWindow.id)")
+        .unwrap();
+    let pointer_before = rig.find("const pixelSiblingFocusBefore").unwrap();
+    let pointer_action = rig
+        .find("const clickBody = await command(\"computer.click\"")
+        .unwrap();
+    let pointer_after = rig.find("const pixelSiblingFocusAfter").unwrap();
+    let text_before = rig.find("const nativeTextReceiverBefore").unwrap();
+    let text_action = rig
+        .find("const nativeTextBody = await command(\"computer.typeText\"")
+        .unwrap();
+    let text_after = rig.find("const nativeTextReceiverAfter").unwrap();
+    assert!(discovery < first_observe);
+    assert!(pointer_before < pointer_action && pointer_action < pointer_after);
+    assert!(text_before < text_action && text_action < text_after);
+
+    for required in [
+        "siblingWindows[0].pid === targetWindow.pid",
+        "String(fixtureReady.primaryWindowId) === targetWindow.id",
+        "String(fixtureReady.siblingWindowId) === siblingWindows[0].id",
+        "startupSiblingFocus.targetFocusedWindowID === fixtureReady.siblingWindowId",
+        "same-PID sibling is remembered before primary pixel dispatch",
+        "background pixel click targets only primary and restores sibling receiver",
+        "clickedFixtureState.siblingClicks === pixelFixtureBefore.siblingClicks",
+        "same-PID pixel routing preserves user foreground/focus/cursor/Space",
+        "same-PID sibling remains the exact prior receiver immediately before text request",
+        "native typeText exact fixture read-back with zero sibling mutation",
+        "nativeTextFixtureState.siblingTextLength === nativeTextFocusedState.siblingTextLength",
+        "every retained screenshot is bound only to the primary exact window",
+        "screenshot.windowId !== siblingWindow.id",
+        "samePidMultiWindowRouting: {",
+        "status: \"unproven-live\"",
+        "attempted: false",
+        "productionHookUsed: false",
+        "focusRaceUsed: false",
+    ] {
+        assert!(
+            rig.contains(required),
+            "same-PID rig proof is missing: {required}"
+        );
+    }
+    for forbidden in [
+        "force-sibling-before-dispatch",
+        "wrong-sibling-delay",
+        "NSApp.activate",
+        "makeKeyAndOrderFront",
+        "LBB_COMPUTER_TEST",
+    ] {
+        assert!(
+            !rig.contains(forbidden),
+            "same-PID evidence uses a race, activation, or production hook: {forbidden}"
+        );
+    }
+
+    for required in [
+        "two clearly titled, visible, genuine",
+        "same-PID sibling receiver sentinel",
+        "restore the same sibling",
+        "wrong-sibling-at-dispatch negative is explicitly **unproven**",
+        "timing race or a",
+        "requires all six manifest entries to name the primary window ID",
+        "sibling field's content is never serialized",
+        "diagnostics retain only availability, expected-focus, observed-focus,",
+        "never the target PID or either native window ID",
+    ] {
+        assert!(
+            readme.contains(required),
+            "same-PID evidence README is missing: {required}"
         );
     }
 }
