@@ -65,6 +65,10 @@ fn release_gates_javascript_macos_and_published_provenance() {
 
     for required in [
         "Run native macOS formatting, lint, and tests",
+        "Refuse publication unless release immutability is enabled",
+        "repos/$GITHUB_REPOSITORY/immutable-releases",
+        "X-GitHub-Api-Version: 2026-03-10",
+        "--jq '.enabled'",
         "--source-ref \"$GITHUB_REF\"",
         "--source-digest \"${{ needs.verify.outputs.source_sha }}\"",
         "--signer-workflow \"$GITHUB_REPOSITORY/.github/workflows/deploy.yml\"",
@@ -82,7 +86,18 @@ fn release_gates_javascript_macos_and_published_provenance() {
     }
 
     assert!(verifier.contains("Missing or empty release checksum manifest"));
+    assert!(verifier.contains("Release directory contains an unexpected file set."));
     assert!(!verifier.contains("if [[ -f \"$checksum_manifest\" ]]"));
+
+    let immutable_gate = release
+        .find("Refuse publication unless release immutability is enabled")
+        .unwrap();
+    let exact_asset_gate = release
+        .find("bash scripts/verify-release-assets.sh \"$version\" dist")
+        .unwrap();
+    let publish = release.find("gh release create \"$RELEASE_TAG\"").unwrap();
+    assert!(immutable_gate < publish);
+    assert!(exact_asset_gate < publish);
 }
 
 #[test]

@@ -33,6 +33,19 @@ for asset in "${assets[@]}"; do
   fi
 done
 
+expected_release_listing="$(printf '%s\n' \
+  "$(basename "$windows_server")" \
+  "$(basename "$windows_helper")" \
+  "$(basename "$macos_archive")" \
+  "$(basename "$extension_archive")" \
+  "$(basename "$checksum_manifest")" | LC_ALL=C sort)"
+actual_release_listing="$(find "$assets_dir" -mindepth 1 -maxdepth 1 -type f -exec basename {} \; | LC_ALL=C sort)"
+if [[ "$actual_release_listing" != "$expected_release_listing" ]]; then
+  echo "Release directory contains an unexpected file set." >&2
+  diff -u <(printf '%s\n' "$expected_release_listing") <(printf '%s\n' "$actual_release_listing") || true
+  exit 1
+fi
+
 for executable in "$windows_server" "$windows_helper"; do
   if [[ "$(od -An -tx1 -N2 "$executable" | tr -d ' \n')" != "4d5a" ]]; then
     echo "Windows executable is missing its MZ header: $executable" >&2
