@@ -653,6 +653,30 @@ struct ControlledComputer {
     server_messages: Arc<Mutex<Vec<Value>>>,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum RejectedShareStart {
+    MissingId,
+    RetiredId,
+    FreshWithWrongObservation,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum RejectedShareCleanup {
+    Confirmed,
+    StillActive,
+    MissingActive,
+    Error,
+    Timeout,
+}
+
+struct RejectedShareComputer {
+    handle: JoinHandle<()>,
+    events: mpsc::UnboundedSender<(String, Value)>,
+    commands: Arc<Mutex<Vec<Value>>>,
+    capture_active: Arc<AtomicBool>,
+    transport_closed: Arc<AtomicBool>,
+}
+
 /// Computer fixture that holds `computer.click` open but remains responsive
 /// to exact cancellation envelopes and test-driven share-frame events.
 async fn connect_controlled_computer(base_url: &str, token: &str) -> ControlledComputer {
@@ -845,6 +869,212 @@ async fn connect_controlled_computer(base_url: &str, token: &str) -> ControlledC
     }
 }
 
+/// Models a helper that has already committed native capture when a gated
+/// `computer.share.start` success body or its automatic observation is
+/// rejected. The cleanup response can then prove stop, remain ambiguous, or
+/// hang so the server's exact-session rollback behavior is observable.
+async fn connect_rejected_share_computer(
+    base_url: &str,
+    token: &str,
+    start: RejectedShareStart,
+    cleanup: RejectedShareCleanup,
+) -> RejectedShareComputer {
+    let mut request = format!("{}/computer", base_url.replace("http", "ws"))
+        .into_client_request()
+        .unwrap();
+    request
+        .headers_mut()
+        .insert("Origin", COMPUTER_HELPER_ORIGIN.parse().unwrap());
+    let (mut socket, _) = connect_async(request).await.unwrap();
+    let welcome = authenticate_test_connector(&mut socket, token, COMPUTER_CONNECTOR).await;
+    let session_id = welcome["sessionId"].as_str().unwrap().to_owned();
+    socket
+        .send(Message::Text(
+            json!({
+                "type": "hello",
+                "version": VERSION,
+                "protocolVersion": PROTOCOL_VERSION,
+                "sessionId": session_id,
+                "platform": "test-os",
+                "architecture": "test-arch",
+                "backend": "rejected-share-capture+input",
+                "inputReady": true,
+                "semanticReady": true,
+                "capabilities": [
+                    "computer.status",
+                    "computer.observe",
+                    "computer.move",
+                    "computer.share.start",
+                    "computer.share.stop",
+                    "computer.capture.native-stream.v1"
+                ]
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<(String, Value)>();
+    let commands = Arc::new(Mutex::new(Vec::new()));
+    let command_log = commands.clone();
+    let capture_active = Arc::new(AtomicBool::new(true));
+    let capture_active_task = capture_active.clone();
+    let transport_closed = Arc::new(AtomicBool::new(false));
+    let transport_closed_task = transport_closed.clone();
+    let handle = tokio::spawn(async move {
+        let (mut writer, mut reader) = socket.split();
+        let mut event_sequence = 0_u64;
+        let mut events_open = true;
+        loop {
+            let message = tokio::select! {
+                event = event_rx.recv(), if events_open => {
+                    let Some((name, data)) = event else {
+                        events_open = false;
+                        continue;
+                    };
+                    event_sequence += 1;
+                    let event = json!({
+                        "type": "event",
+                        "name": name,
+                        "data": data,
+                        "protocolVersion": PROTOCOL_VERSION,
+                        "sessionId": session_id,
+                        "eventSequence": event_sequence,
+                    });
+                    if writer.send(Message::Text(event.to_string().into())).await.is_err() {
+                        break;
+                    }
+                    continue;
+                }
+                message = reader.next() => message,
+            };
+            let Some(Ok(Message::Text(text))) = message else {
+                break;
+            };
+            let message: Value = serde_json::from_str(text.as_str()).unwrap();
+            if matches!(
+                message.get("type").and_then(Value::as_str),
+                Some("helloAck") | Some("eventAck")
+            ) {
+                continue;
+            }
+            command_log.lock().unwrap().push(message.clone());
+            if message["type"] == "cancel" {
+                continue;
+            }
+            if message["type"] != "command" {
+                continue;
+            }
+
+            let response = match message["method"].as_str().unwrap_or("") {
+                "computer.move" => Some(json!({
+                    "ok": false,
+                    "error": {
+                        "code": "COMPUTER_OUTCOME_UNKNOWN",
+                        "message": "Fixture lost authority after dispatch"
+                    }
+                })),
+                "computer.share.start" => {
+                    capture_active_task.store(true, Ordering::SeqCst);
+                    let result = match start {
+                        RejectedShareStart::MissingId => json!({
+                            "active": true,
+                            "windowId": "window-9",
+                            "fps": 4
+                        }),
+                        RejectedShareStart::RetiredId => json!({
+                            "active": true,
+                            "id": "share-old",
+                            "windowId": "window-9",
+                            "fps": 4
+                        }),
+                        RejectedShareStart::FreshWithWrongObservation => json!({
+                            "active": true,
+                            "id": "share-fresh-rejected",
+                            "windowId": "window-9",
+                            "fps": 4
+                        }),
+                    };
+                    Some(json!({ "ok": true, "result": result }))
+                }
+                "computer.observe" => {
+                    let share = match start {
+                        RejectedShareStart::FreshWithWrongObservation => json!({
+                            "active": true,
+                            "id": "share-wrong-observation",
+                            "windowId": "window-9",
+                            "sourceSequence": 1,
+                            "sequence": 1
+                        }),
+                        _ => json!({ "active": false }),
+                    };
+                    Some(json!({
+                        "ok": true,
+                        "result": computer_one_shot_frame_data("rejected-start-observe", share)
+                    }))
+                }
+                "computer.share.stop" => match cleanup {
+                    RejectedShareCleanup::Confirmed => {
+                        capture_active_task.store(false, Ordering::SeqCst);
+                        Some(json!({
+                            "ok": true,
+                            "result": { "active": false, "stopped": true }
+                        }))
+                    }
+                    RejectedShareCleanup::StillActive => Some(json!({
+                        "ok": true,
+                        "result": { "active": true, "id": "share-hidden" }
+                    })),
+                    RejectedShareCleanup::MissingActive => Some(json!({
+                        "ok": true,
+                        "result": { "stopped": true }
+                    })),
+                    RejectedShareCleanup::Error => Some(json!({
+                        "ok": false,
+                        "error": {
+                            "code": "COMPUTER_CAPTURE_FAILED",
+                            "message": "Fixture could not stop native capture"
+                        }
+                    })),
+                    RejectedShareCleanup::Timeout => None,
+                },
+                method => panic!("unexpected rejected-share computer method: {method}"),
+            };
+            let Some(mut response) = response else {
+                continue;
+            };
+            let response = response.as_object_mut().unwrap();
+            response.insert("id".to_owned(), message["id"].clone());
+            response.insert("type".to_owned(), json!("result"));
+            response.insert(
+                "protocolVersion".to_owned(),
+                message["protocolVersion"].clone(),
+            );
+            response.insert("sessionId".to_owned(), message["sessionId"].clone());
+            response.insert("sequence".to_owned(), message["sequence"].clone());
+            if writer
+                .send(Message::Text(
+                    Value::Object(response.clone()).to_string().into(),
+                ))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+        capture_active_task.store(false, Ordering::SeqCst);
+        transport_closed_task.store(true, Ordering::SeqCst);
+    });
+    RejectedShareComputer {
+        handle,
+        events: event_tx,
+        commands,
+        capture_active,
+        transport_closed,
+    }
+}
+
 async fn connect_fake_computer(base_url: &str, token: &str, version: &str) -> JoinHandle<()> {
     connect_fake_computer_with_share_ack(base_url, token, version, false)
         .await
@@ -991,6 +1221,7 @@ async fn connect_fake_computer_with_share_ack(
                                 "screenHeight": 400,
                                 "scaleFactor": 1.0,
                                 "rotation": 0.0,
+                                "share": { "active": false },
                                 "pointer": {
                                     "id": "fixture-cursor",
                                     "visible": false,
@@ -1247,6 +1478,78 @@ async fn wait_for_computer(client: &Client, base_url: &str, token: &str) -> Valu
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!("computer helper hello did not arrive");
+}
+
+async fn wait_for_logged_computer_message(
+    messages: &Arc<Mutex<Vec<Value>>>,
+    predicate: impl Fn(&Value) -> bool,
+    what: &str,
+) -> Value {
+    for _ in 0..200 {
+        if let Some(message) = messages
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|message| predicate(message))
+            .cloned()
+        {
+            return message;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("{what} did not arrive");
+}
+
+async fn establish_rejected_share_start_gate(
+    client: &Client,
+    base_url: &str,
+    token: &str,
+    computer: &RejectedShareComputer,
+) -> String {
+    let connected = wait_for_computer(client, base_url, token).await;
+    let session_id = connected["state"]["computer"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    computer
+        .events
+        .send((
+            "computer.share.frame".to_owned(),
+            computer_share_frame_data(
+                "frame-before-rejected-start",
+                json!({
+                    "active": true,
+                    "id": "share-old",
+                    "windowId": "window-9",
+                    "sourceSequence": 1,
+                    "sequence": 1,
+                    "ackPaced": false
+                }),
+            ),
+        ))
+        .unwrap();
+    wait_for_computer_frame(client, base_url, token, "frame-before-rejected-start").await;
+
+    let outcome_unknown = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(token)
+        .json(&json!({
+            "method": "computer.move",
+            "params": {
+                "frameId": "frame-before-rejected-start",
+                "x": 10,
+                "y": 10
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(outcome_unknown.status(), 504);
+    assert_eq!(
+        outcome_unknown.json::<Value>().await.unwrap()["error"]["code"],
+        "COMPUTER_OUTCOME_UNKNOWN"
+    );
+    session_id
 }
 
 #[tokio::test]
@@ -2045,6 +2348,411 @@ async fn outcome_unknown_native_action_clears_published_share_and_frame_authorit
     );
 
     fake.handle.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn rejected_gated_share_starts_are_stopped_on_the_exact_session_and_remain_retired() {
+    for start in [
+        RejectedShareStart::MissingId,
+        RejectedShareStart::RetiredId,
+        RejectedShareStart::FreshWithWrongObservation,
+    ] {
+        let token = create_token();
+        let (base_url, shutdown, handle) = start_server(&token).await;
+        let computer = connect_rejected_share_computer(
+            &base_url,
+            &token,
+            start,
+            RejectedShareCleanup::Confirmed,
+        )
+        .await;
+        let client = Client::new();
+        let session_id =
+            establish_rejected_share_start_gate(&client, &base_url, &token, &computer).await;
+
+        let rejected = client
+            .post(format!("{base_url}/api/v1/command"))
+            .bearer_auth(&token)
+            .json(&json!({
+                "method": "computer.share.start",
+                "params": { "windowId": "window-9", "fps": 4 }
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), 502, "start mode {start:?}");
+        assert_eq!(
+            rejected.json::<Value>().await.unwrap()["error"]["code"],
+            "COMPUTER_INVALID_OBSERVATION"
+        );
+
+        let stop = wait_for_logged_computer_message(
+            &computer.commands,
+            |message| message["method"] == "computer.share.stop",
+            "exact-session rejected-start stop",
+        )
+        .await;
+        assert_eq!(stop["sessionId"], session_id);
+        assert_eq!(stop["params"], json!({}));
+        assert!(!computer.capture_active.load(Ordering::SeqCst));
+        assert!(!computer.transport_closed.load(Ordering::SeqCst));
+
+        let state: Value = client
+            .get(format!("{base_url}/api/state"))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(state["state"]["computerConnected"], true);
+        assert_eq!(state["state"]["computer"]["sessionId"], session_id);
+        assert_eq!(state["state"]["computer"]["share"]["active"], false);
+        assert_eq!(
+            state["state"]["computer"]["share"]["reason"],
+            "rejected-start-rolled-back"
+        );
+        assert_eq!(state["state"]["computer"]["share"]["stopConfirmed"], true);
+        assert!(state["state"]["computerObservation"].is_null());
+        assert_eq!(
+            client
+                .get(format!("{base_url}/api/computer/screenshot"))
+                .bearer_auth(&token)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            404
+        );
+
+        if matches!(start, RejectedShareStart::FreshWithWrongObservation) {
+            let retried = client
+                .post(format!("{base_url}/api/v1/command"))
+                .bearer_auth(&token)
+                .json(&json!({
+                    "method": "computer.share.start",
+                    "params": { "windowId": "window-9", "fps": 4 }
+                }))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(retried.status(), 502);
+            assert_eq!(
+                retried.json::<Value>().await.unwrap()["error"]["code"],
+                "COMPUTER_INVALID_OBSERVATION",
+                "the first rejected fresh ID must remain retired after confirmed cleanup"
+            );
+            let commands = computer.commands.lock().unwrap();
+            assert_eq!(
+                commands
+                    .iter()
+                    .filter(|message| message["method"] == "computer.share.stop")
+                    .count(),
+                2
+            );
+            assert_eq!(
+                commands
+                    .iter()
+                    .filter(|message| message["method"] == "computer.observe")
+                    .count(),
+                1,
+                "a retired start result must be rejected before automatic observation"
+            );
+        }
+
+        computer.handle.abort();
+        let _ = shutdown.send(());
+        handle.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn rejected_start_is_quarantined_before_bounded_cleanup_finishes() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let computer = connect_rejected_share_computer(
+        &base_url,
+        &token,
+        RejectedShareStart::MissingId,
+        RejectedShareCleanup::Timeout,
+    )
+    .await;
+    let client = Client::new();
+    establish_rejected_share_start_gate(&client, &base_url, &token, &computer).await;
+
+    let rejected = {
+        let client = client.clone();
+        let base_url = base_url.clone();
+        let token = token.clone();
+        tokio::spawn(async move {
+            client
+                .post(format!("{base_url}/api/v1/command"))
+                .bearer_auth(token)
+                .json(&json!({
+                    "method": "computer.share.start",
+                    "params": { "windowId": "window-9", "fps": 4 }
+                }))
+                .send()
+                .await
+                .unwrap()
+        })
+    };
+    wait_for_logged_computer_message(
+        &computer.commands,
+        |message| message["method"] == "computer.share.stop",
+        "pending exact-session rejected-start stop",
+    )
+    .await;
+    assert!(!rejected.is_finished());
+    assert!(computer.capture_active.load(Ordering::SeqCst));
+    assert!(!computer.transport_closed.load(Ordering::SeqCst));
+
+    let quarantined: Value = client
+        .get(format!("{base_url}/api/state"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(quarantined["state"]["computerConnected"], true);
+    assert_eq!(
+        quarantined["state"]["computer"]["share"]["quarantined"],
+        true
+    );
+    assert_eq!(quarantined["state"]["computer"]["share"]["stopping"], true);
+    assert_eq!(
+        quarantined["state"]["computer"]["share"]["stopConfirmed"],
+        false
+    );
+    assert!(quarantined["state"]["computerObservation"].is_null());
+    assert_eq!(
+        client
+            .get(format!("{base_url}/api/computer/screenshot"))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+
+    let rejected = tokio::time::timeout(Duration::from_secs(2), rejected)
+        .await
+        .expect("rejected-start cleanup exceeded its server-side bound")
+        .unwrap();
+    assert_eq!(rejected.status(), 502);
+    for _ in 0..200 {
+        if computer.transport_closed.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(computer.transport_closed.load(Ordering::SeqCst));
+    assert!(!computer.capture_active.load(Ordering::SeqCst));
+
+    computer.handle.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn unproven_rejected_start_cleanup_revokes_the_originating_transport() {
+    for cleanup in [
+        RejectedShareCleanup::StillActive,
+        RejectedShareCleanup::MissingActive,
+        RejectedShareCleanup::Error,
+        RejectedShareCleanup::Timeout,
+    ] {
+        let token = create_token();
+        let (base_url, shutdown, handle) = start_server(&token).await;
+        let computer = connect_rejected_share_computer(
+            &base_url,
+            &token,
+            RejectedShareStart::MissingId,
+            cleanup,
+        )
+        .await;
+        let client = Client::new();
+        let session_id =
+            establish_rejected_share_start_gate(&client, &base_url, &token, &computer).await;
+
+        let rejected = client
+            .post(format!("{base_url}/api/v1/command"))
+            .bearer_auth(&token)
+            .json(&json!({
+                "method": "computer.share.start",
+                "params": { "windowId": "window-9", "fps": 4 }
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), 502, "cleanup mode {cleanup:?}");
+        assert_eq!(
+            rejected.json::<Value>().await.unwrap()["error"]["code"],
+            "COMPUTER_INVALID_OBSERVATION"
+        );
+
+        for _ in 0..200 {
+            if computer.transport_closed.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            computer.transport_closed.load(Ordering::SeqCst),
+            "cleanup mode {cleanup:?} must close the exact helper transport"
+        );
+        assert!(
+            !computer.capture_active.load(Ordering::SeqCst),
+            "transport teardown is the fail-closed capture cleanup boundary"
+        );
+
+        {
+            let commands = computer.commands.lock().unwrap();
+            let stops = commands
+                .iter()
+                .filter(|message| message["method"] == "computer.share.stop")
+                .collect::<Vec<_>>();
+            assert_eq!(stops.len(), 1, "cleanup mode {cleanup:?}");
+            assert_eq!(stops[0]["sessionId"], session_id);
+            if matches!(cleanup, RejectedShareCleanup::Timeout) {
+                let cancel = commands
+                    .iter()
+                    .find(|message| message["type"] == "cancel" && message["id"] == stops[0]["id"])
+                    .expect("a timed out exact-session stop must be canceled once");
+                assert_eq!(cancel["sessionId"], stops[0]["sessionId"]);
+                assert_eq!(cancel["sequence"], stops[0]["sequence"]);
+                assert_eq!(cancel["reason"], "command_timeout");
+            }
+        }
+
+        let state: Value = client
+            .get(format!("{base_url}/api/state"))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(state["state"]["computerConnected"], false);
+        assert!(state["state"]["computer"].is_null());
+        assert!(state["state"]["computerObservation"].is_null());
+        assert_eq!(
+            client
+                .get(format!("{base_url}/api/computer/screenshot"))
+                .bearer_auth(&token)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            404
+        );
+
+        computer.handle.abort();
+        let _ = shutdown.send(());
+        handle.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn rejected_start_cleanup_never_stops_or_revokes_a_replacement_helper() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let origin = connect_rejected_share_computer(
+        &base_url,
+        &token,
+        RejectedShareStart::MissingId,
+        RejectedShareCleanup::Timeout,
+    )
+    .await;
+    let client = Client::new();
+    let origin_session =
+        establish_rejected_share_start_gate(&client, &base_url, &token, &origin).await;
+
+    let rejected = {
+        let client = client.clone();
+        let base_url = base_url.clone();
+        let token = token.clone();
+        tokio::spawn(async move {
+            client
+                .post(format!("{base_url}/api/v1/command"))
+                .bearer_auth(token)
+                .json(&json!({
+                    "method": "computer.share.start",
+                    "params": { "windowId": "window-9", "fps": 4 }
+                }))
+                .send()
+                .await
+                .unwrap()
+        })
+    };
+    wait_for_logged_computer_message(
+        &origin.commands,
+        |message| message["method"] == "computer.share.stop",
+        "origin cleanup stop",
+    )
+    .await;
+
+    let replacement = connect_rejected_share_computer(
+        &base_url,
+        &token,
+        RejectedShareStart::MissingId,
+        RejectedShareCleanup::Confirmed,
+    )
+    .await;
+    let replacement_session = loop {
+        let state = wait_for_computer(&client, &base_url, &token).await;
+        let session = state["state"]["computer"]["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        if session != origin_session {
+            break session;
+        }
+        tokio::task::yield_now().await;
+    };
+
+    let rejected = rejected.await.unwrap();
+    assert_eq!(rejected.status(), 502);
+    for _ in 0..100 {
+        if origin.transport_closed.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(origin.transport_closed.load(Ordering::SeqCst));
+    assert!(
+        replacement
+            .commands
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|message| message["method"] != "computer.share.stop"),
+        "the old rollback must never fall through to the replacement helper"
+    );
+    assert!(!replacement.transport_closed.load(Ordering::SeqCst));
+    assert!(replacement.capture_active.load(Ordering::SeqCst));
+
+    let state: Value = client
+        .get(format!("{base_url}/api/state"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(state["state"]["computerConnected"], true);
+    assert_eq!(state["state"]["computer"]["sessionId"], replacement_session);
+
+    origin.handle.abort();
+    replacement.handle.abort();
     let _ = shutdown.send(());
     handle.await.unwrap();
 }

@@ -832,7 +832,7 @@ async fn run_authenticated_session(
                 )
                 .await;
                 eprintln!(
-                    "Computer command {} exceeded the hard worker deadline; terminating the disposable worker.",
+                    "Computer command {} exceeded the hard deadline; terminating the computer helper process so native authority is revoked.",
                     finished.key.id
                 );
                 terminate_worker(WATCHDOG_EXIT_CODE);
@@ -852,7 +852,7 @@ async fn run_authenticated_session(
                     "data": {
                         "code": "COMPUTER_HELPER_WATCHDOG",
                         "message": format!(
-                            "The disposable computer worker exceeded its {} second live-share pump deadline and will restart",
+                            "The computer helper exceeded its {} second live-share pump deadline and will terminate so native capture is revoked",
                             COMMAND_WATCHDOG_TIMEOUT.as_secs()
                         ),
                         "shareId": expired_share.share_id,
@@ -869,7 +869,7 @@ async fn run_authenticated_session(
                 )
                 .await;
                 eprintln!(
-                    "The live-share observation/PNG pump exceeded the hard worker deadline; terminating the disposable worker."
+                    "The live-share observation/PNG pump exceeded the hard deadline; terminating the computer helper process so native capture is revoked."
                 );
                 terminate_worker(WATCHDOG_EXIT_CODE);
             }
@@ -1281,7 +1281,7 @@ fn command_watchdog_result(cancellation: &CommandCancellation) -> Result<Value, 
     cancellation.finish(Err(ComputerError::new(
         "COMPUTER_HELPER_WATCHDOG",
         format!(
-            "The disposable computer worker exceeded its {} second command deadline and will restart",
+            "The computer helper exceeded its {} second command deadline and will terminate so native authority is revoked",
             COMMAND_WATCHDOG_TIMEOUT.as_secs()
         ),
     )))
@@ -1299,11 +1299,11 @@ fn terminate_worker(exit_code: i32) -> ! {
 }
 
 fn new_command_deadline() -> Option<tokio::time::Instant> {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
         Some(tokio::time::Instant::now() + COMMAND_WATCHDOG_TIMEOUT)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         None
     }
@@ -1687,12 +1687,12 @@ mod tests {
     fn command_watchdog_precedes_the_bridge_timeout() {
         assert!(COMMAND_WATCHDOG_TIMEOUT < Duration::from_secs(15));
         assert!(FATAL_REPORT_TIMEOUT < Duration::from_secs(1));
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
         {
             assert!(new_command_deadline().is_some());
             assert!(new_share_pump_deadline().is_some());
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         {
             assert!(new_command_deadline().is_none());
             assert!(new_share_pump_deadline().is_none());
@@ -1705,6 +1705,9 @@ mod tests {
         before_dispatch.cancel();
         let retry_safe = command_watchdog_result(&before_dispatch).unwrap_err();
         assert_eq!(retry_safe.code, "COMPUTER_HELPER_WATCHDOG");
+        assert!(retry_safe.message.contains("will terminate"));
+        assert!(retry_safe.message.contains("native authority is revoked"));
+        assert!(!retry_safe.message.contains("restart"));
 
         let after_dispatch = CommandCancellation::new();
         after_dispatch
@@ -1714,6 +1717,12 @@ mod tests {
         let outcome_unknown = command_watchdog_result(&after_dispatch).unwrap_err();
         assert_eq!(outcome_unknown.code, "COMPUTER_OUTCOME_UNKNOWN");
         assert!(outcome_unknown.message.contains("COMPUTER_HELPER_WATCHDOG"));
+        assert!(outcome_unknown.message.contains("will terminate"));
+        assert!(
+            outcome_unknown
+                .message
+                .contains("native authority is revoked")
+        );
     }
 
     #[test]

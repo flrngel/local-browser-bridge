@@ -370,6 +370,30 @@ impl ExtensionHub {
         method: &str,
         params: Value,
     ) -> Result<(Uuid, Value), HubError> {
+        self.call_scoped_for(None, method, params).await
+    }
+
+    /// Calls one exact connector transport without ever falling through to a
+    /// replacement connection. Cleanup commands use this after a side effect
+    /// was committed by a known session: selecting the new current connection
+    /// would let an old request mutate a replacement helper.
+    pub async fn call_scoped_to(
+        &self,
+        expected_connection_id: Uuid,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, HubError> {
+        self.call_scoped_for(Some(expected_connection_id), method, params)
+            .await
+            .map(|(_, result)| result)
+    }
+
+    async fn call_scoped_for(
+        &self,
+        expected_connection_id: Option<Uuid>,
+        method: &str,
+        params: Value,
+    ) -> Result<(Uuid, Value), HubError> {
         let connection = self
             .inner
             .connection
@@ -382,6 +406,15 @@ impl ExtensionHub {
                     format!("{} is not connected", self.inner.connector_label),
                 )
             })?;
+        if expected_connection_id.is_some_and(|expected| expected != connection.id) {
+            return Err(HubError::new(
+                format!("{}_DISCONNECTED", self.inner.error_prefix),
+                format!(
+                    "The originating {} connection is no longer current",
+                    self.inner.connector_label.to_ascii_lowercase()
+                ),
+            ));
+        }
         if !connection.ready.load(Ordering::Acquire) {
             return Err(HubError::new(
                 format!("{}_HANDSHAKE_PENDING", self.inner.error_prefix),
@@ -461,6 +494,31 @@ impl ExtensionHub {
                 ))
             }
         }
+    }
+
+    /// Revokes one exact current transport. A replacement is never selected or
+    /// closed. Hub authority is removed before the best-effort close frame, so
+    /// no further inbound event or outbound command can use this connection.
+    pub fn close_if_current(&self, connection_id: Uuid, reason: &str) -> bool {
+        let closed = {
+            let mut connection = self.inner.connection.lock().unwrap();
+            if connection
+                .as_ref()
+                .is_some_and(|current| current.id == connection_id)
+            {
+                connection.take()
+            } else {
+                None
+            }
+        };
+        let Some(closed) = closed else {
+            return false;
+        };
+        // Give transport teardown priority over advisory cancellation frames.
+        // Pending callers are failed below even if their cancels cannot queue.
+        let _ = closed.sender.try_send(Message::Close(None));
+        self.fail_enqueued_for(connection_id, Some(&closed.sender), reason);
+        true
     }
 
     pub fn close(&self) {
@@ -736,5 +794,45 @@ mod tests {
             caller.await.unwrap().unwrap_err().code,
             "COMMAND_OUTCOME_UNKNOWN"
         );
+    }
+
+    #[tokio::test]
+    async fn exact_connection_call_never_falls_through_to_a_replacement() {
+        let hub = ExtensionHub::computer(Duration::from_secs(1));
+        let (origin, mut origin_receiver) = hub.attach();
+        assert!(hub.mark_ready(origin));
+        let (replacement, mut replacement_receiver) = hub.attach();
+        assert!(hub.mark_ready(replacement));
+
+        let error = hub
+            .call_scoped_to(origin, "computer.share.stop", json!({}))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "COMPUTER_DISCONNECTED");
+        assert!(replacement_receiver.try_recv().is_err());
+        assert!(matches!(
+            origin_receiver.recv().await,
+            Some(Message::Close(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn exact_close_revokes_only_the_named_current_connection() {
+        let hub = ExtensionHub::computer(Duration::from_secs(1));
+        let (origin, _origin_receiver) = hub.attach();
+        assert!(hub.mark_ready(origin));
+        let (replacement, mut replacement_receiver) = hub.attach();
+        assert!(hub.mark_ready(replacement));
+
+        assert!(!hub.close_if_current(origin, "rejected_share_cleanup"));
+        assert!(hub.is_current_ready(replacement));
+        assert!(replacement_receiver.try_recv().is_err());
+
+        assert!(hub.close_if_current(replacement, "rejected_share_cleanup"));
+        assert!(!hub.connected());
+        assert!(matches!(
+            replacement_receiver.recv().await,
+            Some(Message::Close(_))
+        ));
     }
 }
