@@ -48,7 +48,7 @@ See [Capabilities](docs/CAPABILITIES.md) for the exact platform matrix and [Limi
 
 Download one version-matched set from [GitHub Releases](https://github.com/flrngel/local-browser-bridge/releases/latest):
 
-> Version 0.12.10 is the current source and release target. It is not a published release until the version-specific macOS, Windows, stock-Chrome, and immutable-release gates all pass. Version 0.12.9 was withdrawn after one exact packaged macOS run observed a global cursor-position delta during the first semantic action; that record could not identify what moved the cursor, and Windows and Chrome were not run. Release artifacts, evidence, and capability claims are versioned; install the server, extension, and helper from one matching published release.
+> Version 0.12.11 is the current source and release target. It is not published until its macOS, Windows, stock-Chrome, and immutable-release gates all pass. Version 0.12.10 was withdrawn when its macOS operator handoff timed out before the final action; Windows and Chrome were not run. Install only one version-matched set from an actual published Release.
 
 - the server for your platform;
 - `local-browser-bridge-extension-vVERSION.zip`; and

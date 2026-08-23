@@ -103,7 +103,9 @@ Test one-shot observation and persistent sharing as separate lifecycles:
 
 Do not report cross-Space, minimized, protected, elevated, or framework-specific behavior as supported merely because a stream or message API returned success.
 
-The v0.12.10 macOS harness defines two fresh, non-mergeable pointer-evidence lanes in [`evidence/v0.12.10/computer/README.md`](../evidence/v0.12.10/computer/README.md). The default `quiet` lane requires a healthy monitor, unchanged sampled position, no shared activity, and `sharedPointerActivityState: quiet` for every evidence cell. The separately authorized `deliberate-concurrency` lane requires at least one `contaminated` cell while the sealed helper route, helper-global-pointer preservation, target postcondition, and foreground/focus/Space boundaries still hold. Never convert or merge concurrency-lane bytes into quiet release evidence. An unknown monitor or boundary is a failure in both lanes.
+The v0.12.11 macOS harness defines two fresh, non-mergeable pointer-evidence lanes in [`evidence/v0.12.11/computer/README.md`](../evidence/v0.12.11/computer/README.md). The default `quiet` lane requires a healthy monitor, unchanged sampled position, no shared activity, and `sharedPointerActivityState: quiet` for every evidence cell. The separately authorized `deliberate-concurrency` lane requires at least one `contaminated` cell while the sealed helper route, helper-global-pointer preservation, target postcondition, and foreground/focus/Space boundaries still hold. Never convert or merge concurrency-lane bytes into quiet release evidence. An unknown monitor or boundary is a failure in both lanes.
+
+For the deliberate-concurrency lane, start the packaged evidence runner and then run `node scripts/wait-macos-pointer-concurrency-handoff.mjs --mode watch --evidence-dir "$ABSOLUTE_EVIDENCE_DIRECTORY" --runner-pid "$RUNNER_PID"` in a separate terminal. The watcher opens only the exact request and completion markers under the evidence directory's `operator` subdirectory, read-only and without following links. It requires schema 1, v0.12.11, fresh file-bound timestamps, the exact live runner/request/prompt identity, a visible nonactivating panel, notification-only/non-authoritative flags, and final `clickFreeMotionObserved: true` proof. `ACTION REQUIRED` means continuously move the shared pointer without clicking; any button, drag, scroll, or tablet counter progress fails the gate. Stop only after `COMPLETE`, which requires click-free movement to advance through the independently observed green completion state and both product and independent boundaries to report sustained contamination. Entering `ACTION` starts a separate 10-second hard action/completion grace, capped by a 310-second total prompt lifetime, and the panel exits at the earlier deadline in every state. The watcher never writes an acknowledgement and its output is not acceptance authority. A stale or changed marker, dead runner or prompt, mismatched completion, unknown boundary, or timeout fails closed. Validate the observer and producer classifier without UI or evidence files with `node --check scripts/wait-macos-pointer-concurrency-handoff.mjs`, `node scripts/wait-macos-pointer-concurrency-handoff.mjs --mode self-test`, `node --check evidence/v0.12.11/computer/helper-evidence-rig.mjs`, and `node evidence/v0.12.11/computer/helper-evidence-rig.mjs --self-test`.
 
 ### Deterministic Windows live acceptance
 
@@ -166,7 +168,7 @@ repository's read-only watcher from a separate process:
 ```
 
 The watcher reads only `operator/foreground-arm-request.json`. It requires the
-exact v0.12.10/schema-2 field set and order, a fresh non-expired publication,
+exact v0.12.11/schema-2 field set and order, a fresh non-expired publication,
 ordinary non-reparse paths, and the same live runner PID/start time both before
 and after parsing. It emits exactly one compact sanitized
 `foreground-arm-visual-handoff` JSON object or fails closed. It neither writes
@@ -258,7 +260,7 @@ Plan verification before changing a capability. Keep these evidence classes sepa
 
 Record negative results. A candidate run must not be described as published release evidence. Screenshots should show the relevant browser or OS indicator, target result, and non-interruption state without exposing tokens, personal data, or authenticated URLs.
 
-The exact v0.12.9 packaged macOS attempt is a required negative-history reference: it stopped at the first semantic `setValue` after a cursor-position delta that the old record could not attribute, and Windows/stock-Chrome were never run. Do not rewrite that historical `hardwareCursorUnchanged` failure with v0.12.10 field names. A v0.12.10 success must come from fresh artifacts and the new route/activity/postcondition contract.
+The exact v0.12.9 packaged macOS attempt is a required negative-history reference: it stopped at the first semantic `setValue` after a cursor-position delta that the old record could not attribute. The exact [v0.12.10 attempt](../evidence/v0.12.10/computer/attempts/withdrawn-de59840-macos-deliberate-pointer-timeout/README.md) then passed 69 assertions before timing out with no separately authorized pointer movement and no final action. Windows/stock-Chrome were never run for either candidate. Do not rewrite those historical failures with v0.12.11 field names. A v0.12.11 success must come from fresh artifacts and the new route/activity/postcondition contract.
 
 See [SOTA audit](SOTA_AUDIT.md) and the [evidence index](../evidence/) for current boundaries.
 
@@ -283,7 +285,7 @@ Publication also requires a nonsecret, compact JSON receipt in the protected `re
 
 ```bash
 receipt="$(jq -cn \
-  --arg tag "v0.12.10" \
+  --arg tag "v0.12.11" \
   --arg source_sha "EXACT_VERIFIED_SOURCE_SHA" \
   --arg tag_object_sha "EXACT_ANNOTATED_TAG_OBJECT_SHA" \
   --arg run_id "EXACT_GITHUB_RUN_ID" \

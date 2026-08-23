@@ -6,8 +6,13 @@ cd "$project_root"
 
 version="$(bash scripts/audit-versions.sh)"
 release_stage="$(mktemp -d)"
-trap 'rm -rf "$release_stage"' EXIT
+validation_stage="$(mktemp -d)"
+trap 'rm -rf "$release_stage" "$validation_stage"' EXIT
 
+node --check scripts/wait-macos-pointer-concurrency-handoff.mjs
+node scripts/wait-macos-pointer-concurrency-handoff.mjs --mode self-test
+node --check evidence/v0.12.11/computer/helper-evidence-rig.mjs
+node evidence/v0.12.11/computer/helper-evidence-rig.mjs --self-test
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
@@ -79,11 +84,17 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 bash scripts/verify-macos-build-host.sh
+xcrun swiftc -typecheck evidence/v0.12.11/computer/HelperEvidenceFixture.swift
+xcrun swiftc -typecheck evidence/v0.12.11/computer/SystemProbe.swift
+xcrun swiftc -typecheck evidence/v0.12.11/computer/PointerHandoff.swift
+pointer_handoff_self_test="$validation_stage/lbb-pointer-handoff-self-test"
+xcrun swiftc evidence/v0.12.11/computer/PointerHandoff.swift -o "$pointer_handoff_self_test"
+"$pointer_handoff_self_test" --self-test
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 cargo build --locked --release --bins --target aarch64-apple-darwin
 cargo build --locked --release --bins --target x86_64-apple-darwin
 mac_stage="$(mktemp -d)"
-trap 'rm -rf "$release_stage" "$mac_stage"' EXIT
+trap 'rm -rf "$release_stage" "$validation_stage" "$mac_stage"' EXIT
 mkdir -p "$mac_stage/Local Computer Helper.app/Contents/MacOS"
 cp LICENSE THIRD_PARTY_LICENSES.txt "$mac_stage/"
 chmod 644 "$mac_stage/LICENSE" "$mac_stage/THIRD_PARTY_LICENSES.txt"

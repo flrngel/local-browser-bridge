@@ -116,7 +116,7 @@ Local Browser Bridge applies the same class of invariant at narrower layers: Web
 
 Interceptor's current macOS source independently validates several implementation choices used here: AX before pixels, `CGEvent.postToPid` for background delivery, ScreenCaptureKit for native frames, an explicit wait for the first frame, and rejection of callbacks after stop. It also shows the limitation of stopping at the component level. Its continuous app mode selects the first window owned by a named application, caches a latest JPEG without a source sequence or dropped-frame proof, and routes synthetic input to a PID rather than proving the exact window receiver. Local Browser Bridge therefore keeps the exact `(PID, native window id)` capability, monotonic source sequence, bounded replacement accounting, receiver proof, and foreground/focus invariants instead of treating a successful per-PID post as an accepted exact-window action.
 
-OpenKosmos prioritizes a different product surface: a persistent click-through cursor on the physical desktop, one-time action confirmations, a fresh foreground-app allowlist check, cancellation checkpoints, and an audit trail. Those are strong visibility and consent references. Its actuator still uses the shared physical input seat and may focus the target, so adopting its overlay would not make its transport non-interrupting. Version 0.12.10 keeps returned-frame pointer evidence and target-routed input; a trusted native Stop/Esc surface and a physical-desktop overlay remain explicitly open deltas rather than inferred from capture.
+OpenKosmos prioritizes a different product surface: a persistent click-through cursor on the physical desktop, one-time action confirmations, a fresh foreground-app allowlist check, cancellation checkpoints, and an audit trail. Those are strong visibility and consent references. Its actuator still uses the shared physical input seat and may focus the target, so adopting its overlay would not make its transport non-interrupting. Version 0.12.11 keeps returned-frame pointer evidence and target-routed input; a trusted native Stop/Esc surface and a physical-desktop overlay remain explicitly open deltas rather than inferred from capture.
 
 ### Current real-profile browser relays: lifecycle recovery without durable handback
 
@@ -128,7 +128,7 @@ Browser Bridge 0.16.0 pushes the passive-observation side further. Its watch mod
 
 BackgroundComputerUse and DSH both prioritize semantic state plus application-owned rereads after action. BackgroundComputerUse adds a compact state token derived from window metadata, AX projection, focus/selection, and image dimensions; DSH makes every ref snapshot-scoped, rejects a stale snapshot, and returns a fresh bounded observation after exactly one action. DSH also combines AX with Vision OCR for semantic gaps and refuses a Stage Manager shelf-thumbnail geometry mismatch before asking ScreenCaptureKit to capture it.
 
-The useful adoption is the policy, not their code: stale state never authorizes a guess, each action produces or requires a successor observation, and visual-only state needs pixels because a semantic token can remain unchanged. Version 0.12.10 carries layered observation/share identities, exact receiver proof, application-owned semantic postconditions, persistent native source sequences, dropped-frame accounting, and route-versus-pointer attribution. It does not claim BackgroundComputerUse's or DSH's native click-through overlay, broader semantic inventory, or OCR fusion; unlike both reviewed one-shot capture paths, its live-share contract is a persistent SCStream/WGC stream. BackgroundComputerUse's reviewed random-port loopback server also exposes no bearer-authentication or exact-Host gate, so it is a component benchmark rather than a transport-security reference.
+The useful adoption is the policy, not their code: stale state never authorizes a guess, each action produces or requires a successor observation, and visual-only state needs pixels because a semantic token can remain unchanged. Version 0.12.11 carries layered observation/share identities, exact receiver proof, application-owned semantic postconditions, persistent native source sequences, dropped-frame accounting, and route-versus-pointer attribution. It does not claim BackgroundComputerUse's or DSH's native click-through overlay, broader semantic inventory, or OCR fusion; unlike both reviewed one-shot capture paths, its live-share contract is a persistent SCStream/WGC stream. BackgroundComputerUse's reviewed random-port loopback server also exposes no bearer-authentication or exact-Host gate, so it is a component benchmark rather than a transport-security reference.
 
 ### ParaDesk: a separate input seat is a different product mode
 
@@ -203,6 +203,12 @@ The helper opens no listening socket. It authenticates outbound to loopback and 
 - Pointer state is owned by the helper session and remains window-specific. A move to another window reseeds it rather than implying a global desktop location.
 - All model-facing pointer/element coordinates use delivered image pixels. OS screen bounds remain separately labeled diagnostic data.
 - The global cursor sample is diagnostic. Sealed route provenance and a healthy platform activity boundary decide whether the helper's global-pointer preservation is confirmed, unknown, or violated; shared activity is reported separately.
+- The release-only deliberate-concurrency lane uses a separate runner-owned,
+  nonactivating macOS prompt so an asynchronous operator can see the bounded
+  request. The prompt is click-through and never reads pointer activity. Its
+  create-once request/completion markers are notification-only; sustained HID
+  advances plus fresh product and independent action boundaries remain the sole
+  acceptance proof.
 
 ## Exact-window backend boundary
 
@@ -234,9 +240,9 @@ Windows live sharing uses a persistent exact-HWND WGC session, while input uses 
 
 ## Pointer attribution and action proof
 
-The exact v0.12.9 packaged macOS attempt exposed why two global coordinates are not an ownership proof. Its first semantic `computer.setValue` used Accessibility, 40 precondition assertions had passed, and the retained result then observed a cursor-position delta. The run correctly failed closed, but its evidence could not identify whether the helper, a person, virtual input, a remote session, the target application, or another process moved the shared cursor. The candidate was withdrawn; Windows and stock-Chrome acceptance were not started. The exact record is preserved in the [withdrawn attempt](../evidence/v0.12.9/computer/attempts/withdrawn-db624da-macos-semantic-hardware-cursor-change/README.md).
+The exact v0.12.9 packaged macOS attempt exposed why two global coordinates are not an ownership proof. Its first semantic `computer.setValue` used Accessibility, 40 precondition assertions had passed, and the retained result then observed a cursor-position delta. The run correctly failed closed, but its evidence could not identify whether the helper, a person, virtual input, a remote session, the target application, or another process moved the shared cursor. The candidate was withdrawn; Windows and stock-Chrome acceptance were not started. The exact record is preserved in the [withdrawn attempt](../evidence/v0.12.9/computer/attempts/withdrawn-db624da-macos-semantic-hardware-cursor-change/README.md). The successor v0.12.10 run proved 69 earlier assertions but then received no separately authorized movement during its bounded handoff, so it stopped before the final action; that exact [negative record](../evidence/v0.12.10/computer/attempts/withdrawn-de59840-macos-deliberate-pointer-timeout/README.md) is preserved separately.
 
-The v0.12.10 design separates three claims:
+The v0.12.11 design separates three claims:
 
 1. **Exact-target sealed route.** Runtime `inputDelivery` records the route, exact target binding, dispatch attempt, support level, and whether shared-seat, global-HID, or cursor-mutation primitives were requested. Source contracts and the frozen packaged-helper audit independently reject known global pointer/HID APIs. This proves the helper path selected for the action, not operating-system delivery or target effect.
 2. **API acceptance.** AX/UIA return values and Windows message-queue success stop at their documented boundary. The private macOS `SLEventPostToPid` function returns `void`, so the bridge records an attempt but no receipt. Neither case confirms what the application did.
@@ -286,13 +292,18 @@ canceled, and no v0.12.8 Release exists. Version 0.12.9 then started a fresh
 cycle and was also withdrawn: its one exact packaged macOS run failed closed at
 the first semantic action after observing a cursor-position delta that the old
 record could not attribute. Windows and stock-Chrome acceptance were not
-started, and no v0.12.9 Release exists.
+started, and no v0.12.9 Release exists. Version 0.12.10 then passed 69 exact
+packaged macOS assertions but timed out after 300 seconds with no separately
+authorized movement, stopped before the final action, and was withdrawn before
+Windows or stock-Chrome acceptance.
 
-Version 0.12.10 requires one exact packaged macOS attempt whose
+Version 0.12.11 requires one exact packaged macOS attempt whose
 `deliberate-concurrency` mode contains both a quiet cell and a separately
 authorized contaminated cell. That single run must prove unrelated
 shared-pointer activity is reported as `contaminated` without losing sealed
-helper-route attribution or application-owned effect proof; its bytes cannot be
+helper-route attribution or application-owned effect proof. The arm and action
+intervals must advance only the `mouseMoved` HID counter; button, drag, scroll,
+or tablet progress invalidates the gate. Its bytes cannot be
 merged with or reused from another attempt. It must also complete fresh
 interactive-Windows, stock-Chrome, and immutable-release gates. A source
 contract, API return, or single screenshot cannot substitute for those

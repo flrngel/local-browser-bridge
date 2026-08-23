@@ -54,6 +54,16 @@ fn release_workflow_and_local_builder_package_both_processes() {
     assert!(workflow.contains("cargo build --locked --release --bins"));
     assert!(local.contains("cargo xwin build --locked --release --bins"));
     assert!(local.contains("release_stage=\"$(mktemp -d)\""));
+    assert!(local.contains("validation_stage=\"$(mktemp -d)\""));
+    assert!(
+        local.contains(
+            "pointer_handoff_self_test=\"$validation_stage/lbb-pointer-handoff-self-test\""
+        )
+    );
+    assert!(
+        !local
+            .contains("pointer_handoff_self_test=\"$release_stage/lbb-pointer-handoff-self-test\"")
+    );
     assert!(
         local.contains("bash scripts/verify-release-assets.sh \"$version\" \"$release_stage\"")
     );
@@ -94,6 +104,158 @@ fn windows_ci_and_release_validate_the_complete_browser_evidence_toolchain() {
                 "Windows validation in {path} does not run {invocation}"
             );
         }
+    }
+}
+
+#[test]
+fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
+    let watcher = source("scripts/wait-macos-pointer-concurrency-handoff.mjs");
+    let producer = source("evidence/v0.12.11/computer/helper-evidence-rig.mjs");
+    let ci = source(".github/workflows/ci.yml");
+    let release = source(".github/workflows/deploy.yml");
+    let local = source("scripts/deploy.sh");
+
+    for integration in [&ci, &release, &local] {
+        assert!(
+            integration.contains("node --check scripts/wait-macos-pointer-concurrency-handoff.mjs")
+        );
+        assert!(
+            integration.contains(
+                "node scripts/wait-macos-pointer-concurrency-handoff.mjs --mode self-test"
+            )
+        );
+    }
+    assert!(
+        ci.matches("node --check scripts/wait-macos-pointer-concurrency-handoff.mjs")
+            .count()
+            >= 2
+    );
+    assert!(
+        release
+            .matches("node --check scripts/wait-macos-pointer-concurrency-handoff.mjs")
+            .count()
+            >= 2
+    );
+
+    for required in [
+        "const PRODUCT_VERSION = \"0.12.11\";",
+        "const SCHEMA_VERSION = 1;",
+        "const OPERATOR_DIRECTORY = \"operator\";",
+        "macos-pointer-concurrency-handoff-request.json",
+        "macos-pointer-concurrency-handoff-complete.json",
+        "macos-pointer-concurrency-handoff-request",
+        "macos-pointer-concurrency-handoff-complete",
+        "--mode watch --evidence-dir <absolute-path> --runner-pid <pid>",
+        "open(path, constants.O_RDONLY | constants.O_NOFOLLOW)",
+        "stats.mode & 0o077n",
+        "stats.uid !== BigInt(process.getuid())",
+        "process.kill(pid, 0)",
+        "is stale.",
+        "currentRequest.identity !== requestRecord.identity",
+        "The request marker disappeared or changed after notification.",
+        "does not match the request marker.",
+        "The watched macOS acceptance runner is not alive.",
+        "The nonactivating pointer prompt is not alive.",
+        "ACTION REQUIRED: Continuously move the shared pointer without clicking; keep moving until COMPLETE.",
+        "COMPLETE: Both boundaries observed sustained click-free shared-pointer movement.",
+        "macOS pointer-concurrency handoff watcher self-test passed.",
+    ] {
+        assert!(
+            watcher.contains(required),
+            "macOS handoff watcher is missing {required}"
+        );
+    }
+
+    for shared_contract in [
+        "macos-pointer-concurrency-handoff-request.json",
+        "macos-pointer-concurrency-handoff-complete.json",
+        "macos-pointer-concurrency-handoff-request",
+        "macos-pointer-concurrency-handoff-complete",
+        "sustainedMotionSamples",
+        "sustainedMotionSpanMilliseconds",
+        "productBoundaryContaminated",
+        "independentBoundaryContaminated",
+        "clickFreeMotionObserved",
+    ] {
+        assert!(watcher.contains(shared_contract));
+        assert!(
+            producer.contains(shared_contract),
+            "macOS handoff producer and watcher disagree on {shared_contract}"
+        );
+    }
+    assert!(producer.contains("const POINTER_HANDOFF_MARKER_SCHEMA = 1;"));
+    assert!(producer.contains("const operatorDirectory = join(outputDir, \"operator\");"));
+    assert!(watcher.contains("join(evidenceDir, OPERATOR_DIRECTORY)"));
+
+    for integration in [&ci, &release, &local] {
+        assert!(
+            integration.contains("node --check evidence/v0.12.11/computer/helper-evidence-rig.mjs"),
+            "release path does not syntax-check the exact macOS evidence rig"
+        );
+        assert!(
+            integration
+                .contains("node evidence/v0.12.11/computer/helper-evidence-rig.mjs --self-test")
+        );
+    }
+    for integration in [&ci, &release] {
+        for source in [
+            "HelperEvidenceFixture.swift",
+            "SystemProbe.swift",
+            "PointerHandoff.swift",
+        ] {
+            assert!(
+                integration.contains(&format!(
+                    "xcrun swiftc -typecheck evidence/v0.12.11/computer/{source}"
+                )),
+                "macOS workflow does not typecheck {source}"
+            );
+        }
+        assert!(integration.contains("lbb-pointer-handoff-self-test\" --self-test"));
+    }
+
+    for field in [
+        "schemaVersion",
+        "kind",
+        "productVersion",
+        "requestId",
+        "createdAt",
+        "runnerPid",
+        "promptPid",
+        "requestDelivered",
+        "panelOnScreen",
+        "panelNonactivating",
+        "notificationOnly",
+        "acceptedAsAuthority",
+        "sustainedMotionSamples",
+        "sustainedMotionSpanMilliseconds",
+        "productBoundaryContaminated",
+        "independentBoundaryContaminated",
+        "clickFreeMotionObserved",
+    ] {
+        assert!(
+            watcher.contains(&format!("\"{field}\"")),
+            "macOS handoff watcher omits schema field {field}"
+        );
+    }
+
+    for forbidden in [
+        "writeFile(",
+        "appendFile(",
+        "rename(",
+        "unlink(",
+        "rm(",
+        "mkdir(",
+        "process.stdin",
+        "readline",
+        "child_process",
+        "acceptedAsAuthority: true",
+        "notificationOnly: false",
+        "--ack",
+    ] {
+        assert!(
+            !watcher.contains(forbidden),
+            "read-only macOS handoff watcher contains forbidden primitive: {forbidden}"
+        );
     }
 }
 

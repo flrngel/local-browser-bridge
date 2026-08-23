@@ -905,9 +905,9 @@ fn background_invariant_failures_use_stage_bound_closed_vocabulary() {
 }
 
 #[test]
-fn macos_v0_12_10_pointer_evidence_is_bounded_corroboration_not_causal_attribution() {
-    let rig = fs::read_to_string("evidence/v0.12.10/computer/helper-evidence-rig.mjs").unwrap();
-    let probe = fs::read_to_string("evidence/v0.12.10/computer/SystemProbe.swift").unwrap();
+fn macos_v0_12_11_pointer_evidence_is_bounded_corroboration_not_causal_attribution() {
+    let rig = fs::read_to_string("evidence/v0.12.11/computer/helper-evidence-rig.mjs").unwrap();
+    let probe = fs::read_to_string("evidence/v0.12.11/computer/SystemProbe.swift").unwrap();
     assert!(rig.contains("failureProbeBaseline"));
     assert!(rig.contains("collectFailureDiagnostics"));
     assert!(rig.contains("systemInvariants(failureProbeBaseline.system, after)"));
@@ -915,7 +915,7 @@ fn macos_v0_12_10_pointer_evidence_is_bounded_corroboration_not_causal_attributi
     assert!(rig.contains("semanticValueMatchesExpected"));
     assert!(rig.contains("failureDiagnostics,"));
     for required in [
-        "schemaVersion: 4",
+        "schemaVersion: 5",
         "computer.input-delivery-provenance.v1",
         "computer.pointer-activity-monitor.v1",
         "inputDeliveryProvenanceV1",
@@ -932,10 +932,16 @@ fn macos_v0_12_10_pointer_evidence_is_bounded_corroboration_not_causal_attributi
         "pointerActivityMonitorHealthy",
         "sharedPointerActivityState",
         "const POINTER_EVIDENCE_LANES = new Set([\"quiet\", \"deliberate-concurrency\"])",
-        "ACTION REQUIRED: continuously move the shared hardware pointer without clicking",
+        "ACTION REQUIRED: the orange macOS pointer handoff panel is visible",
         "const DELIBERATE_CONCURRENCY_ACTION_MS = 2_000",
         "const DELIBERATE_CONCURRENCY_WAIT_MS = 300_000",
-        "await waitForDeliberatePointerActivity(postResizeSystemBefore)",
+        "const POINTER_HANDOFF_COMPLETION_GRACE_MS = 10_000",
+        "function clickFreePointerMotionProgress(before, after)",
+        "if (field !== \"mouseMoved\") return \"disallowed\"",
+        "let pointerHandoffClickFreeCompletionObserved = false",
+        "const completionPresentationProgress = clickFreePointerMotionProgress(\n    completionBoundary,\n    completePromptSample,\n  )",
+        "pointerHandoffClickFreeCompletionObserved = true",
+        "clickFreeMotionObserved:",
         "deliberate concurrency crossed both product and independent action boundaries",
         "state === \"concurrent-shared-seat-activity\"",
         "pointerEvidence.quietObserved === true &&\n          pointerEvidence.concurrentSharedSeatActivityObserved === true",
@@ -947,7 +953,7 @@ fn macos_v0_12_10_pointer_evidence_is_bounded_corroboration_not_causal_attributi
     ] {
         assert!(
             rig.contains(required),
-            "missing v0.12.10 pointer contract: {required}"
+            "missing v0.12.11 pointer contract: {required}"
         );
     }
     assert!(!rig.contains("cursorUnchanged"));
@@ -963,6 +969,24 @@ fn macos_v0_12_10_pointer_evidence_is_bounded_corroboration_not_causal_attributi
             "missing ephemeral macOS pointer probe: {required}"
         );
     }
+    let prompt_sample_before = probe
+        .find("private let pointerBeforePrompt = pointerSample()")
+        .unwrap();
+    let prompt_observation = probe
+        .find("private let pointerPrompt = pointerPromptObservation(")
+        .unwrap();
+    let prompt_sample_after = probe
+        .find(
+            "private let pointer = pointerPrompt.requested ? pointerSample() : pointerBeforePrompt",
+        )
+        .unwrap();
+    assert!(
+        prompt_sample_before < prompt_observation && prompt_observation < prompt_sample_after,
+        "prompt-bound HID counters must sandwich the exact prompt observation"
+    );
+    assert!(probe.contains(
+        "let pointerActivityMonitorHealthy = pointerBeforePrompt.monitorHealthy && pointer.monitorHealthy"
+    ));
 
     let diagnostics = rig
         .split("async function collectFailureDiagnostics()")
@@ -987,6 +1011,421 @@ fn macos_v0_12_10_pointer_evidence_is_bounded_corroboration_not_causal_attributi
         assert!(
             !diagnostics.contains(raw_identity),
             "failure evidence persisted raw identity {raw_identity}"
+        );
+    }
+}
+
+#[test]
+fn macos_v0_12_11_pointer_handoff_is_passive_notification_only_and_fail_closed() {
+    let prompt = fs::read_to_string("evidence/v0.12.11/computer/PointerHandoff.swift")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let probe = fs::read_to_string("evidence/v0.12.11/computer/SystemProbe.swift")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let rig = fs::read_to_string("evidence/v0.12.11/computer/helper-evidence-rig.mjs")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let readme = fs::read_to_string("evidence/v0.12.11/computer/README.md")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let normalized_readme = readme.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    for required in [
+        "private final class PassivePromptPanel: NSPanel",
+        "override var canBecomeKey: Bool { false }",
+        "override var canBecomeMain: Bool { false }",
+        "styleMask: [.borderless, .nonactivatingPanel]",
+        "panel.ignoresMouseEvents = true",
+        "panel.acceptsMouseMovedEvents = false",
+        "panel.hidesOnDeactivate = false",
+        "application.setActivationPolicy(.accessory)",
+        "case .waiting: \"LBB macOS Acceptance - WAITING\"",
+        "case .move: \"LBB macOS Acceptance - MOVE POINTER\"",
+        "case .action: \"LBB macOS Acceptance - ACTION RUNNING\"",
+        "case .complete: \"LBB macOS Acceptance - COMPLETE\"",
+        "func mayTransition(to next: PromptState) -> Bool",
+        "case (.waiting, .move), (.move, .action), (.action, .complete): true",
+        "private let armExpiresAt: Date",
+        "private let hardExpiresAt: Date",
+        "? armExpiresAt",
+        ": actionExpiresAt ?? hardExpiresAt",
+        "if remaining == 0",
+        "hardRemaining <= 310",
+        "completionGrace <= 10",
+        "panel.setAccessibilityTitle(next.title)",
+        "renameatx_np(",
+        "UInt32(RENAME_EXCL)",
+        "return fsync(directoryDescriptor) == 0",
+        "arguments[0] == \"--publish-create-once\"",
+        "guard arguments.count == 3",
+        "precondition(!publishCreateOnce(",
+        "macOS pointer handoff prompt self-test passed",
+    ] {
+        assert!(
+            prompt.contains(required),
+            "passive macOS pointer prompt is missing: {required}"
+        );
+    }
+    for forbidden in [
+        "NSApp.activate",
+        "application.activate",
+        "NSRunningApplication.activate",
+        "AXUIElementPerformAction",
+        "makeKeyAndOrderFront",
+        "makeKey()",
+        "performClick(",
+        "CGEventTapCreate",
+        "CGEvent.tapCreate",
+        "CGEventCreateMouseEvent",
+        "CGEventCreateKeyboardEvent",
+        "CGEventPost",
+        "CGPostMouseEvent",
+        "CGWarpMouseCursorPosition",
+        "CGAssociateMouseAndMouseCursorPosition",
+        "IOHIDPostEvent",
+        "IOHIDEventSystemClientDispatchEvent",
+        ".post(tap:",
+        "NSEvent.addGlobalMonitorForEvents",
+        "NSEvent.addLocalMonitorForEvents",
+        "NSEvent.mouseEvent",
+        "NSEvent.keyEvent",
+        "mouseDown(",
+        "mouseUp(",
+    ] {
+        assert!(
+            !prompt.contains(forbidden),
+            "notification-only prompt must not activate or synthesize input: {forbidden}"
+        );
+    }
+
+    for required in [
+        "private enum PointerPromptState: String",
+        "case action = \"ACTION\"",
+        "case .action: \"LBB macOS Acceptance - ACTION RUNNING\"",
+        "private func pointerPromptObservation(",
+        "for promptPID: pid_t",
+        "expectedState: PointerPromptState?",
+        "[.optionOnScreenOnly, .excludeDesktopElements]",
+        "(window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == promptPID",
+        "title == expectedState.title && alpha > 0 && width >= 1 && height >= 1",
+        "exactWindows.count == 1 && ownedWindows.count == 1",
+        "foregroundPID != promptPID",
+        "frontmostAttribute(for: promptPID) == false",
+        "\"pointerPromptOwnerMatched\": pointerPrompt.ownerMatched",
+        "\"pointerPromptTitleMatched\": pointerPrompt.titleMatched",
+        "\"pointerPromptOnScreen\": pointerPrompt.onScreen",
+        "\"pointerPromptNonactivating\": pointerPrompt.nonactivating",
+    ] {
+        assert!(
+            probe.contains(required),
+            "SystemProbe omits exact prompt delivery/presentation proof: {required}"
+        );
+    }
+    for raw_prompt_identity in ["\"pointerPromptPID\":", "\"pointerPromptTitle\":"] {
+        assert!(
+            !probe.contains(raw_prompt_identity),
+            "SystemProbe must emit only bounded prompt-delivery booleans: {raw_prompt_identity}"
+        );
+    }
+
+    for required in [
+        "const POINTER_HANDOFF_REQUEST_FILE = \"macos-pointer-concurrency-handoff-request.json\"",
+        "const POINTER_HANDOFF_COMPLETE_FILE = \"macos-pointer-concurrency-handoff-complete.json\"",
+        "async function publishAtomicMarkerOnce(path, marker, timeoutMs = MARKER_PUBLISH_TIMEOUT_MS)",
+        "open(temporaryPath, \"wx\", 0o600)",
+        "await handle.sync()",
+        "[\"--publish-create-once\", temporaryPath, path],",
+        "kind: \"macos-pointer-concurrency-handoff-request\"",
+        "kind: \"macos-pointer-concurrency-handoff-complete\"",
+        "notificationOnly: true",
+        "acceptedAsAuthority: false",
+        "externalAcknowledgementConsumed: false",
+        "markerAcceptedAsAuthority: false",
+        "macOS packaged-evidence rig self-test passed.",
+    ] {
+        assert!(
+            rig.contains(required),
+            "one-shot notification marker contract is missing: {required}"
+        );
+    }
+    let atomic_publication = rig
+        .split(
+            "async function publishAtomicMarkerOnce(path, marker, timeoutMs = MARKER_PUBLISH_TIMEOUT_MS)",
+        )
+        .nth(1)
+        .unwrap()
+        .split("async function writePointerHandoffState")
+        .next()
+        .unwrap();
+    assert!(atomic_publication.contains("await handle.writeFile(serialized, \"utf8\")"));
+    assert!(atomic_publication.contains("await handle.close()"));
+    assert!(atomic_publication.contains("[\"--publish-create-once\", temporaryPath, path],"));
+    assert!(atomic_publication.contains("timeoutMs,"));
+    assert!(!atomic_publication.contains("rename("));
+
+    for (marker_factory, exact_fields) in [
+        (
+            "function pointerHandoffRequestMarker(promptPid)",
+            &[
+                "schemaVersion:",
+                "kind:",
+                "productVersion:",
+                "requestId:",
+                "createdAt:",
+                "runnerPid:",
+                "promptPid,",
+                "requestDelivered:",
+                "panelOnScreen:",
+                "panelNonactivating:",
+                "notificationOnly:",
+                "acceptedAsAuthority:",
+            ][..],
+        ),
+        (
+            "function pointerHandoffCompleteMarker(promptPid)",
+            &[
+                "schemaVersion:",
+                "kind:",
+                "productVersion:",
+                "requestId:",
+                "createdAt:",
+                "runnerPid:",
+                "promptPid,",
+                "requestDelivered:",
+                "panelOnScreen:",
+                "panelNonactivating:",
+                "notificationOnly:",
+                "acceptedAsAuthority:",
+                "sustainedMotionSamples:",
+                "sustainedMotionSpanMilliseconds:",
+                "productBoundaryContaminated:",
+                "independentBoundaryContaminated:",
+                "clickFreeMotionObserved:",
+            ][..],
+        ),
+    ] {
+        let marker = rig
+            .split(marker_factory)
+            .nth(1)
+            .unwrap()
+            .split("\n}\n")
+            .next()
+            .unwrap();
+        let mut previous = 0;
+        for field in exact_fields {
+            let current = marker[previous..]
+                .find(field)
+                .map(|offset| previous + offset)
+                .unwrap_or_else(|| panic!("{marker_factory} omits ordered field {field}"));
+            assert!(current >= previous);
+            previous = current + field.len();
+        }
+        assert!(marker.contains("notificationOnly: true"));
+        assert!(marker.contains("acceptedAsAuthority: false"));
+    }
+    for forbidden in [
+        "macos-pointer-concurrency-handoff-received.json",
+        "externalAcknowledgementConsumed: true",
+        "markerAcceptedAsAuthority: true",
+    ] {
+        assert!(
+            !rig.contains(forbidden),
+            "macOS handoff must never consume an external acknowledgement: {forbidden}"
+        );
+    }
+
+    for required in [
+        "const DELIBERATE_MOTION_REQUIRED_SAMPLES = 3",
+        "const DELIBERATE_MOTION_MINIMUM_SPAN_MS = 500",
+        "consecutive >= DELIBERATE_MOTION_REQUIRED_SAMPLES",
+        "span >= DELIBERATE_MOTION_MINIMUM_SPAN_MS",
+        "const progress = clickFreePointerMotionProgress(previous, sample)",
+        "if (progress === \"unknown\")",
+        "if (progress === \"disallowed\")",
+        "click, drag, scroll, or tablet activity invalidated the pointer-motion arm",
+        "const clickFreeActionProgress = clickFreePointerMotionProgress(",
+        "click, drag, scroll, or tablet activity invalidated the action boundary",
+        "pointerHandoffClickFreeActionObserved = clickFreeActionProgress === \"advanced\"",
+        "stage: \"waitDeliberatePointerActivity\"",
+        "actionDispatched: false",
+        "let pointerHandoffActionDispatched = false",
+        "pointerHandoffActionDispatched = null",
+        "postResizeClick.invariants?.inputDelivery?.dispatchAttemptRecorded === true",
+        "failureProbeBaseline.actionDispatched = pointerHandoffActionDispatched",
+        "pointerHandoffActionDispatched !== true",
+        "const DELIBERATE_CONCURRENCY_ACTION_MS = 2_000",
+        "const POINTER_HANDOFF_ACTION_STATE = \"ACTION\"",
+        "pointerHandoffArmDeadlineMilliseconds",
+        "pointerHandoffHardDeadlineMilliseconds",
+        "pointerHandoffActionDeadlineMilliseconds",
+        "const armProbeBudgetMs = remainingPointerHandoffTime(\n      pointerHandoffArmDeadlineMilliseconds,\n      \"arm probe\",\n    )",
+        "Math.min(SYSTEM_PROBE_TIMEOUT_MS, armProbeBudgetMs)",
+        "remainingPointerHandoffTime(pointerHandoffArmDeadlineMilliseconds, \"arm acceptance\")",
+        "POINTER_HANDOFF_COMPLETION_RESERVE_MS",
+        "AbortSignal.timeout(timeoutMs)",
+        "timeout: timeoutMs",
+        "remainingPointerHandoffTime(pointerHandoffActionDeadlineMilliseconds",
+        "postResizeClickResponse.status === 400 && responseCode === \"BAD_REQUEST\"",
+        "pointerLaneState(postResizeClick.invariants) === \"concurrent-shared-seat-activity\"",
+        "pointerLaneState(postResizeActionInvariants) === \"concurrent-shared-seat-activity\"",
+        "await completePointerHandoff(postResizeSystemAfter)",
+        "await terminate(pointerHandoffProcess, \"pointer handoff prompt\")",
+    ] {
+        assert!(
+            rig.contains(required),
+            "macOS pointer arm/action/cleanup contract is missing: {required}"
+        );
+    }
+
+    let start_handoff = rig.find("await startPointerHandoff(").unwrap();
+    let wait_stage = rig
+        .find("stage: \"waitDeliberatePointerActivity\"")
+        .unwrap();
+    let pre_request_false = rig[wait_stage..]
+        .find("actionDispatched: false")
+        .map(|offset| wait_stage + offset)
+        .unwrap();
+    let sustained_arm = rig.find("await waitForDeliberatePointerActivity(").unwrap();
+    let action_baseline = rig
+        .find("const postResizeSystemBefore = pointerEvidenceLane === \"deliberate-concurrency\"")
+        .unwrap();
+    let dispatch_unknown = rig.find("pointerHandoffActionDispatched = null").unwrap();
+    let action_command = rig
+        .find("const postResizeClickResponse = await commandResponse(\n    \"computer.click\"")
+        .unwrap();
+    let action_result = rig
+        .find("const postResizeClick = actionSummary(postResizeClickBody)")
+        .unwrap();
+    let evidence_bound_dispatch = rig
+        .find("postResizeClick.invariants?.inputDelivery?.dispatchAttemptRecorded === true")
+        .unwrap();
+    let contamination_gate = rig
+        .find("pointerHandoffProductBoundaryContaminated &&")
+        .unwrap();
+    let completion = rig
+        .find("await completePointerHandoff(postResizeSystemAfter)")
+        .unwrap();
+    assert!(
+        wait_stage < pre_request_false
+            && pre_request_false < start_handoff
+            && start_handoff < sustained_arm
+            && sustained_arm < action_baseline
+            && action_baseline < dispatch_unknown
+            && dispatch_unknown < action_command
+            && action_command < action_result
+            && action_result < evidence_bound_dispatch
+            && evidence_bound_dispatch < contamination_gate
+            && contamination_gate < completion,
+        "handoff dispatch state must be false before arm, unknown while awaiting, and true only from returned dispatch evidence"
+    );
+
+    let final_cleanup = rig.split("} finally {").nth(1).unwrap();
+    let prompt_cleanup = final_cleanup
+        .find("await terminate(pointerHandoffProcess, \"pointer handoff prompt\")")
+        .unwrap();
+    let helper_cleanup = final_cleanup
+        .find("await terminate(helperProcess, \"helper\")")
+        .unwrap();
+    assert!(prompt_cleanup < helper_cleanup);
+
+    let state_writer = rig
+        .split("async function writePointerHandoffState(state)")
+        .nth(1)
+        .unwrap()
+        .split("function pointerHandoffSummary()")
+        .next()
+        .unwrap();
+    for allowed in [
+        "POINTER_HANDOFF_MOVE_STATE",
+        "POINTER_HANDOFF_ACTION_STATE",
+        "POINTER_HANDOFF_COMPLETE_STATE",
+    ] {
+        assert!(
+            state_writer.contains(allowed),
+            "state writer omits {allowed}"
+        );
+    }
+    assert!(!state_writer.contains("POINTER_HANDOFF_WAITING_STATE"));
+
+    let prompt = fs::read_to_string("evidence/v0.12.11/computer/PointerHandoff.swift").unwrap();
+    assert!(prompt.contains("if priorExpiration.timeIntervalSinceNow <= 0"));
+    assert!(prompt.contains("guard transitionExpiration.timeIntervalSinceNow > 0 else"));
+
+    let server = fs::read_to_string("src/server.rs").unwrap();
+    let controller = fs::read_to_string("src/computer.rs").unwrap();
+    assert!(rig.contains("const DELIBERATE_CONCURRENCY_ACTION_MS = 2_000"));
+    assert!(server.contains("if !(50..=2_000).contains(&duration)"));
+    assert!(controller.contains("const MAX_CURSOR_DURATION_MS: u64 = 2_000;"));
+
+    for required in [
+        "nonactivating",
+        "atomically publishes create-once notifications",
+        "three consecutive",
+        "500 ms",
+        "two-second",
+        "ACTION RUNNING",
+        "clickFreeMotionObserved",
+        "green completion state",
+        "10-second",
+        "never reads an external acknowledgement",
+        "actionDispatched",
+        "waitDeliberatePointerActivity",
+    ] {
+        assert!(
+            normalized_readme.contains(required),
+            "macOS pointer handoff boundary is undocumented: {required}"
+        );
+    }
+}
+
+#[test]
+fn withdrawn_macos_v0_12_10_evidence_remains_byte_exact() {
+    let root =
+        "evidence/v0.12.10/computer/attempts/withdrawn-de59840-macos-deliberate-pointer-timeout";
+    for (name, expected) in [
+        (
+            "README.md",
+            "9cb8a4b18bf4b98931b123597db5d60519708900fffcbc25b573ee57d0fc5fce",
+        ),
+        (
+            "computer-01-exact-window-observe.png",
+            "ec4e34ef15cc8e2007523949dafaef1cf6ebe30bd5e309614a43b202eb5d436b",
+        ),
+        (
+            "computer-02-semantic-set-value.png",
+            "7d1111f4c65763be9769b8e5ff3e681de1ab44737251e8d1f938086f80e75d97",
+        ),
+        (
+            "computer-03-semantic-invoke.png",
+            "f3efb1d688aeb472efe9cdd2112030083eaf34dccca6bc5b11b22ee0235bc002",
+        ),
+        (
+            "computer-04-persistent-scstream-start.png",
+            "0f2fe8b49c242262cf0d1e2088924b712874fd3f8c9ca151c7f38ec2e5900d7b",
+        ),
+        (
+            "computer-05-live-share-pixel-action.png",
+            "5e05b1165715b234bd527c8039ed11f804ce9c7852e706fd30fa3216a2454e6a",
+        ),
+        (
+            "computer-06-persistent-share-resize.png",
+            "474c6f215288717e053d00a0cbfc60227733e1802d8b9b51467a00b214cf01ff",
+        ),
+        (
+            "helper-results.json",
+            "70794822e86c9749bac064c011377fc6c87ef387834c91250a92ec6c9f9e2fc2",
+        ),
+        (
+            "helper-rig.log",
+            "12db1c5278c7b6232c24aaf3a7d69b89cad5882d72d20468ef2373eb268dd50c",
+        ),
+    ] {
+        let path = format!("{root}/{name}");
+        assert_eq!(
+            file_sha256(&path),
+            expected,
+            "withdrawn v0.12.10 evidence changed: {path}"
         );
     }
 }
@@ -1819,7 +2258,7 @@ fn withdrawn_v0_12_9_macos_cursor_invariant_attempt_is_byte_exact_and_fail_close
 
 #[test]
 fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
-    let entries = fs::read_dir("evidence/v0.12.10/computer")
+    let entries = fs::read_dir("evidence/v0.12.11/computer")
         .unwrap()
         .map(Result::unwrap)
         .map(|entry| {
@@ -1836,18 +2275,19 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
         entries,
         BTreeSet::from([
             "HelperEvidenceFixture.swift".to_owned(),
+            "PointerHandoff.swift".to_owned(),
             "README.md".to_owned(),
             "SystemProbe.swift".to_owned(),
             "helper-evidence-rig.mjs".to_owned(),
         ])
     );
 
-    let rig = fs::read_to_string("evidence/v0.12.10/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.11/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let fixture =
-        fs::read_to_string("evidence/v0.12.10/computer/HelperEvidenceFixture.swift").unwrap();
-    let readme = fs::read_to_string("evidence/v0.12.10/computer/README.md").unwrap();
+        fs::read_to_string("evidence/v0.12.11/computer/HelperEvidenceFixture.swift").unwrap();
+    let readme = fs::read_to_string("evidence/v0.12.11/computer/README.md").unwrap();
 
     assert!(rig.contains(&format!("const EXPECTED_VERSION = \"{VERSION}\";")));
     assert!(rig.contains("const EXPECTED_ARCHIVE = `local-browser-bridge-v${EXPECTED_VERSION}-macos-universal.tar.gz`;"));
@@ -1859,15 +2299,16 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
     assert!(readme.contains(&format!(
         "local-browser-bridge-v{VERSION}-macos-universal.tar.gz"
     )));
-    assert!(!rig.replace("v0.12.10", "").contains("v0.12.1"));
-    assert!(!fixture.replace("v0.12.10", "").contains("v0.12.1"));
+    assert!(!rig.replace("v0.12.11", "").contains("v0.12.1"));
+    assert!(!fixture.replace("v0.12.11", "").contains("v0.12.1"));
     assert!(!rig.contains("v0.12.2"));
     assert!(!fixture.contains("v0.12.2"));
     let current_readme = readme
-        .split("## Historical v0.12.1 negative attempts")
+        .split("## Withdrawn v0.12.10 exact-candidate result")
         .next()
         .unwrap();
-    assert!(!current_readme.replace("v0.12.10", "").contains("v0.12.1"));
+    assert!(!current_readme.contains("v0.12.1 "));
+    assert!(!current_readme.contains("v0.12.1/"));
     assert!(readme.contains("../../v0.12.1/computer/attempts/"));
     assert!(readme.contains(
         "../../v0.12.2/computer/attempts/withdrawn-a52d761-post-cancel-fresh-share-refusal/README.md"
@@ -1896,6 +2337,7 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
             "computer-04-persistent-scstream-start.png",
             "computer-05-live-share-pixel-action.png",
             "computer-06-persistent-share-resize.png",
+            "operator",
         ])
     );
     assert!(rig.contains("assertNoToken(serialized, \"machine-readable result\")"));
@@ -1907,10 +2349,10 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
 
 #[test]
 fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
-    let rig = fs::read_to_string("evidence/v0.12.10/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.11/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.10/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.11/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1942,7 +2384,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
         "$EXPECTED_SHA256SUMS_SHA256",
         "$EXPECTED_SOURCE_SHA",
         "mandatory SHA-256 supplied",
-        "exactly the four v0.12.10",
+        "exactly the four v0.12.11",
         "expected and actual manifest hashes",
         "Before invoking either supplied candidate executable—even with `--version`",
         "No supplied server or helper code executes before",
@@ -1999,7 +2441,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
         .unwrap();
     let first_documented_extraction = readme.find("tar -xzf").unwrap();
     let first_documented_execution = readme
-        .find("node evidence/v0.12.10/computer/helper-evidence-rig.mjs")
+        .find("node evidence/v0.12.11/computer/helper-evidence-rig.mjs")
         .unwrap();
     assert!(
         independent_manifest_digest < exact_inventory
@@ -2015,7 +2457,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
 
 #[test]
 fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
-    let rig = fs::read_to_string("evidence/v0.12.10/computer/helper-evidence-rig.mjs").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.11/computer/helper-evidence-rig.mjs").unwrap();
     assert!(rig.contains("capturedFrameMatchesWindowGeometry"));
     assert!(rig.contains("share-resize-settled"));
     assert!(rig.contains("sample.sourceSequence > resizeTransition.sample.sourceSequence"));
@@ -2027,12 +2469,12 @@ fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
 
 #[test]
 fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.10/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.11/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     assert!(rig.contains("function childEnvironment(overrides = {})"));
     assert!(!rig.contains("...process.env"));
-    let fixture = fs::read_to_string("evidence/v0.12.10/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.11/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -2058,7 +2500,7 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
         .next()
         .unwrap();
     for required in [
-        "command(\"computer.click\"",
+        "commandResponse(\n    \"computer.click\"",
         "post-resize pixel click target-side proof",
         "postResizeFixtureAfter.clicks === 2",
         "postResizeFixtureAfter.semanticPresses === postResizeFixtureBefore.semanticPresses",
@@ -2196,7 +2638,7 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
             "packaged evidence uses an impossible, synthetic, or unsafe shortcut: {forbidden}"
         );
     }
-    assert!(rig.contains("schemaVersion: 4"));
+    assert!(rig.contains("schemaVersion: 5"));
     assert!(
         rig.contains("const NATIVE_TEXT_SUFFIX = `-native-${randomBytes(6).toString(\"hex\")}`;")
     );
@@ -2210,10 +2652,10 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
 
 #[test]
 fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.10/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.11/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.10/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.11/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -2344,21 +2786,21 @@ fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() 
 
 #[test]
 fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negative() {
-    let fixture = fs::read_to_string("evidence/v0.12.10/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.11/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.10/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.11/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.10/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.11/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.10/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.11/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
     for required in [
-        "private let siblingFixtureTitle = \"LBB v0.12.10 Same-PID Sibling Receiver\"",
+        "private let siblingFixtureTitle = \"LBB v0.12.11 Same-PID Sibling Receiver\"",
         "var primaryWindowId = 0",
         "var siblingWindowId = 0",
         "var siblingTextLength = 0",
@@ -3276,7 +3718,7 @@ fn windows_foreground_arm_handoff_watcher_is_strict_read_only_and_non_authoritat
         .replace("\r\n", "\n");
 
     for required in [
-        "$script:ProductVersion = \"0.12.10\"",
+        "$script:ProductVersion = \"0.12.11\"",
         "$script:MarkerSchemaVersion = 2",
         "function Assert-ExactPropertyOrder {",
         "function Assert-ExactMarkerSchema {",
@@ -3402,7 +3844,7 @@ fn windows_foreground_arm_handoff_watcher_is_strict_read_only_and_non_authoritat
     );
     assert!(!watcher.contains("}.GetNewClosure() `\n        -ExpectedText"));
     assert!(runner.contains("-ProductVersion $Version"));
-    assert!(runner.contains("-ProductVersion \"0.12.10\""));
+    assert!(runner.contains("-ProductVersion \"0.12.11\""));
     assert!(runner.contains("maximumClickAttempts -ne 1"));
     assert!(runner.contains("maximumClickAttempts -ne 0"));
 }

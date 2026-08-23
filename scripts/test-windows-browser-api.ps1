@@ -258,7 +258,7 @@ function Get-CandidateBindingFromPreflight {
         foreach ($value in @(
             [string]$record.candidate.checksumManifest.sha256,
             [string]$record.candidate.server.sha256,
-            $(if ($Version -ceq "0.12.10") { [string]$record.candidate.computerHelper.sha256 } else { [string]$record.candidate.server.sha256 }),
+            $(if ($Version -ceq "0.12.11") { [string]$record.candidate.computerHelper.sha256 } else { [string]$record.candidate.server.sha256 }),
             [string]$record.candidate.extension.sha256,
             [string]$record.candidate.extension.combinedPayloadSha256
         )) {
@@ -271,7 +271,7 @@ function Get-CandidateBindingFromPreflight {
             checksumManifestSha256 = [string]$record.candidate.checksumManifest.sha256
             serverSha256 = [string]$record.candidate.server.sha256
         }
-        if ($Version -ceq "0.12.10") {
+        if ($Version -ceq "0.12.11") {
             $binding.computerHelperSha256 = [string]$record.candidate.computerHelper.sha256
         }
         $binding.extensionZipSha256 = [string]$record.candidate.extension.sha256
@@ -333,7 +333,7 @@ function Assert-ReducedEvidenceRecord {
         "runNonce", "preflightRecordSha256", "finalSha", "checksumManifestSha256",
         "serverSha256", "extensionZipSha256", "extractedPayloadSha256"
     )
-    if ($Version -ceq "0.12.10") {
+    if ($Version -ceq "0.12.11") {
         $bindingFields = @(
             "runNonce", "preflightRecordSha256", "finalSha", "checksumManifestSha256",
             "serverSha256", "computerHelperSha256", "extensionZipSha256", "extractedPayloadSha256"
@@ -424,7 +424,7 @@ function Invoke-RecordSelfTest {
         checksumManifestSha256 = [String]::new([char]"d", 64)
         serverSha256 = [String]::new([char]"e", 64)
     }
-    if ($Version -ceq "0.12.10") {
+    if ($Version -ceq "0.12.11") {
         $selfTestBinding.computerHelperSha256 = [String]::new([char]"1", 64)
     }
     $selfTestBinding.extensionZipSha256 = [String]::new([char]"f", 64)
@@ -487,7 +487,7 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 if ([String]::IsNullOrWhiteSpace($Version) -or $Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
     throw "Version must be an explicit stable semantic version."
 }
-if ($Version -ceq "0.12.10") {
+if ($Version -ceq "0.12.11") {
     $MethodScreenshots = $MethodScreenshotsV2
 }
 if ([String]::IsNullOrWhiteSpace($PreflightRecord)) {

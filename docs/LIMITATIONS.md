@@ -136,9 +136,25 @@ stock-Chrome acceptance were not started, the protected publication job was
 canceled, and no v0.12.9 Release exists. See the
 [withdrawn attempt](../evidence/v0.12.9/computer/attempts/withdrawn-db624da-macos-semantic-hardware-cursor-change/README.md).
 
-Version 0.12.10 replaces that two-coordinate attribution rule with sealed
-route provenance plus conservative shared-pointer monitoring. Its source
-contract still does not satisfy a release gate: the exact packaged macOS,
+The exact v0.12.10 packaged macOS attempt exercised the replacement attribution
+model through 69 passing assertions and six fixture-only screenshots. It then
+waited 300 seconds for separately authorized pointer movement, observed none,
+and failed before dispatching the post-resize product action. That is a valid
+negative handoff result, not product-action success. The candidate was not
+retried; Windows and stock-Chrome were not started, publication was canceled,
+and no v0.12.10 Release exists.
+
+Version 0.12.11 keeps sealed route provenance plus conservative shared-pointer
+monitoring and adds a persistent runner-owned, nonactivating macOS handoff
+panel. Its request and completion files are notification-only and are never
+acceptance authority. The actual gate still requires sustained independent HID
+`mouseMoved` counter advances with button, drag, scroll, and tablet counters
+stable, a fresh immediately-pre-action baseline, and the same click-free motion
+plus contamination at both the product and independent post-action boundaries.
+Entering `ACTION` starts a separate 10-second hard action/completion grace,
+capped by a 310-second total prompt lifetime; the nonactivating panel terminates
+at the earlier deadline even after turning green. Its source contract
+still does not satisfy a release gate: the exact packaged macOS,
 interactive-Windows, stock-Chrome, and immutable-publication paths must all run
 fresh. Quiet and deliberate-concurrency evidence are separate lanes; neither
 may be relabelled as the other.

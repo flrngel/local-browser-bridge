@@ -35,6 +35,10 @@ jobs:
           rustup default 1.88.0
       - name: Audit distributed versions
         run: bash scripts/audit-versions.sh
+      - name: Validate the read-only macOS pointer handoff watcher
+        run: |
+          node --check scripts/wait-macos-pointer-concurrency-handoff.mjs
+          node scripts/wait-macos-pointer-concurrency-handoff.mjs --mode self-test
       - name: Verify locked dependency licenses
         run: |
           cargo install cargo-about --locked --version 0.9.2 --features cli
@@ -144,6 +148,19 @@ jobs:
           package-manager-cache: false
       - name: Verify the macOS build SDK and runtime floor
         run: bash scripts/verify-macos-build-host.sh
+      - name: Validate the macOS pointer handoff watcher on macOS
+        run: |
+          node --check scripts/wait-macos-pointer-concurrency-handoff.mjs
+          node scripts/wait-macos-pointer-concurrency-handoff.mjs --mode self-test
+      - name: Validate the macOS packaged-evidence harness
+        run: |
+          node --check evidence/v0.12.11/computer/helper-evidence-rig.mjs
+          node evidence/v0.12.11/computer/helper-evidence-rig.mjs --self-test
+          xcrun swiftc -typecheck evidence/v0.12.11/computer/HelperEvidenceFixture.swift
+          xcrun swiftc -typecheck evidence/v0.12.11/computer/SystemProbe.swift
+          xcrun swiftc -typecheck evidence/v0.12.11/computer/PointerHandoff.swift
+          xcrun swiftc evidence/v0.12.11/computer/PointerHandoff.swift -o "$RUNNER_TEMP/lbb-pointer-handoff-self-test"
+          "$RUNNER_TEMP/lbb-pointer-handoff-self-test" --self-test
       - name: Install the minimum supported Rust toolchain
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
