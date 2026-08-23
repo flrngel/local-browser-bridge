@@ -221,7 +221,19 @@ function Assert-ExactKeys {
     if ($null -eq $Object) {
         throw "$Label must be an object."
     }
-    $actual = @($Object.PSObject.Properties.Name | Sort-Object)
+    $actualKeys = @()
+    if ($Object -is [Collections.IDictionary]) {
+        foreach ($key in $Object.Keys) {
+            if ($key -isnot [string]) {
+                throw "$Label contains a non-string field name."
+            }
+            $actualKeys += $key
+        }
+    }
+    else {
+        $actualKeys = @($Object.PSObject.Properties.Name)
+    }
+    $actual = @($actualKeys | Sort-Object)
     $wanted = @($Expected | Sort-Object)
     if (($actual -join "`n") -cne ($wanted -join "`n")) {
         throw "$Label contains missing or unexpected fields."
