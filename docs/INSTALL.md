@@ -2,7 +2,7 @@
 
 Local Browser Bridge has two required matching components—the standalone server and Chromium extension—and one optional matching computer helper for native desktop control. Always use every installed component from the same release version.
 
-Browser control, including recursive cross-origin iframe control, requires Chrome or Edge 140 or later. Version 0.12.6 retains this floor because Chromium 140 is the first supported line in which the extension can restrict persisted local storage to trusted extension contexts. The complete macOS archive requires macOS 13 or later; native Windows support is intended for Windows 11 in the signed-in interactive session.
+Browser control, including recursive cross-origin iframe control, requires Chrome or Edge 140 or later. Version 0.12.7 retains this floor because Chromium 140 is the first supported line in which the extension can restrict persisted local storage to trusted extension contexts. The complete macOS archive requires macOS 13 or later; native Windows support is intended for Windows 11 in the signed-in interactive session.
 
 ## 1. Download the matching files
 

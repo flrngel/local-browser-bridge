@@ -1,0 +1,209 @@
+{
+  "schemaVersion": 2,
+  "evidenceType": "stock-user-chrome-operator-observations",
+  "candidateBinding": {
+    "runNonce": "REPLACE_WITH_INITIALIZER",
+    "preflightRecordSha256": "REPLACE_WITH_INITIALIZER",
+    "finalSha": "REPLACE_WITH_INITIALIZER",
+    "checksumManifestSha256": "REPLACE_WITH_INITIALIZER",
+    "serverSha256": "REPLACE_WITH_INITIALIZER",
+    "computerHelperSha256": "REPLACE_WITH_INITIALIZER",
+    "extensionZipSha256": "REPLACE_WITH_INITIALIZER",
+    "extractedPayloadSha256": "REPLACE_WITH_INITIALIZER"
+  },
+  "environment": {
+    "platform": "windows-x86_64",
+    "browserProduct": "Google Chrome",
+    "browserVersion": "REPLACE_WITH_FOUR_PART_VERSION",
+    "stockUserChrome": false,
+    "existingUserSession": false,
+    "dedicatedTemporaryWindow": false,
+    "browserLaunchFlagsUsed": true,
+    "directCdpUsed": true,
+    "automationTestProfileUsed": true,
+    "localDemoOnly": false
+  },
+  "actionSurfaces": {
+    "bridgeApiMatrix": "local-browser-bridge-api",
+    "computerHelperApi": "local-browser-bridge-computer-api",
+    "orchestrationAndConsent": "REPLACE_WITH_EXTERNAL_ORCHESTRATION_SURFACE",
+    "dedicatedWindowCreation": "REPLACE_WITH_PRODUCT_SURFACE",
+    "chromeExtensionsPage": "REPLACE_WITH_PRODUCT_SURFACE",
+    "nativeLoadUnpackedPicker": "REPLACE_WITH_PRODUCT_SURFACE",
+    "extensionPopup": "REPLACE_WITH_PRODUCT_SURFACE",
+    "chromeDebuggerNotice": "REPLACE_WITH_PRODUCT_SURFACE",
+    "browserApiResult": "REPLACE_WITH_PRODUCT_SURFACE",
+    "computerShareAction": "REPLACE_WITH_PRODUCT_SURFACE",
+    "acceptanceScreenshots": "REPLACE_WITH_PRODUCT_SURFACE",
+    "debuggerOwnerDuringBridgeLease": "local-browser-bridge-extension",
+    "competingDebuggerAttachmentAllowed": true,
+    "chromeMcpUsedDuringBridgeLease": true,
+    "chromeMcpReleaseEvidenceClaimed": true
+  },
+  "computerHelperChain": {
+    "candidateBoundExecutableStarted": false,
+    "connectedThroughLoopbackServer": false,
+    "serverApiOnly": false,
+    "exactChromeWindowSelected": false,
+    "chromeExtensionsLoadCompleted": false,
+    "browserApiActionCompleted": false,
+    "exactWindowShareActionCompleted": false,
+    "freshFramesBoundToComputerAction": false,
+    "screenshotEndpoint": "/api/computer/screenshot",
+    "rawScreenshotCount": 0,
+    "ownerForcedSupervisorTermination": false,
+    "helperDisconnectedAfterTermination": false,
+    "noHelperChildrenOrListenersRemain": false,
+    "helperStopped": false
+  },
+  "consentCheckpoints": {
+    "installCandidate": {
+      "performed": false,
+      "actionTimeHumanConfirmed": false,
+      "ownershipConfirmed": false
+    },
+    "developerModeChange": {
+      "performed": false,
+      "actionTimeHumanConfirmed": false
+    },
+    "fullAccessUse": {
+      "performed": false,
+      "actionTimeHumanConfirmed": false,
+      "localDemoScopeAcknowledged": false
+    },
+    "acceptanceTokenSave": {
+      "performed": false,
+      "actionTimeHumanConfirmed": false,
+      "ephemeralAcceptanceCredentialAcknowledged": false
+    },
+    "clearSavedToken": {
+      "performed": false,
+      "actionTimeHumanConfirmed": false,
+      "confirmationDialogSeen": false,
+      "confirmationActionTimeHumanConfirmed": false
+    },
+    "extensionDisposition": {
+      "performed": false,
+      "actionTimeHumanConfirmed": false,
+      "testOwnedRemovalConfirmed": false
+    }
+  },
+  "initialState": {
+    "capturedBeforeRelevantMutation": false,
+    "candidateExtensionPresent": true,
+    "developerMode": {
+      "value": "REPLACE_WITH_ENABLED_OR_DISABLED",
+      "changedByRun": false
+    },
+    "fullAccess": {
+      "value": "REPLACE_WITH_ENABLED_OR_DISABLED",
+      "changedByRun": false
+    },
+    "savedTokenConfigured": true
+  },
+  "extension": {
+    "cardCount": 0,
+    "version": "0.12.7",
+    "enabled": false,
+    "loadErrors": 1,
+    "loadedVia": "chrome://extensions-load-unpacked",
+    "loadedDirectoryByteMatchesCandidateZip": false,
+    "popupConnected": false,
+    "debuggerLeaseActiveAtFirstCapture": false,
+    "nativeDebuggerUseIndicatorSeen": false
+  },
+  "screenshotCaptures": [
+    {
+      "purpose": "extension-loaded",
+      "image": "browser-01-extension-loaded.png",
+      "captureSurface": "REPLACE_WITH_PRODUCT_SURFACE",
+      "requiredVisibleState": "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.7 card with no load errors and Chrome's debugger-use indicator during the active bridge lease"
+    },
+    {
+      "purpose": "api-action-result",
+      "image": "browser-02-api-action-result.png",
+      "captureSurface": "REPLACE_WITH_PRODUCT_SURFACE",
+      "requiredVisibleState": "the loopback demo visibly shows Hello, Bridge Matrix. blue selected. after the browser API action"
+    },
+    {
+      "purpose": "computer-share-action",
+      "image": "browser-03-computer-share-action.png",
+      "captureSurface": "REPLACE_WITH_PRODUCT_SURFACE",
+      "requiredVisibleState": "the exact shared Chrome window visibly shows the post-click demo state and synthetic session pointer from a fresh helper frame"
+    }
+  ],
+  "humanVisualReview": {
+    "sanitizedBeforeHumanReview": false,
+    "automationPausedForHumanReview": false,
+    "reviewedCropCount": 0,
+    "everySanitizedCropOpenedByHuman": false,
+    "requiredVisibleStateConfirmedByHuman": false,
+    "sensitivePixelsAbsentConfirmedByHuman": false,
+    "reviewFlagsSetOnlyAfterHumanConfirmation": false,
+    "postSanitizationAttestationCreated": false,
+    "pendingReviewRecordsOutsideRetainedEvidence": false,
+    "automaticPixelRedactionClaimed": true
+  },
+  "restoration": {
+    "candidateExtensionPresence": {
+      "finalPresent": true,
+      "matchesInitial": false,
+      "verifiedFromLiveUi": false
+    },
+    "developerMode": {
+      "finalValue": "REPLACE_WITH_ENABLED_OR_DISABLED",
+      "matchesInitial": false,
+      "verifiedFromLiveUi": false
+    },
+    "fullAccess": {
+      "finalValue": "REPLACE_WITH_ENABLED_OR_DISABLED",
+      "matchesInitial": false,
+      "verifiedFromLiveUi": false
+    },
+    "savedToken": {
+      "finalConfigured": true,
+      "matchesInitial": false,
+      "verifiedFromLiveUi": false
+    }
+  },
+  "cleanup": {
+    "controlReleased": false,
+    "testTabsClosed": false,
+    "testWindowClosed": false,
+    "popupDisconnected": false,
+    "serverStopped": false,
+    "portReleased": false,
+    "acceptanceCredentialClearedFromShell": false,
+    "savedTokenClear": {
+      "trustedPopupClick": false,
+      "confirmationDialogShown": false,
+      "confirmationAcceptedByHuman": false,
+      "popupStateVerifiedAfterClear": false,
+      "tokenConfigured": true,
+      "clearButtonDisabled": false
+    },
+    "chromeMcpReleasedOrNotUsed": false,
+    "computerUseReleasedOrNotUsed": false,
+    "computerHelperStopped": false,
+    "rawScreenshotScratchDeleted": false,
+    "pendingReviewRecordsDeleted": false,
+    "extractedExtensionInventoryVerifiedBeforeDeletion": false,
+    "extractedExtensionDirectoryDeleted": false,
+    "extensionDisposition": "REPLACE_WITH_DISPOSITION",
+    "unrelatedTabsOrWindowsChanged": true,
+    "unrelatedExtensionsChanged": true
+  },
+  "retainedEvidence": {
+    "scope": "acceptance-evidence-directory-only",
+    "exactAllowlistVerified": false,
+    "inputFileCount": 0,
+    "finalFileCount": 0,
+    "rawScreenshotsPresent": true,
+    "pendingReviewRecordsPresent": true,
+    "chromeMcpTranscriptPresent": true,
+    "computerUseTranscriptPresent": true,
+    "secretCredentialPresent": true,
+    "filesystemLocationsOrBrowserIdsPresent": true,
+    "externalToolAndPlatformLogsScope": "not-asserted"
+  }
+}

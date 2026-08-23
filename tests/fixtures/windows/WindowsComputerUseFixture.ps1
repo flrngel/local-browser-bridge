@@ -1,12 +1,16 @@
 #requires -Version 5.1
 
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = "Run")]
 param(
-    [Parameter(Mandatory = $true)]
+    [Parameter(ParameterSetName = "Run", Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
     [string]$EvidenceDirectory,
 
-    [switch]$ShowOccluder
+    [Parameter(ParameterSetName = "Run")]
+    [switch]$ShowOccluder,
+
+    [Parameter(ParameterSetName = "SelfTest", Mandatory = $true)]
+    [switch]$SelfTest
 )
 
 Set-StrictMode -Version Latest
@@ -16,13 +20,16 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     throw "The Windows computer-use fixture can run only on Windows."
 }
 
-$evidenceRoot = [IO.Path]::GetFullPath($EvidenceDirectory)
-[IO.Directory]::CreateDirectory($evidenceRoot) | Out-Null
+$evidenceRoot = $null
+if (-not $SelfTest) {
+    $evidenceRoot = [IO.Path]::GetFullPath($EvidenceDirectory)
+    [IO.Directory]::CreateDirectory($evidenceRoot) | Out-Null
 
-foreach ($name in @("fixture-state.json", "fixture-events.ndjson", "fixture-ready.json")) {
-    $path = [IO.Path]::Combine($evidenceRoot, $name)
-    if ([IO.File]::Exists($path)) {
-        throw "The evidence directory already contains $name. Supply a new, empty directory."
+    foreach ($name in @("fixture-state.json", "fixture-events.ndjson", "fixture-ready.json")) {
+        $path = [IO.Path]::Combine($evidenceRoot, $name)
+        if ([IO.File]::Exists($path)) {
+            throw "The evidence directory already contains $name. Supply a new, empty directory."
+        }
     }
 }
 
@@ -52,6 +59,9 @@ namespace LbbWindowsFixture
 
         [DllImport("user32.dll")]
         internal static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        internal static extern IntPtr GetFocus();
 
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -514,6 +524,7 @@ namespace LbbWindowsFixture
         private int animationFrame;
         private int invokeCount;
         private int activatedCount;
+        private long statePublicationGeneration;
         private bool readyWritten;
 
         internal TargetForm(EvidenceStore evidenceStore, MessageCounters messageCounters)
@@ -684,6 +695,7 @@ namespace LbbWindowsFixture
             ready["targetHwnd"] = Handle.ToInt64().ToString(CultureInfo.InvariantCulture);
             ready["surfaceHwnd"] = surface.Handle.ToInt64().ToString(CultureInfo.InvariantCulture);
             ready["sentinelHwnd"] = FixtureRuntime.SentinelHandle.ToString(CultureInfo.InvariantCulture);
+            ready["armButtonHwnd"] = FixtureRuntime.ArmButtonHandle.ToString(CultureInfo.InvariantCulture);
             ready["occluderHwnd"] = FixtureRuntime.OccluderHandle.ToString(CultureInfo.InvariantCulture);
             ready["backdropHwnd"] = FixtureRuntime.BackdropHandle.ToString(CultureInfo.InvariantCulture);
             ready["occluderEnabled"] = FixtureRuntime.ShowOccluder;
@@ -703,6 +715,7 @@ namespace LbbWindowsFixture
             Rectangle surfaceScreen = surface.RectangleToScreen(surface.ClientRectangle);
             Dictionary<string, object> state = new Dictionary<string, object>();
             state["schemaVersion"] = 1;
+            state["statePublicationGeneration"] = Interlocked.Increment(ref statePublicationGeneration);
             state["utc"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
             state["processId"] = System.Diagnostics.Process.GetCurrentProcess().Id;
             state["uptimeMs"] = (long)(DateTime.UtcNow - startedAt).TotalMilliseconds;
@@ -710,6 +723,7 @@ namespace LbbWindowsFixture
             state["targetHwnd"] = Handle.ToInt64().ToString(CultureInfo.InvariantCulture);
             state["surfaceHwnd"] = surface.Handle.ToInt64().ToString(CultureInfo.InvariantCulture);
             state["sentinelHwnd"] = FixtureRuntime.SentinelHandle.ToString(CultureInfo.InvariantCulture);
+            state["armButtonHwnd"] = FixtureRuntime.ArmButtonHandle.ToString(CultureInfo.InvariantCulture);
             state["occluderHwnd"] = FixtureRuntime.OccluderHandle.ToString(CultureInfo.InvariantCulture);
             state["backdropHwnd"] = FixtureRuntime.BackdropHandle.ToString(CultureInfo.InvariantCulture);
             state["foregroundHwnd"] = NativeMethods.GetForegroundWindow().ToInt64().ToString(CultureInfo.InvariantCulture);
@@ -734,6 +748,13 @@ namespace LbbWindowsFixture
             state["targetActivatedCount"] = activatedCount;
             state["sentinelActivatedCount"] = FixtureRuntime.SentinelActivatedCount;
             state["sentinelDeactivatedCount"] = FixtureRuntime.SentinelDeactivatedCount;
+            state["foregroundArmRequestedGeneration"] = FixtureRuntime.ForegroundArmRequestedGeneration;
+            state["foregroundArmAcknowledgedGeneration"] = FixtureRuntime.ForegroundArmAcknowledgedGeneration;
+            state["foregroundArmRequestCount"] = FixtureRuntime.ForegroundArmRequestCount;
+            state["foregroundArmAcknowledgementCount"] = FixtureRuntime.ForegroundArmAcknowledgementCount;
+            state["foregroundArmLeftMouseDownCount"] = FixtureRuntime.ForegroundArmLeftMouseDownCount;
+            state["foregroundArmLeftMouseUpCount"] = FixtureRuntime.ForegroundArmLeftMouseUpCount;
+            state["foregroundArmButtonEnabled"] = FixtureRuntime.ForegroundArmButtonEnabled;
             state["eventSequence"] = store.CurrentSequence;
             state["occluderEnabled"] = FixtureRuntime.ShowOccluder;
             store.WriteState(state);
@@ -743,6 +764,8 @@ namespace LbbWindowsFixture
     internal sealed class SentinelForm : Form
     {
         private readonly EvidenceStore store;
+        private readonly Button armButton;
+        private int pressedArmGeneration;
 
         internal SentinelForm(EvidenceStore evidenceStore)
         {
@@ -751,23 +774,108 @@ namespace LbbWindowsFixture
             AccessibleName = "LBB Foreground Sentinel";
             StartPosition = FormStartPosition.Manual;
             Rectangle area = Screen.PrimaryScreen.WorkingArea;
-            Location = new Point(Math.Max(area.Left + 10, area.Right - 310), Math.Max(area.Top + 10, area.Bottom - 150));
-            ClientSize = new Size(280, 90);
+            Location = new Point(Math.Max(area.Left + 10, area.Right - 390), Math.Max(area.Top + 10, area.Bottom - 230));
+            ClientSize = new Size(360, 170);
             TopMost = true;
             BackColor = Color.FromArgb(255, 183, 77);
             Font = new Font("Segoe UI", 10.0f, FontStyle.Bold, GraphicsUnit.Point);
             Label label = new Label();
-            label.Dock = DockStyle.Fill;
+            label.Location = new Point(0, 0);
+            label.Size = new Size(360, 62);
+            label.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             label.TextAlign = ContentAlignment.MiddleCenter;
-            label.Text = "FOREGROUND SENTINEL\r\nbackground actions must not deactivate this window";
+            label.Text = "FOREGROUND SENTINEL\r\nwait for the arm request before clicking";
             Controls.Add(label);
+
+            armButton = new Button();
+            armButton.Name = "ForegroundArmButton";
+            armButton.AccessibleName = "Click to arm Windows acceptance";
+            armButton.AccessibleDescription = "Requires a fresh left-mouse click after the runner requests foreground arming";
+            armButton.Location = new Point(12, 68);
+            armButton.Size = new Size(336, 90);
+            armButton.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            armButton.Enabled = false;
+            armButton.Text = "WAITING FOR RUNNER";
+            armButton.Font = new Font("Segoe UI", 15.0f, FontStyle.Bold, GraphicsUnit.Point);
+            armButton.BackColor = Color.White;
+            armButton.MouseDown += delegate(object sender, MouseEventArgs eventArgs)
+            {
+                if (eventArgs.Button == MouseButtons.Left)
+                {
+                    FixtureRuntime.RecordForegroundArmLeftMouseDown();
+                }
+                if (eventArgs.Button != MouseButtons.Left ||
+                    !armButton.ClientRectangle.Contains(eventArgs.Location) ||
+                    NativeMethods.GetForegroundWindow() != Handle ||
+                    NativeMethods.GetFocus() != armButton.Handle)
+                {
+                    pressedArmGeneration = 0;
+                    return;
+                }
+                int requested = FixtureRuntime.ForegroundArmRequestedGeneration;
+                if (requested > 0 && requested != FixtureRuntime.ForegroundArmAcknowledgedGeneration)
+                {
+                    pressedArmGeneration = requested;
+                }
+                else
+                {
+                    pressedArmGeneration = 0;
+                }
+            };
+            armButton.LostFocus += delegate { pressedArmGeneration = 0; };
+            armButton.MouseUp += delegate(object sender, MouseEventArgs eventArgs)
+            {
+                if (eventArgs.Button == MouseButtons.Left)
+                {
+                    FixtureRuntime.RecordForegroundArmLeftMouseUp();
+                }
+                int pressed = pressedArmGeneration;
+                pressedArmGeneration = 0;
+                if (eventArgs.Button != MouseButtons.Left ||
+                    pressed <= 0 ||
+                    pressed != FixtureRuntime.ForegroundArmRequestedGeneration ||
+                    !armButton.ClientRectangle.Contains(eventArgs.Location) ||
+                    NativeMethods.GetForegroundWindow() != Handle ||
+                    NativeMethods.GetFocus() != armButton.Handle)
+                {
+                    return;
+                }
+                if (FixtureRuntime.TryAcknowledgeForegroundArm(pressed))
+                {
+                    armButton.Text = "ARMED - DO NOT USE THIS SESSION";
+                    armButton.BackColor = Color.FromArgb(198, 239, 206);
+                    Dictionary<string, object> details = new Dictionary<string, object>();
+                    details["generation"] = pressed;
+                    store.AppendEvent("sentinel", "foregroundArmAcknowledged", details);
+                }
+            };
+            Controls.Add(armButton);
             Shown += delegate
             {
                 FixtureRuntime.SentinelHandle = Handle.ToInt64();
-                Activate();
-                Focus();
+                FixtureRuntime.ArmButtonHandle = armButton.Handle.ToInt64();
                 store.AppendEvent("sentinel", "shown", null);
             };
+        }
+
+        protected override void WndProc(ref Message message)
+        {
+            if (message.Msg == FixtureRuntime.ForegroundArmMessage)
+            {
+                int generation = message.WParam.ToInt32();
+                if (FixtureRuntime.RecordForegroundArmRequest(generation))
+                {
+                    pressedArmGeneration = 0;
+                    armButton.Enabled = true;
+                    FixtureRuntime.MarkForegroundArmButtonEnabled();
+                    armButton.Text = "CLICK TO ARM";
+                    Dictionary<string, object> details = new Dictionary<string, object>();
+                    details["generation"] = generation;
+                    store.AppendEvent("sentinel", "foregroundArmRequested", details);
+                }
+                return;
+            }
+            base.WndProc(ref message);
         }
 
         protected override void OnActivated(EventArgs eventArgs)
@@ -782,6 +890,7 @@ namespace LbbWindowsFixture
 
         protected override void OnDeactivate(EventArgs eventArgs)
         {
+            pressedArmGeneration = 0;
             FixtureRuntime.IncrementSentinelDeactivated();
             base.OnDeactivate(eventArgs);
             if (store != null)
@@ -834,6 +943,8 @@ namespace LbbWindowsFixture
 
     public static class FixtureRuntime
     {
+        // Acceptance-only UI handshake; this is not a product command surface.
+        internal const int ForegroundArmMessage = 0x8126;
         private static readonly ManualResetEvent sentinelReady = new ManualResetEvent(false);
         private static readonly ManualResetEvent occluderReady = new ManualResetEvent(false);
         private static SentinelForm sentinel;
@@ -842,9 +953,17 @@ namespace LbbWindowsFixture
         private static int companionStarted;
         private static int sentinelActivated;
         private static int sentinelDeactivated;
+        private static int foregroundArmRequestedGeneration;
+        private static int foregroundArmAcknowledgedGeneration;
+        private static int foregroundArmRequestCount;
+        private static int foregroundArmAcknowledgementCount;
+        private static int foregroundArmLeftMouseDownCount;
+        private static int foregroundArmLeftMouseUpCount;
+        private static int foregroundArmButtonEnabled;
 
         internal static bool ShowOccluder;
         internal static long SentinelHandle;
+        internal static long ArmButtonHandle;
         internal static long OccluderHandle;
         internal static long BackdropHandle;
 
@@ -864,6 +983,127 @@ namespace LbbWindowsFixture
         internal static int SentinelDeactivatedCount
         {
             get { return Interlocked.CompareExchange(ref sentinelDeactivated, 0, 0); }
+        }
+
+        internal static int ForegroundArmRequestedGeneration
+        {
+            get { return Interlocked.CompareExchange(ref foregroundArmRequestedGeneration, 0, 0); }
+        }
+
+        internal static int ForegroundArmAcknowledgedGeneration
+        {
+            get { return Interlocked.CompareExchange(ref foregroundArmAcknowledgedGeneration, 0, 0); }
+        }
+
+        internal static int ForegroundArmRequestCount
+        {
+            get { return Interlocked.CompareExchange(ref foregroundArmRequestCount, 0, 0); }
+        }
+
+        internal static int ForegroundArmAcknowledgementCount
+        {
+            get { return Interlocked.CompareExchange(ref foregroundArmAcknowledgementCount, 0, 0); }
+        }
+
+        internal static int ForegroundArmLeftMouseDownCount
+        {
+            get { return Interlocked.CompareExchange(ref foregroundArmLeftMouseDownCount, 0, 0); }
+        }
+
+        internal static int ForegroundArmLeftMouseUpCount
+        {
+            get { return Interlocked.CompareExchange(ref foregroundArmLeftMouseUpCount, 0, 0); }
+        }
+
+        internal static bool ForegroundArmButtonEnabled
+        {
+            get { return Interlocked.CompareExchange(ref foregroundArmButtonEnabled, 0, 0) == 1; }
+        }
+
+        internal static void RecordForegroundArmLeftMouseDown()
+        {
+            Interlocked.Increment(ref foregroundArmLeftMouseDownCount);
+        }
+
+        internal static void RecordForegroundArmLeftMouseUp()
+        {
+            Interlocked.Increment(ref foregroundArmLeftMouseUpCount);
+        }
+
+        internal static void MarkForegroundArmButtonEnabled()
+        {
+            Interlocked.Exchange(ref foregroundArmButtonEnabled, 1);
+        }
+
+        internal static bool RecordForegroundArmRequest(int generation)
+        {
+            if (generation <= 0)
+            {
+                return false;
+            }
+            Interlocked.Increment(ref foregroundArmRequestCount);
+            int previous = Interlocked.Exchange(ref foregroundArmRequestedGeneration, generation);
+            if (previous == generation)
+            {
+                return false;
+            }
+            Interlocked.Exchange(ref foregroundArmAcknowledgedGeneration, 0);
+            return true;
+        }
+
+        internal static bool TryAcknowledgeForegroundArm(int generation)
+        {
+            if (generation <= 0 || generation != ForegroundArmRequestedGeneration)
+            {
+                return false;
+            }
+            if (Interlocked.CompareExchange(ref foregroundArmAcknowledgedGeneration, generation, 0) != 0)
+            {
+                return false;
+            }
+            Interlocked.Increment(ref foregroundArmAcknowledgementCount);
+            return true;
+        }
+
+        public static void RunSelfTest()
+        {
+            if (ForegroundArmRequestedGeneration != 0 ||
+                ForegroundArmAcknowledgedGeneration != 0 ||
+                ForegroundArmRequestCount != 0 ||
+                ForegroundArmAcknowledgementCount != 0 ||
+                RecordForegroundArmRequest(0) ||
+                !RecordForegroundArmRequest(41) ||
+                ForegroundArmRequestedGeneration != 41 ||
+                ForegroundArmRequestCount != 1 ||
+                RecordForegroundArmRequest(41) ||
+                ForegroundArmRequestCount != 2 ||
+                TryAcknowledgeForegroundArm(40) ||
+                !TryAcknowledgeForegroundArm(41) ||
+                TryAcknowledgeForegroundArm(41) ||
+                ForegroundArmAcknowledgedGeneration != 41 ||
+                ForegroundArmAcknowledgementCount != 1 ||
+                !RecordForegroundArmRequest(42) ||
+                ForegroundArmRequestedGeneration != 42 ||
+                ForegroundArmAcknowledgedGeneration != 0 ||
+                ForegroundArmRequestCount != 3 ||
+                ForegroundArmAcknowledgementCount != 1 ||
+                !TryAcknowledgeForegroundArm(42) ||
+                ForegroundArmAcknowledgedGeneration != 42 ||
+                ForegroundArmAcknowledgementCount != 2)
+            {
+                throw new InvalidOperationException("The foreground-arm generation state machine failed its self-test.");
+            }
+            RecordForegroundArmLeftMouseDown();
+            RecordForegroundArmLeftMouseUp();
+            if (ForegroundArmLeftMouseDownCount != 1 || ForegroundArmLeftMouseUpCount != 1)
+            {
+                throw new InvalidOperationException("The foreground-arm input-attempt counters failed their self-test.");
+            }
+            MarkForegroundArmButtonEnabled();
+            if (!ForegroundArmButtonEnabled)
+            {
+                throw new InvalidOperationException("The foreground-arm button-enabled receipt failed its self-test.");
+            }
         }
 
         internal static void IncrementSentinelActivated()
@@ -998,6 +1238,12 @@ Add-Type -TypeDefinition $fixtureSource -Language CSharp -ReferencedAssemblies @
 $fixtureRuntimeType = ("$fixtureNamespace.FixtureRuntime" -as [type])
 if ($null -eq $fixtureRuntimeType) {
     throw "The isolated Windows fixture runtime type did not load."
+}
+
+if ($SelfTest) {
+    $fixtureRuntimeType::RunSelfTest()
+    Write-Output "Windows computer-use fixture self-test passed."
+    return
 }
 
 $fixtureRuntimeType::Run($evidenceRoot, $ShowOccluder.IsPresent)

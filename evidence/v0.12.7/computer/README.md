@@ -1,12 +1,11 @@
-# Withdrawn macOS v0.12.6 exact-candidate evidence
+# macOS v0.12.7 persistent-share evidence candidate
 
-This directory preserves the deterministic harness and passing macOS run for
-the exact v0.12.6 release candidate. The packaged server and helper passed
-`187/187` assertions and produced the six reviewed screenshots listed below.
-The candidate was nevertheless withdrawn after its interactive-Windows gate
-failed closed before any computer action. Its protected publication job was
-canceled without approval, no v0.12.6 GitHub Release was created, and nothing
-in this directory is evidence for a shipped release.
+This directory contains a deterministic evidence harness for the packaged
+macOS v0.12.7 server and helper. It is **candidate infrastructure only** until
+the harness runs against the exact release-candidate archive and records a
+passing `helper-results.json`, `helper-rig.log`, and the six screenshots listed
+below. A local pass becomes immutable release evidence only if the same archive
+SHA-256 is later published in the v0.12.7 GitHub release.
 
 The harness talks to the real loopback server API and launches the supplied
 `Local Computer Helper.app` executable exactly once. It does not use a mock
@@ -23,50 +22,13 @@ hashes equal their archived counterparts. Only then does package inspection
 with `lipo`, `codesign`, and `plutil` run; those tools do not execute the
 candidate binaries.
 
-## Frozen binding and retained output
-
-- Source commit: `397e4b6abac794141a028dc52b3216cbacc055b7`
-- Annotated tag object: `7186326dcf10d01e6c213fc241d0940c1a036de3`
-- Deploy workflow run: `32617378542`, attempt `1`
-- Release-candidate artifact: `9487511503`
-- Artifact ZIP SHA-256:
-  `3cc22cc8958b6c201ac05f22fde95f225dc54b83c694b055f677c3083723580e`
-- `SHA256SUMS.txt` SHA-256:
-  `8c3759a53f10d5c9bb5fbae03bb3fe4bb84e39073647ee9d6c7ee2f42392f3c3`
-- macOS archive SHA-256:
-  `a19aff894af893d2f70459a132cb466e81e6f6ce4ff2699fa91375c6535eaed4`
-- Packaged server SHA-256:
-  `b3d52152acf9368cbcc911351b9cc0915f92d163c024d9058d469e4b6127a5d7`
-- Packaged helper SHA-256:
-  `05a174596e7e815f250b80884ce8f53c406e4cd5e5da68b54c631214a6273c1c`
-
-| File | Bytes | SHA-256 |
-|---|---:|---|
-| `computer-01-exact-window-observe.png` | 779654 | `70312651ac419f99bfa4c9ff98ca79ed5ea0ff7d16bc0441171b75d9f5f34ea1` |
-| `computer-02-semantic-set-value.png` | 795661 | `cf5eef8e072cb0e08e1012c5e88e7d167a9da06cc1b036aa82ecc7ac972ec017` |
-| `computer-03-semantic-invoke.png` | 796689 | `5625ce884fffffe5550becd637ae3434728defc60ef5025e9bcbff812d0038ef` |
-| `computer-04-persistent-scstream-start.png` | 663843 | `fa9a3c4130b289ef4b997dca3a4256b26e45fd734b16fc78d375750ec69d8b65` |
-| `computer-05-live-share-pixel-action.png` | 663990 | `222d3380b48d7d5723e4f7f30e69d21219cdda94c368af83ee02018f337d62a2` |
-| `computer-06-persistent-share-resize.png` | 532333 | `34926d4f91567385b5922d89db5249a1f83a0f45f66a0367d8b9ffa21156a629` |
-| `helper-results.json` | 76601 | `8347a8161114b54a596ee76fd0372388e3ef920212188814dc40d9402359b646` |
-| `helper-rig.log` | 25275 | `a8a52ee3af1aff13c21c8e65dc4308b9354b0aec6a9b4b14804ecd6cc78b4757` |
-
-An independent audit recomputed all eight hashes and PNG dimensions, matched
-all 187 result assertions to 187 ordered log passes, and found no failed or
-duplicate assertion. Visual review found only the primary fixture. The three
-live-share frames show the system capture indicator; the action frame also
-shows the synthetic pointer. Safe scans found no token, authorization data,
-native-text suffix, email, personal path, unrelated window, or credential.
-The helper spawned once, controlled teardown completed, the loopback listener
-closed, and the scratch directory was removed.
-
 ## What the run proves
 
-- The server and helper report exactly v0.12.6, are universal
+- The server and helper report exactly v0.12.7, are universal
   `arm64`/`x86_64` binaries, and pass strict code-signature checks.
 - The supplied executables are byte-for-byte identical to the copies inside
-  `local-browser-bridge-v0.12.6-macos-universal.tar.gz`. The archive must be
-  bound by a canonical `SHA256SUMS.txt` containing exactly the four v0.12.6
+  `local-browser-bridge-v0.12.7-macos-universal.tar.gz`. The archive must be
+  bound by a canonical `SHA256SUMS.txt` containing exactly the four v0.12.7
   release assets, and that manifest must match a mandatory SHA-256 supplied
   out of band; a locally rebuilt archive plus a substituted manifest is
   refused. No supplied server or helper code executes before all of those
@@ -117,7 +79,7 @@ closed, and the scratch directory was removed.
   frames while input owns the serialized controller. This proves the source
   stays live; transport drops may correctly remain zero when acknowledgements
   keep pace.
-- Foreground process, front window, hardware cursor, and active Space remain
+- Foreground process, front window, OS-global cursor position, and active Space remain
   unchanged, both in each product action record and in an independent probe.
   The probe now sandwiches a read-only foreground `AXFocusedWindow` and
   `AXFrontmost` read between foreground-PID samples; WindowServer ordering is
@@ -238,7 +200,7 @@ set -euo pipefail
 : "${EXPECTED_SHA256SUMS_SHA256:?set the independently handed-off manifest SHA-256}"
 : "${EXPECTED_SOURCE_SHA:?set the independently handed-off source commit SHA}"
 
-VERSION="0.12.6"
+VERSION="0.12.7"
 TAG="v$VERSION"
 REPOSITORY="flrngel/local-browser-bridge"
 MANIFEST="$RELEASE_CANDIDATE_DIR/SHA256SUMS.txt"
@@ -303,17 +265,17 @@ done
 
 # Extraction and candidate execution are permitted only below this line.
 bash scripts/verify-release-assets.sh "$VERSION" "$RELEASE_CANDIDATE_DIR"
-PACKAGE_ROOT="$(mktemp -d "$SCRATCH_PARENT/lbb-v0.12.6-package.XXXXXX")"
+PACKAGE_ROOT="$(mktemp -d "$SCRATCH_PARENT/lbb-v0.12.7-package.XXXXXX")"
 trap 'rm -rf -- "$PACKAGE_ROOT"' EXIT
-tar -xzf "$RELEASE_CANDIDATE_DIR/local-browser-bridge-v0.12.6-macos-universal.tar.gz" \
+tar -xzf "$RELEASE_CANDIDATE_DIR/local-browser-bridge-v0.12.7-macos-universal.tar.gz" \
   -C "$PACKAGE_ROOT"
 
-node evidence/v0.12.6/computer/helper-evidence-rig.mjs \
+node evidence/v0.12.7/computer/helper-evidence-rig.mjs \
   "$PACKAGE_ROOT/local-browser-bridge" \
   "$PACKAGE_ROOT/Local Computer Helper.app/Contents/MacOS/local-computer-helper" \
-  evidence/v0.12.6/computer \
+  evidence/v0.12.7/computer \
   "$SCRATCH_PARENT" \
-  "$RELEASE_CANDIDATE_DIR/local-browser-bridge-v0.12.6-macos-universal.tar.gz" \
+  "$RELEASE_CANDIDATE_DIR/local-browser-bridge-v0.12.7-macos-universal.tar.gz" \
   "$RELEASE_CANDIDATE_DIR/SHA256SUMS.txt" \
   "$EXPECTED_SHA256SUMS_SHA256"
 ```
@@ -361,25 +323,26 @@ only after it has requested and observed exit of its exact spawned fixture. In
 both cases the event must name the second share ID and produce the identical
 server authority-clear, stale-frame refusal, and cleanup contract.
 
-All six retained screenshots were inspected, `assertions.failed` is zero, and
-their bytes, dimensions, and SHA-256 values match `helper-results.json`. The
-record remains `passed-release-candidate`, not release evidence, because its
-exact archive and manifest were never published as a v0.12.6 GitHub Release.
+After the run, inspect every screenshot, confirm `assertions.failed` is zero,
+and compare the recorded archive SHA-256 with the published release asset
+before changing this directory's status from candidate to released evidence.
 
-## Companion Windows negative attempt
+## Historical v0.12.6 exact-candidate result
 
-The same frozen candidate passed source, artifact, provenance, attestation,
-PowerShell 5.1 self-test, and initial protocol-bound helper-readiness gates on
-Windows. It then failed closed while waiting for its fixture-owned foreground
-sentinel, before observation, sharing, input, or a screenshot. The retained
-sanitized records and the click-bound v0.12.7 repair are documented in:
+The exact v0.12.6 macOS archive passed all 187 assertions and produced six
+reviewed screenshots. The same frozen candidate then failed closed on Windows
+after protocol-bound helper readiness and before observation, capture, sharing,
+input, or any screenshot because its shown WinForms sentinel did not own the
+global foreground. The publish job was canceled and no v0.12.6 Release was
+created. These records are diagnostic history, not v0.12.7 evidence:
 
-- [`withdrawn-397e4b6-windows-foreground-sentinel-timeout`](attempts/withdrawn-397e4b6-windows-foreground-sentinel-timeout/README.md)
+- [`v0.12.6 macOS exact-candidate pass`](../../v0.12.6/computer/README.md)
+- [`withdrawn-397e4b6-windows-foreground-sentinel-timeout`](../../v0.12.6/computer/attempts/withdrawn-397e4b6-windows-foreground-sentinel-timeout/README.md)
 
 ## Historical v0.12.5 negative attempt
 
 The exact v0.12.5 candidate run is retained as failed-candidate evidence, not
-as a v0.12.6 result:
+as a v0.12.7 result:
 
 - [`withdrawn-badda8e-macos-native-text-restore-stale-frame`](../../v0.12.5/computer/attempts/withdrawn-badda8e-macos-native-text-restore-stale-frame/README.md)
   records 82 successful assertions followed by a fail-closed
@@ -391,7 +354,7 @@ as a v0.12.6 result:
 
 ## Historical v0.12.2 negative attempt
 
-The v0.12.2 candidate run is preserved byte-for-byte and is not v0.12.6
+The v0.12.2 candidate run is preserved byte-for-byte and is not v0.12.7
 evidence:
 
 - [`withdrawn-a52d761-post-cancel-fresh-share-refusal`](../../v0.12.2/computer/attempts/withdrawn-a52d761-post-cancel-fresh-share-refusal/README.md)
@@ -403,7 +366,7 @@ evidence:
 ## Historical v0.12.1 negative attempts
 
 The prior attempts remain byte-for-byte in the v0.12.1 evidence directory.
-They are linked for diagnostic history only and are not v0.12.6 results:
+They are linked for diagnostic history only and are not v0.12.7 results:
 
 - [`withdrawn-98ff6f0-macos-invariant-refusal`](../../v0.12.1/computer/attempts/withdrawn-98ff6f0-macos-invariant-refusal/README.md)
   preserves the first fail-closed run. It is diagnostic history, not release

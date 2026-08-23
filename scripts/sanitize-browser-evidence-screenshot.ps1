@@ -124,13 +124,13 @@ function Get-CandidateBindingFromPreflight {
             $record.phase -cne "preflight" -or $record.passed -ne $true -or
             [string]$record.runNonce -cnotmatch '^[0-9a-f]{64}$' -or
             [string]$record.candidate.finalSha -cnotmatch '^[0-9a-f]{40}$' -or
-            @("0.12.2", "0.12.6") -cnotcontains [string]$record.candidate.version) {
+            @("0.12.2", "0.12.7") -cnotcontains [string]$record.candidate.version) {
             throw "PreflightRecord identity is invalid."
         }
         foreach ($value in @(
             [string]$record.candidate.checksumManifest.sha256,
             [string]$record.candidate.server.sha256,
-            $(if ([string]$record.candidate.version -ceq "0.12.6") { [string]$record.candidate.computerHelper.sha256 } else { [string]$record.candidate.server.sha256 }),
+            $(if ([string]$record.candidate.version -ceq "0.12.7") { [string]$record.candidate.computerHelper.sha256 } else { [string]$record.candidate.server.sha256 }),
             [string]$record.candidate.extension.sha256,
             [string]$record.candidate.extension.combinedPayloadSha256
         )) {
@@ -146,7 +146,7 @@ function Get-CandidateBindingFromPreflight {
             checksumManifestSha256 = [string]$record.candidate.checksumManifest.sha256
             serverSha256 = [string]$record.candidate.server.sha256
         }
-        if ($script:CandidateVersionFromPreflight -ceq "0.12.6") {
+        if ($script:CandidateVersionFromPreflight -ceq "0.12.7") {
             $binding.computerHelperSha256 = [string]$record.candidate.computerHelper.sha256
         }
         $binding.extensionZipSha256 = [string]$record.candidate.extension.sha256
@@ -390,7 +390,7 @@ function Invoke-Sanitize {
                         $expectedScreenshots[$Purpose]
                     ) + ".raw.png"
                     if ([IO.Path]::GetFileName($inputPath) -cne $expectedRawName) {
-                        throw "v0.12.6 InputImage must use the canonical raw helper-capture filename."
+                        throw "v0.12.7 InputImage must use the canonical raw helper-capture filename."
                     }
                     $sourceCapture = [ordered]@{
                         name = $expectedRawName
@@ -534,8 +534,8 @@ function Invoke-AttestReview {
     }
     $denyValues = @(Read-DenyValues $DenyValuesFile)
     $candidateBinding = Get-CandidateBindingFromPreflight $PreflightRecord
-    if ($script:CandidateVersionFromPreflight -cne "0.12.6") {
-        throw "AttestReview is available only for the v0.12.6 two-phase screenshot protocol."
+    if ($script:CandidateVersionFromPreflight -cne "0.12.7") {
+        throw "AttestReview is available only for the v0.12.7 two-phase screenshot protocol."
     }
     $pending = Read-StrictJson $pendingPath "PendingRecord"
     $fields = @(
@@ -729,7 +729,7 @@ function Invoke-SelfTest {
             passed = $true
             runNonce = $bindingHash
             candidate = [ordered]@{
-                version = "0.12.6"
+                version = "0.12.7"
                 finalSha = [String]::new([char]"0", 40)
                 checksumManifest = [ordered]@{ sha256 = $bindingHash }
                 server = [ordered]@{ sha256 = $bindingHash }

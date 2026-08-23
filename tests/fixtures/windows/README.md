@@ -8,10 +8,35 @@
 
 Use `-ShowOccluder` to place a no-activate magenta window over the animated target. An exact-window capture must not include those magenta pixels.
 
+The fixture's orange foreground sentinel does not activate itself. After the
+repository runner binds the exact target, it posts one fresh test-only arm
+generation. The runner waits for the fixture's separate processed-generation
+and button-enabled receipt before it prompts for input. The button
+accepts one left-button down/up only while the sentinel is the native
+foreground root and the exact button owns focus. It records total left-button
+attempt counts so an extra click invalidates the acceptance run. A trusted
+human or separately authorized Computer Use surface performs that setup click,
+then stops interacting while the product actions run.
+
+Every state write carries a monotonic publication generation. The runner
+requires distinct advancing publications for the click acknowledgement, each
+stable native sample, the baseline, and every later invariant comparison; one
+stale valid JSON snapshot cannot satisfy the live proof.
+
+Compile the embedded C# and exercise its pure arm-generation/counter state
+machine under Windows PowerShell 5.1 without opening fixture windows or
+creating evidence. CI also parser-checks the script with PowerShell 7, while
+the embedded WinForms/.NET Framework fixture runs on its actual acceptance
+runtime:
+
+```powershell
+.\tests\fixtures\windows\WindowsComputerUseFixture.ps1 -SelfTest
+```
+
 The fixture writes only these files beneath the caller-selected directory:
 
 - `fixture-ready.json`: process and fixture-owned HWND identifiers;
-- `fixture-state.json`: current counters, bounds, foreground/cursor probes, and SHA-256/length text proofs;
+- `fixture-state.json`: current counters, bounds, foreground/system-cursor probes, and SHA-256/length text proofs;
 - `fixture-events.ndjson`: fixture-owned input events, non-character message parameters, redacted character messages, and decoded key `lParam` bits.
 
 Character contents, tokens, environment variables, command lines, and user-profile paths are never written. Existing evidence files are never replaced. Closing the target closes the test-owned sentinel and optional occluder; the target UI thread also closes its capture-evidence backdrop.

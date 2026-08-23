@@ -839,7 +839,7 @@ fn background_invariant_failures_use_stage_bound_closed_vocabulary() {
 
 #[test]
 fn macos_negative_evidence_keeps_only_equality_and_fixture_counters() {
-    let rig = fs::read_to_string("evidence/v0.12.6/computer/helper-evidence-rig.mjs").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.7/computer/helper-evidence-rig.mjs").unwrap();
     assert!(rig.contains("failureProbeBaseline"));
     assert!(rig.contains("collectFailureDiagnostics"));
     assert!(rig.contains("systemInvariants(failureProbeBaseline.system, after)"));
@@ -874,8 +874,24 @@ fn macos_negative_evidence_keeps_only_equality_and_fixture_counters() {
 }
 
 #[test]
-fn historical_macos_v0_12_1_evidence_sources_remain_byte_exact() {
+fn historical_macos_v0_12_1_and_v0_12_6_evidence_sources_remain_byte_exact() {
     for (path, expected) in [
+        (
+            "evidence/v0.12.6/computer/README.md",
+            "a70041c5328bf49a67999eeb6d5c4dad93876256f1959bcd4474440b1bd28cb9",
+        ),
+        (
+            "evidence/v0.12.6/computer/HelperEvidenceFixture.swift",
+            "b13e20bb6a5bc7bb0b5c74a57dc13d8bd24e60e99cad11c66dd2a23596261206",
+        ),
+        (
+            "evidence/v0.12.6/computer/SystemProbe.swift",
+            "c9a46e556b87d21bb7db414ba6fa00457928c8ab661be6d596a4fe650ddf6dde",
+        ),
+        (
+            "evidence/v0.12.6/computer/helper-evidence-rig.mjs",
+            "a930d0d3beab1448850ec996114483461d38b2aaac120e57eb2d266d3884521a",
+        ),
         (
             "evidence/v0.12.1/computer/HelperEvidenceFixture.swift",
             "5a99ad27d5bc80388a8697c0aac9b3c3b4af25e5840aee9e32a3cb9a8c7142ff",
@@ -930,13 +946,173 @@ fn historical_macos_v0_12_2_evidence_sources_remain_byte_exact() {
 }
 
 #[test]
+fn withdrawn_v0_12_6_exact_candidate_outputs_remain_byte_exact() {
+    for (path, expected) in [
+        (
+            "evidence/v0.12.6/computer/computer-01-exact-window-observe.png",
+            "70312651ac419f99bfa4c9ff98ca79ed5ea0ff7d16bc0441171b75d9f5f34ea1",
+        ),
+        (
+            "evidence/v0.12.6/computer/computer-02-semantic-set-value.png",
+            "cf5eef8e072cb0e08e1012c5e88e7d167a9da06cc1b036aa82ecc7ac972ec017",
+        ),
+        (
+            "evidence/v0.12.6/computer/computer-03-semantic-invoke.png",
+            "5625ce884fffffe5550becd637ae3434728defc60ef5025e9bcbff812d0038ef",
+        ),
+        (
+            "evidence/v0.12.6/computer/computer-04-persistent-scstream-start.png",
+            "fa9a3c4130b289ef4b997dca3a4256b26e45fd734b16fc78d375750ec69d8b65",
+        ),
+        (
+            "evidence/v0.12.6/computer/computer-05-live-share-pixel-action.png",
+            "222d3380b48d7d5723e4f7f30e69d21219cdda94c368af83ee02018f337d62a2",
+        ),
+        (
+            "evidence/v0.12.6/computer/computer-06-persistent-share-resize.png",
+            "34926d4f91567385b5922d89db5249a1f83a0f45f66a0367d8b9ffa21156a629",
+        ),
+        (
+            "evidence/v0.12.6/computer/helper-results.json",
+            "8347a8161114b54a596ee76fd0372388e3ef920212188814dc40d9402359b646",
+        ),
+        (
+            "evidence/v0.12.6/computer/helper-rig.log",
+            "a8a52ee3af1aff13c21c8e65dc4308b9354b0aec6a9b4b14804ecd6cc78b4757",
+        ),
+        (
+            "evidence/v0.12.6/computer/attempts/withdrawn-397e4b6-windows-foreground-sentinel-timeout/fixture/fixture-events.ndjson",
+            "7a9d20f90c1ae7ec0badc7c28e40a0946b21622f79b92be05f6f99d67ee60a70",
+        ),
+        (
+            "evidence/v0.12.6/computer/attempts/withdrawn-397e4b6-windows-foreground-sentinel-timeout/fixture/fixture-ready.json",
+            "800549e7281115d79cc933c98b95d61360e0e6dc6582fee93b22e3e737b389c1",
+        ),
+        (
+            "evidence/v0.12.6/computer/attempts/withdrawn-397e4b6-windows-foreground-sentinel-timeout/fixture/fixture-state.json",
+            "f7f71e78deaf8854070d94d0afc8b1d1b9e61fe641646bdd5b9442094e8bee7c",
+        ),
+        (
+            "evidence/v0.12.6/computer/attempts/withdrawn-397e4b6-windows-foreground-sentinel-timeout/steps/01-protocol-bound-helper-readiness.json",
+            "2719e172911aa00201b5b257e7c51a52279ab76b24e8aea9b2e3bc223d1ae84f",
+        ),
+        (
+            "evidence/v0.12.6/computer/attempts/withdrawn-397e4b6-windows-foreground-sentinel-timeout/summary.json",
+            "c44743bdb1b805aacedf1faa555729bd0f8c36c4fdc96e46e4d0fd4cc88ab4ff",
+        ),
+        (
+            "evidence/v0.12.6/computer/attempts/withdrawn-397e4b6-windows-foreground-sentinel-timeout/README.md",
+            "7ba077b172949dd4be1fc23090592b300d143606aa163f04dbb76a93c6c981a6",
+        ),
+    ] {
+        assert_eq!(
+            file_sha256(path),
+            expected,
+            "withdrawn exact-candidate evidence changed: {path}"
+        );
+    }
+
+    let macos_root_entries = fs::read_dir("evidence/v0.12.6/computer")
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| {
+            let mut name = entry.file_name().to_string_lossy().into_owned();
+            if entry.file_type().unwrap().is_dir() {
+                name.push('/');
+            }
+            name
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        macos_root_entries,
+        BTreeSet::from([
+            "HelperEvidenceFixture.swift".to_owned(),
+            "README.md".to_owned(),
+            "SystemProbe.swift".to_owned(),
+            "attempts/".to_owned(),
+            "computer-01-exact-window-observe.png".to_owned(),
+            "computer-02-semantic-set-value.png".to_owned(),
+            "computer-03-semantic-invoke.png".to_owned(),
+            "computer-04-persistent-scstream-start.png".to_owned(),
+            "computer-05-live-share-pixel-action.png".to_owned(),
+            "computer-06-persistent-share-resize.png".to_owned(),
+            "helper-results.json".to_owned(),
+            "helper-rig.log".to_owned(),
+            "helper-evidence-rig.mjs".to_owned(),
+        ])
+    );
+
+    let results: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string("evidence/v0.12.6/computer/helper-results.json").unwrap(),
+    )
+    .unwrap();
+    for (field, path) in [
+        (
+            "runnerSha256",
+            "evidence/v0.12.6/computer/helper-evidence-rig.mjs",
+        ),
+        (
+            "fixtureSha256",
+            "evidence/v0.12.6/computer/HelperEvidenceFixture.swift",
+        ),
+        (
+            "systemProbeSha256",
+            "evidence/v0.12.6/computer/SystemProbe.swift",
+        ),
+    ] {
+        assert_eq!(
+            results["harness"][field].as_str().unwrap(),
+            file_sha256(path),
+            "retained harness binding drifted for {path}"
+        );
+    }
+
+    fn collect_relative_files(
+        root: &std::path::Path,
+        current: &std::path::Path,
+        out: &mut BTreeSet<String>,
+    ) {
+        for entry in fs::read_dir(current).unwrap().map(Result::unwrap) {
+            if entry.file_type().unwrap().is_dir() {
+                collect_relative_files(root, &entry.path(), out);
+            } else {
+                out.insert(
+                    entry
+                        .path()
+                        .strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                );
+            }
+        }
+    }
+    let windows_root = std::path::Path::new(
+        "evidence/v0.12.6/computer/attempts/withdrawn-397e4b6-windows-foreground-sentinel-timeout",
+    );
+    let mut windows_files = BTreeSet::new();
+    collect_relative_files(windows_root, windows_root, &mut windows_files);
+    assert_eq!(
+        windows_files,
+        BTreeSet::from([
+            "README.md".to_owned(),
+            "fixture/fixture-events.ndjson".to_owned(),
+            "fixture/fixture-ready.json".to_owned(),
+            "fixture/fixture-state.json".to_owned(),
+            "steps/01-protocol-bound-helper-readiness.json".to_owned(),
+            "summary.json".to_owned(),
+        ])
+    );
+}
+
+#[test]
 fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
-    let rig = fs::read_to_string("evidence/v0.12.6/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.7/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let fixture =
-        fs::read_to_string("evidence/v0.12.6/computer/HelperEvidenceFixture.swift").unwrap();
-    let readme = fs::read_to_string("evidence/v0.12.6/computer/README.md").unwrap();
+        fs::read_to_string("evidence/v0.12.7/computer/HelperEvidenceFixture.swift").unwrap();
+    let readme = fs::read_to_string("evidence/v0.12.7/computer/README.md").unwrap();
 
     assert!(rig.contains(&format!("const EXPECTED_VERSION = \"{VERSION}\";")));
     assert!(rig.contains("const EXPECTED_ARCHIVE = `local-browser-bridge-v${EXPECTED_VERSION}-macos-universal.tar.gz`;"));
@@ -995,10 +1171,10 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
 
 #[test]
 fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
-    let rig = fs::read_to_string("evidence/v0.12.6/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.7/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.6/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.7/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1030,7 +1206,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
         "$EXPECTED_SHA256SUMS_SHA256",
         "$EXPECTED_SOURCE_SHA",
         "mandatory SHA-256 supplied",
-        "exactly the four v0.12.6",
+        "exactly the four v0.12.7",
         "expected and actual manifest hashes",
         "Before invoking either supplied candidate executable—even with `--version`",
         "No supplied server or helper code executes before",
@@ -1087,7 +1263,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
         .unwrap();
     let first_documented_extraction = readme.find("tar -xzf").unwrap();
     let first_documented_execution = readme
-        .find("node evidence/v0.12.6/computer/helper-evidence-rig.mjs")
+        .find("node evidence/v0.12.7/computer/helper-evidence-rig.mjs")
         .unwrap();
     assert!(
         independent_manifest_digest < exact_inventory
@@ -1103,7 +1279,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
 
 #[test]
 fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
-    let rig = fs::read_to_string("evidence/v0.12.6/computer/helper-evidence-rig.mjs").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.7/computer/helper-evidence-rig.mjs").unwrap();
     assert!(rig.contains("capturedFrameMatchesWindowGeometry"));
     assert!(rig.contains("share-resize-settled"));
     assert!(rig.contains("sample.sourceSequence > resizeTransition.sample.sourceSequence"));
@@ -1115,12 +1291,12 @@ fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
 
 #[test]
 fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.6/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.7/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     assert!(rig.contains("function childEnvironment(overrides = {})"));
     assert!(!rig.contains("...process.env"));
-    let fixture = fs::read_to_string("evidence/v0.12.6/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.7/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1298,10 +1474,10 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
 
 #[test]
 fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.6/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.7/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.6/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.7/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1432,21 +1608,21 @@ fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() 
 
 #[test]
 fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negative() {
-    let fixture = fs::read_to_string("evidence/v0.12.6/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.7/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.6/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.7/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.6/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.7/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.6/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.7/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
     for required in [
-        "private let siblingFixtureTitle = \"LBB v0.12.6 Same-PID Sibling Receiver\"",
+        "private let siblingFixtureTitle = \"LBB v0.12.7 Same-PID Sibling Receiver\"",
         "var primaryWindowId = 0",
         "var siblingWindowId = 0",
         "var siblingTextLength = 0",
@@ -1796,6 +1972,14 @@ fn windows_helper_readiness_is_protocol_and_process_bound() {
             "powershell.exe -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-computer-use.ps1 -SelfTest"
         ));
         assert!(workflow.contains("& ./scripts/test-windows-computer-use.ps1 -SelfTest"));
+        assert!(workflow.contains(
+            "powershell.exe -NoLogo -NoProfile -NonInteractive -File ./tests/fixtures/windows/WindowsComputerUseFixture.ps1 -SelfTest"
+        ));
+        assert!(
+            !workflow
+                .contains("& ./tests/fixtures/windows/WindowsComputerUseFixture.ps1 -SelfTest"),
+            "the .NET Framework fixture must be parsed by PowerShell Core but executed by Windows PowerShell 5.1"
+        );
     }
     for required in [
         "$selfTestJob.StartProcess(",
@@ -1826,10 +2010,11 @@ fn windows_fixture_wait_avoids_powershell_dynamic_scope_recursion() {
         .unwrap();
     for required in [
         "[scriptblock]$FixturePredicate",
-        "[scriptblock]$StateReader",
+        "[scriptblock]$StateReader = { Get-FixtureState }",
         "$state = & $StateReader",
         "if (& $FixturePredicate $state)",
-        "AddMilliseconds($TimeoutMilliseconds)",
+        "$timeoutWatch = [Diagnostics.Stopwatch]::StartNew()",
+        "$timeoutWatch.ElapsedMilliseconds -lt $TimeoutMilliseconds",
         "Timed out waiting for $Description.",
     ] {
         assert!(
@@ -1840,7 +2025,8 @@ fn windows_fixture_wait_avoids_powershell_dynamic_scope_recursion() {
     assert!(
         !fixture_wait.contains("return Wait-Condition")
             && !fixture_wait.contains("Wait-Condition {")
-            && !fixture_wait.contains("[scriptblock]$Condition"),
+            && !fixture_wait.contains("[scriptblock]$Condition")
+            && !fixture_wait.contains("[DateTime]::UtcNow"),
         "the fixture wait must not reintroduce dynamic-scope predicate shadowing"
     );
 
@@ -1860,7 +2046,7 @@ fn windows_fixture_wait_avoids_powershell_dynamic_scope_recursion() {
     }
 
     for required in [
-        "$script:runStage = \"wait-foreground-sentinel\"",
+        "$script:runStage = \"wait-foreground-arm\"",
         "failureDetails = [ordered]@{",
         "stage = $script:runStage",
         "fullyQualifiedErrorId = ConvertTo-SafeFailureText",
@@ -1871,6 +2057,318 @@ fn windows_fixture_wait_avoids_powershell_dynamic_scope_recursion() {
         assert!(
             runner.contains(required),
             "Windows failure diagnostics are missing: {required}"
+        );
+    }
+}
+
+#[test]
+fn windows_foreground_arm_requires_fresh_mouse_ack_and_stable_native_samples() {
+    let runner = fs::read_to_string("scripts/test-windows-computer-use.ps1")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let fixture = fs::read_to_string("tests/fixtures/windows/WindowsComputerUseFixture.ps1")
+        .unwrap()
+        .replace("\r\n", "\n");
+
+    for required in [
+        "[int]$ForegroundArmTimeoutSeconds = 90",
+        "$PSVersionTable.PSEdition -cne \"Desktop\"",
+        "$PSVersionTable.PSVersion.Major -ne 5",
+        "Live Windows acceptance requires Windows PowerShell 5.1 (Desktop edition)",
+        "$foregroundArmMessage = 0x8126",
+        "$script:nativeProbeType::PostMessage(",
+        "[IntPtr]$foregroundArmRequestGeneration",
+        "ACTION REQUIRED: If the large button",
+        "function Test-ForegroundArmRequestDeliveryState {",
+        "$inputNotStarted -or $inputAlreadyComplete",
+        "$script:runStage = \"wait-foreground-arm-request-delivery\"",
+        "Save-StepRecord \"foreground arm request delivery\"",
+        "foregroundArmButtonEnabled",
+        "function Wait-ForStableForegroundArm {",
+        "[scriptblock]$StateReader = { Get-FixtureStateSnapshot }",
+        "[scriptblock]$NativeReader = { $script:nativeProbeType::Capture() }",
+        "[int]$ExpectedFixtureProcessId",
+        "[int]$RequestDeliveryTimeoutSeconds = 10",
+        "[Int64]$AfterPublicationGeneration = 0",
+        "requestDeliveryTimeoutSeconds = $RequestDeliveryTimeoutSeconds",
+        "-RequestDeliveryTimeoutSeconds $foregroundArmRequestDeliveryTimeoutSeconds",
+        "-AfterPublicationGeneration ([Int64]$armRequestDelivery.statePublicationGeneration)",
+        "ValidateFixtureArmTopology",
+        "GetWindowThreadProcessIdWithOwner",
+        "IsWindow(IntPtr window)",
+        "IsChild(IntPtr parent, IntPtr child)",
+        "GetAncestor(IntPtr window, uint flags)",
+        "[int]$RequiredStableSamples = 3",
+        "$requestMatched = [int]$state.foregroundArmRequestedGeneration -eq $RequestedGeneration",
+        "$acknowledgementMatched = [int]$state.foregroundArmAcknowledgedGeneration -eq $RequestedGeneration",
+        "$foregroundMatched = [Int64]$native.ForegroundHwnd -eq $SentinelHwnd",
+        "$focusMatched = [Int64]$native.FocusHwnd -eq $ArmButtonHwnd",
+        "$cursorAvailable = $native.CursorAvailable -eq $true",
+        "$leftMouseDownCountMatched",
+        "$leftMouseUpCountMatched",
+        "$nativeTopologyMatched",
+        "$statePublicationAdvanced",
+        "$statePublicationGeneration -eq $lastAcceptedPublicationGeneration",
+        "A repeated read of the same valid publication is neutral",
+        "$signature -ceq $previousSignature",
+        "$timeoutWatch = [Diagnostics.Stopwatch]::StartNew()",
+        "foregroundStable = $stableSamples -ge $RequiredStableSamples",
+        "focusStable = $stableSamples -ge $RequiredStableSamples",
+        "stableSamplesObserved = $stableSamples",
+        "stablePublicationSamplesObserved = $stableSamples",
+        "baselineContinuityMatched = $false",
+        "rawWindowHandlesRecorded = $false",
+        "rawCursorCoordinatesRecorded = $false",
+        "snapshot resets arm stability instead of extending the arm timeout.",
+        "Timed out waiting for a fresh foreground-arm click and $RequiredStableSamples stable native samples.",
+        "Save-StepRecord \"foreground arm proof\" $script:foregroundArmProof",
+        "foregroundArmProof = $script:foregroundArmProof",
+        "$baselineProbe.foregroundHwnd -eq $armNativeSample.ForegroundHwnd.ToString()",
+        "$baselineProbe.focusHwnd -eq $armNativeSample.FocusHwnd.ToString()",
+        "$baselineProbe.cursor.x -eq $armNativeSample.CursorX",
+        "$baselineProbe.inputDesktop -ceq [string]$armNativeSample.InputDesktop",
+        "$baselineProbe.foregroundArmRequestedGeneration -eq $foregroundArmRequestGeneration",
+        "$baselineProbe.foregroundArmAcknowledgedGeneration -eq $foregroundArmRequestGeneration",
+        "$baselineProbe.foregroundArmRequestCount -eq 1",
+        "$baselineProbe.foregroundArmAcknowledgementCount -eq 1",
+        "$baselineProbe.foregroundArmLeftMouseDownCount -eq 1",
+        "$baselineProbe.foregroundArmLeftMouseUpCount -eq 1",
+        "$baselineProbe.foregroundArmButtonEnabled -eq $true",
+        "$baselineProbe.statePublicationGeneration -gt [Int64]$foregroundArm.fixtureState.statePublicationGeneration",
+        "Capture-InvariantProbe -AfterStatePublicationGeneration ([Int64]$foregroundArm.fixtureState.statePublicationGeneration)",
+        "Capture-InvariantProbe -AfterStatePublicationGeneration $minimumPublicationGeneration",
+        "stale valid publication",
+        "$publicationSequence = @(11, 12, 13, 14, 14, 15, 15, 16)",
+        "$armProbe.stateReads -ne 8",
+        "$script:foregroundArmProof.baselineContinuityMatched = $true",
+        "$baselineProbe.focusHwnd -eq [string]$script:fixtureReady.armButtonHwnd",
+        "$script:runStage = \"rebind-post-arm-helper-readiness\"",
+        "Wait-ForDirectHelperWorker $helperProcess $initialHelperSessionId $postArmHelperDescription",
+        "[int]$postArmWorker.processId -eq $initialWorkerPid",
+        "Complete-HelperTopologyRoundTrip $postArmHelperDescription $initialHelperSessionId $initialWorkerPid \"computer.status\" $statusResponse",
+        "Save-StepResponse \"post-arm protocol-bound helper continuity\"",
+        "$targetPid -eq $fixtureProcess.Id",
+    ] {
+        assert!(
+            runner.contains(required),
+            "Windows foreground-arm runner contract is missing: {required}"
+        );
+    }
+
+    let desktop_runtime_gate = runner.find("if (-not $SelfTest -and (").unwrap();
+    let live_job_creation = runner
+        .find("$script:ownedJob = $script:ownedJobType::new()")
+        .unwrap();
+    assert!(
+        desktop_runtime_gate < live_job_creation,
+        "the Windows PowerShell 5.1 live-runtime gate must precede every live child process"
+    );
+
+    let selection = runner
+        .find("$script:runStage = \"select-exact-fixture-window\"")
+        .unwrap();
+    let request = runner
+        .find("$script:runStage = \"request-foreground-arm\"")
+        .unwrap();
+    let delivery = runner
+        .find("$script:runStage = \"wait-foreground-arm-request-delivery\"")
+        .unwrap();
+    let delivery_proof = runner
+        .find("Save-StepRecord \"foreground arm request delivery\"")
+        .unwrap();
+    let prompt = runner.find("Write-Host \"ACTION REQUIRED:").unwrap();
+    let wait = runner
+        .find("$script:runStage = \"wait-foreground-arm\"")
+        .unwrap();
+    let proof = runner
+        .find("Save-StepRecord \"foreground arm proof\"")
+        .unwrap();
+    let helper_rebind = runner
+        .find("$script:runStage = \"rebind-post-arm-helper-readiness\"")
+        .unwrap();
+    let continuity = runner
+        .find("$script:foregroundArmProof.baselineContinuityMatched = $true")
+        .unwrap();
+    let baseline = runner
+        .find("$script:runStage = \"baseline-status-and-observation\"")
+        .unwrap();
+    assert!(
+        selection < request
+            && request < delivery
+            && delivery < delivery_proof
+            && delivery_proof < prompt
+            && prompt < wait
+            && wait < continuity
+            && continuity < proof
+            && proof < helper_rebind
+            && helper_rebind < baseline
+    );
+    let pre_action_arm_boundary = &runner[selection..baseline];
+    for forbidden in [
+        "Invoke-LbbCommand ",
+        "Invoke-LbbCommandResponse ",
+        "Start-LbbCommandRequest ",
+    ] {
+        assert!(
+            !pre_action_arm_boundary.contains(forbidden),
+            "effectful product command appeared before foreground arming completed: {forbidden}"
+        );
+    }
+
+    for required in [
+        "[Parameter(ParameterSetName = \"SelfTest\", Mandatory = $true)]",
+        "public static void RunSelfTest()",
+        "RecordForegroundArmRequest(0)",
+        "RecordForegroundArmRequest(41)",
+        "ForegroundArmRequestCount != 2",
+        "TryAcknowledgeForegroundArm(40)",
+        "TryAcknowledgeForegroundArm(41)",
+        "RecordForegroundArmRequest(42)",
+        "The foreground-arm generation state machine failed its self-test.",
+        "The foreground-arm input-attempt counters failed their self-test.",
+        "The foreground-arm button-enabled receipt failed its self-test.",
+        "Windows computer-use fixture self-test passed.",
+        "internal const int ForegroundArmMessage = 0x8126;",
+        "armButton.Name = \"ForegroundArmButton\";",
+        "armButton.Enabled = false;",
+        "armButton.Text = \"CLICK TO ARM\";",
+        "armButton.MouseDown +=",
+        "armButton.MouseUp +=",
+        "eventArgs.Button != MouseButtons.Left",
+        "!armButton.ClientRectangle.Contains(eventArgs.Location)",
+        "armButton.LostFocus += delegate { pressedArmGeneration = 0; };",
+        "pressed != FixtureRuntime.ForegroundArmRequestedGeneration",
+        "NativeMethods.GetForegroundWindow() != Handle",
+        "NativeMethods.GetFocus() != armButton.Handle",
+        "FixtureRuntime.TryAcknowledgeForegroundArm(pressed)",
+        "FixtureRuntime.RecordForegroundArmLeftMouseDown()",
+        "FixtureRuntime.RecordForegroundArmLeftMouseUp()",
+        "FixtureRuntime.MarkForegroundArmButtonEnabled()",
+        "protected override void OnDeactivate(EventArgs eventArgs)",
+        "pressedArmGeneration = 0;",
+        "Interlocked.CompareExchange(ref foregroundArmAcknowledgedGeneration, generation, 0)",
+        "ready[\"armButtonHwnd\"]",
+        "state[\"foregroundArmRequestedGeneration\"]",
+        "state[\"foregroundArmAcknowledgedGeneration\"]",
+        "state[\"foregroundArmLeftMouseDownCount\"]",
+        "state[\"foregroundArmLeftMouseUpCount\"]",
+        "state[\"foregroundArmButtonEnabled\"]",
+        "state[\"statePublicationGeneration\"] = Interlocked.Increment(ref statePublicationGeneration);",
+    ] {
+        assert!(
+            fixture.contains(required),
+            "Windows foreground-arm fixture contract is missing: {required}"
+        );
+    }
+
+    let request_state_machine = fixture
+        .split("internal static bool RecordForegroundArmRequest(int generation)")
+        .nth(1)
+        .unwrap()
+        .split("internal static bool TryAcknowledgeForegroundArm")
+        .next()
+        .unwrap();
+    let count_attempt = request_state_machine
+        .find("Interlocked.Increment(ref foregroundArmRequestCount);")
+        .unwrap();
+    let deduplicate = request_state_machine
+        .find("if (previous == generation)")
+        .unwrap();
+    assert!(
+        count_attempt < deduplicate,
+        "every positive foreground-arm request attempt must be counted before duplicate rejection"
+    );
+
+    let sentinel = fixture
+        .split("internal sealed class SentinelForm : Form")
+        .nth(1)
+        .unwrap()
+        .split("internal sealed class OccluderForm : Form")
+        .next()
+        .unwrap();
+    let mouse_down = sentinel
+        .split("armButton.MouseDown +=")
+        .nth(1)
+        .unwrap()
+        .split("armButton.LostFocus +=")
+        .next()
+        .unwrap();
+    for required in [
+        "eventArgs.Button != MouseButtons.Left",
+        "!armButton.ClientRectangle.Contains(eventArgs.Location)",
+        "NativeMethods.GetForegroundWindow() != Handle",
+        "NativeMethods.GetFocus() != armButton.Handle",
+    ] {
+        assert!(
+            mouse_down.contains(required),
+            "Windows foreground-arm mouse-down is missing: {required}"
+        );
+    }
+    assert!(!sentinel.contains("Activate();"));
+    assert!(!sentinel.contains("Focus();"));
+    assert!(!sentinel.contains("armButton.Click +="));
+    assert!(!sentinel.contains("PerformClick"));
+    assert_eq!(
+        sentinel.matches("TryAcknowledgeForegroundArm(").count(),
+        1,
+        "the fixture UI must acknowledge only from its mouse-release handler"
+    );
+    let production_runtime = fixture
+        .split("public static void RunSelfTest()")
+        .next()
+        .unwrap();
+    assert_eq!(
+        production_runtime
+            .matches("internal static bool TryAcknowledgeForegroundArm(")
+            .count(),
+        1,
+        "the production fixture runtime must expose one acknowledgement transition"
+    );
+    let arm_sources = format!("{runner}\n{fixture}");
+    for forbidden in [
+        "SetForegroundWindow",
+        "AttachThreadInput",
+        "AllowSetForegroundWindow",
+        "SendInput",
+        "keybd_event",
+        "mouse_event",
+        "SwitchToThisWindow",
+        "LockSetForegroundWindow",
+    ] {
+        assert!(
+            !arm_sources.contains(forbidden),
+            "foreground-arm acceptance must not use a focus or global-input forcing API: {forbidden}"
+        );
+    }
+
+    for required in [
+        "$armProbe.stateReads -ne 8",
+        "$armProbe.nativeReads -ne 8",
+        "stale acknowledgement",
+        "missing click",
+        "duplicate request",
+        "duplicate acknowledgement",
+        "duplicate left mouse down",
+        "duplicate left mouse up",
+        "wrong button identity",
+        "native topology mismatch",
+        "foreground mismatch",
+        "focus mismatch",
+        "cursor unavailable",
+        "input desktop unavailable",
+        "perpetual signature churn",
+        "stale valid publication",
+        "The foreground-arm request-delivery predicate failed its synthetic",
+        "partial mouse down",
+        "duplicate input edges",
+        "button disabled",
+        "wrong button",
+        "The foreground-arm wait accepted a stale, unstable, or incomplete synthetic sequence.",
+        "The foreground-arm wait did not fail closed for the synthetic",
+    ] {
+        assert!(
+            runner.contains(required),
+            "Windows foreground-arm self-test is missing: {required}"
         );
     }
 }
