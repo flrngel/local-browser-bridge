@@ -88,7 +88,7 @@ fn candidate_binder_is_exact_external_and_immutable() {
         "Self-test cleanup existing-path probe failed.",
         "$fixtureOwned = $true",
         "function Initialize-TrustedGitExecutable",
-        "TrustedGitExecutable must be an absolute path for v0.12.8.",
+        "TrustedGitExecutable must be an absolute path for v0.12.9.",
         "& $script:GitExecutable --no-replace-objects --no-lazy-fetch `",
         "-c core.longpaths=true -c core.fsmonitor=false -c core.hooksPath=$script:EmptyHooksDirectory `",
         "Preserve the v0.12.2 contract",
@@ -340,7 +340,7 @@ fn withdrawn_v0127_browser_protocol_is_byte_exact_and_unexecuted() {
     for (path, expected) in [
         (
             "evidence/v0.12.7/browser/README.md",
-            "97b59051802d2c021cf3e6abe24219cc7638d1219da153237c74b89c12dd9a11",
+            "811ec2a5025fa873cd818f45ac2fead8337f751f81a499eacdc2db33b86ed9c4",
         ),
         (
             "evidence/v0.12.7/browser/operator-results.template.json",
@@ -384,7 +384,60 @@ fn withdrawn_v0127_browser_protocol_is_byte_exact_and_unexecuted() {
 }
 
 #[test]
-fn v0122_browser_protocol_is_byte_exact_while_v0128_uses_schema_two() {
+fn withdrawn_v0128_browser_protocol_is_byte_exact_unexecuted_and_not_current() {
+    for (path, expected) in [
+        (
+            "evidence/v0.12.8/browser/operator-results.template.json",
+            "741759fbd365784297e8701dc9d3be63c7e74f5900896e8c92896f1a0f7cb676",
+        ),
+        (
+            "evidence/v0.12.8/browser/operator-results.schema.json",
+            "34b685e87b06c6cef7ac02a3984b9ce54fa5203f592f263cadd39dc66ff56119",
+        ),
+        (
+            "evidence/v0.12.8/browser/computer-helper-chain.schema.json",
+            "62cd290ee8d3b7eae1f4ed3c206490203ba0d6db97ec370fa486d996bb4b9c4a",
+        ),
+    ] {
+        assert_eq!(
+            format!("{:x}", Sha256::digest(fs::read(path).unwrap())),
+            expected,
+            "withdrawn v0.12.8 browser protocol changed: {path}"
+        );
+    }
+
+    let entries = fs::read_dir("evidence/v0.12.8/browser")
+        .unwrap()
+        .map(Result::unwrap)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        entries,
+        BTreeSet::from([
+            "README.md".to_owned(),
+            "computer-helper-chain.schema.json".to_owned(),
+            "operator-results.schema.json".to_owned(),
+            "operator-results.template.json".to_owned(),
+        ])
+    );
+
+    let readme = source("evidence/v0.12.8/browser/README.md");
+    assert!(readme.contains("Withdrawn"));
+    assert!(readme.contains("Chrome was never started"));
+    assert!(readme.contains("no `browser-acceptance.json`"));
+    assert!(readme.contains("no v0.12.8 GitHub Release exists"));
+
+    let finalizer = source("scripts/write-browser-evidence-record.ps1");
+    assert!(finalizer.contains("$script:OperatorV2Version = \"0.12.9\""));
+    assert!(finalizer.contains(
+        "No stock-user-Chrome operator schema is registered for candidate version $ExpectedVersion."
+    ));
+    assert!(!finalizer.contains("$script:OperatorV2Version = \"0.12.8\""));
+    assert!(!finalizer.contains("evidence\", \"v0.12.8\", \"browser"));
+}
+
+#[test]
+fn v0122_browser_protocol_is_byte_exact_while_v0129_uses_schema_two() {
     let readme_bytes = fs::read("evidence/v0.12.2/browser/README.md").unwrap();
     let template_bytes =
         fs::read("evidence/v0.12.2/browser/operator-results.template.json").unwrap();
@@ -397,16 +450,39 @@ fn v0122_browser_protocol_is_byte_exact_while_v0128_uses_schema_two() {
         "abc28e66f4a14426d9d3cca3370354300354bb07e3c973a4d965e0f3606b8ac4"
     );
 
+    let entries = fs::read_dir("evidence/v0.12.9/browser")
+        .unwrap()
+        .map(Result::unwrap)
+        .map(|entry| {
+            let file_type = entry.file_type().unwrap();
+            assert!(
+                file_type.is_file() && !file_type.is_symlink(),
+                "current browser evidence scaffold entry must be an ordinary file: {}",
+                entry.path().display()
+            );
+            entry.file_name().to_string_lossy().into_owned()
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        entries,
+        BTreeSet::from([
+            "README.md".to_owned(),
+            "computer-helper-chain.schema.json".to_owned(),
+            "operator-results.schema.json".to_owned(),
+            "operator-results.template.json".to_owned(),
+        ])
+    );
+
     let template: Value = serde_json::from_str(&source(
-        "evidence/v0.12.8/browser/operator-results.template.json",
+        "evidence/v0.12.9/browser/operator-results.template.json",
     ))
     .unwrap();
     let schema: Value = serde_json::from_str(&source(
-        "evidence/v0.12.8/browser/operator-results.schema.json",
+        "evidence/v0.12.9/browser/operator-results.schema.json",
     ))
     .unwrap();
     assert_eq!(template["schemaVersion"], 2);
-    assert_eq!(template["extension"]["version"], "0.12.8");
+    assert_eq!(template["extension"]["version"], "0.12.9");
     assert_eq!(
         schema["$schema"],
         "https://json-schema.org/draft/2020-12/schema"
@@ -486,11 +562,11 @@ fn v0122_browser_protocol_is_byte_exact_while_v0128_uses_schema_two() {
 }
 
 #[test]
-fn v0128_finalizer_enforces_surface_consent_restoration_and_retention_relations() {
+fn v0129_finalizer_enforces_surface_consent_restoration_and_retention_relations() {
     let script = source("scripts/write-browser-evidence-record.ps1");
-    let readme = source("evidence/v0.12.8/browser/README.md");
+    let readme = source("evidence/v0.12.9/browser/README.md");
     for required in [
-        "$script:OperatorV2Version = \"0.12.8\"",
+        "$script:OperatorV2Version = \"0.12.9\"",
         "Assert-OperatorResultsV1",
         "Assert-OperatorResultsV2",
         "No stock-user-Chrome operator schema is registered",
@@ -510,7 +586,7 @@ fn v0128_finalizer_enforces_surface_consent_restoration_and_retention_relations(
         "extension-disposition consent",
         "confirmationDialogShown",
         "confirmationAcceptedByHuman",
-        "v0.12.8 screenshot identity, helper surface, or visible-state criterion is invalid.",
+        "v0.12.9 screenshot identity, helper surface, or visible-state criterion is invalid.",
         "automationPausedForHumanReview",
         "postSanitizationAttestationCreated",
         "Assert-RetainedEvidenceDirectoryV2",
@@ -544,11 +620,11 @@ fn v0128_finalizer_enforces_surface_consent_restoration_and_retention_relations(
         "Evidence finalizer accepted retained pending-review records.",
         "Evidence finalizer accepted unverified extracted-extension cleanup.",
         "Evidence finalizer accepted a retained extracted-extension directory.",
-        "Evidence finalizer complete v0.12.8 self-test failed.",
+        "Evidence finalizer complete v0.12.9 self-test failed.",
     ] {
         assert!(
             script.contains(required),
-            "v0.12.8 finalizer is missing {required}"
+            "v0.12.9 finalizer is missing {required}"
         );
     }
     for required in [
@@ -614,7 +690,7 @@ fn v0128_finalizer_enforces_surface_consent_restoration_and_retention_relations(
     ] {
         assert!(
             readme.contains(required),
-            "v0.12.8 protocol is missing {required}"
+            "v0.12.9 protocol is missing {required}"
         );
     }
     let asset_hash = readme.find("$ObservedAssetSha =").unwrap();
@@ -753,7 +829,7 @@ fn screenshot_tool_strips_metadata_but_never_claims_unknown_pixel_redaction() {
     let script = source("scripts/sanitize-browser-evidence-screenshot.ps1");
     let finalizer = source("scripts/write-browser-evidence-record.ps1");
     let readme = source("evidence/v0.12.2/browser/README.md");
-    let v0128_readme = source("evidence/v0.12.8/browser/README.md");
+    let v0129_readme = source("evidence/v0.12.9/browser/README.md");
     for required in [
         "ManualVisualReviewConfirmed is mandatory for v0.12.2 compatibility.",
         "ManualVisualReviewConfirmed is valid only for AttestReview after a human has inspected the sanitized PNG.",
@@ -765,7 +841,7 @@ fn screenshot_tool_strips_metadata_but_never_claims_unknown_pixel_redaction() {
         "$script:CompletedReviewStatement",
         "$script:LegacyReviewStatement",
         "$script:CandidateVersionFromPreflight",
-        "AttestReview is available only for the v0.12.8 two-phase screenshot protocol.",
+        "AttestReview is available only for the v0.12.9 two-phase screenshot protocol.",
         "The sanitized PNG changed after its pending review record was created.",
         "Screenshot sanitizer accepted review confirmation before creating the sanitized crop.",
         "Legacy v0.12.2 screenshot sanitization compatibility failed.",
@@ -822,12 +898,12 @@ fn screenshot_tool_strips_metadata_but_never_claims_unknown_pixel_redaction() {
     assert!(!script.contains("unknownPixelSafetyClaimed = $true"));
     assert!(!script.contains("popup-release-after"));
     assert!(!script.contains("popup-release-paused-popup"));
-    let sanitize = v0128_readme.find("-Mode Sanitize").unwrap();
-    let human_pause = v0128_readme.find("Automation must then pause.").unwrap();
-    let review_receipt = v0128_readme
+    let sanitize = v0129_readme.find("-Mode Sanitize").unwrap();
+    let human_pause = v0129_readme.find("Automation must then pause.").unwrap();
+    let review_receipt = v0129_readme
         .find("Exact purpose-and-image-digest-bound human review receipt")
         .unwrap();
-    let attest = v0128_readme.find("-Mode AttestReview").unwrap();
+    let attest = v0129_readme.find("-Mode AttestReview").unwrap();
     assert!(sanitize < human_pause && human_pause < review_receipt && review_receipt < attest);
     assert!(readme.contains("-Mode Sanitize"));
     assert!(readme.contains("-ManualVisualReviewConfirmed"));
@@ -993,7 +1069,7 @@ fn token_cleanup_proof_is_bound_to_the_trusted_popup_and_reduced_state() {
     let popup_script = source("extension/popup.js");
     let finalizer = source("scripts/write-browser-evidence-record.ps1");
     let readme = source("evidence/v0.12.2/browser/README.md");
-    let v0128_readme = source("evidence/v0.12.8/browser/README.md");
+    let v0129_readme = source("evidence/v0.12.9/browser/README.md");
 
     for required in [
         "id=\"clear-token\"",
@@ -1041,16 +1117,16 @@ fn token_cleanup_proof_is_bound_to_the_trusted_popup_and_reduced_state() {
     }
     assert!(readme.contains("Do not inspect `chrome.storage`"));
     assert!(readme.contains("never the token or raw extension storage"));
-    assert!(v0128_readme.contains("wait for the popup's native `confirm()` dialog"));
-    assert!(v0128_readme.contains("confirmationAcceptedByHuman:true"));
+    assert!(v0129_readme.contains("wait for the popup's native `confirm()` dialog"));
+    assert!(v0129_readme.contains("confirmationAcceptedByHuman:true"));
 }
 
 #[test]
-fn v0128_computer_helper_chain_is_live_exact_window_and_three_capture_bound() {
+fn v0129_computer_helper_chain_is_live_exact_window_and_three_capture_bound() {
     let recorder = source("scripts/record-computer-helper-chain.ps1");
     let finalizer = source("scripts/write-browser-evidence-record.ps1");
     let schema: Value = serde_json::from_str(&source(
-        "evidence/v0.12.8/browser/computer-helper-chain.schema.json",
+        "evidence/v0.12.9/browser/computer-helper-chain.schema.json",
     ))
     .unwrap();
 
@@ -1155,6 +1231,10 @@ fn new_browser_evidence_files_are_english_only() {
         "evidence/v0.12.8/browser/operator-results.template.json",
         "evidence/v0.12.8/browser/operator-results.schema.json",
         "evidence/v0.12.8/browser/computer-helper-chain.schema.json",
+        "evidence/v0.12.9/browser/README.md",
+        "evidence/v0.12.9/browser/operator-results.template.json",
+        "evidence/v0.12.9/browser/operator-results.schema.json",
+        "evidence/v0.12.9/browser/computer-helper-chain.schema.json",
     ] {
         let text = source(path);
         assert!(

@@ -70,6 +70,7 @@ fn windows_ci_and_release_validate_the_complete_browser_evidence_toolchain() {
             "scripts/sanitize-browser-evidence-screenshot.ps1",
             "scripts/test-windows-browser-api.ps1",
             "scripts/test-windows-computer-use.ps1",
+            "scripts/wait-windows-foreground-arm-handoff.ps1",
             "scripts/write-browser-evidence-record.ps1",
             "tests/fixtures/windows/WindowsComputerUseFixture.ps1",
         ] {
@@ -84,6 +85,7 @@ fn windows_ci_and_release_validate_the_complete_browser_evidence_toolchain() {
             "./scripts/sanitize-browser-evidence-screenshot.ps1 -Mode SelfTest",
             "./scripts/test-windows-browser-api.ps1 -SelfTest",
             "./scripts/test-windows-computer-use.ps1 -SelfTest",
+            "./scripts/wait-windows-foreground-arm-handoff.ps1 -Mode SelfTest",
             "./tests/fixtures/windows/WindowsComputerUseFixture.ps1 -SelfTest",
             "./scripts/write-browser-evidence-record.ps1 -Mode SelfTest",
         ] {

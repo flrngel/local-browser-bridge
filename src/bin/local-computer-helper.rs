@@ -199,7 +199,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     if cli.show_licenses {
-        print_license_report("Local Computer Helper");
+        print_license_report("Local Computer Helper")?;
         return Ok(());
     }
     if !NATIVE_COMPUTER_SUPPORTED {

@@ -18,6 +18,19 @@ attempt counts so an extra click invalidates the acceptance run. A trusted
 human or separately authorized Computer Use surface performs that setup click,
 then stops interacting while the product actions run.
 
+For v0.12.9 remote coordination, reserve that external surface before starting
+the runner and use `scripts/wait-windows-foreground-arm-handoff.ps1 -Mode Watch`
+to wait for the fresh schema-2 request. The watcher is read-only and binds the
+exact evidence directory plus runner PID/start time. Its one sanitized handoff
+prefers `windows-computer-use-app-share` and names
+`human-on-windows-session` as fallback, but grants neither consent nor
+acceptance authority. The external surface still needs fresh one-shot
+authorization and a fresh visual confirmation. Click at most once only when the
+exact orange action-required window visibly shows **CLICK TO ARM**; if it shows
+**ARMED** or is ambiguous, click zero times. Never retry an unknown outcome.
+The fixture's native click receipt and advancing samples remain the only
+acceptance proof.
+
 Every state write carries a monotonic publication generation. The runner
 requires distinct advancing publications for the click acknowledgement, each
 stable native sample, the baseline, and every later invariant comparison; one

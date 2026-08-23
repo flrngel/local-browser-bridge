@@ -115,7 +115,7 @@ Local Browser Bridge applies the same class of invariant at narrower layers: Web
 
 Interceptor's current macOS source independently validates several implementation choices used here: AX before pixels, `CGEvent.postToPid` for background delivery, ScreenCaptureKit for native frames, an explicit wait for the first frame, and rejection of callbacks after stop. It also shows the limitation of stopping at the component level. Its continuous app mode selects the first window owned by a named application, caches a latest JPEG without a source sequence or dropped-frame proof, and routes synthetic input to a PID rather than proving the exact window receiver. Local Browser Bridge therefore keeps the exact `(PID, native window id)` capability, monotonic source sequence, bounded replacement accounting, receiver proof, and foreground/focus invariants instead of treating a successful per-PID post as an accepted exact-window action.
 
-OpenKosmos prioritizes a different product surface: a persistent click-through cursor on the physical desktop, one-time action confirmations, a fresh foreground-app allowlist check, cancellation checkpoints, and an audit trail. Those are strong visibility and consent references. Its actuator still uses the shared physical input seat and may focus the target, so adopting its overlay would not make its transport non-interrupting. Version 0.12.8 keeps returned-frame pointer evidence and target-routed input; a trusted native Stop/Esc surface and a physical-desktop overlay remain explicitly open deltas rather than inferred from capture.
+OpenKosmos prioritizes a different product surface: a persistent click-through cursor on the physical desktop, one-time action confirmations, a fresh foreground-app allowlist check, cancellation checkpoints, and an audit trail. Those are strong visibility and consent references. Its actuator still uses the shared physical input seat and may focus the target, so adopting its overlay would not make its transport non-interrupting. Version 0.12.9 keeps returned-frame pointer evidence and target-routed input; a trusted native Stop/Esc surface and a physical-desktop overlay remain explicitly open deltas rather than inferred from capture.
 
 ### Current real-profile browser relays: lifecycle recovery without durable handback
 
@@ -127,7 +127,7 @@ Browser Bridge 0.16.0 pushes the passive-observation side further. Its watch mod
 
 BackgroundComputerUse and DSH both prioritize semantic state plus application-owned rereads after action. BackgroundComputerUse adds a compact state token derived from window metadata, AX projection, focus/selection, and image dimensions; DSH makes every ref snapshot-scoped, rejects a stale snapshot, and returns a fresh bounded observation after exactly one action. DSH also combines AX with Vision OCR for semantic gaps and refuses a Stage Manager shelf-thumbnail geometry mismatch before asking ScreenCaptureKit to capture it.
 
-The useful adoption is the policy, not their code: stale state never authorizes a guess, each action produces or requires a successor observation, and visual-only state needs pixels because a semantic token can remain unchanged. Version 0.12.8 carries layered observation/share identities, exact receiver proof, application-owned semantic postconditions, persistent native source sequences, and dropped-frame accounting. It does not claim BackgroundComputerUse's or DSH's native click-through overlay, broader semantic inventory, or OCR fusion; unlike both reviewed one-shot capture paths, its live-share contract is a persistent SCStream/WGC stream. BackgroundComputerUse's reviewed random-port loopback server also exposes no bearer-authentication or exact-Host gate, so it is a component benchmark rather than a transport-security reference.
+The useful adoption is the policy, not their code: stale state never authorizes a guess, each action produces or requires a successor observation, and visual-only state needs pixels because a semantic token can remain unchanged. Version 0.12.9 carries layered observation/share identities, exact receiver proof, application-owned semantic postconditions, persistent native source sequences, and dropped-frame accounting. It does not claim BackgroundComputerUse's or DSH's native click-through overlay, broader semantic inventory, or OCR fusion; unlike both reviewed one-shot capture paths, its live-share contract is a persistent SCStream/WGC stream. BackgroundComputerUse's reviewed random-port loopback server also exposes no bearer-authentication or exact-Host gate, so it is a component benchmark rather than a transport-security reference.
 
 ### ParaDesk: a separate input seat is a different product mode
 
@@ -254,5 +254,16 @@ Release evidence must independently prove:
 - exact-window live frames carry monotonic sequence, correct dimensions/scales, share state, and the settled synthetic pointer;
 - macOS frontmost-process/window, hardware-cursor, and Space invariants remain unchanged for supported background actions;
 - Windows compiles and runs the shared contracts, while representative Windows UIA/background runtime coverage remains explicitly identified if it is not executed on a real Windows host.
+
+The exact v0.12.8 packaged macOS candidate passed 187/187 assertions and
+produced six reviewed screenshots. Its same-candidate Windows run published a
+fresh foreground-arm request but received no click and no received marker; it
+timed out at `wait-foreground-arm` before the invariant baseline or any product
+action. Stock-Chrome acceptance never started, the publication job was
+canceled, and no v0.12.8 Release exists. Version 0.12.9 therefore starts a
+fresh evidence cycle. Its preferred pre-reserved Computer Use relay changes
+handoff orchestration only: the notification marker grants neither consent nor
+acceptance authority, and the exact fixture-owned click and native samples
+remain mandatory.
 
 Transport success alone is diagnostic evidence. A platform/action combination is supported only after a representative application-owned outcome and the advertised non-interruption invariants are observed.

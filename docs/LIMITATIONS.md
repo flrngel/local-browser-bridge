@@ -109,20 +109,25 @@ The following need versioned packaged evidence before they can become supported 
 - private macOS input compatibility across every supported macOS release and architecture; and
 - concurrent native agents with deterministic per-window leases and conflict handling.
 
-The exact v0.12.7 macOS release candidate passed its 187-check persistent-share
-matrix, but that archive was never published. Its Windows run delivered the
-fresh foreground-arm request and then received no required click; it timed out
-with zero down, up, and acknowledgement counts before the invariant baseline or
-any observation, capture, share, input, or other product action. Chrome
-acceptance was not started, the protected publication job was canceled, and no
-v0.12.7 Release exists. Those records are useful historical evidence, but they
-do not satisfy the v0.12.8 Windows, Chrome, or immutable-release gates.
+The exact v0.12.8 macOS release candidate passed its 187-check persistent-share
+matrix and produced six reviewed screenshots, but that archive was never
+published. Its Windows run delivered a fresh foreground-arm request and then
+received no click; no received marker was created, and the runner timed out at
+`wait-foreground-arm` before the invariant baseline or any observation,
+capture, share, input, or other product action. Chrome acceptance was not
+started, the protected publication job was canceled, and no v0.12.8 Release
+exists. Those records are useful historical evidence, but they do not satisfy
+the v0.12.9 Windows, Chrome, or immutable-release gates.
 
-Version 0.12.8 makes the Windows arm request observable through sanitized,
-atomic request/received marker files and uses a bounded five-minute runner arm
-interval. Those files are notifications only: the runner never reads
-them, and they cannot replace the required one-click native foreground/focus
-receipt or the final packaged Windows and Chrome evidence.
+Version 0.12.9 keeps the Windows runner's bounded five-minute arm interval and
+native one-click authority unchanged. A read-only handoff watcher makes a fresh
+request easier for an already-reserved Windows Computer Use app-share—or a
+human on the Windows session—to notice promptly. The watcher and request/received
+files are notification and routing aids only: they do not grant consent, the
+runner never reads them, and they cannot replace the fixture-owned click,
+three stable native foreground/focus/cursor/input-desktop samples, or final
+packaged Windows and Chrome evidence. An `ARMED` or ambiguous frame authorizes
+zero additional clicks, and an unknown click outcome is never retried.
 
 The checked-in [evidence index](../evidence/) records what was actually run. A code path, unit test, or transport acknowledgement alone is not evidence that an application accepted the action or that the user's desktop remained unchanged.
 

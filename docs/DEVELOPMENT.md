@@ -146,7 +146,52 @@ try {
 }
 ```
 
-For a remote coordinator, do not block on one opaque child invocation. Start the runner in a retained terminal session with a short initial yield, keep its process/session identifier, and poll only runner liveness plus the exact fresh evidence directory from a separate command. When `operator/foreground-arm-request.json` appears, parse-retry the complete atomic JSON, require a fresh request ID, require `notificationOnly: true` and `acceptedAsAuthority: false`, and immediately surface its instruction to the human or authorized Computer Use surface. After the one click, perform no more UI actions; poll only for the matching received notification and final `summary.json`. Never inject the click, infer success from either notification, or reuse a marker from another directory or process. Only the final summary and exact evidence inventory can pass the run. Keep stdout/stderr outside the evidence directory and delete those coordinator-owned files after sanitized review.
+For a remote coordinator, do not block on one opaque child invocation. Reserve
+the external Windows UI surface before starting the runner: prefer an authorized
+Windows Computer Use app-share, and retain a human on the Windows session as the
+fallback. Start the runner in a retained terminal session with a short initial
+yield and record its process ID plus exact UTC process start time. Then run the
+repository's read-only watcher from a separate process:
+
+```powershell
+& .\scripts\wait-windows-foreground-arm-handoff.ps1 `
+  -Mode Watch `
+  -EvidenceDirectory $evidence `
+  -RunnerProcessId $runnerPid `
+  -RunnerStartedAtUtc $runnerStartedAtUtc `
+  -WaitTimeoutSeconds 300
+```
+
+The watcher reads only `operator/foreground-arm-request.json`. It requires the
+exact v0.12.9/schema-2 field set and order, a fresh non-expired publication,
+ordinary non-reparse paths, and the same live runner PID/start time both before
+and after parsing. It emits exactly one compact sanitized
+`foreground-arm-visual-handoff` JSON object or fails closed. It neither writes
+evidence nor reads product state, moves focus, injects input, or verifies the
+separate external authorization.
+
+Treat that output as routing, not consent or authority. Obtain a fresh one-shot
+authorization for the named external surface, observe a fresh shared frame, and
+left-click exactly once only if it visibly shows the exact orange **LBB Windows
+Acceptance - ACTION REQUIRED** window and **CLICK TO ARM** button. If the frame
+shows **ARMED**, is stale, or is ambiguous, perform zero clicks. Do not make a
+preparatory focus click, use a keyboard/UIA/scripted substitute, or retry an
+unknown outcome. Stop all UI interaction immediately after the one action and
+poll only runner liveness, the matching received notification, and final
+`summary.json`. Neither notification can satisfy acceptance; only the fixture's
+exact click/native proof and final summary/inventory can pass. Keep watcher and
+runner stdout/stderr outside the evidence directory and delete those
+coordinator-owned files after sanitized review.
+
+Exercise the watcher parser, liveness/freshness refusals, action-required
+one-click handoff, and already-armed zero-click handoff without opening UI:
+
+```powershell
+powershell.exe -NoLogo -NoProfile -File `
+  .\scripts\wait-windows-foreground-arm-handoff.ps1 -Mode SelfTest
+```
+
+The expected sole output is `Windows foreground-arm handoff watcher self-test passed.`
 
 The fixture increments a monotonic publication generation on every state write. Arm stability consumes three distinct advancing publications after the delivery receipt, the baseline consumes another, and every later invariant comparison requires a still-newer publication. Replaying one valid state file or stalling the fixture writer therefore cannot satisfy the acceptance oracle.
 

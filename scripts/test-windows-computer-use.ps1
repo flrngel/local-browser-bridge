@@ -1205,6 +1205,8 @@ function Write-NewOperatorMarker {
 
 function New-ForegroundArmRequestMarker {
     param(
+        [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+$')]
+        [string]$ProductVersion,
         [ValidatePattern('^[0-9a-f]{32}$')]
         [string]$RequestId,
         [ValidateSet("not-started", "already-acknowledged")]
@@ -1220,15 +1222,29 @@ function New-ForegroundArmRequestMarker {
     }
     $operatorActionRequired = $InputStateAtPublication -ceq "not-started"
     return [ordered]@{
-        schemaVersion = 1
+        schemaVersion = 2
+        productVersion = $ProductVersion
         kind = "foreground-arm"
         status = if ($operatorActionRequired) { "action-required" } else { "already-armed" }
         requestId = $RequestId
         publishedAtUtc = [DateTime]::UtcNow.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
         timeoutSeconds = $TimeoutSeconds
         operatorActionRequired = $operatorActionRequired
+        preferredRelaySurface = "windows-computer-use-app-share"
+        fallbackRelaySurface = "human-on-windows-session"
+        expectedVisibleWindowTitle = if ($operatorActionRequired) { "LBB Windows Acceptance - ACTION REQUIRED" } else { "LBB Windows Acceptance - ARMED" }
         expectedVisibleButtonText = if ($operatorActionRequired) { "CLICK TO ARM" } else { "ARMED - DO NOT USE THIS SESSION" }
-        instruction = if ($operatorActionRequired) { "If the button says CLICK TO ARM, click it once. If it says ARMED, do not click again. Then stop using this Windows session." } else { "Do not click again; stop using this Windows session." }
+        expectedAccessibleName = "Click to arm Windows acceptance"
+        action = if ($operatorActionRequired) { "single-left-click" } else { "none" }
+        stopUiAfterAction = $true
+        requiresSeparateAuthorization = $true
+        markerGrantsAuthorization = $false
+        markerGrantsConsent = $false
+        externalOneShotConsentRequired = $true
+        visualConfirmationRequired = $true
+        maximumClickAttempts = if ($operatorActionRequired) { 1 } else { 0 }
+        retryOnUnknownOutcome = $false
+        instruction = if ($operatorActionRequired) { "Use a separately authorized Windows Computer Use app share to visually confirm this exact window and button, click it once, then stop all UI use. If it already says ARMED or the outcome is uncertain, do not click or retry." } else { "Do not click; stop all UI use because the foreground arm is already acknowledged." }
         requestDelivered = $true
         buttonEnabled = $true
         nativeTopologyMatched = $true
@@ -1244,6 +1260,8 @@ function New-ForegroundArmRequestMarker {
 
 function New-ForegroundArmReceivedMarker {
     param(
+        [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+$')]
+        [string]$ProductVersion,
         [ValidatePattern('^[0-9a-f]{32}$')]
         [string]$RequestId,
         [object]$Proof
@@ -1269,7 +1287,8 @@ function New-ForegroundArmReceivedMarker {
         throw "An operator received marker requires the complete click and stable-native-sample proof."
     }
     return [ordered]@{
-        schemaVersion = 1
+        schemaVersion = 2
+        productVersion = $ProductVersion
         kind = "foreground-arm"
         status = "received"
         requestId = $RequestId
@@ -1787,6 +1806,7 @@ if ($SelfTest) {
     try {
         $operatorMarkerSelfTestRequestId = "0123456789abcdef0123456789abcdef"
         $operatorRequestMarker = New-ForegroundArmRequestMarker `
+            -ProductVersion "0.12.9" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -InputStateAtPublication "not-started" `
             -TimeoutSeconds 120 `
@@ -1801,17 +1821,36 @@ if ($SelfTest) {
         $operatorRequestJson = [Text.Encoding]::UTF8.GetString($operatorRequestBytesBefore)
         $operatorRequestRecord = $operatorRequestJson | ConvertFrom-Json
         $expectedRequestMarkerProperties = @(
-            "schemaVersion", "kind", "status", "requestId", "publishedAtUtc",
-            "timeoutSeconds", "operatorActionRequired", "expectedVisibleButtonText",
-            "instruction", "requestDelivered", "buttonEnabled", "nativeTopologyMatched",
-            "inputStateAtPublication", "notificationOnly", "acceptedAsAuthority",
+            "schemaVersion", "productVersion", "kind", "status", "requestId", "publishedAtUtc",
+            "timeoutSeconds", "operatorActionRequired", "preferredRelaySurface", "fallbackRelaySurface",
+            "expectedVisibleWindowTitle", "expectedVisibleButtonText", "expectedAccessibleName", "action",
+            "stopUiAfterAction", "requiresSeparateAuthorization", "markerGrantsAuthorization",
+            "markerGrantsConsent", "externalOneShotConsentRequired", "visualConfirmationRequired",
+            "maximumClickAttempts", "retryOnUnknownOutcome", "instruction", "requestDelivered",
+            "buttonEnabled", "nativeTopologyMatched", "inputStateAtPublication", "notificationOnly", "acceptedAsAuthority",
             "rawWindowHandlesRecorded", "rawCursorCoordinatesRecorded", "pathsRecorded",
             "secretsRecorded"
         )
         if ((@($operatorRequestRecord.PSObject.Properties.Name) -join "|") -cne ($expectedRequestMarkerProperties -join "|") -or
+            $operatorRequestRecord.schemaVersion -ne 2 -or
+            $operatorRequestRecord.productVersion -cne "0.12.9" -or
             $operatorRequestRecord.status -cne "action-required" -or
             $operatorRequestRecord.requestId -cne $operatorMarkerSelfTestRequestId -or
             $operatorRequestRecord.operatorActionRequired -ne $true -or
+            $operatorRequestRecord.preferredRelaySurface -cne "windows-computer-use-app-share" -or
+            $operatorRequestRecord.fallbackRelaySurface -cne "human-on-windows-session" -or
+            $operatorRequestRecord.expectedVisibleWindowTitle -cne "LBB Windows Acceptance - ACTION REQUIRED" -or
+            $operatorRequestRecord.expectedVisibleButtonText -cne "CLICK TO ARM" -or
+            $operatorRequestRecord.expectedAccessibleName -cne "Click to arm Windows acceptance" -or
+            $operatorRequestRecord.action -cne "single-left-click" -or
+            $operatorRequestRecord.stopUiAfterAction -ne $true -or
+            $operatorRequestRecord.requiresSeparateAuthorization -ne $true -or
+            $operatorRequestRecord.markerGrantsAuthorization -ne $false -or
+            $operatorRequestRecord.markerGrantsConsent -ne $false -or
+            $operatorRequestRecord.externalOneShotConsentRequired -ne $true -or
+            $operatorRequestRecord.visualConfirmationRequired -ne $true -or
+            $operatorRequestRecord.maximumClickAttempts -ne 1 -or
+            $operatorRequestRecord.retryOnUnknownOutcome -ne $false -or
             $operatorRequestRecord.notificationOnly -ne $true -or
             $operatorRequestRecord.acceptedAsAuthority -ne $false) {
             throw "The foreground-arm request marker failed its exact-schema self-test."
@@ -1839,6 +1878,7 @@ if ($SelfTest) {
         }
 
         $alreadyArmedMarker = New-ForegroundArmRequestMarker `
+            -ProductVersion "0.12.9" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -InputStateAtPublication "already-acknowledged" `
             -TimeoutSeconds 120 `
@@ -1846,7 +1886,12 @@ if ($SelfTest) {
             -ButtonEnabled $true `
             -NativeTopologyMatched $true
         if ($alreadyArmedMarker.status -cne "already-armed" -or
-            $alreadyArmedMarker.operatorActionRequired -ne $false) {
+            $alreadyArmedMarker.operatorActionRequired -ne $false -or
+            $alreadyArmedMarker.expectedVisibleWindowTitle -cne "LBB Windows Acceptance - ARMED" -or
+            $alreadyArmedMarker.expectedVisibleButtonText -cne "ARMED - DO NOT USE THIS SESSION" -or
+            $alreadyArmedMarker.action -cne "none" -or
+            $alreadyArmedMarker.maximumClickAttempts -ne 0 -or
+            $alreadyArmedMarker.retryOnUnknownOutcome -ne $false) {
             throw "The foreground-arm request marker did not suppress a duplicate-click prompt after an early valid acknowledgement."
         }
 
@@ -1867,6 +1912,7 @@ if ($SelfTest) {
             stableSamplesRequired = 3
         }
         $operatorReceivedMarker = New-ForegroundArmReceivedMarker `
+            -ProductVersion "0.12.9" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -Proof $operatorReceivedProof
         $operatorReceivedPath = Write-NewOperatorMarker `
@@ -1874,7 +1920,17 @@ if ($SelfTest) {
             -FileName "foreground-arm-received.json" `
             -Value $operatorReceivedMarker
         $operatorReceivedRecord = [IO.File]::ReadAllText($operatorReceivedPath, [Text.Encoding]::UTF8) | ConvertFrom-Json
-        if ($operatorReceivedRecord.status -cne "received" -or
+        $expectedReceivedMarkerProperties = @(
+            "schemaVersion", "productVersion", "kind", "status", "requestId", "receivedAtUtc",
+            "exactClickCountsMatched", "stableSamplesObserved", "stableSamplesRequired", "nativeTopologyMatched",
+            "foregroundMatched", "focusMatched", "cursorStable", "inputDesktopStable", "notificationOnly",
+            "acceptedAsAuthority", "rawWindowHandlesRecorded", "rawCursorCoordinatesRecorded", "pathsRecorded",
+            "secretsRecorded"
+        )
+        if ((@($operatorReceivedRecord.PSObject.Properties.Name) -join "|") -cne ($expectedReceivedMarkerProperties -join "|") -or
+            $operatorReceivedRecord.status -cne "received" -or
+            $operatorReceivedRecord.schemaVersion -ne 2 -or
+            $operatorReceivedRecord.productVersion -cne "0.12.9" -or
             $operatorReceivedRecord.requestId -cne $operatorRequestRecord.requestId -or
             $operatorReceivedRecord.exactClickCountsMatched -ne $true -or
             $operatorReceivedRecord.stableSamplesObserved -ne 3 -or
@@ -1886,6 +1942,7 @@ if ($SelfTest) {
         $incompleteReceivedMarkerFailure = $null
         try {
             $null = New-ForegroundArmReceivedMarker `
+                -ProductVersion "0.12.9" `
                 -RequestId $operatorMarkerSelfTestRequestId `
                 -Proof $operatorReceivedProof
         }
@@ -3136,6 +3193,7 @@ try {
         rawCursorCoordinatesRecorded = $false
     })
     $foregroundArmRequestMarker = New-ForegroundArmRequestMarker `
+        -ProductVersion $Version `
         -RequestId $foregroundArmOperatorRequestId `
         -InputStateAtPublication $armRequestInputState `
         -TimeoutSeconds $ForegroundArmTimeoutSeconds `
@@ -3146,7 +3204,7 @@ try {
         -Directory $operatorEvidence `
         -FileName "foreground-arm-request.json" `
         -Value $foregroundArmRequestMarker
-    Write-Host "ACTION REQUIRED: If the large button in the orange LBB Foreground Sentinel window says CLICK TO ARM, click it once within $ForegroundArmTimeoutSeconds seconds. If it already says ARMED, do not click again. Then do not use this Windows session until the runner finishes."
+    Write-Host "ACTION REQUIRED: Through a separately authorized Windows Computer Use app share, visually confirm the orange LBB Foreground Sentinel and click CLICK TO ARM exactly once within $ForegroundArmTimeoutSeconds seconds. If it already says ARMED or the outcome is uncertain, do not click or retry. Stop all Windows UI use after the action."
     $script:runStage = "wait-foreground-arm"
     $foregroundArm = Wait-ForStableForegroundArm `
         -RequestedGeneration $foregroundArmRequestGeneration `
@@ -3159,6 +3217,7 @@ try {
         -TimeoutMilliseconds ($ForegroundArmTimeoutSeconds * 1000)
     $script:foregroundArmProof.requestPosted = $true
     $foregroundArmReceivedMarker = New-ForegroundArmReceivedMarker `
+        -ProductVersion $Version `
         -RequestId $foregroundArmOperatorRequestId `
         -Proof $foregroundArm.proof
     $null = Write-NewOperatorMarker `

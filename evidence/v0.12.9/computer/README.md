@@ -1,18 +1,14 @@
-# Withdrawn v0.12.8 macOS exact-candidate pass
+# macOS v0.12.9 persistent-share evidence candidate
 
-This directory contains the deterministic harness and completed exact-candidate
-run for the packaged macOS v0.12.8 server and helper. The exact frozen
-release-candidate archive passed all 187 checks and produced
-`helper-results.json`, `helper-rig.log`, and the six reviewed screenshots listed
-below. The same-candidate Windows run later delivered its fresh foreground-arm
-request but received no click and no received marker, then timed out at
-`wait-foreground-arm` before the invariant baseline or any product action.
-Stock-Chrome acceptance never started, the protected publication job was
-canceled, and no v0.12.8 GitHub Release exists. This macOS result is therefore
-real exact-candidate evidence, not shipped-release evidence.
+This directory contains a deterministic evidence harness for the packaged
+macOS v0.12.9 server and helper. It is **candidate infrastructure only** until
+the harness runs against the exact release-candidate archive and records a
+passing `helper-results.json`, `helper-rig.log`, and the six screenshots listed
+below. A local pass becomes immutable release evidence only if the same archive
+SHA-256 is later published in the v0.12.9 GitHub release.
 
-The retained Windows failure is documented at
-[`attempts/withdrawn-532d603-windows-foreground-arm-timeout`](attempts/withdrawn-532d603-windows-foreground-arm-timeout/README.md).
+Version 0.12.9 starts a fresh candidate cycle. It does not reuse or relabel any
+v0.12.8 binary, screenshot, result, or Windows notification as current evidence.
 
 The harness talks to the real loopback server API and launches the supplied
 `Local Computer Helper.app` executable exactly once. It does not use a mock
@@ -29,13 +25,13 @@ hashes equal their archived counterparts. Only then does package inspection
 with `lipo`, `codesign`, and `plutil` run; those tools do not execute the
 candidate binaries.
 
-## What the run proves
+## What a passing run proves
 
-- The server and helper report exactly v0.12.8, are universal
+- The server and helper report exactly v0.12.9, are universal
   `arm64`/`x86_64` binaries, and pass strict code-signature checks.
 - The supplied executables are byte-for-byte identical to the copies inside
-  `local-browser-bridge-v0.12.8-macos-universal.tar.gz`. The archive must be
-  bound by a canonical `SHA256SUMS.txt` containing exactly the four v0.12.8
+  `local-browser-bridge-v0.12.9-macos-universal.tar.gz`. The archive must be
+  bound by a canonical `SHA256SUMS.txt` containing exactly the four v0.12.9
   release assets, and that manifest must match a mandatory SHA-256 supplied
   out of band; a locally rebuilt archive plus a substituted manifest is
   refused. No supplied server or helper code executes before all of those
@@ -207,7 +203,7 @@ set -euo pipefail
 : "${EXPECTED_SHA256SUMS_SHA256:?set the independently handed-off manifest SHA-256}"
 : "${EXPECTED_SOURCE_SHA:?set the independently handed-off source commit SHA}"
 
-VERSION="0.12.8"
+VERSION="0.12.9"
 TAG="v$VERSION"
 REPOSITORY="flrngel/local-browser-bridge"
 MANIFEST="$RELEASE_CANDIDATE_DIR/SHA256SUMS.txt"
@@ -272,17 +268,17 @@ done
 
 # Extraction and candidate execution are permitted only below this line.
 bash scripts/verify-release-assets.sh "$VERSION" "$RELEASE_CANDIDATE_DIR"
-PACKAGE_ROOT="$(mktemp -d "$SCRATCH_PARENT/lbb-v0.12.8-package.XXXXXX")"
+PACKAGE_ROOT="$(mktemp -d "$SCRATCH_PARENT/lbb-v0.12.9-package.XXXXXX")"
 trap 'rm -rf -- "$PACKAGE_ROOT"' EXIT
-tar -xzf "$RELEASE_CANDIDATE_DIR/local-browser-bridge-v0.12.8-macos-universal.tar.gz" \
+tar -xzf "$RELEASE_CANDIDATE_DIR/local-browser-bridge-v0.12.9-macos-universal.tar.gz" \
   -C "$PACKAGE_ROOT"
 
-node evidence/v0.12.8/computer/helper-evidence-rig.mjs \
+node evidence/v0.12.9/computer/helper-evidence-rig.mjs \
   "$PACKAGE_ROOT/local-browser-bridge" \
   "$PACKAGE_ROOT/Local Computer Helper.app/Contents/MacOS/local-computer-helper" \
-  evidence/v0.12.8/computer \
+  evidence/v0.12.9/computer \
   "$SCRATCH_PARENT" \
-  "$RELEASE_CANDIDATE_DIR/local-browser-bridge-v0.12.8-macos-universal.tar.gz" \
+  "$RELEASE_CANDIDATE_DIR/local-browser-bridge-v0.12.9-macos-universal.tar.gz" \
   "$RELEASE_CANDIDATE_DIR/SHA256SUMS.txt" \
   "$EXPECTED_SHA256SUMS_SHA256"
 ```
@@ -330,14 +326,23 @@ only after it has requested and observed exit of its exact spawned fixture. In
 both cases the event must name the second share ID and produce the identical
 server authority-clear, stale-frame refusal, and cleanup contract.
 
-The retained run has `assertions.failed` equal to zero and binds archive
-SHA-256 `651ecd9a1cb095812669884a0c8db1664d20aecd28bc65c05e50d548416dac13`,
-canonical-manifest SHA-256
-`45d550e394a38b56aeb8a67bde3c3792d3c1728d9088d61f9576622506273a28`,
-and source commit `532d603b3a7ab25edf71adcd68b8ed2f89b55983`. All six screenshots were
-opened, matched to their recorded SHA-256 values and expected state, and found
-to contain only the exact fixture window. The candidate was withdrawn without
-publication, so this run cannot become shipped-release evidence retroactively.
+After the run, inspect every screenshot, confirm `assertions.failed` is zero,
+and compare the recorded archive SHA-256 with the published release asset
+before changing this directory's status from candidate to released evidence.
+
+## Historical v0.12.8 exact-candidate result
+
+The exact v0.12.8 macOS archive passed all 187 assertions and produced six
+reviewed screenshots. The same frozen candidate's Windows run passed
+protocol-bound helper readiness and delivered one fresh foreground-arm request,
+but no click reached the fixture and no received marker was created. It timed
+out at `wait-foreground-arm` before the invariant baseline or any product
+action. Stock-Chrome acceptance was not started, the protected publish job was
+canceled, and no v0.12.8 Release was created. These records are diagnostic
+history, not v0.12.9 evidence:
+
+- [`v0.12.8 macOS exact-candidate pass`](../../v0.12.8/computer/README.md)
+- [`withdrawn-532d603-windows-foreground-arm-timeout`](../../v0.12.8/computer/attempts/withdrawn-532d603-windows-foreground-arm-timeout/README.md)
 
 ## Historical v0.12.7 exact-candidate result
 
@@ -348,7 +353,7 @@ scripted click occurred. It timed out with zero mouse-down, mouse-up, and
 acknowledgement counts before the invariant baseline or any product action.
 Chrome acceptance was not started, the protected publish job was canceled, and
 no v0.12.7 Release was created. These records are diagnostic history, not
-v0.12.8 evidence:
+v0.12.9 evidence:
 
 - [`v0.12.7 macOS exact-candidate pass`](../../v0.12.7/computer/README.md)
 - [`withdrawn-0749953-windows-foreground-arm-timeout`](../../v0.12.7/computer/attempts/withdrawn-0749953-windows-foreground-arm-timeout/README.md)
@@ -360,7 +365,7 @@ reviewed screenshots. The same frozen candidate then failed closed on Windows
 after protocol-bound helper readiness and before observation, capture, sharing,
 input, or any screenshot because its shown WinForms sentinel did not own the
 global foreground. The publish job was canceled and no v0.12.6 Release was
-created. These records are diagnostic history, not v0.12.8 evidence:
+created. These records are diagnostic history, not v0.12.9 evidence:
 
 - [`v0.12.6 macOS exact-candidate pass`](../../v0.12.6/computer/README.md)
 - [`withdrawn-397e4b6-windows-foreground-sentinel-timeout`](../../v0.12.6/computer/attempts/withdrawn-397e4b6-windows-foreground-sentinel-timeout/README.md)
@@ -368,7 +373,7 @@ created. These records are diagnostic history, not v0.12.8 evidence:
 ## Historical v0.12.5 negative attempt
 
 The exact v0.12.5 candidate run is retained as failed-candidate evidence, not
-as a v0.12.8 result:
+as a v0.12.9 result:
 
 - [`withdrawn-badda8e-macos-native-text-restore-stale-frame`](../../v0.12.5/computer/attempts/withdrawn-badda8e-macos-native-text-restore-stale-frame/README.md)
   records 82 successful assertions followed by a fail-closed
@@ -380,7 +385,7 @@ as a v0.12.8 result:
 
 ## Historical v0.12.2 negative attempt
 
-The v0.12.2 candidate run is preserved byte-for-byte and is not v0.12.8
+The v0.12.2 candidate run is preserved byte-for-byte and is not v0.12.9
 evidence:
 
 - [`withdrawn-a52d761-post-cancel-fresh-share-refusal`](../../v0.12.2/computer/attempts/withdrawn-a52d761-post-cancel-fresh-share-refusal/README.md)
@@ -392,7 +397,7 @@ evidence:
 ## Historical v0.12.1 negative attempts
 
 The prior attempts remain byte-for-byte in the v0.12.1 evidence directory.
-They are linked for diagnostic history only and are not v0.12.8 results:
+They are linked for diagnostic history only and are not v0.12.9 results:
 
 - [`withdrawn-98ff6f0-macos-invariant-refusal`](../../v0.12.1/computer/attempts/withdrawn-98ff6f0-macos-invariant-refusal/README.md)
   preserves the first fail-closed run. It is diagnostic history, not release

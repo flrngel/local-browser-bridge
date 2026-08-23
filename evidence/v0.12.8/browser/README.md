@@ -1,9 +1,14 @@
-# Windows v0.12.8 stock-Chrome acceptance protocol
+# Withdrawn Windows v0.12.8 stock-Chrome acceptance protocol
 
-This directory defines the release gate for the v0.12.8 browser extension and
-packaged Windows computer helper. It is protocol infrastructure, not passing
-evidence. A release passes only when one frozen candidate run produces the
-finalizer-owned `browser-acceptance.json`.
+This directory preserves the release-gate protocol prepared for the v0.12.8
+browser extension and packaged Windows computer helper. It is protocol
+infrastructure, not passing evidence. The exact candidate's native Windows run
+delivered a fresh foreground-arm request but received no click and no received
+marker, then timed out at `wait-foreground-arm` before any product action.
+Chrome was never started, so no `browser-acceptance.json`, operator record, or
+browser screenshot was produced. The protected publication job was canceled,
+and no v0.12.8 GitHub Release exists. Keep this directory only as historical
+contract evidence; current candidate work uses its own versioned protocol.
 
 The run is new-install-only. Use the user's installed, ordinary Google Chrome,
 an existing user session, one new dedicated Chrome window, and a brand-new

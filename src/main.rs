@@ -28,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     if cli.show_licenses {
-        print_license_report("Local Browser Bridge");
+        print_license_report("Local Browser Bridge")?;
         return Ok(());
     }
     if cli.check_updates {
