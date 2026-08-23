@@ -1,0 +1,2068 @@
+{
+  "schemaVersion": 3,
+  "productVersion": "0.12.8",
+  "status": "passed-release-candidate",
+  "evidenceClass": "exact-release-candidate-package-live-observation",
+  "capturedAt": "2026-08-23T08:15:04.422Z",
+  "candidateNotice": "This becomes release evidence only after the supplied checksum manifest and archive are published immutably for v0.12.8.",
+  "environment": {
+    "operatingSystem": "26.5.1",
+    "architecture": "arm64",
+    "backend": "background-window/ax+skylight+screencapturekit-stream",
+    "semanticMode": "macos-accessibility",
+    "sessionMode": "background-window",
+    "screenCapturePermissionPreexisting": true,
+    "accessibilityPermissionPreexisting": true,
+    "permissionRequestPerformed": false,
+    "foregroundFocusOracle": "sandwiched-pid+read-only-AXFocusedWindow+AXFrontmost"
+  },
+  "package": {
+    "checksumManifest": {
+      "file": "SHA256SUMS.txt",
+      "expectedSha256": "45d550e394a38b56aeb8a67bde3c3792d3c1728d9088d61f9576622506273a28",
+      "actualSha256": "45d550e394a38b56aeb8a67bde3c3792d3c1728d9088d61f9576622506273a28",
+      "expectedSha256Matched": true,
+      "exactCanonicalAssetSet": true,
+      "canonicalEntryCount": 4,
+      "archiveFile": "local-browser-bridge-v0.12.8-macos-universal.tar.gz",
+      "archiveSha256": "651ecd9a1cb095812669884a0c8db1664d20aecd28bc65c05e50d548416dac13",
+      "archiveEntryMatched": true
+    },
+    "archive": {
+      "file": "local-browser-bridge-v0.12.8-macos-universal.tar.gz",
+      "sha256": "651ecd9a1cb095812669884a0c8db1664d20aecd28bc65c05e50d548416dac13",
+      "checksumManifestMatched": true,
+      "checksumManifestSha256": "45d550e394a38b56aeb8a67bde3c3792d3c1728d9088d61f9576622506273a28",
+      "canonicalEntryMatched": true,
+      "extractedInputsMatched": true
+    },
+    "serverVersion": "0.12.8",
+    "helperVersion": "0.12.8",
+    "helperBundleVersion": "0.12.8",
+    "helperBundleBuildVersion": "0.12.8",
+    "serverSha256": "11bf6b475bc8df8b0020c8d3beeedf723a3ca3ebec07058c4e82b0e64a20ec35",
+    "helperSha256": "2a2cb9da53b6d17aac5af1ff17f0aa3c0ec89b53d24e22b98cdccb81207f3b61",
+    "serverArchitectures": [
+      "arm64",
+      "x86_64"
+    ],
+    "helperArchitectures": [
+      "arm64",
+      "x86_64"
+    ],
+    "strictCodeSignatureVerification": "passed"
+  },
+  "harness": {
+    "runnerSha256": "cedd30105136527aa238557c8216103480d3c39ffab599a8b3c8cd38e563ba92",
+    "fixtureSha256": "8f7692964bad4834edb61a3d13ecc3889f6c6050aa2abfe48806cbfa149a6c9f",
+    "systemProbeSha256": "c9a46e556b87d21bb7db414ba6fa00457928c8ab661be6d596a4fe650ddf6dde",
+    "packagedHelperSpawnCount": 1
+  },
+  "fixture": {
+    "application": "helper-evidence-fixture",
+    "windowTitle": "LBB v0.12.8 Persistent SCStream Evidence",
+    "windowId": "64030",
+    "pid": 42936,
+    "samePidSibling": {
+      "windowTitle": "LBB v0.12.8 Same-PID Sibling Receiver",
+      "windowId": "64031",
+      "pid": 42936,
+      "distinctFromPrimary": true
+    },
+    "finalState": {
+      "clicks": 2,
+      "semanticPresses": 1,
+      "semanticValueMatchesExpected": true,
+      "animationTick": 217,
+      "resizeCount": 1,
+      "focusCount": 1,
+      "siblingFocusCount": 1,
+      "siblingTextLength": 0,
+      "siblingClicks": 0,
+      "moveEvents": 66,
+      "appliedControlSequence": 2,
+      "contentWidth": 820,
+      "contentHeight": 520,
+      "lastAction": "set-value"
+    }
+  },
+  "checks": {
+    "helperHandshake": {
+      "compatible": true,
+      "version": "0.12.8",
+      "protocolVersion": 1,
+      "helperSpawnCount": 1,
+      "shareAckAdvertised": true,
+      "nativeStreamAdvertised": true
+    },
+    "exactWindowObserve": {
+      "passed": true,
+      "windowId": "64030",
+      "semanticAvailable": true,
+      "semanticElementCount": 4
+    },
+    "semanticSetValue": {
+      "ok": true,
+      "actionId": "f6f7c89c-610a-4a17-92c3-b4535e8ced00",
+      "effect": "Confirmed",
+      "deliveryMode": "exact-window-semantic",
+      "frameId": "f789337f-cb7a-44ae-a020-0ea95aa5603d",
+      "shareId": null,
+      "sourceSequence": null,
+      "characters": 22,
+      "utf16CodeUnits": null,
+      "invariants": {
+        "cursorUnchanged": true,
+        "foregroundUnchanged": true,
+        "spaceUnchanged": true,
+        "userFocusUnchanged": true
+      },
+      "evidence": [
+        {
+          "claim": "semanticDispatchReturned",
+          "detail": "The semantic backend returned after dispatch; this is not target-effect proof",
+          "kind": "dispatchAcknowledgement",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "value-confirmed",
+          "detail": "The semantic backend observed this target-side postcondition",
+          "kind": "postcondition",
+          "observed": true,
+          "supportsConfirmation": true
+        },
+        {
+          "claim": "foregroundUnchanged",
+          "detail": "The foreground application was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "userFocusUnchanged",
+          "detail": "The platform-specific front-window or focused-window oracle was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "hardwareCursorUnchanged",
+          "detail": "The hardware cursor was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "desktopSpaceUnchanged",
+          "detail": "The active desktop or Space was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        }
+      ],
+      "backendEffect": {
+        "delivered": true,
+        "effectObserved": true,
+        "postcondition": "value-confirmed"
+      }
+    },
+    "semanticInvoke": {
+      "ok": true,
+      "actionId": "b35a6ac8-298e-407e-90d2-73e67eb11230",
+      "effect": "Partial",
+      "deliveryMode": "exact-window-semantic",
+      "frameId": "a173a9a1-4331-4d11-ac40-85dce19fd410",
+      "shareId": null,
+      "sourceSequence": null,
+      "characters": null,
+      "utf16CodeUnits": null,
+      "invariants": {
+        "cursorUnchanged": true,
+        "foregroundUnchanged": true,
+        "spaceUnchanged": true,
+        "userFocusUnchanged": true
+      },
+      "evidence": [
+        {
+          "claim": "semanticDispatchReturned",
+          "detail": "The semantic backend returned after dispatch; this is not target-effect proof",
+          "kind": "dispatchAcknowledgement",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "element-state-changed",
+          "detail": "The semantic backend observed this target-side postcondition",
+          "kind": "postcondition",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "foregroundUnchanged",
+          "detail": "The foreground application was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "userFocusUnchanged",
+          "detail": "The platform-specific front-window or focused-window oracle was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "hardwareCursorUnchanged",
+          "detail": "The hardware cursor was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "desktopSpaceUnchanged",
+          "detail": "The active desktop or Space was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        }
+      ],
+      "backendEffect": {
+        "delivered": true,
+        "effectObserved": true,
+        "postcondition": "element-state-changed"
+      },
+      "independentFixturePostcondition": "semantic counter advanced exactly once"
+    },
+    "backgroundPixelAction": {
+      "ok": true,
+      "actionId": "abfa34d2-4e11-4f35-8594-8f2c5eeb3bb0",
+      "effect": "Unverifiable",
+      "deliveryMode": "exact-window-background",
+      "frameId": "674d2350-0930-4c55-9857-a5c6326f56a6",
+      "shareId": "a8d0ac54-2336-45c5-93a7-06ccbfed0c70",
+      "sourceSequence": 9,
+      "characters": null,
+      "utf16CodeUnits": null,
+      "invariants": {
+        "cursorUnchanged": true,
+        "foregroundUnchanged": true,
+        "spaceUnchanged": true,
+        "userFocusUnchanged": true
+      },
+      "evidence": [
+        {
+          "claim": "foregroundUnchanged",
+          "detail": "The foreground application was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "userFocusUnchanged",
+          "detail": "The platform-specific front-window or focused-window oracle was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "hardwareCursorUnchanged",
+          "detail": "The hardware cursor was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "desktopSpaceUnchanged",
+          "detail": "The active desktop or Space was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        }
+      ],
+      "durationMs": 900,
+      "independentFixturePostcondition": "only the primary click counter advanced exactly once",
+      "priorSiblingMainAndFocused": true,
+      "activeRequestedMainAndFocused": true,
+      "priorSiblingRestored": true,
+      "siblingMutationObserved": false,
+      "independentNonInterruptionSample": {
+        "foregroundUnchanged": true,
+        "userFocusUnchanged": true,
+        "foregroundIdentitySandwichHeld": true,
+        "rawForegroundIdentitySandwichHeld": true,
+        "foregroundAxFocusUnchanged": true,
+        "foregroundAxFrontmostHeld": true,
+        "cursorUnchanged": true,
+        "spaceUnchanged": true
+      }
+    },
+    "postResizePixelAction": {
+      "ok": true,
+      "actionId": "67142e3f-30f9-4023-918c-7a5b309ef07c",
+      "effect": "Unverifiable",
+      "deliveryMode": "exact-window-background",
+      "frameId": "52216228-95b8-4d32-b464-5d806d4b54eb",
+      "shareId": "a8d0ac54-2336-45c5-93a7-06ccbfed0c70",
+      "sourceSequence": 62,
+      "characters": null,
+      "utf16CodeUnits": null,
+      "invariants": {
+        "cursorUnchanged": true,
+        "foregroundUnchanged": true,
+        "spaceUnchanged": true,
+        "userFocusUnchanged": true
+      },
+      "evidence": [
+        {
+          "claim": "foregroundUnchanged",
+          "detail": "The foreground application was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "userFocusUnchanged",
+          "detail": "The platform-specific front-window or focused-window oracle was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "hardwareCursorUnchanged",
+          "detail": "The hardware cursor was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "desktopSpaceUnchanged",
+          "detail": "The active desktop or Space was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        }
+      ],
+      "durationMs": 120,
+      "resizedWindowWidth": 820,
+      "resizedWindowHeight": 552,
+      "capturedImageWidth": 1218,
+      "capturedImageHeight": 820,
+      "independentFixturePostcondition": "only the exact fixture click counter changed functional state after resize",
+      "independentNonInterruptionSample": {
+        "foregroundUnchanged": true,
+        "userFocusUnchanged": true,
+        "foregroundIdentitySandwichHeld": true,
+        "rawForegroundIdentitySandwichHeld": true,
+        "foregroundAxFocusUnchanged": true,
+        "foregroundAxFrontmostHeld": true,
+        "cursorUnchanged": true,
+        "spaceUnchanged": true
+      }
+    },
+    "nativeTextDelivery": {
+      "ok": true,
+      "actionId": "5732f37f-c0d6-4ddf-9513-04d65f1b00b7",
+      "effect": "Unverifiable",
+      "deliveryMode": "exact-window-background",
+      "frameId": "ba91f96b-f3c0-4641-8645-d0ffec1ba631",
+      "shareId": null,
+      "sourceSequence": null,
+      "characters": 20,
+      "utf16CodeUnits": 20,
+      "invariants": {
+        "cursorUnchanged": true,
+        "foregroundUnchanged": true,
+        "spaceUnchanged": true,
+        "userFocusUnchanged": true
+      },
+      "evidence": [
+        {
+          "claim": "foregroundUnchanged",
+          "detail": "The foreground application was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "userFocusUnchanged",
+          "detail": "The platform-specific front-window or focused-window oracle was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "hardwareCursorUnchanged",
+          "detail": "The hardware cursor was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        },
+        {
+          "claim": "desktopSpaceUnchanged",
+          "detail": "The active desktop or Space was unchanged across background delivery",
+          "kind": "deliveryInvariant",
+          "observed": true,
+          "supportsConfirmation": false
+        }
+      ],
+      "requestCharacters": 20,
+      "requestUtf16CodeUnits": 20,
+      "contentRetainedInEvidenceOutputs": false,
+      "temporaryScratchFixtureStateUsed": true,
+      "fixtureFieldFocusCount": 1,
+      "exactFixtureReadBack": true,
+      "priorSiblingMainAndFocused": true,
+      "priorSiblingRestored": true,
+      "siblingTextLengthBefore": 0,
+      "siblingTextLengthAfter": 0,
+      "siblingClicksBefore": 0,
+      "siblingClicksAfter": 0,
+      "siblingMutationObserved": false,
+      "restoredToExpectedValue": true,
+      "fieldPreparationNonInterruptionSample": {
+        "foregroundUnchanged": true,
+        "userFocusUnchanged": true,
+        "foregroundIdentitySandwichHeld": true,
+        "rawForegroundIdentitySandwichHeld": true,
+        "foregroundAxFocusUnchanged": true,
+        "foregroundAxFrontmostHeld": true,
+        "cursorUnchanged": true,
+        "spaceUnchanged": true
+      },
+      "independentNonInterruptionSample": {
+        "foregroundUnchanged": true,
+        "userFocusUnchanged": true,
+        "foregroundIdentitySandwichHeld": true,
+        "rawForegroundIdentitySandwichHeld": true,
+        "foregroundAxFocusUnchanged": true,
+        "foregroundAxFrontmostHeld": true,
+        "cursorUnchanged": true,
+        "spaceUnchanged": true
+      },
+      "restore": {
+        "ok": true,
+        "actionId": "89fa752a-4c1c-4611-b9c1-7c1e2c4ea3bb",
+        "effect": "Confirmed",
+        "deliveryMode": "exact-window-semantic",
+        "frameId": "2bbdcac8-4c25-43a0-b87e-39f6bdef1eab",
+        "shareId": null,
+        "sourceSequence": null,
+        "characters": 22,
+        "utf16CodeUnits": null,
+        "invariants": {
+          "cursorUnchanged": true,
+          "foregroundUnchanged": true,
+          "spaceUnchanged": true,
+          "userFocusUnchanged": true
+        },
+        "evidence": [
+          {
+            "claim": "semanticDispatchReturned",
+            "detail": "The semantic backend returned after dispatch; this is not target-effect proof",
+            "kind": "dispatchAcknowledgement",
+            "observed": true,
+            "supportsConfirmation": false
+          },
+          {
+            "claim": "value-confirmed",
+            "detail": "The semantic backend observed this target-side postcondition",
+            "kind": "postcondition",
+            "observed": true,
+            "supportsConfirmation": true
+          },
+          {
+            "claim": "foregroundUnchanged",
+            "detail": "The foreground application was unchanged across background delivery",
+            "kind": "deliveryInvariant",
+            "observed": true,
+            "supportsConfirmation": false
+          },
+          {
+            "claim": "userFocusUnchanged",
+            "detail": "The platform-specific front-window or focused-window oracle was unchanged across background delivery",
+            "kind": "deliveryInvariant",
+            "observed": true,
+            "supportsConfirmation": false
+          },
+          {
+            "claim": "hardwareCursorUnchanged",
+            "detail": "The hardware cursor was unchanged across background delivery",
+            "kind": "deliveryInvariant",
+            "observed": true,
+            "supportsConfirmation": false
+          },
+          {
+            "claim": "desktopSpaceUnchanged",
+            "detail": "The active desktop or Space was unchanged across background delivery",
+            "kind": "deliveryInvariant",
+            "observed": true,
+            "supportsConfirmation": false
+          }
+        ],
+        "backendEffect": {
+          "delivered": true,
+          "effectObserved": true,
+          "postcondition": "value-confirmed"
+        }
+      }
+    },
+    "explicitCancellation": {
+      "callId": "43562710-7eb9-4b30-ae3d-d879b87ab5f8",
+      "method": "computer.move",
+      "durationMs": 2000,
+      "elapsedMs": 511,
+      "dispatchProof": {
+        "type": "target-routed-fixture-mouse-move",
+        "timeoutMs": 10000,
+        "waitElapsedMs": 507,
+        "moveEventsBefore": 61,
+        "moveEventsObserved": 66
+      },
+      "inProgressDuplicate": {
+        "httpStatus": 409,
+        "code": "CALL_IN_PROGRESS"
+      },
+      "cancellationAccepted": {
+        "httpStatus": 202,
+        "requested": true
+      },
+      "original": {
+        "httpStatus": 504,
+        "code": "COMMAND_OUTCOME_UNKNOWN",
+        "taxonomy": {
+          "code": "outcome_unknown",
+          "prose": "The command's outcome is unknown; observe the current state before deciding whether to act again.",
+          "recoveryHint": "reobserve",
+          "retriable": false
+        },
+        "replayed": false
+      },
+      "duplicateCancel": {
+        "httpStatus": 409,
+        "code": "CALL_NOT_IN_PROGRESS"
+      },
+      "replay": {
+        "httpStatus": 504,
+        "code": "COMMAND_OUTCOME_UNKNOWN",
+        "replayed": true,
+        "exactCachedBody": true
+      },
+      "changedRequestReuse": {
+        "httpStatus": 409,
+        "code": "CALL_ID_REUSED",
+        "taxonomy": {
+          "code": "invalid_request",
+          "prose": "The request itself is invalid; fix the parameters instead of retrying.",
+          "recoveryHint": "none",
+          "retriable": false
+        }
+      },
+      "publicRevocation": {
+        "exactHelperSessionPreserved": true,
+        "observationCleared": true,
+        "screenshotHttpStatus": 404,
+        "screenshotErrorCode": "NO_COMPUTER_SCREENSHOT",
+        "shareActive": false,
+        "shareStopped": true,
+        "reason": "outcome-unknown",
+        "code": "COMMAND_OUTCOME_UNKNOWN",
+        "stayedTornDownAfterThreeFramePeriods": true
+      },
+      "explicitStop": {
+        "active": false,
+        "stopped": false,
+        "reason": "not-active",
+        "observationCleared": true
+      },
+      "preRecoveryGate": {
+        "httpStatus": 409,
+        "code": "NO_COMPUTER_FRAME",
+        "taxonomy": {
+          "code": "stale_snapshot",
+          "prose": "The snapshot or frame you acted on is no longer current; observe again and retry with fresh identifiers.",
+          "recoveryHint": "reobserve",
+          "retriable": true
+        },
+        "helperFunctionalMutationObserved": false,
+        "surfaceRecreated": false
+      },
+      "explicitRecovery": {
+        "method": "computer.observe",
+        "exactHelperSessionPreserved": true,
+        "oldFrameIdReused": false,
+        "exactWindowRecovered": true,
+        "shareActive": false,
+        "freshPersistentShare": {
+          "shareId": "bcd347a5-b937-4b53-bff2-4fd5c3eea8a4",
+          "priorShareIdReused": false,
+          "exactHelperSessionPreserved": true,
+          "recoveredOneShotFrameRetired": true,
+          "startObservationBoundToFreshShare": true,
+          "firstStreamFrameRetiredOneShotAuthority": true
+        }
+      },
+      "staleFrameRefusal": {
+        "httpStatus": 409,
+        "code": "COMPUTER_STALE_FRAME",
+        "taxonomy": {
+          "code": "stale_snapshot",
+          "prose": "The snapshot or frame you acted on is no longer current; observe again and retry with fresh identifiers.",
+          "recoveryHint": "reobserve",
+          "retriable": true
+        },
+        "recoveredFramePreserved": true
+      },
+      "fixtureMutationCounters": {
+        "clicksBefore": 2,
+        "clicksAfter": 2,
+        "semanticPressesBefore": 1,
+        "semanticPressesAfter": 1,
+        "resizeCountBefore": 1,
+        "resizeCountAfter": 1,
+        "focusCountBefore": 1,
+        "focusCountAfter": 1,
+        "moveEventsBefore": 61,
+        "moveEventsAfter": 66,
+        "expectedMoveInstrumentationAdvanced": true,
+        "semanticValueMatchedBefore": true,
+        "semanticValueMatchedAfter": true
+      },
+      "independentNonInterruptionSample": {
+        "foregroundUnchanged": true,
+        "userFocusUnchanged": true,
+        "foregroundIdentitySandwichHeld": true,
+        "rawForegroundIdentitySandwichHeld": true,
+        "foregroundAxFocusUnchanged": true,
+        "foregroundAxFrontmostHeld": true,
+        "cursorUnchanged": true,
+        "spaceUnchanged": true
+      }
+    },
+    "persistentShare": {
+      "shareId": "a8d0ac54-2336-45c5-93a7-06ccbfed0c70",
+      "fps": 10,
+      "captureMode": "persistent-native-stream",
+      "captureScope": "exact-window",
+      "captureBackend": "macos-screencapturekit-scstream",
+      "nativeStream": true,
+      "systemIndicatorPolicy": true,
+      "selectionMode": "programmatic-exact-window",
+      "systemCursorExcluded": true,
+      "syntheticPointerComposited": true,
+      "ackPaced": true,
+      "backpressure": "latest-frame-wins",
+      "initialSourceSequence": 4,
+      "finalSourceSequence": 143,
+      "initialTransportSequence": 1,
+      "finalTransportSequence": 21,
+      "sourceDroppedFrames": 128,
+      "transportDroppedFrames": 1,
+      "lastAckedSequence": 20,
+      "sourceProgressDuringPixelAction": 37,
+      "transportProgressDuringPixelAction": 3,
+      "sourceDropsDuringPixelAction": 35,
+      "resizeSurvived": true,
+      "postResizeActionSourceSequence": 62,
+      "stopped": true,
+      "stopReason": "outcome-unknown",
+      "explicitStopWasIdempotent": true,
+      "samples": [
+        {
+          "stage": "share-initial",
+          "shareId": "a8d0ac54-2336-45c5-93a7-06ccbfed0c70",
+          "sourceSequence": 4,
+          "sourceDroppedFrames": 4,
+          "sequence": 1,
+          "transportDroppedFrames": 0,
+          "lastAckedSequence": 0,
+          "ackPaced": true,
+          "backpressure": "latest-frame-wins",
+          "captureBackend": "macos-screencapturekit-scstream",
+          "nativeStream": true,
+          "systemIndicator": true,
+          "selectionMode": "programmatic-exact-window",
+          "windowWidth": 720,
+          "windowHeight": 492,
+          "imageWidth": 1209,
+          "imageHeight": 826
+        },
+        {
+          "stage": "share-cadence-1",
+          "shareId": "a8d0ac54-2336-45c5-93a7-06ccbfed0c70",
+          "sourceSequence": 7,
+          "sourceDroppedFrames": 6,
+          "sequence": 2,
+          "transportDroppedFrames": 0,
+          "lastAckedSequence": 1,
+          "ackPaced": true,
+          "backpressure": "latest-frame-wins",
+          "captureBackend": "macos-screencapturekit-scstream",
+          "nativeStream": true,
+          "systemIndicator": true,
+          "selectionMode": "programmatic-exact-window",
+          "windowWidth": 720,
+          "windowHeight": 492,
+          "imageWidth": 1209,
+          "imageHeight": 826
+        },
+        {
+          "stage": "share-cadence-2",
+          "shareId": "a8d0ac54-2336-45c5-93a7-06ccbfed0c70",
+          "sourceSequence": 9,
+          "sourceDroppedFrames": 7,
+          "sequence": 3,
+          "transportDroppedFrames": 0,
+          "lastAckedSequence": 2,
+          "ackPaced": true,
+          "backpressure": "latest-frame-wins",
+          "captureBackend": "macos-screencapturekit-scstream",
+          "nativeStream": true,
+          "systemIndicator": true,
+          "selectionMode": "programmatic-exact-window",
+          "windowWidth": 720,
+          "windowHeight": 492,
+          "imageWidth": 1209,
+          "imageHeight": 826
+        },
+        {
+          "stage": "share-after-long-action",
+          "shareId": "a8d0ac54-2336-45c5-93a7-06ccbfed0c70",
+          "sourceSequence": 46,
+          "sourceDroppedFrames": 42,
+          "sequence": 6,
+          "transportDroppedFrames": 0,
+          "lastAckedSequence": 5,
+          "ackPaced": true,
+          "backpressure": "latest-frame-wins",
+          "captureBackend": "macos-screencapturekit-scstream",
+          "nativeStream": true,
+          "systemIndicator": true,
+          "selectionMode": "programmatic-exact-window",
+          "windowWidth": 720,
+          "windowHeight": 492,
+          "imageWidth": 1209,
+          "imageHeight": 826
+        },
+        {
+          "stage": "share-after-resize",
+          "shareId": "a8d0ac54-2336-45c5-93a7-06ccbfed0c70",
+          "sourceSequence": 55,
+          "sourceDroppedFrames": 49,
+          "sequence": 8,
+          "transportDroppedFrames": 0,
+          "lastAckedSequence": 7,
+          "ackPaced": true,
+          "backpressure": "latest-frame-wins",
+          "captureBackend": "macos-screencapturekit-scstream",
+          "nativeStream": true,
+          "systemIndicator": true,
+          "selectionMode": "programmatic-exact-window",
+          "windowWidth": 820,
+          "windowHeight": 552,
+          "imageWidth": 1218,
+          "imageHeight": 820
+        },
+        {
+          "stage": "share-resize-settled",
+          "shareId": "a8d0ac54-2336-45c5-93a7-06ccbfed0c70",
+          "sourceSequence": 57,
+          "sourceDroppedFrames": 50,
+          "sequence": 9,
+          "transportDroppedFrames": 0,
+          "lastAckedSequence": 8,
+          "ackPaced": true,
+          "backpressure": "latest-frame-wins",
+          "captureBackend": "macos-screencapturekit-scstream",
+          "nativeStream": true,
+          "systemIndicator": true,
+          "selectionMode": "programmatic-exact-window",
+          "windowWidth": 820,
+          "windowHeight": 552,
+          "imageWidth": 1218,
+          "imageHeight": 820
+        },
+        {
+          "stage": "share-post-resize-cadence",
+          "shareId": "a8d0ac54-2336-45c5-93a7-06ccbfed0c70",
+          "sourceSequence": 62,
+          "sourceDroppedFrames": 53,
+          "sequence": 11,
+          "transportDroppedFrames": 0,
+          "lastAckedSequence": 9,
+          "ackPaced": true,
+          "backpressure": "latest-frame-wins",
+          "captureBackend": "macos-screencapturekit-scstream",
+          "nativeStream": true,
+          "systemIndicator": true,
+          "selectionMode": "programmatic-exact-window",
+          "windowWidth": 820,
+          "windowHeight": 552,
+          "imageWidth": 1218,
+          "imageHeight": 820
+        },
+        {
+          "stage": "share-after-post-resize-action",
+          "shareId": "a8d0ac54-2336-45c5-93a7-06ccbfed0c70",
+          "sourceSequence": 90,
+          "sourceDroppedFrames": 79,
+          "sequence": 14,
+          "transportDroppedFrames": 1,
+          "lastAckedSequence": 13,
+          "ackPaced": true,
+          "backpressure": "latest-frame-wins",
+          "captureBackend": "macos-screencapturekit-scstream",
+          "nativeStream": true,
+          "systemIndicator": true,
+          "selectionMode": "programmatic-exact-window",
+          "windowWidth": 820,
+          "windowHeight": 552,
+          "imageWidth": 1218,
+          "imageHeight": 820
+        },
+        {
+          "stage": "share-after-native-text-focus",
+          "shareId": "a8d0ac54-2336-45c5-93a7-06ccbfed0c70",
+          "sourceSequence": 93,
+          "sourceDroppedFrames": 80,
+          "sequence": 15,
+          "transportDroppedFrames": 1,
+          "lastAckedSequence": 14,
+          "ackPaced": true,
+          "backpressure": "latest-frame-wins",
+          "captureBackend": "macos-screencapturekit-scstream",
+          "nativeStream": true,
+          "systemIndicator": true,
+          "selectionMode": "programmatic-exact-window",
+          "windowWidth": 820,
+          "windowHeight": 552,
+          "imageWidth": 1218,
+          "imageHeight": 820
+        },
+        {
+          "stage": "share-after-native-text-delivery",
+          "shareId": "a8d0ac54-2336-45c5-93a7-06ccbfed0c70",
+          "sourceSequence": 123,
+          "sourceDroppedFrames": 107,
+          "sequence": 18,
+          "transportDroppedFrames": 1,
+          "lastAckedSequence": 17,
+          "ackPaced": true,
+          "backpressure": "latest-frame-wins",
+          "captureBackend": "macos-screencapturekit-scstream",
+          "nativeStream": true,
+          "systemIndicator": true,
+          "selectionMode": "programmatic-exact-window",
+          "windowWidth": 820,
+          "windowHeight": 552,
+          "imageWidth": 1218,
+          "imageHeight": 820
+        },
+        {
+          "stage": "share-after-native-text-restore",
+          "shareId": "a8d0ac54-2336-45c5-93a7-06ccbfed0c70",
+          "sourceSequence": 143,
+          "sourceDroppedFrames": 128,
+          "sequence": 21,
+          "transportDroppedFrames": 1,
+          "lastAckedSequence": 20,
+          "ackPaced": true,
+          "backpressure": "latest-frame-wins",
+          "captureBackend": "macos-screencapturekit-scstream",
+          "nativeStream": true,
+          "systemIndicator": true,
+          "selectionMode": "programmatic-exact-window",
+          "windowWidth": 820,
+          "windowHeight": 552,
+          "imageWidth": 1218,
+          "imageHeight": 820
+        }
+      ]
+    },
+    "samePidMultiWindowRouting": {
+      "primaryWindowId": "64030",
+      "siblingWindowId": "64031",
+      "samePid": true,
+      "startupSiblingMainAndFocused": true,
+      "finalSiblingMainAndFocused": true,
+      "primarySelectionRemainedExact": true,
+      "positivePointer": {
+        "primaryMutationObserved": true,
+        "siblingMutationObserved": false,
+        "priorSiblingRestored": true,
+        "activeRequestedReceiverObserved": true,
+        "foregroundOwnerDuringActiveLease": {
+          "nsWorkspacePidUnchanged": true,
+          "rawPsnAndPidUnchanged": true,
+          "exactAxWindowUnchanged": true
+        },
+        "userOracle": {
+          "foregroundUnchanged": true,
+          "userFocusUnchanged": true,
+          "foregroundIdentitySandwichHeld": true,
+          "rawForegroundIdentitySandwichHeld": true,
+          "foregroundAxFocusUnchanged": true,
+          "foregroundAxFrontmostHeld": true,
+          "cursorUnchanged": true,
+          "spaceUnchanged": true
+        }
+      },
+      "positiveNativeText": {
+        "primaryExactReadBack": true,
+        "siblingMutationObserved": false,
+        "priorSiblingRestored": true,
+        "userOracle": {
+          "foregroundUnchanged": true,
+          "userFocusUnchanged": true,
+          "foregroundIdentitySandwichHeld": true,
+          "rawForegroundIdentitySandwichHeld": true,
+          "foregroundAxFocusUnchanged": true,
+          "foregroundAxFrontmostHeld": true,
+          "cursorUnchanged": true,
+          "spaceUnchanged": true
+        }
+      },
+      "retainedScreenshots": {
+        "count": 6,
+        "primaryOnly": true
+      },
+      "wrongSiblingNegative": {
+        "status": "unproven-live",
+        "attempted": false,
+        "productionHookUsed": false,
+        "focusRaceUsed": false,
+        "reason": "Forcing the sibling after helper focus preparation would require a timing race or a production-only hook; foregrounding the fixture would interrupt the user. The rig does none of those, so the pre-dispatch refusal remains a unit/source contract until a deterministic non-activating mechanism exists."
+      }
+    },
+    "exactTargetClose": {
+      "shareId": "bcd347a5-b937-4b53-bff2-4fd5c3eea8a4",
+      "frameId": "64264c37-259f-447b-8d24-970352344a4d",
+      "windowId": "64030",
+      "pid": 42936,
+      "shareActiveAtClose": true,
+      "beganAfterExplicitOneShotRecovery": true,
+      "recoveredOneShotFrameRetired": true,
+      "exactTargetTermination": {
+        "requested": true,
+        "alreadyExited": false,
+        "exitCode": null,
+        "signal": "SIGTERM"
+      },
+      "helperObservedTargetAbsent": true,
+      "helperSessionPreserved": true,
+      "helperSpawnCount": 1,
+      "terminalShare": {
+        "active": false,
+        "stopped": true,
+        "reason": "capture-error",
+        "code": "COMPUTER_NO_WINDOW",
+        "exactShareIdMatched": true
+      },
+      "authorityClear": {
+        "observationCleared": true,
+        "screenshotHttpStatus": 404,
+        "screenshotErrorCode": "NO_COMPUTER_SCREENSHOT",
+        "stayedClearedAfterFramePeriods": 3,
+        "queuedFrameRepublished": false
+      },
+      "staleFrameRefusal": {
+        "httpStatus": 409,
+        "code": "NO_COMPUTER_FRAME",
+        "taxonomy": {
+          "code": "stale_snapshot",
+          "prose": "The snapshot or frame you acted on is no longer current; observe again and retry with fresh identifiers.",
+          "recoveryHint": "reobserve",
+          "retriable": true
+        },
+        "helperActionRelayed": false,
+        "surfaceRecreated": false
+      },
+      "closedTargetObserveRefusal": {
+        "httpStatus": 409,
+        "code": "COMPUTER_NO_WINDOW",
+        "taxonomy": {
+          "code": "target_changed",
+          "prose": "The target changed or disappeared after observation; observe again before retrying.",
+          "recoveryHint": "reobserve",
+          "retriable": true
+        },
+        "surfaceRecreated": false
+      },
+      "explicitStop": {
+        "active": false,
+        "stopped": false,
+        "reason": "not-active"
+      },
+      "independentNonInterruptionSample": {
+        "foregroundUnchanged": true,
+        "userFocusUnchanged": true,
+        "foregroundIdentitySandwichHeld": true,
+        "rawForegroundIdentitySandwichHeld": true,
+        "foregroundAxFocusUnchanged": true,
+        "foregroundAxFrontmostHeld": true,
+        "cursorUnchanged": true,
+        "spaceUnchanged": true
+      }
+    },
+    "independentNonInterruptionSample": {
+      "foregroundUnchanged": true,
+      "userFocusUnchanged": true,
+      "foregroundIdentitySandwichHeld": true,
+      "rawForegroundIdentitySandwichHeld": true,
+      "foregroundAxFocusUnchanged": true,
+      "foregroundAxFrontmostHeld": true,
+      "cursorUnchanged": true,
+      "spaceUnchanged": true
+    },
+    "teardown": {
+      "helper": {
+        "requested": true,
+        "alreadyExited": false,
+        "exitCode": null,
+        "signal": "SIGTERM"
+      },
+      "helperConnected": false,
+      "helperStateCleared": true,
+      "observationCleared": true,
+      "server": {
+        "requested": true,
+        "alreadyExited": false,
+        "exitCode": null,
+        "signal": "SIGTERM"
+      },
+      "serverListenerClosed": true,
+      "fixture": {
+        "requested": true,
+        "alreadyExited": false,
+        "exitCode": null,
+        "signal": "SIGTERM"
+      },
+      "fixtureClosedDuringActiveShare": true
+    }
+  },
+  "screenshots": [
+    {
+      "file": "computer-01-exact-window-observe.png",
+      "sha256": "70bbe4b57c1c5e8948c75a32eca2888154c89712c977da15ce0b04b5107cc272",
+      "bytes": 780265,
+      "width": 1209,
+      "height": 826,
+      "frameId": "f789337f-cb7a-44ae-a020-0ea95aa5603d",
+      "windowId": "64030",
+      "sourceSequence": null,
+      "transportSequence": null
+    },
+    {
+      "file": "computer-02-semantic-set-value.png",
+      "sha256": "81a5f9941805076876d070083045d8ca3b430d1e96843435d8bb70779a04a4fd",
+      "bytes": 796113,
+      "width": 1209,
+      "height": 826,
+      "frameId": "a173a9a1-4331-4d11-ac40-85dce19fd410",
+      "windowId": "64030",
+      "sourceSequence": null,
+      "transportSequence": null
+    },
+    {
+      "file": "computer-03-semantic-invoke.png",
+      "sha256": "42fa04c44803f8b0d6d6625c253412ae3758174fdf9e2ea3e88ae71143b9b1f2",
+      "bytes": 797682,
+      "width": 1209,
+      "height": 826,
+      "frameId": "2c34debb-eb77-49aa-a212-4a6d76281324",
+      "windowId": "64030",
+      "sourceSequence": null,
+      "transportSequence": null
+    },
+    {
+      "file": "computer-04-persistent-scstream-start.png",
+      "sha256": "186b34f57524bf8c62eb0d80e51f4da13fb1f70ac63accc8ec06b88dfc64d7dd",
+      "bytes": 663809,
+      "width": 1209,
+      "height": 826,
+      "frameId": "f0fd5ca2-760c-45e6-a658-7296212219a9",
+      "windowId": "64030",
+      "sourceSequence": 4,
+      "transportSequence": 1
+    },
+    {
+      "file": "computer-05-live-share-pixel-action.png",
+      "sha256": "fb3a3cc6a91df9bb6ff23d80cfe9721e6b382db74ac6ec0b975bd4cba0dff44f",
+      "bytes": 664044,
+      "width": 1209,
+      "height": 826,
+      "frameId": "501dbf94-2ec8-4215-9074-e95e0e63cc3b",
+      "windowId": "64030",
+      "sourceSequence": 46,
+      "transportSequence": 6
+    },
+    {
+      "file": "computer-06-persistent-share-resize.png",
+      "sha256": "ea1ccd85eaecb600c3f721b613749c39d3172b11604dfcff8065214925c0ab86",
+      "bytes": 532860,
+      "width": 1218,
+      "height": 820,
+      "frameId": "32a1de26-1def-412b-a0ca-29d6cec015ea",
+      "windowId": "64030",
+      "sourceSequence": 57,
+      "transportSequence": 9
+    }
+  ],
+  "assertions": {
+    "passed": 187,
+    "failed": 0,
+    "total": 187,
+    "details": [
+      {
+        "name": "macOS host",
+        "passed": true,
+        "detail": "Darwin"
+      },
+      {
+        "name": "expected checksum-manifest hash format",
+        "passed": true,
+        "detail": "64 lowercase hexadecimal characters"
+      },
+      {
+        "name": "canonical checksum-manifest name",
+        "passed": true,
+        "detail": "SHA256SUMS.txt"
+      },
+      {
+        "name": "exact archive name",
+        "passed": true,
+        "detail": "local-browser-bridge-v0.12.8-macos-universal.tar.gz"
+      },
+      {
+        "name": "out-of-band checksum-manifest hash matches",
+        "passed": true,
+        "detail": "45d550e394a38b56aeb8a67bde3c3792d3c1728d9088d61f9576622506273a28"
+      },
+      {
+        "name": "checksum manifest has the exact canonical four-entry set",
+        "passed": true,
+        "detail": "local-browser-bridge-v0.12.8-windows-x86_64.exe,local-computer-helper-v0.12.8-windows-x86_64.exe,local-browser-bridge-v0.12.8-macos-universal.tar.gz,local-browser-bridge-extension-v0.12.8.zip"
+      },
+      {
+        "name": "archive checksum is bound by the canonical manifest",
+        "passed": true,
+        "detail": "651ecd9a1cb095812669884a0c8db1664d20aecd28bc65c05e50d548416dac13"
+      },
+      {
+        "name": "archive paths are traversal-safe",
+        "passed": true,
+        "detail": "10 safe entries"
+      },
+      {
+        "name": "archive contains only regular files and directories",
+        "passed": true,
+        "detail": "no links or special filesystem entries"
+      },
+      {
+        "name": "archive contains exact server",
+        "passed": true,
+        "detail": "local-browser-bridge"
+      },
+      {
+        "name": "archive contains exact helper",
+        "passed": true,
+        "detail": "Local Computer Helper.app/Contents/MacOS/local-computer-helper"
+      },
+      {
+        "name": "supplied server is archive-exact",
+        "passed": true,
+        "detail": "11bf6b475bc8df8b0020c8d3beeedf723a3ca3ebec07058c4e82b0e64a20ec35"
+      },
+      {
+        "name": "supplied helper is archive-exact",
+        "passed": true,
+        "detail": "2a2cb9da53b6d17aac5af1ff17f0aa3c0ec89b53d24e22b98cdccb81207f3b61"
+      },
+      {
+        "name": "server universal architecture",
+        "passed": true,
+        "detail": "arm64,x86_64"
+      },
+      {
+        "name": "helper universal architecture",
+        "passed": true,
+        "detail": "arm64,x86_64"
+      },
+      {
+        "name": "helper uses packaged app layout",
+        "passed": true,
+        "detail": "Local Computer Helper.app"
+      },
+      {
+        "name": "strict code-signature verification",
+        "passed": true,
+        "detail": "server, helper executable, and helper app bundle passed strict verification"
+      },
+      {
+        "name": "helper bundle version",
+        "passed": true,
+        "detail": "0.12.8/0.12.8"
+      },
+      {
+        "name": "server version",
+        "passed": true,
+        "detail": "0.12.8"
+      },
+      {
+        "name": "helper version",
+        "passed": true,
+        "detail": "0.12.8"
+      },
+      {
+        "name": "screen-capture permission preflight",
+        "passed": true,
+        "detail": "preexisting permission; no request was made"
+      },
+      {
+        "name": "accessibility permission preflight",
+        "passed": true,
+        "detail": "preexisting permission; no request was made"
+      },
+      {
+        "name": "active Space probe available",
+        "passed": true,
+        "detail": "nonzero active Space identity"
+      },
+      {
+        "name": "sandwiched foreground AX focus probe available",
+        "passed": true,
+        "detail": "stable NSWorkspace/raw PSN plus exact AX focused/main-window identities are available"
+      },
+      {
+        "name": "fixture process identity",
+        "passed": true,
+        "detail": "state belongs to the spawned fixture"
+      },
+      {
+        "name": "startup same-PID sibling is the target app's remembered receiver",
+        "passed": true,
+        "detail": "sibling-main-and-focused=true, fixture-background=true"
+      },
+      {
+        "name": "packaged helper compatible",
+        "passed": true,
+        "detail": "protocol-compatible helper 0.12.8"
+      },
+      {
+        "name": "single helper spawn",
+        "passed": true,
+        "detail": "1 packaged helper process"
+      },
+      {
+        "name": "acknowledged share advertised",
+        "passed": true,
+        "detail": "computer.share.ack present"
+      },
+      {
+        "name": "native stream advertised",
+        "passed": true,
+        "detail": "computer.capture.native-stream.v1 present"
+      },
+      {
+        "name": "helper status backend",
+        "passed": true,
+        "detail": "background-window/ax+skylight+screencapturekit-stream"
+      },
+      {
+        "name": "background shared-session mode",
+        "passed": true,
+        "detail": "background-window/shared-user-session/target-routed"
+      },
+      {
+        "name": "background input backend ready",
+        "passed": true,
+        "detail": "target-routed input is ready"
+      },
+      {
+        "name": "semantic backend ready",
+        "passed": true,
+        "detail": "macos-accessibility is ready without prompting"
+      },
+      {
+        "name": "fixture exact window discovered",
+        "passed": true,
+        "detail": "1 matching windows"
+      },
+      {
+        "name": "genuine same-PID sibling window discovered",
+        "passed": true,
+        "detail": "1 sibling matches, distinct=true"
+      },
+      {
+        "name": "fixture is a background target",
+        "passed": true,
+        "detail": "neither same-PID fixture window owns the user's foreground process or front window"
+      },
+      {
+        "name": "exact fixture window observed",
+        "passed": true,
+        "detail": "1209x826"
+      },
+      {
+        "name": "semantic snapshot available",
+        "passed": true,
+        "detail": "4 elements"
+      },
+      {
+        "name": "semantic value element discovered",
+        "passed": true,
+        "detail": "AXTextField"
+      },
+      {
+        "name": "semantic setValue confirmed",
+        "passed": true,
+        "detail": "Confirmed/value-confirmed"
+      },
+      {
+        "name": "semantic setValue non-interruption invariants",
+        "passed": true,
+        "detail": "{\"cursorUnchanged\":true,\"foregroundUnchanged\":true,\"spaceUnchanged\":true,\"userFocusUnchanged\":true}"
+      },
+      {
+        "name": "semantic setValue screenshot changed",
+        "passed": true,
+        "detail": "fresh exact-window pixels differ from the pre-action observation"
+      },
+      {
+        "name": "semantic action element discovered",
+        "passed": true,
+        "detail": "AXButton"
+      },
+      {
+        "name": "semantic invoke target-side proof",
+        "passed": true,
+        "detail": "fixture semantic counter advanced to 1"
+      },
+      {
+        "name": "semantic invoke conservatively classified",
+        "passed": true,
+        "detail": "Partial/element-state-changed"
+      },
+      {
+        "name": "semantic invoke non-interruption invariants",
+        "passed": true,
+        "detail": "{\"cursorUnchanged\":true,\"foregroundUnchanged\":true,\"spaceUnchanged\":true,\"userFocusUnchanged\":true}"
+      },
+      {
+        "name": "semantic invoke screenshot changed",
+        "passed": true,
+        "detail": "fresh exact-window pixels differ from the setValue stage"
+      },
+      {
+        "name": "persistent live share started",
+        "passed": true,
+        "detail": "persistent-native-stream/exact-window"
+      },
+      {
+        "name": "SCStream start metadata",
+        "passed": true,
+        "detail": "macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window"
+      },
+      {
+        "name": "live share ack pacing",
+        "passed": true,
+        "detail": "latest-frame-wins, ackPaced=true"
+      },
+      {
+        "name": "live share cursor policy",
+        "passed": true,
+        "detail": "system cursor excluded; synthetic session pointer composited"
+      },
+      {
+        "name": "persistent-share screenshot is fresh",
+        "passed": true,
+        "detail": "sourceSequence=4"
+      },
+      {
+        "name": "same-PID sibling is remembered before primary pixel dispatch",
+        "passed": true,
+        "detail": "sibling-main-and-focused=true, sibling-state-clean=true"
+      },
+      {
+        "name": "exact active target receiver observed during pixel lease",
+        "passed": true,
+        "detail": "active-target=true, exact-main-and-focused=true, saved-user-owner=true"
+      },
+      {
+        "name": "background pixel click targets only primary and restores sibling receiver",
+        "passed": true,
+        "detail": "only the primary click counter advanced and the target app's prior sibling receiver was restored"
+      },
+      {
+        "name": "pixel click conservatively classified",
+        "passed": true,
+        "detail": "Unverifiable"
+      },
+      {
+        "name": "pixel action bound to persistent share",
+        "passed": true,
+        "detail": "share=true, source=9"
+      },
+      {
+        "name": "live-share pixel click non-interruption invariants",
+        "passed": true,
+        "detail": "{\"cursorUnchanged\":true,\"foregroundUnchanged\":true,\"spaceUnchanged\":true,\"userFocusUnchanged\":true}"
+      },
+      {
+        "name": "same-PID pixel routing preserves user foreground/focus/cursor/Space",
+        "passed": true,
+        "detail": "{\"foregroundUnchanged\":true,\"userFocusUnchanged\":true,\"foregroundIdentitySandwichHeld\":true,\"rawForegroundIdentitySandwichHeld\":true,\"foregroundAxFocusUnchanged\":true,\"foregroundAxFrontmostHeld\":true,\"cursorUnchanged\":true,\"spaceUnchanged\":true}"
+      },
+      {
+        "name": "native source remained live during input",
+        "passed": true,
+        "detail": "source +37/drop +35; transport +3"
+      },
+      {
+        "name": "settled synthetic pointer published",
+        "passed": true,
+        "detail": "action=click"
+      },
+      {
+        "name": "live-share action screenshot changed",
+        "passed": true,
+        "detail": "fresh exact-window pixels include the action stage"
+      },
+      {
+        "name": "persistent share survived exact-target resize",
+        "passed": true,
+        "detail": "720x492 -> 820x552"
+      },
+      {
+        "name": "settled resize frame matches exact-window geometry",
+        "passed": true,
+        "detail": "window=820x552, image=1218x820"
+      },
+      {
+        "name": "resize screenshot dimensions match settled observation",
+        "passed": true,
+        "detail": "1218x820"
+      },
+      {
+        "name": "resize screenshot geometry changed",
+        "passed": true,
+        "detail": "1209x826 -> 1218x820"
+      },
+      {
+        "name": "post-resize pixel click target-side proof",
+        "passed": true,
+        "detail": "only the exact fixture click counter changed functional state after resize"
+      },
+      {
+        "name": "post-resize action bound to settled persistent share",
+        "passed": true,
+        "detail": "frame=true, share=true, source=62"
+      },
+      {
+        "name": "post-resize pixel click conservatively classified",
+        "passed": true,
+        "detail": "Unverifiable"
+      },
+      {
+        "name": "post-resize pixel click non-interruption invariants",
+        "passed": true,
+        "detail": "{\"cursorUnchanged\":true,\"foregroundUnchanged\":true,\"spaceUnchanged\":true,\"userFocusUnchanged\":true}"
+      },
+      {
+        "name": "post-resize independent foreground/focus/cursor/Space invariants",
+        "passed": true,
+        "detail": "{\"foregroundUnchanged\":true,\"userFocusUnchanged\":true,\"foregroundIdentitySandwichHeld\":true,\"rawForegroundIdentitySandwichHeld\":true,\"foregroundAxFocusUnchanged\":true,\"foregroundAxFrontmostHeld\":true,\"cursorUnchanged\":true,\"spaceUnchanged\":true}"
+      },
+      {
+        "name": "post-resize action retained resized exact-window stream",
+        "passed": true,
+        "detail": "window=820x552, image=1218x820"
+      },
+      {
+        "name": "same-PID sibling is the prior receiver before text preparation",
+        "passed": true,
+        "detail": "sibling-main-and-focused=true, sibling-state-clean=true"
+      },
+      {
+        "name": "background fixture field prepared without mutation while sibling remains prior receiver",
+        "passed": true,
+        "detail": "the primary responder was prepared, the sibling was restored internally, and no target field mutated"
+      },
+      {
+        "name": "field preparation foreground/focus/cursor/Space invariants",
+        "passed": true,
+        "detail": "{\"foregroundUnchanged\":true,\"userFocusUnchanged\":true,\"foregroundIdentitySandwichHeld\":true,\"rawForegroundIdentitySandwichHeld\":true,\"foregroundAxFocusUnchanged\":true,\"foregroundAxFrontmostHeld\":true,\"cursorUnchanged\":true,\"spaceUnchanged\":true}"
+      },
+      {
+        "name": "same-PID sibling remains the exact prior receiver immediately before text request",
+        "passed": true,
+        "detail": "sibling-main-and-focused=true"
+      },
+      {
+        "name": "native typeText exact fixture read-back with zero sibling mutation",
+        "passed": true,
+        "detail": "appended 20 ASCII characters only to the primary field and restored the prior sibling receiver"
+      },
+      {
+        "name": "native typeText bounded product result",
+        "passed": true,
+        "detail": "Unverifiable/exact-window-background, characters=20, utf16=20"
+      },
+      {
+        "name": "native typeText non-interruption invariants",
+        "passed": true,
+        "detail": "{\"cursorUnchanged\":true,\"foregroundUnchanged\":true,\"spaceUnchanged\":true,\"userFocusUnchanged\":true}"
+      },
+      {
+        "name": "native typeText independent foreground/focus/cursor/Space invariants",
+        "passed": true,
+        "detail": "{\"foregroundUnchanged\":true,\"userFocusUnchanged\":true,\"foregroundIdentitySandwichHeld\":true,\"rawForegroundIdentitySandwichHeld\":true,\"foregroundAxFocusUnchanged\":true,\"foregroundAxFrontmostHeld\":true,\"cursorUnchanged\":true,\"spaceUnchanged\":true}"
+      },
+      {
+        "name": "native text restore element discovered",
+        "passed": true,
+        "detail": "AXTextField"
+      },
+      {
+        "name": "native text restore frame is bound to the persistent share authority",
+        "passed": true,
+        "detail": "share=true, source=123"
+      },
+      {
+        "name": "native text fixture value restored",
+        "passed": true,
+        "detail": "Confirmed/value-confirmed"
+      },
+      {
+        "name": "native text restore non-interruption invariants",
+        "passed": true,
+        "detail": "{\"cursorUnchanged\":true,\"foregroundUnchanged\":true,\"spaceUnchanged\":true,\"userFocusUnchanged\":true}"
+      },
+      {
+        "name": "native text restore exact fixture state",
+        "passed": true,
+        "detail": "only the deterministic semantic value was restored"
+      },
+      {
+        "name": "persistent share sample count",
+        "passed": true,
+        "detail": "11 distinct transport frames"
+      },
+      {
+        "name": "one persistent share authority",
+        "passed": true,
+        "detail": "1 share IDs"
+      },
+      {
+        "name": "share-initial native stream metadata",
+        "passed": true,
+        "detail": "macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window"
+      },
+      {
+        "name": "share-initial ack pacing metadata",
+        "passed": true,
+        "detail": "ack=true, backpressure=latest-frame-wins"
+      },
+      {
+        "name": "share-cadence-1 native stream metadata",
+        "passed": true,
+        "detail": "macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window"
+      },
+      {
+        "name": "share-cadence-1 ack pacing metadata",
+        "passed": true,
+        "detail": "ack=true, backpressure=latest-frame-wins"
+      },
+      {
+        "name": "share-cadence-2 native stream metadata",
+        "passed": true,
+        "detail": "macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window"
+      },
+      {
+        "name": "share-cadence-2 ack pacing metadata",
+        "passed": true,
+        "detail": "ack=true, backpressure=latest-frame-wins"
+      },
+      {
+        "name": "share-after-long-action native stream metadata",
+        "passed": true,
+        "detail": "macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window"
+      },
+      {
+        "name": "share-after-long-action ack pacing metadata",
+        "passed": true,
+        "detail": "ack=true, backpressure=latest-frame-wins"
+      },
+      {
+        "name": "share-after-resize native stream metadata",
+        "passed": true,
+        "detail": "macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window"
+      },
+      {
+        "name": "share-after-resize ack pacing metadata",
+        "passed": true,
+        "detail": "ack=true, backpressure=latest-frame-wins"
+      },
+      {
+        "name": "share-resize-settled native stream metadata",
+        "passed": true,
+        "detail": "macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window"
+      },
+      {
+        "name": "share-resize-settled ack pacing metadata",
+        "passed": true,
+        "detail": "ack=true, backpressure=latest-frame-wins"
+      },
+      {
+        "name": "share-post-resize-cadence native stream metadata",
+        "passed": true,
+        "detail": "macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window"
+      },
+      {
+        "name": "share-post-resize-cadence ack pacing metadata",
+        "passed": true,
+        "detail": "ack=true, backpressure=latest-frame-wins"
+      },
+      {
+        "name": "share-after-post-resize-action native stream metadata",
+        "passed": true,
+        "detail": "macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window"
+      },
+      {
+        "name": "share-after-post-resize-action ack pacing metadata",
+        "passed": true,
+        "detail": "ack=true, backpressure=latest-frame-wins"
+      },
+      {
+        "name": "share-after-native-text-focus native stream metadata",
+        "passed": true,
+        "detail": "macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window"
+      },
+      {
+        "name": "share-after-native-text-focus ack pacing metadata",
+        "passed": true,
+        "detail": "ack=true, backpressure=latest-frame-wins"
+      },
+      {
+        "name": "share-after-native-text-delivery native stream metadata",
+        "passed": true,
+        "detail": "macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window"
+      },
+      {
+        "name": "share-after-native-text-delivery ack pacing metadata",
+        "passed": true,
+        "detail": "ack=true, backpressure=latest-frame-wins"
+      },
+      {
+        "name": "share-after-native-text-restore native stream metadata",
+        "passed": true,
+        "detail": "macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window"
+      },
+      {
+        "name": "share-after-native-text-restore ack pacing metadata",
+        "passed": true,
+        "detail": "ack=true, backpressure=latest-frame-wins"
+      },
+      {
+        "name": "share-cadence-1 independent sequences advance",
+        "passed": true,
+        "detail": "source 4->7, transport 1->2"
+      },
+      {
+        "name": "share-cadence-1 drop counters are monotonic",
+        "passed": true,
+        "detail": "source-drop 4->6, transport-drop 0->0"
+      },
+      {
+        "name": "share-cadence-1 previous frame was acknowledged",
+        "passed": true,
+        "detail": "previous=1, ack=1, current=2"
+      },
+      {
+        "name": "share-cadence-2 independent sequences advance",
+        "passed": true,
+        "detail": "source 7->9, transport 2->3"
+      },
+      {
+        "name": "share-cadence-2 drop counters are monotonic",
+        "passed": true,
+        "detail": "source-drop 6->7, transport-drop 0->0"
+      },
+      {
+        "name": "share-cadence-2 previous frame was acknowledged",
+        "passed": true,
+        "detail": "previous=2, ack=2, current=3"
+      },
+      {
+        "name": "share-after-long-action independent sequences advance",
+        "passed": true,
+        "detail": "source 9->46, transport 3->6"
+      },
+      {
+        "name": "share-after-long-action drop counters are monotonic",
+        "passed": true,
+        "detail": "source-drop 7->42, transport-drop 0->0"
+      },
+      {
+        "name": "share-after-long-action previous frame was acknowledged",
+        "passed": true,
+        "detail": "previous=3, ack=5, current=6"
+      },
+      {
+        "name": "share-after-resize independent sequences advance",
+        "passed": true,
+        "detail": "source 46->55, transport 6->8"
+      },
+      {
+        "name": "share-after-resize drop counters are monotonic",
+        "passed": true,
+        "detail": "source-drop 42->49, transport-drop 0->0"
+      },
+      {
+        "name": "share-after-resize previous frame was acknowledged",
+        "passed": true,
+        "detail": "previous=6, ack=7, current=8"
+      },
+      {
+        "name": "share-resize-settled independent sequences advance",
+        "passed": true,
+        "detail": "source 55->57, transport 8->9"
+      },
+      {
+        "name": "share-resize-settled drop counters are monotonic",
+        "passed": true,
+        "detail": "source-drop 49->50, transport-drop 0->0"
+      },
+      {
+        "name": "share-resize-settled previous frame was acknowledged",
+        "passed": true,
+        "detail": "previous=8, ack=8, current=9"
+      },
+      {
+        "name": "share-post-resize-cadence independent sequences advance",
+        "passed": true,
+        "detail": "source 57->62, transport 9->11"
+      },
+      {
+        "name": "share-post-resize-cadence drop counters are monotonic",
+        "passed": true,
+        "detail": "source-drop 50->53, transport-drop 0->0"
+      },
+      {
+        "name": "share-post-resize-cadence previous frame was acknowledged",
+        "passed": true,
+        "detail": "previous=9, ack=9, current=11"
+      },
+      {
+        "name": "share-after-post-resize-action independent sequences advance",
+        "passed": true,
+        "detail": "source 62->90, transport 11->14"
+      },
+      {
+        "name": "share-after-post-resize-action drop counters are monotonic",
+        "passed": true,
+        "detail": "source-drop 53->79, transport-drop 0->1"
+      },
+      {
+        "name": "share-after-post-resize-action previous frame was acknowledged",
+        "passed": true,
+        "detail": "previous=11, ack=13, current=14"
+      },
+      {
+        "name": "share-after-native-text-focus independent sequences advance",
+        "passed": true,
+        "detail": "source 90->93, transport 14->15"
+      },
+      {
+        "name": "share-after-native-text-focus drop counters are monotonic",
+        "passed": true,
+        "detail": "source-drop 79->80, transport-drop 1->1"
+      },
+      {
+        "name": "share-after-native-text-focus previous frame was acknowledged",
+        "passed": true,
+        "detail": "previous=14, ack=14, current=15"
+      },
+      {
+        "name": "share-after-native-text-delivery independent sequences advance",
+        "passed": true,
+        "detail": "source 93->123, transport 15->18"
+      },
+      {
+        "name": "share-after-native-text-delivery drop counters are monotonic",
+        "passed": true,
+        "detail": "source-drop 80->107, transport-drop 1->1"
+      },
+      {
+        "name": "share-after-native-text-delivery previous frame was acknowledged",
+        "passed": true,
+        "detail": "previous=15, ack=17, current=18"
+      },
+      {
+        "name": "share-after-native-text-restore independent sequences advance",
+        "passed": true,
+        "detail": "source 123->143, transport 18->21"
+      },
+      {
+        "name": "share-after-native-text-restore drop counters are monotonic",
+        "passed": true,
+        "detail": "source-drop 107->128, transport-drop 1->1"
+      },
+      {
+        "name": "share-after-native-text-restore previous frame was acknowledged",
+        "passed": true,
+        "detail": "previous=18, ack=20, current=21"
+      },
+      {
+        "name": "share status remains native and ack paced",
+        "passed": true,
+        "detail": "macos-screencapturekit-scstream, source=143, transport=21"
+      },
+      {
+        "name": "share status drop domains retained",
+        "passed": true,
+        "detail": "source-drop=128, transport-drop=1"
+      },
+      {
+        "name": "cancellation starts from a current resized share frame",
+        "passed": true,
+        "detail": "share=true, source=143, screenshot-bound=true"
+      },
+      {
+        "name": "bounded fixture mouse-move instrumentation ready",
+        "passed": true,
+        "detail": "baseline=61"
+      },
+      {
+        "name": "cancellation waits for target-routed native move delivery",
+        "passed": true,
+        "detail": "moveEvents=61->66, wait=507ms"
+      },
+      {
+        "name": "exact duplicate observes one causally dispatched product action",
+        "passed": true,
+        "detail": "HTTP 409, CALL_IN_PROGRESS"
+      },
+      {
+        "name": "authenticated exact-call cancellation accepted",
+        "passed": true,
+        "detail": "HTTP 202, requested=true"
+      },
+      {
+        "name": "canceled original reports conservative outcome unknown",
+        "passed": true,
+        "detail": "HTTP 504, COMMAND_OUTCOME_UNKNOWN/outcome_unknown, elapsed=511ms"
+      },
+      {
+        "name": "completed call cannot be canceled twice",
+        "passed": true,
+        "detail": "HTTP 409, CALL_NOT_IN_PROGRESS"
+      },
+      {
+        "name": "exact canceled call replays without redispatch",
+        "passed": true,
+        "detail": "HTTP 504, replayed=true"
+      },
+      {
+        "name": "changed command cannot reuse canceled call identity",
+        "passed": true,
+        "detail": "HTTP 409, CALL_ID_REUSED/invalid_request"
+      },
+      {
+        "name": "cancellation fail-closed state names the exact-session revocation",
+        "passed": true,
+        "detail": "outcome-unknown/COMMAND_OUTCOME_UNKNOWN"
+      },
+      {
+        "name": "cancellation tears down the computer screenshot surface",
+        "passed": true,
+        "detail": "HTTP 404, NO_COMPUTER_SCREENSHOT"
+      },
+      {
+        "name": "canceled share surface stays torn down",
+        "passed": true,
+        "detail": "no queued SCStream frame republished authority after cancellation"
+      },
+      {
+        "name": "post-cancellation share stop is idempotently fail-closed",
+        "passed": true,
+        "detail": "false/false/not-active"
+      },
+      {
+        "name": "explicit stop preserves surface teardown",
+        "passed": true,
+        "detail": "computer observation, screenshot, pointer, and share authority remain unavailable"
+      },
+      {
+        "name": "revoked authority gates pre-recovery mutations before helper relay",
+        "passed": true,
+        "detail": "HTTP 409, NO_COMPUTER_FRAME/stale_snapshot/reobserve"
+      },
+      {
+        "name": "gated old-frame action cannot recreate a computer surface",
+        "passed": true,
+        "detail": "no frame, screenshot, pointer, or share authority was republished"
+      },
+      {
+        "name": "explicit one-shot observation recovers exact-session authority",
+        "passed": true,
+        "detail": "session-preserved=true, fresh-frame=true"
+      },
+      {
+        "name": "pre-cancellation frame stays stale after explicit recovery",
+        "passed": true,
+        "detail": "HTTP 409, COMPUTER_STALE_FRAME/stale_snapshot/reobserve"
+      },
+      {
+        "name": "rejected stale action preserves the recovered exact frame",
+        "passed": true,
+        "detail": "the old frame was refused without replacing or revoking the recovered one-shot frame"
+      },
+      {
+        "name": "fixture final state",
+        "passed": true,
+        "detail": "{\"clicks\":2,\"semanticPresses\":1,\"semanticValueMatchesExpected\":true,\"resizeCount\":1,\"focusCount\":1,\"siblingFocusCount\":1,\"siblingTextLength\":0,\"siblingClicks\":0,\"distinctSamePidWindows\":true,\"moveEvents\":66,\"appliedControlSequence\":2,\"contentWidth\":820,\"contentHeight\":520}"
+      },
+      {
+        "name": "canceled move, gated refusal, recovery, and stale refusal caused no functional fixture mutation",
+        "passed": true,
+        "detail": "functional fixture state stayed exact; only bounded move-delivery instrumentation advanced"
+      },
+      {
+        "name": "final same-PID receiver main and focus are restored before target close",
+        "passed": true,
+        "detail": "sibling-main-and-focused=true"
+      },
+      {
+        "name": "cancellation/stop foreground/focus/cursor/Space invariants",
+        "passed": true,
+        "detail": "{\"foregroundUnchanged\":true,\"userFocusUnchanged\":true,\"foregroundIdentitySandwichHeld\":true,\"rawForegroundIdentitySandwichHeld\":true,\"foregroundAxFocusUnchanged\":true,\"foregroundAxFrontmostHeld\":true,\"cursorUnchanged\":true,\"spaceUnchanged\":true}"
+      },
+      {
+        "name": "every retained screenshot is bound only to the primary exact window",
+        "passed": true,
+        "detail": "6 primary-only screenshot records; sibling excluded=true"
+      },
+      {
+        "name": "target-close persistent share started with fresh authority",
+        "passed": true,
+        "detail": "fresh-share=true, target=true, backend=macos-screencapturekit-scstream"
+      },
+      {
+        "name": "fresh share start retires the recovered one-shot frame under exact new authority",
+        "passed": true,
+        "detail": "same-session=true, new-frame=true, exact-share=true"
+      },
+      {
+        "name": "exact target is alive while its closing share frame is current",
+        "passed": true,
+        "detail": "share=true, recovered-retired=true, start-frame-retired=true, source=4"
+      },
+      {
+        "name": "rig closed the exact target while its persistent share was active",
+        "passed": true,
+        "detail": "signal-requested=true, already-exited=false"
+      },
+      {
+        "name": "helper-originated exact-share failure stops server authority",
+        "passed": true,
+        "detail": "capture-error/COMPUTER_NO_WINDOW, same-helper=true"
+      },
+      {
+        "name": "target close clears the exact share screenshot surface",
+        "passed": true,
+        "detail": "HTTP 404, NO_COMPUTER_SCREENSHOT"
+      },
+      {
+        "name": "closed target cannot republish a queued native frame",
+        "passed": true,
+        "detail": "3 frame periods settled without authority republish"
+      },
+      {
+        "name": "closed-target frame is refused before helper action relay",
+        "passed": true,
+        "detail": "HTTP 409, NO_COMPUTER_FRAME/stale_snapshot"
+      },
+      {
+        "name": "stale closed-target action cannot recreate a computer surface",
+        "passed": true,
+        "detail": "the retired frame remained unavailable after the rejected mutation"
+      },
+      {
+        "name": "explicit observe cannot recover a closed exact target",
+        "passed": true,
+        "detail": "HTTP 409, COMPUTER_NO_WINDOW/target_changed"
+      },
+      {
+        "name": "closed-target observe refusal preserves terminal teardown",
+        "passed": true,
+        "detail": "the failed recovery did not restore observation, screenshot, pointer, share, or frame authority"
+      },
+      {
+        "name": "helper independently observes the exact target pair is gone",
+        "passed": true,
+        "detail": "the helper no longer enumerates either real window from the closed fixture process"
+      },
+      {
+        "name": "target-close share stop is idempotently clean",
+        "passed": true,
+        "detail": "false/false/not-active"
+      },
+      {
+        "name": "target-close cleanup leaves no share or frame authority",
+        "passed": true,
+        "detail": "the same helper remains ready with no target, share, observation, screenshot, or frame authority"
+      },
+      {
+        "name": "target-close foreground/focus/cursor/Space invariants",
+        "passed": true,
+        "detail": "{\"foregroundUnchanged\":true,\"userFocusUnchanged\":true,\"foregroundIdentitySandwichHeld\":true,\"rawForegroundIdentitySandwichHeld\":true,\"foregroundAxFocusUnchanged\":true,\"foregroundAxFrontmostHeld\":true,\"cursorUnchanged\":true,\"spaceUnchanged\":true}"
+      },
+      {
+        "name": "independent foreground/focus/cursor/Space invariants",
+        "passed": true,
+        "detail": "{\"foregroundUnchanged\":true,\"userFocusUnchanged\":true,\"foregroundIdentitySandwichHeld\":true,\"rawForegroundIdentitySandwichHeld\":true,\"foregroundAxFocusUnchanged\":true,\"foregroundAxFrontmostHeld\":true,\"cursorUnchanged\":true,\"spaceUnchanged\":true}"
+      },
+      {
+        "name": "helper remained alive until controlled teardown",
+        "passed": true,
+        "detail": "SIGTERM was sent by the rig"
+      },
+      {
+        "name": "helper transport disconnected cleanly",
+        "passed": true,
+        "detail": "helper session and observation were revoked"
+      },
+      {
+        "name": "helper was never respawned",
+        "passed": true,
+        "detail": "1 packaged helper process"
+      },
+      {
+        "name": "server remained alive until controlled teardown",
+        "passed": true,
+        "detail": "SIGTERM was sent by the rig"
+      },
+      {
+        "name": "server listener closed",
+        "passed": true,
+        "detail": "the evidence port no longer accepts health requests"
+      }
+    ]
+  },
+  "limitations": [
+    "This run proves the supplied v0.12.8 macOS release-candidate archive, not an immutable GitHub release until those exact checksums are published.",
+    "systemIndicatorPolicy=true proves that the helper did not suppress ScreenCaptureKit's system indication; exact-window screenshots cannot prove a particular system banner was visible.",
+    "Programmatic exact-window selection is authenticated bridge policy, not a native macOS content picker.",
+    "The helper uses target-routed background input on the active user Space, not a separate login session, VM, virtual display, sandbox, or independent input seat.",
+    "The same-PID positive gate uses two genuine fixture NSWindows and an independent read-only AXFocusedWindow probe. It proves primary pointer/text routing and restoration of the prior sibling while a sandwiched foreground PID plus AXFocusedWindow/AXFrontmost oracle remains unchanged.",
+    "A live wrong-sibling-at-dispatch negative is intentionally unproven: changing focus after helper preparation would be a flaky race or require a production-only hook, while foregrounding or raising the fixture would violate the non-interruption contract. Production unit/source contracts retain the fail-closed receiver mismatch requirement.",
+    "The fixture-only post-resize proof combines exact PID/window/frame/share binding, fixture counters, and non-interruption identities; the rig deliberately does not capture or fingerprint unrelated window contents.",
+    "Generic AX invocation remains Partial in the product result; this deterministic fixture supplies separate target-side evidence and does not upgrade that product classification.",
+    "Native typeText remains Unverifiable in the product result. This deterministic fixture adds an independent exact read-back, then restores the prior value through confirmed Accessibility setValue. The ephemeral test content is not retained in evidence outputs, but it exists temporarily in process memory and the scratch fixture-state file until cleanup.",
+    "The long live-share click intentionally creates native source-frame replacement. A zero transport-drop count is valid when server acknowledgements keep pace.",
+    "Explicit cancellation deliberately reports the in-flight move outcome as unknown. The rig proves target-routed dispatch, authority teardown, a pre-recovery server gate, explicit one-shot observation recovery, continued stale-frame refusal, and no functional fixture mutation beyond its bounded move-delivery counter; it does not relabel the canceled native trajectory as a confirmed no-op.",
+    "After cancellation recovery, the rig starts a fresh persistent exact-window share and deliberately terminates only the spawned fixture process. Depending on whether target enumeration or ScreenCaptureKit reports closure first, the terminal share code is COMPUTER_NO_WINDOW or COMPUTER_CAPTURE_FAILED; both paths must identify the exact share, stop capture, clear server authority, and refuse the retired frame.",
+    "Screen Recording and Accessibility permissions were already present. The rig did not request, approve, or modify macOS permissions."
+  ]
+}

@@ -1,11 +1,13 @@
-# macOS v0.12.8 persistent-share evidence candidate
+# macOS v0.12.8 exact-candidate evidence
 
-This directory contains a deterministic evidence harness for the packaged
-macOS v0.12.8 server and helper. It is **candidate infrastructure only** until
-the harness runs against the exact release-candidate archive and records a
-passing `helper-results.json`, `helper-rig.log`, and the six screenshots listed
-below. A local pass becomes immutable release evidence only if the same archive
-SHA-256 is later published in the v0.12.8 GitHub release.
+This directory contains the deterministic harness and completed exact-candidate
+run for the packaged macOS v0.12.8 server and helper. The exact frozen
+release-candidate archive passed all 187 checks and produced
+`helper-results.json`, `helper-rig.log`, and the six reviewed screenshots listed
+below. The protected publication job remains unapproved while same-candidate
+Windows and stock-Chrome acceptance are still pending. This run becomes
+shipped-release evidence only if the identical archive is later published in
+the immutable v0.12.8 GitHub Release.
 
 The harness talks to the real loopback server API and launches the supplied
 `Local Computer Helper.app` executable exactly once. It does not use a mock
@@ -22,7 +24,7 @@ hashes equal their archived counterparts. Only then does package inspection
 with `lipo`, `codesign`, and `plutil` run; those tools do not execute the
 candidate binaries.
 
-## What a passing run proves
+## What the run proves
 
 - The server and helper report exactly v0.12.8, are universal
   `arm64`/`x86_64` binaries, and pass strict code-signature checks.
@@ -323,9 +325,14 @@ only after it has requested and observed exit of its exact spawned fixture. In
 both cases the event must name the second share ID and produce the identical
 server authority-clear, stale-frame refusal, and cleanup contract.
 
-After the run, inspect every screenshot, confirm `assertions.failed` is zero,
-and compare the recorded archive SHA-256 with the published release asset
-before changing this directory's status from candidate to released evidence.
+The retained run has `assertions.failed` equal to zero and binds archive
+SHA-256 `651ecd9a1cb095812669884a0c8db1664d20aecd28bc65c05e50d548416dac13`,
+canonical-manifest SHA-256
+`45d550e394a38b56aeb8a67bde3c3792d3c1728d9088d61f9576622506273a28`,
+and source commit `532d603b3a7ab25edf71adcd68b8ed2f89b55983`. All six screenshots were
+opened, matched to their recorded SHA-256 values and expected state, and found
+to contain only the exact fixture window. The archive must still byte-match the
+eventual immutable release asset before this becomes shipped-release evidence.
 
 ## Historical v0.12.7 exact-candidate result
 
