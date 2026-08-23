@@ -1,0 +1,21 @@
+{
+    "schemaVersion":  1,
+    "kind":  "foreground-arm",
+    "status":  "action-required",
+    "requestId":  "0baf2fd230d54d3b9fc490085e8deff3",
+    "publishedAtUtc":  "2026-08-23T08:23:13.8143173Z",
+    "timeoutSeconds":  300,
+    "operatorActionRequired":  true,
+    "expectedVisibleButtonText":  "CLICK TO ARM",
+    "instruction":  "If the button says CLICK TO ARM, click it once. If it says ARMED, do not click again. Then stop using this Windows session.",
+    "requestDelivered":  true,
+    "buttonEnabled":  true,
+    "nativeTopologyMatched":  true,
+    "inputStateAtPublication":  "not-started",
+    "notificationOnly":  true,
+    "acceptedAsAuthority":  false,
+    "rawWindowHandlesRecorded":  false,
+    "rawCursorCoordinatesRecorded":  false,
+    "pathsRecorded":  false,
+    "secretsRecorded":  false
+}
