@@ -51,6 +51,20 @@ fn helper_exposes_only_bounded_observation_and_input_methods() {
     }
 }
 
+#[test]
+fn unsupported_host_surface_reexports_server_handshake_capabilities() {
+    let unsupported = fs::read_to_string("src/computer_unsupported.rs").unwrap();
+    for capability in [
+        "COMPUTER_INPUT_DELIVERY_PROVENANCE_CAPABILITY",
+        "COMPUTER_POINTER_ACTIVITY_MONITOR_CAPABILITY",
+    ] {
+        assert!(
+            unsupported.contains(capability),
+            "unsupported-host module must re-export {capability} for cross-platform server builds"
+        );
+    }
+}
+
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 #[test]
 fn helper_machine_contract_discloses_platform_activation_truthfully() {
