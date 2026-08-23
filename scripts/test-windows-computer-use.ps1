@@ -1050,6 +1050,55 @@ if ($null -eq $script:nativeProbeType -or $null -eq $script:ownedJobType) {
     throw "The isolated Windows acceptance probe types did not load."
 }
 
+function Wait-Condition {
+    param(
+        [scriptblock]$Probe,
+        [string]$Description,
+        [ValidateRange(1, 180000)]
+        [int]$TimeoutMilliseconds = ($TimeoutSeconds * 1000),
+        [ValidateRange(0, 10000)]
+        [int]$PollMilliseconds = 150
+    )
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMilliseconds)
+    do {
+        $value = & $Probe
+        if ($null -ne $value -and $value -ne $false) {
+            return $value
+        }
+        if ($PollMilliseconds -gt 0) {
+            Start-Sleep -Milliseconds $PollMilliseconds
+        }
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Timed out waiting for $Description."
+}
+
+function Wait-ForFixtureProof {
+    param(
+        [scriptblock]$FixturePredicate,
+        [string]$Description,
+        [scriptblock]$StateReader = { Get-FixtureState },
+        [ValidateRange(1, 180000)]
+        [int]$TimeoutMilliseconds = ($TimeoutSeconds * 1000),
+        [ValidateRange(0, 10000)]
+        [int]$PollMilliseconds = 150
+    )
+    # Keep this bounded loop independent from Wait-Condition. Windows
+    # PowerShell uses dynamic variable lookup for invoked scriptblocks, so a
+    # nested wrapper with the same predicate parameter name can resolve to
+    # itself and recurse until the engine's call-depth limit.
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMilliseconds)
+    do {
+        $state = & $StateReader
+        if (& $FixturePredicate $state) {
+            return $state
+        }
+        if ($PollMilliseconds -gt 0) {
+            Start-Sleep -Milliseconds $PollMilliseconds
+        }
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Timed out waiting for $Description."
+}
+
 if ($SelfTest) {
     $selfTestHost = Get-Process -Id $PID
     $selfTestHostPath = $selfTestHost.Path
@@ -1127,6 +1176,69 @@ if ($SelfTest) {
             $selfTestChild.Dispose()
         }
         $selfTestJob.Dispose()
+    }
+
+    $fixtureWaitProbe = [ordered]@{
+        stateReads = 0
+        predicateCalls = 0
+    }
+    $fixtureWaitResult = Wait-ForFixtureProof `
+        -FixturePredicate {
+            param($state)
+            $fixtureWaitProbe.predicateCalls++
+            return $state.ready -eq $true
+        } `
+        -Description "the synthetic false-false-true fixture state" `
+        -StateReader {
+            $fixtureWaitProbe.stateReads++
+            return [pscustomobject]@{
+                sequence = $fixtureWaitProbe.stateReads
+                ready = $fixtureWaitProbe.stateReads -eq 3
+            }
+        } `
+        -TimeoutMilliseconds 1000 `
+        -PollMilliseconds 1
+    if ($fixtureWaitResult.sequence -ne 3 -or
+        $fixtureWaitProbe.stateReads -ne 3 -or
+        $fixtureWaitProbe.predicateCalls -ne 3) {
+        throw "The fixture wait did not evaluate the synthetic false-false-true sequence exactly once per state."
+    }
+
+    $fixtureTimeoutWatch = [Diagnostics.Stopwatch]::StartNew()
+    $fixtureTimeoutFailure = $null
+    try {
+        $null = Wait-ForFixtureProof `
+            -FixturePredicate { param($state) return $state.ready -eq $true } `
+            -Description "the bounded synthetic fixture timeout" `
+            -StateReader { return [pscustomobject]@{ ready = $false } } `
+            -TimeoutMilliseconds 25 `
+            -PollMilliseconds 1
+    }
+    catch {
+        $fixtureTimeoutFailure = $_.Exception.Message
+    }
+    finally {
+        $fixtureTimeoutWatch.Stop()
+    }
+    if ($fixtureTimeoutFailure -cne "Timed out waiting for the bounded synthetic fixture timeout." -or
+        $fixtureTimeoutWatch.ElapsedMilliseconds -gt 2000) {
+        throw "The fixture wait did not preserve its bounded timeout contract."
+    }
+
+    $fixtureProbeFailure = $null
+    try {
+        $null = Wait-ForFixtureProof `
+            -FixturePredicate { param($state) throw "synthetic-fixture-predicate-failure" } `
+            -Description "the synthetic fixture predicate failure" `
+            -StateReader { return [pscustomobject]@{ ready = $false } } `
+            -TimeoutMilliseconds 1000 `
+            -PollMilliseconds 1
+    }
+    catch {
+        $fixtureProbeFailure = $_.Exception.Message
+    }
+    if ($fixtureProbeFailure -cne "synthetic-fixture-predicate-failure") {
+        throw "The fixture wait did not propagate its predicate failure unchanged."
     }
 
     Write-Output "Windows computer-use acceptance self-test passed."
@@ -1282,19 +1394,6 @@ function Read-JsonFile {
     throw "Timed out waiting for fixture evidence."
 }
 
-function Wait-Condition {
-    param([scriptblock]$Condition, [string]$Description)
-    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
-    do {
-        $value = & $Condition
-        if ($null -ne $value -and $value -ne $false) {
-            return $value
-        }
-        Start-Sleep -Milliseconds 150
-    } while ([DateTime]::UtcNow -lt $deadline)
-    throw "Timed out waiting for $Description."
-}
-
 function Write-EvidenceJson {
     param([string]$Path, [object]$Value)
     $json = $Value | ConvertTo-Json -Depth 40
@@ -1397,7 +1496,9 @@ function ConvertTo-SafeFailureText {
         @($evidenceRoot, "[EVIDENCE_DIRECTORY]"),
         @($resolvedServer, "[SERVER]"),
         @($resolvedHelper, "[HELPER]"),
-        @($resolvedFixture, "[FIXTURE]")
+        @($resolvedFixture, "[FIXTURE]"),
+        @($resolvedChecksumManifest, "[CHECKSUM_MANIFEST]"),
+        @($PSCommandPath, "[RUNNER]")
     )) {
         if (-not [String]::IsNullOrEmpty([string]$replacement[0])) {
             $safe = $safe.Replace([string]$replacement[0], [string]$replacement[1])
@@ -1848,15 +1949,6 @@ function Get-SanitizedHostProvenance {
     }
 }
 
-function Wait-ForFixtureProof {
-    param([scriptblock]$Condition, [string]$Description)
-    return Wait-Condition {
-        $state = Get-FixtureState
-        if (& $Condition $state) { return $state }
-        return $false
-    } $Description
-}
-
 function Record-HelperTopologyObservation {
     param([string]$Stage)
     $script:helperTopologyPollCount++
@@ -2113,6 +2205,8 @@ $script:baseUrl = "http://127.0.0.1:$Port"
 $shareStarted = $false
 $runPassed = $false
 $failureText = $null
+$failureDetails = $null
+$script:runStage = "initialize-owned-processes"
 $cleanupIssues = [Collections.Generic.List[string]]::new()
 $startedAt = [DateTime]::UtcNow
 $baselineProbe = $null
@@ -2149,6 +2243,7 @@ $script:helperTopologyDiagnostic = [ordered]@{
 
 try {
     $script:ownedJob = $script:ownedJobType::new()
+    $script:runStage = "start-fixture"
     $hostPath = (Get-Process -Id $PID).Path
     $fixtureArguments = @("-NoLogo", "-NoProfile", "-NonInteractive", "-File", $resolvedFixture, "-EvidenceDirectory", $fixtureEvidence)
     if ($ShowOccluder) {
@@ -2163,6 +2258,7 @@ try {
     } "the Windows fixture"
     $targetPid = [int]$script:fixtureReady.processId
 
+    $script:runStage = "start-loopback-server"
     $processEnvironment = @{
         LBB_PORT = $Port.ToString([Globalization.CultureInfo]::InvariantCulture)
         LBB_TOKEN = $Token
@@ -2178,6 +2274,7 @@ try {
         catch { return $false }
     } "the loopback server" | Out-Null
 
+    $script:runStage = "start-computer-helper"
     $helperEnvironment = @{}
     foreach ($item in $processEnvironment.GetEnumerator()) {
         $helperEnvironment[[string]$item.Key] = [string]$item.Value
@@ -2198,6 +2295,7 @@ try {
         if ($candidate.computerConnected -eq $true -and $null -ne $candidate.computer) { return $candidate }
         return $false
     } "the authenticated computer helper"
+    $script:runStage = "bind-initial-helper-readiness"
     $initialHelperSessionId = [string]$bridgeState.computer.sessionId
     Assert-True (-not [String]::IsNullOrWhiteSpace($initialHelperSessionId)) "The initial helper session identity was missing."
     $initialWorker = Wait-ForDirectHelperWorker $helperProcess $initialHelperSessionId "the initial disposable helper worker"
@@ -2207,12 +2305,14 @@ try {
     Complete-HelperTopologyRoundTrip "the initial disposable helper worker" $initialHelperSessionId $initialWorkerPid "computer.status" $readinessProbe
     Save-StepResponse "protocol-bound helper readiness" $readinessProbe
     if ($selectedSuites -contains "Recovery") {
+        $script:runStage = "wait-recovery-event-ready"
         $null = Wait-Condition {
             if ($script:nativeProbeType::GetKernelEventState($recoveryEventName) -eq 1) { return $true }
             return $false
         } "the supervisor-owned unsignaled one-shot recovery event"
     }
 
+    $script:runStage = "select-exact-fixture-window"
     $matchingWindows = @($bridgeState.computer.windows | Where-Object {
         [int]$_.pid -eq $targetPid -and $_.title -eq "LBB Windows Fixture Target"
     })
@@ -2220,6 +2320,7 @@ try {
     $targetWindowId = [string]$matchingWindows[0].id
     Assert-True ($targetWindowId -eq [string]$script:fixtureReady.targetHwnd) "The helper window ID did not match the fixture-owned HWND."
 
+    $script:runStage = "wait-foreground-sentinel"
     $fixtureForeground = Wait-ForFixtureProof {
         param($state)
         return [string]$state.foregroundHwnd -eq [string]$state.sentinelHwnd
@@ -2227,6 +2328,7 @@ try {
     $baselineProbe = Capture-InvariantProbe
     Assert-True ($baselineProbe.foregroundHwnd -eq [string]$script:fixtureReady.sentinelHwnd) "The test-owned sentinel is not the foreground window."
 
+    $script:runStage = "baseline-status-and-observation"
     $statusResponse = Invoke-LbbCommand "computer.status" @{}
     Save-StepResponse "computer status" $statusResponse
     Assert-True ($statusResponse.result.inputReady -eq $true) "The helper did not report pixel input readiness."
@@ -2242,6 +2344,7 @@ try {
     $null = Assert-InvariantsHeld $baselineProbe "Baseline observation"
 
     if ($selectedSuites -contains "Recovery") {
+        $script:runStage = "recovery-suite"
         $supervisorPidBefore = $helperProcess.Id
         $serverPidBefore = $serverProcess.Id
         $faultTriggeredAtUtc = [DateTime]::UtcNow
@@ -2359,6 +2462,7 @@ try {
     }
 
     if ($selectedSuites -contains "Semantic") {
+        $script:runStage = "semantic-suite"
         $semanticElement = @($observation.elements | Where-Object {
             $_.name -eq "Fixture Value Input" -and $_.actions -contains "setValue"
         })
@@ -2401,6 +2505,7 @@ try {
     }
 
     if ($selectedSuites -contains "Keyboard") {
+        $script:runStage = "keyboard-suite"
         $typedText = "typed-background-proof"
         $response = Invoke-LbbCommand "computer.typeText" @{
             frameId = [string]$observation.frameId
@@ -2458,6 +2563,7 @@ try {
     }
 
     if ($selectedSuites -contains "Pixel") {
+        $script:runStage = "pixel-suite"
         $from = Get-SurfacePoint $observation 0.30 0.45
         $to = Get-SurfacePoint $observation 0.72 0.68
         $beforePixel = (Get-FixtureState).messageCounters
@@ -2551,6 +2657,7 @@ try {
     }
 
     if ($selectedSuites -contains "Capture") {
+        $script:runStage = "capture-suite"
         $desktopBeforeShare = Save-SanitizedDesktopCrop "39-desktop-crop-before-share"
         Save-StepRecord "sanitized desktop crop before share" $desktopBeforeShare
         $response = Invoke-LbbCommand "computer.share.start" @{ windowId = $targetWindowId; fps = 4 }
@@ -2627,6 +2734,7 @@ try {
     }
 
     if ($selectedSuites -contains "Cancellation") {
+        $script:runStage = "cancellation-suite"
         $cancelShareStart = Invoke-LbbCommand "computer.share.start" @{ windowId = $targetWindowId; fps = 4 }
         $shareStarted = $true
         Save-StepResponse "cancellation native share start" $cancelShareStart
@@ -2829,6 +2937,7 @@ try {
         })
     }
 
+    $script:runStage = "final-invariants"
     $finalProbe = Assert-InvariantsHeld $baselineProbe "Full acceptance run"
     Save-StepRecord "foreground cursor focus desktop invariants" ([ordered]@{
         before = $baselineProbe
@@ -2836,10 +2945,22 @@ try {
         fixtureForegroundHwnd = $fixtureForeground.foregroundHwnd
         fixtureSentinelHwnd = $fixtureForeground.sentinelHwnd
     })
+    $script:runStage = "completed"
     $runPassed = $true
 }
 catch {
     $failureText = ConvertTo-SafeFailureText $_.Exception.Message
+    $failureDetails = [ordered]@{
+        stage = $script:runStage
+        exceptionType = $_.Exception.GetType().FullName
+        fullyQualifiedErrorId = ConvertTo-SafeFailureText ([string]$_.FullyQualifiedErrorId)
+        category = [string]$_.CategoryInfo.Category
+        scriptLineNumber = [int]$_.InvocationInfo.ScriptLineNumber
+        offsetInLine = [int]$_.InvocationInfo.OffsetInLine
+        line = ConvertTo-SafeFailureText ([string]$_.InvocationInfo.Line).Trim()
+        scriptStackTrace = ConvertTo-SafeFailureText ([string]$_.ScriptStackTrace)
+        pathsRecorded = $false
+    }
 }
 finally {
     if ($null -ne $pendingCancellationRequest) {
@@ -2935,6 +3056,7 @@ finally {
         targetWindowId = $targetWindowId
         steps = $script:stepResults
         failure = $failureText
+        failureDetails = $failureDetails
         cleanupIssues = @($cleanupIssues)
         childHandleInheritancePolicy = "PROC_THREAD_ATTRIBUTE_HANDLE_LIST:NUL-only"
         allowedInheritedHandleCount = 1

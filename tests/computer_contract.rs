@@ -839,7 +839,7 @@ fn background_invariant_failures_use_stage_bound_closed_vocabulary() {
 
 #[test]
 fn macos_negative_evidence_keeps_only_equality_and_fixture_counters() {
-    let rig = fs::read_to_string("evidence/v0.12.4/computer/helper-evidence-rig.mjs").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.5/computer/helper-evidence-rig.mjs").unwrap();
     assert!(rig.contains("failureProbeBaseline"));
     assert!(rig.contains("collectFailureDiagnostics"));
     assert!(rig.contains("systemInvariants(failureProbeBaseline.system, after)"));
@@ -931,12 +931,12 @@ fn historical_macos_v0_12_2_evidence_sources_remain_byte_exact() {
 
 #[test]
 fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
-    let rig = fs::read_to_string("evidence/v0.12.4/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.5/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let fixture =
-        fs::read_to_string("evidence/v0.12.4/computer/HelperEvidenceFixture.swift").unwrap();
-    let readme = fs::read_to_string("evidence/v0.12.4/computer/README.md").unwrap();
+        fs::read_to_string("evidence/v0.12.5/computer/HelperEvidenceFixture.swift").unwrap();
+    let readme = fs::read_to_string("evidence/v0.12.5/computer/README.md").unwrap();
 
     assert!(rig.contains(&format!("const EXPECTED_VERSION = \"{VERSION}\";")));
     assert!(rig.contains("const EXPECTED_ARCHIVE = `local-browser-bridge-v${EXPECTED_VERSION}-macos-universal.tar.gz`;"));
@@ -995,10 +995,10 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
 
 #[test]
 fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
-    let rig = fs::read_to_string("evidence/v0.12.4/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.5/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.4/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.5/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1030,7 +1030,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
         "$EXPECTED_SHA256SUMS_SHA256",
         "$EXPECTED_SOURCE_SHA",
         "mandatory SHA-256 supplied",
-        "exactly the four v0.12.4",
+        "exactly the four v0.12.5",
         "expected and actual manifest hashes",
         "Before invoking either supplied candidate executable—even with `--version`",
         "No supplied server or helper code executes before",
@@ -1087,7 +1087,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
         .unwrap();
     let first_documented_extraction = readme.find("tar -xzf").unwrap();
     let first_documented_execution = readme
-        .find("node evidence/v0.12.4/computer/helper-evidence-rig.mjs")
+        .find("node evidence/v0.12.5/computer/helper-evidence-rig.mjs")
         .unwrap();
     assert!(
         independent_manifest_digest < exact_inventory
@@ -1103,7 +1103,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
 
 #[test]
 fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
-    let rig = fs::read_to_string("evidence/v0.12.4/computer/helper-evidence-rig.mjs").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.5/computer/helper-evidence-rig.mjs").unwrap();
     assert!(rig.contains("capturedFrameMatchesWindowGeometry"));
     assert!(rig.contains("share-resize-settled"));
     assert!(rig.contains("sample.sourceSequence > resizeTransition.sample.sourceSequence"));
@@ -1115,12 +1115,12 @@ fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
 
 #[test]
 fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.4/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.5/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     assert!(rig.contains("function childEnvironment(overrides = {})"));
     assert!(!rig.contains("...process.env"));
-    let fixture = fs::read_to_string("evidence/v0.12.4/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.5/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1283,10 +1283,10 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
 
 #[test]
 fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.4/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.5/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.4/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.5/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1417,21 +1417,21 @@ fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() 
 
 #[test]
 fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negative() {
-    let fixture = fs::read_to_string("evidence/v0.12.4/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.5/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.4/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.5/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.4/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.5/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.4/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.5/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
     for required in [
-        "private let siblingFixtureTitle = \"LBB v0.12.4 Same-PID Sibling Receiver\"",
+        "private let siblingFixtureTitle = \"LBB v0.12.5 Same-PID Sibling Receiver\"",
         "var primaryWindowId = 0",
         "var siblingWindowId = 0",
         "var siblingTextLength = 0",
@@ -1758,9 +1758,12 @@ fn windows_helper_readiness_is_protocol_and_process_bound() {
 
     let generic_wait = runner.split("function Wait-Condition {").nth(1).unwrap();
     let generic_wait = generic_wait
-        .split("function Write-EvidenceJson {")
+        .split("function Wait-ForFixtureProof {")
         .next()
         .unwrap();
+    assert!(generic_wait.contains("[scriptblock]$Probe"));
+    assert!(generic_wait.contains("$value = & $Probe"));
+    assert!(!generic_wait.contains("[scriptblock]$Condition"));
     assert!(
         !generic_wait.contains("catch"),
         "generic readiness waits must not erase fatal process or Win32 errors"
@@ -1789,6 +1792,70 @@ fn windows_helper_readiness_is_protocol_and_process_bound() {
         assert!(
             runner.contains(required),
             "Windows acceptance self-test is missing: {required}"
+        );
+    }
+}
+
+#[test]
+fn windows_fixture_wait_avoids_powershell_dynamic_scope_recursion() {
+    let runner = fs::read_to_string("scripts/test-windows-computer-use.ps1")
+        .unwrap()
+        .replace("\r\n", "\n");
+
+    let fixture_wait = runner
+        .split("function Wait-ForFixtureProof {")
+        .nth(1)
+        .unwrap()
+        .split("if ($SelfTest) {")
+        .next()
+        .unwrap();
+    for required in [
+        "[scriptblock]$FixturePredicate",
+        "[scriptblock]$StateReader",
+        "$state = & $StateReader",
+        "if (& $FixturePredicate $state)",
+        "AddMilliseconds($TimeoutMilliseconds)",
+        "Timed out waiting for $Description.",
+    ] {
+        assert!(
+            fixture_wait.contains(required),
+            "Windows fixture wait is missing its non-recursive contract: {required}"
+        );
+    }
+    assert!(
+        !fixture_wait.contains("return Wait-Condition")
+            && !fixture_wait.contains("Wait-Condition {")
+            && !fixture_wait.contains("[scriptblock]$Condition"),
+        "the fixture wait must not reintroduce dynamic-scope predicate shadowing"
+    );
+
+    for required in [
+        "the synthetic false-false-true fixture state",
+        "$fixtureWaitProbe.stateReads -ne 3",
+        "$fixtureWaitProbe.predicateCalls -ne 3",
+        "the bounded synthetic fixture timeout",
+        "$fixtureTimeoutWatch.ElapsedMilliseconds -gt 2000",
+        "synthetic-fixture-predicate-failure",
+        "The fixture wait did not propagate its predicate failure unchanged.",
+    ] {
+        assert!(
+            runner.contains(required),
+            "Windows fixture wait self-test is missing: {required}"
+        );
+    }
+
+    for required in [
+        "$script:runStage = \"wait-foreground-sentinel\"",
+        "failureDetails = [ordered]@{",
+        "stage = $script:runStage",
+        "fullyQualifiedErrorId = ConvertTo-SafeFailureText",
+        "scriptStackTrace = ConvertTo-SafeFailureText",
+        "@($PSCommandPath, \"[RUNNER]\")",
+        "pathsRecorded = $false",
+    ] {
+        assert!(
+            runner.contains(required),
+            "Windows failure diagnostics are missing: {required}"
         );
     }
 }

@@ -48,7 +48,7 @@ See [Capabilities](docs/CAPABILITIES.md) for the exact platform matrix and [Limi
 
 Download one version-matched set from [GitHub Releases](https://github.com/flrngel/local-browser-bridge/releases/latest):
 
-> Version 0.12.4 is the current source and release target. Release artifacts, evidence, and capability claims are versioned; install the server, extension, and helper from one matching release.
+> Version 0.12.5 is the current source and release target. Release artifacts, evidence, and capability claims are versioned; install the server, extension, and helper from one matching release.
 
 - the server for your platform;
 - `local-browser-bridge-extension-vVERSION.zip`; and
