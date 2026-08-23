@@ -1,0 +1,117 @@
+{
+    "result":  {
+                   "architecture":  "x86_64",
+                   "backend":  "background-window/uia+win32-messages+wgc-stream",
+                   "frameReady":  false,
+                   "inputReady":  true,
+                   "invariants":  {
+                                      "activatesTargetApplication":  false,
+                                      "exactWindowRequired":  true,
+                                      "foregroundIdentityPreservedBeforeAfter":  true,
+                                      "globalHidInput":  false,
+                                      "hardwareCursorPreservedBeforeAfter":  true,
+                                      "implicitForegroundFallback":  false,
+                                      "movesHardwareCursor":  false,
+                                      "switchesActiveSpace":  false,
+                                      "targetActivationMode":  "no-explicit-target-activation-api",
+                                      "usesAxRaise":  false,
+                                      "usesFrontProcessSwitch":  false,
+                                      "zeroTransientInterruptionGuaranteed":  false
+                                  },
+                   "isolation":  "shared-user-session/target-routed",
+                   "limitations":  [
+                                       "UI Automation is preferred for Chromium, WPF, WinUI, and native controls",
+                                       "Pixel-only events use Win32 messages; games, elevated windows, and protected content can refuse them",
+                                       "Unsupported controls fail rather than falling back to SendInput or SetForegroundWindow"
+                                   ],
+                   "platform":  "windows",
+                   "pointer":  {
+                                   "action":  "idle",
+                                   "buttonsMask":  0,
+                                   "coordinateSpace":  "image-pixels",
+                                   "headingDegrees":  45.0,
+                                   "id":  "cb5d20c5-5658-4f31-b517-9a23fe69822f",
+                                   "imageX":  null,
+                                   "imageY":  null,
+                                   "pressed":  false,
+                                   "revision":  0,
+                                   "screenX":  null,
+                                   "screenY":  null,
+                                   "sequence":  0,
+                                   "style":  {
+                                                 "fill":  "#33E0BE",
+                                                 "hotspot":  "tip",
+                                                 "logicalSize":  42,
+                                                 "outline":  "#FFFFFF",
+                                                 "theme":  "lbb.session-pointer.v1"
+                                             },
+                                   "updatedAt":  "2026-08-23T08:23:13.0843197Z",
+                                   "visible":  false,
+                                   "windowId":  null
+                               },
+                   "semanticReady":  true,
+                   "sessionMode":  "background-window",
+                   "share":  {
+                                 "active":  false
+                             },
+                   "windowCount":  6
+               },
+    "error":  null,
+    "taxonomy":  null,
+    "callId":  "windows-fixture-78b8ed7ea3534c6e91c2f00b24e8d8d5",
+    "targetState":  {
+                        "computerConnected":  true,
+                        "computer":  {
+                                         "architecture":  "x86_64",
+                                         "backend":  "background-window/uia+win32-messages+wgc-stream",
+                                         "capabilities":  [
+                                                              "computer.status",
+                                                              "computer.share.start",
+                                                              "computer.share.status",
+                                                              "computer.share.stop",
+                                                              "computer.observe",
+                                                              "computer.move",
+                                                              "computer.click",
+                                                              "computer.drag",
+                                                              "computer.scroll",
+                                                              "computer.typeText",
+                                                              "computer.key",
+                                                              "computer.invoke",
+                                                              "computer.setValue",
+                                                              "computer.share.ack",
+                                                              "computer.capture.native-stream.v1"
+                                                          ],
+                                         "compatible":  true,
+                                         "connectedAt":  "2026-08-23T08:23:13.0889419Z",
+                                         "inputReady":  true,
+                                         "invariants":  {
+                                                            "activatesTargetApplication":  false,
+                                                            "exactWindowRequired":  true,
+                                                            "foregroundIdentityPreservedBeforeAfter":  true,
+                                                            "globalHidInput":  false,
+                                                            "hardwareCursorPreservedBeforeAfter":  true,
+                                                            "implicitForegroundFallback":  false,
+                                                            "movesHardwareCursor":  false,
+                                                            "switchesActiveSpace":  false,
+                                                            "targetActivationMode":  "no-explicit-target-activation-api",
+                                                            "usesAxRaise":  false,
+                                                            "usesFrontProcessSwitch":  false,
+                                                            "zeroTransientInterruptionGuaranteed":  false
+                                                        },
+                                         "isolation":  "shared-user-session/target-routed",
+                                         "platform":  "windows",
+                                         "processId":  17396,
+                                         "protocolVersion":  1,
+                                         "semanticReady":  true,
+                                         "sessionId":  "709ed73f-f588-4d25-bcb1-d170058a4b3d",
+                                         "sessionMode":  "background-window",
+                                         "share":  {
+                                                       "active":  false,
+                                                       "reason":  "inactive",
+                                                       "stopped":  false
+                                                   },
+                                         "version":  "0.12.8"
+                                     },
+                        "computerObservation":  null
+                    }
+}
