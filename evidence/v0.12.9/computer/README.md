@@ -1,11 +1,11 @@
 # macOS v0.12.9 persistent-share evidence candidate
 
-This directory contains a deterministic evidence harness for the packaged
-macOS v0.12.9 server and helper. It is **candidate infrastructure only** until
-the harness runs against the exact release-candidate archive and records a
-passing `helper-results.json`, `helper-rig.log`, and the six screenshots listed
-below. A local pass becomes immutable release evidence only if the same archive
-SHA-256 is later published in the v0.12.9 GitHub release.
+This directory preserves the deterministic evidence harness used for the
+withdrawn packaged macOS v0.12.9 server and helper candidate. Its single exact
+run failed closed at the first semantic mutation because the sampled global
+hardware cursor changed across dispatch. The protected publication job was
+canceled, Windows and stock-Chrome acceptance were not started, and no v0.12.9
+GitHub Release exists. The retained attempt is diagnostic evidence only.
 
 Version 0.12.9 starts a fresh candidate cycle. It does not reuse or relabel any
 v0.12.8 binary, screenshot, result, or Windows notification as current evidence.
@@ -329,6 +329,19 @@ server authority-clear, stale-frame refusal, and cleanup contract.
 After the run, inspect every screenshot, confirm `assertions.failed` is zero,
 and compare the recorded archive SHA-256 with the published release asset
 before changing this directory's status from candidate to released evidence.
+
+## Withdrawn v0.12.9 exact-candidate result
+
+The exact v0.12.9 candidate passed its artifact, package, permission, topology,
+window-discovery, and initial-observation gates, then failed closed when
+`computer.setValue` observed a changed global hardware-cursor sample across the
+semantic dispatch. The retained record cannot attribute that change to the
+helper rather than concurrent physical input, so it does not prove the
+non-interruption invariant. The candidate was not retried; Windows and Chrome
+acceptance were never started, the protected publish job was canceled, and no
+v0.12.9 Release was created:
+
+- [`withdrawn-db624da-macos-semantic-hardware-cursor-change`](attempts/withdrawn-db624da-macos-semantic-hardware-cursor-change/README.md)
 
 ## Historical v0.12.8 exact-candidate result
 

@@ -1,0 +1,262 @@
+{
+  "schemaVersion": 3,
+  "productVersion": "0.12.9",
+  "status": "failed-release-candidate",
+  "evidenceClass": "release-candidate-negative-result",
+  "capturedAt": "2026-08-23T09:53:34.769Z",
+  "fatal": "computer.setValue returned HTTP 504: COMPUTER_OUTCOME_UNKNOWN The command was canceled or failed after computer input dispatch; observe again and do not automatically retry. COMPUTER_BACKGROUND_CONTRACT_VIOLATION: stage=semanticSetValue;failedInvariants=hardwareCursorUnchanged",
+  "helperSpawnCount": 1,
+  "packageBinding": {
+    "file": "SHA256SUMS.txt",
+    "expectedSha256": "56a87068ac150d322edf923696bd93f4c9ef0f10dd752ef48bfd7ca0e1950500",
+    "actualSha256": "56a87068ac150d322edf923696bd93f4c9ef0f10dd752ef48bfd7ca0e1950500",
+    "expectedSha256Matched": true,
+    "exactCanonicalAssetSet": true,
+    "canonicalEntryCount": 4,
+    "archiveFile": "local-browser-bridge-v0.12.9-macos-universal.tar.gz",
+    "archiveSha256": "7959a18f58a5f96861b8647edbb8059222e3a5b47df45f52dfe5ac5174c43a8e",
+    "archiveEntryMatched": true
+  },
+  "screenshots": [
+    {
+      "file": "computer-01-exact-window-observe.png",
+      "sha256": "550816e6e8a77a3dcfea111e7393c2976b17484609d8e45fe3c170c5883e67ce",
+      "bytes": 779471,
+      "width": 1209,
+      "height": 826,
+      "frameId": "386c7834-b75f-43ce-b049-cf572aad7f4b",
+      "windowId": "64168",
+      "sourceSequence": null,
+      "transportSequence": null
+    }
+  ],
+  "failureDiagnostics": {
+    "stage": "notReached",
+    "systemProbe": {
+      "baselineCaptured": false,
+      "afterCaptured": false,
+      "equality": null
+    },
+    "fixtureCounters": {
+      "baselineCaptured": false,
+      "afterCaptured": false,
+      "before": null,
+      "after": null
+    },
+    "targetSiblingReceiver": {
+      "targetKnown": true,
+      "expectedFocusedAfter": true,
+      "afterCaptured": true,
+      "focusedAfter": true,
+      "mainAfter": true,
+      "expectationMet": true
+    }
+  },
+  "assertions": {
+    "passed": 40,
+    "failed": 0,
+    "total": 40,
+    "details": [
+      {
+        "name": "macOS host",
+        "passed": true,
+        "detail": "Darwin"
+      },
+      {
+        "name": "expected checksum-manifest hash format",
+        "passed": true,
+        "detail": "64 lowercase hexadecimal characters"
+      },
+      {
+        "name": "canonical checksum-manifest name",
+        "passed": true,
+        "detail": "SHA256SUMS.txt"
+      },
+      {
+        "name": "exact archive name",
+        "passed": true,
+        "detail": "local-browser-bridge-v0.12.9-macos-universal.tar.gz"
+      },
+      {
+        "name": "out-of-band checksum-manifest hash matches",
+        "passed": true,
+        "detail": "56a87068ac150d322edf923696bd93f4c9ef0f10dd752ef48bfd7ca0e1950500"
+      },
+      {
+        "name": "checksum manifest has the exact canonical four-entry set",
+        "passed": true,
+        "detail": "local-browser-bridge-v0.12.9-windows-x86_64.exe,local-computer-helper-v0.12.9-windows-x86_64.exe,local-browser-bridge-v0.12.9-macos-universal.tar.gz,local-browser-bridge-extension-v0.12.9.zip"
+      },
+      {
+        "name": "archive checksum is bound by the canonical manifest",
+        "passed": true,
+        "detail": "7959a18f58a5f96861b8647edbb8059222e3a5b47df45f52dfe5ac5174c43a8e"
+      },
+      {
+        "name": "archive paths are traversal-safe",
+        "passed": true,
+        "detail": "10 safe entries"
+      },
+      {
+        "name": "archive contains only regular files and directories",
+        "passed": true,
+        "detail": "no links or special filesystem entries"
+      },
+      {
+        "name": "archive contains exact server",
+        "passed": true,
+        "detail": "local-browser-bridge"
+      },
+      {
+        "name": "archive contains exact helper",
+        "passed": true,
+        "detail": "Local Computer Helper.app/Contents/MacOS/local-computer-helper"
+      },
+      {
+        "name": "supplied server is archive-exact",
+        "passed": true,
+        "detail": "44d3b46c456b803e2801776ea730199a3f8072541d4df9f449b7432343387909"
+      },
+      {
+        "name": "supplied helper is archive-exact",
+        "passed": true,
+        "detail": "67e7ce5e4cc45472a19107c8ec70f80984e069101df63bcf46b7905d5ce70801"
+      },
+      {
+        "name": "server universal architecture",
+        "passed": true,
+        "detail": "arm64,x86_64"
+      },
+      {
+        "name": "helper universal architecture",
+        "passed": true,
+        "detail": "arm64,x86_64"
+      },
+      {
+        "name": "helper uses packaged app layout",
+        "passed": true,
+        "detail": "Local Computer Helper.app"
+      },
+      {
+        "name": "strict code-signature verification",
+        "passed": true,
+        "detail": "server, helper executable, and helper app bundle passed strict verification"
+      },
+      {
+        "name": "helper bundle version",
+        "passed": true,
+        "detail": "0.12.9/0.12.9"
+      },
+      {
+        "name": "server version",
+        "passed": true,
+        "detail": "0.12.9"
+      },
+      {
+        "name": "helper version",
+        "passed": true,
+        "detail": "0.12.9"
+      },
+      {
+        "name": "screen-capture permission preflight",
+        "passed": true,
+        "detail": "preexisting permission; no request was made"
+      },
+      {
+        "name": "accessibility permission preflight",
+        "passed": true,
+        "detail": "preexisting permission; no request was made"
+      },
+      {
+        "name": "active Space probe available",
+        "passed": true,
+        "detail": "nonzero active Space identity"
+      },
+      {
+        "name": "sandwiched foreground AX focus probe available",
+        "passed": true,
+        "detail": "stable NSWorkspace/raw PSN plus exact AX focused/main-window identities are available"
+      },
+      {
+        "name": "fixture process identity",
+        "passed": true,
+        "detail": "state belongs to the spawned fixture"
+      },
+      {
+        "name": "startup same-PID sibling is the target app's remembered receiver",
+        "passed": true,
+        "detail": "sibling-main-and-focused=true, fixture-background=true"
+      },
+      {
+        "name": "packaged helper compatible",
+        "passed": true,
+        "detail": "protocol-compatible helper 0.12.9"
+      },
+      {
+        "name": "single helper spawn",
+        "passed": true,
+        "detail": "1 packaged helper process"
+      },
+      {
+        "name": "acknowledged share advertised",
+        "passed": true,
+        "detail": "computer.share.ack present"
+      },
+      {
+        "name": "native stream advertised",
+        "passed": true,
+        "detail": "computer.capture.native-stream.v1 present"
+      },
+      {
+        "name": "helper status backend",
+        "passed": true,
+        "detail": "background-window/ax+skylight+screencapturekit-stream"
+      },
+      {
+        "name": "background shared-session mode",
+        "passed": true,
+        "detail": "background-window/shared-user-session/target-routed"
+      },
+      {
+        "name": "background input backend ready",
+        "passed": true,
+        "detail": "target-routed input is ready"
+      },
+      {
+        "name": "semantic backend ready",
+        "passed": true,
+        "detail": "macos-accessibility is ready without prompting"
+      },
+      {
+        "name": "fixture exact window discovered",
+        "passed": true,
+        "detail": "1 matching windows"
+      },
+      {
+        "name": "genuine same-PID sibling window discovered",
+        "passed": true,
+        "detail": "1 sibling matches, distinct=true"
+      },
+      {
+        "name": "fixture is a background target",
+        "passed": true,
+        "detail": "neither same-PID fixture window owns the user's foreground process or front window"
+      },
+      {
+        "name": "exact fixture window observed",
+        "passed": true,
+        "detail": "1209x826"
+      },
+      {
+        "name": "semantic snapshot available",
+        "passed": true,
+        "detail": "4 elements"
+      },
+      {
+        "name": "semantic value element discovered",
+        "passed": true,
+        "detail": "AXTextField"
+      }
+    ]
+  }
+}

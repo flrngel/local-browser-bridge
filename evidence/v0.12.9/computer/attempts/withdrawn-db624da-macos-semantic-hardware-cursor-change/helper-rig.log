@@ -1,0 +1,45 @@
+2026-08-23T09:53:30.842Z PASS macOS host: Darwin
+2026-08-23T09:53:30.843Z PASS expected checksum-manifest hash format: 64 lowercase hexadecimal characters
+2026-08-23T09:53:30.843Z PASS canonical checksum-manifest name: SHA256SUMS.txt
+2026-08-23T09:53:30.844Z PASS exact archive name: local-browser-bridge-v0.12.9-macos-universal.tar.gz
+2026-08-23T09:53:30.853Z PASS out-of-band checksum-manifest hash matches: 56a87068ac150d322edf923696bd93f4c9ef0f10dd752ef48bfd7ca0e1950500
+2026-08-23T09:53:30.853Z PASS checksum manifest has the exact canonical four-entry set: local-browser-bridge-v0.12.9-windows-x86_64.exe,local-computer-helper-v0.12.9-windows-x86_64.exe,local-browser-bridge-v0.12.9-macos-universal.tar.gz,local-browser-bridge-extension-v0.12.9.zip
+2026-08-23T09:53:30.853Z PASS archive checksum is bound by the canonical manifest: 7959a18f58a5f96861b8647edbb8059222e3a5b47df45f52dfe5ac5174c43a8e
+2026-08-23T09:53:30.874Z PASS archive paths are traversal-safe: 10 safe entries
+2026-08-23T09:53:30.894Z PASS archive contains only regular files and directories: no links or special filesystem entries
+2026-08-23T09:53:30.894Z PASS archive contains exact server: local-browser-bridge
+2026-08-23T09:53:30.894Z PASS archive contains exact helper: Local Computer Helper.app/Contents/MacOS/local-computer-helper
+2026-08-23T09:53:30.926Z PASS supplied server is archive-exact: 44d3b46c456b803e2801776ea730199a3f8072541d4df9f449b7432343387909
+2026-08-23T09:53:30.928Z PASS supplied helper is archive-exact: 67e7ce5e4cc45472a19107c8ec70f80984e069101df63bcf46b7905d5ce70801
+2026-08-23T09:53:30.941Z PASS server universal architecture: arm64,x86_64
+2026-08-23T09:53:30.941Z PASS helper universal architecture: arm64,x86_64
+2026-08-23T09:53:30.941Z PASS helper uses packaged app layout: Local Computer Helper.app
+2026-08-23T09:53:30.964Z PASS strict code-signature verification: server, helper executable, and helper app bundle passed strict verification
+2026-08-23T09:53:30.972Z PASS helper bundle version: 0.12.9/0.12.9
+2026-08-23T09:53:31.186Z PASS server version: 0.12.9
+2026-08-23T09:53:31.310Z PASS helper version: 0.12.9
+2026-08-23T09:53:32.389Z PASS screen-capture permission preflight: preexisting permission; no request was made
+2026-08-23T09:53:32.389Z PASS accessibility permission preflight: preexisting permission; no request was made
+2026-08-23T09:53:32.389Z PASS active Space probe available: nonzero active Space identity
+2026-08-23T09:53:32.389Z PASS sandwiched foreground AX focus probe available: stable NSWorkspace/raw PSN plus exact AX focused/main-window identities are available
+2026-08-23T09:53:32.998Z PASS fixture process identity: state belongs to the spawned fixture
+2026-08-23T09:53:33.175Z PASS startup same-PID sibling is the target app's remembered receiver: sibling-main-and-focused=true, fixture-background=true
+2026-08-23T09:53:33.603Z PASS packaged helper compatible: protocol-compatible helper 0.12.9
+2026-08-23T09:53:33.603Z PASS single helper spawn: 1 packaged helper process
+2026-08-23T09:53:33.603Z PASS acknowledged share advertised: computer.share.ack present
+2026-08-23T09:53:33.603Z PASS native stream advertised: computer.capture.native-stream.v1 present
+2026-08-23T09:53:33.858Z PASS helper status backend: background-window/ax+skylight+screencapturekit-stream
+2026-08-23T09:53:33.858Z PASS background shared-session mode: background-window/shared-user-session/target-routed
+2026-08-23T09:53:33.858Z PASS background input backend ready: target-routed input is ready
+2026-08-23T09:53:33.858Z PASS semantic backend ready: macos-accessibility is ready without prompting
+2026-08-23T09:53:33.858Z PASS fixture exact window discovered: 1 matching windows
+2026-08-23T09:53:33.858Z PASS genuine same-PID sibling window discovered: 1 sibling matches, distinct=true
+2026-08-23T09:53:33.858Z PASS fixture is a background target: neither same-PID fixture window owns the user's foreground process or front window
+2026-08-23T09:53:34.199Z PASS exact fixture window observed: 1209x826
+2026-08-23T09:53:34.199Z PASS semantic snapshot available: 4 elements
+2026-08-23T09:53:34.203Z PASS semantic value element discovered: AXTextField
+2026-08-23T09:53:34.770Z FATAL computer.setValue returned HTTP 504: COMPUTER_OUTCOME_UNKNOWN The command was canceled or failed after computer input dispatch; observe again and do not automatically retry. COMPUTER_BACKGROUND_CONTRACT_VIOLATION: stage=semanticSetValue;failedInvariants=hardwareCursorUnchanged
+2026-08-23T09:53:34.772Z helper stopped
+2026-08-23T09:53:34.774Z server stopped
+2026-08-23T09:53:34.776Z fixture stopped
+2026-08-23T09:53:34.778Z scratch directory removed

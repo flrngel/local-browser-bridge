@@ -1528,15 +1528,18 @@ fn withdrawn_v0_12_8_exact_candidate_results_remain_byte_exact_and_fail_closed()
 }
 
 #[test]
-fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
-    let entries = fs::read_dir("evidence/v0.12.9/computer")
+fn withdrawn_v0_12_9_macos_cursor_invariant_attempt_is_byte_exact_and_fail_closed() {
+    let attempt_root = std::path::Path::new(
+        "evidence/v0.12.9/computer/attempts/withdrawn-db624da-macos-semantic-hardware-cursor-change",
+    );
+    let entries = fs::read_dir(attempt_root)
         .unwrap()
         .map(Result::unwrap)
         .map(|entry| {
             let file_type = entry.file_type().unwrap();
             assert!(
                 file_type.is_file() && !file_type.is_symlink(),
-                "current macOS evidence scaffold entry must be an ordinary file: {}",
+                "withdrawn v0.12.9 macOS evidence entry must be an ordinary file: {}",
                 entry.path().display()
             );
             entry.file_name().to_string_lossy().into_owned()
@@ -1545,9 +1548,183 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
     assert_eq!(
         entries,
         BTreeSet::from([
+            "README.md".to_owned(),
+            "computer-01-exact-window-observe.png".to_owned(),
+            "helper-results.json".to_owned(),
+            "helper-rig.log".to_owned(),
+        ])
+    );
+
+    for (name, expected_bytes, expected_sha256) in [
+        (
+            "README.md",
+            4_250,
+            "a2c8033e8a45e3545dfb5d2a7ed41bbaff304752d3781bf124f67bb18d12bc2b",
+        ),
+        (
+            "computer-01-exact-window-observe.png",
+            779_471,
+            "550816e6e8a77a3dcfea111e7393c2976b17484609d8e45fe3c170c5883e67ce",
+        ),
+        (
+            "helper-results.json",
+            8_164,
+            "862184d1d8bce46d64c854a768dadef5efe27747abdb9972c726e5ea6eeb795e",
+        ),
+        (
+            "helper-rig.log",
+            4_640,
+            "f435b55373a6bfb28a8d002002762b1e174f2af55c541bb1a42f9563ac9160f1",
+        ),
+    ] {
+        let path = attempt_root.join(name);
+        assert_eq!(
+            fs::metadata(&path).unwrap().len(),
+            expected_bytes,
+            "withdrawn v0.12.9 macOS evidence size changed: {name}"
+        );
+        assert_eq!(
+            format!("{:x}", Sha256::digest(fs::read(&path).unwrap())),
+            expected_sha256,
+            "withdrawn v0.12.9 macOS evidence bytes changed: {name}"
+        );
+    }
+
+    let results: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(attempt_root.join("helper-results.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(results["schemaVersion"], 3);
+    assert_eq!(results["productVersion"], "0.12.9");
+    assert_eq!(results["status"], "failed-release-candidate");
+    assert_eq!(
+        results["evidenceClass"],
+        "release-candidate-negative-result"
+    );
+    assert_eq!(results["helperSpawnCount"], 1);
+    assert_eq!(
+        results["fatal"],
+        "computer.setValue returned HTTP 504: COMPUTER_OUTCOME_UNKNOWN The command was canceled or failed after computer input dispatch; observe again and do not automatically retry. COMPUTER_BACKGROUND_CONTRACT_VIOLATION: stage=semanticSetValue;failedInvariants=hardwareCursorUnchanged"
+    );
+    assert_eq!(results["assertions"]["passed"], 40);
+    assert_eq!(results["assertions"]["failed"], 0);
+    let assertion_details = results["assertions"]["details"].as_array().unwrap();
+    assert_eq!(assertion_details.len(), 40);
+    assert!(
+        assertion_details
+            .iter()
+            .all(|detail| detail["passed"] == true)
+    );
+
+    assert_eq!(results["failureDiagnostics"]["stage"], "notReached");
+    assert_eq!(
+        results["failureDiagnostics"]["systemProbe"]["baselineCaptured"],
+        false
+    );
+    assert_eq!(
+        results["failureDiagnostics"]["systemProbe"]["afterCaptured"],
+        false
+    );
+    assert_eq!(
+        results["failureDiagnostics"]["targetSiblingReceiver"]["expectationMet"],
+        true
+    );
+    assert_eq!(
+        results["failureDiagnostics"]["targetSiblingReceiver"]["focusedAfter"],
+        true
+    );
+    assert_eq!(
+        results["failureDiagnostics"]["targetSiblingReceiver"]["mainAfter"],
+        true
+    );
+
+    let screenshots = results["screenshots"].as_array().unwrap();
+    assert_eq!(screenshots.len(), 1);
+    let screenshot = &screenshots[0];
+    assert_eq!(screenshot["file"], "computer-01-exact-window-observe.png");
+    assert_eq!(
+        screenshot["sha256"],
+        "550816e6e8a77a3dcfea111e7393c2976b17484609d8e45fe3c170c5883e67ce"
+    );
+    assert_eq!(screenshot["bytes"], 779_471);
+    assert_eq!(screenshot["width"], 1_209);
+    assert_eq!(screenshot["height"], 826);
+    assert_eq!(screenshot["sourceSequence"], serde_json::Value::Null);
+    assert_eq!(screenshot["transportSequence"], serde_json::Value::Null);
+
+    assert_eq!(
+        results["packageBinding"]["expectedSha256"],
+        "56a87068ac150d322edf923696bd93f4c9ef0f10dd752ef48bfd7ca0e1950500"
+    );
+    assert_eq!(
+        results["packageBinding"]["actualSha256"],
+        results["packageBinding"]["expectedSha256"]
+    );
+    assert_eq!(results["packageBinding"]["expectedSha256Matched"], true);
+    assert_eq!(results["packageBinding"]["exactCanonicalAssetSet"], true);
+    assert_eq!(results["packageBinding"]["canonicalEntryCount"], 4);
+    assert_eq!(results["packageBinding"]["archiveEntryMatched"], true);
+
+    let log = fs::read_to_string(attempt_root.join("helper-rig.log")).unwrap();
+    assert_eq!(log.matches(" PASS ").count(), 40);
+    assert_eq!(log.matches(" FATAL ").count(), 1);
+    assert!(log.contains(
+        "COMPUTER_BACKGROUND_CONTRACT_VIOLATION: stage=semanticSetValue;failedInvariants=hardwareCursorUnchanged"
+    ));
+    for cleanup in [
+        "helper stopped",
+        "server stopped",
+        "fixture stopped",
+        "scratch directory removed",
+    ] {
+        assert!(
+            log.contains(cleanup),
+            "withdrawn attempt log omits {cleanup}"
+        );
+    }
+
+    let readme = fs::read_to_string(attempt_root.join("README.md")).unwrap();
+    let normalized_readme = readme.split_whitespace().collect::<Vec<_>>().join(" ");
+    for truthful_boundary in [
+        "Nothing in this directory is evidence for a shipped release.",
+        "Windows and stock-Chrome acceptance were not started",
+        "zero assertion failures before a fatal post-dispatch refusal",
+        "cannot attribute that cursor change to the helper",
+        "The candidate was not retried or reused.",
+    ] {
+        assert!(
+            normalized_readme.contains(truthful_boundary),
+            "withdrawn attempt README omits truthful boundary: {truthful_boundary}"
+        );
+    }
+}
+
+#[test]
+fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
+    let entries = fs::read_dir("evidence/v0.12.9/computer")
+        .unwrap()
+        .map(Result::unwrap)
+        .map(|entry| {
+            let file_type = entry.file_type().unwrap();
+            assert!(
+                (file_type.is_file() || file_type.is_dir()) && !file_type.is_symlink(),
+                "current macOS evidence scaffold entry must be ordinary: {}",
+                entry.path().display()
+            );
+            let mut name = entry.file_name().to_string_lossy().into_owned();
+            if file_type.is_dir() {
+                name.push('/');
+            }
+            name
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        entries,
+        BTreeSet::from([
             "HelperEvidenceFixture.swift".to_owned(),
             "README.md".to_owned(),
             "SystemProbe.swift".to_owned(),
+            "attempts/".to_owned(),
             "helper-evidence-rig.mjs".to_owned(),
         ])
     );
