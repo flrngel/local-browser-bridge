@@ -1,0 +1,8 @@
+{"schemaVersion":1,"sequence":1,"utc":"2026-08-23T04:58:03.5468579Z","source":"backdrop","event":"shown"}
+{"schemaVersion":1,"sequence":2,"utc":"2026-08-23T04:58:03.5946735Z","source":"target","event":"activated","activatedCount":1}
+{"schemaVersion":1,"sequence":3,"utc":"2026-08-23T04:58:03.6304306Z","source":"target","event":"shown"}
+{"schemaVersion":1,"sequence":4,"utc":"2026-08-23T04:58:03.6478944Z","source":"sentinel","event":"activated"}
+{"schemaVersion":1,"sequence":5,"utc":"2026-08-23T04:58:03.6628911Z","source":"sentinel","event":"shown"}
+{"schemaVersion":1,"sequence":6,"utc":"2026-08-23T04:58:03.6628911Z","source":"occluder","event":"shown"}
+{"schemaVersion":1,"sequence":7,"utc":"2026-08-23T04:58:03.7292912Z","source":"fixture","event":"ready"}
+{"schemaVersion":1,"sequence":8,"utc":"2026-08-23T04:58:50.0643715Z","source":"target","event":"closed"}

@@ -1,0 +1,152 @@
+{
+    "schemaVersion":  1,
+    "passed":  false,
+    "suites":  [
+                   "Smoke",
+                   "Recovery",
+                   "Semantic",
+                   "Keyboard",
+                   "Pixel",
+                   "Capture",
+                   "Cancellation"
+               ],
+    "startedAtUtc":  "2026-08-23T04:58:02.7134036Z",
+    "finishedAtUtc":  "2026-08-23T04:58:50.4136243Z",
+    "interactiveSessionId":  2,
+    "loopbackPort":  52698,
+    "targetPid":  16512,
+    "targetWindowId":  "3147202",
+    "steps":  [
+                  {
+                      "name":  "protocol-bound helper readiness",
+                      "passed":  true,
+                      "evidence":  "01-protocol-bound-helper-readiness.json"
+                  }
+              ],
+    "failure":  "Timed out waiting for the foreground sentinel.",
+    "failureDetails":  {
+                           "stage":  "wait-foreground-sentinel",
+                           "exceptionType":  "System.Management.Automation.RuntimeException",
+                           "fullyQualifiedErrorId":  "Timed out waiting for the foreground sentinel.",
+                           "category":  "OperationStopped",
+                           "scriptLineNumber":  1099,
+                           "offsetInLine":  5,
+                           "line":  "throw \"Timed out waiting for $Description.\"",
+                           "scriptStackTrace":  "at Wait-ForFixtureProof, [RUNNER]: line 1099\r\nat \u003cScriptBlock\u003e, [RUNNER]: line 2324\r\nat \u003cScriptBlock\u003e, \u003cNo file\u003e: line 10",
+                           "pathsRecorded":  false
+                       },
+    "cleanupIssues":  [
+
+                      ],
+    "childHandleInheritancePolicy":  "PROC_THREAD_ATTRIBUTE_HANDLE_LIST:NUL-only",
+    "allowedInheritedHandleCount":  1,
+    "tokenPersistenceVerified":  true,
+    "tokenPersisted":  false,
+    "tokenBearingEvidenceRemoved":  0,
+    "unrelatedProcessesTerminated":  false,
+    "recoveryEventReleased":  true,
+    "helperTopologyChecks":  [
+                                 {
+                                     "description":  "the initial disposable helper worker",
+                                     "supervisorPid":  20276,
+                                     "workerPid":  10960,
+                                     "exactImageMatched":  true,
+                                     "interactiveSessionId":  2,
+                                     "stableConsecutivePolls":  2,
+                                     "helloStateMatched":  true,
+                                     "protocolRoundTrip":  true,
+                                     "roundTripMethod":  "computer.status"
+                                 }
+                             ],
+    "helperTopologyPollCount":  3,
+    "helperTopologyTransitionCount":  2,
+    "helperTopologyHistory":  [
+                                  {
+                                      "stage":  "the initial disposable helper worker",
+                                      "observedAtUtc":  "2026-08-23T04:58:04.6123463Z",
+                                      "poll":  1,
+                                      "supervisorExited":  false,
+                                      "reportedWorkerPid":  10960,
+                                      "matchingHelperChildCount":  1,
+                                      "matchingHelperChildPids":  [
+                                                                      10960
+                                                                  ],
+                                      "connected":  true,
+                                      "helloStateMatched":  true,
+                                      "workerSessionId":  2,
+                                      "runnerSessionMatched":  true,
+                                      "stablePolls":  1,
+                                      "nativeErrorCode":  null
+                                  },
+                                  {
+                                      "stage":  "the initial disposable helper worker",
+                                      "observedAtUtc":  "2026-08-23T04:58:04.7792349Z",
+                                      "poll":  3,
+                                      "supervisorExited":  false,
+                                      "reportedWorkerPid":  10960,
+                                      "matchingHelperChildCount":  1,
+                                      "matchingHelperChildPids":  [
+                                                                      10960
+                                                                  ],
+                                      "connected":  true,
+                                      "helloStateMatched":  true,
+                                      "workerSessionId":  2,
+                                      "runnerSessionMatched":  true,
+                                      "stablePolls":  2,
+                                      "nativeErrorCode":  null
+                                  }
+                              ],
+    "helperTopologyLastObservation":  {
+                                          "supervisorPid":  20276,
+                                          "supervisorExited":  false,
+                                          "supervisorExitCode":  null,
+                                          "reportedWorkerPid":  10960,
+                                          "matchingHelperChildCount":  1,
+                                          "matchingHelperChildPids":  [
+                                                                          10960
+                                                                      ],
+                                          "connected":  true,
+                                          "helloStateMatched":  true,
+                                          "workerSessionId":  2,
+                                          "runnerSessionMatched":  true,
+                                          "stablePolls":  2,
+                                          "nativeErrorCode":  null,
+                                          "imagePathRecorded":  false,
+                                          "commandLineRecorded":  false
+                                      },
+    "candidateBinding":  {
+                             "version":  "0.12.6",
+                             "checksumManifestMatched":  true,
+                             "exactAssetSetMatched":  true,
+                             "checksumManifest":  {
+                                                      "name":  "SHA256SUMS.txt",
+                                                      "bytes":  456,
+                                                      "sha256":  "8c3759a53f10d5c9bb5fbae03bb3fe4bb84e39073647ee9d6c7ee2f42392f3c3",
+                                                      "expectedSha256":  "8c3759a53f10d5c9bb5fbae03bb3fe4bb84e39073647ee9d6c7ee2f42392f3c3",
+                                                      "exactEntryCount":  4,
+                                                      "pathRecorded":  false
+                                                  },
+                             "server":  {
+                                            "name":  "local-browser-bridge-v0.12.6-windows-x86_64.exe",
+                                            "bytes":  6690816,
+                                            "sha256":  "72cef4966edb0ef18b33210cc8808f669e22d23ed3372a0190b1be2bf78be94e",
+                                            "checksumManifestMatched":  true,
+                                            "fileVersion":  "0.12.6",
+                                            "productVersion":  "0.12.6",
+                                            "reportedVersion":  "local-browser-bridge 0.12.6",
+                                            "versionMatched":  true,
+                                            "pathRecorded":  false
+                                        },
+                             "helper":  {
+                                            "name":  "local-computer-helper-v0.12.6-windows-x86_64.exe",
+                                            "bytes":  2560512,
+                                            "sha256":  "e27d9b2e75a3897709c3121568469471bc0fa0be945122fa08f56a52e1d3c652",
+                                            "checksumManifestMatched":  true,
+                                            "fileVersion":  "0.12.6",
+                                            "productVersion":  "0.12.6",
+                                            "reportedVersion":  "local-computer-helper 0.12.6",
+                                            "versionMatched":  true,
+                                            "pathRecorded":  false
+                                        }
+                         }
+}
