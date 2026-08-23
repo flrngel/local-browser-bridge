@@ -714,7 +714,7 @@ function Invoke-BoundedExactExtensionZipExtraction(
   }
   $Extracted = @([IO.DirectoryInfo]::new($DestinationFull).GetFileSystemInfos())
   if ($Extracted.Count -ne 11 -or
-      (Compare-Object ($Extracted.Name | Sort-Object) ($ExpectedNames | Sort-Object)).Count -ne 0 -or
+      @(Compare-Object ($Extracted.Name | Sort-Object) ($ExpectedNames | Sort-Object)).Count -ne 0 -or
       @($Extracted | Where-Object {
         $_ -isnot [IO.FileInfo] -or ($_.Attributes -band [IO.FileAttributes]::ReparsePoint)
       }).Count -ne 0) {
@@ -833,7 +833,7 @@ function Remove-ExactFlatOwnedDirectory([string]$Path, [string[]]$ExpectedNames)
       @($Entries | Where-Object {
         $_ -isnot [IO.FileInfo] -or ($_.Attributes -band [IO.FileAttributes]::ReparsePoint)
       }).Count -ne 0 -or
-      (Compare-Object ($Entries.Name | Sort-Object) ($ExpectedNames | Sort-Object)).Count -ne 0) {
+      @(Compare-Object ($Entries.Name | Sort-Object) ($ExpectedNames | Sort-Object)).Count -ne 0) {
     throw "Flat cleanup refused an unexpected or linked inventory."
   }
   foreach ($Name in $ExpectedNames) { [IO.File]::Delete((Join-Path $Full $Name)) }
@@ -937,7 +937,7 @@ $Downloads = @([IO.DirectoryInfo]::new($Candidate).GetFileSystemInfos())
 if ($Downloads.Count -ne 5 -or @($Downloads | Where-Object {
       $_ -isnot [IO.FileInfo] -or ($_.Attributes -band [IO.FileAttributes]::ReparsePoint)
     }).Count -ne 0 -or
-    (Compare-Object ($ExpectedDownloads | Sort-Object) ($Downloads.Name | Sort-Object)).Count -ne 0) {
+    @(Compare-Object ($ExpectedDownloads | Sort-Object) ($Downloads.Name | Sort-Object)).Count -ne 0) {
   throw "Candidate download inventory is not the exact five ordinary files."
 }
 

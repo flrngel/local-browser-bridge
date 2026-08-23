@@ -291,7 +291,21 @@ function Read-Json {
 
 function Get-Sha256 {
     param([string]$Path)
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $stream = [IO.File]::Open(
+        $Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read
+    )
+    $hasher = $null
+    $digest = $null
+    try {
+        $hasher = [Security.Cryptography.SHA256]::Create()
+        $digest = $hasher.ComputeHash($stream)
+        return ([BitConverter]::ToString($digest)).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        if ($null -ne $digest) { [Array]::Clear($digest, 0, $digest.Length) }
+        if ($null -ne $hasher) { $hasher.Dispose() }
+        $stream.Dispose()
+    }
 }
 
 function Assert-ExactKeys {

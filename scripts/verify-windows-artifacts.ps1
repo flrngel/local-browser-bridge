@@ -5,7 +5,11 @@ param(
     [string]$Version,
 
     [string]$ServerPath = "dist/local-browser-bridge-v$Version-windows-x86_64.exe",
-    [string]$HelperPath = "dist/local-computer-helper-v$Version-windows-x86_64.exe"
+    [string]$HelperPath = "dist/local-computer-helper-v$Version-windows-x86_64.exe",
+
+    [string]$ChecksumManifestPath = "",
+
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = 'Stop'
@@ -70,6 +74,96 @@ function Assert-PeX64 {
     }
     if ([BitConverter]::ToUInt16($bytes, $peOffset + 4) -ne 0x8664) {
         throw "$Path is not an x86_64 PE executable."
+    }
+}
+
+function Get-FileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $stream = [IO.File]::Open(
+        $Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read
+    )
+    $hasher = $null
+    $digest = $null
+    try {
+        $hasher = [Security.Cryptography.SHA256]::Create()
+        $digest = $hasher.ComputeHash($stream)
+        return ([BitConverter]::ToString($digest)).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        if ($null -ne $digest) { [Array]::Clear($digest, 0, $digest.Length) }
+        if ($null -ne $hasher) { $hasher.Dispose() }
+        $stream.Dispose()
+    }
+}
+
+function Write-ChecksumManifest {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][object[]]$Entries
+    )
+
+    $resolved = [IO.Path]::GetFullPath($Path)
+    $parent = [IO.Path]::GetDirectoryName($resolved)
+    if ([string]::IsNullOrWhiteSpace($parent) -or -not [IO.Directory]::Exists($parent)) {
+        throw "The checksum manifest parent directory does not exist."
+    }
+    $lines = @($Entries | ForEach-Object {
+        "$($_.Sha256)  $([IO.Path]::GetFileName($_.Path))"
+    })
+    if ($lines.Count -ne $Entries.Count) {
+        throw "The checksum manifest inventory is incomplete."
+    }
+
+    $stream = [IO.File]::Open(
+        $resolved, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None
+    )
+    $writer = $null
+    try {
+        $writer = [IO.StreamWriter]::new($stream, [Text.Encoding]::ASCII)
+        foreach ($line in $lines) { $writer.WriteLine($line) }
+        $writer.Flush()
+    }
+    finally {
+        if ($null -ne $writer) { $writer.Dispose() } else { $stream.Dispose() }
+    }
+}
+
+if ($SelfTest) {
+    $selfTestRoot = Join-Path ([IO.Path]::GetTempPath()) "lbb-windows-artifact-self-test-$([guid]::NewGuid().ToString('N'))"
+    [IO.Directory]::CreateDirectory($selfTestRoot) | Out-Null
+    $probePath = Join-Path $selfTestRoot "probe.bin"
+    $manifestPath = Join-Path $selfTestRoot "SHA256SUMS.txt"
+    try {
+        [IO.File]::WriteAllBytes($probePath, [byte[]](0x61, 0x62, 0x63))
+        $expectedSha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        $actualSha256 = Get-FileSha256 $probePath
+        if ($actualSha256 -cne $expectedSha256) {
+            throw "The artifact verifier SHA-256 helper failed its canonical test vector."
+        }
+        $entry = [pscustomobject]@{ Path = $probePath; Sha256 = $actualSha256 }
+        Write-ChecksumManifest -Path $manifestPath -Entries @($entry)
+        $expectedManifest = "$expectedSha256  probe.bin$([Environment]::NewLine)"
+        if ([IO.File]::ReadAllText($manifestPath, [Text.Encoding]::ASCII) -cne $expectedManifest) {
+            throw "The artifact verifier wrote a noncanonical checksum manifest."
+        }
+        $overwriteRefused = $false
+        try {
+            Write-ChecksumManifest -Path $manifestPath -Entries @($entry)
+        }
+        catch [IO.IOException] {
+            $overwriteRefused = $true
+        }
+        if (-not $overwriteRefused) {
+            throw "The artifact verifier checksum writer did not refuse an existing manifest."
+        }
+        Write-Output "Windows artifact verifier self-test passed."
+        exit 0
+    }
+    finally {
+        if ([IO.File]::Exists($manifestPath)) { [IO.File]::Delete($manifestPath) }
+        if ([IO.File]::Exists($probePath)) { [IO.File]::Delete($probePath) }
+        if ([IO.Directory]::Exists($selfTestRoot)) { [IO.Directory]::Delete($selfTestRoot, $false) }
     }
 }
 
@@ -264,7 +358,7 @@ $results = foreach ($artifact in $artifacts) {
     [pscustomobject]@{
         Path = $resolved
         Version = $reportedVersion
-        Sha256 = (Get-FileHash -LiteralPath $resolved -Algorithm SHA256).Hash.ToLowerInvariant()
+        Sha256 = Get-FileSha256 $resolved
         Manifest = 'asInvoker; uiAccess=false; PerMonitorV2; longPathAware'
         VersionResource = "$($artifact.Description); FileVersion=$Version; ProductVersion=$Version"
         Runtime = 'static CRT'
@@ -272,4 +366,7 @@ $results = foreach ($artifact in $artifacts) {
     }
 }
 
+if (-not [string]::IsNullOrWhiteSpace($ChecksumManifestPath)) {
+    Write-ChecksumManifest -Path $ChecksumManifestPath -Entries $results
+}
 $results | Format-Table -AutoSize

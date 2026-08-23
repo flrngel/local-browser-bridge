@@ -173,6 +173,25 @@ function Read-ExactCandidateChecksums {
     return ,$entries
 }
 
+function Get-FileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $stream = [IO.File]::Open(
+        $Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read
+    )
+    $hasher = $null
+    $digest = $null
+    try {
+        $hasher = [Security.Cryptography.SHA256]::Create()
+        $digest = $hasher.ComputeHash($stream)
+        return ([BitConverter]::ToString($digest)).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        if ($null -ne $digest) { [Array]::Clear($digest, 0, $digest.Length) }
+        if ($null -ne $hasher) { $hasher.Dispose() }
+        $stream.Dispose()
+    }
+}
+
 function Assert-ExactJsonProperties {
     param(
         [object]$Value,
@@ -309,7 +328,7 @@ function Get-VerifiedCandidateArtifact {
     if ([IO.Path]::GetFileName($Path) -cne $ExpectedName) {
         throw "$Label must use the canonical frozen-candidate filename."
     }
-    $actualSha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $actualSha256 = Get-FileSha256 $Path
     if ($actualSha256 -cne $ExpectedSha256) {
         throw "$Label does not match its exact ChecksumManifest entry."
     }
@@ -358,7 +377,7 @@ if (-not $SelfTest) {
     if ([IO.Path]::GetFileName($resolvedChecksumManifest) -cne "SHA256SUMS.txt") {
         throw "ChecksumManifest must use the canonical SHA256SUMS.txt filename."
     }
-    $manifestSha256 = (Get-FileHash -LiteralPath $resolvedChecksumManifest -Algorithm SHA256).Hash.ToLowerInvariant()
+    $manifestSha256 = Get-FileSha256 $resolvedChecksumManifest
     if ($manifestSha256 -cne $ChecksumManifestSha256.ToLowerInvariant()) {
         throw "ChecksumManifest does not match the externally recorded frozen-candidate SHA-256."
     }
@@ -2106,6 +2125,12 @@ if ($SelfTest) {
     )
     [IO.Directory]::CreateDirectory($candidateBindingSelfTestRoot) | Out-Null
     try {
+        $sha256SelfTestPath = [IO.Path]::Combine($candidateBindingSelfTestRoot, "sha256-probe.bin")
+        [IO.File]::WriteAllBytes($sha256SelfTestPath, [byte[]](0x61, 0x62, 0x63))
+        if ((Get-FileSha256 $sha256SelfTestPath) -cne
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad") {
+            throw "The module-independent SHA-256 helper failed its canonical test vector."
+        }
         $candidateBindingSelfTestPath = [IO.Path]::Combine($candidateBindingSelfTestRoot, "candidate-binding.json")
         $candidateBindingNames = @(
             "local-browser-bridge-v0.12.12-windows-x86_64.exe",
@@ -2662,7 +2687,7 @@ function Save-ObservationScreenshot {
     return [ordered]@{
         file = $fileName
         bytes = $bytes.Length
-        sha256 = (Get-FileHash -Algorithm SHA256 -Path $path).Hash.ToLowerInvariant()
+        sha256 = Get-FileSha256 $path
         frameId = $Observation.frameId
         contentHash = $Observation.contentHash
     }
@@ -2872,7 +2897,7 @@ function Save-SanitizedDesktopCrop {
     return [ordered]@{
         file = $fileName
         bytes = ([IO.FileInfo]::new($path)).Length
-        sha256 = (Get-FileHash -Algorithm SHA256 -Path $path).Hash.ToLowerInvariant()
+        sha256 = Get-FileSha256 $path
         crop = [ordered]@{ x = $left; y = $top; width = $width; height = $height; targetMargin = $margin }
         fixtureBackdropRgb = "#101820"
         backdropPerimeterRatio = $backdropRatio
@@ -2923,7 +2948,7 @@ function Get-SanitizedFileProvenance {
     $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($Path).FileVersion
     return [ordered]@{
         bytes = $file.Length
-        sha256 = (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLowerInvariant()
+        sha256 = Get-FileSha256 $Path
         fileVersion = if ([String]::IsNullOrWhiteSpace($version)) { $null } else { $version }
         pathRecorded = $false
     }

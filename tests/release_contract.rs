@@ -81,6 +81,7 @@ fn windows_ci_and_release_validate_the_complete_browser_evidence_toolchain() {
             "scripts/test-windows-browser-api.ps1",
             "scripts/test-windows-computer-use.ps1",
             "scripts/test-windows-stock-chrome.ps1",
+            "scripts/verify-windows-artifacts.ps1",
             "scripts/verify-windows-release-candidate.ps1",
             "scripts/wait-windows-foreground-arm-handoff.ps1",
             "scripts/write-browser-evidence-record.ps1",
@@ -97,6 +98,7 @@ fn windows_ci_and_release_validate_the_complete_browser_evidence_toolchain() {
             "./scripts/sanitize-browser-evidence-screenshot.ps1 -Mode SelfTest",
             "./scripts/test-windows-browser-api.ps1 -SelfTest",
             "./scripts/test-windows-computer-use.ps1 -SelfTest",
+            "./scripts/verify-windows-artifacts.ps1 -Version 0.0.0 -SelfTest",
             "./scripts/wait-windows-foreground-arm-handoff.ps1 -Mode SelfTest",
             "./tests/fixtures/windows/WindowsComputerUseFixture.ps1 -SelfTest",
             "./scripts/write-browser-evidence-record.ps1 -Mode SelfTest",
@@ -141,6 +143,7 @@ fn windows_ci_and_release_validate_the_complete_browser_evidence_toolchain() {
             "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-browser-api.ps1 -SelfTest",
             "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/write-browser-evidence-record.ps1 -Mode SelfTest",
             "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-computer-use.ps1 -SelfTest",
+            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-artifacts.ps1 -Version 0.0.0 -SelfTest",
             "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-stock-chrome.ps1 -SelfTest",
             "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-release-candidate.ps1 -SelfTest",
             "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/wait-windows-foreground-arm-handoff.ps1 -Mode SelfTest",
@@ -164,6 +167,7 @@ fn release_runs_every_browser_evidence_self_test_under_windows_powershell_51() {
         "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-browser-api.ps1 -SelfTest",
         "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/write-browser-evidence-record.ps1 -Mode SelfTest",
         "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-computer-use.ps1 -SelfTest",
+        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-artifacts.ps1 -Version 0.0.0 -SelfTest",
         "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-stock-chrome.ps1 -SelfTest",
         "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-release-candidate.ps1 -SelfTest",
         "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/wait-windows-foreground-arm-handoff.ps1 -Mode SelfTest",
@@ -172,6 +176,31 @@ fn release_runs_every_browser_evidence_self_test_under_windows_powershell_51() {
         assert!(
             workflow.contains(invocation),
             "release validation does not run under Windows PowerShell 5.1: {invocation}"
+        );
+    }
+}
+
+#[test]
+fn windows_release_tooling_hashes_without_module_discovery() {
+    for path in [
+        ".github/workflows/ci.yml",
+        ".github/workflows/deploy.yml",
+        "scripts/browser-evidence-candidate.ps1",
+        "scripts/record-computer-helper-chain.ps1",
+        "scripts/sanitize-browser-evidence-screenshot.ps1",
+        "scripts/test-windows-browser-api.ps1",
+        "scripts/test-windows-computer-use.ps1",
+        "scripts/test-windows-stock-chrome.ps1",
+        "scripts/verify-windows-artifacts.ps1",
+        "scripts/verify-windows-release-candidate.ps1",
+        "scripts/wait-windows-foreground-arm-handoff.ps1",
+        "scripts/write-browser-evidence-record.ps1",
+        "tests/fixtures/windows/WindowsComputerUseFixture.ps1",
+    ] {
+        let tooling = source(path);
+        assert!(
+            !tooling.contains("Get-FileHash"),
+            "{path} must hash through the .NET cryptography API so a restricted PSModulePath cannot disable a release or acceptance gate"
         );
     }
 }

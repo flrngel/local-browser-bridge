@@ -97,6 +97,7 @@ jobs:
             "scripts/test-windows-browser-api.ps1",
             "scripts/test-windows-computer-use.ps1",
             "scripts/test-windows-stock-chrome.ps1",
+            "scripts/verify-windows-artifacts.ps1",
             "scripts/verify-windows-release-candidate.ps1",
             "scripts/wait-windows-foreground-arm-handoff.ps1",
             "scripts/write-browser-evidence-record.ps1",
@@ -130,6 +131,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 browser evidence finalizer self-test failed." }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-computer-use.ps1 -SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 computer-use self-test failed." }
+          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-artifacts.ps1 -Version 0.0.0 -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 artifact verifier self-test failed." }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-release-candidate.ps1 -SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 release-candidate trust self-test failed." }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-stock-chrome.ps1 -SelfTest
@@ -155,8 +158,7 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target/x86_64-pc-windows-msvc/release/local-browser-bridge.exe "dist/local-browser-bridge-v${version}-windows-x86_64.exe"
           Copy-Item target/x86_64-pc-windows-msvc/release/local-computer-helper.exe "dist/local-computer-helper-v${version}-windows-x86_64.exe"
-          ./scripts/verify-windows-artifacts.ps1 -Version $version
-          Get-FileHash dist/*.exe -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLowerInvariant())  $(Split-Path $_.Path -Leaf)" } | Set-Content -Encoding ascii dist/SHA256SUMS-windows.txt
+          ./scripts/verify-windows-artifacts.ps1 -Version $version -ChecksumManifestPath dist/SHA256SUMS-windows.txt
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-ci-${{ github.sha }}

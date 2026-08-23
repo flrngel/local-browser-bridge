@@ -124,6 +124,7 @@ jobs:
             "scripts/test-windows-browser-api.ps1",
             "scripts/test-windows-computer-use.ps1",
             "scripts/test-windows-stock-chrome.ps1",
+            "scripts/verify-windows-artifacts.ps1",
             "scripts/verify-windows-release-candidate.ps1",
             "scripts/wait-windows-foreground-arm-handoff.ps1",
             "scripts/write-browser-evidence-record.ps1",
@@ -157,6 +158,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 browser evidence finalizer self-test failed." }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-computer-use.ps1 -SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 computer-use self-test failed." }
+          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-artifacts.ps1 -Version 0.0.0 -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 artifact verifier self-test failed." }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-release-candidate.ps1 -SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 release-candidate trust self-test failed." }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-stock-chrome.ps1 -SelfTest
