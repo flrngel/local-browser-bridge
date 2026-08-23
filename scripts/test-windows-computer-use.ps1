@@ -294,7 +294,7 @@ function Read-ExactReleaseCandidateBinding {
         attestationInvocationUri = [string]$binding.attestationInvocationUri
         attestedAssetCount = [int64]$binding.attestedAssetCount
         githubHostedRunner = $true
-        assets = @($normalizedAssets)
+        assets = $normalizedAssets.ToArray()
     }
 }
 
@@ -2151,7 +2151,7 @@ if ($SelfTest) {
             attestationInvocationUri = "https://github.com/flrngel/local-browser-bridge/actions/runs/32650000000/attempts/1"
             attestedAssetCount = 5
             githubHostedRunner = $true
-            assets = @($candidateBindingAssets)
+            assets = $candidateBindingAssets.ToArray()
             passed = $true
         }
         [IO.File]::WriteAllText(
