@@ -2,6 +2,7 @@
 
 import { createHash } from "node:crypto";
 import {
+  chmod,
   constants,
   link,
   lstat,
@@ -37,6 +38,8 @@ const MAX_REQUEST_TO_COMPLETE_MS = 310_000;
 const MAX_LANE_DURATION_MS = 2 * 60 * 60 * 1_000;
 const MAX_DELIBERATE_REVIEW_DELAY_MS = 30 * 60 * 1_000;
 const MAX_PID = 2_147_483_647;
+const IS_WINDOWS = process.platform === "win32";
+const POSIX_PERMISSION_METADATA_AVAILABLE = !IS_WINDOWS && typeof process.getuid === "function";
 const FINALIZER_SOURCE_PATH = fileURLToPath(import.meta.url);
 const FINALIZER_SOURCE_SHA256 = createHash("sha256")
   .update(await readFile(FINALIZER_SOURCE_PATH))
@@ -279,6 +282,12 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+function assertSupportedFilesystemIdentity() {
+  if (!IS_WINDOWS && !POSIX_PERMISSION_METADATA_AVAILABLE) {
+    fail("POSIX filesystem identity metadata is unavailable.");
+  }
+}
+
 function sameStats(before, after) {
   return (
     before.dev === after.dev &&
@@ -291,10 +300,11 @@ function sameStats(before, after) {
 }
 
 function validateOwnedOrdinaryFile(stats, label, maximumBytes) {
+  assertSupportedFilesystemIdentity();
   if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1n) {
     fail(`${label} must be one ordinary, singly linked file.`);
   }
-  if (typeof process.getuid === "function" && stats.uid !== BigInt(process.getuid())) {
+  if (POSIX_PERMISSION_METADATA_AVAILABLE && stats.uid !== BigInt(process.getuid())) {
     fail(`${label} must be owned by the finalizer user.`);
   }
   if (stats.size < 1n || stats.size > BigInt(maximumBytes)) {
@@ -462,6 +472,7 @@ function pathContains(parent, child) {
 }
 
 async function validateCanonicalPrivateDirectory(input, label, now) {
+  assertSupportedFilesystemIdentity();
   if (typeof input !== "string" || input.length === 0 || input.includes("\0")) {
     fail(`${label} path is invalid.`);
   }
@@ -472,8 +483,10 @@ async function validateCanonicalPrivateDirectory(input, label, now) {
   }
   const stats = await lstat(canonical, { bigint: true });
   if (!stats.isDirectory() || stats.isSymbolicLink()) fail(`${label} must be one ordinary directory.`);
-  if ((stats.mode & 0o077n) !== 0n) fail(`${label} must not grant group or other filesystem access.`);
-  if (typeof process.getuid === "function" && stats.uid !== BigInt(process.getuid())) {
+  if (POSIX_PERMISSION_METADATA_AVAILABLE && (stats.mode & 0o077n) !== 0n) {
+    fail(`${label} must not grant group or other filesystem access.`);
+  }
+  if (POSIX_PERMISSION_METADATA_AVAILABLE && stats.uid !== BigInt(process.getuid())) {
     fail(`${label} must be owned by the finalizer user.`);
   }
   const modifiedAt = Number(stats.ctimeNs / 1_000_000n);
@@ -498,10 +511,10 @@ async function walkLane(root, label, now) {
       validateFreshTimestamp(modifiedAt, now, `${label} entry ${relativePath}`);
       if (entry.isSymbolicLink()) fail(`${label} entry ${relativePath} must not be a symbolic link.`);
       if (entry.isDirectory()) {
-        if ((entry.mode & 0o077n) !== 0n) {
+        if (POSIX_PERMISSION_METADATA_AVAILABLE && (entry.mode & 0o077n) !== 0n) {
           fail(`${label} directory ${relativePath} must be private.`);
         }
-        if (typeof process.getuid === "function" && entry.uid !== BigInt(process.getuid())) {
+        if (POSIX_PERMISSION_METADATA_AVAILABLE && entry.uid !== BigInt(process.getuid())) {
           fail(`${label} directory ${relativePath} must be owned by the finalizer user.`);
         }
         directories.push(relativePath);
@@ -1546,6 +1559,46 @@ async function runSelfTest() {
     await expectSelfTestFailure(() => finalize(quiet, deliberate, output), "fresh and empty");
     if (!(await readFile(published.path)).equals(before)) {
       throw new Error("self-test create-once aggregate changed after overwrite refusal.");
+    }
+
+    if (POSIX_PERMISSION_METADATA_AVAILABLE) {
+      const permissiveQuiet = await createSelfTestLane(root, "permissive-quiet", "quiet");
+      const permissiveDeliberate = await createSelfTestLane(
+        root,
+        "permissive-deliberate",
+        "deliberate-concurrency",
+      );
+      const permissiveOutput = await freshSelfTestOutput(root, "permissive-output");
+      await chmod(permissiveOutput, 0o755);
+      await expectSelfTestFailure(
+        () => finalize(permissiveQuiet, permissiveDeliberate, permissiveOutput),
+        "must not grant group or other filesystem access",
+      );
+
+      const nestedPermissiveQuiet = await createSelfTestLane(
+        root,
+        "nested-permissive-quiet",
+        "quiet",
+      );
+      const nestedPermissiveDeliberate = await createSelfTestLane(
+        root,
+        "nested-permissive-deliberate",
+        "deliberate-concurrency",
+      );
+      const permissiveOperatorPath = join(nestedPermissiveDeliberate, "operator");
+      await chmod(permissiveOperatorPath, 0o755);
+      const nestedPermissiveOutput = await freshSelfTestOutput(
+        root,
+        "nested-permissive-output",
+      );
+      await expectSelfTestFailure(
+        () => finalize(
+          nestedPermissiveQuiet,
+          nestedPermissiveDeliberate,
+          nestedPermissiveOutput,
+        ),
+        "directory operator must be private",
+      );
     }
 
     const swapOutput = await freshSelfTestOutput(root, "swap-output");
