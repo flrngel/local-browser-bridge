@@ -1,4 +1,6 @@
-use std::{fs, process::Command};
+use std::fs;
+#[cfg(not(target_os = "windows"))]
+use std::process::Command;
 
 fn source(path: &str) -> String {
     fs::read_to_string(path).unwrap().replace("\r\n", "\n")
@@ -810,23 +812,26 @@ fn release_evidence_verifier_fails_closed_on_artifact_or_commit_substitution() {
 
 #[test]
 fn release_evidence_verifier_executes_adversarial_replay_and_decoder_tests() {
-    let output = Command::new("bash")
-        .args([
-            "scripts/verify-release-acceptance-evidence.sh",
-            "--self-test",
-        ])
-        .output()
-        .expect("release evidence verifier self-test must start");
-    assert!(
-        output.status.success(),
-        "release evidence verifier self-test failed:\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        String::from_utf8_lossy(&output.stdout)
-            .contains("Release acceptance evidence verifier self-test passed.")
-    );
+    #[cfg(not(target_os = "windows"))]
+    {
+        let output = Command::new("bash")
+            .args([
+                "scripts/verify-release-acceptance-evidence.sh",
+                "--self-test",
+            ])
+            .output()
+            .expect("release evidence verifier self-test must start");
+        assert!(
+            output.status.success(),
+            "release evidence verifier self-test failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout)
+                .contains("Release acceptance evidence verifier self-test passed.")
+        );
+    }
 
     let verifier = source("scripts/verify-release-acceptance-evidence.sh");
     for required in [
