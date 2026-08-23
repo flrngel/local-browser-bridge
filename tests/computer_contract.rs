@@ -839,7 +839,7 @@ fn background_invariant_failures_use_stage_bound_closed_vocabulary() {
 
 #[test]
 fn macos_negative_evidence_keeps_only_equality_and_fixture_counters() {
-    let rig = fs::read_to_string("evidence/v0.12.5/computer/helper-evidence-rig.mjs").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.6/computer/helper-evidence-rig.mjs").unwrap();
     assert!(rig.contains("failureProbeBaseline"));
     assert!(rig.contains("collectFailureDiagnostics"));
     assert!(rig.contains("systemInvariants(failureProbeBaseline.system, after)"));
@@ -931,12 +931,12 @@ fn historical_macos_v0_12_2_evidence_sources_remain_byte_exact() {
 
 #[test]
 fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
-    let rig = fs::read_to_string("evidence/v0.12.5/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.6/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let fixture =
-        fs::read_to_string("evidence/v0.12.5/computer/HelperEvidenceFixture.swift").unwrap();
-    let readme = fs::read_to_string("evidence/v0.12.5/computer/README.md").unwrap();
+        fs::read_to_string("evidence/v0.12.6/computer/HelperEvidenceFixture.swift").unwrap();
+    let readme = fs::read_to_string("evidence/v0.12.6/computer/README.md").unwrap();
 
     assert!(rig.contains(&format!("const EXPECTED_VERSION = \"{VERSION}\";")));
     assert!(rig.contains("const EXPECTED_ARCHIVE = `local-browser-bridge-v${EXPECTED_VERSION}-macos-universal.tar.gz`;"));
@@ -995,10 +995,10 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
 
 #[test]
 fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
-    let rig = fs::read_to_string("evidence/v0.12.5/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.6/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.5/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.6/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1030,7 +1030,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
         "$EXPECTED_SHA256SUMS_SHA256",
         "$EXPECTED_SOURCE_SHA",
         "mandatory SHA-256 supplied",
-        "exactly the four v0.12.5",
+        "exactly the four v0.12.6",
         "expected and actual manifest hashes",
         "Before invoking either supplied candidate executable—even with `--version`",
         "No supplied server or helper code executes before",
@@ -1087,7 +1087,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
         .unwrap();
     let first_documented_extraction = readme.find("tar -xzf").unwrap();
     let first_documented_execution = readme
-        .find("node evidence/v0.12.5/computer/helper-evidence-rig.mjs")
+        .find("node evidence/v0.12.6/computer/helper-evidence-rig.mjs")
         .unwrap();
     assert!(
         independent_manifest_digest < exact_inventory
@@ -1103,7 +1103,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
 
 #[test]
 fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
-    let rig = fs::read_to_string("evidence/v0.12.5/computer/helper-evidence-rig.mjs").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.6/computer/helper-evidence-rig.mjs").unwrap();
     assert!(rig.contains("capturedFrameMatchesWindowGeometry"));
     assert!(rig.contains("share-resize-settled"));
     assert!(rig.contains("sample.sourceSequence > resizeTransition.sample.sourceSequence"));
@@ -1115,12 +1115,12 @@ fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
 
 #[test]
 fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.5/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.6/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     assert!(rig.contains("function childEnvironment(overrides = {})"));
     assert!(!rig.contains("...process.env"));
-    let fixture = fs::read_to_string("evidence/v0.12.5/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.6/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1197,6 +1197,13 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
         "nativeText.characters === NATIVE_TEXT_SUFFIX.length",
         "nativeText.utf16CodeUnits === NATIVE_TEXT_SUFFIX.length",
         "native typeText independent foreground/focus/cursor/Space invariants",
+        "share-after-native-text-delivery",
+        "candidateObservation.shareId === firstShareId",
+        "candidateObservation.sourceSequence === sample.sourceSequence",
+        "candidateObservation.elements.some",
+        "native text restore frame is bound to the persistent share authority",
+        "restoreObservation.shareId === firstShareId",
+        "restoreObservation.sourceSequence === current.sample.sourceSequence",
         "command(\"computer.setValue\"",
         "native text fixture value restored",
         "native text restore exact fixture state",
@@ -1207,6 +1214,14 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
             "missing native text proof: {required}"
         );
     }
+    let native_text_action = native_text.find("command(\"computer.typeText\"").unwrap();
+    let restore_share_frame = native_text
+        .find("share-after-native-text-delivery")
+        .unwrap();
+    let restore_action = native_text.find("command(\"computer.setValue\"").unwrap();
+    assert!(native_text_action < restore_share_frame && restore_share_frame < restore_action);
+    assert!(!native_text.contains("restoreObserved"));
+    assert!(!native_text.contains("freshObserve(targetWindow.id)"));
 
     assert!(rig.contains("cancellation starts from a current resized share frame"));
     let cancellation = rig
@@ -1283,10 +1298,10 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
 
 #[test]
 fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.5/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.6/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.5/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.6/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1417,21 +1432,21 @@ fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() 
 
 #[test]
 fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negative() {
-    let fixture = fs::read_to_string("evidence/v0.12.5/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.6/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.5/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.6/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.5/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.6/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.5/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.6/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
     for required in [
-        "private let siblingFixtureTitle = \"LBB v0.12.5 Same-PID Sibling Receiver\"",
+        "private let siblingFixtureTitle = \"LBB v0.12.6 Same-PID Sibling Receiver\"",
         "var primaryWindowId = 0",
         "var siblingWindowId = 0",
         "var siblingTextLength = 0",

@@ -1,19 +1,11 @@
-# macOS v0.12.5 persistent-share evidence candidate
-
-> **Withdrawn:** the exact v0.12.5 candidate failed closed during this harness's
-> native-text cleanup and was never approved or published. The retained result,
-> immutable candidate binding, checksums, cleanup caveat, and privacy review are
-> recorded in
-> [attempts/withdrawn-badda8e-macos-native-text-restore-stale-frame/README.md](attempts/withdrawn-badda8e-macos-native-text-restore-stale-frame/README.md).
-> This directory remains the historical runner source and must not be used as
-> current release evidence.
+# macOS v0.12.6 persistent-share evidence candidate
 
 This directory contains a deterministic evidence harness for the packaged
-macOS v0.12.5 server and helper. It is **candidate infrastructure only** until
+macOS v0.12.6 server and helper. It is **candidate infrastructure only** until
 the harness runs against the exact release-candidate archive and records a
 passing `helper-results.json`, `helper-rig.log`, and the six screenshots listed
 below. A local pass becomes immutable release evidence only if the same archive
-SHA-256 is later published in the v0.12.5 GitHub release.
+SHA-256 is later published in the v0.12.6 GitHub release.
 
 The harness talks to the real loopback server API and launches the supplied
 `Local Computer Helper.app` executable exactly once. It does not use a mock
@@ -32,11 +24,11 @@ candidate binaries.
 
 ## What the run proves
 
-- The server and helper report exactly v0.12.5, are universal
+- The server and helper report exactly v0.12.6, are universal
   `arm64`/`x86_64` binaries, and pass strict code-signature checks.
 - The supplied executables are byte-for-byte identical to the copies inside
-  `local-browser-bridge-v0.12.5-macos-universal.tar.gz`. The archive must be
-  bound by a canonical `SHA256SUMS.txt` containing exactly the four v0.12.5
+  `local-browser-bridge-v0.12.6-macos-universal.tar.gz`. The archive must be
+  bound by a canonical `SHA256SUMS.txt` containing exactly the four v0.12.6
   release assets, and that manifest must match a mandatory SHA-256 supplied
   out of band; a locally rebuilt archive plus a substituted manifest is
   refused. No supplied server or helper code executes before all of those
@@ -69,9 +61,14 @@ candidate binaries.
   becoming the foreground app. A short, bounded native `computer.typeText`
   action must append to that exact field, report `Unverifiable`, and satisfy
   both product and independent non-interruption invariants. Exact fixture
-  read-back supplies separate evidence, after which confirmed Accessibility
-  `setValue` restores the deterministic value. Before and after delivery, both
-  target `AXMainWindow` and `AXFocusedWindow` must equal the original sibling.
+  read-back supplies separate evidence. While the persistent share remains
+  active, the runner then waits for a later server-published streamed frame from
+  that exact share epoch, proves its top-level `shareId` and `sourceSequence`
+  against the sampled transport record, and uses only that frame to authorize
+  confirmed Accessibility `setValue` restoration. It never substitutes an
+  unbound one-shot observation during the live share and never retries a stale
+  mutation. Before and after delivery, both target `AXMainWindow` and
+  `AXFocusedWindow` must equal the original sibling.
 - Capture metadata reports `macos-screencapturekit-scstream`,
   `nativeStream: true`, the no-suppression system-indicator policy, and
   `programmatic-exact-window` selection.
@@ -203,7 +200,7 @@ set -euo pipefail
 : "${EXPECTED_SHA256SUMS_SHA256:?set the independently handed-off manifest SHA-256}"
 : "${EXPECTED_SOURCE_SHA:?set the independently handed-off source commit SHA}"
 
-VERSION="0.12.5"
+VERSION="0.12.6"
 TAG="v$VERSION"
 REPOSITORY="flrngel/local-browser-bridge"
 MANIFEST="$RELEASE_CANDIDATE_DIR/SHA256SUMS.txt"
@@ -268,17 +265,17 @@ done
 
 # Extraction and candidate execution are permitted only below this line.
 bash scripts/verify-release-assets.sh "$VERSION" "$RELEASE_CANDIDATE_DIR"
-PACKAGE_ROOT="$(mktemp -d "$SCRATCH_PARENT/lbb-v0.12.5-package.XXXXXX")"
+PACKAGE_ROOT="$(mktemp -d "$SCRATCH_PARENT/lbb-v0.12.6-package.XXXXXX")"
 trap 'rm -rf -- "$PACKAGE_ROOT"' EXIT
-tar -xzf "$RELEASE_CANDIDATE_DIR/local-browser-bridge-v0.12.5-macos-universal.tar.gz" \
+tar -xzf "$RELEASE_CANDIDATE_DIR/local-browser-bridge-v0.12.6-macos-universal.tar.gz" \
   -C "$PACKAGE_ROOT"
 
-node evidence/v0.12.5/computer/helper-evidence-rig.mjs \
+node evidence/v0.12.6/computer/helper-evidence-rig.mjs \
   "$PACKAGE_ROOT/local-browser-bridge" \
   "$PACKAGE_ROOT/Local Computer Helper.app/Contents/MacOS/local-computer-helper" \
-  evidence/v0.12.5/computer \
+  evidence/v0.12.6/computer \
   "$SCRATCH_PARENT" \
-  "$RELEASE_CANDIDATE_DIR/local-browser-bridge-v0.12.5-macos-universal.tar.gz" \
+  "$RELEASE_CANDIDATE_DIR/local-browser-bridge-v0.12.6-macos-universal.tar.gz" \
   "$RELEASE_CANDIDATE_DIR/SHA256SUMS.txt" \
   "$EXPECTED_SHA256SUMS_SHA256"
 ```
@@ -330,9 +327,22 @@ After the run, inspect every screenshot, confirm `assertions.failed` is zero,
 and compare the recorded archive SHA-256 with the published release asset
 before changing this directory's status from candidate to released evidence.
 
+## Historical v0.12.5 negative attempt
+
+The exact v0.12.5 candidate run is retained as failed-candidate evidence, not
+as a v0.12.6 result:
+
+- [`withdrawn-badda8e-macos-native-text-restore-stale-frame`](../../v0.12.5/computer/attempts/withdrawn-badda8e-macos-native-text-restore-stale-frame/README.md)
+  records 82 successful assertions followed by a fail-closed
+  `COMPUTER_STALE_FRAME` refusal. Its live-share cleanup requested an unbound
+  one-shot observation that a later stream frame correctly superseded before
+  mutation dispatch. The same-epoch streamed restore gate in this harness is
+  the regression boundary found by that run; production authority checks were
+  not relaxed.
+
 ## Historical v0.12.2 negative attempt
 
-The v0.12.2 candidate run is preserved byte-for-byte and is not v0.12.5
+The v0.12.2 candidate run is preserved byte-for-byte and is not v0.12.6
 evidence:
 
 - [`withdrawn-a52d761-post-cancel-fresh-share-refusal`](../../v0.12.2/computer/attempts/withdrawn-a52d761-post-cancel-fresh-share-refusal/README.md)
@@ -344,7 +354,7 @@ evidence:
 ## Historical v0.12.1 negative attempts
 
 The prior attempts remain byte-for-byte in the v0.12.1 evidence directory.
-They are linked for diagnostic history only and are not v0.12.5 results:
+They are linked for diagnostic history only and are not v0.12.6 results:
 
 - [`withdrawn-98ff6f0-macos-invariant-refusal`](../../v0.12.1/computer/attempts/withdrawn-98ff6f0-macos-invariant-refusal/README.md)
   preserves the first fail-closed run. It is diagnostic history, not release

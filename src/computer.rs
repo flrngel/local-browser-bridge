@@ -2255,6 +2255,44 @@ mod tests {
     }
 
     #[test]
+    fn active_share_rejects_a_demoted_one_shot_but_accepts_a_same_epoch_stream_frame() {
+        let mut controller = ComputerController::new();
+        let now = Instant::now();
+        let mut current = frame();
+        current.id = "current-stream-frame".to_owned();
+        current.captured_at = now;
+        current.share_id = Some("share-1".to_owned());
+        current.source_sequence = Some(3);
+
+        let mut demoted_one_shot = current.clone();
+        demoted_one_shot.id = "demoted-one-shot".to_owned();
+        demoted_one_shot.share_id = None;
+        demoted_one_shot.source_sequence = None;
+
+        let mut demoted_stream = current.clone();
+        demoted_stream.id = "demoted-stream-frame".to_owned();
+        demoted_stream.source_sequence = Some(2);
+
+        controller.frame = Some(current);
+        controller.recent_frames.push_back(demoted_one_shot);
+        controller.recent_frames.push_back(demoted_stream);
+        controller.share = Some(test_share(false));
+
+        assert!(
+            controller
+                .requested_frame_at("demoted-one-shot", now)
+                .is_none(),
+            "an unbound one-shot must lose authority after a stream frame supersedes it"
+        );
+        assert!(
+            controller
+                .requested_frame_at("demoted-stream-frame", now)
+                .is_some(),
+            "a recent same-epoch stream frame remains valid for immediate action"
+        );
+    }
+
+    #[test]
     fn share_commit_clears_frames_from_the_previous_authority_epoch() {
         let mut controller = ComputerController::new();
         controller.frame = Some(frame());

@@ -1,0 +1,87 @@
+2026-08-23T03:43:07.397Z PASS macOS host: Darwin
+2026-08-23T03:43:07.398Z PASS expected checksum-manifest hash format: 64 lowercase hexadecimal characters
+2026-08-23T03:43:07.398Z PASS canonical checksum-manifest name: SHA256SUMS.txt
+2026-08-23T03:43:07.398Z PASS exact archive name: local-browser-bridge-v0.12.5-macos-universal.tar.gz
+2026-08-23T03:43:07.407Z PASS out-of-band checksum-manifest hash matches: 6c33a9229de67da543ad3696e74495fd43fde3aebada12de9ce6c56924c9d85e
+2026-08-23T03:43:07.408Z PASS checksum manifest has the exact canonical four-entry set: local-browser-bridge-v0.12.5-windows-x86_64.exe,local-computer-helper-v0.12.5-windows-x86_64.exe,local-browser-bridge-v0.12.5-macos-universal.tar.gz,local-browser-bridge-extension-v0.12.5.zip
+2026-08-23T03:43:07.408Z PASS archive checksum is bound by the canonical manifest: 1b48a8ef92f67f7d3f548bcece8af364205192744dac4b47bda87352953ceb11
+2026-08-23T03:43:07.428Z PASS archive paths are traversal-safe: 10 safe entries
+2026-08-23T03:43:07.448Z PASS archive contains only regular files and directories: no links or special filesystem entries
+2026-08-23T03:43:07.448Z PASS archive contains exact server: local-browser-bridge
+2026-08-23T03:43:07.448Z PASS archive contains exact helper: Local Computer Helper.app/Contents/MacOS/local-computer-helper
+2026-08-23T03:43:07.475Z PASS supplied server is archive-exact: 3e1e9c36bfef6d7759b41f0a242b8098d8c8741e0a3b8c1015e31379b20249fe
+2026-08-23T03:43:07.477Z PASS supplied helper is archive-exact: d0f86127c04a8d75bdf12ced31fab059077d714934e86e3dc76d5d9a1505d46c
+2026-08-23T03:43:07.490Z PASS server universal architecture: arm64,x86_64
+2026-08-23T03:43:07.490Z PASS helper universal architecture: arm64,x86_64
+2026-08-23T03:43:07.490Z PASS helper uses packaged app layout: Local Computer Helper.app
+2026-08-23T03:43:07.514Z PASS strict code-signature verification: server, helper executable, and helper app bundle passed strict verification
+2026-08-23T03:43:07.519Z PASS helper bundle version: 0.12.5/0.12.5
+2026-08-23T03:43:07.740Z PASS server version: 0.12.5
+2026-08-23T03:43:07.859Z PASS helper version: 0.12.5
+2026-08-23T03:43:09.199Z PASS screen-capture permission preflight: preexisting permission; no request was made
+2026-08-23T03:43:09.199Z PASS accessibility permission preflight: preexisting permission; no request was made
+2026-08-23T03:43:09.199Z PASS active Space probe available: nonzero active Space identity
+2026-08-23T03:43:09.199Z PASS sandwiched foreground AX focus probe available: stable NSWorkspace/raw PSN plus exact AX focused/main-window identities are available
+2026-08-23T03:43:09.712Z PASS fixture process identity: state belongs to the spawned fixture
+2026-08-23T03:43:09.876Z PASS startup same-PID sibling is the target app's remembered receiver: sibling-main-and-focused=true, fixture-background=true
+2026-08-23T03:43:10.205Z PASS packaged helper compatible: protocol-compatible helper 0.12.5
+2026-08-23T03:43:10.205Z PASS single helper spawn: 1 packaged helper process
+2026-08-23T03:43:10.205Z PASS acknowledged share advertised: computer.share.ack present
+2026-08-23T03:43:10.205Z PASS native stream advertised: computer.capture.native-stream.v1 present
+2026-08-23T03:43:10.424Z PASS helper status backend: background-window/ax+skylight+screencapturekit-stream
+2026-08-23T03:43:10.424Z PASS background shared-session mode: background-window/shared-user-session/target-routed
+2026-08-23T03:43:10.424Z PASS background input backend ready: target-routed input is ready
+2026-08-23T03:43:10.424Z PASS semantic backend ready: macos-accessibility is ready without prompting
+2026-08-23T03:43:10.424Z PASS fixture exact window discovered: 1 matching windows
+2026-08-23T03:43:10.424Z PASS genuine same-PID sibling window discovered: 1 sibling matches, distinct=true
+2026-08-23T03:43:10.424Z PASS fixture is a background target: neither same-PID fixture window owns the user's foreground process or front window
+2026-08-23T03:43:10.712Z PASS exact fixture window observed: 1209x826
+2026-08-23T03:43:10.712Z PASS semantic snapshot available: 4 elements
+2026-08-23T03:43:10.716Z PASS semantic value element discovered: AXTextField
+2026-08-23T03:43:12.010Z PASS semantic setValue confirmed: Confirmed/value-confirmed
+2026-08-23T03:43:12.010Z PASS semantic setValue non-interruption invariants: {"cursorUnchanged":true,"foregroundUnchanged":true,"spaceUnchanged":true,"userFocusUnchanged":true}
+2026-08-23T03:43:12.262Z PASS semantic setValue screenshot changed: fresh exact-window pixels differ from the pre-action observation
+2026-08-23T03:43:12.262Z PASS semantic action element discovered: AXButton
+2026-08-23T03:43:13.609Z PASS semantic invoke target-side proof: fixture semantic counter advanced to 1
+2026-08-23T03:43:13.609Z PASS semantic invoke conservatively classified: Partial/element-state-changed
+2026-08-23T03:43:13.609Z PASS semantic invoke non-interruption invariants: {"cursorUnchanged":true,"foregroundUnchanged":true,"spaceUnchanged":true,"userFocusUnchanged":true}
+2026-08-23T03:43:13.835Z PASS semantic invoke screenshot changed: fresh exact-window pixels differ from the setValue stage
+2026-08-23T03:43:14.966Z PASS persistent live share started: persistent-native-stream/exact-window
+2026-08-23T03:43:14.966Z PASS SCStream start metadata: macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window
+2026-08-23T03:43:14.966Z PASS live share ack pacing: latest-frame-wins, ackPaced=true
+2026-08-23T03:43:14.966Z PASS live share cursor policy: system cursor excluded; synthetic session pointer composited
+2026-08-23T03:43:15.179Z PASS persistent-share screenshot is fresh: sourceSequence=6
+2026-08-23T03:43:15.956Z PASS same-PID sibling is remembered before primary pixel dispatch: sibling-main-and-focused=true, sibling-state-clean=true
+2026-08-23T03:43:19.047Z PASS exact active target receiver observed during pixel lease: active-target=true, exact-main-and-focused=true, saved-user-owner=true
+2026-08-23T03:43:19.135Z PASS background pixel click targets only primary and restores sibling receiver: only the primary click counter advanced and the target app's prior sibling receiver was restored
+2026-08-23T03:43:19.135Z PASS pixel click conservatively classified: Unverifiable
+2026-08-23T03:43:19.135Z PASS pixel action bound to persistent share: share=true, source=12
+2026-08-23T03:43:19.135Z PASS live-share pixel click non-interruption invariants: {"cursorUnchanged":true,"foregroundUnchanged":true,"spaceUnchanged":true,"userFocusUnchanged":true}
+2026-08-23T03:43:19.210Z PASS same-PID pixel routing preserves user foreground/focus/cursor/Space: {"foregroundUnchanged":true,"userFocusUnchanged":true,"foregroundIdentitySandwichHeld":true,"rawForegroundIdentitySandwichHeld":true,"foregroundAxFocusUnchanged":true,"foregroundAxFrontmostHeld":true,"cursorUnchanged":true,"spaceUnchanged":true}
+2026-08-23T03:43:19.315Z PASS native source remained live during input: source +34/drop +32; transport +3
+2026-08-23T03:43:19.315Z PASS settled synthetic pointer published: action=click
+2026-08-23T03:43:19.317Z PASS live-share action screenshot changed: fresh exact-window pixels include the action stage
+2026-08-23T03:43:20.414Z PASS persistent share survived exact-target resize: 720x492 -> 820x552
+2026-08-23T03:43:20.414Z PASS settled resize frame matches exact-window geometry: window=820x552, image=1218x820
+2026-08-23T03:43:20.416Z PASS resize screenshot dimensions match settled observation: 1218x820
+2026-08-23T03:43:20.416Z PASS resize screenshot geometry changed: 1209x826 -> 1218x820
+2026-08-23T03:43:22.940Z PASS post-resize pixel click target-side proof: only the exact fixture click counter changed functional state after resize
+2026-08-23T03:43:22.940Z PASS post-resize action bound to settled persistent share: frame=true, share=true, source=58
+2026-08-23T03:43:22.940Z PASS post-resize pixel click conservatively classified: Unverifiable
+2026-08-23T03:43:22.940Z PASS post-resize pixel click non-interruption invariants: {"cursorUnchanged":true,"foregroundUnchanged":true,"spaceUnchanged":true,"userFocusUnchanged":true}
+2026-08-23T03:43:23.040Z PASS post-resize independent foreground/focus/cursor/Space invariants: {"foregroundUnchanged":true,"userFocusUnchanged":true,"foregroundIdentitySandwichHeld":true,"rawForegroundIdentitySandwichHeld":true,"foregroundAxFocusUnchanged":true,"foregroundAxFrontmostHeld":true,"cursorUnchanged":true,"spaceUnchanged":true}
+2026-08-23T03:43:23.247Z PASS post-resize action retained resized exact-window stream: window=820x552, image=1218x820
+2026-08-23T03:43:23.416Z PASS same-PID sibling is the prior receiver before text preparation: sibling-main-and-focused=true, sibling-state-clean=true
+2026-08-23T03:43:23.613Z PASS background fixture field prepared without mutation while sibling remains prior receiver: the primary responder was prepared, the sibling was restored internally, and no target field mutated
+2026-08-23T03:43:23.682Z PASS field preparation foreground/focus/cursor/Space invariants: {"foregroundUnchanged":true,"userFocusUnchanged":true,"foregroundIdentitySandwichHeld":true,"rawForegroundIdentitySandwichHeld":true,"foregroundAxFocusUnchanged":true,"foregroundAxFrontmostHeld":true,"cursorUnchanged":true,"spaceUnchanged":true}
+2026-08-23T03:43:23.839Z PASS same-PID sibling remains the exact prior receiver immediately before text request: sibling-main-and-focused=true
+2026-08-23T03:43:26.328Z PASS native typeText exact fixture read-back with zero sibling mutation: appended 20 ASCII characters only to the primary field and restored the prior sibling receiver
+2026-08-23T03:43:26.328Z PASS native typeText bounded product result: Unverifiable/exact-window-background, characters=20, utf16=20
+2026-08-23T03:43:26.328Z PASS native typeText non-interruption invariants: {"cursorUnchanged":true,"foregroundUnchanged":true,"spaceUnchanged":true,"userFocusUnchanged":true}
+2026-08-23T03:43:26.426Z PASS native typeText independent foreground/focus/cursor/Space invariants: {"foregroundUnchanged":true,"userFocusUnchanged":true,"foregroundIdentitySandwichHeld":true,"rawForegroundIdentitySandwichHeld":true,"foregroundAxFocusUnchanged":true,"foregroundAxFrontmostHeld":true,"cursorUnchanged":true,"spaceUnchanged":true}
+2026-08-23T03:43:26.719Z PASS native text restore element discovered: AXTextField
+2026-08-23T03:43:27.113Z FATAL computer.setValue returned HTTP 409: COMPUTER_STALE_FRAME The exact-window frame is missing or stale. Observe the target window again before acting.
+2026-08-23T03:43:27.116Z helper stopped
+2026-08-23T03:43:27.118Z server stopped
+2026-08-23T03:43:27.122Z fixture stopped
+2026-08-23T03:43:27.124Z scratch directory removed
