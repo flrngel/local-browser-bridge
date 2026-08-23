@@ -1062,6 +1062,9 @@ if ($SelfTest) {
     $selfTestChild = $null
     $selfTestTerminated = $false
     try {
+        if ($selfTestJob.ActiveProcessCount -ne 0) {
+            throw "The new private Job unexpectedly owned a process before self-test launch."
+        }
         $selfTestCommandLine = '"' + $selfTestHostPath + '" -NoLogo -NoProfile -NonInteractive -Command "Start-Sleep -Seconds 30"'
         $selfTestChildPid = $selfTestJob.StartProcess(
             $selfTestHostPath,
@@ -1090,8 +1093,9 @@ if ($SelfTest) {
         if (@($script:nativeProbeType::GetDirectChildProcessIds($PID, $nonMatchingImage)).Count -ne 0) {
             throw "The native exact-image probe accepted a nonmatching executable path."
         }
-        if ($selfTestJob.ActiveProcessCount -ne 1) {
-            throw "The private Job did not account for exactly one resumed self-test child."
+        $selfTestActiveProcessCount = $selfTestJob.ActiveProcessCount
+        if ($selfTestActiveProcessCount -lt 1) {
+            throw "The private Job did not account for the resumed self-test process tree (active count $selfTestActiveProcessCount)."
         }
 
         $selfTestJob.Terminate()

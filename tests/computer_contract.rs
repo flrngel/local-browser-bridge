@@ -1782,6 +1782,7 @@ fn windows_helper_readiness_is_protocol_and_process_bound() {
     for required in [
         "$selfTestJob.StartProcess(",
         "GetDirectChildProcessIds($PID, $selfTestHostPath)",
+        "$selfTestActiveProcessCount -lt 1",
         "$selfTestJob.Terminate()",
         "$selfTestJob.ActiveProcessCount -ne 0",
     ] {
