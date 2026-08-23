@@ -74,6 +74,7 @@ jobs:
             "scripts/record-computer-helper-chain.ps1",
             "scripts/sanitize-browser-evidence-screenshot.ps1",
             "scripts/test-windows-browser-api.ps1",
+            "scripts/test-windows-computer-use.ps1",
             "scripts/write-browser-evidence-record.ps1"
           )
           foreach ($script in $scripts) {
@@ -92,6 +93,9 @@ jobs:
           & ./scripts/record-computer-helper-chain.ps1 -Mode SelfTest
           & ./scripts/sanitize-browser-evidence-screenshot.ps1 -Mode SelfTest
           & ./scripts/test-windows-browser-api.ps1 -SelfTest
+          powershell.exe -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-computer-use.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 computer-use self-test failed." }
+          & ./scripts/test-windows-computer-use.ps1 -SelfTest
           & ./scripts/write-browser-evidence-record.ps1 -Mode SelfTest
       - name: Check Windows formatting, lint, and tests
         shell: pwsh

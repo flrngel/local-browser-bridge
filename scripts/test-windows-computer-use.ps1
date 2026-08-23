@@ -1,32 +1,32 @@
 #requires -Version 5.1
 
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = "Run")]
 param(
-    [Parameter(Mandatory = $true)]
+    [Parameter(ParameterSetName = "Run", Mandatory = $true)]
     [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+$')]
     [string]$Version,
 
-    [Parameter(Mandatory = $true)]
+    [Parameter(ParameterSetName = "Run", Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
     [string]$ServerPath,
 
-    [Parameter(Mandatory = $true)]
+    [Parameter(ParameterSetName = "Run", Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
     [string]$HelperPath,
 
-    [Parameter(Mandatory = $true)]
+    [Parameter(ParameterSetName = "Run", Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
     [string]$ChecksumManifest,
 
-    [Parameter(Mandatory = $true)]
+    [Parameter(ParameterSetName = "Run", Mandatory = $true)]
     [ValidatePattern('^[0-9A-Fa-f]{64}$')]
     [string]$ChecksumManifestSha256,
 
-    [Parameter(Mandatory = $true)]
+    [Parameter(ParameterSetName = "Run", Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
     [string]$FixturePath,
 
-    [Parameter(Mandatory = $true)]
+    [Parameter(ParameterSetName = "Run", Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
     [string]$EvidenceDirectory,
 
@@ -41,7 +41,10 @@ param(
     [ValidateRange(10, 180)]
     [int]$TimeoutSeconds = 45,
 
-    [switch]$ShowOccluder
+    [switch]$ShowOccluder,
+
+    [Parameter(ParameterSetName = "SelfTest", Mandatory = $true)]
+    [switch]$SelfTest
 )
 
 Set-StrictMode -Version Latest
@@ -192,82 +195,84 @@ function Get-VerifiedCandidateArtifact {
     }
 }
 
-$environmentToken = [Environment]::GetEnvironmentVariable("LBB_TOKEN", "Process")
-# Consume the inherited secret immediately even when an in-memory -Token was
-# supplied. This keeps the fixture and every other non-bridge child from
-# inheriting a stale or duplicate bearer token.
-[Environment]::SetEnvironmentVariable("LBB_TOKEN", $null, "Process")
-if ([String]::IsNullOrWhiteSpace($Token)) {
-    $Token = $environmentToken
-}
-$environmentToken = $null
-if (-not (Test-BridgeToken $Token)) {
-    throw "Token must be a canonical, high-entropy 43-character Local Browser Bridge token."
-}
-
-$resolvedServer = Resolve-RequiredFile $ServerPath "ServerPath"
-$resolvedHelper = Resolve-RequiredFile $HelperPath "HelperPath"
-$resolvedChecksumManifest = Resolve-RequiredFile $ChecksumManifest "ChecksumManifest"
-$resolvedFixture = Resolve-RequiredFile $FixturePath "FixturePath"
-$evidenceRoot = [IO.Path]::GetFullPath($EvidenceDirectory)
-
-if ([IO.Path]::GetFileName($resolvedChecksumManifest) -cne "SHA256SUMS.txt") {
-    throw "ChecksumManifest must use the canonical SHA256SUMS.txt filename."
-}
-$manifestSha256 = (Get-FileHash -LiteralPath $resolvedChecksumManifest -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($manifestSha256 -cne $ChecksumManifestSha256.ToLowerInvariant()) {
-    throw "ChecksumManifest does not match the externally recorded frozen-candidate SHA-256."
-}
-$expectedServerName = "local-browser-bridge-v$Version-windows-x86_64.exe"
-$expectedHelperName = "local-computer-helper-v$Version-windows-x86_64.exe"
-$expectedCandidateNames = @(
-    $expectedServerName,
-    $expectedHelperName,
-    "local-browser-bridge-v$Version-macos-universal.tar.gz",
-    "local-browser-bridge-extension-v$Version.zip"
-)
-$candidateChecksums = Read-ExactCandidateChecksums -Path $resolvedChecksumManifest -ExpectedNames $expectedCandidateNames
-$candidateBinding = [ordered]@{
-    version = $Version
-    checksumManifestMatched = $true
-    exactAssetSetMatched = $true
-    checksumManifest = [ordered]@{
-        name = "SHA256SUMS.txt"
-        bytes = ([IO.FileInfo]::new($resolvedChecksumManifest)).Length
-        sha256 = $manifestSha256
-        expectedSha256 = $ChecksumManifestSha256.ToLowerInvariant()
-        exactEntryCount = $candidateChecksums.Count
-        pathRecorded = $false
+if (-not $SelfTest) {
+    $environmentToken = [Environment]::GetEnvironmentVariable("LBB_TOKEN", "Process")
+    # Consume the inherited secret immediately even when an in-memory -Token was
+    # supplied. This keeps the fixture and every other non-bridge child from
+    # inheriting a stale or duplicate bearer token.
+    [Environment]::SetEnvironmentVariable("LBB_TOKEN", $null, "Process")
+    if ([String]::IsNullOrWhiteSpace($Token)) {
+        $Token = $environmentToken
     }
-    server = Get-VerifiedCandidateArtifact `
-        -Path $resolvedServer `
-        -ExpectedName $expectedServerName `
-        -ExpectedSha256 $candidateChecksums[$expectedServerName] `
-        -ExpectedReportedVersion "local-browser-bridge $Version" `
-        -Label "ServerPath"
-    helper = Get-VerifiedCandidateArtifact `
-        -Path $resolvedHelper `
-        -ExpectedName $expectedHelperName `
-        -ExpectedSha256 $candidateChecksums[$expectedHelperName] `
-        -ExpectedReportedVersion "local-computer-helper $Version" `
-        -Label "HelperPath"
-}
-
-if ([IO.Directory]::Exists($evidenceRoot)) {
-    if (@([IO.Directory]::EnumerateFileSystemEntries($evidenceRoot)).Count -ne 0) {
-        throw "EvidenceDirectory must be new or empty; existing evidence is never overwritten."
+    $environmentToken = $null
+    if (-not (Test-BridgeToken $Token)) {
+        throw "Token must be a canonical, high-entropy 43-character Local Browser Bridge token."
     }
-}
-else {
-    [IO.Directory]::CreateDirectory($evidenceRoot) | Out-Null
-}
 
-$fixtureEvidence = [IO.Path]::Combine($evidenceRoot, "fixture")
-$stepEvidence = [IO.Path]::Combine($evidenceRoot, "steps")
-$screenshotEvidence = [IO.Path]::Combine($evidenceRoot, "screenshots")
-[IO.Directory]::CreateDirectory($fixtureEvidence) | Out-Null
-[IO.Directory]::CreateDirectory($stepEvidence) | Out-Null
-[IO.Directory]::CreateDirectory($screenshotEvidence) | Out-Null
+    $resolvedServer = Resolve-RequiredFile $ServerPath "ServerPath"
+    $resolvedHelper = Resolve-RequiredFile $HelperPath "HelperPath"
+    $resolvedChecksumManifest = Resolve-RequiredFile $ChecksumManifest "ChecksumManifest"
+    $resolvedFixture = Resolve-RequiredFile $FixturePath "FixturePath"
+    $evidenceRoot = [IO.Path]::GetFullPath($EvidenceDirectory)
+
+    if ([IO.Path]::GetFileName($resolvedChecksumManifest) -cne "SHA256SUMS.txt") {
+        throw "ChecksumManifest must use the canonical SHA256SUMS.txt filename."
+    }
+    $manifestSha256 = (Get-FileHash -LiteralPath $resolvedChecksumManifest -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($manifestSha256 -cne $ChecksumManifestSha256.ToLowerInvariant()) {
+        throw "ChecksumManifest does not match the externally recorded frozen-candidate SHA-256."
+    }
+    $expectedServerName = "local-browser-bridge-v$Version-windows-x86_64.exe"
+    $expectedHelperName = "local-computer-helper-v$Version-windows-x86_64.exe"
+    $expectedCandidateNames = @(
+        $expectedServerName,
+        $expectedHelperName,
+        "local-browser-bridge-v$Version-macos-universal.tar.gz",
+        "local-browser-bridge-extension-v$Version.zip"
+    )
+    $candidateChecksums = Read-ExactCandidateChecksums -Path $resolvedChecksumManifest -ExpectedNames $expectedCandidateNames
+    $candidateBinding = [ordered]@{
+        version = $Version
+        checksumManifestMatched = $true
+        exactAssetSetMatched = $true
+        checksumManifest = [ordered]@{
+            name = "SHA256SUMS.txt"
+            bytes = ([IO.FileInfo]::new($resolvedChecksumManifest)).Length
+            sha256 = $manifestSha256
+            expectedSha256 = $ChecksumManifestSha256.ToLowerInvariant()
+            exactEntryCount = $candidateChecksums.Count
+            pathRecorded = $false
+        }
+        server = Get-VerifiedCandidateArtifact `
+            -Path $resolvedServer `
+            -ExpectedName $expectedServerName `
+            -ExpectedSha256 $candidateChecksums[$expectedServerName] `
+            -ExpectedReportedVersion "local-browser-bridge $Version" `
+            -Label "ServerPath"
+        helper = Get-VerifiedCandidateArtifact `
+            -Path $resolvedHelper `
+            -ExpectedName $expectedHelperName `
+            -ExpectedSha256 $candidateChecksums[$expectedHelperName] `
+            -ExpectedReportedVersion "local-computer-helper $Version" `
+            -Label "HelperPath"
+    }
+
+    if ([IO.Directory]::Exists($evidenceRoot)) {
+        if (@([IO.Directory]::EnumerateFileSystemEntries($evidenceRoot)).Count -ne 0) {
+            throw "EvidenceDirectory must be new or empty; existing evidence is never overwritten."
+        }
+    }
+    else {
+        [IO.Directory]::CreateDirectory($evidenceRoot) | Out-Null
+    }
+
+    $fixtureEvidence = [IO.Path]::Combine($evidenceRoot, "fixture")
+    $stepEvidence = [IO.Path]::Combine($evidenceRoot, "steps")
+    $screenshotEvidence = [IO.Path]::Combine($evidenceRoot, "screenshots")
+    [IO.Directory]::CreateDirectory($fixtureEvidence) | Out-Null
+    [IO.Directory]::CreateDirectory($stepEvidence) | Out-Null
+    [IO.Directory]::CreateDirectory($screenshotEvidence) | Out-Null
+}
 
 $probeSource = @'
 using System;
@@ -275,6 +280,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -294,6 +300,9 @@ namespace LbbWindowsAcceptance
         private const uint DESKTOP_READOBJECTS = 0x0001;
         private const int UOI_NAME = 2;
         private const uint TH32CS_SNAPPROCESS = 0x00000002;
+        private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x00001000;
+        private const int ERROR_INVALID_PARAMETER = 87;
+        private const int ERROR_NO_MORE_FILES = 18;
         private const uint SYNCHRONIZE = 0x00100000;
         private const uint WAIT_OBJECT_0 = 0x00000000;
         private const uint WAIT_TIMEOUT = 0x00000102;
@@ -385,6 +394,17 @@ namespace LbbWindowsAcceptance
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool Process32Next(IntPtr snapshot, ref PROCESSENTRY32 entry);
 
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr OpenProcess(uint desiredAccess, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, uint processId);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder imagePath, ref uint size);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool ProcessIdToSessionId(uint processId, out uint sessionId);
+
         [DllImport("kernel32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool CloseHandle(IntPtr value);
@@ -428,8 +448,14 @@ namespace LbbWindowsAcceptance
             return output;
         }
 
-        public static int[] GetDirectChildProcessIds(int parentProcessId)
+        public static int[] GetDirectChildProcessIds(int parentProcessId, string expectedImagePath)
         {
+            if (parentProcessId <= 0 || String.IsNullOrWhiteSpace(expectedImagePath))
+            {
+                throw new ArgumentException("A positive parent PID and exact helper image path are required");
+            }
+            string expectedPath = Path.GetFullPath(expectedImagePath);
+            string expectedName = Path.GetFileName(expectedPath);
             List<int> output = new List<int>();
             IntPtr snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
             if (snapshot == InvalidHandle)
@@ -446,18 +472,71 @@ namespace LbbWindowsAcceptance
                 }
                 do
                 {
-                    if (entry.ParentProcessId == (uint)parentProcessId)
+                    if (entry.ParentProcessId == (uint)parentProcessId &&
+                        String.Equals(entry.ExeFile, expectedName, StringComparison.OrdinalIgnoreCase))
                     {
-                        output.Add((int)entry.ProcessId);
+                        string childPath = ReadProcessImagePath(entry.ProcessId);
+                        if (childPath != null && String.Equals(Path.GetFullPath(childPath), expectedPath, StringComparison.OrdinalIgnoreCase))
+                        {
+                            output.Add((int)entry.ProcessId);
+                        }
                     }
                     entry.Size = (uint)Marshal.SizeOf(typeof(PROCESSENTRY32));
                 }
                 while (Process32Next(snapshot, ref entry));
+                int enumerationError = Marshal.GetLastWin32Error();
+                if (enumerationError != ERROR_NO_MORE_FILES)
+                {
+                    throw new Win32Exception(enumerationError, "Could not finish enumerating runner-owned helper descendants");
+                }
                 return output.ToArray();
             }
             finally
             {
                 CloseHandle(snapshot);
+            }
+        }
+
+        public static int GetProcessSessionId(int processId)
+        {
+            uint processSessionId;
+            if (processId <= 0 || !ProcessIdToSessionId((uint)processId, out processSessionId))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not inspect the helper worker session");
+            }
+            return checked((int)processSessionId);
+        }
+
+        private static string ReadProcessImagePath(uint processId)
+        {
+            IntPtr process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
+            if (process == IntPtr.Zero)
+            {
+                int error = Marshal.GetLastWin32Error();
+                if (error == ERROR_INVALID_PARAMETER)
+                {
+                    return null;
+                }
+                throw new Win32Exception(error, "Could not open a runner-owned helper descendant for image verification");
+            }
+            try
+            {
+                uint size = 32768;
+                StringBuilder imagePath = new StringBuilder((int)size);
+                if (!QueryFullProcessImageName(process, 0, imagePath, ref size))
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    if (error == ERROR_INVALID_PARAMETER)
+                    {
+                        return null;
+                    }
+                    throw new Win32Exception(error, "Could not verify a runner-owned helper descendant image");
+                }
+                return imagePath.ToString();
+            }
+            finally
+            {
+                CloseHandle(process);
             }
         }
 
@@ -971,6 +1050,85 @@ if ($null -eq $script:nativeProbeType -or $null -eq $script:ownedJobType) {
     throw "The isolated Windows acceptance probe types did not load."
 }
 
+if ($SelfTest) {
+    $selfTestHost = Get-Process -Id $PID
+    $selfTestHostPath = $selfTestHost.Path
+    $selfTestSessionId = $selfTestHost.SessionId
+    if ($script:nativeProbeType::GetProcessSessionId($PID) -ne $selfTestSessionId) {
+        throw "The native process-session probe did not identify the PowerShell runner session."
+    }
+
+    $selfTestJob = $script:ownedJobType::new()
+    $selfTestChild = $null
+    $selfTestTerminated = $false
+    try {
+        $selfTestCommandLine = '"' + $selfTestHostPath + '" -NoLogo -NoProfile -NonInteractive -Command "Start-Sleep -Seconds 30"'
+        $selfTestChildPid = $selfTestJob.StartProcess(
+            $selfTestHostPath,
+            $selfTestCommandLine,
+            [IO.Path]::GetDirectoryName($selfTestHostPath),
+            @{}
+        )
+        $selfTestChild = [Diagnostics.Process]::GetProcessById($selfTestChildPid)
+        $selfTestDeadline = [DateTime]::UtcNow.AddSeconds(5)
+        $selfTestChildren = @()
+        do {
+            $selfTestChildren = @($script:nativeProbeType::GetDirectChildProcessIds($PID, $selfTestHostPath))
+            if ($selfTestChildren -contains $selfTestChildPid) {
+                break
+            }
+            Start-Sleep -Milliseconds 50
+        } while ([DateTime]::UtcNow -lt $selfTestDeadline)
+
+        if ($selfTestChildren.Count -ne 1 -or $selfTestChildren[0] -ne $selfTestChildPid) {
+            throw "The native exact-parent/image probe did not identify exactly the Job-owned self-test child."
+        }
+        if ($script:nativeProbeType::GetProcessSessionId($selfTestChildPid) -ne $selfTestSessionId) {
+            throw "The Job-owned self-test child was outside the PowerShell runner session."
+        }
+        $nonMatchingImage = [IO.Path]::Combine([IO.Path]::GetDirectoryName($selfTestHostPath), "lbb-self-test-nonmatch.exe")
+        if (@($script:nativeProbeType::GetDirectChildProcessIds($PID, $nonMatchingImage)).Count -ne 0) {
+            throw "The native exact-image probe accepted a nonmatching executable path."
+        }
+        if ($selfTestJob.ActiveProcessCount -ne 1) {
+            throw "The private Job did not account for exactly one resumed self-test child."
+        }
+
+        $selfTestJob.Terminate()
+        $selfTestTerminated = $true
+        if (-not $selfTestChild.WaitForExit(5000)) {
+            throw "The private Job did not terminate its resumed self-test child."
+        }
+        $selfTestAccountingDeadline = [DateTime]::UtcNow.AddSeconds(2)
+        while ($selfTestJob.ActiveProcessCount -ne 0 -and [DateTime]::UtcNow -lt $selfTestAccountingDeadline) {
+            Start-Sleep -Milliseconds 50
+        }
+        if ($selfTestJob.ActiveProcessCount -ne 0) {
+            throw "The private Job retained a live process after bounded termination."
+        }
+    }
+    finally {
+        if (-not $selfTestTerminated) {
+            try {
+                if ($selfTestJob.ActiveProcessCount -gt 0) {
+                    $selfTestJob.Terminate()
+                }
+            }
+            catch {
+                # Preserve the primary self-test failure; Dispose still closes
+                # the kill-on-close Job handle below.
+            }
+        }
+        if ($null -ne $selfTestChild) {
+            $selfTestChild.Dispose()
+        }
+        $selfTestJob.Dispose()
+    }
+
+    Write-Output "Windows computer-use acceptance self-test passed."
+    return
+}
+
 $sessionId = (Get-Process -Id $PID).SessionId
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not [Environment]::UserInteractive -or $sessionId -eq 0 -or $identity.IsSystem) {
@@ -1124,14 +1282,9 @@ function Wait-Condition {
     param([scriptblock]$Condition, [string]$Description)
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     do {
-        try {
-            $value = & $Condition
-            if ($null -ne $value -and $value -ne $false) {
-                return $value
-            }
-        }
-        catch {
-            # Startup state can be absent or briefly incomplete.
+        $value = & $Condition
+        if ($null -ne $value -and $value -ne $false) {
+            return $value
         }
         Start-Sleep -Milliseconds 150
     } while ([DateTime]::UtcNow -lt $deadline)
@@ -1700,15 +1853,204 @@ function Wait-ForFixtureProof {
     } $Description
 }
 
+function Record-HelperTopologyObservation {
+    param([string]$Stage)
+    $script:helperTopologyPollCount++
+    $signature = @(
+        $Stage,
+        $script:helperTopologyDiagnostic.supervisorExited,
+        $script:helperTopologyDiagnostic.reportedWorkerPid,
+        $script:helperTopologyDiagnostic.matchingHelperChildCount,
+        (@($script:helperTopologyDiagnostic.matchingHelperChildPids) -join ","),
+        $script:helperTopologyDiagnostic.connected,
+        $script:helperTopologyDiagnostic.helloStateMatched,
+        $script:helperTopologyDiagnostic.workerSessionId,
+        $script:helperTopologyDiagnostic.runnerSessionMatched,
+        $script:helperTopologyDiagnostic.stablePolls,
+        $script:helperTopologyDiagnostic.nativeErrorCode
+    ) -join "|"
+    if ($signature -ceq $script:helperTopologyLastSignature) {
+        return
+    }
+    $script:helperTopologyLastSignature = $signature
+    $script:helperTopologyTransitionCount++
+    $script:helperTopologyHistory.Add([ordered]@{
+        stage = $Stage
+        observedAtUtc = [DateTime]::UtcNow.ToString("o")
+        poll = $script:helperTopologyPollCount
+        supervisorExited = $script:helperTopologyDiagnostic.supervisorExited
+        reportedWorkerPid = $script:helperTopologyDiagnostic.reportedWorkerPid
+        matchingHelperChildCount = $script:helperTopologyDiagnostic.matchingHelperChildCount
+        matchingHelperChildPids = @($script:helperTopologyDiagnostic.matchingHelperChildPids)
+        connected = $script:helperTopologyDiagnostic.connected
+        helloStateMatched = $script:helperTopologyDiagnostic.helloStateMatched
+        workerSessionId = $script:helperTopologyDiagnostic.workerSessionId
+        runnerSessionMatched = $script:helperTopologyDiagnostic.runnerSessionMatched
+        stablePolls = $script:helperTopologyDiagnostic.stablePolls
+        nativeErrorCode = $script:helperTopologyDiagnostic.nativeErrorCode
+    })
+    if ($script:helperTopologyHistory.Count -gt 32) {
+        $script:helperTopologyHistory.RemoveAt(0)
+    }
+}
+
 function Wait-ForDirectHelperWorker {
-    param([int]$SupervisorPid, [string]$Description)
-    return Wait-Condition {
-        $children = @($script:nativeProbeType::GetDirectChildProcessIds($SupervisorPid))
-        if ($children.Count -eq 1) {
-            return [int]$children[0]
+    param(
+        [Diagnostics.Process]$SupervisorProcess,
+        [string]$ExpectedSessionId,
+        [string]$Description
+    )
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $stableIdentity = $null
+    $stablePolls = 0
+    do {
+        $SupervisorProcess.Refresh()
+        $script:helperTopologyDiagnostic.supervisorPid = $SupervisorProcess.Id
+        if ($SupervisorProcess.HasExited) {
+            $script:helperTopologyDiagnostic.supervisorExited = $true
+            $script:helperTopologyDiagnostic.supervisorExitCode = $SupervisorProcess.ExitCode
+            Record-HelperTopologyObservation $Description
+            throw "The helper supervisor exited with code $($SupervisorProcess.ExitCode) while waiting for $Description."
         }
-        return $false
-    } $Description
+
+        $candidate = Get-LbbState
+        $candidateComputer = Get-PropertyValue $candidate "computer"
+        $candidateSessionId = [string](Get-PropertyValue $candidateComputer "sessionId")
+        $reportedWorkerPid = [int64](Get-PropertyValue $candidateComputer "processId")
+        $script:helperTopologyDiagnostic.supervisorExited = $false
+        $script:helperTopologyDiagnostic.supervisorExitCode = $null
+        $script:helperTopologyDiagnostic.reportedWorkerPid = $reportedWorkerPid
+        $script:helperTopologyDiagnostic.matchingHelperChildCount = $null
+        $script:helperTopologyDiagnostic.matchingHelperChildPids = @()
+        $script:helperTopologyDiagnostic.connected = $candidate.computerConnected -eq $true
+        $script:helperTopologyDiagnostic.helloStateMatched = $candidateSessionId -ceq $ExpectedSessionId
+        $script:helperTopologyDiagnostic.workerSessionId = $null
+        $script:helperTopologyDiagnostic.runnerSessionMatched = $false
+        $script:helperTopologyDiagnostic.stablePolls = $stablePolls
+        $script:helperTopologyDiagnostic.nativeErrorCode = $null
+        try {
+            $children = @($script:nativeProbeType::GetDirectChildProcessIds($SupervisorProcess.Id, $resolvedHelper))
+        }
+        catch [ComponentModel.Win32Exception] {
+            $script:helperTopologyDiagnostic.nativeErrorCode = $_.Exception.NativeErrorCode
+            Record-HelperTopologyObservation $Description
+            throw
+        }
+
+        $script:helperTopologyDiagnostic.matchingHelperChildCount = $children.Count
+        $script:helperTopologyDiagnostic.matchingHelperChildPids = @($children)
+
+        if ($children.Count -gt 1) {
+            $stableIdentity = $null
+            $stablePolls = 0
+            $script:helperTopologyDiagnostic.stablePolls = 0
+            Record-HelperTopologyObservation $Description
+            throw "The helper supervisor had multiple exact-image worker children; authority is ambiguous."
+        }
+
+        $identity = "$candidateSessionId|$reportedWorkerPid"
+        $workerSessionId = $null
+        if (
+            $candidate.computerConnected -eq $true -and
+            -not [String]::IsNullOrWhiteSpace($candidateSessionId) -and
+            $candidateSessionId -ceq $ExpectedSessionId -and
+            $reportedWorkerPid -gt 0 -and
+            $children.Count -eq 1 -and
+            [int64]$children[0] -eq $reportedWorkerPid
+        ) {
+            try {
+                $workerSessionId = $script:nativeProbeType::GetProcessSessionId([int]$reportedWorkerPid)
+            }
+            catch [ComponentModel.Win32Exception] {
+                if ($_.Exception.NativeErrorCode -ne 87) {
+                    $script:helperTopologyDiagnostic.nativeErrorCode = $_.Exception.NativeErrorCode
+                    Record-HelperTopologyObservation $Description
+                    throw
+                }
+                # The exact worker retired between snapshot and session lookup.
+                $script:helperTopologyDiagnostic.nativeErrorCode = 87
+                $workerSessionId = $null
+            }
+            if ($null -ne $workerSessionId -and $workerSessionId -ne $sessionId) {
+                $script:helperTopologyDiagnostic.workerSessionId = $workerSessionId
+                $script:helperTopologyDiagnostic.runnerSessionMatched = $false
+                Record-HelperTopologyObservation $Description
+                throw "The authenticated helper worker was outside the interactive acceptance session."
+            }
+            if ($workerSessionId -eq $sessionId) {
+                if ($identity -ceq $stableIdentity) {
+                    $stablePolls++
+                }
+                else {
+                    $stableIdentity = $identity
+                    $stablePolls = 1
+                }
+                $script:helperTopologyDiagnostic.workerSessionId = $workerSessionId
+                $script:helperTopologyDiagnostic.runnerSessionMatched = $true
+                $script:helperTopologyDiagnostic.stablePolls = $stablePolls
+                Record-HelperTopologyObservation $Description
+                if ($stablePolls -ge 2) {
+                    $script:helperTopologyChecks.Add([ordered]@{
+                        description = $Description
+                        supervisorPid = $SupervisorProcess.Id
+                        workerPid = [int]$reportedWorkerPid
+                        exactImageMatched = $true
+                        interactiveSessionId = $workerSessionId
+                        stableConsecutivePolls = $stablePolls
+                        helloStateMatched = $true
+                        protocolRoundTrip = $false
+                        roundTripMethod = $null
+                    })
+                    return [pscustomobject]@{
+                        processId = [int]$reportedWorkerPid
+                        state = $candidate
+                    }
+                }
+            }
+            else {
+                $stableIdentity = $null
+                $stablePolls = 0
+                $script:helperTopologyDiagnostic.workerSessionId = $workerSessionId
+                $script:helperTopologyDiagnostic.runnerSessionMatched = $false
+                $script:helperTopologyDiagnostic.stablePolls = 0
+            }
+        }
+        else {
+            $stableIdentity = $null
+            $stablePolls = 0
+            $script:helperTopologyDiagnostic.workerSessionId = $workerSessionId
+            $script:helperTopologyDiagnostic.runnerSessionMatched = $false
+            $script:helperTopologyDiagnostic.stablePolls = 0
+        }
+        Record-HelperTopologyObservation $Description
+        Start-Sleep -Milliseconds 150
+    } while ([DateTime]::UtcNow -lt $deadline)
+
+    throw "Timed out waiting for $Description (connected=$($script:helperTopologyDiagnostic.connected), helloStateMatched=$($script:helperTopologyDiagnostic.helloStateMatched), reportedWorkerPid=$($script:helperTopologyDiagnostic.reportedWorkerPid), exactImageChildren=$($script:helperTopologyDiagnostic.matchingHelperChildCount), stablePolls=$($script:helperTopologyDiagnostic.stablePolls), topologyTransitions=$script:helperTopologyTransitionCount)."
+}
+
+function Complete-HelperTopologyRoundTrip {
+    param(
+        [string]$Description,
+        [string]$ExpectedSessionId,
+        [int]$ExpectedProcessId,
+        [string]$Method,
+        [object]$Response
+    )
+    $responseState = Get-PropertyValue $Response "state"
+    $responseComputer = Get-PropertyValue $responseState "computer"
+    Assert-True ([string](Get-PropertyValue $responseComputer "sessionId") -ceq $ExpectedSessionId) "The helper round trip changed its authenticated protocol session."
+    Assert-True ([int64](Get-PropertyValue $responseComputer "processId") -eq $ExpectedProcessId) "The helper round trip changed its authenticated worker process identity."
+
+    for ($index = $script:helperTopologyChecks.Count - 1; $index -ge 0; $index--) {
+        $check = $script:helperTopologyChecks[$index]
+        if ([string]$check["description"] -ceq $Description -and [int]$check["workerPid"] -eq $ExpectedProcessId) {
+            $check["protocolRoundTrip"] = $true
+            $check["roundTripMethod"] = $Method
+            return
+        }
+    }
+    throw "The helper command round trip had no matching process-bound topology record."
 }
 
 function New-WatchdogCausalityProof {
@@ -1779,6 +2121,27 @@ $recoveryEventReleased = $true
 $watchdogCausalityMinimumMs = 11500
 $tokenPersistenceVerified = $false
 $tokenBearingEvidenceRemoved = 0
+$script:helperTopologyChecks = [Collections.Generic.List[object]]::new()
+$script:helperTopologyHistory = [Collections.Generic.List[object]]::new()
+$script:helperTopologyLastSignature = $null
+$script:helperTopologyPollCount = 0
+$script:helperTopologyTransitionCount = 0
+$script:helperTopologyDiagnostic = [ordered]@{
+    supervisorPid = $null
+    supervisorExited = $null
+    supervisorExitCode = $null
+    reportedWorkerPid = $null
+    matchingHelperChildCount = $null
+    matchingHelperChildPids = @()
+    connected = $null
+    helloStateMatched = $null
+    workerSessionId = $null
+    runnerSessionMatched = $null
+    stablePolls = 0
+    nativeErrorCode = $null
+    imagePathRecorded = $false
+    commandLineRecorded = $false
+}
 
 try {
     $script:ownedJob = $script:ownedJobType::new()
@@ -1821,14 +2184,24 @@ try {
     }
     $helperProcess = Start-IsolatedProcess $resolvedHelper @() $helperEnvironment
     $bridgeState = Wait-Condition {
-        if ($helperProcess.HasExited) { throw "The computer helper exited during startup." }
+        if ($helperProcess.HasExited) {
+            $script:helperTopologyDiagnostic.supervisorPid = $helperProcess.Id
+            $script:helperTopologyDiagnostic.supervisorExited = $true
+            $script:helperTopologyDiagnostic.supervisorExitCode = $helperProcess.ExitCode
+            throw "The computer helper supervisor exited with code $($helperProcess.ExitCode) during startup."
+        }
         $candidate = Get-LbbState
         if ($candidate.computerConnected -eq $true -and $null -ne $candidate.computer) { return $candidate }
         return $false
     } "the authenticated computer helper"
-    $initialWorkerPid = Wait-ForDirectHelperWorker $helperProcess.Id "the initial disposable helper worker"
     $initialHelperSessionId = [string]$bridgeState.computer.sessionId
     Assert-True (-not [String]::IsNullOrWhiteSpace($initialHelperSessionId)) "The initial helper session identity was missing."
+    $initialWorker = Wait-ForDirectHelperWorker $helperProcess $initialHelperSessionId "the initial disposable helper worker"
+    $initialWorkerPid = [int]$initialWorker.processId
+    $bridgeState = $initialWorker.state
+    $readinessProbe = Invoke-LbbCommand "computer.status" @{}
+    Complete-HelperTopologyRoundTrip "the initial disposable helper worker" $initialHelperSessionId $initialWorkerPid "computer.status" $readinessProbe
+    Save-StepResponse "protocol-bound helper readiness" $readinessProbe
     if ($selectedSuites -contains "Recovery") {
         $null = Wait-Condition {
             if ($script:nativeProbeType::GetKernelEventState($recoveryEventName) -eq 1) { return $true }
@@ -1924,8 +2297,13 @@ try {
         Save-StepRecord "share pump watchdog causality proof" $watchdogCausalityProof
         Assert-True $watchdogCausalityProof.causalityProven "Worker replacement lacked COMPUTER_HELPER_WATCHDOG evidence and occurred too early to prove the 12-second share-pump watchdog caused it."
         $shareStarted = $false
-        $replacementWorkerPid = Wait-ForDirectHelperWorker $helperProcess.Id "the replacement disposable helper worker"
         $replacementSessionId = [string]$recoveredBridgeState.computer.sessionId
+        $replacementWorker = Wait-ForDirectHelperWorker $helperProcess $replacementSessionId "the replacement disposable helper worker"
+        $replacementWorkerPid = [int]$replacementWorker.processId
+        $recoveredBridgeState = $replacementWorker.state
+        $replacementReadiness = Invoke-LbbCommand "computer.status" @{}
+        Complete-HelperTopologyRoundTrip "the replacement disposable helper worker" $replacementSessionId $replacementWorkerPid "computer.status" $replacementReadiness
+        Save-StepResponse "replacement protocol-bound helper readiness" $replacementReadiness
         Assert-True ($replacementWorkerPid -ne $initialWorkerPid) "The helper supervisor did not replace the stalled worker process."
         Assert-True ($replacementSessionId -ne $initialHelperSessionId) "The replacement worker reused the stale protocol session."
         Assert-True ($helperProcess.Id -eq $supervisorPidBefore -and -not $helperProcess.HasExited) "The helper supervisor identity did not survive worker replacement."
@@ -2264,7 +2642,11 @@ try {
         Assert-True (-not [String]::IsNullOrWhiteSpace($cancellationSessionId)) "The cancellation frame had no exact helper session identity."
         $cancellationSupervisorPid = $helperProcess.Id
         $cancellationServerPid = $serverProcess.Id
-        $cancellationWorkerPid = Wait-ForDirectHelperWorker $cancellationSupervisorPid "the pre-cancellation disposable helper worker"
+        $cancellationWorker = Wait-ForDirectHelperWorker $helperProcess $cancellationSessionId "the pre-cancellation disposable helper worker"
+        $cancellationWorkerPid = [int]$cancellationWorker.processId
+        $cancellationReadiness = Invoke-LbbCommand "computer.status" @{}
+        Complete-HelperTopologyRoundTrip "the pre-cancellation disposable helper worker" $cancellationSessionId $cancellationWorkerPid "computer.status" $cancellationReadiness
+        Save-StepResponse "pre-cancellation protocol-bound helper readiness" $cancellationReadiness
 
         $cancelPoint = Get-SurfacePoint $cancelFrame 0.25 0.33
         $cancelParams = @{
@@ -2338,7 +2720,12 @@ try {
             return $false
         } "a replacement Windows helper worker after outcome-unknown cancellation"
         $replacementSessionId = [string]$replacementState.computer.sessionId
-        $cancellationReplacementWorkerPid = Wait-ForDirectHelperWorker $cancellationSupervisorPid "the post-cancellation replacement helper worker"
+        $cancellationReplacementWorker = Wait-ForDirectHelperWorker $helperProcess $replacementSessionId "the post-cancellation replacement helper worker"
+        $cancellationReplacementWorkerPid = [int]$cancellationReplacementWorker.processId
+        $replacementState = $cancellationReplacementWorker.state
+        $cancellationReplacementReadiness = Invoke-LbbCommand "computer.status" @{}
+        Complete-HelperTopologyRoundTrip "the post-cancellation replacement helper worker" $replacementSessionId $cancellationReplacementWorkerPid "computer.status" $cancellationReplacementReadiness
+        Save-StepResponse "post-cancellation protocol-bound helper readiness" $cancellationReplacementReadiness
         Assert-True ($cancellationReplacementWorkerPid -ne $cancellationWorkerPid) "Outcome-unknown cancellation did not replace the disposable Windows worker."
         Assert-True ($helperProcess.Id -eq $cancellationSupervisorPid -and -not $helperProcess.HasExited) "Outcome-unknown cancellation replaced the helper supervisor instead of only its disposable worker."
         Assert-True ($serverProcess.Id -eq $cancellationServerPid -and -not $serverProcess.HasExited) "Outcome-unknown cancellation restarted the loopback server."
@@ -2552,6 +2939,11 @@ finally {
         tokenBearingEvidenceRemoved = $tokenBearingEvidenceRemoved
         unrelatedProcessesTerminated = $false
         recoveryEventReleased = $recoveryEventReleased
+        helperTopologyChecks = @($script:helperTopologyChecks)
+        helperTopologyPollCount = $script:helperTopologyPollCount
+        helperTopologyTransitionCount = $script:helperTopologyTransitionCount
+        helperTopologyHistory = @($script:helperTopologyHistory)
+        helperTopologyLastObservation = $script:helperTopologyDiagnostic
         candidateBinding = $candidateBinding
     }
     Write-EvidenceJson ([IO.Path]::Combine($evidenceRoot, "summary.json")) $summary

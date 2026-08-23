@@ -697,6 +697,7 @@ async fn connect_controlled_computer(base_url: &str, token: &str) -> ControlledC
                 "version": VERSION,
                 "protocolVersion": PROTOCOL_VERSION,
                 "sessionId": session_id,
+                "processId": 4242,
                 "platform": "test-os",
                 "architecture": "test-arch",
                 "backend": "controlled-capture+input",
@@ -903,6 +904,7 @@ async fn connect_rejected_share_computer(
                 "version": VERSION,
                 "protocolVersion": PROTOCOL_VERSION,
                 "sessionId": session_id,
+                "processId": 4242,
                 "platform": "test-os",
                 "architecture": "test-arch",
                 "backend": "rejected-share-capture+input",
@@ -1107,6 +1109,23 @@ async fn connect_fake_computer_with_share_ack(
     version: &str,
     advertise_share_ack: bool,
 ) -> FakeComputer {
+    connect_fake_computer_with_process_id(
+        base_url,
+        token,
+        version,
+        advertise_share_ack,
+        Some(json!(4242)),
+    )
+    .await
+}
+
+async fn connect_fake_computer_with_process_id(
+    base_url: &str,
+    token: &str,
+    version: &str,
+    advertise_share_ack: bool,
+    process_id: Option<Value>,
+) -> FakeComputer {
     let mut request = format!("{}/computer", base_url.replace("http", "ws"))
         .into_client_request()
         .unwrap();
@@ -1137,23 +1156,23 @@ async fn connect_fake_computer_with_share_ack(
     if advertise_share_ack {
         capabilities.push("computer.share.ack");
     }
+    let mut hello = json!({
+        "type": "hello",
+        "version": version,
+        "protocolVersion": PROTOCOL_VERSION,
+        "sessionId": session_id,
+        "platform": "test-os",
+        "architecture": "test-arch",
+        "backend": "test-capture+test-input",
+        "inputReady": true,
+        "semanticReady": true,
+        "capabilities": capabilities
+    });
+    if let Some(process_id) = process_id {
+        hello["processId"] = process_id;
+    }
     socket
-        .send(Message::Text(
-            json!({
-                "type": "hello",
-                "version": version,
-                "protocolVersion": PROTOCOL_VERSION,
-                "sessionId": session_id,
-                "platform": "test-os",
-                "architecture": "test-arch",
-                "backend": "test-capture+test-input",
-                "inputReady": true,
-                "semanticReady": true,
-                "capabilities": capabilities
-            })
-            .to_string()
-            .into(),
-        ))
+        .send(Message::Text(hello.to_string().into()))
         .await
         .unwrap();
     let server_messages = Arc::new(Mutex::new(Vec::new()));
@@ -1950,6 +1969,7 @@ async fn relays_frame_bound_computer_actions_and_serves_desktop_capture() {
     assert_eq!(state["state"]["computerConnected"], true);
     assert_eq!(state["state"]["computer"]["inputReady"], true);
     assert_eq!(state["state"]["computer"]["semanticReady"], true);
+    assert_eq!(state["state"]["computer"]["processId"], 4242);
     assert_eq!(state["state"]["computer"]["platform"], "test-os");
     #[cfg(target_os = "macos")]
     {
@@ -2166,6 +2186,47 @@ async fn blocks_mismatched_computer_helper_versions() {
     fake.abort();
     let _ = shutdown.send(());
     handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn rejects_invalid_computer_process_identities() {
+    for process_id in [
+        None,
+        Some(json!(0)),
+        Some(json!(u64::from(u32::MAX) + 1)),
+        Some(json!(-1)),
+        Some(json!(1.5)),
+        Some(json!("4242")),
+    ] {
+        let token = create_token();
+        let (base_url, shutdown, handle) = start_server(&token).await;
+        let fake =
+            connect_fake_computer_with_process_id(&base_url, &token, VERSION, false, process_id)
+                .await;
+        let client = Client::new();
+        let state = wait_for_computer(&client, &base_url, &token).await;
+        assert_eq!(state["state"]["computerConnected"], false);
+        assert_eq!(state["state"]["computer"]["compatible"], false);
+        assert_eq!(state["state"]["computer"]["processId"], 0);
+        assert_eq!(state["state"]["computer"]["capabilities"], json!([]));
+
+        let response = client
+            .post(format!("{base_url}/api/v1/command"))
+            .bearer_auth(&token)
+            .json(&json!({ "method": "computer.status", "params": {} }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 409);
+        assert_eq!(
+            response.json::<Value>().await.unwrap()["error"]["code"],
+            "COMPUTER_PROTOCOL_MISMATCH"
+        );
+
+        fake.handle.abort();
+        let _ = shutdown.send(());
+        handle.await.unwrap();
+    }
 }
 
 #[tokio::test]

@@ -256,9 +256,11 @@ async fn run_worker(controller: ComputerController) -> Result<(), Box<dyn std::e
     );
 
     let controller = Arc::new(Mutex::new(controller));
+    let shutdown = shutdown_signal(tokio::signal::ctrl_c());
+    tokio::pin!(shutdown);
     #[cfg(target_os = "windows")]
     tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
+        _ = shutdown.as_mut() => {
             println!("Stopping...");
             terminate_worker(0);
         }
@@ -277,7 +279,7 @@ async fn run_worker(controller: ComputerController) -> Result<(), Box<dyn std::e
     // so the async session can never hang while trying to stop SCStream.
     #[cfg(target_os = "macos")]
     tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
+        _ = shutdown.as_mut() => {
             println!("Stopping...");
             terminate_worker(0);
         }
@@ -297,7 +299,7 @@ async fn run_worker(controller: ComputerController) -> Result<(), Box<dyn std::e
         let mut backoff = Duration::from_millis(250);
         loop {
             tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
+                _ = shutdown.as_mut() => {
                     println!("Stopping...");
                     break;
                 }
@@ -312,12 +314,24 @@ async fn run_worker(controller: ComputerController) -> Result<(), Box<dyn std::e
                 }
             }
             tokio::select! {
-                _ = tokio::signal::ctrl_c() => break,
+                _ = shutdown.as_mut() => break,
                 _ = tokio::time::sleep(backoff) => {}
             }
             backoff = (backoff * 2).min(Duration::from_secs(5));
         }
         Ok(())
+    }
+}
+
+async fn shutdown_signal<F>(signal: F)
+where
+    F: std::future::Future<Output = std::io::Result<()>>,
+{
+    if let Err(error) = signal.await {
+        eprintln!(
+            "Ctrl+C shutdown registration failed: {error}; continuing until the process is terminated externally."
+        );
+        std::future::pending::<()>().await;
     }
 }
 
@@ -331,13 +345,15 @@ async fn supervise_worker() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Local Computer Helper {VERSION}");
     println!("Supervising the disposable computer-control worker; press Ctrl+C to stop.");
+    let shutdown = shutdown_signal(tokio::signal::ctrl_c());
+    tokio::pin!(shutdown);
 
     loop {
         let mut child = match spawn_worker() {
             Ok(child) => child,
             Err(error) => {
                 eprintln!("Could not start the computer-control worker: {error}");
-                if wait_for_restart(backoff).await {
+                if wait_for_restart(backoff, shutdown.as_mut()).await {
                     println!("Stopping...");
                     return Ok(());
                 }
@@ -350,8 +366,7 @@ async fn supervise_worker() -> Result<(), Box<dyn std::error::Error>> {
         let status = loop {
             tokio::select! {
                 biased;
-                signal = tokio::signal::ctrl_c() => {
-                    signal?;
+                _ = shutdown.as_mut() => {
                     child.terminate();
                     println!("Stopping...");
                     return Ok(());
@@ -369,7 +384,7 @@ async fn supervise_worker() -> Result<(), Box<dyn std::error::Error>> {
         if runtime >= SUPERVISOR_STABLE_RUN {
             backoff = SUPERVISOR_INITIAL_BACKOFF;
         }
-        if wait_for_restart(backoff).await {
+        if wait_for_restart(backoff, shutdown.as_mut()).await {
             println!("Stopping...");
             return Ok(());
         }
@@ -393,10 +408,13 @@ fn spawn_worker() -> std::io::Result<SupervisedWorker> {
 }
 
 #[cfg(target_os = "windows")]
-async fn wait_for_restart(backoff: Duration) -> bool {
+async fn wait_for_restart<F>(backoff: Duration, shutdown: std::pin::Pin<&mut F>) -> bool
+where
+    F: std::future::Future<Output = ()> + ?Sized,
+{
     tokio::select! {
         biased;
-        _ = tokio::signal::ctrl_c() => true,
+        _ = shutdown => true,
         _ = tokio::time::sleep(backoff) => false,
     }
 }
@@ -682,6 +700,7 @@ async fn run_session(
     if let Some(object) = hello.as_object_mut() {
         object.insert("protocolVersion".to_owned(), json!(PROTOCOL_VERSION));
         object.insert("sessionId".to_owned(), json!(session_id));
+        object.insert("processId".to_owned(), json!(std::process::id()));
     }
     socket.send(Message::Text(hello.to_string().into())).await?;
     let hello_deadline = tokio::time::Instant::now() + AUTH_TIMEOUT;
@@ -1611,10 +1630,39 @@ fn parse_port(raw: Option<&str>) -> Result<u16, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::task::noop_waker_ref;
     use local_browser_bridge::create_token;
     use local_browser_bridge::ws_auth::{ClientHello, ServerChallenge};
     use tokio::net::TcpListener;
     use tokio_tungstenite::accept_hdr_async;
+
+    #[test]
+    fn shutdown_signal_completes_when_ctrl_c_is_available() {
+        let mut shutdown = Box::pin(shutdown_signal(std::future::ready(Ok(()))));
+        let mut context = std::task::Context::from_waker(noop_waker_ref());
+
+        assert!(matches!(
+            std::future::Future::poll(shutdown.as_mut(), &mut context),
+            std::task::Poll::Ready(())
+        ));
+    }
+
+    #[test]
+    fn shutdown_signal_stays_pending_when_ctrl_c_registration_fails() {
+        let mut shutdown = Box::pin(shutdown_signal(std::future::ready(Err(
+            std::io::Error::other("fixture has no console"),
+        ))));
+        let mut context = std::task::Context::from_waker(noop_waker_ref());
+
+        assert!(matches!(
+            std::future::Future::poll(shutdown.as_mut(), &mut context),
+            std::task::Poll::Pending
+        ));
+        assert!(matches!(
+            std::future::Future::poll(shutdown.as_mut(), &mut context),
+            std::task::Poll::Pending
+        ));
+    }
 
     #[test]
     fn share_tick_drains_queued_acks_when_no_share_is_active() {

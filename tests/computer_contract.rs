@@ -839,7 +839,7 @@ fn background_invariant_failures_use_stage_bound_closed_vocabulary() {
 
 #[test]
 fn macos_negative_evidence_keeps_only_equality_and_fixture_counters() {
-    let rig = fs::read_to_string("evidence/v0.12.3/computer/helper-evidence-rig.mjs").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.4/computer/helper-evidence-rig.mjs").unwrap();
     assert!(rig.contains("failureProbeBaseline"));
     assert!(rig.contains("collectFailureDiagnostics"));
     assert!(rig.contains("systemInvariants(failureProbeBaseline.system, after)"));
@@ -931,12 +931,12 @@ fn historical_macos_v0_12_2_evidence_sources_remain_byte_exact() {
 
 #[test]
 fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
-    let rig = fs::read_to_string("evidence/v0.12.3/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.4/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let fixture =
-        fs::read_to_string("evidence/v0.12.3/computer/HelperEvidenceFixture.swift").unwrap();
-    let readme = fs::read_to_string("evidence/v0.12.3/computer/README.md").unwrap();
+        fs::read_to_string("evidence/v0.12.4/computer/HelperEvidenceFixture.swift").unwrap();
+    let readme = fs::read_to_string("evidence/v0.12.4/computer/README.md").unwrap();
 
     assert!(rig.contains(&format!("const EXPECTED_VERSION = \"{VERSION}\";")));
     assert!(rig.contains("const EXPECTED_ARCHIVE = `local-browser-bridge-v${EXPECTED_VERSION}-macos-universal.tar.gz`;"));
@@ -995,10 +995,10 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
 
 #[test]
 fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
-    let rig = fs::read_to_string("evidence/v0.12.3/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.4/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.3/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.4/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1030,7 +1030,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
         "$EXPECTED_SHA256SUMS_SHA256",
         "$EXPECTED_SOURCE_SHA",
         "mandatory SHA-256 supplied",
-        "exactly the four v0.12.3",
+        "exactly the four v0.12.4",
         "expected and actual manifest hashes",
         "Before invoking either supplied candidate executable—even with `--version`",
         "No supplied server or helper code executes before",
@@ -1087,7 +1087,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
         .unwrap();
     let first_documented_extraction = readme.find("tar -xzf").unwrap();
     let first_documented_execution = readme
-        .find("node evidence/v0.12.3/computer/helper-evidence-rig.mjs")
+        .find("node evidence/v0.12.4/computer/helper-evidence-rig.mjs")
         .unwrap();
     assert!(
         independent_manifest_digest < exact_inventory
@@ -1103,7 +1103,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
 
 #[test]
 fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
-    let rig = fs::read_to_string("evidence/v0.12.3/computer/helper-evidence-rig.mjs").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.4/computer/helper-evidence-rig.mjs").unwrap();
     assert!(rig.contains("capturedFrameMatchesWindowGeometry"));
     assert!(rig.contains("share-resize-settled"));
     assert!(rig.contains("sample.sourceSequence > resizeTransition.sample.sourceSequence"));
@@ -1115,12 +1115,12 @@ fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
 
 #[test]
 fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.3/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.4/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     assert!(rig.contains("function childEnvironment(overrides = {})"));
     assert!(!rig.contains("...process.env"));
-    let fixture = fs::read_to_string("evidence/v0.12.3/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.4/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1283,10 +1283,10 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
 
 #[test]
 fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.3/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.4/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.3/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.4/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1417,21 +1417,21 @@ fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() 
 
 #[test]
 fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negative() {
-    let fixture = fs::read_to_string("evidence/v0.12.3/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.4/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.3/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.4/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.3/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.4/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.3/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.4/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
     for required in [
-        "private let siblingFixtureTitle = \"LBB v0.12.3 Same-PID Sibling Receiver\"",
+        "private let siblingFixtureTitle = \"LBB v0.12.4 Same-PID Sibling Receiver\"",
         "var primaryWindowId = 0",
         "var siblingWindowId = 0",
         "var siblingTextLength = 0",
@@ -1720,6 +1720,76 @@ fn windows_live_runner_is_bound_to_one_frozen_release_candidate() {
     let first_process_launch = runner.find("Start-IsolatedProcess $hostPath").unwrap();
     assert!(candidate_binding < evidence_creation);
     assert!(candidate_binding < first_process_launch);
+}
+
+#[test]
+fn windows_helper_readiness_is_protocol_and_process_bound() {
+    let runner = fs::read_to_string("scripts/test-windows-computer-use.ps1")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let helper = fs::read_to_string("src/bin/local-computer-helper.rs").unwrap();
+    let server = fs::read_to_string("src/server.rs").unwrap();
+    let ci = fs::read_to_string(".github/workflows/ci.yml").unwrap();
+    let deploy = fs::read_to_string(".github/workflows/deploy.yml").unwrap();
+
+    for required in [
+        "QueryFullProcessImageName",
+        "ProcessIdToSessionId",
+        "GetDirectChildProcessIds($SupervisorProcess.Id, $resolvedHelper)",
+        "[int64]$children[0] -eq $reportedWorkerPid",
+        "$stablePolls -ge 2",
+        "exactImageMatched = $true",
+        "helloStateMatched = $true",
+        "protocolRoundTrip = $false",
+        "Complete-HelperTopologyRoundTrip",
+        "helperTopologyTransitionCount",
+        "helperTopologyHistory",
+        "stage = $Stage",
+        "observedAtUtc = [DateTime]::UtcNow.ToString(\"o\")",
+        "helperTopologyLastObservation",
+        "The helper supervisor exited with code",
+        "protocol-bound helper readiness",
+    ] {
+        assert!(
+            runner.contains(required),
+            "Windows helper readiness proof is missing: {required}"
+        );
+    }
+
+    let generic_wait = runner.split("function Wait-Condition {").nth(1).unwrap();
+    let generic_wait = generic_wait
+        .split("function Write-EvidenceJson {")
+        .next()
+        .unwrap();
+    assert!(
+        !generic_wait.contains("catch"),
+        "generic readiness waits must not erase fatal process or Win32 errors"
+    );
+
+    assert!(helper.contains("shutdown_signal(tokio::signal::ctrl_c())"));
+    assert!(helper.contains("std::future::pending::<()>().await"));
+    assert!(helper.contains("object.insert(\"processId\".to_owned(), json!(std::process::id()))"));
+    assert!(server.contains("&& process_id.is_some()"));
+    assert!(server.contains("process_id: process_id.unwrap_or(0)"));
+    assert!(ci.contains("scripts/test-windows-computer-use.ps1"));
+    assert!(deploy.contains("scripts/test-windows-computer-use.ps1"));
+    for workflow in [&ci, &deploy] {
+        assert!(workflow.contains(
+            "powershell.exe -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-computer-use.ps1 -SelfTest"
+        ));
+        assert!(workflow.contains("& ./scripts/test-windows-computer-use.ps1 -SelfTest"));
+    }
+    for required in [
+        "$selfTestJob.StartProcess(",
+        "GetDirectChildProcessIds($PID, $selfTestHostPath)",
+        "$selfTestJob.Terminate()",
+        "$selfTestJob.ActiveProcessCount -ne 0",
+    ] {
+        assert!(
+            runner.contains(required),
+            "Windows acceptance self-test is missing: {required}"
+        );
+    }
 }
 
 #[test]

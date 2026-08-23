@@ -1162,6 +1162,7 @@ struct ComputerInfo {
     version: String,
     protocol_version: u64,
     session_id: String,
+    process_id: u32,
     compatible: bool,
     platform: String,
     architecture: String,
@@ -3178,9 +3179,15 @@ async fn handle_computer_hello(state: &AppState, connection_id: Uuid, message: &
             .unwrap_or(""),
         80,
     );
+    let process_id = message
+        .get("processId")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| *value != 0);
     let envelope_compatible = version == VERSION
         && protocol_version == PROTOCOL_VERSION
-        && session_id == connection_id.to_string();
+        && session_id == connection_id.to_string()
+        && process_id.is_some();
     let compatible = envelope_compatible && state.computer_hub.mark_ready(connection_id);
     let capabilities: Vec<String> = message
         .get("capabilities")
@@ -3217,6 +3224,7 @@ async fn handle_computer_hello(state: &AppState, connection_id: Uuid, message: &
         version: version.clone(),
         protocol_version,
         session_id: session_id.clone(),
+        process_id: process_id.unwrap_or(0),
         compatible,
         platform,
         architecture: bounded(
@@ -7438,6 +7446,7 @@ mod tests {
                     "version": VERSION,
                     "protocolVersion": PROTOCOL_VERSION,
                     "sessionId": connection_id.to_string(),
+                    "processId": 4242,
                     "platform": "test-os",
                     "architecture": "test-arch",
                     "backend": backend,
@@ -9167,6 +9176,7 @@ mod tests {
                 version: VERSION.to_owned(),
                 protocol_version: PROTOCOL_VERSION,
                 session_id: "replacement-session".to_owned(),
+                process_id: 4242,
                 compatible: true,
                 platform: "test-os".to_owned(),
                 architecture: "test-arch".to_owned(),
@@ -9335,6 +9345,7 @@ mod tests {
                 version: VERSION.to_owned(),
                 protocol_version: PROTOCOL_VERSION,
                 session_id: TEST_COMPUTER_SESSION_ID.to_owned(),
+                process_id: 4242,
                 compatible: true,
                 platform: "test-os".to_owned(),
                 architecture: "test-arch".to_owned(),
@@ -9568,6 +9579,7 @@ mod tests {
                 version: VERSION.to_owned(),
                 protocol_version: PROTOCOL_VERSION,
                 session_id: TEST_COMPUTER_SESSION_ID.to_owned(),
+                process_id: 4242,
                 compatible: true,
                 platform: "test-os".to_owned(),
                 architecture: "test-arch".to_owned(),
