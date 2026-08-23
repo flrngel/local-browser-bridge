@@ -118,6 +118,54 @@ function Assert-StaticCrt {
     }
 }
 
+function Assert-HelperInputSurface {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$DumpBinPath
+    )
+
+    $imports = (& $DumpBinPath /nologo /imports $Path 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        throw "dumpbin failed while inspecting the helper input API surface."
+    }
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    $ascii = [System.Text.Encoding]::ASCII.GetString($bytes)
+    $utf16 = [System.Text.Encoding]::Unicode.GetString($bytes)
+    $reports = @($imports, $ascii, $utf16)
+
+    foreach ($api in @(
+        'SendInput',
+        'SetCursorPos',
+        'SetPhysicalCursorPos',
+        'mouse_event',
+        'keybd_event',
+        'SetForegroundWindow',
+        'AttachThreadInput',
+        'AllowSetForegroundWindow',
+        'LockSetForegroundWindow',
+        'SwitchToThisWindow'
+    )) {
+        $pattern = '(?m)(^|[^A-Za-z0-9_])_?' + [Regex]::Escape($api) + '([^A-Za-z0-9_]|$)'
+        if ($reports.Where({ $_ -match $pattern }).Count -ne 0) {
+            throw "Windows helper contains forbidden global input API: $api"
+        }
+    }
+
+    foreach ($api in @(
+        'PostMessageW',
+        'GetCursorPos',
+        'OpenInputDesktop',
+        'GetUserObjectInformationW',
+        'RegisterRawInputDevices',
+        'SetWindowsHookExW'
+    )) {
+        $pattern = '(?m)(^|[^A-Za-z0-9_])_?' + [Regex]::Escape($api) + '([^A-Za-z0-9_]|$)'
+        if ($reports.Where({ $_ -match $pattern }).Count -eq 0) {
+            throw "Windows helper is missing required target-route or invariant API: $api"
+        }
+    }
+}
+
 function Assert-VersionResource {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -174,6 +222,9 @@ function Assert-VersionResource {
 
 $mt = Resolve-WindowsSdkTool -Name 'mt.exe'
 $dumpbin = Resolve-DumpBin
+$resolvedHelperPath = (Resolve-Path -LiteralPath $HelperPath).Path
+Assert-PeX64 -Path $resolvedHelperPath
+Assert-HelperInputSurface -Path $resolvedHelperPath -DumpBinPath $dumpbin
 $artifacts = @(
     [pscustomobject]@{
         Path = $ServerPath

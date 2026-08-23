@@ -33,7 +33,8 @@ use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
 use crate::computer::{
-    COMPUTER_HELPER_ORIGIN, COMPUTER_METHODS, COMPUTER_NATIVE_SHARE_CAPABILITY,
+    COMPUTER_HELPER_ORIGIN, COMPUTER_INPUT_DELIVERY_PROVENANCE_CAPABILITY, COMPUTER_METHODS,
+    COMPUTER_NATIVE_SHARE_CAPABILITY, COMPUTER_POINTER_ACTIVITY_MONITOR_CAPABILITY,
     COMPUTER_SHARE_ACK_CAPABILITY, ShareFrameAck, validate_computer_type_text,
 };
 use crate::error_taxonomy::{TaxonomyCode, classify};
@@ -1187,6 +1188,8 @@ struct ComputerInvariants {
     target_activation_mode: String,
     foreground_identity_preserved_before_after: bool,
     hardware_cursor_preserved_before_after: bool,
+    hardware_cursor_sample_authoritative: bool,
+    input_delivery_provenance_required: bool,
     uses_ax_raise: bool,
     uses_front_process_switch: bool,
     switches_active_space: bool,
@@ -3188,8 +3191,7 @@ async fn handle_computer_hello(state: &AppState, connection_id: Uuid, message: &
         && protocol_version == PROTOCOL_VERSION
         && session_id == connection_id.to_string()
         && process_id.is_some();
-    let compatible = envelope_compatible && state.computer_hub.mark_ready(connection_id);
-    let capabilities: Vec<String> = message
+    let advertised_capabilities: Vec<String> = message
         .get("capabilities")
         .and_then(Value::as_array)
         .map(|items| {
@@ -3200,15 +3202,32 @@ async fn handle_computer_hello(state: &AppState, connection_id: Uuid, message: &
                     COMPUTER_METHODS.contains(item)
                         || *item == COMPUTER_SHARE_ACK_CAPABILITY
                         || *item == COMPUTER_NATIVE_SHARE_CAPABILITY
+                        || *item == COMPUTER_INPUT_DELIVERY_PROVENANCE_CAPABILITY
+                        || *item == COMPUTER_POINTER_ACTIVITY_MONITOR_CAPABILITY
                 })
-                .take(COMPUTER_METHODS.len() + 2)
+                .take(COMPUTER_METHODS.len() + 4)
                 .map(|item| item.to_owned())
                 .collect::<Vec<_>>()
         })
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|_| compatible)
-        .collect();
+        .unwrap_or_default();
+    // These two capabilities are not advisory metadata. They are the package
+    // contract that makes a successful native mutation auditable at the
+    // server boundary. Never publish or mark a helper ready before both were
+    // negotiated, even when its version and envelope otherwise match.
+    let action_evidence_compatible = advertised_capabilities
+        .iter()
+        .any(|item| item == COMPUTER_INPUT_DELIVERY_PROVENANCE_CAPABILITY)
+        && advertised_capabilities
+            .iter()
+            .any(|item| item == COMPUTER_POINTER_ACTIVITY_MONITOR_CAPABILITY);
+    let compatible = envelope_compatible
+        && action_evidence_compatible
+        && state.computer_hub.mark_ready(connection_id);
+    let capabilities = if compatible {
+        advertised_capabilities
+    } else {
+        Vec::new()
+    };
     let share_ack_paced = capabilities
         .iter()
         .any(|item| item == COMPUTER_SHARE_ACK_CAPABILITY);
@@ -3297,8 +3316,9 @@ async fn handle_computer_hello(state: &AppState, connection_id: Uuid, message: &
                 "computer.bridge",
                 "warning",
                 format!(
-                    "Helper handshake rejected (version {version}, protocol {protocol_version}, session match {})",
-                    session_id == connection_id.to_string()
+                    "Helper handshake rejected (version {version}, protocol {protocol_version}, session match {}, required action evidence capabilities {})",
+                    session_id == connection_id.to_string(),
+                    action_evidence_compatible
                 ),
             )
             .await;
@@ -3322,7 +3342,9 @@ async fn handle_computer_hello(state: &AppState, connection_id: Uuid, message: &
         "shareAck": share_ack_paced,
         "error": (!compatible).then(|| json!({
             "code": "COMPUTER_PROTOCOL_MISMATCH",
-            "message": format!("Helper and server must both use package {VERSION} and protocol {PROTOCOL_VERSION}")
+            "message": format!(
+                "Helper and server must both use package {VERSION}, protocol {PROTOCOL_VERSION}, and the required native action-evidence capabilities"
+            )
         }))
     }));
     state.bump("computer-hello").await;
@@ -4483,6 +4505,13 @@ impl AppState {
                 return Err(error.into());
             }
         };
+        if computer_mutation_requires_verified_result(method)
+            && !valid_native_computer_action_result(method, &computer.platform, &result)
+        {
+            return Err(self
+                .revoke_invalid_native_action_result(connection_id, &computer_session_id, method)
+                .await);
+        }
         if method == "computer.status" {
             if let Some(output) = result.as_object_mut() {
                 output.insert(
@@ -4899,6 +4928,54 @@ impl AppState {
         }
     }
 
+    /// A native mutation can have crossed its target dispatch boundary before
+    /// a malformed success record reaches the server. Treat that response as
+    /// outcome-unknown, remove only the exact originating transport, and clear
+    /// public authority only when it still belongs to that same session. The
+    /// data-then-hub lock order matches attach/detach and prevents a late old
+    /// result from revoking a replacement helper.
+    async fn revoke_invalid_native_action_result(
+        &self,
+        connection_id: Uuid,
+        expected_session_id: &str,
+        method: &str,
+    ) -> ApiError {
+        let revoked = {
+            let mut data = self.data.write().await;
+            let revoked = self
+                .computer_hub
+                .close_if_current(connection_id, "invalid_native_action_result");
+            if revoked
+                && data
+                    .public
+                    .computer
+                    .as_ref()
+                    .is_some_and(|computer| computer.session_id == expected_session_id)
+            {
+                data.public.computer_connected = false;
+                data.public.computer = None;
+                data.public.computer_observation = None;
+                data.computer_screenshot = None;
+                data.computer_authority_gate = None;
+            }
+            revoked
+        };
+        if revoked {
+            self.log(
+                method,
+                "error",
+                "Computer helper returned an invalid native action success record; its exact transport was revoked",
+            )
+            .await;
+            self.bump("computer-connection").await;
+        }
+        HubError::new(
+            "COMPUTER_OUTCOME_UNKNOWN",
+            "The computer helper returned an invalid success record after native dispatch; the command outcome is unknown",
+        )
+        .into()
+    }
+
     /// Mirrors the helper's fail-closed outcome-unknown boundary in public
     /// state and independently supplies it when best-effort cancel delivery is
     /// lost. Retaining the previous frame would expose stale authority to a
@@ -5298,6 +5375,401 @@ fn request_cancel_invalidates_browser_freshness(method: &str) -> bool {
             | "page.batch"
             | "page.handleDialog"
     )
+}
+
+fn computer_mutation_requires_verified_result(method: &str) -> bool {
+    matches!(
+        method,
+        "computer.move"
+            | "computer.click"
+            | "computer.drag"
+            | "computer.scroll"
+            | "computer.typeText"
+            | "computer.key"
+            | "computer.invoke"
+            | "computer.setValue"
+    )
+}
+
+/// Validates the helper's sealed native-action record before any successful
+/// mutation can be logged, returned, or followed by an observation. Package
+/// versions are lockstepped, so accepting an open-ended or partial schema here
+/// would turn the capability handshake into an unaudited assertion.
+fn valid_native_computer_action_result(method: &str, platform: &str, result: &Value) -> bool {
+    let Some(result) = result.as_object() else {
+        return false;
+    };
+    let Some(invariants) = result.get("invariants").and_then(Value::as_object) else {
+        return false;
+    };
+    if !object_has_exact_keys(
+        invariants,
+        &[
+            "foregroundUnchanged",
+            "userFocusUnchanged",
+            "cursorPositionUnchanged",
+            "sharedPointerActivityObserved",
+            "hidSystemPointerActivityObserved",
+            "rawInputPointerActivityObserved",
+            "injectedPointerActivityObserved",
+            "pointerActivityMonitorHealthy",
+            "sharedPointerBoundaryCorroborated",
+            "sharedPointerBoundaryState",
+            "hardwareCursorPreservedByHelper",
+            "helperGlobalPointerPreservation",
+            "sharedPointerActivityState",
+            "spaceUnchanged",
+            "inputDelivery",
+        ],
+    ) {
+        return false;
+    }
+    let boolean = |name: &str| invariants.get(name).and_then(Value::as_bool);
+    let Some(foreground_unchanged) = boolean("foregroundUnchanged") else {
+        return false;
+    };
+    let Some(user_focus_unchanged) = boolean("userFocusUnchanged") else {
+        return false;
+    };
+    let Some(cursor_position_unchanged) = boolean("cursorPositionUnchanged") else {
+        return false;
+    };
+    let Some(shared_pointer_activity) = boolean("sharedPointerActivityObserved") else {
+        return false;
+    };
+    let Some(hid_pointer_activity) = boolean("hidSystemPointerActivityObserved") else {
+        return false;
+    };
+    let Some(raw_pointer_activity) = boolean("rawInputPointerActivityObserved") else {
+        return false;
+    };
+    let Some(injected_pointer_activity) = boolean("injectedPointerActivityObserved") else {
+        return false;
+    };
+    let Some(pointer_monitor_healthy) = boolean("pointerActivityMonitorHealthy") else {
+        return false;
+    };
+    let Some(pointer_boundary_corroborated) = boolean("sharedPointerBoundaryCorroborated") else {
+        return false;
+    };
+    let Some(hardware_cursor_preserved) = boolean("hardwareCursorPreservedByHelper") else {
+        return false;
+    };
+    let Some(space_unchanged) = boolean("spaceUnchanged") else {
+        return false;
+    };
+    if !foreground_unchanged
+        || !user_focus_unchanged
+        || !pointer_monitor_healthy
+        || !pointer_boundary_corroborated
+        || !hardware_cursor_preserved
+        || !space_unchanged
+        || invariants
+            .get("sharedPointerBoundaryState")
+            .and_then(Value::as_str)
+            != Some("corroborated")
+        || invariants
+            .get("helperGlobalPointerPreservation")
+            .and_then(Value::as_str)
+            != Some("confirmed")
+    {
+        return false;
+    }
+    let activity_state = invariants
+        .get("sharedPointerActivityState")
+        .and_then(Value::as_str);
+    match activity_state {
+        Some("quiet")
+            if !shared_pointer_activity
+                && !hid_pointer_activity
+                && !raw_pointer_activity
+                && !injected_pointer_activity
+                && cursor_position_unchanged => {}
+        Some("contaminated") if shared_pointer_activity => {}
+        _ => return false,
+    }
+    if (hid_pointer_activity || raw_pointer_activity || injected_pointer_activity)
+        && !shared_pointer_activity
+    {
+        return false;
+    }
+
+    let Some(delivery) = invariants.get("inputDelivery").and_then(Value::as_object) else {
+        return false;
+    };
+    if !object_has_exact_keys(
+        delivery,
+        &[
+            "route",
+            "supportLevel",
+            "exactTargetBound",
+            "dispatchAttemptRecorded",
+            "osAcceptanceSignalAvailable",
+            "osAcceptanceObserved",
+            "sharedInputSeatUsed",
+            "globalHidInputUsed",
+            "hardwareCursorMutationRequested",
+        ],
+    ) {
+        return false;
+    }
+    let Some(route) = delivery.get("route").and_then(Value::as_str) else {
+        return false;
+    };
+    let expected_routes: &[&str] = match method {
+        "computer.move" | "computer.click" | "computer.drag" | "computer.scroll" => {
+            &["macosTargetedProcessEvent", "windowsWindowMessage"]
+        }
+        "computer.typeText" | "computer.key" => {
+            &["macosTargetedProcessEvent", "windowsWindowMessage"]
+        }
+        "computer.invoke" | "computer.setValue" => &["macosAccessibility", "windowsUiAutomation"],
+        _ => return false,
+    };
+    if !expected_routes.contains(&route)
+        || (platform == "macos" && !route.starts_with("macos"))
+        || (platform == "windows" && !route.starts_with("windows"))
+    {
+        return false;
+    }
+    let private_macos_route = route == "macosTargetedProcessEvent";
+    if delivery.get("supportLevel").and_then(Value::as_str)
+        != Some(if private_macos_route {
+            "privateUnsupported"
+        } else {
+            "publicDocumented"
+        })
+        || delivery.get("exactTargetBound").and_then(Value::as_bool) != Some(true)
+        || delivery
+            .get("dispatchAttemptRecorded")
+            .and_then(Value::as_bool)
+            != Some(true)
+        || delivery
+            .get("osAcceptanceSignalAvailable")
+            .and_then(Value::as_bool)
+            != Some(!private_macos_route)
+        || delivery
+            .get("osAcceptanceObserved")
+            .and_then(Value::as_bool)
+            != Some(!private_macos_route)
+        || delivery.get("sharedInputSeatUsed").and_then(Value::as_bool) != Some(false)
+        || delivery.get("globalHidInputUsed").and_then(Value::as_bool) != Some(false)
+        || delivery
+            .get("hardwareCursorMutationRequested")
+            .and_then(Value::as_bool)
+            != Some(false)
+    {
+        return false;
+    }
+
+    let Some(action_id) = result.get("actionId").and_then(Value::as_str) else {
+        return false;
+    };
+    if action_id.len() > 80
+        || !Uuid::parse_str(action_id).is_ok_and(|action_id| {
+            !action_id.is_nil()
+                && action_id.get_version_num() == 4
+                && action_id.get_variant() == uuid::Variant::RFC4122
+        })
+    {
+        return false;
+    }
+    let Some(effect) = result.get("effect").and_then(Value::as_str) else {
+        return false;
+    };
+    let semantic = matches!(method, "computer.invoke" | "computer.setValue");
+    if (!semantic && effect != "Unverifiable")
+        || (semantic
+            && !matches!(
+                effect,
+                "Confirmed" | "Partial" | "SuspectedNoop" | "Refused"
+            ))
+    {
+        return false;
+    }
+
+    let Some(evidence) = result.get("evidence").and_then(Value::as_array) else {
+        return false;
+    };
+    if (!semantic && evidence.len() != 12) || (semantic && !(13..=14).contains(&evidence.len())) {
+        return false;
+    }
+    let required_delivery = [
+        ("foregroundUnchanged", foreground_unchanged),
+        ("userFocusUnchanged", user_focus_unchanged),
+        ("inputRouteTargetBound", true),
+        ("hardwareCursorPreservedByHelper", hardware_cursor_preserved),
+        (
+            "sharedPointerBoundaryCorroborated",
+            pointer_boundary_corroborated,
+        ),
+        ("desktopSpaceUnchanged", space_unchanged),
+    ];
+    let required_diagnostics = [
+        ("cursorPositionUnchanged", cursor_position_unchanged),
+        ("sharedPointerActivityObserved", shared_pointer_activity),
+        ("hidSystemPointerActivityObserved", hid_pointer_activity),
+        ("rawInputPointerActivityObserved", raw_pointer_activity),
+        ("injectedPointerActivityObserved", injected_pointer_activity),
+        ("pointerActivityMonitorHealthy", pointer_monitor_healthy),
+    ];
+    let mut seen = HashSet::new();
+    let mut semantic_dispatch = None;
+    let mut postcondition = None;
+    for item in evidence {
+        let Some(item) = item.as_object() else {
+            return false;
+        };
+        if !object_has_exact_keys(
+            item,
+            &[
+                "kind",
+                "claim",
+                "observed",
+                "supportsConfirmation",
+                "detail",
+            ],
+        ) {
+            return false;
+        }
+        let Some(kind) = item.get("kind").and_then(Value::as_str) else {
+            return false;
+        };
+        let Some(claim) = item.get("claim").and_then(Value::as_str) else {
+            return false;
+        };
+        let Some(observed) = item.get("observed").and_then(Value::as_bool) else {
+            return false;
+        };
+        let Some(supports_confirmation) = item.get("supportsConfirmation").and_then(Value::as_bool)
+        else {
+            return false;
+        };
+        let Some(detail) = item.get("detail").and_then(Value::as_str) else {
+            return false;
+        };
+        if claim.is_empty()
+            || claim.len() > 100
+            || detail.is_empty()
+            || detail.len() > 1_000
+            || !seen.insert(format!("{kind}\0{claim}"))
+        {
+            return false;
+        }
+        match kind {
+            "deliveryInvariant" => {
+                let Some((_, expected)) = required_delivery
+                    .iter()
+                    .find(|(expected_claim, _)| *expected_claim == claim)
+                else {
+                    return false;
+                };
+                if observed != *expected || supports_confirmation {
+                    return false;
+                }
+            }
+            "diagnosticObservation" => {
+                let Some((_, expected)) = required_diagnostics
+                    .iter()
+                    .find(|(expected_claim, _)| *expected_claim == claim)
+                else {
+                    return false;
+                };
+                if observed != *expected || supports_confirmation {
+                    return false;
+                }
+            }
+            "dispatchAcknowledgement" if semantic && claim == "semanticDispatchReturned" => {
+                if semantic_dispatch.replace(observed).is_some() || supports_confirmation {
+                    return false;
+                }
+            }
+            "postcondition" if semantic => {
+                let confirming = matches!(
+                    claim,
+                    "value-confirmed"
+                        | "masked-length-confirmed"
+                        | "toggle-state-changed"
+                        | "selection-state-changed"
+                        | "expand-collapse-state-changed"
+                );
+                if supports_confirmation != (observed && confirming)
+                    || postcondition
+                        .replace((observed, supports_confirmation, claim))
+                        .is_some()
+                {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    if required_delivery
+        .iter()
+        .any(|(claim, _)| !seen.contains(&format!("deliveryInvariant\0{claim}")))
+        || required_diagnostics
+            .iter()
+            .any(|(claim, _)| !seen.contains(&format!("diagnosticObservation\0{claim}")))
+    {
+        return false;
+    }
+    if semantic {
+        let Some(delivered) = semantic_dispatch else {
+            return false;
+        };
+        let has_confirmation = postcondition.is_some_and(|(_, supports, _)| supports);
+        let has_nonconfirming_observation = postcondition.is_some_and(|(observed, _, claim)| {
+            observed
+                && !matches!(
+                    claim,
+                    "no-observable-change"
+                        | "value-not-confirmed"
+                        | "postcondition-not-reported"
+                        | "effect-not-observed"
+                )
+        });
+        let expected_effect = if has_confirmation {
+            "Confirmed"
+        } else if delivered && has_nonconfirming_observation {
+            "Partial"
+        } else if delivered && postcondition.is_some() {
+            "SuspectedNoop"
+        } else if delivered {
+            "Partial"
+        } else {
+            "Refused"
+        };
+        if effect != expected_effect {
+            return false;
+        }
+    }
+
+    let Some(timings) = result.get("timings").and_then(Value::as_object) else {
+        return false;
+    };
+    if !object_has_exact_keys(timings, &["resolveMs", "dispatchMs", "verifyMs", "totalMs"]) {
+        return false;
+    }
+    let Some(resolve_ms) = timings.get("resolveMs").and_then(Value::as_f64) else {
+        return false;
+    };
+    let Some(dispatch_ms) = timings.get("dispatchMs").and_then(Value::as_f64) else {
+        return false;
+    };
+    let Some(verify_ms) = timings.get("verifyMs").and_then(Value::as_f64) else {
+        return false;
+    };
+    let Some(total_ms) = timings.get("totalMs").and_then(Value::as_f64) else {
+        return false;
+    };
+    [resolve_ms, dispatch_ms, verify_ms, total_ms]
+        .into_iter()
+        .all(|value| value.is_finite() && (0.0..=120_000.0).contains(&value))
+        && (resolve_ms + dispatch_ms + verify_ms - total_ms).abs() <= 0.01
+}
+
+fn object_has_exact_keys(object: &Map<String, Value>, keys: &[&str]) -> bool {
+    object.len() == keys.len() && keys.iter().all(|key| object.contains_key(*key))
 }
 
 fn computer_observation_delay(method: &str) -> Duration {
@@ -6112,6 +6584,8 @@ fn computer_invariants_for_server_platform() -> ComputerInvariants {
         .to_owned(),
         foreground_identity_preserved_before_after: true,
         hardware_cursor_preserved_before_after: true,
+        hardware_cursor_sample_authoritative: false,
+        input_delivery_provenance_required: true,
         uses_ax_raise: false,
         uses_front_process_switch: false,
         switches_active_space: false,
@@ -7385,6 +7859,228 @@ mod tests {
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >;
 
+    fn valid_native_action_result_for_test(
+        route: &str,
+        support_level: &str,
+        os_acceptance_available: bool,
+    ) -> Value {
+        let evidence = [
+            ("deliveryInvariant", "foregroundUnchanged", true),
+            ("deliveryInvariant", "userFocusUnchanged", true),
+            ("deliveryInvariant", "inputRouteTargetBound", true),
+            ("deliveryInvariant", "hardwareCursorPreservedByHelper", true),
+            (
+                "deliveryInvariant",
+                "sharedPointerBoundaryCorroborated",
+                true,
+            ),
+            ("deliveryInvariant", "desktopSpaceUnchanged", true),
+            ("diagnosticObservation", "cursorPositionUnchanged", true),
+            (
+                "diagnosticObservation",
+                "sharedPointerActivityObserved",
+                false,
+            ),
+            (
+                "diagnosticObservation",
+                "hidSystemPointerActivityObserved",
+                false,
+            ),
+            (
+                "diagnosticObservation",
+                "rawInputPointerActivityObserved",
+                false,
+            ),
+            (
+                "diagnosticObservation",
+                "injectedPointerActivityObserved",
+                false,
+            ),
+            (
+                "diagnosticObservation",
+                "pointerActivityMonitorHealthy",
+                true,
+            ),
+        ]
+        .into_iter()
+        .map(|(kind, claim, observed)| {
+            json!({
+                "kind": kind,
+                "claim": claim,
+                "observed": observed,
+                "supportsConfirmation": false,
+                "detail": "Complete sealed action evidence"
+            })
+        })
+        .collect::<Vec<_>>();
+        json!({
+            "frameId": "frame-1",
+            "invariants": {
+                "foregroundUnchanged": true,
+                "userFocusUnchanged": true,
+                "cursorPositionUnchanged": true,
+                "sharedPointerActivityObserved": false,
+                "hidSystemPointerActivityObserved": false,
+                "rawInputPointerActivityObserved": false,
+                "injectedPointerActivityObserved": false,
+                "pointerActivityMonitorHealthy": true,
+                "sharedPointerBoundaryCorroborated": true,
+                "sharedPointerBoundaryState": "corroborated",
+                "hardwareCursorPreservedByHelper": true,
+                "helperGlobalPointerPreservation": "confirmed",
+                "sharedPointerActivityState": "quiet",
+                "spaceUnchanged": true,
+                "inputDelivery": {
+                    "route": route,
+                    "supportLevel": support_level,
+                    "exactTargetBound": true,
+                    "dispatchAttemptRecorded": true,
+                    "osAcceptanceSignalAvailable": os_acceptance_available,
+                    "osAcceptanceObserved": os_acceptance_available,
+                    "sharedInputSeatUsed": false,
+                    "globalHidInputUsed": false,
+                    "hardwareCursorMutationRequested": false
+                }
+            },
+            "actionId": "123e4567-e89b-42d3-a456-426614174000",
+            "effect": "Unverifiable",
+            "evidence": evidence,
+            "timings": {
+                "resolveMs": 1.0,
+                "dispatchMs": 2.0,
+                "verifyMs": 3.0,
+                "totalMs": 6.0
+            }
+        })
+    }
+
+    fn set_test_action_evidence_observed(result: &mut Value, claim: &str, observed: bool) {
+        let evidence = result["evidence"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|item| item["claim"] == claim)
+            .unwrap();
+        evidence["observed"] = json!(observed);
+    }
+
+    #[test]
+    fn native_action_validator_accepts_exact_mac_private_text_and_key_delivery_schema() {
+        let result = valid_native_action_result_for_test(
+            "macosTargetedProcessEvent",
+            "privateUnsupported",
+            false,
+        );
+        assert_eq!(
+            result["invariants"]["inputDelivery"]
+                .as_object()
+                .unwrap()
+                .len(),
+            9
+        );
+        assert!(valid_native_computer_action_result(
+            "computer.typeText",
+            "macos",
+            &result
+        ));
+        assert!(valid_native_computer_action_result(
+            "computer.key",
+            "macos",
+            &result
+        ));
+
+        let mut missing_key = result.clone();
+        missing_key["invariants"]["inputDelivery"]
+            .as_object_mut()
+            .unwrap()
+            .remove("exactTargetBound");
+        assert!(!valid_native_computer_action_result(
+            "computer.typeText",
+            "macos",
+            &missing_key
+        ));
+
+        let mut extra_key = result;
+        extra_key["invariants"]["inputDelivery"]["unsealedClaim"] = json!(true);
+        assert!(!valid_native_computer_action_result(
+            "computer.key",
+            "macos",
+            &extra_key
+        ));
+    }
+
+    #[test]
+    fn native_action_validator_accepts_a_contaminated_mac_pointer_boundary() {
+        let mut result = valid_native_action_result_for_test(
+            "macosTargetedProcessEvent",
+            "privateUnsupported",
+            false,
+        );
+        result["invariants"]["cursorPositionUnchanged"] = json!(false);
+        result["invariants"]["sharedPointerActivityObserved"] = json!(true);
+        result["invariants"]["hidSystemPointerActivityObserved"] = json!(true);
+        result["invariants"]["sharedPointerActivityState"] = json!("contaminated");
+        set_test_action_evidence_observed(&mut result, "cursorPositionUnchanged", false);
+        set_test_action_evidence_observed(&mut result, "sharedPointerActivityObserved", true);
+        set_test_action_evidence_observed(&mut result, "hidSystemPointerActivityObserved", true);
+        assert!(valid_native_computer_action_result(
+            "computer.click",
+            "macos",
+            &result
+        ));
+    }
+
+    #[test]
+    fn native_action_validator_rejects_unsealed_or_inconsistent_records() {
+        let valid =
+            valid_native_action_result_for_test("windowsWindowMessage", "publicDocumented", true);
+        assert!(valid_native_computer_action_result(
+            "computer.click",
+            "windows",
+            &valid
+        ));
+
+        let mut shared_seat = valid.clone();
+        shared_seat["invariants"]["inputDelivery"]["sharedInputSeatUsed"] = json!(true);
+        assert!(!valid_native_computer_action_result(
+            "computer.click",
+            "windows",
+            &shared_seat
+        ));
+
+        let mut inconsistent_evidence = valid.clone();
+        set_test_action_evidence_observed(&mut inconsistent_evidence, "foregroundUnchanged", false);
+        assert!(!valid_native_computer_action_result(
+            "computer.click",
+            "windows",
+            &inconsistent_evidence
+        ));
+
+        let mut wrong_effect = valid.clone();
+        wrong_effect["effect"] = json!("Confirmed");
+        assert!(!valid_native_computer_action_result(
+            "computer.click",
+            "windows",
+            &wrong_effect
+        ));
+
+        let mut non_v4_action_id = valid.clone();
+        non_v4_action_id["actionId"] = json!("123e4567-e89b-12d3-a456-426614174000");
+        assert!(!valid_native_computer_action_result(
+            "computer.click",
+            "windows",
+            &non_v4_action_id
+        ));
+
+        let mut inconsistent_timings = valid;
+        inconsistent_timings["timings"]["totalMs"] = json!(7.0);
+        assert!(!valid_native_computer_action_result(
+            "computer.click",
+            "windows",
+            &inconsistent_timings
+        ));
+    }
+
     async fn authenticate_computer_test_peer(
         socket: &mut ComputerTestSocket,
         token: &str,
@@ -7452,7 +8148,11 @@ mod tests {
                     "backend": backend,
                     "inputReady": true,
                     "semanticReady": true,
-                    "capabilities": ["computer.status"]
+                    "capabilities": [
+                        "computer.status",
+                        "computer.input-delivery-provenance.v1",
+                        "computer.pointer-activity-monitor.v1"
+                    ]
                 })
                 .to_string()
                 .into(),
@@ -9225,6 +9925,56 @@ mod tests {
         assert_eq!(after_screenshot.id, before_screenshot.id);
         assert_eq!(after_screenshot.binding, before_screenshot.binding);
         assert_eq!(after_screenshot.route, before_screenshot.route);
+    }
+
+    #[tokio::test]
+    async fn invalid_native_result_from_old_connection_cannot_revoke_replacement_helper() {
+        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false);
+        let old_connection = Uuid::new_v4();
+        let (_old_id, _old_receiver, _old_shutdown) =
+            state.computer_hub.attach_with_id(old_connection);
+        assert!(state.computer_hub.mark_ready(old_connection));
+
+        let replacement_connection = Uuid::new_v4();
+        let (_replacement_id, _replacement_receiver, _replacement_shutdown) =
+            state.computer_hub.attach_with_id(replacement_connection);
+        assert!(state.computer_hub.mark_ready(replacement_connection));
+        {
+            let mut data = state.data.write().await;
+            data.public.computer_connected = true;
+            data.public.computer = Some(ComputerInfo {
+                version: VERSION.to_owned(),
+                protocol_version: PROTOCOL_VERSION,
+                session_id: replacement_connection.to_string(),
+                process_id: 4242,
+                compatible: true,
+                platform: "test-os".to_owned(),
+                architecture: "test-arch".to_owned(),
+                backend: "test-backend".to_owned(),
+                session_mode: "background-window".to_owned(),
+                isolation: "exact-window".to_owned(),
+                input_ready: true,
+                semantic_ready: true,
+                invariants: computer_invariants_for_server_platform(),
+                capabilities: vec!["computer.click".to_owned()],
+                windows: Vec::new(),
+                share: json!({ "active": true, "id": "replacement-share" }),
+                connected_at: "2026-08-23T00:00:00Z".to_owned(),
+            });
+        }
+        let before = state.public_state().await;
+
+        let error = state
+            .revoke_invalid_native_action_result(
+                old_connection,
+                &old_connection.to_string(),
+                "computer.click",
+            )
+            .await;
+        assert_eq!(error.status, StatusCode::GATEWAY_TIMEOUT);
+        assert_eq!(error.code, "COMPUTER_OUTCOME_UNKNOWN");
+        assert!(state.computer_hub.is_current_ready(replacement_connection));
+        assert_eq!(state.public_state().await, before);
     }
 
     #[test]

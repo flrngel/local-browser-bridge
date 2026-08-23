@@ -1,4 +1,6 @@
 use std::ffi::c_void;
+use std::sync::Once;
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -6,8 +8,11 @@ use image::RgbaImage;
 use xcap::Window;
 
 use super::{
-    COMPUTER_TYPE_TEXT_MAX_DISPATCH_MS, CommandCancellation, ComputerError, InvariantReport,
-    InvariantStage, SemanticSnapshot, SemanticTarget, TargetPoint, WindowDescriptor, uia_windows,
+    COMPUTER_TYPE_TEXT_MAX_DISPATCH_MS, CommandCancellation, ComputerError,
+    HelperGlobalPointerPreservation, InputDeliveryProvenance, InputDeliveryRoute,
+    InputDeliverySupportLevel, InvariantReport, InvariantStage, SemanticSnapshot, SemanticTarget,
+    SharedPointerActivityState, SharedPointerBoundaryState, TargetPoint, WindowDescriptor,
+    uia_windows,
 };
 
 const TEXT_MESSAGE_BURST: usize = 16;
@@ -16,6 +21,11 @@ const WM_CHAR_REPEAT_COUNT: isize = 1;
 
 type Hwnd = isize;
 type Hdesk = isize;
+type Hinstance = isize;
+type Hhook = isize;
+
+type WindowProcedure = Option<unsafe extern "system" fn(Hwnd, u32, usize, isize) -> isize>;
+type HookProcedure = Option<unsafe extern "system" fn(i32, usize, isize) -> isize>;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -47,6 +57,49 @@ struct GuiThreadInfo {
     caret: [i32; 4],
 }
 
+#[repr(C)]
+struct WindowClassW {
+    style: u32,
+    window_procedure: WindowProcedure,
+    class_extra_bytes: i32,
+    window_extra_bytes: i32,
+    instance: Hinstance,
+    icon: isize,
+    cursor: isize,
+    background: isize,
+    menu_name: *const u16,
+    class_name: *const u16,
+}
+
+#[repr(C)]
+struct RawInputDevice {
+    usage_page: u16,
+    usage: u16,
+    flags: u32,
+    target: Hwnd,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct WindowsMessage {
+    window: Hwnd,
+    message: u32,
+    wparam: usize,
+    lparam: isize,
+    time: u32,
+    point: Point,
+    private: u32,
+}
+
+#[repr(C)]
+struct LowLevelMouseEvent {
+    point: Point,
+    mouse_data: u32,
+    flags: u32,
+    time: u32,
+    extra_info: usize,
+}
+
 #[link(name = "user32")]
 unsafe extern "system" {
     fn GetForegroundWindow() -> Hwnd;
@@ -70,6 +123,40 @@ unsafe extern "system" {
         needed: *mut u32,
     ) -> i32;
     fn CloseDesktop(desktop: Hdesk) -> i32;
+    fn RegisterClassW(class: *const WindowClassW) -> u16;
+    fn UnregisterClassW(class_name: *const u16, instance: Hinstance) -> i32;
+    fn CreateWindowExW(
+        extended_style: u32,
+        class_name: *const u16,
+        window_name: *const u16,
+        style: u32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        parent: Hwnd,
+        menu: isize,
+        instance: Hinstance,
+        parameter: *mut c_void,
+    ) -> Hwnd;
+    fn DestroyWindow(window: Hwnd) -> i32;
+    fn DefWindowProcW(window: Hwnd, message: u32, wparam: usize, lparam: isize) -> isize;
+    fn RegisterRawInputDevices(
+        devices: *const RawInputDevice,
+        device_count: u32,
+        structure_size: u32,
+    ) -> i32;
+    fn SetWindowsHookExW(
+        hook_id: i32,
+        callback: HookProcedure,
+        module: Hinstance,
+        thread_id: u32,
+    ) -> Hhook;
+    fn UnhookWindowsHookEx(hook: Hhook) -> i32;
+    fn CallNextHookEx(hook: Hhook, code: i32, wparam: usize, lparam: isize) -> isize;
+    fn GetMessageW(message: *mut WindowsMessage, window: Hwnd, min: u32, max: u32) -> i32;
+    fn TranslateMessage(message: *const WindowsMessage) -> i32;
+    fn DispatchMessageW(message: *const WindowsMessage) -> isize;
 }
 
 #[link(name = "dwmapi")]
@@ -87,6 +174,7 @@ unsafe extern "system" {
     fn GetLastError() -> u32;
     fn SetLastError(error: u32);
     fn ProcessIdToSessionId(process_id: u32, session_id: *mut u32) -> i32;
+    fn GetModuleHandleW(module_name: *const u16) -> Hinstance;
 }
 
 const WM_MOUSEMOVE: u32 = 0x0200;
@@ -119,6 +207,20 @@ const DESKTOP_READOBJECTS: u32 = 0x0001;
 const UOI_NAME: i32 = 2;
 const ERROR_ACCESS_DENIED: u32 = 5;
 const ERROR_NOT_ENOUGH_QUOTA: u32 = 1_816;
+const WM_INPUT: u32 = 0x00FF;
+const RIDEV_REMOVE: u32 = 0x0000_0001;
+const RIDEV_INPUTSINK: u32 = 0x0000_0100;
+const HID_USAGE_PAGE_GENERIC: u16 = 0x01;
+const HID_USAGE_GENERIC_MOUSE: u16 = 0x02;
+const WH_MOUSE_LL: i32 = 14;
+const HC_ACTION: i32 = 0;
+const LLMHF_INJECTED: u32 = 0x0000_0001;
+const LLMHF_LOWER_IL_INJECTED: u32 = 0x0000_0002;
+const HWND_MESSAGE: Hwnd = -3;
+const POINTER_MONITOR_STARTING: u8 = 1;
+const POINTER_MONITOR_SAMPLING_READY: u8 = 2;
+const POINTER_MONITOR_FAILED: u8 = 3;
+const POINTER_EPOCH_SNAPSHOT_ATTEMPTS: usize = 64;
 
 const VK_CONTROL: usize = 0x11;
 const VK_MENU: usize = 0x12;
@@ -131,6 +233,36 @@ const VK_DELETE: usize = 0x2E;
 
 pub fn backend_name() -> &'static str {
     "background-window/uia+win32-messages+wgc-stream"
+}
+
+impl InputDeliveryProvenance {
+    fn windows_window_message(os_acceptance_observed: bool) -> Self {
+        Self {
+            route: InputDeliveryRoute::WindowsWindowMessage,
+            support_level: InputDeliverySupportLevel::PublicDocumented,
+            exact_target_bound: true,
+            dispatch_attempt_recorded: true,
+            os_acceptance_signal_available: true,
+            os_acceptance_observed,
+            shared_input_seat_used: false,
+            global_hid_input_used: false,
+            hardware_cursor_mutation_requested: false,
+        }
+    }
+
+    fn windows_ui_automation(os_acceptance_observed: bool) -> Self {
+        Self {
+            route: InputDeliveryRoute::WindowsUiAutomation,
+            support_level: InputDeliverySupportLevel::PublicDocumented,
+            exact_target_bound: true,
+            dispatch_attempt_recorded: true,
+            os_acceptance_signal_available: true,
+            os_acceptance_observed,
+            shared_input_seat_used: false,
+            global_hid_input_used: false,
+            hardware_cursor_mutation_requested: false,
+        }
+    }
 }
 
 pub fn semantic_backend_name() -> &'static str {
@@ -175,7 +307,9 @@ pub fn limitations() -> Vec<&'static str> {
     vec![
         "UI Automation is preferred for Chromium, WPF, WinUI, and native controls",
         "Pixel-only events use Win32 messages; games, elevated windows, and protected content can refuse them",
-        "Unsupported controls fail rather than falling back to SendInput or SetForegroundWindow",
+        "Unsupported controls fail rather than falling back to global input injection or foreground activation",
+        "Raw Input and low-level pointer epochs retain no input contents or device identity and cannot distinguish every virtual or remote source",
+        "Windows exposes no continuous low-level hook health query; monitor health means bounded setup and sample readability only",
     ]
 }
 
@@ -593,9 +727,19 @@ fn guarded(
     target_hwnd(target)?;
     cancellation.check("Windows background dispatch")?;
     let action_result = action();
+    let dispatched = cancellation.was_dispatched();
+    let os_acceptance_observed = action_result.is_ok();
     cancellation.mark_verification_started();
     thread::sleep(Duration::from_millis(35));
-    let report = before.compare(&DesktopSnapshot::capture()?);
+    let input_delivery = if dispatched {
+        InputDeliveryProvenance::windows_window_message(os_acceptance_observed)
+    } else {
+        InputDeliveryProvenance::unverified()
+    };
+    let report = before.compare(&DesktopSnapshot::capture()?, input_delivery);
+    if !dispatched && action_result.is_err() {
+        return action_result.map(|()| report);
+    }
     report.clone().assert_held(stage)?;
     action_result?;
     Ok(report)
@@ -611,11 +755,20 @@ fn guarded_effect<T>(
     target_hwnd(target)?;
     cancellation.check("UI Automation semantic resolution")?;
     let action_result = action();
+    let dispatched = cancellation.was_dispatched();
+    let os_acceptance_observed = action_result.is_ok();
     cancellation.mark_verification_started();
     thread::sleep(Duration::from_millis(35));
-    let report = before
-        .compare(&DesktopSnapshot::capture()?)
-        .assert_held(stage)?;
+    let input_delivery = if dispatched {
+        InputDeliveryProvenance::windows_ui_automation(os_acceptance_observed)
+    } else {
+        InputDeliveryProvenance::unverified()
+    };
+    let report = before.compare(&DesktopSnapshot::capture()?, input_delivery);
+    if !dispatched && action_result.is_err() {
+        return action_result.map(|effect| (effect, report));
+    }
+    let report = report.assert_held(stage)?;
     let backend_effect = action_result?;
     Ok((backend_effect, report))
 }
@@ -1173,11 +1326,337 @@ fn virtual_key(value: &str) -> Option<usize> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct InputDesktopIdentity(Vec<u16>);
 
+static POINTER_MONITOR_START: Once = Once::new();
+static POINTER_MONITOR_STATE: AtomicU8 = AtomicU8::new(0);
+static RAW_POINTER_EPOCH: AtomicU64 = AtomicU64::new(0);
+// This is an odd/even publication sequence, not an event counter. The hook
+// makes it odd before classifying an event and even after publishing every
+// field. Readers accept only the same even value on both sides of a sample.
+static LOW_LEVEL_POINTER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static INJECTED_POINTER_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Copy)]
+struct PointerActivityStamp {
+    raw_epoch: u64,
+    low_level_epoch: u64,
+    injected_epoch: u64,
+    monitor_healthy: bool,
+    boundary_activity_observed: bool,
+}
+
+#[derive(Clone, Copy)]
+struct PointerActivityProgress {
+    observed: bool,
+    raw_observed: bool,
+    injected_observed: bool,
+    monitor_healthy: bool,
+}
+
+impl PointerActivityStamp {
+    fn capture() -> Result<Self, ComputerError> {
+        if !ensure_pointer_activity_monitor() {
+            return Err(input_error(
+                "The Windows Raw Input and low-level pointer monitor is unavailable",
+            ));
+        }
+
+        let mut boundary_activity_observed = false;
+        for _ in 0..POINTER_EPOCH_SNAPSHOT_ATTEMPTS {
+            // Windows provides no query that proves a low-level hook remains
+            // installed after a silent timeout removal. This state therefore
+            // means only that setup completed and the monitor thread remained
+            // readable at both ends of this bounded sample; it is not a claim
+            // of continuous hook coverage.
+            if POINTER_MONITOR_STATE.load(Ordering::Acquire) != POINTER_MONITOR_SAMPLING_READY {
+                return Err(input_error(
+                    "The Windows pointer monitor stopped during epoch sampling",
+                ));
+            }
+
+            let sequence_before = LOW_LEVEL_POINTER_SEQUENCE.load(Ordering::Acquire);
+            if sequence_before & 1 != 0 {
+                boundary_activity_observed = true;
+                std::hint::spin_loop();
+                continue;
+            }
+            let raw_before = RAW_POINTER_EPOCH.load(Ordering::Acquire);
+            let injected_epoch = INJECTED_POINTER_EPOCH.load(Ordering::Acquire);
+            let raw_after = RAW_POINTER_EPOCH.load(Ordering::Acquire);
+            let sequence_after = LOW_LEVEL_POINTER_SEQUENCE.load(Ordering::Acquire);
+            let monitor_ready_after =
+                POINTER_MONITOR_STATE.load(Ordering::Acquire) == POINTER_MONITOR_SAMPLING_READY;
+
+            if monitor_ready_after
+                && sequence_before == sequence_after
+                && sequence_after & 1 == 0
+                && raw_before == raw_after
+            {
+                return Ok(Self {
+                    raw_epoch: raw_after,
+                    low_level_epoch: sequence_after / 2,
+                    injected_epoch,
+                    monitor_healthy: true,
+                    boundary_activity_observed,
+                });
+            }
+
+            if !monitor_ready_after {
+                return Err(input_error(
+                    "The Windows pointer monitor stopped during epoch sampling",
+                ));
+            }
+            boundary_activity_observed = true;
+            std::hint::spin_loop();
+        }
+
+        Err(input_error(
+            "The Windows pointer monitor could not produce a stable bounded epoch sample",
+        ))
+    }
+
+    fn finish_boundary(self, mut after: Self) -> Self {
+        after.boundary_activity_observed = self.boundary_activity_observed
+            || after.boundary_activity_observed
+            || self.raw_epoch != after.raw_epoch
+            || self.low_level_epoch != after.low_level_epoch;
+        after
+    }
+
+    fn progress_to(self, after: Self) -> PointerActivityProgress {
+        let monitor_healthy = self.monitor_healthy && after.monitor_healthy;
+        PointerActivityProgress {
+            observed: monitor_healthy
+                && (self.boundary_activity_observed
+                    || after.boundary_activity_observed
+                    || self.raw_epoch != after.raw_epoch
+                    || self.low_level_epoch != after.low_level_epoch),
+            raw_observed: monitor_healthy && self.raw_epoch != after.raw_epoch,
+            injected_observed: monitor_healthy && self.injected_epoch != after.injected_epoch,
+            monitor_healthy,
+        }
+    }
+}
+
+fn ensure_pointer_activity_monitor() -> bool {
+    POINTER_MONITOR_START.call_once(|| {
+        POINTER_MONITOR_STATE.store(POINTER_MONITOR_STARTING, Ordering::Release);
+        if thread::Builder::new()
+            .name("lbb-pointer-monitor".to_owned())
+            .spawn(|| {
+                if run_pointer_activity_monitor().is_err() {
+                    POINTER_MONITOR_STATE.store(POINTER_MONITOR_FAILED, Ordering::Release);
+                }
+            })
+            .is_err()
+        {
+            POINTER_MONITOR_STATE.store(POINTER_MONITOR_FAILED, Ordering::Release);
+        }
+    });
+
+    let deadline = Instant::now() + Duration::from_millis(500);
+    loop {
+        match POINTER_MONITOR_STATE.load(Ordering::Acquire) {
+            POINTER_MONITOR_SAMPLING_READY => return true,
+            POINTER_MONITOR_FAILED => return false,
+            _ if Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
+            _ => return false,
+        }
+    }
+}
+
+struct PointerMonitorResources<'a> {
+    class_name: &'a [u16],
+    instance: Hinstance,
+    class_registered: bool,
+    window: Hwnd,
+    raw_input_registered: bool,
+    hook: Hhook,
+}
+
+impl Drop for PointerMonitorResources<'_> {
+    fn drop(&mut self) {
+        // Keep teardown on the monitor thread and reverse the acquisition
+        // order: hook, Raw Input registration, message-only window, class.
+        // Failed acknowledgements leave the monitor unavailable and are
+        // reported without aborting the remaining cleanup steps.
+        POINTER_MONITOR_STATE.store(POINTER_MONITOR_FAILED, Ordering::Release);
+        let mut cleanup_acknowledged = true;
+        unsafe {
+            if self.hook != 0 {
+                if UnhookWindowsHookEx(self.hook) != 0 {
+                    self.hook = 0;
+                } else {
+                    cleanup_acknowledged = false;
+                }
+            }
+            if self.raw_input_registered {
+                let removal = RawInputDevice {
+                    usage_page: HID_USAGE_PAGE_GENERIC,
+                    usage: HID_USAGE_GENERIC_MOUSE,
+                    flags: RIDEV_REMOVE,
+                    // RIDEV_REMOVE requires a null target.
+                    target: 0,
+                };
+                if RegisterRawInputDevices(
+                    &removal,
+                    1,
+                    u32::try_from(std::mem::size_of::<RawInputDevice>())
+                        .expect("RAWINPUTDEVICE size fits in u32"),
+                ) != 0
+                {
+                    self.raw_input_registered = false;
+                } else {
+                    cleanup_acknowledged = false;
+                }
+            }
+            if self.window != 0 {
+                if DestroyWindow(self.window) != 0 {
+                    self.window = 0;
+                } else {
+                    cleanup_acknowledged = false;
+                }
+            }
+            if self.class_registered {
+                if UnregisterClassW(self.class_name.as_ptr(), self.instance) != 0 {
+                    self.class_registered = false;
+                } else {
+                    cleanup_acknowledged = false;
+                }
+            }
+        }
+        if !cleanup_acknowledged {
+            eprintln!(
+                "Windows pointer monitor teardown completed with an unacknowledged cleanup call"
+            );
+        }
+    }
+}
+
+fn run_pointer_activity_monitor() -> Result<(), ()> {
+    let class_name = "LocalBrowserBridgePointerMonitor"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
+    if instance == 0 {
+        return Err(());
+    }
+    let class = WindowClassW {
+        style: 0,
+        window_procedure: Some(pointer_monitor_window_procedure),
+        class_extra_bytes: 0,
+        window_extra_bytes: 0,
+        instance,
+        icon: 0,
+        cursor: 0,
+        background: 0,
+        menu_name: std::ptr::null(),
+        class_name: class_name.as_ptr(),
+    };
+    if unsafe { RegisterClassW(&class) } == 0 {
+        return Err(());
+    }
+    let mut resources = PointerMonitorResources {
+        class_name: &class_name,
+        instance,
+        class_registered: true,
+        window: 0,
+        raw_input_registered: false,
+        hook: 0,
+    };
+    resources.window = unsafe {
+        CreateWindowExW(
+            0,
+            class_name.as_ptr(),
+            class_name.as_ptr(),
+            0,
+            0,
+            0,
+            0,
+            0,
+            HWND_MESSAGE,
+            0,
+            instance,
+            std::ptr::null_mut(),
+        )
+    };
+    if resources.window == 0 {
+        return Err(());
+    }
+    let device = RawInputDevice {
+        usage_page: HID_USAGE_PAGE_GENERIC,
+        usage: HID_USAGE_GENERIC_MOUSE,
+        flags: RIDEV_INPUTSINK,
+        target: resources.window,
+    };
+    if unsafe {
+        RegisterRawInputDevices(
+            &device,
+            1,
+            u32::try_from(std::mem::size_of::<RawInputDevice>()).map_err(|_| ())?,
+        )
+    } == 0
+    {
+        return Err(());
+    }
+    resources.raw_input_registered = true;
+    resources.hook =
+        unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(pointer_monitor_hook), instance, 0) };
+    if resources.hook == 0 {
+        return Err(());
+    }
+
+    POINTER_MONITOR_STATE.store(POINTER_MONITOR_SAMPLING_READY, Ordering::Release);
+    let mut message = WindowsMessage::default();
+    loop {
+        let status = unsafe { GetMessageW(&mut message, 0, 0, 0) };
+        if status <= 0 {
+            break;
+        }
+        unsafe {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+    }
+    POINTER_MONITOR_STATE.store(POINTER_MONITOR_FAILED, Ordering::Release);
+    Err(())
+}
+
+unsafe extern "system" fn pointer_monitor_window_procedure(
+    window: Hwnd,
+    message: u32,
+    wparam: usize,
+    lparam: isize,
+) -> isize {
+    if message == WM_INPUT {
+        RAW_POINTER_EPOCH.fetch_add(1, Ordering::AcqRel);
+    }
+    unsafe { DefWindowProcW(window, message, wparam, lparam) }
+}
+
+unsafe extern "system" fn pointer_monitor_hook(code: i32, wparam: usize, lparam: isize) -> isize {
+    if code == HC_ACTION {
+        // Odd means a hook callback is publishing. The final Release makes
+        // both the generic event and injected classification visible before
+        // the sequence becomes even again.
+        LOW_LEVEL_POINTER_SEQUENCE.fetch_add(1, Ordering::AcqRel);
+        if lparam != 0 {
+            let event = unsafe { &*(lparam as *const LowLevelMouseEvent) };
+            if event.flags & (LLMHF_INJECTED | LLMHF_LOWER_IL_INJECTED) != 0 {
+                INJECTED_POINTER_EPOCH.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+        LOW_LEVEL_POINTER_SEQUENCE.fetch_add(1, Ordering::Release);
+    }
+    unsafe { CallNextHookEx(0, code, wparam, lparam) }
+}
+
 #[derive(Clone)]
 struct DesktopSnapshot {
     foreground: Hwnd,
     user_focus: Hwnd,
     cursor: Point,
+    pointer_activity: PointerActivityStamp,
     input_desktop: InputDesktopIdentity,
 }
 
@@ -1206,14 +1685,18 @@ impl DesktopSnapshot {
                 "The foreground or focused window is no longer valid",
             ));
         }
+        let pointer_activity_before = PointerActivityStamp::capture()?;
         let mut cursor = Point::default();
         if unsafe { GetCursorPos(&mut cursor) } == 0 {
             return Err(input_error("GetCursorPos failed"));
         }
+        let pointer_activity =
+            pointer_activity_before.finish_boundary(PointerActivityStamp::capture()?);
         Self::from_observations(
             foreground,
             info.hwnd_focus,
             Some(cursor),
+            Some(pointer_activity),
             Some(input_desktop_identity()?),
         )
     }
@@ -1222,6 +1705,7 @@ impl DesktopSnapshot {
         foreground: Hwnd,
         user_focus: Hwnd,
         cursor: Option<Point>,
+        pointer_activity: Option<PointerActivityStamp>,
         input_desktop: Option<InputDesktopIdentity>,
     ) -> Result<Self, ComputerError> {
         if foreground == 0 {
@@ -1234,17 +1718,56 @@ impl DesktopSnapshot {
             foreground,
             user_focus,
             cursor: cursor.ok_or_else(|| input_error("The hardware cursor is unreadable"))?,
+            pointer_activity: pointer_activity
+                .ok_or_else(|| input_error("The pointer activity monitor is unreadable"))?,
             input_desktop: input_desktop
                 .ok_or_else(|| input_error("The input desktop identity is unknown"))?,
         })
     }
 
-    fn compare(&self, after: &Self) -> InvariantReport {
+    fn compare(&self, after: &Self, input_delivery: InputDeliveryProvenance) -> InvariantReport {
+        let cursor_position_unchanged = self.cursor == after.cursor;
+        let activity = self.pointer_activity.progress_to(after.pointer_activity);
+        let boundary_corroborated =
+            activity.monitor_healthy && (cursor_position_unchanged || activity.observed);
+        let helper_preservation = if input_delivery.global_hid_input_used
+            || input_delivery.hardware_cursor_mutation_requested
+        {
+            HelperGlobalPointerPreservation::Violated
+        } else if input_delivery.is_target_bound() && boundary_corroborated {
+            HelperGlobalPointerPreservation::Confirmed
+        } else {
+            HelperGlobalPointerPreservation::Unknown
+        };
+        let shared_pointer_activity_state =
+            if !activity.monitor_healthy || (!cursor_position_unchanged && !activity.observed) {
+                SharedPointerActivityState::Unknown
+            } else if activity.observed {
+                SharedPointerActivityState::Contaminated
+            } else {
+                SharedPointerActivityState::Quiet
+            };
         InvariantReport {
             foreground_unchanged: self.foreground == after.foreground,
             user_focus_unchanged: self.user_focus == after.user_focus,
-            cursor_unchanged: self.cursor == after.cursor,
+            cursor_position_unchanged,
+            shared_pointer_activity_observed: activity.observed,
+            hid_system_pointer_activity_observed: false,
+            raw_input_pointer_activity_observed: activity.raw_observed,
+            injected_pointer_activity_observed: activity.injected_observed,
+            pointer_activity_monitor_healthy: activity.monitor_healthy,
+            shared_pointer_boundary_corroborated: boundary_corroborated,
+            shared_pointer_boundary_state: if boundary_corroborated {
+                SharedPointerBoundaryState::Corroborated
+            } else {
+                SharedPointerBoundaryState::Unknown
+            },
+            hardware_cursor_preserved_by_helper: helper_preservation
+                == HelperGlobalPointerPreservation::Confirmed,
+            helper_global_pointer_preservation: helper_preservation,
+            shared_pointer_activity_state,
             space_unchanged: self.input_desktop == after.input_desktop,
+            input_delivery,
         }
     }
 }
@@ -1502,6 +2025,36 @@ mod invariant_tests {
         InputDesktopIdentity(name.encode_utf16().collect())
     }
 
+    fn pointer_stamp(
+        raw_epoch: u64,
+        low_level_epoch: u64,
+        injected_epoch: u64,
+        monitor_healthy: bool,
+    ) -> PointerActivityStamp {
+        PointerActivityStamp {
+            raw_epoch,
+            low_level_epoch,
+            injected_epoch,
+            monitor_healthy,
+            boundary_activity_observed: false,
+        }
+    }
+
+    fn snapshot(point: Point, activity: PointerActivityStamp, desktop: &str) -> DesktopSnapshot {
+        DesktopSnapshot::from_observations(
+            1,
+            2,
+            Some(point),
+            Some(activity),
+            Some(identity(desktop)),
+        )
+        .unwrap()
+    }
+
+    fn target_delivery() -> InputDeliveryProvenance {
+        InputDeliveryProvenance::windows_window_message(true)
+    }
+
     #[test]
     fn readiness_requires_a_nonzero_session_and_complete_desktop_probe() {
         assert!(!readiness_from_observations(None, true));
@@ -1513,11 +2066,17 @@ mod invariant_tests {
     #[test]
     fn unreadable_invariant_components_fail_closed() {
         let point = Some(Point { x: 10, y: 20 });
+        let activity = Some(pointer_stamp(1, 1, 0, true));
         let desktop = Some(identity("Default"));
-        assert!(DesktopSnapshot::from_observations(0, 2, point, desktop.clone()).is_err());
-        assert!(DesktopSnapshot::from_observations(1, 0, point, desktop.clone()).is_err());
-        assert!(DesktopSnapshot::from_observations(1, 2, None, desktop.clone()).is_err());
-        assert!(DesktopSnapshot::from_observations(1, 2, point, None).is_err());
+        assert!(
+            DesktopSnapshot::from_observations(0, 2, point, activity, desktop.clone()).is_err()
+        );
+        assert!(
+            DesktopSnapshot::from_observations(1, 0, point, activity, desktop.clone()).is_err()
+        );
+        assert!(DesktopSnapshot::from_observations(1, 2, None, activity, desktop.clone()).is_err());
+        assert!(DesktopSnapshot::from_observations(1, 2, point, None, desktop.clone()).is_err());
+        assert!(DesktopSnapshot::from_observations(1, 2, point, activity, None).is_err());
     }
 
     #[test]
@@ -1526,6 +2085,7 @@ mod invariant_tests {
             1,
             2,
             Some(Point { x: 10, y: 20 }),
+            Some(pointer_stamp(1, 1, 0, true)),
             Some(identity("Default")),
         )
         .unwrap();
@@ -1534,10 +2094,76 @@ mod invariant_tests {
             1,
             2,
             Some(Point { x: 10, y: 20 }),
+            Some(pointer_stamp(1, 1, 0, true)),
             Some(identity("Secure")),
         )
         .unwrap();
-        assert!(before.compare(&same).space_unchanged);
-        assert!(!before.compare(&changed).space_unchanged);
+        assert!(before.compare(&same, target_delivery()).space_unchanged);
+        assert!(!before.compare(&changed, target_delivery()).space_unchanged);
+    }
+
+    #[test]
+    fn pointer_monitor_distinguishes_quiet_contaminated_and_unknown_boundaries() {
+        let point = Point { x: 10, y: 20 };
+        let before = snapshot(point, pointer_stamp(10, 20, 1, true), "Default");
+
+        let quiet = before.compare(&before.clone(), target_delivery());
+        assert!(quiet.shared_pointer_boundary_corroborated);
+        assert_eq!(
+            quiet.shared_pointer_activity_state,
+            SharedPointerActivityState::Quiet
+        );
+        assert_eq!(
+            quiet.helper_global_pointer_preservation,
+            HelperGlobalPointerPreservation::Confirmed
+        );
+
+        let raw_motion = snapshot(
+            Point { x: 11, y: 20 },
+            pointer_stamp(11, 21, 1, true),
+            "Default",
+        );
+        let contaminated = before.compare(&raw_motion, target_delivery());
+        assert!(contaminated.shared_pointer_boundary_corroborated);
+        assert!(contaminated.shared_pointer_activity_observed);
+        assert!(contaminated.raw_input_pointer_activity_observed);
+        assert_eq!(
+            contaminated.shared_pointer_activity_state,
+            SharedPointerActivityState::Contaminated
+        );
+
+        let injected_out_and_back = snapshot(point, pointer_stamp(10, 21, 2, true), "Default");
+        let injected = before.compare(&injected_out_and_back, target_delivery());
+        assert!(injected.cursor_position_unchanged);
+        assert!(injected.injected_pointer_activity_observed);
+        assert_eq!(
+            injected.shared_pointer_activity_state,
+            SharedPointerActivityState::Contaminated
+        );
+
+        let unexplained = snapshot(
+            Point { x: 11, y: 20 },
+            pointer_stamp(10, 20, 1, true),
+            "Default",
+        );
+        let unknown = before.compare(&unexplained, target_delivery());
+        assert!(!unknown.shared_pointer_boundary_corroborated);
+        assert_eq!(
+            unknown.shared_pointer_boundary_state,
+            SharedPointerBoundaryState::Unknown
+        );
+        assert_eq!(
+            unknown.helper_global_pointer_preservation,
+            HelperGlobalPointerPreservation::Unknown
+        );
+
+        let unhealthy = snapshot(point, pointer_stamp(10, 20, 1, false), "Default");
+        let unknown = before.compare(&unhealthy, target_delivery());
+        assert!(!unknown.pointer_activity_monitor_healthy);
+        assert!(!unknown.shared_pointer_boundary_corroborated);
+        assert_eq!(
+            unknown.shared_pointer_activity_state,
+            SharedPointerActivityState::Unknown
+        );
     }
 }

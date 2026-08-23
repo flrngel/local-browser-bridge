@@ -393,6 +393,63 @@ jobs:
           for subject in dist/*; do
             verify_attestation "$subject"
           done
+      - name: Require exact candidate-bound platform acceptance receipt
+        env:
+          LBB_RELEASE_ACCEPTANCE_V1: ${{ vars.LBB_RELEASE_ACCEPTANCE_V1 }}
+          VERIFIED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          VERIFIED_TAG_SHA: ${{ needs.verify.outputs.tag_sha }}
+        shell: bash
+        run: |
+          test -n "${LBB_RELEASE_ACCEPTANCE_V1:-}"
+          test "${#LBB_RELEASE_ACCEPTANCE_V1}" -le 2048
+          receipt_file="$(mktemp)"
+          printf '%s' "$LBB_RELEASE_ACCEPTANCE_V1" > "$receipt_file"
+          test "$(jq -c . "$receipt_file")" = "$LBB_RELEASE_ACCEPTANCE_V1"
+
+          frozen_manifest_sha256="$(sha256sum dist/SHA256SUMS.txt | awk '{ print $1 }')"
+          jq -e \
+            --arg tag "$RELEASE_TAG" \
+            --arg source_sha "$VERIFIED_SOURCE_SHA" \
+            --arg tag_object_sha "$VERIFIED_TAG_SHA" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg manifest_sha256 "$frozen_manifest_sha256" '
+              (type == "object")
+              and (keys_unsorted == [
+                "schemaVersion", "tag", "sourceSha", "tagObjectSha",
+                "workflowRunId", "workflowRunAttempt", "checksumManifestSha256",
+                "macosPassed", "macosResultSha256",
+                "windowsPassed", "windowsResultSha256",
+                "stockChromePassed", "stockChrome", "stockChromeResultSha256"
+              ])
+              and ((.schemaVersion | type) == "number") and (.schemaVersion == 1)
+              and ((.tag | type) == "string")
+              and (.tag | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) and (.tag == $tag)
+              and ((.sourceSha | type) == "string")
+              and (.sourceSha | test("^[0-9a-f]{40}$")) and (.sourceSha == $source_sha)
+              and ((.tagObjectSha | type) == "string")
+              and (.tagObjectSha | test("^[0-9a-f]{40}$")) and (.tagObjectSha == $tag_object_sha)
+              and ((.workflowRunId | type) == "string")
+              and (.workflowRunId | test("^[1-9][0-9]*$")) and (.workflowRunId == $run_id)
+              and ((.workflowRunAttempt | type) == "string")
+              and (.workflowRunAttempt | test("^[1-9][0-9]*$")) and (.workflowRunAttempt == $run_attempt)
+              and ((.checksumManifestSha256 | type) == "string")
+              and (.checksumManifestSha256 | test("^[0-9a-f]{64}$"))
+              and (.checksumManifestSha256 == $manifest_sha256)
+              and ((.macosPassed | type) == "boolean") and (.macosPassed == true)
+              and ((.macosResultSha256 | type) == "string")
+              and (.macosResultSha256 | test("^[0-9a-f]{64}$"))
+              and ((.windowsPassed | type) == "boolean") and (.windowsPassed == true)
+              and ((.windowsResultSha256 | type) == "string")
+              and (.windowsResultSha256 | test("^[0-9a-f]{64}$"))
+              and ((.stockChromePassed | type) == "boolean") and (.stockChromePassed == true)
+              and ((.stockChrome | type) == "boolean") and (.stockChrome == true)
+              and ((.stockChromeResultSha256 | type) == "string")
+              and (.stockChromeResultSha256 | test("^[0-9a-f]{64}$"))
+            ' "$receipt_file" >/dev/null
+          acceptance_receipt_sha256="$(sha256sum "$receipt_file" | awk '{ print $1 }')"
+          printf 'LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256=%s\n' \
+            "$acceptance_receipt_sha256" >> "$GITHUB_ENV"
       - name: Recover a verified draft or publish immutable release assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -401,9 +458,10 @@ jobs:
         shell: bash
         run: |
           version="${RELEASE_TAG#v}"
+          [[ "${LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]
           expected_title="Local Browser Bridge ${version}"
           candidate_manifest_sha256="$(sha256sum dist/SHA256SUMS.txt | awk '{ print $1 }')"
-          release_marker="<!-- local-browser-bridge-release:v1 source-sha=$VERIFIED_SOURCE_SHA tag-object-sha=$VERIFIED_TAG_SHA manifest-sha256=$candidate_manifest_sha256 -->"
+          release_marker="<!-- local-browser-bridge-release:v1 source-sha=$VERIFIED_SOURCE_SHA tag-object-sha=$VERIFIED_TAG_SHA manifest-sha256=$candidate_manifest_sha256 acceptance-receipt-sha256=$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256 -->"
           candidate_assets=(
             "local-browser-bridge-v${version}-windows-x86_64.exe"
             "local-computer-helper-v${version}-windows-x86_64.exe"
@@ -429,6 +487,8 @@ jobs:
           ## Trust notice
 
           These binaries are built by public GitHub Actions and include GitHub artifact attestations. No release asset auto-installs itself. This release is not yet signed with a Microsoft publisher certificate or Apple Developer ID and is not Apple-notarized, so SmartScreen or Gatekeeper may show an unfamiliar-developer warning. Do not weaken system security globally; verify the release and source first.
+
+          Acceptance receipt SHA-256: \`$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256\`
           EOF
           assert_remote_tag() {
             test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$(git rev-parse HEAD)"
@@ -442,6 +502,8 @@ jobs:
             local release_json="$1"
             local expected_draft="$2"
             local expected_immutable="$3"
+            local expected_acceptance_receipt_sha256="${4:-$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256}"
+            [[ "$expected_acceptance_receipt_sha256" =~ ^[0-9a-f]{64}$ ]]
             jq -e \
               --arg repository "$GITHUB_REPOSITORY" \
               --arg tag "$RELEASE_TAG" \
@@ -462,7 +524,29 @@ jobs:
             local release_body
             release_body="$(mktemp)"
             jq -ej '.body | select(type == "string")' "$release_json" > "$release_body"
-            cmp -s release-notes.md "$release_body"
+            if [[ "$expected_acceptance_receipt_sha256" == "$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256" ]]; then
+              cmp -s release-notes.md "$release_body"
+            else
+              local expected_release_body
+              expected_release_body="$(mktemp)"
+              test "$(grep -Fo "$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256" release-notes.md | wc -l | tr -d ' ')" = 2
+              sed "s/$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256/$expected_acceptance_receipt_sha256/g" \
+                release-notes.md > "$expected_release_body"
+              cmp -s "$expected_release_body" "$release_body"
+            fi
+          }
+
+          release_acceptance_receipt_sha256() {
+            local release_json="$1"
+            local release_body
+            release_body="$(mktemp)"
+            jq -ej '.body | select(type == "string")' "$release_json" > "$release_body"
+            local accepted_receipt_sha256
+            accepted_receipt_sha256="$(sed -n \
+              "s/^<!-- local-browser-bridge-release:v1 source-sha=$VERIFIED_SOURCE_SHA tag-object-sha=$VERIFIED_TAG_SHA manifest-sha256=$candidate_manifest_sha256 acceptance-receipt-sha256=\\([0-9a-f]\\{64\\}\\) -->$/\\1/p" \
+              "$release_body")"
+            [[ "$accepted_receipt_sha256" =~ ^[0-9a-f]{64}$ ]]
+            printf '%s\n' "$accepted_receipt_sha256"
           }
 
           assert_candidate_asset_name() {
@@ -579,7 +663,8 @@ jobs:
               --json databaseId,apiUrl,assets,body,isDraft,isImmutable,isPrerelease,name,tagName \
               > "$existing_release"
             if jq -e '.isDraft == true and .isImmutable == false' "$existing_release" >/dev/null; then
-              assert_release_identity "$existing_release" true false
+              existing_acceptance_receipt_sha256="$(release_acceptance_receipt_sha256 "$existing_release")"
+              assert_release_identity "$existing_release" true false "$existing_acceptance_receipt_sha256"
               assert_release_assets "$existing_release" subset
               download_and_compare_release_assets "$existing_release"
               draft_fingerprint="$(release_fingerprint "$existing_release")"
@@ -589,7 +674,7 @@ jobs:
                 --repo "$GITHUB_REPOSITORY" \
                 --json databaseId,apiUrl,assets,body,isDraft,isImmutable,isPrerelease,name,tagName \
                 > "$refreshed_draft"
-              assert_release_identity "$refreshed_draft" true false
+              assert_release_identity "$refreshed_draft" true false "$existing_acceptance_receipt_sha256"
               assert_release_assets "$refreshed_draft" subset
               test "$(release_fingerprint "$refreshed_draft")" = "$draft_fingerprint"
               assert_remote_tag
@@ -600,7 +685,8 @@ jobs:
               wait_for_release_absence
               assert_remote_tag
             elif jq -e '.isDraft == false and .isImmutable == true' "$existing_release" >/dev/null; then
-              assert_release_identity "$existing_release" false true
+              existing_acceptance_receipt_sha256="$(release_acceptance_receipt_sha256 "$existing_release")"
+              assert_release_identity "$existing_release" false true "$existing_acceptance_receipt_sha256"
               assert_release_assets "$existing_release" exact
               download_and_compare_release_assets "$existing_release"
               published_fingerprint="$(release_fingerprint "$existing_release")"
@@ -609,7 +695,7 @@ jobs:
                 --repo "$GITHUB_REPOSITORY" \
                 --json databaseId,apiUrl,assets,body,isDraft,isImmutable,isPrerelease,name,tagName \
                 > "$refreshed_published"
-              assert_release_identity "$refreshed_published" false true
+              assert_release_identity "$refreshed_published" false true "$existing_acceptance_receipt_sha256"
               assert_release_assets "$refreshed_published" exact
               test "$(release_fingerprint "$refreshed_published")" = "$published_fingerprint"
               assert_remote_tag

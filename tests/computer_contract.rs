@@ -56,11 +56,23 @@ fn helper_exposes_only_bounded_observation_and_input_methods() {
 fn helper_machine_contract_discloses_platform_activation_truthfully() {
     let hello = ComputerController::new().hello();
     let invariants = &hello["invariants"];
+    let capabilities = hello["capabilities"].as_array().unwrap();
+
+    assert!(capabilities.iter().any(|capability| {
+        capability.as_str() == Some("computer.input-delivery-provenance.v1")
+    }));
+    assert!(
+        capabilities.iter().any(|capability| {
+            capability.as_str() == Some("computer.pointer-activity-monitor.v1")
+        })
+    );
 
     assert_eq!(invariants["globalHidInput"], false);
     assert_eq!(invariants["movesHardwareCursor"], false);
     assert_eq!(invariants["foregroundIdentityPreservedBeforeAfter"], true);
     assert_eq!(invariants["hardwareCursorPreservedBeforeAfter"], true);
+    assert_eq!(invariants["hardwareCursorSampleAuthoritative"], false);
+    assert_eq!(invariants["inputDeliveryProvenanceRequired"], true);
     assert_eq!(invariants["usesAxRaise"], false);
     assert_eq!(invariants["usesFrontProcessSwitch"], false);
     assert_eq!(invariants["switchesActiveSpace"], false);
@@ -198,8 +210,27 @@ fn background_backend_has_no_global_or_foreground_input_fallback() {
         "CGEventTapLocation::HID",
         "CGEventPost(",
         "CGWarpMouseCursorPosition",
+        "CGDisplayMoveCursorToPoint",
+        "CGAssociateMouseAndMouseCursorPosition",
+        "CGDisplayHideCursor",
+        "CGDisplayShowCursor",
+        "CGEventTapPostEvent",
+        "CGPostMouseEvent",
+        "CGPostScrollWheelEvent",
+        "CGPostKeyboardEvent",
+        "IOHIDPostEvent",
+        "IOHIDSetCursorEnable",
+        "IOHIDSetCursorPosition",
+        "CGEventPostToPSN",
+        "CGEventPostToPid",
         "SendInput(",
+        "SetCursorPos(",
+        "SetPhysicalCursorPos(",
         "SetForegroundWindow(",
+        "AttachThreadInput(",
+        "AllowSetForegroundWindow(",
+        "LockSetForegroundWindow(",
+        "SwitchToThisWindow(",
         "keybd_event(",
     ] {
         assert!(
@@ -207,9 +238,25 @@ fn background_backend_has_no_global_or_foreground_input_fallback() {
             "found forbidden foreground fallback: {forbidden}"
         );
     }
+    assert!(!windows.contains("mouse_event("));
     assert!(macos.contains("SLEventPostToPid"));
     assert!(macos.contains("CGEventSetWindowLocation"));
+    assert!(macos.contains("CGEventSource::new(CGEventSourceStateID::Private)"));
+    assert!(macos.contains("CGEvent::new_mouse_event(\n        private_event_source()?"));
+    assert!(macos.contains("CGEvent::new_keyboard_event(private_event_source()?"));
+    assert!(macos.contains(
+        "let source = private_event_source()?;\n            let event = CGEvent::new_scroll_event("
+    ));
     assert!(windows.contains("PostMessageW"));
+    assert!(windows.contains("RegisterRawInputDevices"));
+    assert!(windows.contains("SetWindowsHookExW"));
+    assert!(windows.contains("RIDEV_REMOVE"));
+    assert!(windows.contains("RIDEV_INPUTSINK"));
+    assert!(windows.contains("LLMHF_INJECTED"));
+    assert!(windows.contains("sequence_before == sequence_after"));
+    assert!(windows.contains("sequence_after & 1 == 0"));
+    assert!(windows.contains("RIDEV_REMOVE requires a null target"));
+    assert!(windows.contains("cleanup_acknowledged"));
     assert!(!windows.contains("SetWindowLongPtrW"));
     assert!(!windows.contains("WS_EX_NOACTIVATE"));
     assert!(macos.contains("held_event_sequence"));
@@ -363,7 +410,7 @@ fn macos_keyboard_delivery_requires_exact_post_focus_receiver_proof() {
     assert!(macos.contains("ensure_same_process_mutation_target(target, before)?;"));
     assert!(macos.contains("previous_focus.window_id != before.front_window_id"));
     let semantic_guard = macos
-        .split("fn guarded_semantic<T>(")
+        .split("fn guarded_semantic(")
         .nth(1)
         .unwrap()
         .split("fn post_mouse(")
@@ -792,9 +839,13 @@ fn unsupported_host_share_identity_surface_fails_closed_with_api_parity() {
 #[test]
 fn background_invariant_failures_use_stage_bound_closed_vocabulary() {
     let controller = fs::read_to_string("src/computer.rs").unwrap();
+    let production_controller = controller
+        .split("#[cfg(test)]\nmod tests")
+        .next()
+        .expect("computer production source must precede its test module");
     let macos = fs::read_to_string("src/computer/platform_macos.rs").unwrap();
     let windows = fs::read_to_string("src/computer/platform_windows.rs").unwrap();
-    let source = format!("{controller}\n{macos}\n{windows}");
+    let source = format!("{production_controller}\n{macos}\n{windows}");
 
     for stage in [
         "pointerTrajectory",
@@ -810,42 +861,94 @@ fn background_invariant_failures_use_stage_bound_closed_vocabulary() {
         "focusRecovery",
     ] {
         assert!(
-            controller.contains(stage),
+            production_controller.contains(stage),
             "missing invariant stage {stage}"
         );
     }
     for invariant in [
         "foregroundUnchanged",
         "userFocusUnchanged",
-        "hardwareCursorUnchanged",
+        "hardwareCursorPreservedByHelper",
+        "sharedPointerBoundaryCorroborated",
+        "inputRouteTargetBound",
         "desktopSpaceUnchanged",
     ] {
         assert!(
-            controller.contains(invariant),
+            production_controller.contains(invariant),
             "missing invariant name {invariant}"
         );
     }
 
-    assert!(controller.contains("stage={};failedInvariants={}"));
+    assert!(production_controller.contains("stage={};failedInvariants={}"));
     assert!(!source.contains(".assert_held()"));
     assert!(source.contains("InvariantStage::PointerTrajectory"));
     assert!(source.contains("InvariantStage::ClickDispatch"));
     assert!(source.contains("InvariantStage::DragDispatch"));
     assert!(source.contains("InvariantStage::ScrollDispatch"));
-    assert!(!controller.contains(
+    assert!(!production_controller.contains(
         "The foreground, hardware cursor, or active desktop changed during background delivery"
     ));
 }
 
 #[test]
-fn macos_negative_evidence_keeps_only_equality_and_fixture_counters() {
-    let rig = fs::read_to_string("evidence/v0.12.9/computer/helper-evidence-rig.mjs").unwrap();
+fn macos_v0_12_10_pointer_evidence_is_bounded_corroboration_not_causal_attribution() {
+    let rig = fs::read_to_string("evidence/v0.12.10/computer/helper-evidence-rig.mjs").unwrap();
+    let probe = fs::read_to_string("evidence/v0.12.10/computer/SystemProbe.swift").unwrap();
     assert!(rig.contains("failureProbeBaseline"));
     assert!(rig.contains("collectFailureDiagnostics"));
     assert!(rig.contains("systemInvariants(failureProbeBaseline.system, after)"));
     assert!(rig.contains("fixtureCounterSnapshot"));
     assert!(rig.contains("semanticValueMatchesExpected"));
     assert!(rig.contains("failureDiagnostics,"));
+    for required in [
+        "schemaVersion: 4",
+        "computer.input-delivery-provenance.v1",
+        "computer.pointer-activity-monitor.v1",
+        "inputDeliveryProvenanceV1",
+        "pointerActivityMonitorV1",
+        "function inputDeliveryProvenanceHeld(invariants)",
+        "hardwareCursorPreservedByHelper",
+        "helperGlobalPointerPreservation === \"confirmed\"",
+        "sharedPointerBoundaryCorroborated",
+        "sharedPointerBoundaryState === \"corroborated\"",
+        "sharedPointerActivityObserved",
+        "hidSystemPointerActivityObserved",
+        "rawInputPointerActivityObserved",
+        "injectedPointerActivityObserved",
+        "pointerActivityMonitorHealthy",
+        "sharedPointerActivityState",
+        "const POINTER_EVIDENCE_LANES = new Set([\"quiet\", \"deliberate-concurrency\"])",
+        "ACTION REQUIRED: continuously move the shared hardware pointer without clicking",
+        "const DELIBERATE_CONCURRENCY_ACTION_MS = 2_000",
+        "const DELIBERATE_CONCURRENCY_WAIT_MS = 300_000",
+        "await waitForDeliberatePointerActivity(postResizeSystemBefore)",
+        "deliberate concurrency crossed both product and independent action boundaries",
+        "state === \"concurrent-shared-seat-activity\"",
+        "pointerEvidence.quietObserved === true &&\n          pointerEvidence.concurrentSharedSeatActivityObserved === true",
+        "rawCursorPositionsRetained: false",
+        "rawPlatformActivityCountersRetained: false",
+        "hidSystemActivityClaimedAsPhysical: false",
+        "assertNoRetainedPointerRawData(serialized",
+        "assertNoRetainedPointerRawData(persistedLog",
+    ] {
+        assert!(
+            rig.contains(required),
+            "missing v0.12.10 pointer contract: {required}"
+        );
+    }
+    assert!(!rig.contains("cursorUnchanged"));
+    for required in [
+        "CGEventSource.counterForEventType(.hidSystemState",
+        "hidPointerCounters",
+        "pointerBoundaryActivityObserved",
+        "pointerActivityMonitorHealthy",
+        "Only bounded equality/activity/health booleans and state enums are retained",
+    ] {
+        assert!(
+            probe.contains(required),
+            "missing ephemeral macOS pointer probe: {required}"
+        );
+    }
 
     let diagnostics = rig
         .split("async function collectFailureDiagnostics()")
@@ -859,6 +962,7 @@ fn macos_negative_evidence_keeps_only_equality_and_fixture_counters() {
         "frontWindowID:",
         "cursorX:",
         "cursorY:",
+        "hidPointerCounters:",
         "activeSpace:",
         "pid:",
         "targetFocusedWindowID:",
@@ -1701,21 +1805,17 @@ fn withdrawn_v0_12_9_macos_cursor_invariant_attempt_is_byte_exact_and_fail_close
 
 #[test]
 fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
-    let entries = fs::read_dir("evidence/v0.12.9/computer")
+    let entries = fs::read_dir("evidence/v0.12.10/computer")
         .unwrap()
         .map(Result::unwrap)
         .map(|entry| {
             let file_type = entry.file_type().unwrap();
             assert!(
-                (file_type.is_file() || file_type.is_dir()) && !file_type.is_symlink(),
-                "current macOS evidence scaffold entry must be ordinary: {}",
+                file_type.is_file() && !file_type.is_symlink(),
+                "current macOS evidence scaffold entry must be an ordinary file: {}",
                 entry.path().display()
             );
-            let mut name = entry.file_name().to_string_lossy().into_owned();
-            if file_type.is_dir() {
-                name.push('/');
-            }
-            name
+            entry.file_name().to_string_lossy().into_owned()
         })
         .collect::<BTreeSet<_>>();
     assert_eq!(
@@ -1724,17 +1824,16 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
             "HelperEvidenceFixture.swift".to_owned(),
             "README.md".to_owned(),
             "SystemProbe.swift".to_owned(),
-            "attempts/".to_owned(),
             "helper-evidence-rig.mjs".to_owned(),
         ])
     );
 
-    let rig = fs::read_to_string("evidence/v0.12.9/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.10/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let fixture =
-        fs::read_to_string("evidence/v0.12.9/computer/HelperEvidenceFixture.swift").unwrap();
-    let readme = fs::read_to_string("evidence/v0.12.9/computer/README.md").unwrap();
+        fs::read_to_string("evidence/v0.12.10/computer/HelperEvidenceFixture.swift").unwrap();
+    let readme = fs::read_to_string("evidence/v0.12.10/computer/README.md").unwrap();
 
     assert!(rig.contains(&format!("const EXPECTED_VERSION = \"{VERSION}\";")));
     assert!(rig.contains("const EXPECTED_ARCHIVE = `local-browser-bridge-v${EXPECTED_VERSION}-macos-universal.tar.gz`;"));
@@ -1746,15 +1845,15 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
     assert!(readme.contains(&format!(
         "local-browser-bridge-v{VERSION}-macos-universal.tar.gz"
     )));
-    assert!(!rig.contains("v0.12.1"));
-    assert!(!fixture.contains("v0.12.1"));
+    assert!(!rig.replace("v0.12.10", "").contains("v0.12.1"));
+    assert!(!fixture.replace("v0.12.10", "").contains("v0.12.1"));
     assert!(!rig.contains("v0.12.2"));
     assert!(!fixture.contains("v0.12.2"));
     let current_readme = readme
         .split("## Historical v0.12.1 negative attempts")
         .next()
         .unwrap();
-    assert!(!current_readme.contains("v0.12.1"));
+    assert!(!current_readme.replace("v0.12.10", "").contains("v0.12.1"));
     assert!(readme.contains("../../v0.12.1/computer/attempts/"));
     assert!(readme.contains(
         "../../v0.12.2/computer/attempts/withdrawn-a52d761-post-cancel-fresh-share-refusal/README.md"
@@ -1787,16 +1886,17 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
     );
     assert!(rig.contains("assertNoToken(serialized, \"machine-readable result\")"));
     assert!(rig.contains("assertNoRetainedNativeTextPayload(serialized"));
+    assert!(rig.contains("assertNoRetainedPointerRawData(serialized"));
     assert!(rig.contains("every retained screenshot is bound only to the primary exact window"));
     assert!(!rig.contains("computer-07-"));
 }
 
 #[test]
 fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
-    let rig = fs::read_to_string("evidence/v0.12.9/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.10/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.9/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.10/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1828,7 +1928,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
         "$EXPECTED_SHA256SUMS_SHA256",
         "$EXPECTED_SOURCE_SHA",
         "mandatory SHA-256 supplied",
-        "exactly the four v0.12.9",
+        "exactly the four v0.12.10",
         "expected and actual manifest hashes",
         "Before invoking either supplied candidate executable—even with `--version`",
         "No supplied server or helper code executes before",
@@ -1885,7 +1985,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
         .unwrap();
     let first_documented_extraction = readme.find("tar -xzf").unwrap();
     let first_documented_execution = readme
-        .find("node evidence/v0.12.9/computer/helper-evidence-rig.mjs")
+        .find("node evidence/v0.12.10/computer/helper-evidence-rig.mjs")
         .unwrap();
     assert!(
         independent_manifest_digest < exact_inventory
@@ -1901,7 +2001,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
 
 #[test]
 fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
-    let rig = fs::read_to_string("evidence/v0.12.9/computer/helper-evidence-rig.mjs").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.10/computer/helper-evidence-rig.mjs").unwrap();
     assert!(rig.contains("capturedFrameMatchesWindowGeometry"));
     assert!(rig.contains("share-resize-settled"));
     assert!(rig.contains("sample.sourceSequence > resizeTransition.sample.sourceSequence"));
@@ -1913,12 +2013,12 @@ fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
 
 #[test]
 fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.9/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.10/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     assert!(rig.contains("function childEnvironment(overrides = {})"));
     assert!(!rig.contains("...process.env"));
-    let fixture = fs::read_to_string("evidence/v0.12.9/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.10/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1952,7 +2052,7 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
         "postResizeClick.frameId === observation.frameId",
         "postResizeClick.shareId === firstShareId",
         "postResizeClick.sourceSequence === beforePostResizeAction.sourceSequence",
-        "post-resize independent foreground/focus/cursor/Space invariants",
+        "requireIndependentInvariants(\"post-resize pixel action\", postResizeActionInvariants)",
         "share-after-post-resize-action",
         "capturedFrameMatchesWindowGeometry(sample)",
     ] {
@@ -1994,7 +2094,7 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
         "nativeText.effect === \"Unverifiable\"",
         "nativeText.characters === NATIVE_TEXT_SUFFIX.length",
         "nativeText.utf16CodeUnits === NATIVE_TEXT_SUFFIX.length",
-        "native typeText independent foreground/focus/cursor/Space invariants",
+        "requireIndependentInvariants(\"native typeText\", nativeTextInvariants)",
         "share-after-native-text-delivery",
         "candidateObservation.shareId === firstShareId",
         "candidateObservation.sourceSequence === sample.sourceSequence",
@@ -2060,7 +2160,7 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
         "pre-cancellation frame stays stale after explicit recovery",
         "rejected stale action preserves the recovered exact frame",
         "canceled move, gated refusal, recovery, and stale refusal caused no functional fixture mutation",
-        "cancellation/stop foreground/focus/cursor/Space invariants",
+        "requireIndependentInvariants(\"cancellation/stop\", cancellationInvariants)",
     ] {
         assert!(
             cancellation.contains(required),
@@ -2082,7 +2182,7 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
             "packaged evidence uses an impossible, synthetic, or unsafe shortcut: {forbidden}"
         );
     }
-    assert!(rig.contains("schemaVersion: 3"));
+    assert!(rig.contains("schemaVersion: 4"));
     assert!(
         rig.contains("const NATIVE_TEXT_SUFFIX = `-native-${randomBytes(6).toString(\"hex\")}`;")
     );
@@ -2096,10 +2196,10 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
 
 #[test]
 fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.9/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.10/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.9/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.10/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -2186,7 +2286,7 @@ fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() 
         "closed-target observe refusal preserves terminal teardown",
         "targetCloseStop.reason === \"not-active\"",
         "target-close cleanup leaves no share or frame authority",
-        "target-close foreground/focus/cursor/Space invariants",
+        "requireIndependentInvariants(\"target-close\", targetCloseInvariants)",
         "fixtureProcess = null",
     ] {
         assert!(
@@ -2230,21 +2330,21 @@ fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() 
 
 #[test]
 fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negative() {
-    let fixture = fs::read_to_string("evidence/v0.12.9/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.10/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.9/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.10/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.9/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.10/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.9/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.10/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
     for required in [
-        "private let siblingFixtureTitle = \"LBB v0.12.9 Same-PID Sibling Receiver\"",
+        "private let siblingFixtureTitle = \"LBB v0.12.10 Same-PID Sibling Receiver\"",
         "var primaryWindowId = 0",
         "var siblingWindowId = 0",
         "var siblingTextLength = 0",
@@ -2315,7 +2415,7 @@ fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negati
         .split("function systemInvariants(before, after)")
         .nth(1)
         .unwrap()
-        .split("function allInvariantsHeld")
+        .split("function allIndependentInvariantsHeld")
         .next()
         .unwrap();
     for required in [
@@ -2381,7 +2481,7 @@ fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negati
         "same-PID sibling is remembered before primary pixel dispatch",
         "background pixel click targets only primary and restores sibling receiver",
         "clickedFixtureState.siblingClicks === pixelFixtureBefore.siblingClicks",
-        "same-PID pixel routing preserves user foreground/focus/cursor/Space",
+        "requireIndependentInvariants(\"same-PID pixel routing\", pixelSystemInvariants)",
         "same-PID sibling remains the exact prior receiver immediately before text request",
         "native typeText exact fixture read-back with zero sibling mutation",
         "nativeTextFixtureState.siblingTextLength === nativeTextFocusedState.siblingTextLength",
@@ -3162,7 +3262,7 @@ fn windows_foreground_arm_handoff_watcher_is_strict_read_only_and_non_authoritat
         .replace("\r\n", "\n");
 
     for required in [
-        "$script:ProductVersion = \"0.12.9\"",
+        "$script:ProductVersion = \"0.12.10\"",
         "$script:MarkerSchemaVersion = 2",
         "function Assert-ExactPropertyOrder {",
         "function Assert-ExactMarkerSchema {",
@@ -3288,7 +3388,7 @@ fn windows_foreground_arm_handoff_watcher_is_strict_read_only_and_non_authoritat
     );
     assert!(!watcher.contains("}.GetNewClosure() `\n        -ExpectedText"));
     assert!(runner.contains("-ProductVersion $Version"));
-    assert!(runner.contains("-ProductVersion \"0.12.9\""));
+    assert!(runner.contains("-ProductVersion \"0.12.10\""));
     assert!(runner.contains("maximumClickAttempts -ne 1"));
     assert!(runner.contains("maximumClickAttempts -ne 0"));
 }
@@ -3354,8 +3454,23 @@ fn semantic_backends_revalidate_exact_targets_and_report_effects() {
         let set_value = platform.split("pub fn set_value(").nth(1).unwrap();
         let set_value = set_value.split("pub fn limitations(").next().unwrap();
         assert!(set_value.contains("Result<(serde_json::Value, InvariantReport), ComputerError>"));
-        assert!(platform.contains("Ok((backend_effect, report))"));
     }
+    assert!(windows_platform.contains("Ok((backend_effect, report))"));
+    let macos_semantic_finish = macos_platform
+        .split("fn finish_semantic_after_snapshot(")
+        .nth(1)
+        .unwrap()
+        .split("fn post_mouse(")
+        .next()
+        .unwrap();
+    assert!(macos_semantic_finish.contains("let report = report.assert_held(stage)?;"));
+    assert!(macos_semantic_finish.contains("Ok((backend_effect?, report))"));
+    assert!(
+        macos_semantic_finish
+            .find("report.assert_held(stage)?")
+            .unwrap()
+            < macos_semantic_finish.find("backend_effect?").unwrap()
+    );
 
     let invoke = computer.split("    fn invoke(").nth(1).unwrap();
     let invoke = invoke.split("    fn set_value(").next().unwrap();

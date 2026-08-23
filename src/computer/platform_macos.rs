@@ -15,11 +15,14 @@ use core_graphics::window::{copy_window_info, kCGNullWindowID, kCGWindowListOpti
 use foreign_types::ForeignType;
 use image::RgbaImage;
 use libc::pid_t;
+use uuid::Uuid;
 use xcap::Window;
 
 use super::{
-    COMPUTER_TYPE_TEXT_MAX_DISPATCH_MS, CommandCancellation, ComputerError, InvariantFailure,
-    InvariantReport, InvariantStage, SemanticSnapshot, SemanticTarget, TargetPoint,
+    COMPUTER_TYPE_TEXT_MAX_DISPATCH_MS, CommandCancellation, ComputerError,
+    HelperGlobalPointerPreservation, InputDeliveryProvenance, InputDeliveryRoute,
+    InputDeliverySupportLevel, InvariantFailure, InvariantReport, InvariantStage, SemanticSnapshot,
+    SemanticTarget, SharedPointerActivityState, SharedPointerBoundaryState, TargetPoint,
     WindowDescriptor, ax_macos, background_contract_violation,
 };
 
@@ -35,6 +38,9 @@ const FOCUS_RESTORE_POLL_STEP: Duration = Duration::from_millis(10);
 const FOCUS_PREPARATION_MIN_SETTLE: Duration = Duration::from_millis(50);
 const KEYBOARD_ELIGIBILITY_PROOF_BUDGET: Duration = Duration::from_millis(650);
 const MAX_RAW_WINDOW_INVENTORY: usize = 4_096;
+const CURSOR_STAMP_BUDGET: Duration = Duration::from_millis(30);
+const CURSOR_STAMP_POLL: Duration = Duration::from_millis(1);
+const MAX_HID_POINTER_COUNTER_ADVANCE: u32 = 1_000_000;
 
 type PostToPidFn = unsafe extern "C" fn(pid_t, *mut c_void);
 type SetWindowLocationFn = unsafe extern "C" fn(*mut c_void, f64, f64);
@@ -50,6 +56,11 @@ type GetActiveSpaceFn = unsafe extern "C" fn(u32) -> u64;
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
     fn CGEventSetLocation(event: *mut c_void, location: CGPoint);
+    fn CGEventSourceCounterForEventType(
+        state_id: CGEventSourceStateID,
+        event_type: CGEventType,
+    ) -> u32;
+    fn CGEventSourceSetUserData(source: *mut c_void, user_data: i64);
 }
 
 #[derive(Clone, Copy)]
@@ -68,6 +79,131 @@ struct Symbols {
 
 unsafe impl Send for Symbols {}
 unsafe impl Sync for Symbols {}
+
+#[derive(Clone, Copy)]
+struct MacTargetDispatchRecord {
+    target_pid: u32,
+    target_window_id: u32,
+}
+
+struct PreparedTargetEvent {
+    event: CGEvent,
+    target_pid: u32,
+    target_window_id: u32,
+}
+
+impl PreparedTargetEvent {
+    fn new(target: &WindowDescriptor, event: CGEvent) -> Result<Self, ComputerError> {
+        Ok(Self {
+            event,
+            target_pid: target.pid,
+            target_window_id: target
+                .id
+                .parse::<u32>()
+                .map_err(|_| input_error("invalid macOS target window id"))?,
+        })
+    }
+
+    fn matches(&self, target: &WindowDescriptor) -> bool {
+        self.target_pid == target.pid
+            && Some(self.target_window_id) == target.id.parse::<u32>().ok()
+    }
+}
+
+struct MacTargetDispatchTrace {
+    target_pid: u32,
+    target_window_id: u32,
+    attempt_count: u32,
+}
+
+impl MacTargetDispatchTrace {
+    fn new(target: &WindowDescriptor) -> Result<Self, ComputerError> {
+        Ok(Self {
+            target_pid: target.pid,
+            target_window_id: target
+                .id
+                .parse::<u32>()
+                .map_err(|_| input_error("invalid macOS target window id"))?,
+            attempt_count: 0,
+        })
+    }
+
+    fn record(&mut self, attempt: MacTargetDispatchRecord) -> Result<(), ComputerError> {
+        if attempt.target_pid != self.target_pid
+            || attempt.target_window_id != self.target_window_id
+        {
+            return Err(ComputerError::new(
+                "COMPUTER_BACKGROUND_CONTRACT_VIOLATION",
+                "stage=dispatchRecord;failedInvariants=inputRouteTargetBound",
+            ));
+        }
+        self.attempt_count = self.attempt_count.checked_add(1).ok_or_else(|| {
+            ComputerError::new(
+                "COMPUTER_DISPATCH_EXHAUSTED",
+                "The macOS target-delivery attempt count was exhausted",
+            )
+        })?;
+        Ok(())
+    }
+
+    fn provenance(&self) -> Result<InputDeliveryProvenance, ComputerError> {
+        if self.attempt_count == 0 {
+            return Err(ComputerError::new(
+                "COMPUTER_BACKGROUND_CONTRACT_VIOLATION",
+                "stage=dispatchRecord;failedInvariants=inputRouteTargetBound",
+            ));
+        }
+        Ok(InputDeliveryProvenance {
+            route: InputDeliveryRoute::MacosTargetedProcessEvent,
+            support_level: InputDeliverySupportLevel::PrivateUnsupported,
+            exact_target_bound: true,
+            dispatch_attempt_recorded: true,
+            // This private API returns void. The record proves only that the
+            // exact PID-scoped call returned, not that macOS accepted it.
+            os_acceptance_signal_available: false,
+            os_acceptance_observed: false,
+            shared_input_seat_used: false,
+            global_hid_input_used: false,
+            hardware_cursor_mutation_requested: false,
+        })
+    }
+}
+
+impl InputDeliveryProvenance {
+    fn macos_accessibility(
+        attempt: &ax_macos::AxDispatchRecord,
+        target: &WindowDescriptor,
+        stage: InvariantStage,
+    ) -> Result<Self, ComputerError> {
+        let operation = match stage {
+            InvariantStage::SemanticInvoke => ax_macos::AxDispatchOperation::Invoke,
+            InvariantStage::SemanticSetValue => ax_macos::AxDispatchOperation::SetValue,
+            _ => {
+                return Err(ComputerError::new(
+                    "COMPUTER_BACKGROUND_CONTRACT_VIOLATION",
+                    "stage=dispatchRecord;failedInvariants=inputRouteTargetBound",
+                ));
+            }
+        };
+        if !attempt.matches(target, operation) {
+            return Err(ComputerError::new(
+                "COMPUTER_BACKGROUND_CONTRACT_VIOLATION",
+                "stage=dispatchRecord;failedInvariants=inputRouteTargetBound",
+            ));
+        }
+        Ok(Self {
+            route: InputDeliveryRoute::MacosAccessibility,
+            support_level: InputDeliverySupportLevel::PublicDocumented,
+            exact_target_bound: true,
+            dispatch_attempt_recorded: true,
+            os_acceptance_signal_available: true,
+            os_acceptance_observed: attempt.os_acceptance_observed(),
+            shared_input_seat_used: false,
+            global_hid_input_used: false,
+            hardware_cursor_mutation_requested: false,
+        })
+    }
+}
 
 pub fn backend_name() -> &'static str {
     "background-window/ax+skylight+screencapturekit-stream"
@@ -119,6 +255,7 @@ pub fn limitations() -> Vec<&'static str> {
         "Accessibility permission is required to prove and restore exact focus/window ownership for focus-capable target-routed input",
         "Secure input, protected content, games, and some GPU surfaces can refuse background events",
         "Private SkyLight event routing may require updates after a macOS release",
+        "HID-system pointer counters detect shared pointer activity but do not prove a physical device or identify its source",
     ]
 }
 
@@ -178,12 +315,12 @@ pub fn move_pointer_path(
         InvariantStage::PointerTrajectory,
         cancellation,
         None,
-        |_| {
+        |_, delivery| {
             if points.is_empty() {
                 return Err(input_error("synthetic pointer trajectory is empty"));
             }
             for (index, point) in points.iter().copied().enumerate() {
-                post_mouse(
+                delivery.record(post_mouse(
                     target,
                     point,
                     CGEventType::MouseMoved,
@@ -191,7 +328,7 @@ pub fn move_pointer_path(
                     0,
                     0,
                     cancellation,
-                )?;
+                )?)?;
                 if index + 1 < points.len() {
                     thread::sleep(step_delay);
                 }
@@ -233,7 +370,7 @@ pub fn click(
         InvariantStage::ClickDispatch,
         cancellation,
         None,
-        |focus| {
+        |focus, delivery| {
             let move_event = mouse_event(
                 target,
                 point,
@@ -245,13 +382,13 @@ pub fn click(
             )?;
             let move_deadline = Instant::now() + FOCUS_RESTORE_PROOF_BUDGET;
             prove_action_dispatch_owner(focus, target, move_deadline, true)?;
-            post_before_deadline(
+            delivery.record(post_before_deadline(
                 target,
                 &move_event,
                 cancellation,
                 "pointer dispatch",
                 move_deadline,
-            )?;
+            )?)?;
             for index in 0..count.max(1) {
                 let down_event = mouse_event(
                     target,
@@ -275,10 +412,11 @@ pub fn click(
                 prove_action_dispatch_owner(focus, target, press_deadline, true)?;
                 held_event_sequence(
                     target,
+                    delivery,
                     cancellation,
                     press_deadline,
                     &down_event,
-                    || {
+                    |_| {
                         thread::sleep(Duration::from_millis(24));
                         Ok(())
                     },
@@ -305,7 +443,7 @@ pub fn drag(
         InvariantStage::DragDispatch,
         cancellation,
         None,
-        |focus| {
+        |focus, delivery| {
             let move_event = mouse_event(
                 target,
                 from,
@@ -317,13 +455,13 @@ pub fn drag(
             )?;
             let move_deadline = Instant::now() + FOCUS_RESTORE_PROOF_BUDGET;
             prove_action_dispatch_owner(focus, target, move_deadline, true)?;
-            post_before_deadline(
+            delivery.record(post_before_deadline(
                 target,
                 &move_event,
                 cancellation,
                 "pointer dispatch",
                 move_deadline,
-            )?;
+            )?)?;
             let down_event = mouse_event(
                 target,
                 from,
@@ -346,10 +484,11 @@ pub fn drag(
             prove_action_dispatch_owner(focus, target, press_deadline, true)?;
             held_event_sequence(
                 target,
+                delivery,
                 cancellation,
                 press_deadline,
                 &down_event,
-                || {
+                |delivery| {
                     let steps = (duration_ms / 16).clamp(4, 120);
                     for step in 1..=steps {
                         let progress = step as f64 / steps as f64;
@@ -374,13 +513,13 @@ pub fn drag(
                         )?;
                         let drag_deadline = Instant::now() + FOCUS_RESTORE_PROOF_BUDGET;
                         prove_action_dispatch_owner(focus, target, drag_deadline, true)?;
-                        post_before_deadline(
+                        delivery.record(post_before_deadline(
                             target,
                             &drag_event,
                             cancellation,
                             "pointer dispatch",
                             drag_deadline,
-                        )?;
+                        )?)?;
                         thread::sleep(Duration::from_millis((duration_ms / steps).max(1)));
                     }
                     Ok(())
@@ -403,7 +542,7 @@ pub fn scroll(
         InvariantStage::ScrollDispatch,
         cancellation,
         None,
-        |focus| {
+        |focus, delivery| {
             let move_event = mouse_event(
                 target,
                 point,
@@ -415,14 +554,14 @@ pub fn scroll(
             )?;
             let move_deadline = Instant::now() + FOCUS_RESTORE_PROOF_BUDGET;
             prove_action_dispatch_owner(focus, target, move_deadline, true)?;
-            post_before_deadline(
+            delivery.record(post_before_deadline(
                 target,
                 &move_event,
                 cancellation,
                 "pointer dispatch",
                 move_deadline,
-            )?;
-            let source = source()?;
+            )?)?;
+            let source = private_event_source()?;
             let event = CGEvent::new_scroll_event(
                 source,
                 ScrollEventUnit::LINE,
@@ -440,15 +579,17 @@ pub fn scroll(
                 )
             };
             stamp(target, point, raw, 0, 0, 0)?;
+            let event = PreparedTargetEvent::new(target, event)?;
             let scroll_deadline = Instant::now() + FOCUS_RESTORE_PROOF_BUDGET;
             prove_action_dispatch_owner(focus, target, scroll_deadline, true)?;
-            post_before_deadline(
+            delivery.record(post_before_deadline(
                 target,
                 &event,
                 cancellation,
                 "scroll dispatch",
                 scroll_deadline,
-            )
+            )?)?;
+            Ok(())
         },
     )
 }
@@ -469,7 +610,7 @@ pub fn type_text(
         InvariantStage::TextDispatch,
         cancellation,
         Some(deadline),
-        |focus| {
+        |focus, delivery| {
             let mut characters = text.chars().peekable();
             let mut dispatched = 0_usize;
             while let Some(character) = characters.next() {
@@ -483,7 +624,15 @@ pub fn type_text(
                 // immediately before every key-down. Releases stay unconditional.
                 ensure_text_keyboard_receiver(focus, target, dispatched, deadline)?;
                 text_dispatch_checkpoint(cancellation, deadline)?;
-                held_event_sequence(target, cancellation, deadline, &down, || Ok(()), &up)?;
+                held_event_sequence(
+                    target,
+                    delivery,
+                    cancellation,
+                    deadline,
+                    &down,
+                    |_| Ok(()),
+                    &up,
+                )?;
                 dispatched += 1;
                 if characters.peek().is_some() {
                     pace_text_dispatch(cancellation, deadline, TEXT_EVENT_PACE)?;
@@ -551,7 +700,7 @@ pub fn key(
         InvariantStage::KeyDispatch,
         cancellation,
         None,
-        |focus| {
+        |focus, delivery| {
             let down = keyboard_event(target, keycode, true, flags, None)?;
             let up = keyboard_event(target, keycode, false, flags, None)?;
             let receiver_deadline = Instant::now() + FOCUS_RESTORE_PROOF_BUDGET;
@@ -562,10 +711,11 @@ pub fn key(
             ax_macos::ensure_keyboard_receiver_before(target, false, true, receiver_deadline)?;
             held_event_sequence(
                 target,
+                delivery,
                 cancellation,
                 receiver_deadline,
                 &down,
-                || {
+                |_| {
                     thread::sleep(Duration::from_millis(18));
                     Ok(())
                 },
@@ -906,41 +1056,65 @@ fn guarded(
     stage: InvariantStage,
     cancellation: &CommandCancellation,
     preparation_deadline: Option<Instant>,
-    action: impl FnOnce(Option<&FocusLease>) -> Result<(), ComputerError>,
+    action: impl FnOnce(Option<&FocusLease>, &mut MacTargetDispatchTrace) -> Result<(), ComputerError>,
 ) -> Result<InvariantReport, ComputerError> {
     let before = DesktopSnapshot::capture()?;
+    let mut delivery = MacTargetDispatchTrace::new(target)?;
     let focus = (stage != InvariantStage::PointerTrajectory)
         .then(|| activate_without_raise(target, &before, cancellation, preparation_deadline))
         .transpose()?
         .flatten();
-    let action_result = action(focus.as_ref());
+    let action_result = action(focus.as_ref(), &mut delivery);
     cancellation.mark_verification_started();
     let restore_result = focus.map(FocusLease::restore).transpose();
     thread::sleep(Duration::from_millis(35));
-    let report = before.compare(&DesktopSnapshot::capture()?);
+    let (input_delivery, delivery_error) = match delivery.provenance() {
+        Ok(provenance) => (provenance, None),
+        Err(error) => (InputDeliveryProvenance::unverified(), Some(error)),
+    };
+    let report = before.compare(&DesktopSnapshot::capture()?, input_delivery);
+    if action_result.is_ok()
+        && let Some(error) = delivery_error
+    {
+        return Err(error);
+    }
     report.clone().assert_held(stage)?;
     restore_result?;
     action_result?;
     Ok(report)
 }
 
-fn guarded_semantic<T>(
+fn guarded_semantic(
     target: &WindowDescriptor,
     stage: InvariantStage,
     cancellation: &CommandCancellation,
-    action: impl FnOnce() -> Result<T, ComputerError>,
-) -> Result<(T, InvariantReport), ComputerError> {
+    action: impl FnOnce() -> Result<ax_macos::AxDispatchAttempt, ComputerError>,
+) -> Result<(serde_json::Value, InvariantReport), ComputerError> {
     let before = DesktopSnapshot::capture()?;
     exact_window(target)?;
     cancellation.check("semantic resolution")?;
     let action_result = action();
     cancellation.mark_verification_started();
     thread::sleep(Duration::from_millis(35));
-    let report = before
-        .compare(&DesktopSnapshot::capture()?)
-        .assert_held(stage)?;
-    let backend_effect = action_result?;
-    Ok((backend_effect, report))
+    let delivery = action_result?;
+    let (dispatch, backend_effect) = delivery.into_parts();
+    let report = before.compare(
+        &DesktopSnapshot::capture()?,
+        InputDeliveryProvenance::macos_accessibility(&dispatch, target, stage)?,
+    );
+    finish_semantic_after_snapshot(report, stage, backend_effect)
+}
+
+fn finish_semantic_after_snapshot(
+    report: InvariantReport,
+    stage: InvariantStage,
+    backend_effect: Result<serde_json::Value, ComputerError>,
+) -> Result<(serde_json::Value, InvariantReport), ComputerError> {
+    // Safety verification intentionally precedes the target postcondition
+    // result. Once dispatch began, a backend error must never skip or mask a
+    // shared-desktop contract violation observed by the after-snapshot.
+    let report = report.assert_held(stage)?;
+    Ok((backend_effect?, report))
 }
 
 fn post_mouse(
@@ -951,7 +1125,7 @@ fn post_mouse(
     button_number: i64,
     subtype: i64,
     cancellation: &CommandCancellation,
-) -> Result<(), ComputerError> {
+) -> Result<MacTargetDispatchRecord, ComputerError> {
     post_mouse_with_button(
         target,
         point,
@@ -974,7 +1148,7 @@ fn post_mouse_with_button(
     button_number: i64,
     subtype: i64,
     cancellation: &CommandCancellation,
-) -> Result<(), ComputerError> {
+) -> Result<MacTargetDispatchRecord, ComputerError> {
     let event = mouse_event(
         target,
         point,
@@ -995,9 +1169,9 @@ fn mouse_event(
     click_state: i64,
     button_number: i64,
     subtype: i64,
-) -> Result<CGEvent, ComputerError> {
+) -> Result<PreparedTargetEvent, ComputerError> {
     let event = CGEvent::new_mouse_event(
-        source()?,
+        private_event_source()?,
         event_type,
         CGPoint::new(point.screen_x as f64, point.screen_y as f64),
         button,
@@ -1011,18 +1185,24 @@ fn mouse_event(
         button_number,
         subtype,
     )?;
-    Ok(event)
+    PreparedTargetEvent::new(target, event)
 }
 
 fn retarget_mouse_event(
     target: &WindowDescriptor,
-    event: &CGEvent,
+    event: &PreparedTargetEvent,
     point: TargetPoint,
     click_state: i64,
     button_number: i64,
     subtype: i64,
 ) -> Result<(), ComputerError> {
-    let raw = event.as_ptr() as *mut c_void;
+    if !event.matches(target) {
+        return Err(ComputerError::new(
+            "COMPUTER_BACKGROUND_CONTRACT_VIOLATION",
+            "stage=preparedEvent;failedInvariants=inputRouteTargetBound",
+        ));
+    }
+    let raw = event.event.as_ptr() as *mut c_void;
     unsafe {
         CGEventSetLocation(
             raw,
@@ -1038,35 +1218,39 @@ fn keyboard_event(
     down: bool,
     flags: CGEventFlags,
     text: Option<&str>,
-) -> Result<CGEvent, ComputerError> {
-    let event = CGEvent::new_keyboard_event(source()?, keycode, down)
+) -> Result<PreparedTargetEvent, ComputerError> {
+    let event = CGEvent::new_keyboard_event(private_event_source()?, keycode, down)
         .map_err(|_| input_error("CGEventCreateKeyboardEvent failed"))?;
     event.set_flags(flags);
     if let Some(text) = text {
         event.set_string(text);
     }
     stamp_keyboard(target, &event)?;
-    Ok(event)
+    PreparedTargetEvent::new(target, event)
 }
 
 fn held_event_sequence<T>(
     target: &WindowDescriptor,
+    delivery: &mut MacTargetDispatchTrace,
     cancellation: &CommandCancellation,
     first_post_deadline: Instant,
-    down: &CGEvent,
-    action: impl FnOnce() -> Result<T, ComputerError>,
-    up: &CGEvent,
+    down: &PreparedTargetEvent,
+    action: impl FnOnce(&mut MacTargetDispatchTrace) -> Result<T, ComputerError>,
+    up: &PreparedTargetEvent,
 ) -> Result<T, ComputerError> {
-    post_before_deadline(
+    delivery.record(post_before_deadline(
         target,
         down,
         cancellation,
         "held input press",
         first_post_deadline,
-    )?;
-    let action_result = action();
+    )?)?;
+    let action_result = action(delivery);
     match post_release(target, up) {
-        Ok(()) => action_result,
+        Ok(attempt) => {
+            delivery.record(attempt)?;
+            action_result
+        }
         Err(release_error) => Err(release_error),
     }
 }
@@ -1105,21 +1289,21 @@ fn stamp_keyboard(target: &WindowDescriptor, event: &CGEvent) -> Result<(), Comp
 
 fn post(
     target: &WindowDescriptor,
-    event: &CGEvent,
+    event: &PreparedTargetEvent,
     cancellation: &CommandCancellation,
     boundary: &str,
-) -> Result<(), ComputerError> {
+) -> Result<MacTargetDispatchRecord, ComputerError> {
     cancellation.begin_side_effect(boundary)?;
     post_release(target, event)
 }
 
 fn post_before_deadline(
     target: &WindowDescriptor,
-    event: &CGEvent,
+    event: &PreparedTargetEvent,
     cancellation: &CommandCancellation,
     boundary: &str,
     deadline: Instant,
-) -> Result<(), ComputerError> {
+) -> Result<MacTargetDispatchRecord, ComputerError> {
     ensure_dispatch_deadline(cancellation, boundary, deadline)?;
     cancellation.begin_side_effect(boundary)?;
     // Dispatch accounting can block briefly on the command phase lock. Never
@@ -1149,10 +1333,26 @@ fn ensure_dispatch_deadline(
     })
 }
 
-fn post_release(target: &WindowDescriptor, event: &CGEvent) -> Result<(), ComputerError> {
+fn post_release(
+    target: &WindowDescriptor,
+    event: &PreparedTargetEvent,
+) -> Result<MacTargetDispatchRecord, ComputerError> {
+    if !event.matches(target) {
+        return Err(ComputerError::new(
+            "COMPUTER_BACKGROUND_CONTRACT_VIOLATION",
+            "stage=preparedEvent;failedInvariants=inputRouteTargetBound",
+        ));
+    }
     let symbols = symbols().ok_or_else(|| input_error("SkyLight symbols are unavailable"))?;
-    unsafe { (symbols.post_to_pid)(target.pid as pid_t, event.as_ptr() as *mut c_void) };
-    Ok(())
+    let target_window_id = target
+        .id
+        .parse::<u32>()
+        .map_err(|_| input_error("invalid macOS target window id"))?;
+    unsafe { (symbols.post_to_pid)(target.pid as pid_t, event.event.as_ptr() as *mut c_void) };
+    Ok(MacTargetDispatchRecord {
+        target_pid: target.pid,
+        target_window_id,
+    })
 }
 
 fn activate_without_raise(
@@ -1422,8 +1622,11 @@ fn focus_preparation_needed(front_pid: u32, target_pid: u32) -> bool {
 fn assert_snapshot_held(before: &DesktopSnapshot) -> Result<(), ComputerError> {
     thread::sleep(Duration::from_millis(35));
     before
-        .compare(&DesktopSnapshot::capture()?)
-        .assert_held(InvariantStage::FocusPreparation)
+        .compare(
+            &DesktopSnapshot::capture()?,
+            InputDeliveryProvenance::unverified(),
+        )
+        .assert_environment_held(InvariantStage::FocusPreparation)
         .map(|_| ())
 }
 
@@ -2410,9 +2613,22 @@ fn exact_window_process(
     Ok(process)
 }
 
-fn source() -> Result<CGEventSource, ComputerError> {
-    CGEventSource::new(CGEventSourceStateID::HIDSystemState)
-        .map_err(|_| input_error("CGEventSourceCreate failed"))
+fn private_event_source() -> Result<CGEventSource, ComputerError> {
+    let source = CGEventSource::new(CGEventSourceStateID::Private)
+        .map_err(|_| input_error("CGEventSourceCreate failed"))?;
+    let mut value = [0_u8; 8];
+    value.copy_from_slice(&Uuid::new_v4().as_bytes()[..8]);
+    let event_source_tag = i64::from_le_bytes(value) | 1;
+    unsafe { CGEventSourceSetUserData(source.as_ptr().cast(), event_source_tag) };
+    Ok(source)
+}
+
+fn hardware_cursor_position() -> Result<CGPoint, ComputerError> {
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+        .map_err(|_| input_error("Could not create the read-only HID cursor source"))?;
+    CGEvent::new(source)
+        .map_err(|_| input_error("Could not read the hardware cursor"))
+        .map(|event| event.location())
 }
 
 fn interpolate(from: i32, to: i32, progress: f64) -> i32 {
@@ -2514,12 +2730,189 @@ fn keycode(value: &str) -> Option<u16> {
     })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HidSystemPointerCounters {
+    left_down: u32,
+    left_up: u32,
+    right_down: u32,
+    right_up: u32,
+    mouse_moved: u32,
+    left_dragged: u32,
+    right_dragged: u32,
+    scroll_wheel: u32,
+    other_dragged: u32,
+    other_down: u32,
+    other_up: u32,
+    tablet_pointer: u32,
+    tablet_proximity: u32,
+}
+
+impl HidSystemPointerCounters {
+    fn capture() -> Self {
+        let counter = |event_type| unsafe {
+            CGEventSourceCounterForEventType(CGEventSourceStateID::HIDSystemState, event_type)
+        };
+        Self {
+            left_down: counter(CGEventType::LeftMouseDown),
+            left_up: counter(CGEventType::LeftMouseUp),
+            right_down: counter(CGEventType::RightMouseDown),
+            right_up: counter(CGEventType::RightMouseUp),
+            mouse_moved: counter(CGEventType::MouseMoved),
+            left_dragged: counter(CGEventType::LeftMouseDragged),
+            right_dragged: counter(CGEventType::RightMouseDragged),
+            scroll_wheel: counter(CGEventType::ScrollWheel),
+            other_dragged: counter(CGEventType::OtherMouseDragged),
+            other_down: counter(CGEventType::OtherMouseDown),
+            other_up: counter(CGEventType::OtherMouseUp),
+            tablet_pointer: counter(CGEventType::TabletPointer),
+            tablet_proximity: counter(CGEventType::TabletProximity),
+        }
+    }
+
+    fn progress_to(self, after: Self) -> HidCounterProgress {
+        let mut progress = HidCounterProgress::Stable;
+        for (before, after) in [
+            (self.left_down, after.left_down),
+            (self.left_up, after.left_up),
+            (self.right_down, after.right_down),
+            (self.right_up, after.right_up),
+            (self.mouse_moved, after.mouse_moved),
+            (self.left_dragged, after.left_dragged),
+            (self.right_dragged, after.right_dragged),
+            (self.scroll_wheel, after.scroll_wheel),
+            (self.other_dragged, after.other_dragged),
+            (self.other_down, after.other_down),
+            (self.other_up, after.other_up),
+            (self.tablet_pointer, after.tablet_pointer),
+            (self.tablet_proximity, after.tablet_proximity),
+        ] {
+            let advance = after.wrapping_sub(before);
+            if advance == 0 {
+                continue;
+            }
+            if advance > MAX_HID_POINTER_COUNTER_ADVANCE {
+                return HidCounterProgress::Unknown;
+            }
+            progress = HidCounterProgress::Advanced;
+        }
+        progress
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HidCounterProgress {
+    Stable,
+    Advanced,
+    Unknown,
+}
+
+#[derive(Clone, Copy)]
+struct CursorStamp {
+    position: CGPoint,
+    counters: HidSystemPointerCounters,
+    boundary_activity_observed: bool,
+}
+
+impl CursorStamp {
+    fn capture() -> Result<Self, ComputerError> {
+        let deadline = Instant::now() + CURSOR_STAMP_BUDGET;
+        let mut boundary_activity_observed = false;
+        loop {
+            let counters_before = HidSystemPointerCounters::capture();
+            let position = hardware_cursor_position()?;
+            let counters_after = HidSystemPointerCounters::capture();
+            match counters_before.progress_to(counters_after) {
+                HidCounterProgress::Stable => {
+                    return Ok(Self {
+                        position,
+                        counters: counters_after,
+                        boundary_activity_observed,
+                    });
+                }
+                HidCounterProgress::Advanced => {
+                    boundary_activity_observed = true;
+                    if Instant::now() >= deadline {
+                        return Ok(Self {
+                            position,
+                            counters: counters_after,
+                            boundary_activity_observed: true,
+                        });
+                    }
+                }
+                HidCounterProgress::Unknown => {
+                    return Err(input_error(
+                        "The macOS HID-system cursor counter epoch became invalid",
+                    ));
+                }
+            }
+            thread::sleep(CURSOR_STAMP_POLL);
+        }
+    }
+
+    fn classify(self, after: Self, input_delivery: InputDeliveryProvenance) -> CursorAttribution {
+        let position_unchanged = (self.position.x - after.position.x).abs() < 0.01
+            && (self.position.y - after.position.y).abs() < 0.01;
+        let counter_progress = self.counters.progress_to(after.counters);
+        let monitor_healthy = counter_progress != HidCounterProgress::Unknown;
+        let hid_system_pointer_activity = self.boundary_activity_observed
+            || after.boundary_activity_observed
+            || counter_progress == HidCounterProgress::Advanced;
+        let boundary_corroborated =
+            monitor_healthy && (position_unchanged || hid_system_pointer_activity);
+        let shared_pointer_boundary_state = if boundary_corroborated {
+            SharedPointerBoundaryState::Corroborated
+        } else {
+            SharedPointerBoundaryState::Unknown
+        };
+        let helper_global_pointer_preservation = if input_delivery.global_hid_input_used
+            || input_delivery.hardware_cursor_mutation_requested
+        {
+            HelperGlobalPointerPreservation::Violated
+        } else if input_delivery.is_target_bound() && boundary_corroborated {
+            HelperGlobalPointerPreservation::Confirmed
+        } else {
+            HelperGlobalPointerPreservation::Unknown
+        };
+        let shared_pointer_activity_state =
+            if !monitor_healthy || (!position_unchanged && !hid_system_pointer_activity) {
+                SharedPointerActivityState::Unknown
+            } else if hid_system_pointer_activity {
+                SharedPointerActivityState::Contaminated
+            } else {
+                SharedPointerActivityState::Quiet
+            };
+        CursorAttribution {
+            position_unchanged,
+            hid_system_pointer_activity,
+            monitor_healthy,
+            boundary_corroborated,
+            shared_pointer_boundary_state,
+            preserved_by_helper: helper_global_pointer_preservation
+                == HelperGlobalPointerPreservation::Confirmed,
+            helper_global_pointer_preservation,
+            shared_pointer_activity_state,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CursorAttribution {
+    position_unchanged: bool,
+    hid_system_pointer_activity: bool,
+    monitor_healthy: bool,
+    boundary_corroborated: bool,
+    shared_pointer_boundary_state: SharedPointerBoundaryState,
+    preserved_by_helper: bool,
+    helper_global_pointer_preservation: HelperGlobalPointerPreservation,
+    shared_pointer_activity_state: SharedPointerActivityState,
+}
+
 #[derive(Clone, Copy)]
 struct DesktopSnapshot {
     front_process: [u8; 8],
     front_pid: u32,
     front_window_id: u32,
-    cursor: CGPoint,
+    cursor: CursorStamp,
     active_space: u64,
 }
 
@@ -2530,9 +2923,7 @@ impl DesktopSnapshot {
         let focus_deadline = Instant::now() + FOCUS_RESTORE_PROOF_BUDGET;
         let front_focus_before =
             ax_macos::application_focus_state_before(front_pid, focus_deadline)?;
-        let cursor = CGEvent::new(source()?)
-            .map_err(|_| input_error("Could not read the hardware cursor"))?
-            .location();
+        let cursor = CursorStamp::capture()?;
         let active_space = unsafe { (symbols.get_active_space)((symbols.connection_id)()) };
         if active_space == 0 {
             return Err(input_error("Could not prove the active macOS Space"));
@@ -2559,14 +2950,25 @@ impl DesktopSnapshot {
         })
     }
 
-    fn compare(&self, after: &Self) -> InvariantReport {
+    fn compare(&self, after: &Self, input_delivery: InputDeliveryProvenance) -> InvariantReport {
+        let cursor = self.cursor.classify(after.cursor, input_delivery);
         InvariantReport {
             foreground_unchanged: self.front_process == after.front_process,
             user_focus_unchanged: self.front_pid == after.front_pid
                 && self.front_window_id == after.front_window_id,
-            cursor_unchanged: (self.cursor.x - after.cursor.x).abs() < 0.01
-                && (self.cursor.y - after.cursor.y).abs() < 0.01,
+            cursor_position_unchanged: cursor.position_unchanged,
+            shared_pointer_activity_observed: cursor.hid_system_pointer_activity,
+            hid_system_pointer_activity_observed: cursor.hid_system_pointer_activity,
+            raw_input_pointer_activity_observed: false,
+            injected_pointer_activity_observed: false,
+            pointer_activity_monitor_healthy: cursor.monitor_healthy,
+            shared_pointer_boundary_corroborated: cursor.boundary_corroborated,
+            shared_pointer_boundary_state: cursor.shared_pointer_boundary_state,
+            hardware_cursor_preserved_by_helper: cursor.preserved_by_helper,
+            helper_global_pointer_preservation: cursor.helper_global_pointer_preservation,
+            shared_pointer_activity_state: cursor.shared_pointer_activity_state,
             space_unchanged: self.active_space == after.active_space,
+            input_delivery,
         }
     }
 }
@@ -2978,5 +3380,241 @@ mod invariant_tests {
             62100,
             62090
         ));
+    }
+
+    fn test_cursor_stamp(x: f64, y: f64, mouse_moved: u32) -> CursorStamp {
+        CursorStamp {
+            position: CGPoint::new(x, y),
+            counters: HidSystemPointerCounters {
+                left_down: 1,
+                left_up: 2,
+                right_down: 3,
+                right_up: 4,
+                mouse_moved,
+                left_dragged: 11,
+                right_dragged: 12,
+                scroll_wheel: 15,
+                other_dragged: 13,
+                other_down: 5,
+                other_up: 6,
+                tablet_pointer: 14,
+                tablet_proximity: 16,
+            },
+            boundary_activity_observed: false,
+        }
+    }
+
+    fn test_target_delivery() -> InputDeliveryProvenance {
+        let trace = MacTargetDispatchTrace {
+            target_pid: 42,
+            target_window_id: 62090,
+            attempt_count: 1,
+        };
+        trace.provenance().unwrap()
+    }
+
+    #[test]
+    fn target_dispatch_trace_requires_one_exact_record_and_refuses_overflow() {
+        let target = keyboard_target();
+        let mut empty = MacTargetDispatchTrace::new(&target).unwrap();
+        let missing = empty.provenance().unwrap_err();
+        assert_eq!(missing.code, "COMPUTER_BACKGROUND_CONTRACT_VIOLATION");
+
+        let wrong_pid = empty
+            .record(MacTargetDispatchRecord {
+                target_pid: target.pid + 1,
+                target_window_id: 62090,
+            })
+            .unwrap_err();
+        assert_eq!(wrong_pid.code, "COMPUTER_BACKGROUND_CONTRACT_VIOLATION");
+
+        empty
+            .record(MacTargetDispatchRecord {
+                target_pid: target.pid,
+                target_window_id: 62090,
+            })
+            .unwrap();
+        let provenance = empty.provenance().unwrap();
+        assert_eq!(
+            provenance.support_level,
+            InputDeliverySupportLevel::PrivateUnsupported
+        );
+        assert!(provenance.dispatch_attempt_recorded);
+        assert!(!provenance.os_acceptance_signal_available);
+        assert!(!provenance.os_acceptance_observed);
+
+        let mut exhausted = MacTargetDispatchTrace {
+            target_pid: target.pid,
+            target_window_id: 62090,
+            attempt_count: u32::MAX,
+        };
+        let overflow = exhausted
+            .record(MacTargetDispatchRecord {
+                target_pid: target.pid,
+                target_window_id: 62090,
+            })
+            .unwrap_err();
+        assert_eq!(overflow.code, "COMPUTER_DISPATCH_EXHAUSTED");
+    }
+
+    #[test]
+    fn cursor_attribution_accepts_only_stable_or_hid_explained_motion() {
+        let delivery = test_target_delivery();
+
+        let quiet = test_cursor_stamp(100.0, 200.0, 7)
+            .classify(test_cursor_stamp(100.0, 200.0, 7), delivery);
+        assert_eq!(
+            quiet,
+            CursorAttribution {
+                position_unchanged: true,
+                hid_system_pointer_activity: false,
+                monitor_healthy: true,
+                boundary_corroborated: true,
+                shared_pointer_boundary_state: SharedPointerBoundaryState::Corroborated,
+                preserved_by_helper: true,
+                helper_global_pointer_preservation: HelperGlobalPointerPreservation::Confirmed,
+                shared_pointer_activity_state: SharedPointerActivityState::Quiet,
+            }
+        );
+
+        let explained = test_cursor_stamp(100.0, 200.0, 7)
+            .classify(test_cursor_stamp(101.0, 200.0, 8), delivery);
+        assert_eq!(
+            explained,
+            CursorAttribution {
+                position_unchanged: false,
+                hid_system_pointer_activity: true,
+                monitor_healthy: true,
+                boundary_corroborated: true,
+                shared_pointer_boundary_state: SharedPointerBoundaryState::Corroborated,
+                preserved_by_helper: true,
+                helper_global_pointer_preservation: HelperGlobalPointerPreservation::Confirmed,
+                shared_pointer_activity_state: SharedPointerActivityState::Contaminated,
+            }
+        );
+
+        let unexplained = test_cursor_stamp(100.0, 200.0, 7)
+            .classify(test_cursor_stamp(101.0, 200.0, 7), delivery);
+        assert_eq!(
+            unexplained,
+            CursorAttribution {
+                position_unchanged: false,
+                hid_system_pointer_activity: false,
+                monitor_healthy: true,
+                boundary_corroborated: false,
+                shared_pointer_boundary_state: SharedPointerBoundaryState::Unknown,
+                preserved_by_helper: false,
+                helper_global_pointer_preservation: HelperGlobalPointerPreservation::Unknown,
+                shared_pointer_activity_state: SharedPointerActivityState::Unknown,
+            }
+        );
+    }
+
+    #[test]
+    fn cursor_attribution_records_move_away_and_back_and_counter_wrap() {
+        let delivery = test_target_delivery();
+        let out_and_back = test_cursor_stamp(100.0, 200.0, 7)
+            .classify(test_cursor_stamp(100.0, 200.0, 8), delivery);
+        assert!(out_and_back.position_unchanged);
+        assert!(out_and_back.hid_system_pointer_activity);
+        assert!(out_and_back.monitor_healthy);
+        assert!(out_and_back.boundary_corroborated);
+        assert!(out_and_back.preserved_by_helper);
+
+        let wrapped = test_cursor_stamp(100.0, 200.0, u32::MAX)
+            .classify(test_cursor_stamp(101.0, 200.0, 0), delivery);
+        assert!(wrapped.hid_system_pointer_activity);
+        assert!(wrapped.monitor_healthy);
+        assert!(wrapped.boundary_corroborated);
+        assert!(wrapped.preserved_by_helper);
+
+        let mut active_boundary = test_cursor_stamp(101.0, 200.0, 7);
+        active_boundary.boundary_activity_observed = true;
+        let continuously_active =
+            test_cursor_stamp(100.0, 200.0, 7).classify(active_boundary, delivery);
+        assert!(continuously_active.hid_system_pointer_activity);
+        assert!(continuously_active.monitor_healthy);
+        assert!(continuously_active.boundary_corroborated);
+        assert!(continuously_active.preserved_by_helper);
+
+        let mut clicked = test_cursor_stamp(100.0, 200.0, 7);
+        clicked.counters.left_down += 1;
+        let clicked = test_cursor_stamp(100.0, 200.0, 7).classify(clicked, delivery);
+        assert!(clicked.position_unchanged);
+        assert!(clicked.hid_system_pointer_activity);
+        assert_eq!(
+            clicked.shared_pointer_activity_state,
+            SharedPointerActivityState::Contaminated
+        );
+
+        let mut scrolled = test_cursor_stamp(100.0, 200.0, 7);
+        scrolled.counters.scroll_wheel += 1;
+        let scrolled = test_cursor_stamp(100.0, 200.0, 7).classify(scrolled, delivery);
+        assert!(scrolled.hid_system_pointer_activity);
+        assert_eq!(
+            scrolled.shared_pointer_activity_state,
+            SharedPointerActivityState::Contaminated
+        );
+    }
+
+    #[test]
+    fn cursor_attribution_refuses_an_unverified_delivery_route() {
+        let attribution = test_cursor_stamp(100.0, 200.0, 7).classify(
+            test_cursor_stamp(100.0, 200.0, 7),
+            InputDeliveryProvenance::unverified(),
+        );
+        assert!(attribution.position_unchanged);
+        assert!(attribution.monitor_healthy);
+        assert!(attribution.boundary_corroborated);
+        assert!(!attribution.preserved_by_helper);
+    }
+
+    #[test]
+    fn cursor_attribution_treats_counter_reset_or_implausible_flood_as_unknown() {
+        let delivery = test_target_delivery();
+        let reset = test_cursor_stamp(100.0, 200.0, 100)
+            .classify(test_cursor_stamp(100.0, 200.0, 50), delivery);
+        assert!(!reset.monitor_healthy);
+        assert!(!reset.boundary_corroborated);
+        assert!(!reset.preserved_by_helper);
+
+        let flood = test_cursor_stamp(100.0, 200.0, 1).classify(
+            test_cursor_stamp(
+                100.0,
+                200.0,
+                MAX_HID_POINTER_COUNTER_ADVANCE.saturating_add(2),
+            ),
+            delivery,
+        );
+        assert!(!flood.monitor_healthy);
+        assert!(!flood.boundary_corroborated);
+        assert!(!flood.preserved_by_helper);
+    }
+
+    #[test]
+    fn post_dispatch_semantic_error_cannot_mask_after_snapshot_invariant_failure() {
+        let before = DesktopSnapshot {
+            front_process: [1; 8],
+            front_pid: 7,
+            front_window_id: 70,
+            cursor: test_cursor_stamp(100.0, 200.0, 7),
+            active_space: 1,
+        };
+        let after = DesktopSnapshot {
+            front_process: [2; 8],
+            ..before
+        };
+        let report = before.compare(&after, test_target_delivery());
+        let error = finish_semantic_after_snapshot(
+            report,
+            InvariantStage::SemanticSetValue,
+            Err(ComputerError::new(
+                "COMPUTER_POSTCONDITION_FAILED",
+                "fixture postcondition failure after dispatch",
+            )),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "COMPUTER_BACKGROUND_CONTRACT_VIOLATION");
+        assert!(error.message.contains("foregroundUnchanged"));
     }
 }

@@ -17,6 +17,14 @@ pub const COMPUTER_SHARE_ACK_CAPABILITY: &str = "computer.share.ack";
 /// persistent OS exact-window capture stream instead of polling snapshot APIs.
 /// It is metadata, not a dispatchable command method.
 pub const COMPUTER_NATIVE_SHARE_CAPABILITY: &str = "computer.capture.native-stream.v1";
+/// Capability string indicating that every native action reports a sealed
+/// exact-target delivery route and separates API acceptance from target effect.
+pub const COMPUTER_INPUT_DELIVERY_PROVENANCE_CAPABILITY: &str =
+    "computer.input-delivery-provenance.v1";
+/// Capability string indicating that the helper samples a platform pointer
+/// activity monitor without retaining input contents, coordinates, or devices.
+pub const COMPUTER_POINTER_ACTIVITY_MONITOR_CAPABILITY: &str =
+    "computer.pointer-activity-monitor.v1";
 /// Native text delivery is intentionally much smaller than browser or
 /// accessibility value writes. Windows posts one message per UTF-16 code unit
 /// and permits a per-queue minimum as low as 4,000 posted messages, so one

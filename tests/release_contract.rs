@@ -301,6 +301,128 @@ fn release_gates_javascript_macos_and_published_provenance() {
 }
 
 #[test]
+fn release_requires_a_canonical_run_and_candidate_bound_acceptance_receipt() {
+    let release = source(".github/workflows/deploy.yml");
+    let development = source("docs/DEVELOPMENT.md");
+    let receipt_gate = release
+        .split("- name: Require exact candidate-bound platform acceptance receipt")
+        .nth(1)
+        .unwrap()
+        .split("- name: Recover a verified draft or publish immutable release assets")
+        .next()
+        .unwrap();
+
+    for required in [
+        "LBB_RELEASE_ACCEPTANCE_V1: ${{ vars.LBB_RELEASE_ACCEPTANCE_V1 }}",
+        "test -n \"${LBB_RELEASE_ACCEPTANCE_V1:-}\"",
+        "test \"${#LBB_RELEASE_ACCEPTANCE_V1}\" -le 2048",
+        "test \"$(jq -c . \"$receipt_file\")\" = \"$LBB_RELEASE_ACCEPTANCE_V1\"",
+        "frozen_manifest_sha256=\"$(sha256sum dist/SHA256SUMS.txt",
+        "acceptance_receipt_sha256=\"$(sha256sum \"$receipt_file\"",
+        "printf 'LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256=%s\\n'",
+        ">> \"$GITHUB_ENV\"",
+        "VERIFIED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}",
+        "VERIFIED_TAG_SHA: ${{ needs.verify.outputs.tag_sha }}",
+        ".tag == $tag",
+        ".sourceSha == $source_sha",
+        ".tagObjectSha == $tag_object_sha",
+        ".workflowRunId == $run_id",
+        ".workflowRunAttempt == $run_attempt",
+        ".checksumManifestSha256 == $manifest_sha256",
+        ".macosPassed == true",
+        ".windowsPassed == true",
+        ".stockChromePassed == true",
+        ".stockChrome == true",
+    ] {
+        assert!(
+            receipt_gate.contains(required),
+            "release acceptance receipt gate is missing {required}"
+        );
+    }
+    assert!(!receipt_gate.contains("secrets.LBB_RELEASE_ACCEPTANCE_V1"));
+    assert_eq!(receipt_gate.matches("test(\"^[0-9a-f]{64}$\")").count(), 4);
+    assert_eq!(receipt_gate.matches("test(\"^[0-9a-f]{40}$\")").count(), 2);
+    assert_eq!(receipt_gate.matches("test(\"^[1-9][0-9]*$\")").count(), 2);
+    let expected_keys = [
+        "schemaVersion",
+        "tag",
+        "sourceSha",
+        "tagObjectSha",
+        "workflowRunId",
+        "workflowRunAttempt",
+        "checksumManifestSha256",
+        "macosPassed",
+        "macosResultSha256",
+        "windowsPassed",
+        "windowsResultSha256",
+        "stockChromePassed",
+        "stockChrome",
+        "stockChromeResultSha256",
+    ];
+    for key in expected_keys {
+        assert!(
+            receipt_gate.contains(&format!("\"{key}\"")),
+            "canonical acceptance receipt omits {key}"
+        );
+    }
+    assert!(receipt_gate.contains("keys_unsorted == ["));
+
+    let freeze = release
+        .find("Freeze the exact candidate for interactive acceptance")
+        .unwrap();
+    let receipt = release
+        .find("Require exact candidate-bound platform acceptance receipt")
+        .unwrap();
+    let release_mutation = release
+        .find("Recover a verified draft or publish immutable release assets")
+        .unwrap();
+    assert!(freeze < receipt);
+    assert!(receipt < release_mutation);
+    assert!(receipt < release.find("gh release create \"$RELEASE_TAG\"").unwrap());
+
+    let publication = &release[release_mutation..];
+    for required in [
+        "[[ \"${LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256:-}\" =~ ^[0-9a-f]{64}$ ]]",
+        "acceptance-receipt-sha256=$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256",
+        "Acceptance receipt SHA-256: \\`$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256\\`",
+        "release_acceptance_receipt_sha256()",
+        "existing_acceptance_receipt_sha256=\"$(release_acceptance_receipt_sha256",
+        "cmp -s release-notes.md \"$release_body\"",
+    ] {
+        assert!(
+            publication.contains(required),
+            "published release does not bind the accepted receipt: {required}"
+        );
+    }
+    assert!(
+        !publication
+            .contains("Acceptance receipt SHA-256: `$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256`")
+    );
+    assert!(
+        publication.find("acceptance-receipt-sha256=").unwrap()
+            < publication
+                .find("gh release create \"$RELEASE_TAG\"")
+                .unwrap()
+    );
+
+    for required in [
+        "protected `release` environment variable `LBB_RELEASE_ACCEPTANCE_V1`",
+        "helper-results.json",
+        "Windows `summary.json`",
+        "stock-Chrome `browser-acceptance.json`",
+        "wrong-run",
+        "wrong-attempt",
+        "A rerun has a new `workflowRunAttempt`",
+        "embeds only that SHA-256 in both the immutable release marker and the visible release notes",
+    ] {
+        assert!(
+            development.contains(required),
+            "operator receipt process is missing {required}"
+        );
+    }
+}
+
+#[test]
 fn release_reruns_delete_only_a_candidate_bound_byte_exact_draft() {
     let release = source(".github/workflows/deploy.yml");
 
@@ -309,6 +431,7 @@ fn release_reruns_delete_only_a_candidate_bound_byte_exact_draft() {
         "source-sha=$VERIFIED_SOURCE_SHA",
         "tag-object-sha=$VERIFIED_TAG_SHA",
         "manifest-sha256=$candidate_manifest_sha256",
+        "acceptance-receipt-sha256=$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256",
         "jq -ej '.body | select(type == \"string\")'",
         "cmp -s release-notes.md \"$release_body\"",
     ] {
@@ -434,6 +557,199 @@ fn macos_artifacts_enforce_the_supported_floor_per_macho_slice() {
     for caller in [release, local, archive] {
         assert!(caller.contains("bash scripts/verify-macos-artifacts.sh"));
     }
+}
+
+#[test]
+fn packaged_macos_helper_freezes_targeted_input_apis_per_architecture() {
+    let verifier = source("scripts/verify-macos-artifacts.sh");
+    let release = source(".github/workflows/deploy.yml");
+    let local = source("scripts/deploy.sh");
+    let archive = source("scripts/verify-release-assets.sh");
+
+    for required in [
+        "for command in lipo otool codesign nm strings",
+        "forbidden_helper_apis=(",
+        "allowed_dynamic_lookup_symbols=(",
+        "audit_helper_api_slice() {",
+        "lipo -thin \"$architecture\" \"$helper_path\" -output \"$slice_path\"",
+        "nm -u \"$slice_path\" > \"$undefined_report\"",
+        "strings -a \"$slice_path\" > \"$strings_report\"",
+        "report_mentions_api \"$api\" \"$undefined_report\" \"$strings_report\"",
+        "grep -Fxq \"$api\" \"$strings_report\"",
+        "grep -Eq '(^|[[:space:]])_dlsym$' \"$undefined_report\"",
+        "observed_dynamic_symbols",
+        "expected_dynamic_symbols",
+        "for architecture in arm64 x86_64; do\n  audit_helper_api_slice \"$architecture\"",
+    ] {
+        assert!(
+            verifier.contains(required),
+            "macOS packaged-helper API verifier is missing {required}"
+        );
+    }
+
+    let forbidden_block = verifier
+        .split("forbidden_helper_apis=(")
+        .nth(1)
+        .unwrap()
+        .split("\n)\n")
+        .next()
+        .unwrap();
+    let forbidden_apis = [
+        "CGWarpMouseCursorPosition",
+        "CGDisplayMoveCursorToPoint",
+        "CGAssociateMouseAndMouseCursorPosition",
+        "CGDisplayHideCursor",
+        "CGDisplayShowCursor",
+        "CGEventPost",
+        "CGEventTapPostEvent",
+        "CGPostMouseEvent",
+        "CGPostScrollWheelEvent",
+        "CGPostKeyboardEvent",
+        "IOHIDPostEvent",
+        "IOHIDSetCursorEnable",
+        "IOHIDSetCursorPosition",
+        "CGEventPostToPSN",
+        "CGEventPostToPid",
+    ];
+    assert_eq!(
+        forbidden_block
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count(),
+        forbidden_apis.len()
+    );
+    for forbidden in forbidden_apis {
+        assert!(
+            forbidden_block.lines().any(|line| line.trim() == forbidden),
+            "macOS packaged-helper API verifier does not forbid {forbidden}"
+        );
+    }
+
+    let allowed_block = verifier
+        .split("allowed_dynamic_lookup_symbols=(")
+        .nth(1)
+        .unwrap()
+        .split("\n)\n")
+        .next()
+        .unwrap();
+    let allowed_lookups = [
+        "CGEventSetWindowLocation",
+        "CGSGetActiveSpace",
+        "CGSMainConnectionID",
+        "GetProcessPID",
+        "SLEventPostToPid",
+        "SLEventSetIntegerValueField",
+        "SLPSPostEventRecordTo",
+        "SLSGetActiveSpace",
+        "SLSGetConnectionPSN",
+        "SLSGetWindowOwner",
+        "_SLPSGetFrontProcess",
+    ];
+    assert_eq!(
+        allowed_block
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count(),
+        allowed_lookups.len()
+    );
+    for allowed_lookup in allowed_lookups {
+        assert!(
+            allowed_block
+                .lines()
+                .any(|line| line.trim() == allowed_lookup),
+            "macOS packaged-helper dynamic lookup allowlist omits {allowed_lookup}"
+        );
+    }
+
+    let audit_call = verifier
+        .find("  audit_helper_api_slice \"$architecture\"")
+        .unwrap();
+    let first_candidate_execution = verifier
+        .find("if [[ \"$(\"$server_path\" --version)\"")
+        .unwrap();
+    assert!(
+        audit_call < first_candidate_execution,
+        "packaged-helper API inspection must complete before candidate execution"
+    );
+
+    let release_macos_job = release
+        .split("- name: Build and verify universal server and helper app")
+        .nth(1)
+        .unwrap();
+    assert!(
+        release_macos_job
+            .find("bash scripts/verify-macos-artifacts.sh")
+            .unwrap()
+            < release_macos_job.find("tar -czf").unwrap()
+    );
+    assert!(
+        local
+            .find("bash scripts/verify-macos-artifacts.sh")
+            .unwrap()
+            < local.find("tar -czf").unwrap()
+    );
+    assert!(archive.contains("bash scripts/verify-macos-artifacts.sh"));
+}
+
+#[test]
+fn packaged_windows_helper_rejects_global_input_and_requires_target_route_apis() {
+    let verifier = source("scripts/verify-windows-artifacts.ps1");
+
+    for required in [
+        "function Assert-HelperInputSurface",
+        "& $DumpBinPath /nologo /imports $Path",
+        "[System.IO.File]::ReadAllBytes($Path)",
+        "[System.Text.Encoding]::ASCII.GetString($bytes)",
+        "[System.Text.Encoding]::Unicode.GetString($bytes)",
+        "Assert-HelperInputSurface -Path $resolvedHelperPath -DumpBinPath $dumpbin",
+    ] {
+        assert!(
+            verifier.contains(required),
+            "Windows packaged-helper API verifier is missing {required}"
+        );
+    }
+
+    for forbidden in [
+        "'SendInput'",
+        "'SetCursorPos'",
+        "'SetPhysicalCursorPos'",
+        "'mouse_event'",
+        "'keybd_event'",
+        "'SetForegroundWindow'",
+        "'AttachThreadInput'",
+        "'AllowSetForegroundWindow'",
+        "'LockSetForegroundWindow'",
+        "'SwitchToThisWindow'",
+    ] {
+        assert!(
+            verifier.contains(forbidden),
+            "Windows packaged-helper API verifier does not forbid {forbidden}"
+        );
+    }
+    for required_api in [
+        "'PostMessageW'",
+        "'GetCursorPos'",
+        "'OpenInputDesktop'",
+        "'GetUserObjectInformationW'",
+        "'RegisterRawInputDevices'",
+        "'SetWindowsHookExW'",
+    ] {
+        assert!(
+            verifier.contains(required_api),
+            "Windows packaged-helper API verifier does not require {required_api}"
+        );
+    }
+
+    let api_audit = verifier
+        .find("Assert-HelperInputSurface -Path $resolvedHelperPath")
+        .unwrap();
+    let first_candidate_execution = verifier
+        .find("$reportedVersion = (& $resolved --version")
+        .unwrap();
+    assert!(
+        api_audit < first_candidate_execution,
+        "Windows helper API inspection must complete before candidate execution"
+    );
 }
 
 #[test]

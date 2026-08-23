@@ -666,7 +666,7 @@ pub fn invoke(
     semantic: &SemanticTarget,
     action: &str,
     cancellation: &CommandCancellation,
-) -> Result<Value, ComputerError> {
+) -> Result<AxDispatchAttempt, ComputerError> {
     let before_snapshot = snapshot(target).ok();
     let native_action = match action {
         "press" => "AXPress",
@@ -677,6 +677,7 @@ pub fn invoke(
         "open" => "AXOpen",
         _ => return Err(invalid_semantic("Unsupported native accessibility action")),
     };
+    let dispatch = AxDispatchRecord::new(target, AxDispatchOperation::Invoke)?;
     unsafe {
         let element = resolve_verified(target, semantic)?;
         let action_name = CFString::new(native_action);
@@ -687,37 +688,44 @@ pub fn invoke(
         let result = AXUIElementPerformAction(element, action_name.as_concrete_TypeRef());
         CFRelease(element as CFTypeRef);
         if result != AX_SUCCESS {
-            return Err(ComputerError::new(
-                "COMPUTER_SEMANTIC_ACTION_FAILED",
-                format!("{native_action} failed with macOS AX error {result}"),
+            return Ok(AxDispatchAttempt::new(
+                dispatch,
+                Err(ComputerError::new(
+                    "COMPUTER_SEMANTIC_ACTION_FAILED",
+                    format!("{native_action} failed with macOS AX error {result}"),
+                )),
             ));
         }
+        let dispatch = dispatch.with_os_acceptance();
         cancellation.mark_verification_started();
+        let outcome = (|| {
+            cancellation.check("macOS AX action observation")?;
+            thread::sleep(Duration::from_millis(90));
+            cancellation.check("macOS AX action observation")?;
+            let mut effect = observe_effect(target, semantic, None);
+            if !effect.0
+                && let (Some(before), Ok(after)) = (before_snapshot, snapshot(target))
+            {
+                let before = before
+                    .into_iter()
+                    .map(|target| target.element)
+                    .collect::<Vec<_>>();
+                let after = after
+                    .into_iter()
+                    .map(|target| target.element)
+                    .collect::<Vec<_>>();
+                if before != after {
+                    effect = (true, "window-state-changed");
+                }
+            }
+            Ok(json!({
+                "delivered": true,
+                "effectObserved": effect.0,
+                "postcondition": effect.1,
+            }))
+        })();
+        Ok(AxDispatchAttempt::new(dispatch, outcome))
     }
-    cancellation.check("macOS AX action observation")?;
-    thread::sleep(Duration::from_millis(90));
-    cancellation.check("macOS AX action observation")?;
-    let mut effect = observe_effect(target, semantic, None);
-    if !effect.0
-        && let (Some(before), Ok(after)) = (before_snapshot, snapshot(target))
-    {
-        let before = before
-            .into_iter()
-            .map(|target| target.element)
-            .collect::<Vec<_>>();
-        let after = after
-            .into_iter()
-            .map(|target| target.element)
-            .collect::<Vec<_>>();
-        if before != after {
-            effect = (true, "window-state-changed");
-        }
-    }
-    Ok(json!({
-        "delivered": true,
-        "effectObserved": effect.0,
-        "postcondition": effect.1,
-    }))
 }
 
 pub fn set_value(
@@ -725,10 +733,11 @@ pub fn set_value(
     semantic: &SemanticTarget,
     value: &str,
     cancellation: &CommandCancellation,
-) -> Result<Value, ComputerError> {
+) -> Result<AxDispatchAttempt, ComputerError> {
     if semantic.element.sensitive || semantic.element.value_redacted {
         return Err(sensitive_semantic());
     }
+    let dispatch = AxDispatchRecord::new(target, AxDispatchOperation::SetValue)?;
     unsafe {
         let element = resolve_verified(target, semantic)?;
         let attr = CFString::new("AXValue");
@@ -744,28 +753,35 @@ pub fn set_value(
         );
         CFRelease(element as CFTypeRef);
         if result != AX_SUCCESS {
-            return Err(ComputerError::new(
-                "COMPUTER_SEMANTIC_ACTION_FAILED",
-                format!("AXValue write failed with macOS AX error {result}"),
+            return Ok(AxDispatchAttempt::new(
+                dispatch,
+                Err(ComputerError::new(
+                    "COMPUTER_SEMANTIC_ACTION_FAILED",
+                    format!("AXValue write failed with macOS AX error {result}"),
+                )),
             ));
         }
+        let dispatch = dispatch.with_os_acceptance();
         cancellation.mark_verification_started();
+        let outcome = (|| {
+            cancellation.check("macOS AX value observation")?;
+            thread::sleep(Duration::from_millis(60));
+            cancellation.check("macOS AX value observation")?;
+            let effect = observe_effect(target, semantic, Some(value));
+            if !effect.0 {
+                return Err(ComputerError::new(
+                    "COMPUTER_POSTCONDITION_FAILED",
+                    "macOS accepted AXValue but the requested value was not observed",
+                ));
+            }
+            Ok(json!({
+                "delivered": true,
+                "effectObserved": true,
+                "postcondition": effect.1,
+            }))
+        })();
+        Ok(AxDispatchAttempt::new(dispatch, outcome))
     }
-    cancellation.check("macOS AX value observation")?;
-    thread::sleep(Duration::from_millis(60));
-    cancellation.check("macOS AX value observation")?;
-    let effect = observe_effect(target, semantic, Some(value));
-    if !effect.0 {
-        return Err(ComputerError::new(
-            "COMPUTER_POSTCONDITION_FAILED",
-            "macOS accepted AXValue but the requested value was not observed",
-        ));
-    }
-    Ok(json!({
-        "delivered": true,
-        "effectObserved": true,
-        "postcondition": effect.1,
-    }))
 }
 
 fn observe_effect(
@@ -1404,5 +1420,104 @@ mod tests {
             true
         ));
         assert!(!keyboard_receiver_matches(62090, Some(62090), None, true));
+    }
+
+    fn dispatch_target() -> WindowDescriptor {
+        WindowDescriptor {
+            id: "62090".to_owned(),
+            pid: 4242,
+            app_name: "Fixture".to_owned(),
+            title: "Target".to_owned(),
+            x: 180,
+            y: 768,
+            width: 820,
+            height: 552,
+            minimized: false,
+            focused: false,
+        }
+    }
+
+    #[test]
+    fn accessibility_dispatch_record_binds_pid_window_operation_and_acceptance() {
+        let target = dispatch_target();
+        let invoke = AxDispatchRecord::new(&target, AxDispatchOperation::Invoke).unwrap();
+        assert!(invoke.matches(&target, AxDispatchOperation::Invoke));
+        assert!(!invoke.matches(&target, AxDispatchOperation::SetValue));
+        assert!(!invoke.os_acceptance_observed());
+
+        let mut wrong_pid = target.clone();
+        wrong_pid.pid += 1;
+        assert!(!invoke.matches(&wrong_pid, AxDispatchOperation::Invoke));
+        let mut wrong_window = target.clone();
+        wrong_window.id = "62100".to_owned();
+        assert!(!invoke.matches(&wrong_window, AxDispatchOperation::Invoke));
+
+        let accepted = invoke.with_os_acceptance();
+        assert!(accepted.os_acceptance_observed());
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AxDispatchOperation {
+    Invoke,
+    SetValue,
+}
+
+pub(crate) struct AxDispatchRecord {
+    target_pid: u32,
+    target_window_id: u32,
+    operation: AxDispatchOperation,
+    os_acceptance_observed: bool,
+}
+
+impl AxDispatchRecord {
+    fn new(
+        target: &WindowDescriptor,
+        operation: AxDispatchOperation,
+    ) -> Result<Self, ComputerError> {
+        Ok(Self {
+            target_pid: target.pid,
+            target_window_id: target.id.parse::<u32>().map_err(|_| {
+                ComputerError::new(
+                    "COMPUTER_STALE_FRAME",
+                    "The exact macOS Accessibility window id is invalid",
+                )
+            })?,
+            operation,
+            os_acceptance_observed: false,
+        })
+    }
+
+    fn with_os_acceptance(mut self) -> Self {
+        self.os_acceptance_observed = true;
+        self
+    }
+
+    pub(crate) fn matches(
+        &self,
+        target: &WindowDescriptor,
+        operation: AxDispatchOperation,
+    ) -> bool {
+        self.target_pid == target.pid
+            && Some(self.target_window_id) == target.id.parse::<u32>().ok()
+            && self.operation == operation
+    }
+
+    pub(crate) fn os_acceptance_observed(&self) -> bool {
+        self.os_acceptance_observed
+    }
+}
+
+pub(crate) struct AxDispatchAttempt {
+    dispatch: AxDispatchRecord,
+    outcome: Result<Value, ComputerError>,
+}
+
+impl AxDispatchAttempt {
+    fn new(dispatch: AxDispatchRecord, outcome: Result<Value, ComputerError>) -> Self {
+        Self { dispatch, outcome }
+    }
+
+    pub(crate) fn into_parts(self) -> (AxDispatchRecord, Result<Value, ComputerError>) {
+        (self.dispatch, self.outcome)
     }
 }

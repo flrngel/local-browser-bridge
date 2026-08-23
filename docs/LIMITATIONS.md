@@ -56,13 +56,14 @@ Minimized windows and applications that stop rendering can freeze or stop produc
 ### macOS
 
 - Accessibility actions are preferred, but application accessibility trees can be sparse, stale, or incomplete, especially for Electron, canvas, games, and custom controls.
-- Pixel/key delivery depends partly on dynamically resolved private SkyLight symbols. A macOS update can rename, gate, or change them. The helper reports the route unavailable rather than falling back to global HID.
+- Pixel/key delivery depends partly on dynamically resolved private SkyLight symbols. These interfaces are undocumented and unsupported by Apple. A macOS update can rename, gate, or change them; the helper reports the route unavailable rather than falling back to global HID. Source and per-architecture packaged Mach-O audits forbid known global cursor/HID APIs and freeze the expected targeted symbol set, but an audit cannot make the private route supported or prove that an application consumed an event.
 - Focus-capable target-routed input requires Accessibility permission, including pixel click, drag, and scroll. A different-process focus lease reads the user-front app's and target app's exact `AXFocusedWindow` and `AXMainWindow` values and requires the later user sample to equal the original snapshot. Multi-window routing is admitted only when each app's initial main/focused pair agrees, both retained target windows expose writable `AXMain`, and independent WindowServer owner-connection lookups bind both target IDs to one exact PSN. The requested sibling is selected and read back through exact-window `AXMain` while the user is still fully active; application-level `AXFocusedWindow` is never written. The private route then leaves WindowServer's user-front PSN/PID unchanged while the saved user app's `AXFrontmost` changes from true to false and the exact target becomes `AXFrontmost=true` only while its Focus record is active. Normal preparation records end authorization with a front-PSN → exact saved-user AX window/phase-appropriate `AXFrontmost` → front-PSN sandwich before and after dispatch accounting. Cleanup defocuses requested, restores a distinct prior receiver through an exact target Focus plus a target-only make-key pair when AppKit needs it, proves prior main+focused, defocuses prior, and restores the user; it never calls `_SLPSSetFrontProcessWithOptions`, raises a window, or changes Space. Cleanup failure dominates the original action result. Fixed deadline slices reserve time for one safe user-only compensation. That emergency Focus is deliberately target-independent: it requires stable saved front PSN/PID, exact saved window with `AXFrontmost=false`, raw user restorability, and the original deadline; target uncertainty still returns an unknown outcome. Before each keyboard down and each new focus-capable pointer mutation, the exact released owner and requested-active target receiver are re-proved; long drag rechecks before each drag event while release remains unconditional after mouse-down. The unrelated foreground app is queried read-only; only the selected target may receive the existing one-time Chromium Accessibility opt-in. Missing, changed, or unreadable identity fails closed. Pointer trajectory alone does not prepare focus, but `inputReady` reports the requirements for the complete input backend.
 - Current mutable targets are limited to non-minimized windows on the active Space. ScreenCaptureKit's ability to capture another Space does not grant cross-Space input.
 - A process can have multiple real windows, and on the tested macOS build ScreenCaptureKit adds a same-PID, layer-0 `AXDialog` for its title-bar indicator. Neither raw WindowServer sibling count nor AX-window count proves the keyboard receiver. Delivery instead requires the application's exact [`AXFocusedWindow`](https://developer.apple.com/documentation/applicationservices/kaxfocusedwindowattribute) to match the requested CGWindowID immediately before key-down; text also requires its focused element to resolve to that exact window. If the user's foreground process owns a different sibling, focus-capable input is refused before dispatch. For a different-process target, the stricter main/focused/settable/owner admission above supports a distinct sibling and requires exact restoration; apps that expose a genuine main/key split, reject `AXMain`, fail the target-only make-key transfer, or cannot be proved within the deadline remain unsupported and fail closed.
 - Native `computer.typeText` is limited to 2,000 UTF-16 code units, paced between each Unicode scalar, and re-proves the exact focused window and focused-element owner immediately before every scalar key-down. Proof loss after an earlier scalar is `COMPUTER_OUTCOME_UNKNOWN` and must not be automatically retried; key-up remains unconditional after a posted key-down. Apple notes that [application frameworks may ignore the Unicode string attached to a Quartz keyboard event](https://developer.apple.com/documentation/coregraphics/cgevent/keyboardsetunicodestring%28stringlength%3Aunicodestring%3A%29), so successful event posting remains delivery evidence rather than a confirmed text postcondition. Prefer semantic `setValue` for a field that exposes it.
 - Cross-Space keyboard and pointer input is not claimed. It would require additional private Space discovery/routing, OS-version gating, and invariant tests before release.
 - Exact receiver checks and restore polling narrow but cannot eliminate TOCTOU: there is no public atomic primitive that binds an AX focus proof to the following private PID event post. Short per-element timeouts, bounded ancestry, and deadline checks fail closed within the native text budget, but one unresponsive provider call can still consume its timeout interval. `CGWindowListCopyWindowInfo` is synchronous and cannot be interrupted in flight; every inventory is checked against the same absolute proof deadline before and after it returns, and a late result authorizes no focus record.
+- `SLEventPostToPid` returns no acceptance value. A recorded call is a dispatch attempt, not an operating-system delivery receipt and not target-effect proof. Accessibility return values similarly stop at the API boundary; semantic `setValue` becomes `Confirmed` only after the target value or permitted masked length is read back.
 - Secure input, protected controls, some Chromium gestures, right-click variants, games, and HID-only engines can reject background events.
 - Native `computer.key` maps only the documented navigation/editing keys, F1–F12, ASCII letters/digits, selected US-keyboard punctuation, and Control/Alt/Shift/Meta modifiers. Other names accepted by browser `page.key` fail closed; use `computer.typeText` for text.
 
@@ -75,6 +76,7 @@ Minimized windows and applications that stop rendering can freeze or stop produc
 - API cancellation and REST-client teardown are cooperative and remove server-side authority before publishing an outcome-unknown replay, but neither is rollback. A native call already inside an operating-system provider can finish cleanup after the HTTP 202 or client disconnect; Windows retains the 12-second disposable-worker containment boundary. If the async runtime is already shutting down, owner-bound interrupted replay entries deliberately remain in-flight rather than exposing a 504 before quarantine; the terminating server discards that registry with its state.
 - A browser side effect can reach Chrome before cancellation, caller disconnect, or connector timeout becomes visible. These controlled-page outcome-unknown paths preserve the debugger lease when safe but quarantine observation-derived mutations until explicit `page.observe`; failed extension turn persistence revokes the lease. Browser-process tab mutations do not use that page-authority quarantine: a canceled `tabs.activate`, `tabs.new`, or `tabs.close` is still outcome-unknown and must be reconciled with `tabs.list`, never retried under a new `callId`. A late `tabs.new` blocks the global browser-action queue—including trusted popup approval dispatch—until every created tab's bridge provenance is durable and canceled-command freshness finalization is complete; this also keeps an omitted-URL blank tab visible to Safe-mode reconciliation. The canceled caller can receive its outcome before that internal queue barrier releases.
 - Exact-HWND messages are application-framework behavior, not a universal trusted input API. A successful [`PostMessage`](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-postmessagew) call proves only that the message was queued.
+- The shared-pointer monitor owns one message-only [`RIDEV_INPUTSINK`](https://learn.microsoft.com/en-us/windows/win32/inputdev/about-raw-input) mouse registration in the disposable helper worker and a minimal dedicated-thread [`WH_MOUSE_LL`](https://learn.microsoft.com/en-us/windows/win32/winmsg/lowlevelmouseproc) epoch for generic/injected flags. It stores counters and health only, never Raw Input payloads, coordinates, or device identity. Microsoft documents that a low-level hook that exceeds its timeout can be silently removed with no notification; `pointerActivityMonitorHealthy` therefore means initialization and the sampled epoch were readable, not that hook delivery was continuously provable. Raw Input, injected flags, integrity levels, virtual devices, remote transport, and eventless or out-and-back cursor changes still have blind spots. An unexplained sampled delta becomes `unknown` and fails closed, but two equal coordinates do not prove that nothing happened between them.
 - Native `computer.typeText` accepts only Unicode window recipients, uses a documented `WM_CHAR` repeat count of one, and limits each command to 2,000 UTF-16 code units. It posts at most 16 code units before a scheduler pause and checks cancellation at every unit. This caps one command at half of Windows' documented 4,000 minimum posted-message queue limit, but it still cannot prove that a control consumed the queued text; semantic `setValue` is the confirmed route when available.
 - Chromium, Electron, WPF, WinUI, GTK, games, canvas, elevated processes, and UIPI boundaries can reject background delivery. Browser web content should use the extension instead.
 - The helper does not use global [`SendInput`](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput) as an automatic fallback. Unsupported actions fail closed.
@@ -82,14 +84,18 @@ Minimized windows and applications that stop rendering can freeze or stop produc
 
 ## Non-interruption is not isolation
 
-On a supported application, target-routed input can leave the user's foreground application, platform focus oracle, hardware cursor, and active desktop unchanged. On macOS the general before/after snapshot derives the front window from a read-only AX focused-window sample—not the first same-PID compositor row—and sandwiches AX, cursor, and Space sampling between the same front ProcessSerialNumber/PID. Every focus-preparing route additionally captures, stabilizes, restores, and re-proves that exact Accessibility window. Windows also includes the GUI-thread focus window. These are bounded observations, not an atomic rollback guarantee or proof that no unobserved transient focus change occurred. Both the user and helper still share:
+On a supported application, a sealed target route can leave the user's foreground application, platform focus oracle, and active desktop unchanged without asking the helper to move the global pointer. That is not the same as requiring two shared cursor samples to be equal. `cursorPositionUnchanged` is diagnostic: the person, a virtual-HID source, a remote session, or another process can move the pointer concurrently. On macOS a healthy HID-system counter boundary can corroborate that such activity occurred, but it does not identify a physical device or rule out every eventless warp. The action therefore reports `helperGlobalPointerPreservation`, `sharedPointerBoundaryCorroborated`/`sharedPointerBoundaryState`, `hidSystemPointerActivityObserved`, `pointerActivityMonitorHealthy`, and `sharedPointerActivityState` separately. `contaminated` means shared activity was observed; `unknown` fails closed.
+
+The helper's exact route, an operating-system API return, and the target application's postcondition are also different facts. A sealed `inputDelivery` proves the attempted route and absence of helper-requested global input. API success proves at most acceptance or queueing where the API has such a signal. Only an application-owned read-back can confirm the requested effect.
+
+On macOS the general before/after snapshot derives the front window from a read-only AX focused-window sample—not the first same-PID compositor row—and sandwiches AX, pointer activity, and Space sampling between the same front ProcessSerialNumber/PID. Every focus-preparing route additionally captures, stabilizes, restores, and re-proves that exact Accessibility window. Windows also includes the GUI-thread focus window. These are bounded observations, not an atomic rollback guarantee or proof that no unobserved transient focus change occurred. Both the user and helper still share:
 
 - the same login session and security principal;
 - application files, settings, network access, and signed-in accounts;
 - operating-system permissions and much of the same clipboard/application state; and
 - one underlying WindowServer or Windows desktop environment.
 
-Hostile or destructive workloads require an explicitly managed VM, RDP desktop, separate login, or other sandbox. PiP automation, virtual displays, VM/RDP lifecycle, and separate OS input seats are not included.
+Same-session operation is cooperative: it neither blocks the person from acting nor gives the helper an independent focus, cursor, or input queue. True independent concurrency, hostile workloads, or destructive workloads require an explicitly managed VM, RDP/other desktop session, separate login, or other sandbox. PiP automation, virtual displays, VM/RDP lifecycle, and separate OS input seats are not included.
 
 ## Product comparison boundary
 
@@ -116,24 +122,34 @@ received no click; no received marker was created, and the runner timed out at
 `wait-foreground-arm` before the invariant baseline or any observation,
 capture, share, input, or other product action. Chrome acceptance was not
 started, the protected publication job was canceled, and no v0.12.8 Release
-exists. Those records are useful historical evidence, but they do not satisfy
-the v0.12.9 Windows, Chrome, or immutable-release gates.
+exists. Those records are useful historical evidence, but they did not satisfy
+the later v0.12.9 Windows, Chrome, or immutable-release gates.
 
-Version 0.12.9 keeps the Windows runner's bounded five-minute arm interval and
-native one-click authority unchanged. A read-only handoff watcher makes a fresh
-request easier for an already-reserved Windows Computer Use app-share—or a
-human on the Windows session—to notice promptly. The watcher and request/received
-files are notification and routing aids only: they do not grant consent, the
-runner never reads them, and they cannot replace the fixture-owned click,
-three stable native foreground/focus/cursor/input-desktop samples, or final
-packaged Windows and Chrome evidence. An `ARMED` or ambiguous frame authorizes
-zero additional clicks, and an unknown click outcome is never retried.
+Version 0.12.9 kept the Windows runner's bounded five-minute arm interval and
+native one-click authority unchanged, and added a read-only handoff watcher.
+Its one exact packaged macOS run reached the first semantic `setValue` after
+40 passing precondition assertions, then failed closed because the sampled
+global cursor position changed across `semanticSetValue`. The retained record
+cannot identify whether the helper, a person, or another source moved it. The
+run stopped before semantic read-back and retained one screenshot. Windows and
+stock-Chrome acceptance were not started, the protected publication job was
+canceled, and no v0.12.9 Release exists. See the
+[withdrawn attempt](../evidence/v0.12.9/computer/attempts/withdrawn-db624da-macos-semantic-hardware-cursor-change/README.md).
+
+Version 0.12.10 replaces that two-coordinate attribution rule with sealed
+route provenance plus conservative shared-pointer monitoring. Its source
+contract still does not satisfy a release gate: the exact packaged macOS,
+interactive-Windows, stock-Chrome, and immutable-publication paths must all run
+fresh. Quiet and deliberate-concurrency evidence are separate lanes; neither
+may be relabelled as the other.
 
 The checked-in [evidence index](../evidence/) records what was actually run. A code path, unit test, or transport acknowledgement alone is not evidence that an application accepted the action or that the user's desktop remained unchanged.
 
 ## Research references
 
 - [Temporal UI State Inconsistency / PUSV](https://arxiv.org/abs/2604.18860) — observation-to-action race defenses
+- [Apple `CGEventSource` counters](https://developer.apple.com/documentation/coregraphics/cgeventsource/counterforeventtype(_:eventtype:)) — system-source activity counters, not physical-device identity
+- [ParaGUIBench](https://arxiv.org/abs/2607.22689) — parallel GUI evaluation through separate desktop instances
 - [UFO²](https://arxiv.org/abs/2504.14603) — isolated virtual desktop as a distinct architecture
 - [CaMeLs Can Use Computers Too](https://arxiv.org/abs/2601.09923) — security isolation for computer-use agents
 - [Computer-use research](COMPUTER_USE_RESEARCH.md) — pinned implementation and community review

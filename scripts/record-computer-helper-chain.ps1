@@ -21,7 +21,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $script:Utf8NoBom = [Text.UTF8Encoding]::new($false, $true)
-$script:Version = "0.12.9"
+$script:Version = "0.12.10"
 $script:Source = "local-browser-bridge-computer-helper-via-loopback-api"
 $script:Screenshots = [ordered]@{
     "extension-loaded" = "browser-01-extension-loaded.raw.png"
@@ -182,11 +182,40 @@ function Get-PngDimensions {
     finally { $stream.Dispose() }
 }
 
+function Remove-CanonicalRawScreenshots {
+    param([string]$DirectoryPath)
+    if (-not [IO.Directory]::Exists($DirectoryPath)) { return }
+    $directory = [IO.DirectoryInfo]::new([IO.Path]::GetFullPath($DirectoryPath))
+    if ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw "Raw screenshot cleanup refused a reparse-point directory."
+    }
+    $errors = New-Object Collections.Generic.List[string]
+    foreach ($name in $script:Screenshots.Values) {
+        $path = [IO.Path]::Combine($directory.FullName, $name)
+        try {
+            if ([IO.Directory]::Exists($path)) {
+                throw "the canonical raw screenshot path is a directory"
+            }
+            if ([IO.File]::Exists($path)) {
+                $item = [IO.FileInfo]::new($path)
+                if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                    throw "the canonical raw screenshot is a reparse point"
+                }
+                [IO.File]::Delete($path)
+            }
+        }
+        catch { $errors.Add("${name}: $($_.Exception.Message)") }
+    }
+    if ($errors.Count -ne 0) {
+        throw "Canonical raw screenshot cleanup was incomplete: $($errors -join '; ')"
+    }
+}
+
 function Get-CandidateBinding {
     param([object]$Preflight, [string]$PreflightSha256)
     if ($Preflight.phase -cne "preflight" -or $Preflight.passed -ne $true -or
         $Preflight.candidate.version -cne $script:Version) {
-        throw "PreflightRecord is not a passing v0.12.9 preflight."
+        throw "PreflightRecord is not a passing v0.12.10 preflight."
     }
     foreach ($value in @(
         $Preflight.runNonce, $PreflightSha256, $Preflight.candidate.checksumManifest.sha256,
@@ -1029,7 +1058,7 @@ function Read-RollbackCandidateCardState {
     param([string]$WindowId, [int64]$ExpectedPid)
     [void](Get-ExactChromeWindow $WindowId $ExpectedPid)
     [void](Get-FreshObservation $WindowId $ExpectedPid $null)
-    $value = (Read-Host "Exact v0.12.9 test-owned candidate card in this fresh chrome://extensions frame (present/absent)").Trim().ToLowerInvariant()
+    $value = (Read-Host "Exact v0.12.10 test-owned candidate card in this fresh chrome://extensions frame (present/absent)").Trim().ToLowerInvariant()
     if ($value -notin @("present", "absent")) {
         throw "Candidate-card rollback state was not reduced to present or absent."
     }
@@ -1131,7 +1160,7 @@ function Invoke-BestEffortUiRollback {
                 if ($cardState -ceq "present") {
                     Invoke-UnrecordedNativeSteps `
                         "Use only the exact bound test-owned chrome://extensions window." @(
-                            [ordered]@{ kind="click"; label="Remove on the exact v0.12.9 test-owned candidate card" },
+                            [ordered]@{ kind="click"; label="Remove on the exact v0.12.10 test-owned candidate card" },
                             [ordered]@{ kind="click"; label="confirm removal of that exact candidate card" }
                         ) "CONSENT:extensionDisposition:rollback" `
                         $script:DedicatedWindowId $script:DedicatedWindowPid
@@ -1182,7 +1211,7 @@ function Invoke-Run {
         throw "The live computer-helper chain recorder runs only on Windows."
     }
     if ($Port -ne 17373) {
-        throw "The v0.12.9 acceptance recorder requires the canonical 127.0.0.1:17373 endpoint."
+        throw "The v0.12.10 acceptance recorder requires the canonical 127.0.0.1:17373 endpoint."
     }
     $preflightPath = Resolve-OrdinaryFile $PreflightRecord "PreflightRecord"
     $runnerPath = Resolve-OrdinaryFile $ApiMatrixRunner "ApiMatrixRunner"
@@ -1332,7 +1361,7 @@ function Invoke-Run {
         [void](Get-ExactExtensionPayloadDigest $extensionDirectoryPath $payloadInventory $preflight.candidate.extension.combinedPayloadSha256)
 
         $epoch = Start-RecordedEpoch $script:EpochNames[3] $script:EpochSurfaces[3] "Reselect the dedicated stock Chrome extensions window."
-        Invoke-RecordedAction $epoch $script:ActionNames[5] @() "none" "Verify exactly one enabled unpacked Local Browser Bridge v0.12.9 card, no duplicate, and no load error."
+        Invoke-RecordedAction $epoch $script:ActionNames[5] @() "none" "Verify exactly one enabled unpacked Local Browser Bridge v0.12.10 card, no duplicate, and no load error."
         Set-MutationDisposition $mutation "CandidateExtension" "verified_applied"
         Invoke-RecordedAction $epoch $script:ActionNames[6] @(
             [ordered]@{ kind="click"; label="Chrome Extensions menu button" },
@@ -1356,7 +1385,7 @@ function Invoke-Run {
             [ordered]@{ kind="click"; label="popup token field" },
             [ordered]@{ kind="typeText"; value=$script:Token },
             [ordered]@{ kind="click"; label="popup Connect button" }
-        ) "acceptanceTokenSave" "Verify v0.12.9 is connected and the credential field is empty."
+        ) "acceptanceTokenSave" "Verify v0.12.10 is connected and the credential field is empty."
         Set-MutationDisposition $mutation "SavedToken" "verified_applied"
         Stop-RecordedEpoch $epoch
 
@@ -1371,7 +1400,7 @@ function Invoke-Run {
         $browserAction = Show-DeterministicGreeting $ownedTarget
 
         $epoch = Start-RecordedEpoch $script:EpochNames[5] $script:EpochSurfaces[5] "Select the dedicated Chrome window containing chrome://extensions and the matrix-owned demo."
-        Invoke-RecordedAction $epoch $script:ActionNames[9] @([ordered]@{ kind="click"; label="the exact chrome://extensions tab" }) "none" "Verify exactly one enabled unpacked Local Browser Bridge v0.12.9 card, no error, and Chrome's native debugger-use indicator while the exact bridge lease is active."
+        Invoke-RecordedAction $epoch $script:ActionNames[9] @([ordered]@{ kind="click"; label="the exact chrome://extensions tab" }) "none" "Verify exactly one enabled unpacked Local Browser Bridge v0.12.10 card, no error, and Chrome's native debugger-use indicator while the exact bridge lease is active."
         Save-RecordedScreenshot $epoch "extension-loaded"
         Invoke-RecordedAction $epoch $script:ActionNames[10] @([ordered]@{ kind="click"; label="the exact matrix-owned loopback demo tab" }) "none" "Verify the exact visible result is Hello, Bridge Matrix. blue selected."
         Save-RecordedScreenshot $epoch "api-action-result"
@@ -1408,9 +1437,9 @@ function Invoke-Run {
         Set-MutationDisposition $mutation "CandidateExtension" "outcome_unknown"
         Invoke-RecordedAction $epoch $script:ActionNames[16] @(
             [ordered]@{ kind="click"; label="the exact existing chrome://extensions tab" },
-            [ordered]@{ kind="click"; label="Remove on the exact v0.12.9 test-owned candidate card" },
+            [ordered]@{ kind="click"; label="Remove on the exact v0.12.10 test-owned candidate card" },
             [ordered]@{ kind="click"; label="confirm removal of that exact candidate card" }
-        ) "extensionDisposition" "Verify the helper switched to the protected chrome://extensions tab before removing only the new test-owned v0.12.9 card."
+        ) "extensionDisposition" "Verify the helper switched to the protected chrome://extensions tab before removing only the new test-owned v0.12.10 card."
         Set-MutationDisposition $mutation "CandidateExtension" "restored"
         $restoreDeveloperSteps = if ($capturedDeveloperMode.value -ceq "disabled") {
             @([ordered]@{ kind="click"; label="Developer Mode toggle back to disabled" })
@@ -1680,6 +1709,16 @@ function Invoke-Run {
         [IO.File]::WriteAllText($temporary, (($record | ConvertTo-Json -Depth 30) + [Environment]::NewLine), $script:Utf8NoBom)
         [IO.File]::Move($temporary, $outputPath)
     }
+    catch {
+        $finalWriteFailure = $_
+        try {
+            Remove-CanonicalRawScreenshots $script:RawDirectory
+        }
+        catch {
+            throw "$($finalWriteFailure.Exception.Message) Final-record failure cleanup was incomplete: $($_.Exception.Message)"
+        }
+        throw "$($finalWriteFailure.Exception.Message) Canonical raw screenshot cleanup completed."
+    }
     finally {
         if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) }
     }
@@ -1764,6 +1803,7 @@ function Invoke-SelfTest {
         -not $source.Contains("Select Folder button in Chrome's native picker") -or
         -not $source.Contains("the exact existing chrome://extensions tab") -or
         -not $source.Contains("UI rollback was unavailable because the exact helper/server transport was not alive") -or
+        -not $source.Contains("Remove-CanonicalRawScreenshots `$script:RawDirectory") -or
         -not $source.Contains("PassThruOwnedTarget") -or
         -not $source.Contains("ConvertFrom-Json")) {
         throw "Computer-helper recorder live-execution self-test failed."

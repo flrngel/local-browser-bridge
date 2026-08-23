@@ -98,9 +98,12 @@ Test one-shot observation and persistent sharing as separate lifecycles:
 - On macOS, `computer.observe` exercises the snapshot backend. On Windows, it starts the same bounded WGC implementation as live sharing, consumes one fresh frame, and proves shutdown.
 - `computer.share.start` exercises ScreenCaptureKit `SCStream` on macOS or Windows Graphics Capture on Windows.
 - Share tests must cover start, first useful frame, monotonic sequences, bounded replacement, dropped-frame accounting, target closure, explicit stop, and connector replacement.
-- Input tests must prove an application-owned result plus unchanged platform-specific foreground/window-focus oracle, hardware pointer, and active desktop. The before/after samples do not prove the absence of an unobserved transient change.
+- Input tests must keep three layers distinct: sealed exact-target route provenance, operating-system API acceptance where a signal exists, and an application-owned postcondition. Only the postcondition can confirm target effect.
+- `cursorPositionUnchanged` is diagnostic, not action-source authority. Tests must assert `helperGlobalPointerPreservation`, `sharedPointerBoundaryCorroborated`/`sharedPointerBoundaryState`, `hidSystemPointerActivityObserved`, `pointerActivityMonitorHealthy`, and `sharedPointerActivityState` according to the platform contract. HID-system activity is never physical-device provenance.
 
 Do not report cross-Space, minimized, protected, elevated, or framework-specific behavior as supported merely because a stream or message API returned success.
+
+The v0.12.10 macOS harness defines two fresh, non-mergeable pointer-evidence lanes in [`evidence/v0.12.10/computer/README.md`](../evidence/v0.12.10/computer/README.md). The default `quiet` lane requires a healthy monitor, unchanged sampled position, no shared activity, and `sharedPointerActivityState: quiet` for every evidence cell. The separately authorized `deliberate-concurrency` lane requires at least one `contaminated` cell while the sealed helper route, helper-global-pointer preservation, target postcondition, and foreground/focus/Space boundaries still hold. Never convert or merge concurrency-lane bytes into quiet release evidence. An unknown monitor or boundary is a failure in both lanes.
 
 ### Deterministic Windows live acceptance
 
@@ -163,7 +166,7 @@ repository's read-only watcher from a separate process:
 ```
 
 The watcher reads only `operator/foreground-arm-request.json`. It requires the
-exact v0.12.9/schema-2 field set and order, a fresh non-expired publication,
+exact v0.12.10/schema-2 field set and order, a fresh non-expired publication,
 ordinary non-reparse paths, and the same live runner PID/start time both before
 and after parsing. It emits exactly one compact sanitized
 `foreground-arm-visual-handoff` JSON object or fails closed. It neither writes
@@ -255,6 +258,8 @@ Plan verification before changing a capability. Keep these evidence classes sepa
 
 Record negative results. A candidate run must not be described as published release evidence. Screenshots should show the relevant browser or OS indicator, target result, and non-interruption state without exposing tokens, personal data, or authenticated URLs.
 
+The exact v0.12.9 packaged macOS attempt is a required negative-history reference: it stopped at the first semantic `setValue` after a cursor-position delta that the old record could not attribute, and Windows/stock-Chrome were never run. Do not rewrite that historical `hardwareCursorUnchanged` failure with v0.12.10 field names. A v0.12.10 success must come from fresh artifacts and the new route/activity/postcondition contract.
+
 See [SOTA audit](SOTA_AUDIT.md) and the [evidence index](../evidence/) for current boundaries.
 
 ## Versioning
@@ -272,7 +277,25 @@ Run `bash scripts/audit-versions.sh` before packaging. Commit finished work with
 
 In this repository, `deploy` means more than a local build. It means committing and pushing the intended version, building the Windows server and helper, building the universal macOS server/helper archive, packaging the matching extension, publishing all artifacts plus `SHA256SUMS.txt` and GitHub provenance in an immutable public GitHub Release, then downloading and verifying every published asset.
 
-The canonical release path is `.github/workflows/deploy.yml` from a matching annotated `vVERSION` tag. It is tag-push only; rerun the same tag-triggered workflow rather than dispatching it from a branch. Windows, macOS, and extension jobs build and attest their outputs; an assembly job then creates `SHA256SUMS.txt`, verifies the exact five-file set, and uploads one frozen `release-candidate` workflow artifact retained for 14 days. The publication job is bound to the protected, `v*`-only `release` environment and cannot start until its required reviewer approves it. Download that exact candidate from the waiting workflow run, record its source commit and asset SHA-256 values, and run the real macOS and FLRngel19 Windows/stock-Chrome acceptance suites against those bytes. Approve publication only after both pass. The gated job downloads the same workflow artifact, re-verifies every file and attestation, and publishes those unchanged bytes. Never substitute a local rebuild or post-publication smoke test for this pre-publication acceptance gate.
+The canonical release path is `.github/workflows/deploy.yml` from a matching annotated `vVERSION` tag. It is tag-push only; rerun the same tag-triggered workflow rather than dispatching it from a branch. Windows, macOS, and extension jobs build and attest their outputs; an assembly job then creates `SHA256SUMS.txt`, verifies the exact five-file set, and uploads one frozen `release-candidate` workflow artifact retained for 14 days. The publication job is bound to the protected, `v*`-only `release` environment and cannot start until its required reviewer approves it. Download that exact candidate from the waiting workflow run, record its source commit and asset SHA-256 values, and run the real macOS and designated Windows/stock-Chrome acceptance suites against those bytes. The macOS gate must also verify each architecture slice of the exact packaged helper against the forbidden global-input API list and expected targeted dynamic-symbol allowlist; this is shipped-route evidence, not Apple support for private SkyLight. Approve publication only after every required lane passes. The gated job downloads the same workflow artifact, re-verifies every file and attestation, and publishes those unchanged bytes. Never substitute a local rebuild or post-publication smoke test for this pre-publication acceptance gate.
+
+Publication also requires a nonsecret, compact JSON receipt in the protected `release` environment variable `LBB_RELEASE_ACCEPTANCE_V1`. Create it only after independently confirming that the candidate-bound macOS `helper-results.json`, Windows `summary.json`, and stock-Chrome `browser-acceptance.json` each report a pass. Hash those exact result bytes and the frozen candidate's `SHA256SUMS.txt`; do not put the result contents, screenshots, credentials, paths, or operator identity into the receipt. The keys and their order are canonical, and run identifiers are strings:
+
+```bash
+receipt="$(jq -cn \
+  --arg tag "v0.12.10" \
+  --arg source_sha "EXACT_VERIFIED_SOURCE_SHA" \
+  --arg tag_object_sha "EXACT_ANNOTATED_TAG_OBJECT_SHA" \
+  --arg run_id "EXACT_GITHUB_RUN_ID" \
+  --arg run_attempt "EXACT_GITHUB_RUN_ATTEMPT" \
+  --arg manifest_sha256 "$(sha256sum SHA256SUMS.txt | awk '{ print $1 }')" \
+  --arg macos_sha256 "$(sha256sum helper-results.json | awk '{ print $1 }')" \
+  --arg windows_sha256 "$(sha256sum summary.json | awk '{ print $1 }')" \
+  --arg chrome_sha256 "$(sha256sum browser-acceptance.json | awk '{ print $1 }')" \
+  '{schemaVersion:1,tag:$tag,sourceSha:$source_sha,tagObjectSha:$tag_object_sha,workflowRunId:$run_id,workflowRunAttempt:$run_attempt,checksumManifestSha256:$manifest_sha256,macosPassed:true,macosResultSha256:$macos_sha256,windowsPassed:true,windowsResultSha256:$windows_sha256,stockChromePassed:true,stockChrome:true,stockChromeResultSha256:$chrome_sha256}')"
+```
+
+Set the exact one-line value as the `LBB_RELEASE_ACCEPTANCE_V1` environment variable on the GitHub `release` environment, then approve that waiting job. The publication job rejects missing, reformatted, reordered, malformed, wrong-type, wrong-tag, wrong-source, wrong-tag-object, wrong-run, wrong-attempt, wrong-manifest, nonpassing, non-stock-Chrome, or noncanonical digest receipts before it can create, recover, upload, or publish a Release. It hashes the accepted receipt and embeds only that SHA-256 in both the immutable release marker and the visible release notes. A rerun has a new `workflowRunAttempt`, so it always needs a freshly bound receipt even when the candidate bytes are unchanged; exact prior-attempt drafts or immutable publications remain recoverable only when their previously published receipt digest and entire release body also match byte for byte.
 
 Repository policy is part of that boundary. An active tag ruleset allows the first creation of `refs/tags/v*` but forbids every later update or deletion with no bypass actor. GitHub Actions requires every third-party action reference to use a complete commit SHA. Dependabot security updates, secret-scanning push protection, and private vulnerability reporting remain enabled. Before tagging, read these settings back through the GitHub API; a source contract cannot prove mutable repository policy.
 

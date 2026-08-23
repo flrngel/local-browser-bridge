@@ -45,13 +45,16 @@ The optional helper is a separate Rust process. It connects outbound to the loop
 | Captured cursor | System cursor disabled; helper cursor composited into returned frames | Same |
 | Semantic observation/action | macOS Accessibility | Windows UI Automation |
 | Background pixel/key route | Process/window-targeted route using dynamically resolved macOS facilities | UIA plus exact-HWND background messages where the application accepts them |
+| Route provenance | Every mutation records a sealed exact-target `inputDelivery`; private SkyLight routes are labelled `privateUnsupported` | Every mutation records the UIA or exact-HWND route and whether an API acceptance signal existed |
+| Target-effect proof | Accessibility read-back or another allowlisted target postcondition is required for `Confirmed` | UI Automation read-back or another allowlisted target postcondition is required for `Confirmed` |
 | Native key subset | Navigation/editing keys, F1–F12, ASCII letters/digits, mapped US-keyboard punctuation, and Control/Alt/Shift/Meta modifiers | Navigation/editing keys, F1–F12, ASCII letters/digits, mapped punctuation, and Control/Alt/Shift; Windows/global and secure chords fail closed |
 | Readiness signal | Current permission and complete focus/input snapshot must be readable | Non-Session-0 process plus readable input desktop, foreground/focus HWNDs, and cursor; provider acceptance is still per action |
 | Target-activation disclosure | Focus-capable input may use and restore a transient exact-target `AXFrontmost` lease; no `AXRaise`, OS-front-process switch, or Space switch | No explicit target-activation or foreground API; provider behavior is still checked before/after |
 | Foreground/focus invariant | WindowServer-front process/window and saved user AX state must match before/after; no zero-transient guarantee | Foreground and GUI-thread focus HWNDs must match before/after; no zero-transient guarantee |
+| Shared pointer attribution | Global position is diagnostic; a healthy HID-system boundary covering movement, drag, buttons, scroll, and tablet activity can distinguish a quiet interval from shared-session contamination, without claiming physical-device provenance | Global position is diagnostic; message-only Raw Input and a minimal low-level injected-flag epoch retain counters/health only. They do not identify a physical actor and can have integrity, remote, or virtual-input blind spots |
 | Helper transport lifecycle | Intentional or unexpected server-transport loss exits the helper; relaunch is required. Explicit share stop stays in process | The launcher supervises disposable workers and restarts them after transport loss. Explicit share stop stays in process |
 | Automatic foreground fallback | Not included | Not included |
-| Physical pointer movement or global HID input | Not included | Not included |
+| Helper-requested physical pointer movement or global HID input | Not included; source and packaged-artifact audits also forbid known global cursor/HID APIs | Not included |
 
 The live-share target is selected in the Local Browser Bridge control page. The helper starts the native stream programmatically for that exact process/window pair. It does **not** present `SCContentSharingPicker` on macOS or the Windows system capture picker.
 
@@ -59,13 +62,15 @@ The operating system still owns capture lifecycle UI. macOS can show its current
 
 Every primary computer command and follow-up observation is bound to the exact helper-session UUID selected before dispatch. Share start is accepted only from a raw `{ "active": true, "id": "..." }` result followed by a first observation carrying that exact ID; share stop requires raw `{ "active": false }`. Rejected lifecycle results are quarantined and cleaned up by an exact-session task that survives caller cancellation. If stop cannot be proven, the server revokes only the originating WebSocket through a queue-independent shutdown signal; a replacement helper is never used for that cleanup.
 
+The helper advertises `computer.input-delivery-provenance.v1` and `computer.pointer-activity-monitor.v1` for the layered action result and bounded activity monitor. These are negotiated metadata, not callable methods. Pointer diagnostics retain no device IDs, coordinates, or input contents.
+
 ## Setup prerequisites
 
 These are setup conditions, not product limitations:
 
 - Every installed component must use the same release version.
 - Browser control requires an unpacked Manifest V3 extension loaded from `chrome://extensions` or `edge://extensions`.
-- Browser control requires Chromium 140+. Cross-origin child-session routing first appeared in Chromium 125, but version 0.12.9 retains the overall floor so persisted extension storage can be restricted to trusted contexts.
+- Browser control requires Chromium 140+. Cross-origin child-session routing first appeared in Chromium 125, but version 0.12.10 retains the overall floor so persisted extension storage can be restricted to trusted contexts.
 - The complete macOS archive requires macOS 13+. Live sharing additionally requires Screen Recording permission for the packaged helper application.
 - macOS semantic control and supported input routes require Accessibility permission.
 - Windows native control must run in the signed-in interactive session, not Session 0 or a service.
@@ -78,6 +83,7 @@ See [Installation](INSTALL.md) for the user flow.
 - A native content picker or OS-managed per-window consent dialog
 - Picture-in-Picture automation on a second desktop
 - A virtual display, VM, RDP loopback, separate login, or separate OS input seat
+- Independent simultaneous input inside the same login session; current native control is cooperative shared-session operation
 - Security isolation from the user's current account, credentials, applications, clipboard, or files
 - Guaranteed background input for every application framework
 - Audio capture or video/WebRTC transport
@@ -87,11 +93,12 @@ See [Installation](INSTALL.md) for the user flow.
 
 - The browser evidence under [`evidence/v0.11.1`](../evidence/v0.11.1/README.md) separates published 0.11.1 results from a local 0.11.2 recursive-frame candidate.
 - The exact v0.12.8 macOS candidate passed 187/187 persistent-stream checks and produced six reviewed screenshots. Its same-candidate Windows run delivered a fresh foreground-arm request but received no click and created no received marker; it timed out at `wait-foreground-arm` before the invariant baseline or any product action. Chrome acceptance never started, publication was canceled, and no v0.12.8 Release exists.
-- That macOS candidate pass is real historical package evidence, but it is not immutable release proof and cannot substitute for v0.12.9 package evidence. Version 0.12.9 is a fresh pending candidate whose handoff orchestration prefers an already-reserved Windows Computer Use app-share and keeps a human-on-session fallback. That preference does not grant consent or weaken the fixture's one-click native authority proof.
+- The exact v0.12.9 candidate was withdrawn after its single packaged macOS run observed a global cursor-position delta at the first semantic `setValue`. Forty precondition assertions had passed and one exact-window screenshot was retained, but the old two-coordinate invariant could not identify the mover. Windows and stock-Chrome acceptance were not started, and no v0.12.9 Release exists.
+- Version 0.12.10 is the fresh pending candidate. Its action records separate sealed target-route provenance, operating-system API acceptance, and application-owned postconditions. `cursorPositionUnchanged` is diagnostic; `helperGlobalPointerPreservation`, `sharedPointerBoundaryCorroborated`/`sharedPointerBoundaryState`, `hidSystemPointerActivityObserved`, `pointerActivityMonitorHealthy`, and `sharedPointerActivityState` carry conservative pointer-attribution state. These source capabilities still need version-specific packaged macOS, Windows, stock-Chrome, and immutable-release proof.
 - Persistent native-stream code still needs packaged, version-specific live proof on both operating systems before its implementation status is treated as release proof.
 - Cross-Space macOS capture/input, minimized-window capture, protected content, elevated Windows targets, and a broad application compatibility matrix remain unproven and are not advertised.
 
-Transport success is diagnostic evidence. A native action is supported only when a representative application-owned result and the advertised platform-specific foreground/window-focus, pointer, and desktop invariants are also observed. Successful snapshots are post-dispatch evidence, not transactional rollback or proof that no shorter transient change occurred.
+Transport success is diagnostic evidence. A native action is supported only when its exact-target route is sealed, any API acceptance is labelled only as such, a representative application-owned result is observed when confirmation is claimed, and the advertised platform-specific foreground/window-focus, pointer-attribution, and desktop invariants hold. A contaminated shared-pointer interval can reflect unrelated activity without identifying the helper as its source. Successful snapshots are post-dispatch evidence, not transactional rollback or proof that no shorter transient change occurred.
 
 ## Primary references
 

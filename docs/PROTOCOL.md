@@ -1,6 +1,6 @@
 # Bridge protocol
 
-Protocol version: `1`. Package version examples below use `0.12.9`.
+Protocol version: `1`. Package version examples below use `0.12.10`.
 
 ## Transport and trust boundary
 
@@ -88,7 +88,7 @@ After mutual authentication succeeds, the server sends the normal welcome for th
   "type": "welcome",
   "protocolVersion": 1,
   "sessionId": "82b6b311-f71d-4a88-ae07-0b5e7a897815",
-  "serverVersion": "0.12.9",
+  "serverVersion": "0.12.10",
   "connector": "browser-extension"
 }
 ```
@@ -104,7 +104,7 @@ The connector must validate `protocolVersion`, `serverVersion`, `sessionId`, and
   "controllerSequence": 81,
   "controllerId": "38a72d1f-d124-4335-8f1e-9cb85777df14",
   "connectionId": "2f9ad9af-5bb7-42b3-a77d-a0c83a625792",
-  "version": "0.12.9",
+  "version": "0.12.10",
   "browser": "Google Chrome",
   "mode": "full-access",
   "capabilities": ["tabs.list", "page.observe", "browser.control.start"]
@@ -120,7 +120,7 @@ The computer helper uses the same negotiated envelope and reports its bounded na
   "type": "hello",
   "protocolVersion": 1,
   "sessionId": "d559c7b3-56fb-49e6-b661-801cfcb8807f",
-  "version": "0.12.9",
+  "version": "0.12.10",
   "processId": 4242,
   "platform": "macos",
   "architecture": "aarch64",
@@ -135,6 +135,8 @@ The computer helper uses the same negotiated envelope and reports its bounded na
     "computer.share.start",
     "computer.share.ack",
     "computer.capture.native-stream.v1",
+    "computer.input-delivery-provenance.v1",
+    "computer.pointer-activity-monitor.v1",
     "computer.click"
   ],
   "invariants": {
@@ -144,6 +146,8 @@ The computer helper uses the same negotiated envelope and reports its bounded na
     "targetActivationMode": "may-use-transient-ax-frontmost-focus-lease",
     "foregroundIdentityPreservedBeforeAfter": true,
     "hardwareCursorPreservedBeforeAfter": true,
+    "hardwareCursorSampleAuthoritative": false,
+    "inputDeliveryProvenanceRequired": true,
     "usesAxRaise": false,
     "usesFrontProcessSwitch": false,
     "switchesActiveSpace": false,
@@ -154,9 +158,11 @@ The computer helper uses the same negotiated envelope and reports its bounded na
 }
 ```
 
-The example is macOS, so `activatesTargetApplication` is intentionally `true`: focus-capable input may temporarily release the saved user's AX state and make the exact target `AXFrontmost=true`, then restore both. `foregroundIdentityPreservedBeforeAfter` refers to WindowServer's OS-front process/window at accepted-action boundaries. The route does not use `AXRaise`, switch the front process, move the hardware cursor, or change Space, and it does not claim zero transient interruption. Windows reports `activatesTargetApplication: false` with `targetActivationMode: no-explicit-target-activation-api`, while still treating its foreground/focus comparison as a before/after observation rather than an atomic guarantee.
+The example is macOS, so `activatesTargetApplication` is intentionally `true`: focus-capable input may temporarily release the saved user's AX state and make the exact target `AXFrontmost=true`, then restore both. `foregroundIdentityPreservedBeforeAfter` refers to WindowServer's OS-front process/window at accepted-action boundaries. `hardwareCursorSampleAuthoritative: false` states that equality of two global cursor coordinates cannot identify which actor moved a shared pointer. `inputDeliveryProvenanceRequired: true` requires the action result to prove its sealed route independently. The helper does not request `AXRaise`, a front-process switch, global HID, a hardware-cursor mutation, or a Space change, and it does not claim zero transient interruption. Windows reports `activatesTargetApplication: false` with `targetActivationMode: no-explicit-target-activation-api`, while still treating its foreground/focus comparison as a before/after observation rather than an atomic guarantee.
 
 On Windows, both readiness booleans are conservative snapshots of the current helper environment, not promises that every provider accepts every action. They are `true` only when the helper is outside Session 0 and can read the current input desktop, foreground HWND, foreground GUI-thread focus HWND, and hardware-cursor position without changing any of them. A missing desktop, foreground/focus identity, cursor sample, session lookup, or any probe failure reports both values as `false`; an individual UI Automation or exact-HWND action can still fail with its provider-specific error after a passing probe.
+
+`computer.input-delivery-provenance.v1` declares the layered `inputDelivery` action record. `computer.pointer-activity-monitor.v1` declares bounded platform activity sampling that retains no device identity, coordinates, or input contents. Neither feature flag is a dispatchable command.
 
 The server intersects advertised capabilities with its compiled allowlist and sends `helloAck`. `connected` becomes true only after all three compatibility checks pass:
 
@@ -401,7 +407,7 @@ element       ::= "e" [1-9][0-9]{0,3}         ; e1 .. e9999
 
 The exact published 0.11.1 boundary run added a live top-level `same_process_frame` skip and a live `FRAME_ACTION_UNSUPPORTED` refusal, but failed 2 of 19 checks because the root-only auto-attach did not discover a depth-two OOPIF. Version 0.11.2 recursively arms each verified child session and handles child-originated target lifecycle events. A packaged local candidate then passed 22 of 22 checks: two OOPIF levels merged with accumulated offsets and a depth-two click landed with `event.isTrusted === true` ([../evidence/v0.11.1/README.md](../evidence/v0.11.1/README.md)). That candidate is developer-build evidence, not immutable release proof. Isolated-world survival across a frame's own same-document navigation and nested in-process-frame reporting remain harness-only or deferred.
 
-The first command to every child remains a discriminating routing probe: it must return that child's own frame ID. If a browser or intermediary strips `sessionId` and returns the root tree, frame support is disabled for the lease with `reason: "session_routing_unverified"`, every attached record is dropped, and the observation stays top-document-only. The checked-in negative run is an explicitly labelled fault injection; no released Chrome version is known to accept and silently ignore that field. Chrome 118–124 did not expose child-session routing in the extension API schema and rejected the child command, while Chrome 125 added the routed form. Version 0.12.9 declares Chrome 140 as its minimum because that line also supports restricting persisted local extension storage to trusted contexts, so every supported browser has the routed form.
+The first command to every child remains a discriminating routing probe: it must return that child's own frame ID. If a browser or intermediary strips `sessionId` and returns the root tree, frame support is disabled for the lease with `reason: "session_routing_unverified"`, every attached record is dropped, and the observation stays top-document-only. The checked-in negative run is an explicitly labelled fault injection; no released Chrome version is known to accept and silently ignore that field. Chrome 118–124 did not expose child-session routing in the extension API schema and rejected the child command, while Chrome 125 added the routed form. Version 0.12.10 declares Chrome 140 as its minimum because that line also supports restricting persisted local extension storage to trusted contexts, so every supported browser has the routed form.
 
 ### Condition waits
 
@@ -553,9 +559,54 @@ A different-process focus-preparing action captures the user-front app's exact m
 
 Restoration defocuses and proves requested inactive. For a distinct prior sibling, it posts an exact prior Focus and accepts only a bounded exact active requested-or-prior observation; when AppKit remains on requested, a target-only paired make-key record commits and proves `AXMainWindow == AXFocusedWindow == prior`. The prior is then defocused and proved inactive before saved-user Focus. This route does not call `_SLPSSetFrontProcessWithOptions`, perform `AXRaise`, or raise/change Space. Preparation records require exact raw/AX target-phase evidence ending with a saved-user PSN → AX window/frontmost → PSN sample both before and after dispatch accounting. Restore cleanup runs after accounting and repeats one exact target/raw/user authorization immediately before every cleanup record. Each write is followed by a bounded phase poll, with at least 50 ms settle before input. Cleanup failure dominates the original action error. Restoration reserves distinct target-work, user-Focus-authorization, target-independent user-proof, and safe-retry deadline slices; exact user restoration is proved before final target inspection. Emergency user compensation is the deliberate exception to target-phase proof: it performs no target read or write and may Focus only the unchanged saved user after proving exact PSN/PID, exact AX window with `AXFrontmost=false`, raw user restorability, and the original deadline; the target result remains unknown. Before each keyboard down or new focus-capable pointer event, the released user owner and exact requested-active target receiver are re-proved; the exact target receiver is the final AX proof before keyboard posting. A same-process foreground sibling mismatch refuses before focus-capable pixel or keyboard dispatch. Accessibility reads of the unrelated front app are read-only; only the selected target can receive the one-time Chromium AX opt-in.
 
-On macOS the general oracle sandwiches read-only exact front-app AX focus, hardware cursor, and active Space between stable foreground ProcessSerialNumber/PID samples; it never derives focus from the first same-PID compositor row. The focus lease additionally refuses to overwrite restoration if the user's exact front AX window changed. Every synchronous WindowServer inventory shares the absolute proof deadline and is rejected if it returns late, although `CGWindowListCopyWindowInfo` itself cannot be interrupted in flight. Windows compares foreground and focused HWND identities plus the input desktop. The helper returns `COMPUTER_BACKGROUND_CONTRACT_VIOLATION` if that non-interruption oracle changes. Its message reports only a closed-vocabulary action stage and the failed boolean invariant names, such as `stage=clickDispatch;failedInvariants=userFocusUnchanged`; it never exposes raw process, window, cursor, desktop, or sibling AX metadata. These bounded samples are not transactional rollback, cannot make the final receiver proof plus private event post atomic, and cannot prove no shorter transient change occurred. There is no implicit global-HID or foreground fallback. The server serializes actions and requests a new exact-window observation after successful input.
+On macOS the general oracle sandwiches read-only exact front-app AX focus, global cursor sampling, pointer-activity counters, and active Space between stable foreground ProcessSerialNumber/PID samples; it never derives focus from the first same-PID compositor row. The focus lease additionally refuses to overwrite restoration if the user's exact front AX window changed. Every synchronous WindowServer inventory shares the absolute proof deadline and is rejected if it returns late, although `CGWindowListCopyWindowInfo` itself cannot be interrupted in flight. Windows compares foreground and focused HWND identities plus the input desktop and reports only the pointer-monitor signals that its runtime can obtain conservatively. The helper returns `COMPUTER_BACKGROUND_CONTRACT_VIOLATION` if the required foreground, focus, desktop, target-route, or pointer-attribution proof becomes unknown or violated. Its message reports only a closed-vocabulary action stage and failed invariant names, such as `stage=clickDispatch;failedInvariants=sharedPointerBoundaryCorroborated`; it never exposes raw process, window, cursor, desktop, or sibling AX metadata. These bounded samples are not transactional rollback, cannot make the final receiver proof plus private event post atomic, and cannot prove no shorter transient change occurred. There is no implicit global-HID or foreground fallback. The server serializes actions and requests a new exact-window observation after successful input.
 
-Each successful mutation includes an `actionId`, conservative `effect`, structured `evidence`, and `timings`. `resolveMs` ends when frame/target/action resolution is complete. `dispatchMs` ends immediately after the final native side effect in a compound action. `verifyMs` covers exact postcondition reads, non-interruption sampling, and result finalization after that boundary. `totalMs` spans the complete helper action. A later side effect, such as the click after a pointer approach, supersedes the earlier boundary so preparation is never mislabeled as final verification.
+Every mutation result keeps three proof layers separate:
+
+1. **Sealed exact-target route.** `inputDelivery` records the resolved route, support level, exact-target binding, dispatch attempt, and explicit negatives for shared-seat, global-HID, and hardware-cursor-mutation use. This is local helper provenance; it is not a receipt from the operating system or target.
+2. **Operating-system API acceptance.** `osAcceptanceSignalAvailable` says whether the selected API has a synchronous return signal, and `osAcceptanceObserved` records that signal when available. A successful AX/UIA return or queued Windows message proves only that API boundary. The private macOS `SLEventPostToPid` call returns `void`, so its dispatch attempt is recorded with no acceptance signal and must never be described as a delivery receipt.
+3. **Target postcondition.** Only an application-owned read-back, state change, or other allowlisted postcondition can support `effect: "Confirmed"`. Dispatch and invariant evidence never confirm the target effect.
+
+The macOS pixel/key route reports `supportLevel: "privateUnsupported"` because its SkyLight interfaces are private and unsupported even when runtime resolution and packaged-artifact auditing succeed. Semantic Accessibility and Windows UI Automation routes report their documented support level. An unavailable, unsealed, or changed route fails closed.
+
+A representative macOS semantic action result can contain:
+
+```json
+{
+  "effect": "Confirmed",
+  "invariants": {
+    "foregroundUnchanged": true,
+    "userFocusUnchanged": true,
+    "cursorPositionUnchanged": false,
+    "sharedPointerActivityObserved": true,
+    "hidSystemPointerActivityObserved": true,
+    "rawInputPointerActivityObserved": false,
+    "injectedPointerActivityObserved": false,
+    "pointerActivityMonitorHealthy": true,
+    "sharedPointerBoundaryCorroborated": true,
+    "sharedPointerBoundaryState": "corroborated",
+    "hardwareCursorPreservedByHelper": true,
+    "helperGlobalPointerPreservation": "confirmed",
+    "sharedPointerActivityState": "contaminated",
+    "spaceUnchanged": true,
+    "inputDelivery": {
+      "route": "macosAccessibility",
+      "supportLevel": "publicDocumented",
+      "exactTargetBound": true,
+      "dispatchAttemptRecorded": true,
+      "osAcceptanceSignalAvailable": true,
+      "osAcceptanceObserved": true,
+      "sharedInputSeatUsed": false,
+      "globalHidInputUsed": false,
+      "hardwareCursorMutationRequested": false
+    }
+  }
+}
+```
+
+`cursorPositionUnchanged` is diagnostic. A false value identifies a coordinate delta, not its source. `sharedPointerActivityObserved` is the platform-neutral activity bit. On macOS, `hidSystemPointerActivityObserved` covers movement, drag, button, scroll, and tablet counter activity; physical devices, virtual HID, remote-session input, and other platform routing can all contribute, so it is never physical-input provenance. On Windows, `rawInputPointerActivityObserved` comes from message-only `RIDEV_INPUTSINK` Raw Input and `injectedPointerActivityObserved` comes from a minimal dedicated-thread `WH_MOUSE_LL` injected-flag epoch. Only counters and health are retained—never device IDs, coordinates, or input contents. Raw Input and hook signals still cannot prove a human or physical device and can have integrity-level, remote-session, or virtual-input blind spots. Windows can also silently remove a timed-out low-level hook without notification, so `pointerActivityMonitorHealthy` reports successful initialization and a usable sampled epoch, not guaranteed continuous hook delivery. `sharedPointerBoundaryCorroborated` and `sharedPointerBoundaryState` report whether the sampled boundary was sufficient to reason conservatively. `helperGlobalPointerPreservation` is `confirmed`, `unknown`, or `violated` from the sealed route plus that boundary. `sharedPointerActivityState` is `quiet`, `contaminated`, or `unknown`; `contaminated` truthfully permits unrelated concurrent pointer activity without blaming it on the helper. An unavailable monitor, implausible/reset counter epoch, uncorroborated delta, or unsealed route yields `unknown` and fails closed. None of these diagnostics confirms target effect or a physical actor.
+
+Each successful mutation also includes an `actionId`, structured `evidence`, and `timings`. `resolveMs` ends when frame/target/action resolution is complete. `dispatchMs` ends immediately after the final native side effect in a compound action. `verifyMs` covers exact postcondition reads, invariant sampling, and result finalization after that boundary. `totalMs` spans the complete helper action. A later side effect, such as the click after a pointer approach, supersedes the earlier boundary so preparation is never mislabeled as final verification.
 
 Legacy `displayId` and display-shaped aliases identify the selected window, not a physical display, and remain deprecated compatibility fields.
 

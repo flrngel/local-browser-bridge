@@ -646,6 +646,21 @@ struct FakeComputer {
     server_messages: Arc<Mutex<Vec<Value>>>,
 }
 
+#[derive(Clone, Copy)]
+struct FakeComputerTrustOptions {
+    input_delivery_capability: bool,
+    pointer_monitor_capability: bool,
+    valid_action_results: bool,
+}
+
+impl FakeComputerTrustOptions {
+    const TRUSTED: Self = Self {
+        input_delivery_capability: true,
+        pointer_monitor_capability: true,
+        valid_action_results: true,
+    };
+}
+
 struct ControlledComputer {
     handle: JoinHandle<()>,
     events: mpsc::UnboundedSender<(String, Value)>,
@@ -711,7 +726,9 @@ async fn connect_controlled_computer(base_url: &str, token: &str) -> ControlledC
                     "computer.share.status",
                     "computer.share.stop",
                     "computer.share.ack",
-                    "computer.capture.native-stream.v1"
+                    "computer.capture.native-stream.v1",
+                    "computer.input-delivery-provenance.v1",
+                    "computer.pointer-activity-monitor.v1"
                 ]
             })
             .to_string()
@@ -916,7 +933,9 @@ async fn connect_rejected_share_computer(
                     "computer.move",
                     "computer.share.start",
                     "computer.share.stop",
-                    "computer.capture.native-stream.v1"
+                    "computer.capture.native-stream.v1",
+                    "computer.input-delivery-provenance.v1",
+                    "computer.pointer-activity-monitor.v1"
                 ]
             })
             .to_string()
@@ -1097,6 +1116,101 @@ async fn connect_rejected_share_computer(
     }
 }
 
+fn valid_computer_click_result(params: &Value) -> Value {
+    let invariants = json!({
+        "foregroundUnchanged": true,
+        "userFocusUnchanged": true,
+        "cursorPositionUnchanged": true,
+        "sharedPointerActivityObserved": false,
+        "hidSystemPointerActivityObserved": false,
+        "rawInputPointerActivityObserved": false,
+        "injectedPointerActivityObserved": false,
+        "pointerActivityMonitorHealthy": true,
+        "sharedPointerBoundaryCorroborated": true,
+        "sharedPointerBoundaryState": "corroborated",
+        "hardwareCursorPreservedByHelper": true,
+        "helperGlobalPointerPreservation": "confirmed",
+        "sharedPointerActivityState": "quiet",
+        "spaceUnchanged": true,
+        "inputDelivery": {
+            "route": "windowsWindowMessage",
+            "supportLevel": "publicDocumented",
+            "exactTargetBound": true,
+            "dispatchAttemptRecorded": true,
+            "osAcceptanceSignalAvailable": true,
+            "osAcceptanceObserved": true,
+            "sharedInputSeatUsed": false,
+            "globalHidInputUsed": false,
+            "hardwareCursorMutationRequested": false
+        }
+    });
+    let evidence = [
+        ("deliveryInvariant", "foregroundUnchanged", true),
+        ("deliveryInvariant", "userFocusUnchanged", true),
+        ("deliveryInvariant", "inputRouteTargetBound", true),
+        ("deliveryInvariant", "hardwareCursorPreservedByHelper", true),
+        (
+            "deliveryInvariant",
+            "sharedPointerBoundaryCorroborated",
+            true,
+        ),
+        ("deliveryInvariant", "desktopSpaceUnchanged", true),
+        ("diagnosticObservation", "cursorPositionUnchanged", true),
+        (
+            "diagnosticObservation",
+            "sharedPointerActivityObserved",
+            false,
+        ),
+        (
+            "diagnosticObservation",
+            "hidSystemPointerActivityObserved",
+            false,
+        ),
+        (
+            "diagnosticObservation",
+            "rawInputPointerActivityObserved",
+            false,
+        ),
+        (
+            "diagnosticObservation",
+            "injectedPointerActivityObserved",
+            false,
+        ),
+        (
+            "diagnosticObservation",
+            "pointerActivityMonitorHealthy",
+            true,
+        ),
+    ]
+    .into_iter()
+    .map(|(kind, claim, observed)| {
+        json!({
+            "kind": kind,
+            "claim": claim,
+            "observed": observed,
+            "supportsConfirmation": false,
+            "detail": "Fixture evidence mirrors the sealed production action-record schema"
+        })
+    })
+    .collect::<Vec<_>>();
+    json!({
+        "x": params["x"],
+        "y": params["y"],
+        "clickCount": params["clickCount"],
+        "expectedPointerRevision": params["expectedPointerRevision"],
+        "invariants": invariants,
+        "actionId": "123e4567-e89b-42d3-a456-426614174000",
+        "effect": "Unverifiable",
+        "evidence": evidence,
+        "timings": {
+            "resolveMs": 1.0,
+            "dispatchMs": 2.0,
+            "verifyMs": 3.0,
+            "totalMs": 6.0
+        }
+    })
+}
+
 async fn connect_fake_computer(base_url: &str, token: &str, version: &str) -> JoinHandle<()> {
     connect_fake_computer_with_share_ack(base_url, token, version, false)
         .await
@@ -1126,6 +1240,25 @@ async fn connect_fake_computer_with_process_id(
     advertise_share_ack: bool,
     process_id: Option<Value>,
 ) -> FakeComputer {
+    connect_fake_computer_with_trust_options(
+        base_url,
+        token,
+        version,
+        advertise_share_ack,
+        process_id,
+        FakeComputerTrustOptions::TRUSTED,
+    )
+    .await
+}
+
+async fn connect_fake_computer_with_trust_options(
+    base_url: &str,
+    token: &str,
+    version: &str,
+    advertise_share_ack: bool,
+    process_id: Option<Value>,
+    trust: FakeComputerTrustOptions,
+) -> FakeComputer {
     let mut request = format!("{}/computer", base_url.replace("http", "ws"))
         .into_client_request()
         .unwrap();
@@ -1153,6 +1286,12 @@ async fn connect_fake_computer_with_process_id(
         "computer.capture.native-stream.v1",
         "computer.shell",
     ];
+    if trust.input_delivery_capability {
+        capabilities.push("computer.input-delivery-provenance.v1");
+    }
+    if trust.pointer_monitor_capability {
+        capabilities.push("computer.pointer-activity-monitor.v1");
+    }
     if advertise_share_ack {
         capabilities.push("computer.share.ack");
     }
@@ -1296,9 +1435,15 @@ async fn connect_fake_computer_with_process_id(
                 }),
                 "computer.click" => json!({
                     "id": id, "type": "result", "ok": true,
-                    "result": {
-                        "x": params["x"], "y": params["y"], "clickCount": params["clickCount"],
-                        "expectedPointerRevision": params["expectedPointerRevision"]
+                    "result": if trust.valid_action_results {
+                        valid_computer_click_result(&params)
+                    } else {
+                        json!({
+                            "x": params["x"],
+                            "y": params["y"],
+                            "clickCount": params["clickCount"],
+                            "expectedPointerRevision": params["expectedPointerRevision"]
+                        })
                     }
                 }),
                 "computer.move" => {
@@ -1998,17 +2143,37 @@ async fn relays_frame_bound_computer_actions_and_serves_desktop_capture() {
         false
     );
     assert_eq!(
+        state["state"]["computer"]["invariants"]["hardwareCursorSampleAuthoritative"],
+        false
+    );
+    assert_eq!(
+        state["state"]["computer"]["invariants"]["inputDeliveryProvenanceRequired"],
+        true
+    );
+    assert_eq!(
         state["state"]["computer"]["capabilities"]
             .as_array()
             .unwrap()
             .len(),
-        14
+        16
     );
     assert!(
         state["state"]["computer"]["capabilities"]
             .as_array()
             .unwrap()
             .contains(&json!("computer.capture.native-stream.v1"))
+    );
+    assert!(
+        state["state"]["computer"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("computer.input-delivery-provenance.v1"))
+    );
+    assert!(
+        state["state"]["computer"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("computer.pointer-activity-monitor.v1"))
     );
     assert!(
         !state["state"]["computer"]["capabilities"]
@@ -2052,6 +2217,14 @@ async fn relays_frame_bound_computer_actions_and_serves_desktop_capture() {
     assert_eq!(
         status["result"]["invariants"]["zeroTransientInterruptionGuaranteed"],
         false
+    );
+    assert_eq!(
+        status["result"]["invariants"]["hardwareCursorSampleAuthoritative"],
+        false
+    );
+    assert_eq!(
+        status["result"]["invariants"]["inputDeliveryProvenanceRequired"],
+        true
     );
 
     let observed: Value = client
@@ -2227,6 +2400,177 @@ async fn rejects_invalid_computer_process_identities() {
         let _ = shutdown.send(());
         handle.await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn requires_both_native_action_evidence_capabilities_before_helper_readiness() {
+    for trust in [
+        FakeComputerTrustOptions {
+            input_delivery_capability: false,
+            pointer_monitor_capability: true,
+            valid_action_results: true,
+        },
+        FakeComputerTrustOptions {
+            input_delivery_capability: true,
+            pointer_monitor_capability: false,
+            valid_action_results: true,
+        },
+    ] {
+        let token = create_token();
+        let (base_url, shutdown, handle) = start_server(&token).await;
+        let fake = connect_fake_computer_with_trust_options(
+            &base_url,
+            &token,
+            VERSION,
+            false,
+            Some(json!(4242)),
+            trust,
+        )
+        .await;
+        let client = Client::new();
+        let state = wait_for_computer(&client, &base_url, &token).await;
+        assert_eq!(state["state"]["computerConnected"], false);
+        assert_eq!(state["state"]["computer"]["compatible"], false);
+        assert_eq!(state["state"]["computer"]["capabilities"], json!([]));
+
+        let hello_ack = wait_for_server_message(
+            &fake.server_messages,
+            |message| message["type"] == "helloAck",
+            "rejected capability-gated helloAck",
+        )
+        .await;
+        assert_eq!(hello_ack["ok"], false);
+        assert_eq!(hello_ack["error"]["code"], "COMPUTER_PROTOCOL_MISMATCH");
+
+        let response = client
+            .post(format!("{base_url}/api/v1/command"))
+            .bearer_auth(&token)
+            .json(&json!({ "method": "computer.status", "params": {} }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 409);
+        assert_eq!(
+            response.json::<Value>().await.unwrap()["error"]["code"],
+            "COMPUTER_PROTOCOL_MISMATCH"
+        );
+
+        fake.handle.abort();
+        let _ = shutdown.send(());
+        handle.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn malformed_native_success_is_outcome_unknown_and_revokes_only_its_helper() {
+    let token = create_token();
+    let (base_url, shutdown, handle) = start_server(&token).await;
+    let malformed = connect_fake_computer_with_trust_options(
+        &base_url,
+        &token,
+        VERSION,
+        false,
+        Some(json!(4242)),
+        FakeComputerTrustOptions {
+            valid_action_results: false,
+            ..FakeComputerTrustOptions::TRUSTED
+        },
+    )
+    .await;
+    let client = Client::new();
+    let initial = wait_for_computer(&client, &base_url, &token).await;
+    let old_session = initial["state"]["computer"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let observed: Value = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({ "method": "computer.observe", "params": {} }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(observed["result"]["frameId"], "frame-1");
+
+    let rejected = client
+        .post(format!("{base_url}/api/v1/command"))
+        .bearer_auth(&token)
+        .json(&json!({
+            "method": "computer.click",
+            "params": {
+                "frameId": "frame-1",
+                "x": 25,
+                "y": 30,
+                "button": "left",
+                "clickCount": 1
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), 504);
+    let rejected: Value = rejected.json().await.unwrap();
+    assert_eq!(rejected["error"]["code"], "COMPUTER_OUTCOME_UNKNOWN");
+    assert_eq!(rejected["taxonomy"]["code"], "outcome_unknown");
+    assert_eq!(rejected["taxonomy"]["retriable"], false);
+
+    let cleared: Value = client
+        .get(format!("{base_url}/api/state"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(cleared["state"]["computerConnected"], false);
+    assert!(cleared["state"]["computer"].is_null());
+    assert!(cleared["state"]["computerObservation"].is_null());
+    assert_eq!(
+        client
+            .get(format!("{base_url}/api/computer/screenshot"))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+
+    let replacement = connect_fake_computer(&base_url, &token, VERSION).await;
+    let replacement_state = wait_for_computer(&client, &base_url, &token).await;
+    let replacement_session = replacement_state["state"]["computer"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(replacement_session, old_session);
+    assert_eq!(replacement_state["state"]["computerConnected"], true);
+    let started = start_computer_share(&base_url, &token).await;
+    assert_eq!(started["result"]["id"], "share-fixture");
+
+    let _ = tokio::time::timeout(Duration::from_secs(1), malformed.handle).await;
+    let after_old_exit: Value = client
+        .get(format!("{base_url}/api/state"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        after_old_exit["state"]["computer"]["sessionId"],
+        replacement_session
+    );
+    assert_eq!(after_old_exit["state"]["computerConnected"], true);
+    assert_eq!(after_old_exit["state"]["computer"]["share"]["active"], true);
+
+    replacement.abort();
+    let _ = shutdown.send(());
+    handle.await.unwrap();
 }
 
 #[tokio::test]

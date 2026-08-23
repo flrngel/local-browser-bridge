@@ -18,7 +18,8 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 pub use crate::computer_protocol::{
-    COMPUTER_HELPER_ORIGIN, COMPUTER_METHODS, COMPUTER_NATIVE_SHARE_CAPABILITY,
+    COMPUTER_HELPER_ORIGIN, COMPUTER_INPUT_DELIVERY_PROVENANCE_CAPABILITY, COMPUTER_METHODS,
+    COMPUTER_NATIVE_SHARE_CAPABILITY, COMPUTER_POINTER_ACTIVITY_MONITOR_CAPABILITY,
     COMPUTER_SHARE_ACK_CAPABILITY, COMPUTER_TYPE_TEXT_MAX_DISPATCH_MS,
     COMPUTER_TYPE_TEXT_MAX_UTF16_UNITS, CommandCancellation, ComputerError, ShareFrameAck,
     ShareMailbox, command_parts, result_envelope, validate_computer_type_text,
@@ -76,6 +77,8 @@ fn computer_invariants() -> Value {
         "targetActivationMode": TARGET_ACTIVATION_MODE,
         "foregroundIdentityPreservedBeforeAfter": true,
         "hardwareCursorPreservedBeforeAfter": true,
+        "hardwareCursorSampleAuthoritative": false,
+        "inputDeliveryProvenanceRequired": true,
         "usesAxRaise": false,
         "usesFrontProcessSwitch": false,
         "switchesActiveSpace": false,
@@ -105,8 +108,129 @@ pub struct WindowDescriptor {
 pub(crate) struct InvariantReport {
     pub foreground_unchanged: bool,
     pub user_focus_unchanged: bool,
-    pub cursor_unchanged: bool,
+    /// A diagnostic observation of the shared system cursor. User, virtual-HID,
+    /// remote-session, or other-process motion can make this false, so it is
+    /// never action-source authority. `input_delivery` carries route evidence.
+    pub cursor_position_unchanged: bool,
+    pub shared_pointer_activity_observed: bool,
+    pub hid_system_pointer_activity_observed: bool,
+    pub raw_input_pointer_activity_observed: bool,
+    pub injected_pointer_activity_observed: bool,
+    pub pointer_activity_monitor_healthy: bool,
+    pub shared_pointer_boundary_corroborated: bool,
+    pub shared_pointer_boundary_state: SharedPointerBoundaryState,
+    pub hardware_cursor_preserved_by_helper: bool,
+    pub helper_global_pointer_preservation: HelperGlobalPointerPreservation,
+    pub shared_pointer_activity_state: SharedPointerActivityState,
     pub space_unchanged: bool,
+    pub input_delivery: InputDeliveryProvenance,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum SharedPointerBoundaryState {
+    Corroborated,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum HelperGlobalPointerPreservation {
+    Confirmed,
+    Unknown,
+    Violated,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum SharedPointerActivityState {
+    Quiet,
+    Contaminated,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum InputDeliveryRoute {
+    #[cfg(target_os = "macos")]
+    MacosAccessibility,
+    #[cfg(target_os = "macos")]
+    MacosTargetedProcessEvent,
+    #[cfg(target_os = "windows")]
+    WindowsUiAutomation,
+    #[cfg(target_os = "windows")]
+    WindowsWindowMessage,
+    Unverified,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum InputDeliverySupportLevel {
+    PublicDocumented,
+    #[cfg(target_os = "macos")]
+    PrivateUnsupported,
+    Unverified,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct InputDeliveryProvenance {
+    pub route: InputDeliveryRoute,
+    pub support_level: InputDeliverySupportLevel,
+    pub exact_target_bound: bool,
+    pub dispatch_attempt_recorded: bool,
+    /// Whether the native API has a synchronous acceptance signal at all.
+    /// A signal can acknowledge only API/queue acceptance, never target effect.
+    pub os_acceptance_signal_available: bool,
+    pub os_acceptance_observed: bool,
+    pub shared_input_seat_used: bool,
+    pub global_hid_input_used: bool,
+    pub hardware_cursor_mutation_requested: bool,
+}
+
+impl InputDeliveryProvenance {
+    const fn unverified() -> Self {
+        Self {
+            route: InputDeliveryRoute::Unverified,
+            support_level: InputDeliverySupportLevel::Unverified,
+            exact_target_bound: false,
+            dispatch_attempt_recorded: false,
+            os_acceptance_signal_available: false,
+            os_acceptance_observed: false,
+            shared_input_seat_used: false,
+            global_hid_input_used: false,
+            hardware_cursor_mutation_requested: false,
+        }
+    }
+
+    const fn is_target_bound(self) -> bool {
+        !matches!(self.route, InputDeliveryRoute::Unverified)
+            && self.exact_target_bound
+            && self.dispatch_attempt_recorded
+            && !self.shared_input_seat_used
+            && !self.global_hid_input_used
+            && !self.hardware_cursor_mutation_requested
+    }
+
+    #[cfg(test)]
+    const fn target_bound_for_test() -> Self {
+        Self {
+            #[cfg(target_os = "macos")]
+            route: InputDeliveryRoute::MacosAccessibility,
+            #[cfg(target_os = "windows")]
+            route: InputDeliveryRoute::WindowsUiAutomation,
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            route: InputDeliveryRoute::Unverified,
+            support_level: InputDeliverySupportLevel::PublicDocumented,
+            exact_target_bound: cfg!(any(target_os = "macos", target_os = "windows")),
+            dispatch_attempt_recorded: cfg!(any(target_os = "macos", target_os = "windows")),
+            os_acceptance_signal_available: cfg!(any(target_os = "macos", target_os = "windows")),
+            os_acceptance_observed: cfg!(any(target_os = "macos", target_os = "windows")),
+            shared_input_seat_used: false,
+            global_hid_input_used: false,
+            hardware_cursor_mutation_requested: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,6 +277,8 @@ pub(crate) enum InvariantFailure {
     Foreground,
     UserFocus,
     HardwareCursor,
+    SharedPointerBoundary,
+    InputRoute,
     DesktopSpace,
 }
 
@@ -161,7 +287,9 @@ impl InvariantFailure {
         match self {
             Self::Foreground => "foregroundUnchanged",
             Self::UserFocus => "userFocusUnchanged",
-            Self::HardwareCursor => "hardwareCursorUnchanged",
+            Self::HardwareCursor => "hardwareCursorPreservedByHelper",
+            Self::SharedPointerBoundary => "sharedPointerBoundaryCorroborated",
+            Self::InputRoute => "inputRouteTargetBound",
             Self::DesktopSpace => "desktopSpaceUnchanged",
         }
     }
@@ -171,8 +299,10 @@ impl InvariantReport {
     pub(crate) fn assert_held(self, stage: InvariantStage) -> Result<Self, ComputerError> {
         if self.foreground_unchanged
             && self.user_focus_unchanged
-            && self.cursor_unchanged
+            && self.helper_global_pointer_preservation == HelperGlobalPointerPreservation::Confirmed
+            && self.shared_pointer_boundary_state == SharedPointerBoundaryState::Corroborated
             && self.space_unchanged
+            && self.input_delivery.is_target_bound()
         {
             Ok(self)
         } else {
@@ -180,11 +310,40 @@ impl InvariantReport {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    pub(crate) fn assert_environment_held(
+        self,
+        stage: InvariantStage,
+    ) -> Result<Self, ComputerError> {
+        if self.foreground_unchanged
+            && self.user_focus_unchanged
+            && self.shared_pointer_boundary_state == SharedPointerBoundaryState::Corroborated
+            && self.space_unchanged
+        {
+            Ok(self)
+        } else {
+            let failed = [
+                (!self.foreground_unchanged).then_some(InvariantFailure::Foreground),
+                (!self.user_focus_unchanged).then_some(InvariantFailure::UserFocus),
+                (self.shared_pointer_boundary_state != SharedPointerBoundaryState::Corroborated)
+                    .then_some(InvariantFailure::SharedPointerBoundary),
+                (!self.space_unchanged).then_some(InvariantFailure::DesktopSpace),
+            ]
+            .into_iter()
+            .flatten();
+            Err(background_contract_violation(stage, failed))
+        }
+    }
+
     fn failed_names(&self) -> Vec<InvariantFailure> {
         [
             (!self.foreground_unchanged).then_some(InvariantFailure::Foreground),
             (!self.user_focus_unchanged).then_some(InvariantFailure::UserFocus),
-            (!self.cursor_unchanged).then_some(InvariantFailure::HardwareCursor),
+            (self.helper_global_pointer_preservation != HelperGlobalPointerPreservation::Confirmed)
+                .then_some(InvariantFailure::HardwareCursor),
+            (self.shared_pointer_boundary_state != SharedPointerBoundaryState::Corroborated)
+                .then_some(InvariantFailure::SharedPointerBoundary),
+            (!self.input_delivery.is_target_bound()).then_some(InvariantFailure::InputRoute),
             (!self.space_unchanged).then_some(InvariantFailure::DesktopSpace),
         ]
         .into_iter()
@@ -1539,6 +1698,8 @@ fn advertised_capabilities() -> Vec<&'static str> {
     let mut capabilities = COMPUTER_METHODS.to_vec();
     capabilities.push(COMPUTER_SHARE_ACK_CAPABILITY);
     capabilities.push(COMPUTER_NATIVE_SHARE_CAPABILITY);
+    capabilities.push(COMPUTER_INPUT_DELIVERY_PROVENANCE_CAPABILITY);
+    capabilities.push(COMPUTER_POINTER_ACTIVITY_MONITOR_CAPABILITY);
     capabilities
 }
 
@@ -1997,6 +2158,8 @@ mod tests {
     fn hello_advertises_share_ack_pacing_as_a_capability_not_a_method() {
         let capabilities = advertised_capabilities();
         assert!(capabilities.contains(&COMPUTER_SHARE_ACK_CAPABILITY));
+        assert!(capabilities.contains(&COMPUTER_INPUT_DELIVERY_PROVENANCE_CAPABILITY));
+        assert!(capabilities.contains(&COMPUTER_POINTER_ACTIVITY_MONITOR_CAPABILITY));
         assert!(capabilities.contains(&COMPUTER_NATIVE_SHARE_CAPABILITY));
         assert!(!COMPUTER_METHODS.contains(&COMPUTER_SHARE_ACK_CAPABILITY));
         assert!(!COMPUTER_METHODS.contains(&COMPUTER_NATIVE_SHARE_CAPABILITY));
@@ -2041,8 +2204,19 @@ mod tests {
         let report = InvariantReport {
             foreground_unchanged: true,
             user_focus_unchanged: true,
-            cursor_unchanged: false,
+            cursor_position_unchanged: false,
+            shared_pointer_activity_observed: false,
+            hid_system_pointer_activity_observed: false,
+            raw_input_pointer_activity_observed: false,
+            injected_pointer_activity_observed: false,
+            pointer_activity_monitor_healthy: true,
+            shared_pointer_boundary_corroborated: false,
+            shared_pointer_boundary_state: SharedPointerBoundaryState::Unknown,
+            hardware_cursor_preserved_by_helper: false,
+            helper_global_pointer_preservation: HelperGlobalPointerPreservation::Unknown,
+            shared_pointer_activity_state: SharedPointerActivityState::Unknown,
             space_unchanged: true,
+            input_delivery: InputDeliveryProvenance::target_bound_for_test(),
         };
         let error = report
             .assert_held(InvariantStage::ClickDispatch)
@@ -2050,7 +2224,7 @@ mod tests {
         assert_eq!(error.code, "COMPUTER_BACKGROUND_CONTRACT_VIOLATION");
         assert_eq!(
             error.message,
-            "stage=clickDispatch;failedInvariants=hardwareCursorUnchanged"
+            "stage=clickDispatch;failedInvariants=hardwareCursorPreservedByHelper,sharedPointerBoundaryCorroborated"
         );
     }
 
@@ -2059,15 +2233,26 @@ mod tests {
         let report = InvariantReport {
             foreground_unchanged: false,
             user_focus_unchanged: false,
-            cursor_unchanged: false,
+            cursor_position_unchanged: false,
+            shared_pointer_activity_observed: false,
+            hid_system_pointer_activity_observed: false,
+            raw_input_pointer_activity_observed: false,
+            injected_pointer_activity_observed: false,
+            pointer_activity_monitor_healthy: false,
+            shared_pointer_boundary_corroborated: false,
+            shared_pointer_boundary_state: SharedPointerBoundaryState::Unknown,
+            hardware_cursor_preserved_by_helper: false,
+            helper_global_pointer_preservation: HelperGlobalPointerPreservation::Unknown,
+            shared_pointer_activity_state: SharedPointerActivityState::Unknown,
             space_unchanged: false,
+            input_delivery: InputDeliveryProvenance::unverified(),
         };
         let error = report
             .assert_held(InvariantStage::PointerTrajectory)
             .unwrap_err();
         assert_eq!(
             error.message,
-            "stage=pointerTrajectory;failedInvariants=foregroundUnchanged,userFocusUnchanged,hardwareCursorUnchanged,desktopSpaceUnchanged"
+            "stage=pointerTrajectory;failedInvariants=foregroundUnchanged,userFocusUnchanged,hardwareCursorPreservedByHelper,sharedPointerBoundaryCorroborated,inputRouteTargetBound,desktopSpaceUnchanged"
         );
 
         let stages = [
@@ -2129,8 +2314,19 @@ mod tests {
         let invariants = InvariantReport {
             foreground_unchanged: true,
             user_focus_unchanged: true,
-            cursor_unchanged: true,
+            cursor_position_unchanged: true,
+            shared_pointer_activity_observed: false,
+            hid_system_pointer_activity_observed: false,
+            raw_input_pointer_activity_observed: false,
+            injected_pointer_activity_observed: false,
+            pointer_activity_monitor_healthy: true,
+            shared_pointer_boundary_corroborated: true,
+            shared_pointer_boundary_state: SharedPointerBoundaryState::Corroborated,
+            hardware_cursor_preserved_by_helper: true,
+            helper_global_pointer_preservation: HelperGlobalPointerPreservation::Confirmed,
+            shared_pointer_activity_state: SharedPointerActivityState::Quiet,
             space_unchanged: true,
+            input_delivery: InputDeliveryProvenance::target_bound_for_test(),
         };
         let evidence = invariant_evidence(&invariants);
         let result = recorded_action_result(

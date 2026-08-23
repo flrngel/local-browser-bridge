@@ -1,6 +1,6 @@
 # Local Browser Bridge
 
-Local Browser Bridge lets a browser-based AI agent work with real Chrome or Edge tabs on your computer. An optional companion helper can also view and operate one selected window from a supported macOS or Windows application without taking over your foreground pointer.
+Local Browser Bridge lets a browser-based AI agent work with real Chrome or Edge tabs on your computer. An optional companion helper can also view and operate one selected window from a supported macOS or Windows application without routing its actions through the global hardware pointer.
 
 Everything runs locally through `127.0.0.1`. The server and computer helper are compiled Rust programs; end users do not need Node.js, Rust, or a package manager.
 
@@ -16,7 +16,7 @@ Everything runs locally through `127.0.0.1`. The server and computer helper are 
 - Optionally observe and operate one exact desktop application window
 - Share that window through native macOS or Windows capture with a requested 1–10 FPS cap
 - Prefer macOS Accessibility or Windows UI Automation before pixel input
-- Keep the OS foreground-window identity and hardware pointer unchanged before and after supported desktop actions; macOS may briefly use and restore an Accessibility focus lease
+- Prove the exact target route, check the application's result when possible, and preserve the foreground and active desktop at supported action boundaries; macOS may briefly use and restore an Accessibility focus lease
 
 The bridge has no cloud relay, telemetry, silent installer, or silent updater. It does not add shell, filesystem, clipboard, download, or process-launch tools to the computer helper.
 
@@ -30,9 +30,9 @@ browser-based agent -> localhost control page -> Rust server
 
 The agent must use a browser running on the same computer. A cloud-hosted browser cannot reach your local `127.0.0.1` server.
 
-Use the extension for Chrome and Edge web content. Use the optional helper for one already-open desktop window when that application's background route is supported. A separate Windows login/input seat is a different mode that requires an RDP child session or VM; it is not implied by exact-window sharing.
+Use the extension for Chrome and Edge web content. Use the optional helper for one already-open desktop window when that application's background route is supported. A separate Windows login/input seat is a different mode that requires another session or VM; it is not implied by exact-window sharing. The current helper is cooperative: it shares the person's login session, so unrelated pointer activity can occur while an action is running.
 
-On macOS, the helper may briefly borrow and restore app focus while leaving the user's foreground window and pointer unchanged at checked boundaries; see [Limitations](docs/LIMITATIONS.md) for details.
+On macOS, the helper may briefly borrow and restore app focus while leaving the user's foreground window unchanged at checked boundaries. It reports shared pointer activity separately from proof about the helper's own sealed action route; see [Limitations](docs/LIMITATIONS.md) for details.
 
 ## Requirements
 
@@ -48,7 +48,7 @@ See [Capabilities](docs/CAPABILITIES.md) for the exact platform matrix and [Limi
 
 Download one version-matched set from [GitHub Releases](https://github.com/flrngel/local-browser-bridge/releases/latest):
 
-> Version 0.12.9 is the current source and release target. It is not a published release until the version-specific macOS, Windows, stock-Chrome, and immutable-release gates all pass. Release artifacts, evidence, and capability claims are versioned; install the server, extension, and helper from one matching published release.
+> Version 0.12.10 is the current source and release target. It is not a published release until the version-specific macOS, Windows, stock-Chrome, and immutable-release gates all pass. Version 0.12.9 was withdrawn after one exact packaged macOS run observed a global cursor-position delta during the first semantic action; that record could not identify what moved the cursor, and Windows and Chrome were not run. Release artifacts, evidence, and capability claims are versioned; install the server, extension, and helper from one matching published release.
 
 - the server for your platform;
 - `local-browser-bridge-extension-vVERSION.zip`; and

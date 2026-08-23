@@ -25,6 +25,7 @@ pub(crate) enum EvidenceKind {
     DeliveryInvariant,
     DispatchAcknowledgement,
     Postcondition,
+    DiagnosticObservation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -75,6 +76,20 @@ impl ActionEvidence {
     ) -> Self {
         Self {
             kind: EvidenceKind::DispatchAcknowledgement,
+            claim: claim.into(),
+            observed,
+            supports_confirmation: false,
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn diagnostic_observation(
+        claim: impl Into<String>,
+        observed: bool,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: EvidenceKind::DiagnosticObservation,
             claim: claim.into(),
             observed,
             supports_confirmation: false,
@@ -210,7 +225,7 @@ impl ActionTimer {
 }
 
 pub(crate) fn invariant_evidence(report: &InvariantReport) -> Vec<ActionEvidence> {
-    [
+    let mut evidence = [
         (
             "foregroundUnchanged",
             report.foreground_unchanged,
@@ -222,9 +237,19 @@ pub(crate) fn invariant_evidence(report: &InvariantReport) -> Vec<ActionEvidence
             "The platform-specific front-window or focused-window oracle was unchanged across background delivery",
         ),
         (
-            "hardwareCursorUnchanged",
-            report.cursor_unchanged,
-            "The hardware cursor was unchanged across background delivery",
+            "inputRouteTargetBound",
+            report.input_delivery.is_target_bound(),
+            "The runtime delivery route remained exact-target-bound and did not use the shared input seat, global HID input, or a hardware-cursor mutation API",
+        ),
+        (
+            "hardwareCursorPreservedByHelper",
+            report.hardware_cursor_preserved_by_helper,
+            "The sealed exact-target route and corroborated shared-pointer boundary supported that this helper action requested no global pointer operation; release artifacts are separately checked for forbidden APIs",
+        ),
+        (
+            "sharedPointerBoundaryCorroborated",
+            report.shared_pointer_boundary_corroborated,
+            "The cursor stayed at the sampled position, or a position delta coincided with platform pointer-monitor activity; this is boundary corroboration only and does not prove physical-device provenance or exclude a simultaneous eventless cursor warp",
         ),
         (
             "desktopSpaceUnchanged",
@@ -234,7 +259,38 @@ pub(crate) fn invariant_evidence(report: &InvariantReport) -> Vec<ActionEvidence
     ]
     .into_iter()
     .map(|(claim, observed, detail)| ActionEvidence::delivery_invariant(claim, observed, detail))
-    .collect()
+    .collect::<Vec<_>>();
+    evidence.push(ActionEvidence::diagnostic_observation(
+        "cursorPositionUnchanged",
+        report.cursor_position_unchanged,
+        "The global hardware-cursor sample matched before and after delivery; concurrent shared-seat motion can change this diagnostic without identifying the action source",
+    ));
+    evidence.push(ActionEvidence::diagnostic_observation(
+        "sharedPointerActivityObserved",
+        report.shared_pointer_activity_observed,
+        "A platform pointer monitor observed shared-session pointer activity across delivery; this is contamination evidence, not physical-device provenance or target-effect confirmation",
+    ));
+    evidence.push(ActionEvidence::diagnostic_observation(
+        "hidSystemPointerActivityObserved",
+        report.hid_system_pointer_activity_observed,
+        "The platform's HID-system source recorded pointer activity across delivery; this can include physical, virtual-HID, or remote-session input and is never target-effect confirmation",
+    ));
+    evidence.push(ActionEvidence::diagnostic_observation(
+        "rawInputPointerActivityObserved",
+        report.raw_input_pointer_activity_observed,
+        "The Windows Raw Input monitor observed mouse-device activity without retaining device identity, coordinates, or input contents",
+    ));
+    evidence.push(ActionEvidence::diagnostic_observation(
+        "injectedPointerActivityObserved",
+        report.injected_pointer_activity_observed,
+        "The Windows low-level pointer monitor observed an injected-event flag; this cannot identify the injecting process or target effect",
+    ));
+    evidence.push(ActionEvidence::diagnostic_observation(
+        "pointerActivityMonitorHealthy",
+        report.pointer_activity_monitor_healthy,
+        "The platform pointer monitor initialized and its sampled counter or epoch boundary remained readable; this does not prove continuous capture or identify an input source",
+    ));
+    evidence
 }
 
 /// Converts the semantic backend's effect report into conservative evidence.
@@ -410,8 +466,21 @@ mod tests {
         let invariants = InvariantReport {
             foreground_unchanged: true,
             user_focus_unchanged: true,
-            cursor_unchanged: true,
+            cursor_position_unchanged: true,
+            shared_pointer_activity_observed: false,
+            hid_system_pointer_activity_observed: false,
+            raw_input_pointer_activity_observed: false,
+            injected_pointer_activity_observed: false,
+            pointer_activity_monitor_healthy: true,
+            shared_pointer_boundary_corroborated: true,
+            shared_pointer_boundary_state:
+                crate::computer::SharedPointerBoundaryState::Corroborated,
+            hardware_cursor_preserved_by_helper: true,
+            helper_global_pointer_preservation:
+                crate::computer::HelperGlobalPointerPreservation::Confirmed,
+            shared_pointer_activity_state: crate::computer::SharedPointerActivityState::Quiet,
             space_unchanged: true,
+            input_delivery: crate::computer::InputDeliveryProvenance::target_bound_for_test(),
         };
         evidence.extend(invariant_evidence(&invariants));
 
@@ -422,7 +491,7 @@ mod tests {
             .iter()
             .filter(|item| item.kind == EvidenceKind::DeliveryInvariant)
             .collect::<Vec<_>>();
-        assert_eq!(invariant_evidence.len(), 4);
+        assert_eq!(invariant_evidence.len(), 6);
         assert!(
             invariant_evidence
                 .iter()
@@ -436,5 +505,22 @@ mod tests {
             focus.detail,
             "The platform-specific front-window or focused-window oracle was unchanged across background delivery"
         );
+        let diagnostics = record
+            .evidence
+            .iter()
+            .filter(|item| item.kind == EvidenceKind::DiagnosticObservation)
+            .collect::<Vec<_>>();
+        assert_eq!(diagnostics.len(), 6);
+        assert!(diagnostics.iter().all(|item| !item.supports_confirmation));
+        for claim in [
+            "cursorPositionUnchanged",
+            "sharedPointerActivityObserved",
+            "hidSystemPointerActivityObserved",
+            "rawInputPointerActivityObserved",
+            "injectedPointerActivityObserved",
+            "pointerActivityMonitorHealthy",
+        ] {
+            assert!(diagnostics.iter().any(|item| item.claim == claim));
+        }
     }
 }
