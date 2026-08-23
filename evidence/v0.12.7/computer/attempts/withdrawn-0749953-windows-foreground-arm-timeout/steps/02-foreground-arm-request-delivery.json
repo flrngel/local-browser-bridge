@@ -1,0 +1,18 @@
+{
+    "requestedGeneration":  1920802092,
+    "requestPosted":  true,
+    "requestDelivered":  true,
+    "requestDeliveryTimeoutSeconds":  10,
+    "fixtureRequestMatched":  true,
+    "fixtureInputState":  "not-started",
+    "fixtureRequestCount":  1,
+    "fixtureAcknowledgementCount":  0,
+    "fixtureLeftMouseDownCount":  0,
+    "fixtureLeftMouseUpCount":  0,
+    "fixtureStatePublicationGeneration":  6,
+    "armButtonEnabled":  true,
+    "armButtonIdentityMatched":  true,
+    "nativeTopologyMatched":  true,
+    "rawWindowHandlesRecorded":  false,
+    "rawCursorCoordinatesRecorded":  false
+}
