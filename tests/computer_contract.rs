@@ -839,7 +839,7 @@ fn background_invariant_failures_use_stage_bound_closed_vocabulary() {
 
 #[test]
 fn macos_negative_evidence_keeps_only_equality_and_fixture_counters() {
-    let rig = fs::read_to_string("evidence/v0.12.7/computer/helper-evidence-rig.mjs").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.8/computer/helper-evidence-rig.mjs").unwrap();
     assert!(rig.contains("failureProbeBaseline"));
     assert!(rig.contains("collectFailureDiagnostics"));
     assert!(rig.contains("systemInvariants(failureProbeBaseline.system, after)"));
@@ -1106,13 +1106,213 @@ fn withdrawn_v0_12_6_exact_candidate_outputs_remain_byte_exact() {
 }
 
 #[test]
+fn withdrawn_v0_12_7_exact_candidate_outputs_remain_byte_exact() {
+    for (path, expected) in [
+        (
+            "evidence/v0.12.7/computer/README.md",
+            "62abf279ddd03191f6736a7852866c293de756a410da452d5d683ced019b432e",
+        ),
+        (
+            "evidence/v0.12.7/computer/HelperEvidenceFixture.swift",
+            "ce7b88b1eafba7c284b348116937e103991af1b5460a653ff1e3580c925777db",
+        ),
+        (
+            "evidence/v0.12.7/computer/SystemProbe.swift",
+            "c9a46e556b87d21bb7db414ba6fa00457928c8ab661be6d596a4fe650ddf6dde",
+        ),
+        (
+            "evidence/v0.12.7/computer/helper-evidence-rig.mjs",
+            "638d77ab756d11ac1a46fe7b66aa0477a62f70647610889d76d6bd1f11bb562d",
+        ),
+        (
+            "evidence/v0.12.7/computer/helper-results.json",
+            "adacc4548b792df5dc278c7e5509b2f35814940a67ca0f377ff6e04cdac1572b",
+        ),
+        (
+            "evidence/v0.12.7/computer/helper-rig.log",
+            "cbd81926825a1403a25000abfac5b2a476a1412f06174724534cf412ec425a53",
+        ),
+        (
+            "evidence/v0.12.7/computer/computer-01-exact-window-observe.png",
+            "54124e0ba163dccdf45bf3988b72d852fc176476431f6415493c865ba15736d0",
+        ),
+        (
+            "evidence/v0.12.7/computer/computer-02-semantic-set-value.png",
+            "8c6b062d0525fce8d89d77d1f0c9b12a27e0aec677a3692599c866924e232aad",
+        ),
+        (
+            "evidence/v0.12.7/computer/computer-03-semantic-invoke.png",
+            "6526ae14e01fdb25b0830f0092525d2c12c41d0ae8e0229bbbc640e60820fd41",
+        ),
+        (
+            "evidence/v0.12.7/computer/computer-04-persistent-scstream-start.png",
+            "db040b9454c4016cb827649f535f2da6e0d658ea8c2ffc97b9410f6c86fdd5b5",
+        ),
+        (
+            "evidence/v0.12.7/computer/computer-05-live-share-pixel-action.png",
+            "74268d4fe60e568ff58c2a3f42366c0a7efecda66a20c9928fe791c23c0933ee",
+        ),
+        (
+            "evidence/v0.12.7/computer/computer-06-persistent-share-resize.png",
+            "46daeff4a950a76f56a6ae7baf381393d1c11af3b295c16b049b32f8742903ab",
+        ),
+        (
+            "evidence/v0.12.7/computer/attempts/withdrawn-0749953-windows-foreground-arm-timeout/README.md",
+            "6d10aa26dc7f6a7e4e86313b2eee805a3e2a68fc4facc866bb21b0e06320511f",
+        ),
+        (
+            "evidence/v0.12.7/computer/attempts/withdrawn-0749953-windows-foreground-arm-timeout/fixture/fixture-events.ndjson",
+            "d8bb290dcddeacd7dffb7c9f985096791ee048bcf6014038755e1a12df8476a0",
+        ),
+        (
+            "evidence/v0.12.7/computer/attempts/withdrawn-0749953-windows-foreground-arm-timeout/fixture/fixture-ready.json",
+            "1903aa7c34f3ad9c4088b4285e7cd5d66a1bf8a447f9c2ff9b76d553559e2d5f",
+        ),
+        (
+            "evidence/v0.12.7/computer/attempts/withdrawn-0749953-windows-foreground-arm-timeout/fixture/fixture-state.json",
+            "f9880cb98a1a7a9a686ec0f6c011f0664a1d0529408893d38ca3f170ce350cf8",
+        ),
+        (
+            "evidence/v0.12.7/computer/attempts/withdrawn-0749953-windows-foreground-arm-timeout/steps/01-protocol-bound-helper-readiness.json",
+            "9ee1dd964734eda9d216acbc8b955b172d12fe0707ae38a3f9de31b854b39865",
+        ),
+        (
+            "evidence/v0.12.7/computer/attempts/withdrawn-0749953-windows-foreground-arm-timeout/steps/02-foreground-arm-request-delivery.json",
+            "391e7573abd178bd1bafccedbf235fd4c1d2d72d9f09402ed9d5cc5564f20900",
+        ),
+        (
+            "evidence/v0.12.7/computer/attempts/withdrawn-0749953-windows-foreground-arm-timeout/summary.json",
+            "639179342894f075f672e18bbbd7c62865bf842cc0751a10bd97a4ddc4ce1f95",
+        ),
+    ] {
+        assert_eq!(
+            file_sha256(path),
+            expected,
+            "withdrawn v0.12.7 exact-candidate evidence changed: {path}"
+        );
+    }
+
+    let macos_root_entries = fs::read_dir("evidence/v0.12.7/computer")
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| {
+            let mut name = entry.file_name().to_string_lossy().into_owned();
+            if entry.file_type().unwrap().is_dir() {
+                name.push('/');
+            }
+            name
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        macos_root_entries,
+        BTreeSet::from([
+            "HelperEvidenceFixture.swift".to_owned(),
+            "README.md".to_owned(),
+            "SystemProbe.swift".to_owned(),
+            "attempts/".to_owned(),
+            "computer-01-exact-window-observe.png".to_owned(),
+            "computer-02-semantic-set-value.png".to_owned(),
+            "computer-03-semantic-invoke.png".to_owned(),
+            "computer-04-persistent-scstream-start.png".to_owned(),
+            "computer-05-live-share-pixel-action.png".to_owned(),
+            "computer-06-persistent-share-resize.png".to_owned(),
+            "helper-evidence-rig.mjs".to_owned(),
+            "helper-results.json".to_owned(),
+            "helper-rig.log".to_owned(),
+        ])
+    );
+
+    let results: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string("evidence/v0.12.7/computer/helper-results.json").unwrap(),
+    )
+    .unwrap();
+    assert_eq!(results["status"], "passed-release-candidate");
+    assert_eq!(results["assertions"]["passed"], 187);
+    assert_eq!(results["assertions"]["failed"], 0);
+    assert_eq!(results["screenshots"].as_array().unwrap().len(), 6);
+    for (field, path) in [
+        (
+            "runnerSha256",
+            "evidence/v0.12.7/computer/helper-evidence-rig.mjs",
+        ),
+        (
+            "fixtureSha256",
+            "evidence/v0.12.7/computer/HelperEvidenceFixture.swift",
+        ),
+        (
+            "systemProbeSha256",
+            "evidence/v0.12.7/computer/SystemProbe.swift",
+        ),
+    ] {
+        assert_eq!(
+            results["harness"][field].as_str().unwrap(),
+            file_sha256(path),
+            "retained v0.12.7 harness binding drifted for {path}"
+        );
+    }
+
+    fn collect_relative_files(
+        root: &std::path::Path,
+        current: &std::path::Path,
+        out: &mut BTreeSet<String>,
+    ) {
+        for entry in fs::read_dir(current).unwrap().map(Result::unwrap) {
+            if entry.file_type().unwrap().is_dir() {
+                collect_relative_files(root, &entry.path(), out);
+            } else {
+                out.insert(
+                    entry
+                        .path()
+                        .strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                );
+            }
+        }
+    }
+    let windows_root = std::path::Path::new(
+        "evidence/v0.12.7/computer/attempts/withdrawn-0749953-windows-foreground-arm-timeout",
+    );
+    let mut windows_files = BTreeSet::new();
+    collect_relative_files(windows_root, windows_root, &mut windows_files);
+    assert_eq!(
+        windows_files,
+        BTreeSet::from([
+            "README.md".to_owned(),
+            "fixture/fixture-events.ndjson".to_owned(),
+            "fixture/fixture-ready.json".to_owned(),
+            "fixture/fixture-state.json".to_owned(),
+            "steps/01-protocol-bound-helper-readiness.json".to_owned(),
+            "steps/02-foreground-arm-request-delivery.json".to_owned(),
+            "summary.json".to_owned(),
+        ])
+    );
+
+    let summary: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(windows_root.join("summary.json")).unwrap())
+            .unwrap();
+    assert_eq!(summary["passed"], false);
+    assert_eq!(summary["failureDetails"]["stage"], "wait-foreground-arm");
+    let state: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(windows_root.join("fixture/fixture-state.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(state["foregroundArmRequestCount"], 1);
+    assert_eq!(state["foregroundArmAcknowledgementCount"], 0);
+    assert_eq!(state["foregroundArmLeftMouseDownCount"], 0);
+    assert_eq!(state["foregroundArmLeftMouseUpCount"], 0);
+    assert_eq!(state["foregroundArmButtonEnabled"], true);
+}
+
+#[test]
 fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
-    let rig = fs::read_to_string("evidence/v0.12.7/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.8/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let fixture =
-        fs::read_to_string("evidence/v0.12.7/computer/HelperEvidenceFixture.swift").unwrap();
-    let readme = fs::read_to_string("evidence/v0.12.7/computer/README.md").unwrap();
+        fs::read_to_string("evidence/v0.12.8/computer/HelperEvidenceFixture.swift").unwrap();
+    let readme = fs::read_to_string("evidence/v0.12.8/computer/README.md").unwrap();
 
     assert!(rig.contains(&format!("const EXPECTED_VERSION = \"{VERSION}\";")));
     assert!(rig.contains("const EXPECTED_ARCHIVE = `local-browser-bridge-v${EXPECTED_VERSION}-macos-universal.tar.gz`;"));
@@ -1171,10 +1371,10 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
 
 #[test]
 fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
-    let rig = fs::read_to_string("evidence/v0.12.7/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.8/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.7/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.8/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1206,7 +1406,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
         "$EXPECTED_SHA256SUMS_SHA256",
         "$EXPECTED_SOURCE_SHA",
         "mandatory SHA-256 supplied",
-        "exactly the four v0.12.7",
+        "exactly the four v0.12.8",
         "expected and actual manifest hashes",
         "Before invoking either supplied candidate executable—even with `--version`",
         "No supplied server or helper code executes before",
@@ -1263,7 +1463,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
         .unwrap();
     let first_documented_extraction = readme.find("tar -xzf").unwrap();
     let first_documented_execution = readme
-        .find("node evidence/v0.12.7/computer/helper-evidence-rig.mjs")
+        .find("node evidence/v0.12.8/computer/helper-evidence-rig.mjs")
         .unwrap();
     assert!(
         independent_manifest_digest < exact_inventory
@@ -1279,7 +1479,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
 
 #[test]
 fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
-    let rig = fs::read_to_string("evidence/v0.12.7/computer/helper-evidence-rig.mjs").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.8/computer/helper-evidence-rig.mjs").unwrap();
     assert!(rig.contains("capturedFrameMatchesWindowGeometry"));
     assert!(rig.contains("share-resize-settled"));
     assert!(rig.contains("sample.sourceSequence > resizeTransition.sample.sourceSequence"));
@@ -1291,12 +1491,12 @@ fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
 
 #[test]
 fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.7/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.8/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     assert!(rig.contains("function childEnvironment(overrides = {})"));
     assert!(!rig.contains("...process.env"));
-    let fixture = fs::read_to_string("evidence/v0.12.7/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.8/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1474,10 +1674,10 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
 
 #[test]
 fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.7/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.8/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.7/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.8/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1608,21 +1808,21 @@ fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() 
 
 #[test]
 fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negative() {
-    let fixture = fs::read_to_string("evidence/v0.12.7/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.8/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.7/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.8/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.7/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.8/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.7/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.8/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
     for required in [
-        "private let siblingFixtureTitle = \"LBB v0.12.7 Same-PID Sibling Receiver\"",
+        "private let siblingFixtureTitle = \"LBB v0.12.8 Same-PID Sibling Receiver\"",
         "var primaryWindowId = 0",
         "var siblingWindowId = 0",
         "var siblingTextLength = 0",
@@ -2005,7 +2205,7 @@ fn windows_fixture_wait_avoids_powershell_dynamic_scope_recursion() {
         .split("function Wait-ForFixtureProof {")
         .nth(1)
         .unwrap()
-        .split("if ($SelfTest) {")
+        .split("function Write-NewOperatorMarker {")
         .next()
         .unwrap();
     for required in [
@@ -2071,7 +2271,7 @@ fn windows_foreground_arm_requires_fresh_mouse_ack_and_stable_native_samples() {
         .replace("\r\n", "\n");
 
     for required in [
-        "[int]$ForegroundArmTimeoutSeconds = 90",
+        "[int]$ForegroundArmTimeoutSeconds = 300",
         "$PSVersionTable.PSEdition -cne \"Desktop\"",
         "$PSVersionTable.PSVersion.Major -ne 5",
         "Live Windows acceptance requires Windows PowerShell 5.1 (Desktop edition)",
@@ -2232,6 +2432,11 @@ fn windows_foreground_arm_requires_fresh_mouse_ack_and_stable_native_samples() {
         "armButton.Name = \"ForegroundArmButton\";",
         "armButton.Enabled = false;",
         "armButton.Text = \"CLICK TO ARM\";",
+        "protected override bool ShowWithoutActivation",
+        "Text = \"LBB Windows Acceptance - ACTION REQUIRED\";",
+        "statusLabel.Text = \"ACTION REQUIRED\\r\\nClick once, then stop using this session\";",
+        "Text = \"LBB Windows Acceptance - ARMED\";",
+        "statusLabel.Text = \"ARMED\\r\\nDo not use this session until the run finishes\";",
         "armButton.MouseDown +=",
         "armButton.MouseUp +=",
         "eventArgs.Button != MouseButtons.Left",
@@ -2308,6 +2513,22 @@ fn windows_foreground_arm_requires_fresh_mouse_ack_and_stable_native_samples() {
     assert!(!sentinel.contains("Focus();"));
     assert!(!sentinel.contains("armButton.Click +="));
     assert!(!sentinel.contains("PerformClick"));
+    assert!(sentinel.contains("protected override bool ShowWithoutActivation"));
+    assert!(
+        !sentinel.contains("WS_EX_NOACTIVATE"),
+        "the sentinel must avoid activation only when first shown; the deliberate click must still activate and focus it"
+    );
+    let mouse_up = sentinel
+        .split("armButton.MouseUp +=")
+        .nth(1)
+        .unwrap()
+        .split("Controls.Add(armButton)")
+        .next()
+        .unwrap();
+    assert!(
+        !mouse_up.contains("armButton.Enabled = false"),
+        "the acknowledged button must keep recording a duplicate click attempt so the exactly-once proof fails closed"
+    );
     assert_eq!(
         sentinel.matches("TryAcknowledgeForegroundArm(").count(),
         1,
@@ -2371,6 +2592,127 @@ fn windows_foreground_arm_requires_fresh_mouse_ack_and_stable_native_samples() {
             "Windows foreground-arm self-test is missing: {required}"
         );
     }
+}
+
+#[test]
+fn windows_foreground_arm_operator_markers_are_atomic_and_notification_only() {
+    let runner = fs::read_to_string("scripts/test-windows-computer-use.ps1")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let development = fs::read_to_string("docs/DEVELOPMENT.md").unwrap();
+
+    for required in [
+        "function Write-NewOperatorMarker {",
+        "[ValidateSet(\"foreground-arm-request.json\", \"foreground-arm-received.json\")]",
+        "[IO.FileMode]::CreateNew",
+        "[IO.FileShare]::None",
+        "$stream.Flush($true)",
+        "[IO.File]::Move($temporaryPath, $finalPath)",
+        "Operator markers are create-once for this runner and cannot be overwritten by it.",
+        "function New-ForegroundArmRequestMarker {",
+        "status = if ($operatorActionRequired) { \"action-required\" } else { \"already-armed\" }",
+        "expectedVisibleButtonText",
+        "inputStateAtPublication = $InputStateAtPublication",
+        "function New-ForegroundArmReceivedMarker {",
+        "An operator received marker requires the complete click and stable-native-sample proof.",
+        "exactClickCountsMatched = $true",
+        "notificationOnly = $true",
+        "acceptedAsAuthority = $false",
+        "rawWindowHandlesRecorded = $false",
+        "rawCursorCoordinatesRecorded = $false",
+        "pathsRecorded = $false",
+        "secretsRecorded = $false",
+        "The foreground-arm request marker failed its exact-schema self-test.",
+        "The operator marker writer failed its atomic create-once self-test.",
+        "The foreground-arm request marker did not suppress a duplicate-click prompt after an early valid acknowledgement.",
+        "The foreground-arm received marker accepted an incomplete or duplicate-click proof.",
+    ] {
+        assert!(
+            runner.contains(required),
+            "Windows foreground-arm operator-marker contract is missing: {required}"
+        );
+    }
+
+    let request_factory = runner
+        .split("function New-ForegroundArmRequestMarker {")
+        .nth(1)
+        .unwrap()
+        .split("function New-ForegroundArmReceivedMarker {")
+        .next()
+        .unwrap();
+    for forbidden in [
+        "pid =",
+        "hwnd =",
+        "cursorX =",
+        "cursorY =",
+        "token =",
+        "generation =",
+    ] {
+        assert!(
+            !request_factory.contains(forbidden),
+            "operator request marker exposes an unnecessary raw identity or secret field: {forbidden}"
+        );
+    }
+
+    let live_runner = runner
+        .split("$sessionId = (Get-Process -Id $PID).SessionId")
+        .nth(1)
+        .unwrap();
+    let delivery_proof = live_runner
+        .find("Save-StepRecord \"foreground arm request delivery\"")
+        .unwrap();
+    let request_marker = live_runner
+        .find("$foregroundArmRequestMarker = New-ForegroundArmRequestMarker")
+        .unwrap();
+    let prompt = live_runner.find("Write-Host \"ACTION REQUIRED:").unwrap();
+    let stable_wait = live_runner
+        .find("$foregroundArm = Wait-ForStableForegroundArm")
+        .unwrap();
+    let received_marker = live_runner
+        .find("$foregroundArmReceivedMarker = New-ForegroundArmReceivedMarker")
+        .unwrap();
+    let baseline = live_runner
+        .find("$baselineProbe = Capture-InvariantProbe")
+        .unwrap();
+    assert!(
+        delivery_proof < request_marker
+            && request_marker < prompt
+            && prompt < stable_wait
+            && stable_wait < received_marker
+            && received_marker < baseline,
+        "operator markers are not ordered around the existing click/native proof boundary"
+    );
+    assert_eq!(
+        live_runner.matches("$foregroundArmRequestMarker").count(),
+        2,
+        "the live runner must only construct and write the request marker"
+    );
+    assert_eq!(
+        live_runner.matches("$foregroundArmReceivedMarker").count(),
+        2,
+        "the live runner must only construct and write the received marker"
+    );
+    for forbidden in [
+        "ReadAllText($foregroundArmRequestMarker",
+        "ReadAllBytes($foregroundArmRequestMarker",
+        "Get-Content $foregroundArmRequestMarker",
+        "ReadAllText($foregroundArmReceivedMarker",
+        "ReadAllBytes($foregroundArmReceivedMarker",
+        "Get-Content $foregroundArmReceivedMarker",
+    ] {
+        assert!(
+            !live_runner.contains(forbidden),
+            "the live runner must never consume an operator marker as authority: {forbidden}"
+        );
+    }
+
+    assert_eq!(runner.matches("Save-StepResponse \"").count(), 36);
+    assert_eq!(runner.matches("Save-StepRecord \"").count(), 26);
+    assert_eq!(runner.matches("Save-ObservationScreenshot $").count(), 18);
+    assert_eq!(runner.matches("Save-SanitizedDesktopCrop \"").count(), 2);
+    assert!(development.contains(
+        "exactly 88 files: three fixture records, 62 step records, 20 sanitized screenshots, two operator notifications, and `summary.json`"
+    ));
 }
 
 #[test]

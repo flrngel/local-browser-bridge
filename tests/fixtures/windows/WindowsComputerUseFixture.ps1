@@ -764,8 +764,14 @@ namespace LbbWindowsFixture
     internal sealed class SentinelForm : Form
     {
         private readonly EvidenceStore store;
+        private readonly Label statusLabel;
         private readonly Button armButton;
         private int pressedArmGeneration;
+
+        protected override bool ShowWithoutActivation
+        {
+            get { return true; }
+        }
 
         internal SentinelForm(EvidenceStore evidenceStore)
         {
@@ -779,13 +785,13 @@ namespace LbbWindowsFixture
             TopMost = true;
             BackColor = Color.FromArgb(255, 183, 77);
             Font = new Font("Segoe UI", 10.0f, FontStyle.Bold, GraphicsUnit.Point);
-            Label label = new Label();
-            label.Location = new Point(0, 0);
-            label.Size = new Size(360, 62);
-            label.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            label.TextAlign = ContentAlignment.MiddleCenter;
-            label.Text = "FOREGROUND SENTINEL\r\nwait for the arm request before clicking";
-            Controls.Add(label);
+            statusLabel = new Label();
+            statusLabel.Location = new Point(0, 0);
+            statusLabel.Size = new Size(360, 62);
+            statusLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            statusLabel.TextAlign = ContentAlignment.MiddleCenter;
+            statusLabel.Text = "FOREGROUND SENTINEL\r\nwait for the arm request before clicking";
+            Controls.Add(statusLabel);
 
             armButton = new Button();
             armButton.Name = "ForegroundArmButton";
@@ -842,6 +848,8 @@ namespace LbbWindowsFixture
                 }
                 if (FixtureRuntime.TryAcknowledgeForegroundArm(pressed))
                 {
+                    Text = "LBB Windows Acceptance - ARMED";
+                    statusLabel.Text = "ARMED\r\nDo not use this session until the run finishes";
                     armButton.Text = "ARMED - DO NOT USE THIS SESSION";
                     armButton.BackColor = Color.FromArgb(198, 239, 206);
                     Dictionary<string, object> details = new Dictionary<string, object>();
@@ -866,6 +874,8 @@ namespace LbbWindowsFixture
                 if (FixtureRuntime.RecordForegroundArmRequest(generation))
                 {
                     pressedArmGeneration = 0;
+                    Text = "LBB Windows Acceptance - ACTION REQUIRED";
+                    statusLabel.Text = "ACTION REQUIRED\r\nClick once, then stop using this session";
                     armButton.Enabled = true;
                     FixtureRuntime.MarkForegroundArmButtonEnabled();
                     armButton.Text = "CLICK TO ARM";

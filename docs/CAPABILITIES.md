@@ -65,7 +65,7 @@ These are setup conditions, not product limitations:
 
 - Every installed component must use the same release version.
 - Browser control requires an unpacked Manifest V3 extension loaded from `chrome://extensions` or `edge://extensions`.
-- Browser control requires Chromium 140+. Cross-origin child-session routing first appeared in Chromium 125, but version 0.12.7 retains the overall floor so persisted extension storage can be restricted to trusted contexts.
+- Browser control requires Chromium 140+. Cross-origin child-session routing first appeared in Chromium 125, but version 0.12.8 retains the overall floor so persisted extension storage can be restricted to trusted contexts.
 - The complete macOS archive requires macOS 13+. Live sharing additionally requires Screen Recording permission for the packaged helper application.
 - macOS semantic control and supported input routes require Accessibility permission.
 - Windows native control must run in the signed-in interactive session, not Session 0 or a service.
@@ -86,8 +86,8 @@ See [Installation](INSTALL.md) for the user flow.
 ## Evidence status
 
 - The browser evidence under [`evidence/v0.11.1`](../evidence/v0.11.1/README.md) separates published 0.11.1 results from a local 0.11.2 recursive-frame candidate.
-- The published native evidence proves the earlier exact-window observation, semantic actions, background input invariants, and bounded share protocol. It does not by itself prove the newer persistent SCStream or WGC source.
-- Persistent native-stream code must receive packaged, version-specific live proof on both operating systems before its implementation status is treated as release proof.
+- The exact v0.12.7 macOS candidate passed 187/187 persistent-stream checks and produced six reviewed screenshots, but its same-candidate Windows run received no required foreground-arm click and stopped before the invariant baseline or any product action. Chrome acceptance was never started, publication was canceled, and no v0.12.7 Release exists.
+- That macOS candidate pass is real historical package evidence, but it is not immutable release proof and cannot substitute for v0.12.8 package evidence. Persistent native-stream code still needs packaged, version-specific live proof on both operating systems before its implementation status is treated as release proof.
 - Cross-Space macOS capture/input, minimized-window capture, protected content, elevated Windows targets, and a broad application compatibility matrix remain unproven and are not advertised.
 
 Transport success is diagnostic evidence. A native action is supported only when a representative application-owned result and the advertised platform-specific foreground/window-focus, pointer, and desktop invariants are also observed. Successful snapshots are post-dispatch evidence, not transactional rollback or proof that no shorter transient change occurred.

@@ -1,13 +1,9 @@
-# Withdrawn Windows v0.12.7 stock-Chrome acceptance protocol
+# Windows v0.12.8 stock-Chrome acceptance protocol
 
-This directory preserves the release-gate protocol that was prepared for the
-v0.12.7 browser extension and packaged Windows computer helper. It is protocol
-infrastructure, not passing evidence. The exact candidate stopped at its native
-foreground-arm gate before Chrome was started, so no `browser-acceptance.json`,
-operator record, or browser screenshot was produced. The protected publication
-job was canceled and no v0.12.7 GitHub Release was created. Use the versioned
-v0.12.8 protocol for the current candidate; keep this file only as historical
-contract evidence.
+This directory defines the release gate for the v0.12.8 browser extension and
+packaged Windows computer helper. It is protocol infrastructure, not passing
+evidence. A release passes only when one frozen candidate run produces the
+finalizer-owned `browser-acceptance.json`.
 
 The run is new-install-only. Use the user's installed, ordinary Google Chrome,
 an existing user session, one new dedicated Chrome window, and a brand-new
@@ -77,7 +73,7 @@ file, then run that file once in a fresh absolute 64-bit
 `powershell.exe -NoProfile` process with a private working directory. The first
 block opens the outer `try`; the final block closes it and performs cleanup. Do
 not execute the blocks independently. The
-coordinator independently supplies version `0.12.7`, lowercase `FINAL_SHA`,
+coordinator independently supplies version `0.12.8`, lowercase `FINAL_SHA`,
 the SHA-256 of `SHA256SUMS.txt`, absolute trusted `git.exe` and `gh.exe` paths,
 and a least-privilege GitHub token. Never execute a script from a supplied
 checkout.
@@ -150,16 +146,17 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$Version = "0.12.7"
+$Version = "0.12.8"
 $FinalSha = "REPLACE_WITH_COORDINATOR_FINAL_SHA"
 $ManifestSha = "REPLACE_WITH_COORDINATOR_MANIFEST_SHA256"
 $Candidate = "REPLACE_WITH_PRIVATE_FIVE_FILE_DOWNLOAD_DIRECTORY"
 $PrivateParent = "REPLACE_WITH_PRIVATE_TEST_OWNED_PARENT"
+$ShortSourceParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
 $TrustedGit = "REPLACE_WITH_ABSOLUTE_TRUSTED_GIT_EXE"
 $TrustedGh = "REPLACE_WITH_ABSOLUTE_TRUSTED_GH_EXE"
 $Origin = "https://github.com/flrngel/local-browser-bridge.git"
 
-if ($Version -cne "0.12.7" -or $FinalSha -cnotmatch '^[0-9a-f]{40}$' -or
+if ($Version -cne "0.12.8" -or $FinalSha -cnotmatch '^[0-9a-f]{40}$' -or
     $ManifestSha -cnotmatch '^[0-9a-f]{64}$') {
   throw "Coordinator candidate identifiers are not canonical."
 }
@@ -177,6 +174,10 @@ if (-not [IO.Directory]::Exists($PrivateParent) -or
     ([IO.DirectoryInfo]::new($PrivateParent).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
   throw "PrivateParent must be an existing ordinary test-owned directory."
 }
+if (-not [IO.Directory]::Exists($ShortSourceParent) -or $ShortSourceParent.Length -gt 80 -or
+    ([IO.DirectoryInfo]::new($ShortSourceParent).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+  throw "The system temporary directory must be an existing short ordinary source parent."
+}
 
 $OwnedDirectories = New-Object Collections.Generic.List[string]
 function New-PrivateEmptyDirectory([string]$Prefix) {
@@ -193,6 +194,20 @@ function New-PrivateEmptyDirectory([string]$Prefix) {
   return $Item.FullName
 }
 
+function New-ShortSourceDirectory {
+  $Path = [IO.Path]::GetFullPath((Join-Path $ShortSourceParent ("lbb-src-" + [Guid]::NewGuid().ToString("N"))))
+  $ParentPrefix = $ShortSourceParent + '\'
+  if (-not $Path.StartsWith($ParentPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "New source directory escaped the short source parent."
+  }
+  $OwnedDirectories.Add($Path)
+  [IO.Directory]::CreateDirectory($Path) | Out-Null
+  $Item = [IO.DirectoryInfo]::new($Path)
+  if (($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+      $Item.GetFileSystemInfos().Count -ne 0) { throw "New source directory is not empty and ordinary." }
+  return $Item.FullName
+}
+
 function Get-TrustedSha256([string]$Path) {
   $Stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
   try {
@@ -206,9 +221,14 @@ function Get-TrustedSha256([string]$Path) {
 function Remove-TestOwnedTree([string]$Path) {
   if ([String]::IsNullOrWhiteSpace($Path) -or -not [IO.Directory]::Exists($Path)) { return }
   $Full = [IO.Path]::GetFullPath($Path)
-  $ParentPrefix = [IO.Path]::GetFullPath($PrivateParent).TrimEnd('\') + '\'
+  $PrivateParentPrefix = [IO.Path]::GetFullPath($PrivateParent).TrimEnd('\') + '\'
+  $ShortSourceParentPrefix = $ShortSourceParent + '\'
+  $UnderApprovedParent = (
+    $Full.StartsWith($PrivateParentPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+    $Full.StartsWith($ShortSourceParentPrefix, [StringComparison]::OrdinalIgnoreCase)
+  )
   if (-not $OwnedDirectories.Contains($Full) -or
-      -not $Full.StartsWith($ParentPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+      -not $UnderApprovedParent) {
     throw "Cleanup refused a directory without exact random-run ownership."
   }
   function Remove-VerifiedNode([IO.DirectoryInfo]$Directory) {
@@ -282,7 +302,7 @@ $RawScreenshotDirectory = $null
 $ExtensionDirectory = $null
 $SecureGhToken = $null
 try {
-$Repository = New-PrivateEmptyDirectory "lbb-repo-"
+$Repository = New-ShortSourceDirectory
 $EvidenceDirectory = New-PrivateEmptyDirectory "lbb-evidence-"
 $RawScreenshotDirectory = New-PrivateEmptyDirectory "lbb-raw-"
 $ExtensionDirectory = New-PrivateEmptyDirectory "lbb-extension-"
@@ -385,11 +405,14 @@ $SecureGhToken = $null
 
 $GitCommon = @(
   "--no-replace-objects", "--no-lazy-fetch", "-c", "core.fsmonitor=false",
-  "-c", "core.hooksPath=$EmptyHooks", "-c", "core.autocrlf=false"
+  "-c", "core.hooksPath=$EmptyHooks", "-c", "core.autocrlf=false",
+  "-c", "core.longpaths=true"
 )
 & $TrustedGit @GitCommon clone --no-checkout --no-local --origin origin `
   "--template=$EmptyTemplates" $Origin $Repository
 if ($LASTEXITCODE -ne 0) { throw "Fixed-origin fresh clone failed." }
+& $TrustedGit @GitCommon -C $Repository config --local core.longpaths true
+if ($LASTEXITCODE -ne 0) { throw "Fresh clone could not persist long-path support." }
 & $TrustedGit @GitCommon -C $Repository checkout --detach --force $FinalSha
 if ($LASTEXITCODE -ne 0) { throw "Exact detached checkout failed." }
 
@@ -409,7 +432,7 @@ $TrustedRelativeFiles = @(
   "scripts/test-windows-browser-api.ps1",
   "scripts/record-computer-helper-chain.ps1",
   "scripts/sanitize-browser-evidence-screenshot.ps1",
-  "evidence/v0.12.7/browser/operator-results.template.json"
+  "evidence/v0.12.8/browser/operator-results.template.json"
 )
 function Export-ExactTrustedBlob([string]$ObjectId, [string]$Relative) {
   if ($ObjectId -cnotmatch '^[0-9a-f]{40}$' -or $TrustedRelativeFiles -cnotcontains $Relative) {
@@ -532,7 +555,7 @@ The canonical UI sequence is short and explicit:
 3. Click **Load unpacked**. In the native picker the helper focuses the address
    with `Control+L`, types the exact candidate directory, presses Enter,
    obtains a fresh frame, and actually clicks **Select Folder**.
-4. Verify exactly one enabled v0.12.7 card with no load error. Open the
+4. Verify exactly one enabled v0.12.8 card with no load error. Open the
    Extensions menu and choose Local Browser Bridge; do not assume it is pinned.
 5. In the first popup frames, capture Full Access and verify the saved token is
    initially unconfigured. Enable Full Access only when required, then save the
@@ -565,7 +588,7 @@ operator guidance and creates no passing helper record.
 
 | Purpose | Sanitized image | Human-visible state required |
 |---|---|---|
-| `extension-loaded` | `browser-01-extension-loaded.png` | Stock `chrome://extensions` shows exactly one enabled unpacked Local Browser Bridge v0.12.7 card, no load error, and Chrome's native debugger-use indicator while the bridge lease is active. |
+| `extension-loaded` | `browser-01-extension-loaded.png` | Stock `chrome://extensions` shows exactly one enabled unpacked Local Browser Bridge v0.12.8 card, no load error, and Chrome's native debugger-use indicator while the bridge lease is active. |
 | `api-action-result` | `browser-02-api-action-result.png` | The exact loopback demo visibly says `Hello, Bridge Matrix. blue selected.` after the browser API action. |
 | `computer-share-action` | `browser-03-computer-share-action.png` | The exact shared demo visibly shows `coordinate:true` after the native helper click plus the synthetic session pointer. |
 
@@ -755,5 +778,5 @@ retained file.
 The outer `finally` restores the coordinator environment, disposes only the
 random test-owned clone/home/config/hook/template directories after an exact
 ownership and non-reparse walk, and invalidates a passing output if that cleanup
-fails. It never deletes `$PrivateParent`, the supplied download directory, or an
-unverified path.
+fails. It never deletes `$PrivateParent`, `$ShortSourceParent`, the supplied
+download directory, or an unverified path.

@@ -42,7 +42,7 @@ param(
     [int]$TimeoutSeconds = 45,
 
     [ValidateRange(15, 300)]
-    [int]$ForegroundArmTimeoutSeconds = 90,
+    [int]$ForegroundArmTimeoutSeconds = 300,
 
     [switch]$ShowOccluder,
 
@@ -279,9 +279,11 @@ if (-not $SelfTest) {
     $fixtureEvidence = [IO.Path]::Combine($evidenceRoot, "fixture")
     $stepEvidence = [IO.Path]::Combine($evidenceRoot, "steps")
     $screenshotEvidence = [IO.Path]::Combine($evidenceRoot, "screenshots")
+    $operatorEvidence = [IO.Path]::Combine($evidenceRoot, "operator")
     [IO.Directory]::CreateDirectory($fixtureEvidence) | Out-Null
     [IO.Directory]::CreateDirectory($stepEvidence) | Out-Null
     [IO.Directory]::CreateDirectory($screenshotEvidence) | Out-Null
+    [IO.Directory]::CreateDirectory($operatorEvidence) | Out-Null
 }
 
 $probeSource = @'
@@ -1154,6 +1156,141 @@ function Wait-ForFixtureProof {
     throw "Timed out waiting for $Description."
 }
 
+function Write-NewOperatorMarker {
+    param(
+        [string]$Directory,
+        [ValidateSet("foreground-arm-request.json", "foreground-arm-received.json")]
+        [string]$FileName,
+        [object]$Value
+    )
+    if (-not [IO.Directory]::Exists($Directory)) {
+        throw "The operator-marker directory does not exist."
+    }
+    $finalPath = [IO.Path]::Combine($Directory, $FileName)
+    if ([IO.File]::Exists($finalPath)) {
+        throw "Operator markers are create-once for this runner and cannot be overwritten by it."
+    }
+    $temporaryPath = [IO.Path]::Combine(
+        $Directory,
+        "." + $FileName + "." + [Guid]::NewGuid().ToString("N") + ".tmp"
+    )
+    $stream = $null
+    try {
+        $json = $Value | ConvertTo-Json -Depth 20
+        $bytes = [Text.UTF8Encoding]::new($false).GetBytes($json + [Environment]::NewLine)
+        $stream = [IO.FileStream]::new(
+            $temporaryPath,
+            [IO.FileMode]::CreateNew,
+            [IO.FileAccess]::Write,
+            [IO.FileShare]::None
+        )
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush($true)
+        $stream.Dispose()
+        $stream = $null
+        # The temporary file and destination share a directory, so observers
+        # see either no marker or one complete runner-create-once JSON document.
+        [IO.File]::Move($temporaryPath, $finalPath)
+    }
+    finally {
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        }
+        if ([IO.File]::Exists($temporaryPath)) {
+            [IO.File]::Delete($temporaryPath)
+        }
+    }
+    return $finalPath
+}
+
+function New-ForegroundArmRequestMarker {
+    param(
+        [ValidatePattern('^[0-9a-f]{32}$')]
+        [string]$RequestId,
+        [ValidateSet("not-started", "already-acknowledged")]
+        [string]$InputStateAtPublication,
+        [ValidateRange(15, 300)]
+        [int]$TimeoutSeconds,
+        [bool]$RequestDelivered,
+        [bool]$ButtonEnabled,
+        [bool]$NativeTopologyMatched
+    )
+    if (-not $RequestDelivered -or -not $ButtonEnabled -or -not $NativeTopologyMatched) {
+        throw "An operator request marker requires a completed request-delivery proof."
+    }
+    $operatorActionRequired = $InputStateAtPublication -ceq "not-started"
+    return [ordered]@{
+        schemaVersion = 1
+        kind = "foreground-arm"
+        status = if ($operatorActionRequired) { "action-required" } else { "already-armed" }
+        requestId = $RequestId
+        publishedAtUtc = [DateTime]::UtcNow.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
+        timeoutSeconds = $TimeoutSeconds
+        operatorActionRequired = $operatorActionRequired
+        expectedVisibleButtonText = if ($operatorActionRequired) { "CLICK TO ARM" } else { "ARMED - DO NOT USE THIS SESSION" }
+        instruction = if ($operatorActionRequired) { "If the button says CLICK TO ARM, click it once. If it says ARMED, do not click again. Then stop using this Windows session." } else { "Do not click again; stop using this Windows session." }
+        requestDelivered = $true
+        buttonEnabled = $true
+        nativeTopologyMatched = $true
+        inputStateAtPublication = $InputStateAtPublication
+        notificationOnly = $true
+        acceptedAsAuthority = $false
+        rawWindowHandlesRecorded = $false
+        rawCursorCoordinatesRecorded = $false
+        pathsRecorded = $false
+        secretsRecorded = $false
+    }
+}
+
+function New-ForegroundArmReceivedMarker {
+    param(
+        [ValidatePattern('^[0-9a-f]{32}$')]
+        [string]$RequestId,
+        [object]$Proof
+    )
+    $exactClickCountsMatched = (
+        $Proof.completed -eq $true -and
+        [int]$Proof.fixtureRequestCount -eq 1 -and
+        [int]$Proof.fixtureAcknowledgementCount -eq 1 -and
+        [int]$Proof.fixtureLeftMouseDownCount -eq 1 -and
+        [int]$Proof.fixtureLeftMouseUpCount -eq 1
+    )
+    $nativeGatesMatched = (
+        $Proof.nativeTopologyMatched -eq $true -and
+        $Proof.foregroundMatched -eq $true -and
+        $Proof.focusMatched -eq $true -and
+        $Proof.cursorAvailable -eq $true -and
+        $Proof.cursorStable -eq $true -and
+        $Proof.inputDesktopAvailable -eq $true -and
+        $Proof.inputDesktopStable -eq $true -and
+        [int]$Proof.stableSamplesObserved -ge [int]$Proof.stableSamplesRequired
+    )
+    if (-not $exactClickCountsMatched -or -not $nativeGatesMatched) {
+        throw "An operator received marker requires the complete click and stable-native-sample proof."
+    }
+    return [ordered]@{
+        schemaVersion = 1
+        kind = "foreground-arm"
+        status = "received"
+        requestId = $RequestId
+        receivedAtUtc = [DateTime]::UtcNow.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
+        exactClickCountsMatched = $true
+        stableSamplesObserved = [int]$Proof.stableSamplesObserved
+        stableSamplesRequired = [int]$Proof.stableSamplesRequired
+        nativeTopologyMatched = $true
+        foregroundMatched = $true
+        focusMatched = $true
+        cursorStable = $true
+        inputDesktopStable = $true
+        notificationOnly = $true
+        acceptedAsAuthority = $false
+        rawWindowHandlesRecorded = $false
+        rawCursorCoordinatesRecorded = $false
+        pathsRecorded = $false
+        secretsRecorded = $false
+    }
+}
+
 $script:foregroundArmProof = $null
 
 function Test-ForegroundArmRequestDeliveryState {
@@ -1639,6 +1776,129 @@ if ($SelfTest) {
             $armTimeoutWatch.ElapsedMilliseconds -gt 2000 -or
             $script:foregroundArmProof.completed -ne $false) {
             throw "The foreground-arm wait did not fail closed for the synthetic $($armTimeoutCase.name) case."
+        }
+    }
+
+    $operatorMarkerSelfTestRoot = [IO.Path]::Combine(
+        [IO.Path]::GetTempPath(),
+        "lbb-operator-marker-self-test-" + [Guid]::NewGuid().ToString("N")
+    )
+    [IO.Directory]::CreateDirectory($operatorMarkerSelfTestRoot) | Out-Null
+    try {
+        $operatorMarkerSelfTestRequestId = "0123456789abcdef0123456789abcdef"
+        $operatorRequestMarker = New-ForegroundArmRequestMarker `
+            -RequestId $operatorMarkerSelfTestRequestId `
+            -InputStateAtPublication "not-started" `
+            -TimeoutSeconds 120 `
+            -RequestDelivered $true `
+            -ButtonEnabled $true `
+            -NativeTopologyMatched $true
+        $operatorRequestPath = Write-NewOperatorMarker `
+            -Directory $operatorMarkerSelfTestRoot `
+            -FileName "foreground-arm-request.json" `
+            -Value $operatorRequestMarker
+        $operatorRequestBytesBefore = [IO.File]::ReadAllBytes($operatorRequestPath)
+        $operatorRequestJson = [Text.Encoding]::UTF8.GetString($operatorRequestBytesBefore)
+        $operatorRequestRecord = $operatorRequestJson | ConvertFrom-Json
+        $expectedRequestMarkerProperties = @(
+            "schemaVersion", "kind", "status", "requestId", "publishedAtUtc",
+            "timeoutSeconds", "operatorActionRequired", "expectedVisibleButtonText",
+            "instruction", "requestDelivered", "buttonEnabled", "nativeTopologyMatched",
+            "inputStateAtPublication", "notificationOnly", "acceptedAsAuthority",
+            "rawWindowHandlesRecorded", "rawCursorCoordinatesRecorded", "pathsRecorded",
+            "secretsRecorded"
+        )
+        if ((@($operatorRequestRecord.PSObject.Properties.Name) -join "|") -cne ($expectedRequestMarkerProperties -join "|") -or
+            $operatorRequestRecord.status -cne "action-required" -or
+            $operatorRequestRecord.requestId -cne $operatorMarkerSelfTestRequestId -or
+            $operatorRequestRecord.operatorActionRequired -ne $true -or
+            $operatorRequestRecord.notificationOnly -ne $true -or
+            $operatorRequestRecord.acceptedAsAuthority -ne $false) {
+            throw "The foreground-arm request marker failed its exact-schema self-test."
+        }
+        foreach ($forbiddenMarkerField in @('"token"', '"pid"', '"hwnd"', '"cursorX"', '"cursorY"', '"path"')) {
+            if ($operatorRequestJson.IndexOf($forbiddenMarkerField, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                throw "The foreground-arm request marker retained a forbidden raw or secret-bearing field."
+            }
+        }
+        $duplicateMarkerFailure = $null
+        try {
+            $null = Write-NewOperatorMarker `
+                -Directory $operatorMarkerSelfTestRoot `
+                -FileName "foreground-arm-request.json" `
+                -Value $operatorRequestMarker
+        }
+        catch {
+            $duplicateMarkerFailure = $_.Exception.Message
+        }
+        $operatorRequestBytesAfter = [IO.File]::ReadAllBytes($operatorRequestPath)
+        if ($duplicateMarkerFailure -cne "Operator markers are create-once for this runner and cannot be overwritten by it." -or
+            [Convert]::ToBase64String($operatorRequestBytesBefore) -cne [Convert]::ToBase64String($operatorRequestBytesAfter) -or
+            @([IO.Directory]::EnumerateFiles($operatorMarkerSelfTestRoot, "*.tmp")).Count -ne 0) {
+            throw "The operator marker writer failed its atomic create-once self-test."
+        }
+
+        $alreadyArmedMarker = New-ForegroundArmRequestMarker `
+            -RequestId $operatorMarkerSelfTestRequestId `
+            -InputStateAtPublication "already-acknowledged" `
+            -TimeoutSeconds 120 `
+            -RequestDelivered $true `
+            -ButtonEnabled $true `
+            -NativeTopologyMatched $true
+        if ($alreadyArmedMarker.status -cne "already-armed" -or
+            $alreadyArmedMarker.operatorActionRequired -ne $false) {
+            throw "The foreground-arm request marker did not suppress a duplicate-click prompt after an early valid acknowledgement."
+        }
+
+        $operatorReceivedProof = [pscustomobject]@{
+            completed = $true
+            fixtureRequestCount = 1
+            fixtureAcknowledgementCount = 1
+            fixtureLeftMouseDownCount = 1
+            fixtureLeftMouseUpCount = 1
+            nativeTopologyMatched = $true
+            foregroundMatched = $true
+            focusMatched = $true
+            cursorAvailable = $true
+            cursorStable = $true
+            inputDesktopAvailable = $true
+            inputDesktopStable = $true
+            stableSamplesObserved = 3
+            stableSamplesRequired = 3
+        }
+        $operatorReceivedMarker = New-ForegroundArmReceivedMarker `
+            -RequestId $operatorMarkerSelfTestRequestId `
+            -Proof $operatorReceivedProof
+        $operatorReceivedPath = Write-NewOperatorMarker `
+            -Directory $operatorMarkerSelfTestRoot `
+            -FileName "foreground-arm-received.json" `
+            -Value $operatorReceivedMarker
+        $operatorReceivedRecord = [IO.File]::ReadAllText($operatorReceivedPath, [Text.Encoding]::UTF8) | ConvertFrom-Json
+        if ($operatorReceivedRecord.status -cne "received" -or
+            $operatorReceivedRecord.requestId -cne $operatorRequestRecord.requestId -or
+            $operatorReceivedRecord.exactClickCountsMatched -ne $true -or
+            $operatorReceivedRecord.stableSamplesObserved -ne 3 -or
+            $operatorReceivedRecord.notificationOnly -ne $true -or
+            $operatorReceivedRecord.acceptedAsAuthority -ne $false) {
+            throw "The foreground-arm received marker failed its exact-proof self-test."
+        }
+        $operatorReceivedProof.fixtureLeftMouseUpCount = 2
+        $incompleteReceivedMarkerFailure = $null
+        try {
+            $null = New-ForegroundArmReceivedMarker `
+                -RequestId $operatorMarkerSelfTestRequestId `
+                -Proof $operatorReceivedProof
+        }
+        catch {
+            $incompleteReceivedMarkerFailure = $_.Exception.Message
+        }
+        if ($incompleteReceivedMarkerFailure -cne "An operator received marker requires the complete click and stable-native-sample proof.") {
+            throw "The foreground-arm received marker accepted an incomplete or duplicate-click proof."
+        }
+    }
+    finally {
+        if ([IO.Directory]::Exists($operatorMarkerSelfTestRoot)) {
+            [IO.Directory]::Delete($operatorMarkerSelfTestRoot, $true)
         }
     }
 
@@ -2677,6 +2937,7 @@ $foregroundArmRequestDeliveryTimeoutSeconds = 10
 # Acceptance-only WM_APP handshake shared with the fixture; never exposed by
 # the server or helper protocol.
 $foregroundArmMessage = 0x8126
+$foregroundArmOperatorRequestId = [Guid]::NewGuid().ToString("N")
 $foregroundArmRequestGeneration = [BitConverter]::ToInt32([Guid]::NewGuid().ToByteArray(), 0) -band 0x7fffffff
 if ($foregroundArmRequestGeneration -eq 0) {
     $foregroundArmRequestGeneration = 1
@@ -2855,13 +3116,14 @@ try {
     $script:foregroundArmProof.requestDelivered = $true
     $script:foregroundArmProof.armButtonEnabled = $true
     $script:foregroundArmProof.nativeTopologyMatched = $true
+    $armRequestInputState = if ([int]$armRequestDelivery.foregroundArmAcknowledgedGeneration -eq $foregroundArmRequestGeneration) { "already-acknowledged" } else { "not-started" }
     Save-StepRecord "foreground arm request delivery" ([ordered]@{
         requestedGeneration = $foregroundArmRequestGeneration
         requestPosted = $true
         requestDelivered = $true
         requestDeliveryTimeoutSeconds = $foregroundArmRequestDeliveryTimeoutSeconds
         fixtureRequestMatched = [int]$armRequestDelivery.foregroundArmRequestedGeneration -eq $foregroundArmRequestGeneration
-        fixtureInputState = if ([int]$armRequestDelivery.foregroundArmAcknowledgedGeneration -eq $foregroundArmRequestGeneration) { "already-acknowledged" } else { "not-started" }
+        fixtureInputState = $armRequestInputState
         fixtureRequestCount = [int]$armRequestDelivery.foregroundArmRequestCount
         fixtureAcknowledgementCount = [int]$armRequestDelivery.foregroundArmAcknowledgementCount
         fixtureLeftMouseDownCount = [int]$armRequestDelivery.foregroundArmLeftMouseDownCount
@@ -2873,6 +3135,17 @@ try {
         rawWindowHandlesRecorded = $false
         rawCursorCoordinatesRecorded = $false
     })
+    $foregroundArmRequestMarker = New-ForegroundArmRequestMarker `
+        -RequestId $foregroundArmOperatorRequestId `
+        -InputStateAtPublication $armRequestInputState `
+        -TimeoutSeconds $ForegroundArmTimeoutSeconds `
+        -RequestDelivered $true `
+        -ButtonEnabled ($armRequestDelivery.foregroundArmButtonEnabled -eq $true) `
+        -NativeTopologyMatched $armRequestTopologyMatched
+    $null = Write-NewOperatorMarker `
+        -Directory $operatorEvidence `
+        -FileName "foreground-arm-request.json" `
+        -Value $foregroundArmRequestMarker
     Write-Host "ACTION REQUIRED: If the large button in the orange LBB Foreground Sentinel window says CLICK TO ARM, click it once within $ForegroundArmTimeoutSeconds seconds. If it already says ARMED, do not click again. Then do not use this Windows session until the runner finishes."
     $script:runStage = "wait-foreground-arm"
     $foregroundArm = Wait-ForStableForegroundArm `
@@ -2885,6 +3158,13 @@ try {
         -RequiredStableSamples 3 `
         -TimeoutMilliseconds ($ForegroundArmTimeoutSeconds * 1000)
     $script:foregroundArmProof.requestPosted = $true
+    $foregroundArmReceivedMarker = New-ForegroundArmReceivedMarker `
+        -RequestId $foregroundArmOperatorRequestId `
+        -Proof $foregroundArm.proof
+    $null = Write-NewOperatorMarker `
+        -Directory $operatorEvidence `
+        -FileName "foreground-arm-received.json" `
+        -Value $foregroundArmReceivedMarker
     $baselineProbe = Capture-InvariantProbe -AfterStatePublicationGeneration ([Int64]$foregroundArm.fixtureState.statePublicationGeneration)
     $script:lastInvariantPublicationGeneration = [Int64]$baselineProbe.statePublicationGeneration
     $armNativeSample = $foregroundArm.nativeSample
