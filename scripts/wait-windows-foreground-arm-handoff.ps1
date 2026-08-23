@@ -643,11 +643,14 @@ function Invoke-SelfTest {
         -ExpectedText "not one complete JSON object" `
         -Label "malformed marker"
 
+    # Keep these operation blocks in the script scope. PowerShell 7 runs a
+    # GetNewClosure() block in a dynamic module that cannot resolve the
+    # watcher functions when this script is invoked with the call operator.
     $staleAtomic = New-SelfTestMarker $now.AddSeconds(-40) "action-required" 300
     Assert-SelfTestFailure `
         -Operation {
             $null = Assert-FreshMarkerBinding $staleAtomic $runnerStart $now 30 2 2
-        }.GetNewClosure() `
+        } `
         -ExpectedText "stale for immediate operator handoff" `
         -Label "stale marker"
 
@@ -655,7 +658,7 @@ function Invoke-SelfTest {
     Assert-SelfTestFailure `
         -Operation {
             $null = Assert-FreshMarkerBinding $futureAtomic $runnerStart $now 30 2 2
-        }.GetNewClosure() `
+        } `
         -ExpectedText "unacceptably far in the future" `
         -Label "future marker"
 
@@ -663,7 +666,7 @@ function Invoke-SelfTest {
     Assert-SelfTestFailure `
         -Operation {
             $null = Assert-FreshMarkerBinding $expiredAtomic $runnerStart $now 60 2 2
-        }.GetNewClosure() `
+        } `
         -ExpectedText "marker has expired" `
         -Label "expired marker"
 
@@ -682,7 +685,7 @@ function Invoke-SelfTest {
                 -AllowedFutureSeconds 2 `
                 -AllowedFileTimestampDifferenceSeconds 2 `
                 -PollIntervalMilliseconds 0
-        }.GetNewClosure() `
+        } `
         -ExpectedText "runner is not alive" `
         -Label "dead runner"
 
@@ -691,7 +694,7 @@ function Invoke-SelfTest {
         return [pscustomobject]@{ alive = $true; startTimeUtc = $runnerStart.AddTicks(1).UtcDateTime }
     }.GetNewClosure()
     Assert-SelfTestFailure `
-        -Operation { $null = Assert-BoundRunnerState (& $wrongStartReader 17) $runnerStart }.GetNewClosure() `
+        -Operation { $null = Assert-BoundRunnerState (& $wrongStartReader 17) $runnerStart } `
         -ExpectedText "does not match the exact expected start time" `
         -Label "runner start-time mismatch"
 

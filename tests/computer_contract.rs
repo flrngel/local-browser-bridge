@@ -3106,6 +3106,10 @@ fn windows_foreground_arm_handoff_watcher_is_strict_read_only_and_non_authoritat
     }
 
     assert_eq!(watcher.matches("Write-Output ($handoff").count(), 1);
+    assert!(
+        watcher.contains("PowerShell 7 runs a\n    # GetNewClosure() block in a dynamic module")
+    );
+    assert!(!watcher.contains("}.GetNewClosure() `\n        -ExpectedText"));
     assert!(runner.contains("-ProductVersion $Version"));
     assert!(runner.contains("-ProductVersion \"0.12.9\""));
     assert!(runner.contains("maximumClickAttempts -ne 1"));
