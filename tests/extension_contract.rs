@@ -898,7 +898,7 @@ fn actual_websocket_handlers_do_not_resume_after_transport_retirement() {
       const functions = ["retireProtocolSocket", "protocolSocketAdmitted", "exactObjectKeys", "connectNow"]
         .map((name) => extractFunction(source, name)).join("\n");
       const bridge = new Function("deferred", `
-        const VERSION = "0.12.11";
+        const VERSION = "0.12.12";
         const PROTOCOL_VERSION = 1;
         const AUTH_NEGOTIATION_TIMEOUT_MS = 3000;
         const AUTH_MAX_INBOUND_FRAMES = 4;
@@ -2924,7 +2924,7 @@ fn control_is_visible_and_user_stoppable_in_page_and_popup() {
     assert!(content.contains("lastControlState"));
     assert!(content.contains("!controlUi.host.isConnected"));
     assert!(content.contains("queueMicrotask"));
-    assert!(popup.contains("Chrome shows its native debugging notice"));
+    assert!(popup.contains("The browser shows its native debugging notice"));
     assert!(popup.contains("id=\"start-control\""));
     assert!(popup.contains("id=\"release-control\""));
     assert!(popup_script.contains("startControlCurrent"));
@@ -6167,7 +6167,9 @@ fn control_ui_render_capture_and_stop_failures_are_fail_closed() {
         assert!(content.contains(acknowledgement));
     }
     assert!(content.contains("await waitForRenderOpportunity()"));
-    assert!(content.contains("Stop failed—use Chrome Cancel or the extension popup."));
+    assert!(
+        content.contains("Stop failed—use the browser's Cancel action or the extension popup.")
+    );
     assert!(content.contains("Retry Stop"));
 
     let script = r#"

@@ -58,12 +58,12 @@
         <div class="section-heading control-heading">
           <div>
             <p class="eyebrow">VISIBLE BROWSER CONTROL</p>
-            <h2 id="browser-control-title">Chrome control lease</h2>
+            <h2 id="browser-control-title">Browser control lease</h2>
             <p id="browser-control-summary" class="target-meta" role="status" aria-live="polite">Connect the extension and select a tab to start a visible control session.</p>
           </div>
           <span id="browser-control-badge" class="state-badge inactive">Inactive</span>
         </div>
-        <p class="control-boundary"><strong>Two visible signals:</strong> while the debugger-backed lease is active, Chrome owns the “Local Browser Bridge started debugging this browser” banner. The extension separately shows “Local Browser Bridge is using this tab” inside the page. Stop here, press the in-tab Stop button, or use Chrome's Cancel action to revoke control.</p>
+        <p class="control-boundary"><strong>Two visible signals:</strong> while the debugger-backed lease is active, the browser owns its native debugging notice. The extension separately shows “Local Browser Bridge is using this tab” inside the page. Stop here, press the in-tab Stop button, or use the browser's Cancel action to revoke control.</p>
         <div class="control-layout">
           <dl id="browser-control-details" class="metadata-list" aria-label="Browser control session details">
             <div><dt>Session</dt><dd>Not started</dd></div>
@@ -98,7 +98,7 @@
             <button id="computer-observe" type="button" class="button primary">One-shot observe</button>
           </div>
         </div>
-        <p class="computer-boundary"><strong>Two capture modes:</strong> Observe takes one exact-window snapshot. Share keeps a persistent operating-system exact-window stream open. Supported input compares the platform's foreground/window-focus oracle, active desktop, and physical pointer before and after delivery and fails if those samples differ; matching samples cannot rule out a shorter transient change. On macOS, focus-capable input may briefly make the exact target <code>AXFrontmost</code> under a restored focus lease without raising it or switching WindowServer's OS-front process/window. Both modes use your shared login session, not a VM or separate desktop.</p>
+        <p class="computer-boundary"><strong>Two capture modes:</strong> Observe takes one exact-window snapshot. Share keeps a persistent operating-system exact-window stream open. Supported input seals an exact-target route and samples the platform's foreground/window-focus oracle, active desktop, and shared-pointer boundary before and after delivery. An unknown route or boundary fails closed; concurrent pointer activity is reported as contaminated without attributing it to a physical device or the helper. Matching samples still cannot rule out a shorter transient change. On macOS, focus-capable input may briefly make the exact target <code>AXFrontmost</code> under a restored focus lease without raising it or switching WindowServer's OS-front process/window. Both modes use your shared login session, not a VM or separate desktop.</p>
         <div class="share-toolbar">
           <label class="share-target" for="computer-window">Target application window
             <select id="computer-window"></select>
@@ -234,7 +234,7 @@
           <p id="computer-action-summary" class="evidence-summary">Run a native action to inspect its delivery invariants and any verified target-side postcondition.</p>
           <dl id="computer-action-details" class="metadata-list evidence-details"></dl>
           <ul id="computer-action-evidence" class="evidence-list"></ul>
-          <p class="evidence-note"><strong>Evidence rule:</strong> matching before/after foreground, focus, desktop, and hardware-pointer samples support the delivery invariant, but do not prove zero interruption or rule out a shorter transient change. A target effect is confirmed only when a semantic postcondition is observed.</p>
+          <p class="evidence-note"><strong>Evidence rule:</strong> a sealed target route plus corroborated foreground, focus, desktop, and shared-pointer boundaries support the delivery invariant, but do not prove zero interruption, identify a physical actor, or rule out a shorter transient change. Concurrent pointer activity is reported separately and may leave helper-global pointer preservation confirmed. A target effect is confirmed only when a semantic postcondition is observed.</p>
         </section>
       </section>
 

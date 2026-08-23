@@ -132,10 +132,19 @@ $script:ExpectedScreenshotsV2 = [ordered]@{
     "extension-loaded" = "browser-01-extension-loaded.png"
     "api-action-result" = "browser-02-api-action-result.png"
     "computer-share-action" = "browser-03-computer-share-action.png"
+    "stop-paused" = "browser-04-stop-paused.png"
+    "cancel-paused" = "browser-05-cancel-paused.png"
+    "post-handback-resume" = "browser-06-post-handback-resume.png"
 }
 $script:ReviewStatement = "A human reviewed this tight crop; OCR is supplemental and unknown sensitive pixels are not automatically redacted."
-$script:ReviewStatementV2 = "A human reviewed this tight crop after sanitization; OCR is supplemental and unknown sensitive pixels are not automatically redacted."
-$script:OperatorV2Version = "0.12.11"
+$script:ReviewStatementV2 = "A human reviewed this tight crop after sanitization; no automated text inspection or pixel redaction is claimed."
+$script:OperatorV2Version = "0.12.12"
+$script:ReleaseCandidateBindingFields = @(
+    "productVersion", "repository", "tag", "sourceSha", "tagObjectSha",
+    "workflowRunId", "workflowRunAttempt", "artifactId", "artifactName",
+    "artifactZipBytes", "artifactZipSha256", "checksumManifestSha256",
+    "attestationInvocationUri", "attestedAssetCount", "githubHostedRunner", "assets"
+)
 $script:BrowserChromeSurfaces = @(
     "local-browser-bridge-computer-helper"
 )
@@ -150,30 +159,40 @@ $script:ComputerHelperLifecycleEvents = @(
 $script:ComputerHelperEpochNames = @(
     "existing-chrome-bootstrap", "dedicated-chrome-extensions", "native-load-picker",
     "dedicated-chrome-installed", "extension-popup-setup", "dedicated-chrome-demo",
+    "stop-paused-popup", "stop-recovered-demo", "cancel-paused-popup", "cancel-recovered-demo",
     "extension-popup-cleanup", "cleanup-chrome-extensions", "dedicated-chrome-close"
 )
 $script:ComputerHelperEpochSurfaces = @(
     "chrome-window", "chrome-window", "native-file-picker", "chrome-window",
-    "extension-popup", "chrome-window", "extension-popup", "chrome-window", "chrome-window"
+    "extension-popup", "chrome-window", "extension-popup", "chrome-window", "extension-popup",
+    "chrome-window", "extension-popup", "chrome-window", "chrome-window"
 )
 $script:ComputerHelperActionNames = @(
     "dedicated-window-created", "chrome-extensions-navigated", "developer-mode-ready",
     "load-unpacked-clicked", "native-picker-completed", "candidate-card-verified",
     "extension-popup-opened", "full-access-ready", "popup-token-saved",
-    "extension-proof-revealed", "browser-api-result-revealed", "computer-demo-clicked", "cleanup-popup-opened",
+    "extension-proof-revealed", "browser-api-result-revealed", "computer-demo-clicked",
+    "in-page-stop-clicked", "stop-popup-opened", "stop-resume-clicked", "stop-recovery-verified",
+    "chrome-native-cancel-clicked", "cancel-popup-opened", "cancel-resume-clicked", "cancel-recovery-verified",
+    "cleanup-popup-opened",
     "token-clear-initiated", "token-clear-confirmed", "full-access-restored",
     "test-card-removed", "developer-mode-restored", "test-window-closed"
 )
-$script:ComputerHelperActionEpochIndexes = @(0, 1, 1, 1, 2, 3, 3, 4, 4, 5, 5, 5, 5, 6, 6, 6, 7, 7, 8)
+$script:ComputerHelperActionEpochIndexes = @(
+    0, 1, 1, 1, 2, 3, 3, 4, 4, 5, 5, 5, 5, 5, 6, 7, 7, 7, 8, 9, 9, 10, 10, 10, 11, 11, 12
+)
 $script:ComputerHelperActionMutators = @(
     "computer.key", "computer.typeText", "conditional-developer-mode", "computer.click",
     "computer.typeText", "none", "computer.click", "conditional-full-access", "computer.typeText",
     "computer.click", "computer.click", "computer.click", "computer.click", "computer.click",
-    "computer.click", "conditional-full-access", "computer.click", "conditional-developer-mode", "computer.key"
+    "computer.click", "none", "computer.click", "computer.click", "computer.click", "none",
+    "computer.click", "computer.click", "computer.click", "conditional-full-access", "computer.click",
+    "conditional-developer-mode", "computer.key"
 )
 $script:ComputerHelperActionConsentRefs = @(
     "none", "none", "conditional-developer-mode", "installCandidate", "installCandidate", "none",
-    "none", "fullAccessUse", "acceptanceTokenSave", "none", "none", "none", "none",
+    "none", "fullAccessUse", "acceptanceTokenSave", "none", "none", "none", "none", "none",
+    "none", "none", "none", "none", "none", "none", "none",
     "clearSavedTokenInitiate", "clearSavedTokenConfirm", "fullAccessUse", "extensionDisposition",
     "conditional-developer-mode", "none"
 )
@@ -181,16 +200,22 @@ $script:ComputerHelperBrowserMethods = @(
     "browser.control.start", "page.observe", "page.fill", "page.observe",
     "page.select", "page.observe", "page.click", "page.observe", "page.evaluate"
 )
-$script:ComputerHelperScreenshotEpochIndexes = @(5, 5, 5)
+$script:ComputerHelperScreenshotEpochIndexes = @(5, 5, 5, 6, 8, 9)
 $script:RequiredVisibleStatesV2 = [ordered]@{
-    "extension-loaded" = "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.11 card with no load errors and Chrome's debugger-use indicator during the active bridge lease"
+    "extension-loaded" = "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.12 card with no load errors and Chrome's debugger-use indicator during the active bridge lease"
     "api-action-result" = "the loopback demo visibly shows Hello, Bridge Matrix. blue selected. after the browser API action"
     "computer-share-action" = "the exact shared Chrome window visibly shows the post-click demo state and synthetic session pointer from a fresh helper frame"
+    "stop-paused" = "the trusted extension popup visibly shows the human pause and Resume remote control after the in-page Stop handback"
+    "cancel-paused" = "the trusted extension popup visibly shows the human pause and Resume remote control after Chrome's browser-owned Cancel handback"
+    "post-handback-resume" = "the exact demo visibly shows the restored Chrome debugger-use indicator and page control pill after both trusted-popup recovery cycles"
 }
 $script:ScreenshotCaptureSurfacesV2 = [ordered]@{
     "extension-loaded" = "machine-helper-visual"
     "api-action-result" = "machine-helper-visual"
     "computer-share-action" = "machine-helper-visual"
+    "stop-paused" = "machine-helper-visual"
+    "cancel-paused" = "machine-helper-visual"
+    "post-handback-resume" = "machine-helper-visual"
 }
 
 function Assert-RequiredArgument {
@@ -210,7 +235,23 @@ function Resolve-RequiredFile {
     if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
         throw "$Label must not be a reparse point."
     }
+    Assert-NoReparseAncestorChain $resolved $Label
     return $resolved
+}
+
+function Assert-NoReparseAncestorChain {
+    param([string]$Path, [string]$Label)
+    $full = [IO.Path]::GetFullPath($Path)
+    $directory = if ([IO.Directory]::Exists($full)) {
+        [IO.DirectoryInfo]::new($full)
+    }
+    else { [IO.DirectoryInfo]::new([IO.Path]::GetDirectoryName($full)) }
+    while ($null -ne $directory) {
+        if (($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "$Label must not traverse a reparse-point directory."
+        }
+        $directory = $directory.Parent
+    }
 }
 
 function Resolve-NewOutputFile {
@@ -230,6 +271,7 @@ function Resolve-NewOutputFile {
     if (($parentInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
         throw "OutputRecord parent directory must not be a reparse point."
     }
+    Assert-NoReparseAncestorChain $parent "OutputRecord parent"
     return $resolved
 }
 
@@ -422,26 +464,85 @@ function Assert-CandidateBinding {
     return $candidate
 }
 
+function Assert-ReleaseCandidateBinding {
+    param([object]$Binding, [object]$Candidate, [string]$Label)
+    Assert-ExactKeys $Binding $script:ReleaseCandidateBindingFields $Label
+    Assert-ExactPropertyOrder $Binding $script:ReleaseCandidateBindingFields $Label
+    if ($Binding.productVersion -cne $Candidate.version -or
+        $Binding.repository -cne "flrngel/local-browser-bridge" -or
+        $Binding.tag -cne "v$($Candidate.version)" -or
+        $Binding.sourceSha -cne $Candidate.finalSha -or
+        [string]$Binding.tagObjectSha -cnotmatch '^[0-9a-f]{40}$' -or
+        [string]$Binding.workflowRunId -cnotmatch '^[1-9][0-9]*$' -or
+        [string]$Binding.workflowRunAttempt -cnotmatch '^[1-9][0-9]*$' -or
+        [string]$Binding.artifactId -cnotmatch '^[1-9][0-9]*$' -or
+        $Binding.artifactName -cne "release-candidate" -or
+        $Binding.artifactZipBytes -isnot [ValueType] -or [int64]$Binding.artifactZipBytes -le 0 -or
+        [string]$Binding.artifactZipSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        $Binding.checksumManifestSha256 -cne $Candidate.checksumManifest.sha256 -or
+        $Binding.attestationInvocationUri -cne ("https://github.com/flrngel/local-browser-bridge/actions/runs/{0}/attempts/{1}" -f
+            [string]$Binding.workflowRunId, [string]$Binding.workflowRunAttempt) -or
+        $Binding.attestedAssetCount -ne 5 -or $Binding.githubHostedRunner -ne $true) {
+        throw "$Label does not bind the exact release workflow attempt and candidate."
+    }
+    $expectedNames = @($Candidate.checksumManifest.canonicalNamesInOrder) + "SHA256SUMS.txt"
+    $assets = @($Binding.assets)
+    if ($assets.Count -ne 5) { throw "$Label must bind exactly five assets." }
+    for ($index = 0; $index -lt 5; $index += 1) {
+        $asset = $assets[$index]
+        Assert-ExactKeys $asset @("file", "bytes", "sha256") "$Label asset"
+        Assert-ExactPropertyOrder $asset @("file", "bytes", "sha256") "$Label asset"
+        if ($asset.file -cne $expectedNames[$index]) { throw "$Label asset order is invalid." }
+        Assert-IntegerRange $asset.bytes 1 100MB "$Label asset bytes"
+        Assert-Hex $asset.sha256 64 "$Label asset SHA-256"
+    }
+    if ($assets[0].sha256 -cne $Candidate.server.sha256 -or
+        $assets[1].sha256 -cne $Candidate.computerHelper.sha256 -or
+        $assets[3].sha256 -cne $Candidate.extension.sha256 -or
+        $assets[4].sha256 -cne $Candidate.checksumManifest.sha256) {
+        throw "$Label asset digests do not match the exact Windows candidate payload."
+    }
+    return $Binding
+}
+
 function Assert-CandidatePreflight {
     param([object]$Record)
-    Assert-ExactKeys $Record @(
-        "schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed", "runNonce", "candidate"
-    ) "candidate preflight record"
+    $fields = @("schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed", "runNonce", "candidate")
+    if ($Record.candidate.version -ceq $script:OperatorV2Version) {
+        $fields = @(
+            "schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed",
+            "runNonce", "releaseCandidateBinding", "candidate"
+        )
+    }
+    Assert-ExactKeys $Record $fields "candidate preflight record"
+    Assert-ExactPropertyOrder $Record $fields "candidate preflight record"
     Assert-IntegerRange $Record.schemaVersion 1 1 "candidate preflight schemaVersion"
     if ($Record.evidenceType -cne "stock-user-chrome-candidate-binding" -or $Record.phase -cne "preflight") {
         throw "Candidate preflight identity is invalid."
     }
     Assert-ExactBoolean $Record.passed $true "candidate preflight passed"
     Assert-Hex $Record.runNonce 64 "candidate preflight run nonce"
-    return Assert-CandidateBinding $Record.candidate
+    $candidate = Assert-CandidateBinding $Record.candidate
+    if ($candidate.version -ceq $script:OperatorV2Version) {
+        [void](Assert-ReleaseCandidateBinding $Record.releaseCandidateBinding $candidate "preflight releaseCandidateBinding")
+    }
+    return $candidate
 }
 
 function Assert-CandidatePostflight {
     param([object]$Record)
-    Assert-ExactKeys $Record @(
+    $fields = @(
         "schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed", "runNonce", "candidate",
         "candidateBinding", "preflightRecordSha256", "unchanged"
-    ) "candidate postflight record"
+    )
+    if ($Record.candidate.version -ceq $script:OperatorV2Version) {
+        $fields = @(
+            "schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed", "runNonce",
+            "releaseCandidateBinding", "candidate", "candidateBinding", "preflightRecordSha256", "unchanged"
+        )
+    }
+    Assert-ExactKeys $Record $fields "candidate postflight record"
+    Assert-ExactPropertyOrder $Record $fields "candidate postflight record"
     Assert-IntegerRange $Record.schemaVersion 1 1 "candidate postflight schemaVersion"
     if ($Record.evidenceType -cne "stock-user-chrome-candidate-binding" -or $Record.phase -cne "postflight") {
         throw "Candidate postflight identity is invalid."
@@ -462,7 +563,11 @@ function Assert-CandidatePostflight {
     foreach ($property in $Record.unchanged.PSObject.Properties) {
         Assert-ExactBoolean $property.Value $true "candidate unchanged $($property.Name)"
     }
-    return Assert-CandidateBinding $Record.candidate
+    $candidate = Assert-CandidateBinding $Record.candidate
+    if ($candidate.version -ceq $script:OperatorV2Version) {
+        [void](Assert-ReleaseCandidateBinding $Record.releaseCandidateBinding $candidate "postflight releaseCandidateBinding")
+    }
+    return $candidate
 }
 
 function Get-CandidateBindingDomain {
@@ -796,20 +901,25 @@ function Assert-ActionConsentV2 {
 }
 
 function Assert-OperatorResultsV2 {
-    param([object]$Operator, [string]$ExpectedVersion, [object]$ExpectedBinding)
+    param([object]$Operator, [string]$ExpectedVersion, [object]$ExpectedBinding, [object]$ExpectedReleaseBinding, [object]$Candidate)
     $operatorFields = @(
-        "schemaVersion", "evidenceType", "candidateBinding", "environment", "actionSurfaces",
+        "schemaVersion", "evidenceType", "releaseCandidateBinding", "candidateBinding", "environment", "actionSurfaces",
         "computerHelperChain", "consentCheckpoints", "initialState", "extension",
-        "screenshotCaptures", "humanVisualReview", "restoration", "cleanup", "retainedEvidence"
+        "handback", "screenshotCaptures", "humanVisualReview", "restoration", "cleanup", "retainedEvidence"
     )
-    Assert-ExactKeys $Operator $operatorFields "v0.12.11 operator results"
-    Assert-ExactPropertyOrder $Operator $operatorFields "v0.12.11 operator results"
-    Assert-IntegerRange $Operator.schemaVersion 2 2 "v0.12.11 operator schemaVersion"
+    Assert-ExactKeys $Operator $operatorFields "v0.12.12 operator results"
+    Assert-ExactPropertyOrder $Operator $operatorFields "v0.12.12 operator results"
+    Assert-IntegerRange $Operator.schemaVersion 2 2 "v0.12.12 operator schemaVersion"
     if ($ExpectedVersion -cne $script:OperatorV2Version -or
         $Operator.evidenceType -cne "stock-user-chrome-operator-observations") {
-        throw "The v0.12.11 operator schema is bound only to a v0.12.11 candidate."
+        throw "The v0.12.12 operator schema is bound only to a v0.12.12 candidate."
     }
-    Assert-CandidateBindingDomain $Operator.candidateBinding $ExpectedBinding "v0.12.11 operator candidateBinding"
+    [void](Assert-ReleaseCandidateBinding $Operator.releaseCandidateBinding $Candidate "v0.12.12 operator releaseCandidateBinding")
+    if (($Operator.releaseCandidateBinding | ConvertTo-Json -Depth 10 -Compress) -cne
+        ($ExpectedReleaseBinding | ConvertTo-Json -Depth 10 -Compress)) {
+        throw "The operator record is not bound to the exact release candidate attempt."
+    }
+    Assert-CandidateBindingDomain $Operator.candidateBinding $ExpectedBinding "v0.12.12 operator candidateBinding"
 
     $environment = $Operator.environment
     $environmentFields = @(
@@ -817,18 +927,18 @@ function Assert-OperatorResultsV2 {
         "dedicatedTemporaryWindow", "browserLaunchFlagsUsed", "directCdpUsed",
         "automationTestProfileUsed", "localDemoOnly"
     )
-    Assert-ExactKeys $environment $environmentFields "v0.12.11 operator environment"
-    Assert-ExactPropertyOrder $environment $environmentFields "v0.12.11 operator environment"
+    Assert-ExactKeys $environment $environmentFields "v0.12.12 operator environment"
+    Assert-ExactPropertyOrder $environment $environmentFields "v0.12.12 operator environment"
     if ($environment.platform -cne "windows-x86_64" -or $environment.browserProduct -cne "Google Chrome" -or
         -not [regex]::IsMatch([string]$environment.browserVersion, '^[0-9]{1,3}\.[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}$') -or
         [int]([string]$environment.browserVersion).Split('.')[0] -lt 140) {
-        throw "The v0.12.11 operator browser identity is invalid."
+        throw "The v0.12.12 operator browser identity is invalid."
     }
     foreach ($name in @("stockUserChrome", "existingUserSession", "dedicatedTemporaryWindow", "localDemoOnly")) {
-        Assert-ExactBoolean $environment.$name $true "v0.12.11 operator environment $name"
+        Assert-ExactBoolean $environment.$name $true "v0.12.12 operator environment $name"
     }
     foreach ($name in @("browserLaunchFlagsUsed", "directCdpUsed", "automationTestProfileUsed")) {
-        Assert-ExactBoolean $environment.$name $false "v0.12.11 operator environment $name"
+        Assert-ExactBoolean $environment.$name $false "v0.12.12 operator environment $name"
     }
 
     $surfaces = $Operator.actionSurfaces
@@ -839,22 +949,22 @@ function Assert-OperatorResultsV2 {
         "debuggerOwnerDuringBridgeLease", "competingDebuggerAttachmentAllowed",
         "chromeMcpUsedDuringBridgeLease", "chromeMcpReleaseEvidenceClaimed"
     )
-    Assert-ExactKeys $surfaces $surfaceFields "v0.12.11 action surfaces"
-    Assert-ExactPropertyOrder $surfaces $surfaceFields "v0.12.11 action surfaces"
+    Assert-ExactKeys $surfaces $surfaceFields "v0.12.12 action surfaces"
+    Assert-ExactPropertyOrder $surfaces $surfaceFields "v0.12.12 action surfaces"
     if ($surfaces.bridgeApiMatrix -cne "local-browser-bridge-api" -or
         $surfaces.computerHelperApi -cne "local-browser-bridge-computer-api" -or
         $surfaces.debuggerOwnerDuringBridgeLease -cne "local-browser-bridge-extension") {
         throw "The Local Browser Bridge extension must be the exclusive debugger owner during its lease."
     }
     if ($script:ExternalOrchestrationSurfaces -cnotcontains $surfaces.orchestrationAndConsent) {
-        throw "v0.12.11 requires an explicit external human-consent orchestration surface."
+        throw "v0.12.12 requires an explicit external human-consent orchestration surface."
     }
     foreach ($name in @(
         "dedicatedWindowCreation", "chromeExtensionsPage", "nativeLoadUnpackedPicker",
         "extensionPopup", "chromeDebuggerNotice", "browserApiResult",
         "computerShareAction", "acceptanceScreenshots"
     )) {
-        Assert-BrowserChromeSurfaceV2 $surfaces.$name "v0.12.11 action surface $name"
+        Assert-BrowserChromeSurfaceV2 $surfaces.$name "v0.12.12 action surface $name"
     }
     Assert-ExactBoolean $surfaces.competingDebuggerAttachmentAllowed $false "competing debugger attachment"
     Assert-ExactBoolean $surfaces.chromeMcpUsedDuringBridgeLease $false "Chrome MCP use during the bridge lease"
@@ -865,30 +975,30 @@ function Assert-OperatorResultsV2 {
         "candidateBoundExecutableStarted", "connectedThroughLoopbackServer", "serverApiOnly",
         "exactChromeWindowSelected", "chromeExtensionsLoadCompleted", "browserApiActionCompleted",
         "exactWindowShareActionCompleted", "freshFramesBoundToComputerAction", "screenshotEndpoint",
-        "rawScreenshotCount", "ownerForcedSupervisorTermination", "helperDisconnectedAfterTermination",
+        "rawScreenshotCount", "topologyProtocolBound", "ownerForcedSupervisorTermination", "helperDisconnectedAfterTermination",
         "noHelperChildrenOrListenersRemain", "helperStopped"
     )
-    Assert-ExactKeys $helper $helperFields "v0.12.11 computer helper chain"
-    Assert-ExactPropertyOrder $helper $helperFields "v0.12.11 computer helper chain"
+    Assert-ExactKeys $helper $helperFields "v0.12.12 computer helper chain"
+    Assert-ExactPropertyOrder $helper $helperFields "v0.12.12 computer helper chain"
     foreach ($name in @(
         "candidateBoundExecutableStarted", "connectedThroughLoopbackServer", "serverApiOnly",
         "exactChromeWindowSelected", "chromeExtensionsLoadCompleted", "browserApiActionCompleted",
         "exactWindowShareActionCompleted", "freshFramesBoundToComputerAction",
-        "ownerForcedSupervisorTermination", "helperDisconnectedAfterTermination",
+        "topologyProtocolBound", "ownerForcedSupervisorTermination", "helperDisconnectedAfterTermination",
         "noHelperChildrenOrListenersRemain", "helperStopped"
     )) {
-        Assert-ExactBoolean $helper.$name $true "v0.12.11 computer helper chain $name"
+        Assert-ExactBoolean $helper.$name $true "v0.12.12 computer helper chain $name"
     }
     if ($helper.screenshotEndpoint -cne "/api/computer/screenshot") {
-        throw "v0.12.11 computer helper screenshots must use /api/computer/screenshot."
+        throw "v0.12.12 computer helper screenshots must use /api/computer/screenshot."
     }
-    Assert-IntegerRange $helper.rawScreenshotCount 3 3 "v0.12.11 computer helper raw screenshot count"
+    Assert-IntegerRange $helper.rawScreenshotCount 6 6 "v0.12.12 computer helper raw screenshot count"
 
     $initial = $Operator.initialState
     Assert-ExactKeys $initial @(
         "capturedBeforeRelevantMutation", "candidateExtensionPresent", "developerMode",
         "fullAccess", "savedTokenConfigured"
-    ) "v0.12.11 initial state"
+    ) "v0.12.12 initial state"
     Assert-ExactBoolean $initial.capturedBeforeRelevantMutation $true "initial-state capture"
     Assert-ExactBoolean $initial.candidateExtensionPresent $false "initial candidate extension presence"
     Assert-ExactBoolean $initial.savedTokenConfigured $false "initial saved token configured"
@@ -904,7 +1014,7 @@ function Assert-OperatorResultsV2 {
     Assert-ExactKeys $consent @(
         "installCandidate", "developerModeChange", "fullAccessUse", "acceptanceTokenSave",
         "clearSavedToken", "extensionDisposition"
-    ) "v0.12.11 consent checkpoints"
+    ) "v0.12.12 consent checkpoints"
     Assert-ExactKeys $consent.installCandidate @(
         "performed", "actionTimeHumanConfirmed", "ownershipConfirmed"
     ) "candidate-install consent"
@@ -946,35 +1056,40 @@ function Assert-OperatorResultsV2 {
         "cardCount", "version", "enabled", "loadErrors", "loadedVia",
         "loadedDirectoryByteMatchesCandidateZip", "popupConnected",
         "debuggerLeaseActiveAtFirstCapture", "nativeDebuggerUseIndicatorSeen"
-    ) "v0.12.11 extension proof"
-    Assert-IntegerRange $extension.cardCount 1 1 "v0.12.11 extension cardCount"
-    Assert-IntegerRange $extension.loadErrors 0 0 "v0.12.11 extension loadErrors"
+    ) "v0.12.12 extension proof"
+    Assert-IntegerRange $extension.cardCount 1 1 "v0.12.12 extension cardCount"
+    Assert-IntegerRange $extension.loadErrors 0 0 "v0.12.12 extension loadErrors"
     if ($extension.version -cne $ExpectedVersion -or
         $extension.loadedVia -cne "chrome://extensions-load-unpacked") {
-        throw "The v0.12.11 extension card identity is invalid."
+        throw "The v0.12.12 extension card identity is invalid."
     }
     foreach ($name in @(
         "enabled", "loadedDirectoryByteMatchesCandidateZip", "popupConnected",
         "debuggerLeaseActiveAtFirstCapture", "nativeDebuggerUseIndicatorSeen"
     )) {
-        Assert-ExactBoolean $extension.$name $true "v0.12.11 extension $name"
+        Assert-ExactBoolean $extension.$name $true "v0.12.12 extension $name"
     }
 
+    Assert-ExactKeys $Operator.handback @("stop", "cancel") "v0.12.12 handback matrix"
+    Assert-ExactPropertyOrder $Operator.handback @("stop", "cancel") "v0.12.12 handback matrix"
+    Assert-HandbackCaseV2 $Operator.handback.stop "Stop" "in-page-stop" "released_by_user" $true
+    Assert-HandbackCaseV2 $Operator.handback.cancel "Cancel" "chrome-native-cancel" "canceled_by_user" $true
+
     if ($Operator.screenshotCaptures.Count -ne $script:ExpectedScreenshotsV2.Count) {
-        throw "v0.12.11 must bind exactly three machine-helper screenshot capture surfaces."
+        throw "v0.12.12 must bind exactly six machine-helper screenshot capture surfaces."
     }
     for ($index = 0; $index -lt $script:ExpectedScreenshotsV2.Count; $index += 1) {
         $purpose = @($script:ExpectedScreenshotsV2.Keys)[$index]
         $capture = $Operator.screenshotCaptures[$index]
         Assert-ExactKeys $capture @(
             "purpose", "image", "captureSurface", "requiredVisibleState"
-        ) "v0.12.11 screenshot capture"
+        ) "v0.12.12 screenshot capture"
         if ($capture.purpose -cne $purpose -or
             $capture.image -cne $script:ExpectedScreenshotsV2[$purpose] -or
             $capture.captureSurface -cne "local-browser-bridge-computer-helper" -or
             $capture.captureSurface -cne $surfaces.acceptanceScreenshots -or
             $capture.requiredVisibleState -cne $script:RequiredVisibleStatesV2[$purpose]) {
-            throw "v0.12.11 screenshot identity, helper surface, or visible-state criterion is invalid."
+            throw "v0.12.12 screenshot identity, helper surface, or visible-state criterion is invalid."
         }
     }
 
@@ -986,22 +1101,22 @@ function Assert-OperatorResultsV2 {
         "postSanitizationAttestationCreated", "pendingReviewRecordsOutsideRetainedEvidence",
         "automaticPixelRedactionClaimed"
     )
-    Assert-ExactKeys $review $reviewFields "v0.12.11 human visual review"
+    Assert-ExactKeys $review $reviewFields "v0.12.12 human visual review"
     foreach ($name in @(
         "sanitizedBeforeHumanReview", "automationPausedForHumanReview",
         "everySanitizedCropOpenedByHuman", "requiredVisibleStateConfirmedByHuman",
         "sensitivePixelsAbsentConfirmedByHuman", "reviewFlagsSetOnlyAfterHumanConfirmation",
         "postSanitizationAttestationCreated", "pendingReviewRecordsOutsideRetainedEvidence"
     )) {
-        Assert-ExactBoolean $review.$name $true "v0.12.11 human visual review $name"
+        Assert-ExactBoolean $review.$name $true "v0.12.12 human visual review $name"
     }
-    Assert-IntegerRange $review.reviewedCropCount 3 3 "v0.12.11 human-reviewed crop count"
+    Assert-IntegerRange $review.reviewedCropCount 6 6 "v0.12.12 human-reviewed crop count"
     Assert-ExactBoolean $review.automaticPixelRedactionClaimed $false "automatic pixel-redaction claim"
 
     $restoration = $Operator.restoration
     Assert-ExactKeys $restoration @(
         "candidateExtensionPresence", "developerMode", "fullAccess", "savedToken"
-    ) "v0.12.11 restoration"
+    ) "v0.12.12 restoration"
     Assert-ExactKeys $restoration.candidateExtensionPresence @(
         "finalPresent", "matchesInitial", "verifiedFromLiveUi"
     ) "candidate-extension restoration"
@@ -1035,7 +1150,7 @@ function Assert-OperatorResultsV2 {
         "extractedExtensionInventoryVerifiedBeforeDeletion", "extractedExtensionDirectoryDeleted",
         "extensionDisposition", "unrelatedTabsOrWindowsChanged", "unrelatedExtensionsChanged"
     )
-    Assert-ExactKeys $cleanup $cleanupFields "v0.12.11 cleanup"
+    Assert-ExactKeys $cleanup $cleanupFields "v0.12.12 cleanup"
     foreach ($name in @(
         "controlReleased", "testTabsClosed", "testWindowClosed", "popupDisconnected", "serverStopped",
         "portReleased", "acceptanceCredentialClearedFromShell", "chromeMcpReleasedOrNotUsed",
@@ -1043,7 +1158,7 @@ function Assert-OperatorResultsV2 {
         "pendingReviewRecordsDeleted", "extractedExtensionInventoryVerifiedBeforeDeletion",
         "extractedExtensionDirectoryDeleted"
     )) {
-        Assert-ExactBoolean $cleanup.$name $true "v0.12.11 cleanup $name"
+        Assert-ExactBoolean $cleanup.$name $true "v0.12.12 cleanup $name"
     }
     Assert-ExactKeys $cleanup.savedTokenClear @(
         "trustedPopupClick", "confirmationDialogShown", "confirmationAcceptedByHuman",
@@ -1068,30 +1183,30 @@ function Assert-OperatorResultsV2 {
         "rawScreenshotsPresent", "pendingReviewRecordsPresent", "chromeMcpTranscriptPresent",
         "computerUseTranscriptPresent", "secretCredentialPresent",
         "filesystemLocationsOrBrowserIdsPresent", "externalToolAndPlatformLogsScope"
-    ) "v0.12.11 retained evidence"
+    ) "v0.12.12 retained evidence"
     if ($retained.scope -cne "acceptance-evidence-directory-only" -or
         $retained.externalToolAndPlatformLogsScope -cne "not-asserted") {
-        throw "The v0.12.11 retained-evidence scope is invalid."
+        throw "The v0.12.12 retained-evidence scope is invalid."
     }
     Assert-ExactBoolean $retained.exactAllowlistVerified $true "retained-evidence allowlist verification"
-    Assert-IntegerRange $retained.inputFileCount 11 11 "retained-evidence input count"
-    Assert-IntegerRange $retained.finalFileCount 12 12 "retained-evidence final count"
+    Assert-IntegerRange $retained.inputFileCount 17 17 "retained-evidence input count"
+    Assert-IntegerRange $retained.finalFileCount 18 18 "retained-evidence final count"
     foreach ($name in @(
         "rawScreenshotsPresent", "pendingReviewRecordsPresent", "chromeMcpTranscriptPresent",
         "computerUseTranscriptPresent", "secretCredentialPresent",
         "filesystemLocationsOrBrowserIdsPresent"
     )) {
-        Assert-ExactBoolean $retained.$name $false "v0.12.11 retained evidence $name"
+        Assert-ExactBoolean $retained.$name $false "v0.12.12 retained evidence $name"
     }
 }
 function Assert-OperatorResults {
-    param([object]$Operator, [string]$ExpectedVersion, [object]$ExpectedBinding)
+    param([object]$Operator, [string]$ExpectedVersion, [object]$ExpectedBinding, [object]$ExpectedReleaseBinding, [object]$Candidate)
     if ($ExpectedVersion -ceq "0.12.2") {
         Assert-OperatorResultsV1 $Operator $ExpectedVersion $ExpectedBinding
         return
     }
     if ($ExpectedVersion -ceq $script:OperatorV2Version) {
-        Assert-OperatorResultsV2 $Operator $ExpectedVersion $ExpectedBinding
+        Assert-OperatorResultsV2 $Operator $ExpectedVersion $ExpectedBinding $ExpectedReleaseBinding $Candidate
         return
     }
     throw "No stock-user-Chrome operator schema is registered for candidate version $ExpectedVersion."
@@ -1167,14 +1282,14 @@ function Get-PngFacts {
 }
 
 function Assert-ScreenshotRecords {
-    param([string[]]$Paths, [object]$ExpectedBinding, [string]$ExpectedVersion)
+    param([string[]]$Paths, [object]$ExpectedBinding, [object]$ExpectedReleaseBinding, [object]$Candidate, [string]$ExpectedVersion)
     $expectedScreenshots = if ($ExpectedVersion -ceq $script:OperatorV2Version) {
         $script:ExpectedScreenshotsV2
     }
     else { $script:ExpectedScreenshots }
     if ($Paths.Count -ne $expectedScreenshots.Count) {
         if ($ExpectedVersion -ceq $script:OperatorV2Version) {
-            throw "Exactly three v0.12.11 screenshot sidecars are required."
+            throw "Exactly six v0.12.12 screenshot sidecars are required."
         }
         throw "Exactly eleven screenshot sidecars are required."
     }
@@ -1190,9 +1305,9 @@ function Assert-ScreenshotRecords {
         )
         if ($ExpectedVersion -ceq $script:OperatorV2Version) {
             $screenshotFields = @(
-                "schemaVersion", "evidenceType", "purpose", "candidateBinding", "sourceCapture", "image", "cropApplied",
-                "metadataStrippedByDecodeAndReencode", "forbiddenMetadataChunksPresent", "ocrAvailable",
-                "ocrDenylistChecked", "ocrDenylistMatches", "manualVisualReviewConfirmed",
+                "schemaVersion", "evidenceType", "purpose", "releaseCandidateBinding", "candidateBinding", "sourceCapture", "image", "cropApplied",
+                "metadataStrippedByDecodeAndReencode", "forbiddenMetadataChunksPresent",
+                "automatedTextInspectionPerformed", "manualVisualReviewRequired", "manualVisualReviewConfirmed",
                 "automaticPixelRedactionPerformed", "unknownPixelSafetyClaimed", "reviewStatement"
             )
         }
@@ -1205,6 +1320,11 @@ function Assert-ScreenshotRecords {
         }
         Assert-CandidateBindingDomain $record.candidateBinding $ExpectedBinding "screenshot candidateBinding"
         if ($ExpectedVersion -ceq $script:OperatorV2Version) {
+            [void](Assert-ReleaseCandidateBinding $record.releaseCandidateBinding $Candidate "screenshot releaseCandidateBinding")
+            if (($record.releaseCandidateBinding | ConvertTo-Json -Depth 10 -Compress) -cne
+                ($ExpectedReleaseBinding | ConvertTo-Json -Depth 10 -Compress)) {
+                throw "Screenshot sidecar is not bound to the exact release candidate attempt."
+            }
             Assert-ExactKeys $record.sourceCapture @(
                 "name", "endpoint", "bytes", "sha256", "width", "height"
             ) "screenshot source capture"
@@ -1243,12 +1363,22 @@ function Assert-ScreenshotRecords {
         foreach ($name in @("forbiddenMetadataChunksPresent", "automaticPixelRedactionPerformed", "unknownPixelSafetyClaimed")) {
             Assert-ExactBoolean $record.$name $false "screenshot $name"
         }
-        Assert-IntegerRange $record.ocrDenylistMatches 0 0 "screenshot OCR denylist matches"
+        if ($ExpectedVersion -ceq $script:OperatorV2Version) {
+            Assert-ExactBoolean $record.automatedTextInspectionPerformed $false "screenshot automated text inspection"
+            Assert-ExactBoolean $record.manualVisualReviewRequired $true "screenshot manual visual review requirement"
+        }
+        else {
+            Assert-IntegerRange $record.ocrDenylistMatches 0 0 "screenshot OCR denylist matches"
+        }
         $expectedReviewStatement = if ($ExpectedVersion -ceq $script:OperatorV2Version) {
             $script:ReviewStatementV2
         }
         else { $script:ReviewStatement }
-        if ($record.ocrAvailable -isnot [bool] -or $record.ocrDenylistChecked -isnot [bool] -or $record.ocrDenylistChecked -ne $record.ocrAvailable -or $record.reviewStatement -cne $expectedReviewStatement) {
+        if ($ExpectedVersion -ceq $script:OperatorV2Version) {
+            if ($record.reviewStatement -cne $expectedReviewStatement) { throw "Screenshot review contract is invalid." }
+        }
+        elseif ($record.ocrAvailable -isnot [bool] -or $record.ocrDenylistChecked -isnot [bool] -or
+            $record.ocrDenylistChecked -ne $record.ocrAvailable -or $record.reviewStatement -cne $expectedReviewStatement) {
             throw "Screenshot review contract is invalid."
         }
         $imagePath = Resolve-RequiredFile ([IO.Path]::Combine([IO.Path]::GetDirectoryName($recordPath), $record.image.name)) "sanitized screenshot"
@@ -1324,7 +1454,18 @@ function Write-NewJson {
     if ([IO.File]::Exists($temporary)) { throw "A stale temporary evidence record exists." }
     try {
         $json = $Value | ConvertTo-Json -Depth 30
-        [IO.File]::WriteAllText($temporary, "$json`n", $script:Utf8NoBom)
+        $bytes = $script:Utf8NoBom.GetBytes("$json`n")
+        $stream = [IO.File]::Open(
+            $temporary, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None
+        )
+        try {
+            $stream.Write($bytes, 0, $bytes.Length)
+            $stream.Flush($true)
+        }
+        finally {
+            $stream.Dispose()
+            [Array]::Clear($bytes, 0, $bytes.Length)
+        }
         [IO.File]::Move($temporary, $Path)
     }
     catch {
@@ -1336,19 +1477,25 @@ function Assert-ComputerHelperRecordV2 {
     param(
         [object]$Record,
         [object]$ExpectedBinding,
+        [object]$ExpectedReleaseBinding,
         [object]$Candidate,
         [object]$Operator,
         [string]$ExpectedApiMatrixSha256
     )
     Assert-ExactKeys $Record @(
-        "schemaVersion", "evidenceType", "version", "candidateBinding", "passed", "recordedBy",
+        "schemaVersion", "evidenceType", "version", "releaseCandidateBinding", "candidateBinding", "passed", "recordedBy",
         "run", "server", "helper", "extensionPayload", "initialState", "windowBinding", "lifecycle", "windowEpochs",
-        "actions", "browserAction", "screenshots", "cleanup", "privacy"
-    ) "v0.12.11 computer-helper record"
+        "actions", "browserAction", "handback", "screenshots", "cleanup", "privacy"
+    ) "v0.12.12 computer-helper record"
     Assert-IntegerRange $Record.schemaVersion 1 1 "computer-helper record schemaVersion"
     if ($Record.evidenceType -cne "stock-user-chrome-computer-helper-chain" -or
         $Record.version -cne $script:OperatorV2Version) {
         throw "The computer-helper record identity is invalid."
+    }
+    [void](Assert-ReleaseCandidateBinding $Record.releaseCandidateBinding $Candidate "computer-helper releaseCandidateBinding")
+    if (($Record.releaseCandidateBinding | ConvertTo-Json -Depth 10 -Compress) -cne
+        ($ExpectedReleaseBinding | ConvertTo-Json -Depth 10 -Compress)) {
+        throw "The computer-helper record is not bound to the exact release candidate attempt."
     }
     Assert-ExactBoolean $Record.passed $true "computer-helper record passed"
     Assert-CandidateBindingDomain $Record.candidateBinding $ExpectedBinding "computer-helper candidateBinding"
@@ -1396,7 +1543,7 @@ function Assert-ComputerHelperRecordV2 {
 
     Assert-ExactKeys $Record.helper @(
         "executableName", "sha256", "connectedThroughLoopbackServer", "serverApiOnly",
-        "processRef", "sessionBindingSha256", "rawSessionIdentifierRetained"
+        "processRef", "sessionBindingSha256", "rawSessionIdentifierRetained", "topology"
     ) "computer-helper identity"
     if ($Record.helper.executableName -cne $Candidate.computerHelper.name -or
         $Record.helper.sha256 -cne $Candidate.computerHelper.sha256) {
@@ -1408,6 +1555,27 @@ function Assert-ComputerHelperRecordV2 {
     Assert-ExactBoolean $Record.helper.connectedThroughLoopbackServer $true "computer-helper loopback connection"
     Assert-ExactBoolean $Record.helper.serverApiOnly $true "computer-helper API-only transport"
     Assert-ExactBoolean $Record.helper.rawSessionIdentifierRetained $false "computer-helper raw session retention"
+    Assert-ExactKeys $Record.helper.topology @(
+        "exactImageDirectChildCount", "exactImageMatched", "directChildOfLaunchedSupervisor",
+        "interactiveSessionMatched", "stableConsecutivePolls", "helloStateMatched",
+        "protocolRoundTrip", "roundTripMethod", "supervisorProcessRef", "workerProcessRef"
+    ) "computer-helper topology"
+    Assert-IntegerRange $Record.helper.topology.exactImageDirectChildCount 1 1 `
+        "computer-helper exact-image direct-child count"
+    Assert-IntegerRange $Record.helper.topology.stableConsecutivePolls 2 1000 `
+        "computer-helper stable topology polls"
+    foreach ($name in @(
+        "exactImageMatched", "directChildOfLaunchedSupervisor", "interactiveSessionMatched",
+        "helloStateMatched", "protocolRoundTrip"
+    )) {
+        Assert-ExactBoolean $Record.helper.topology.$name $true "computer-helper topology $name"
+    }
+    if ($Record.helper.topology.roundTripMethod -cne "computer.status") {
+        throw "The exact helper worker was not protocol-bound through computer.status."
+    }
+    foreach ($name in @("supervisorProcessRef", "workerProcessRef")) {
+        Assert-Hex $Record.helper.topology.$name 64 "computer-helper topology $name"
+    }
 
     Assert-ExactKeys $Record.extensionPayload @(
         "fileCount", "combinedPayloadSha256", "verifiedBeforeLoad",
@@ -1481,7 +1649,7 @@ function Assert-ComputerHelperRecordV2 {
     }
 
     if ($Record.windowEpochs.Count -ne $script:ComputerHelperEpochNames.Count) {
-        throw "The computer-helper record must contain the exact nine window/share epochs."
+        throw "The computer-helper record must contain the exact thirteen window/share epochs."
     }
     $epochRefs = @{}
     $shareRefs = @{}
@@ -1520,7 +1688,7 @@ function Assert-ComputerHelperRecordV2 {
         Assert-ExactBoolean $epoch.rawIdentifiersRetained $false "computer-helper raw identifier retention"
     }
 
-    $dedicatedEpochIndexes = @(1, 3, 5, 7, 8)
+    $dedicatedEpochIndexes = @(1, 3, 5, 7, 9, 11, 12)
     $dedicatedTargetRef = $Record.windowEpochs[1].targetRef
     $dedicatedProcessRef = $Record.windowEpochs[1].processRef
     foreach ($index in $dedicatedEpochIndexes) {
@@ -1529,7 +1697,7 @@ function Assert-ComputerHelperRecordV2 {
             throw "Dedicated Chrome epochs must bind the same exact native window and process."
         }
     }
-    foreach ($index in @(2, 4, 6)) {
+    foreach ($index in @(2, 4, 6, 8, 10)) {
         if ($Record.windowEpochs[$index].processRef -cne $dedicatedProcessRef) {
             throw "Native picker and extension-popup epochs must be process-linked to the dedicated Chrome window."
         }
@@ -1560,7 +1728,7 @@ function Assert-ComputerHelperRecordV2 {
         "computer-helper dedicated target equality"
 
     Assert-ExactKeys $Record.initialState @(
-        "capturedFromFreshHelperFrames", "developerMode", "fullAccess", "savedToken"
+        "capturedFromFreshHelperFrames", "developerMode", "fullAccess", "savedToken", "candidateCard"
     ) "computer-helper live initial state"
     Assert-ExactBoolean $Record.initialState.capturedFromFreshHelperFrames $true `
         "computer-helper fresh-frame initial-state capture"
@@ -1595,6 +1763,19 @@ function Assert-ComputerHelperRecordV2 {
         "computer-helper live saved-token timing"
     if ($Record.initialState.fullAccess.frameRef -ceq $Record.initialState.savedToken.frameRef) {
         throw "Full Access and saved-token initial-state receipts must use independently fresh popup frames."
+    }
+    Assert-ExactKeys $Record.initialState.candidateCard @(
+        "present", "epochRef", "frameRef", "verifiedFromFreshLiveUi"
+    ) "computer-helper initial candidate card"
+    Assert-ExactBoolean $Record.initialState.candidateCard.present $false `
+        "computer-helper initial candidate-card absence"
+    Assert-ExactBoolean $Record.initialState.candidateCard.verifiedFromFreshLiveUi $true `
+        "computer-helper initial candidate-card fresh live-UI verification"
+    Assert-Hex $Record.initialState.candidateCard.frameRef 64 `
+        "computer-helper initial candidate-card frame"
+    if ($Record.initialState.candidateCard.epochRef -cne $Record.windowEpochs[1].epochRef -or
+        $Operator.initialState.candidateExtensionPresent -ne $Record.initialState.candidateCard.present) {
+        throw "The operator and live helper initial candidate-card state do not match the exact fresh-frame epoch."
     }
 
     $allowedMethods = @("computer.observe", "computer.click", "computer.typeText", "computer.key", "computer.status")
@@ -1655,7 +1836,7 @@ function Assert-ComputerHelperRecordV2 {
              $actualMutators -cnotcontains "computer.click")) {
             throw "The native picker action must type the exact directory and invoke Select Folder."
         }
-        if ($index -eq 16 -and
+        if ($index -eq 24 -and
             @($actualMutators | Where-Object { $_ -ceq "computer.click" }).Count -lt 3) {
             throw "Cleanup must switch to chrome://extensions before the exact card removal and confirmation."
         }
@@ -1701,8 +1882,17 @@ function Assert-ComputerHelperRecordV2 {
     }
     Assert-ExactBoolean $Record.browserAction.resultVerified $true "deterministic browser API result"
 
+    Assert-ExactKeys $Record.handback @("stop", "cancel") "computer-helper handback matrix"
+    Assert-ExactPropertyOrder $Record.handback @("stop", "cancel") "computer-helper handback matrix"
+    Assert-HandbackCaseV2 $Record.handback.stop "Stop" "in-page-stop" "released_by_user" $true
+    Assert-HandbackCaseV2 $Record.handback.cancel "Cancel" "chrome-native-cancel" "canceled_by_user" $true
+    if (($Record.handback | ConvertTo-Json -Depth 12 -Compress) -cne
+        ($Operator.handback | ConvertTo-Json -Depth 12 -Compress)) {
+        throw "Operator handback assertions do not match the live computer-helper/API record."
+    }
+
     if ($Record.screenshots.Count -ne $script:ExpectedScreenshotsV2.Count) {
-        throw "The computer-helper record must bind exactly three raw exact-window screenshots."
+        throw "The computer-helper record must bind exactly six raw exact-window screenshots."
     }
     for ($index = 0; $index -lt $script:ExpectedScreenshotsV2.Count; $index += 1) {
         $purpose = @($script:ExpectedScreenshotsV2.Keys)[$index]
@@ -1742,13 +1932,16 @@ function Assert-ComputerHelperRecordV2 {
     Assert-ExactKeys $Record.cleanup @(
         "allSharesStopped", "helperTerminationDisposition", "helperExitCode",
         "helperDisconnectedAfterTermination", "helperChildrenRemaining", "helperListenersRemaining",
-        "serverTerminationDisposition", "serverExitCode", "serverListenersRemaining",
-        "candidateExtensionRemoved", "savedTokenCleared", "developerModeRestored",
+        "exactHelperImageProcessesRemaining", "serverTerminationDisposition", "serverExitCode",
+        "serverListenersRemaining", "canonicalPortListenersRemaining", "candidateExtensionRemoved",
+        "candidateCardAbsentAfterRemoval", "candidateCardAbsenceVerifiedFromFreshLiveUi",
+        "savedTokenCleared", "developerModeRestored",
         "fullAccessRestored", "testWindowClosed", "helperExecutableUnchanged",
         "serverExecutableUnchanged", "extensionPayloadUnchanged", "rawIdentifiersCleared"
     ) "computer-helper cleanup"
     foreach ($name in @(
         "allSharesStopped", "helperDisconnectedAfterTermination", "candidateExtensionRemoved",
+        "candidateCardAbsentAfterRemoval", "candidateCardAbsenceVerifiedFromFreshLiveUi",
         "savedTokenCleared", "developerModeRestored", "fullAccessRestored", "testWindowClosed",
         "helperExecutableUnchanged", "serverExecutableUnchanged", "extensionPayloadUnchanged",
         "rawIdentifiersCleared"
@@ -1769,7 +1962,8 @@ function Assert-ComputerHelperRecordV2 {
         throw "Computer-helper cleanup server exit code must be an integer."
     }
     foreach ($name in @(
-        "helperChildrenRemaining", "helperListenersRemaining", "serverListenersRemaining"
+        "helperChildrenRemaining", "helperListenersRemaining", "exactHelperImageProcessesRemaining",
+        "serverListenersRemaining", "canonicalPortListenersRemaining"
     )) {
         Assert-IntegerRange $Record.cleanup.$name 0 0 "computer-helper cleanup $name"
     }
@@ -1793,8 +1987,11 @@ function Assert-ComputerHelperRecordV2 {
             ($Record.cleanup.helperTerminationDisposition -ceq "owner-forced-exact-supervisor") -or
         $Operator.computerHelperChain.helperDisconnectedAfterTermination -ne
             $Record.cleanup.helperDisconnectedAfterTermination -or
+        $Operator.computerHelperChain.topologyProtocolBound -ne
+            $Record.helper.topology.protocolRoundTrip -or
         $Operator.computerHelperChain.noHelperChildrenOrListenersRemain -ne
-            (($Record.cleanup.helperChildrenRemaining + $Record.cleanup.helperListenersRemaining) -eq 0)) {
+            (($Record.cleanup.helperChildrenRemaining + $Record.cleanup.helperListenersRemaining +
+              $Record.cleanup.exactHelperImageProcessesRemaining + $Record.cleanup.canonicalPortListenersRemaining) -eq 0)) {
         throw "Operator helper assertions do not match the machine helper record."
     }
 }
@@ -1831,7 +2028,7 @@ function Assert-RetainedEvidenceDirectoryV2 {
     )
     $directory = [IO.Path]::GetDirectoryName($OutputPath)
     if ([IO.Path]::GetFileName($OutputPath) -cne "browser-acceptance.json") {
-        throw "v0.12.11 final evidence must use the canonical browser-acceptance.json filename."
+        throw "v0.12.12 final evidence must use the canonical browser-acceptance.json filename."
     }
     $fixedInputs = [ordered]@{
         "candidate-preflight.json" = $PreflightPath
@@ -1847,7 +2044,7 @@ function Assert-RetainedEvidenceDirectoryV2 {
                 [IO.Path]::GetDirectoryName($entry.Value), $directory,
                 [StringComparison]::OrdinalIgnoreCase
             )) {
-            throw "v0.12.11 retained evidence inputs must use canonical names in one directory."
+            throw "v0.12.12 retained evidence inputs must use canonical names in one directory."
         }
     }
     foreach ($sidecarPath in $SidecarPaths) {
@@ -1855,36 +2052,36 @@ function Assert-RetainedEvidenceDirectoryV2 {
             [IO.Path]::GetDirectoryName($sidecarPath), $directory,
             [StringComparison]::OrdinalIgnoreCase
         )) {
-            throw "v0.12.11 screenshot sidecars must be in the retained evidence directory."
+            throw "v0.12.12 screenshot sidecars must be in the retained evidence directory."
         }
         $sidecarName = [IO.Path]::GetFileName($sidecarPath)
         $imageName = [IO.Path]::GetFileNameWithoutExtension($sidecarName) + ".png"
         $imagePath = [IO.Path]::Combine($directory, $imageName)
         if (-not [IO.File]::Exists($imagePath)) {
-            throw "v0.12.11 retained screenshot image is missing."
+            throw "v0.12.12 retained screenshot image is missing."
         }
         $image = [IO.FileInfo]::new($imagePath)
         if (($image.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "v0.12.11 retained screenshot image must not be a reparse point."
+            throw "v0.12.12 retained screenshot image must not be a reparse point."
         }
         $expectedNames += $sidecarName
         $expectedNames += $imageName
     }
-    if ($expectedNames.Count -ne 11 -or ($expectedNames | Select-Object -Unique).Count -ne 11) {
-        throw "v0.12.11 retained evidence allowlist must contain exactly 11 unique inputs."
+    if ($expectedNames.Count -ne 17 -or ($expectedNames | Select-Object -Unique).Count -ne 17) {
+        throw "v0.12.12 retained evidence allowlist must contain exactly 17 unique inputs."
     }
     $actualNames = @()
     foreach ($item in [IO.DirectoryInfo]::new($directory).GetFileSystemInfos()) {
         if ($item -isnot [IO.FileInfo] -or
             ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "v0.12.11 retained evidence directory contains a directory, link, or unsupported entry."
+            throw "v0.12.12 retained evidence directory contains a directory, link, or unsupported entry."
         }
         $actualNames += $item.Name
     }
     $expectedSorted = @($expectedNames | Sort-Object)
     $actualSorted = @($actualNames | Sort-Object)
     if (($expectedSorted -join "`n") -cne ($actualSorted -join "`n")) {
-        throw "v0.12.11 retained evidence directory contains a missing or unexpected input."
+        throw "v0.12.12 retained evidence directory contains a missing or unexpected input."
     }
 }
 
@@ -1914,11 +2111,20 @@ function Invoke-Finalize {
         ($candidate | ConvertTo-Json -Depth 20 -Compress)) {
         throw "Candidate preflight and postflight bindings differ."
     }
+    $releaseCandidateBinding = $null
+    if ($candidate.version -ceq $script:OperatorV2Version) {
+        $releaseCandidateBinding = Assert-ReleaseCandidateBinding `
+            $preflight.releaseCandidateBinding $candidate "preflight releaseCandidateBinding"
+        if (($releaseCandidateBinding | ConvertTo-Json -Depth 10 -Compress) -cne
+            ($postflight.releaseCandidateBinding | ConvertTo-Json -Depth 10 -Compress)) {
+            throw "Candidate preflight and postflight releaseCandidateBinding objects differ."
+        }
+    }
     Assert-CandidateBindingDomain $postflight.candidateBinding $candidateBinding "candidate postflight candidateBinding"
     $matrix = Read-Json $matrixPath "ApiMatrixRecord"
     Assert-ApiMatrixRecord $matrix $candidate.version $candidateBinding
     $operator = Read-Json $operatorPath "OperatorResults"
-    Assert-OperatorResults $operator $candidate.version $candidateBinding
+    Assert-OperatorResults $operator $candidate.version $candidateBinding $releaseCandidateBinding $candidate
     $helperPath = $null
     $helperRecord = $null
     if ($candidate.version -ceq $script:OperatorV2Version) {
@@ -1926,9 +2132,11 @@ function Invoke-Finalize {
         $helperPath = Resolve-RequiredFile $ComputerHelperRecord "ComputerHelperRecord"
         $helperRecord = Read-Json $helperPath "ComputerHelperRecord"
         Assert-ComputerHelperRecordV2 `
-            $helperRecord $candidateBinding $candidate $operator (Get-Sha256 $matrixPath)
+            $helperRecord $candidateBinding $releaseCandidateBinding $candidate $operator (Get-Sha256 $matrixPath)
     }
-    $screenshots = @(Assert-ScreenshotRecords $ScreenshotRecords $candidateBinding $candidate.version)
+    $screenshots = @(
+        Assert-ScreenshotRecords $ScreenshotRecords $candidateBinding $releaseCandidateBinding $candidate $candidate.version
+    )
     if ($candidate.version -ceq $script:OperatorV2Version) {
         Assert-HelperScreenshotsMatchSidecarsV2 $helperRecord $screenshots
     }
@@ -1963,6 +2171,7 @@ function Invoke-Finalize {
             evidenceType = "stock-user-chrome-acceptance"
             recordedAtUtc = [DateTime]::UtcNow.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
             passed = $true
+            releaseCandidateBinding = $releaseCandidateBinding
             candidateBinding = $candidateBinding
             candidate = $candidateSummary
             environment = $operator.environment
@@ -1971,10 +2180,12 @@ function Invoke-Finalize {
             consentCheckpoints = $operator.consentCheckpoints
             initialState = $operator.initialState
             extension = $operator.extension
+            handback = $helperRecord.handback
             apiMatrixRecordSha256 = Get-Sha256 $matrixPath
             apiMatrix = $matrix
             computerHelperRecordSha256 = Get-Sha256 $helperPath
             computerHelper = $helperRecord
+            operatorRecordSha256 = Get-Sha256 $operatorPath
             screenshotCaptures = $operator.screenshotCaptures
             screenshots = $screenshots
             humanVisualReview = $operator.humanVisualReview
@@ -2045,11 +2256,11 @@ function Invoke-InitializeOperator {
     $operator = Read-Json $templatePath "operator template"
     if ($templateVersion -ceq $script:OperatorV2Version) {
         Assert-ExactKeys $operator @(
-            "schemaVersion", "evidenceType", "candidateBinding", "environment", "actionSurfaces",
+            "schemaVersion", "evidenceType", "releaseCandidateBinding", "candidateBinding", "environment", "actionSurfaces",
             "computerHelperChain", "consentCheckpoints", "initialState", "extension", "screenshotCaptures",
-            "humanVisualReview", "restoration", "cleanup", "retainedEvidence"
-        ) "v0.12.11 operator template"
-        Assert-IntegerRange $operator.schemaVersion 2 2 "v0.12.11 operator template schemaVersion"
+            "handback", "humanVisualReview", "restoration", "cleanup", "retainedEvidence"
+        ) "v0.12.12 operator template"
+        Assert-IntegerRange $operator.schemaVersion 2 2 "v0.12.12 operator template schemaVersion"
     }
     else {
         Assert-ExactKeys $operator @(
@@ -2057,17 +2268,57 @@ function Invoke-InitializeOperator {
         ) "operator template"
         Assert-IntegerRange $operator.schemaVersion 1 1 "operator template schemaVersion"
     }
+    if ($templateVersion -ceq $script:OperatorV2Version) {
+        $operator.releaseCandidateBinding = $preflight.releaseCandidateBinding
+    }
     $operator.candidateBinding = [pscustomobject]$binding
     Write-NewJson $outputPath $operator
     Write-Output "Candidate-bound operator checklist was initialized."
 }
 
+function New-PassingHandbackCaseV2SelfTest {
+    param([string]$Trigger, [string]$Reason)
+    return [ordered]@{
+        trigger = $Trigger
+        operatorSurface = "local-browser-bridge-computer-helper"
+        statusPollMethod = "browser.control.status"
+        statusPolledAfterTrigger = $true
+        reducedStatus = [ordered]@{
+            active = $false; humanPaused = $true; reason = $Reason; revocationPending = $false
+        }
+        controlStartRefusal = [ordered]@{
+            httpStatus = 423; errorCode = "HUMAN_CONTROL_PAUSED"; taxonomyState = "needs_user"
+            taxonomyAction = "handback"; retriable = $false
+        }
+        tabMutationRefusal = [ordered]@{
+            httpStatus = 423; errorCode = "HUMAN_CONTROL_PAUSED"; taxonomyState = "needs_user"
+            taxonomyAction = "handback"; retriable = $false
+        }
+        indicatorsRemoved = $true
+        resume = [ordered]@{
+            trustedPopupClick = $true
+            operatorSurface = "local-browser-bridge-computer-helper"
+            statusPollMethod = "browser.control.status"
+            statusPolledAfterResume = $true
+            reducedStatus = [ordered]@{
+                active = $false; humanPaused = $false; revocationPending = $false
+            }
+            postResumeStartSucceeded = $true
+            activeStatusPolled = $true
+            activeStatus = [ordered]@{
+                active = $true; humanPaused = $false; revocationPending = $false
+            }
+        }
+    }
+}
+
 function New-PassingOperatorV2SelfTest {
-    param([object]$Binding)
+    param([object]$Binding, [object]$ReleaseBinding)
     $templatePath = [IO.Path]::GetFullPath([IO.Path]::Combine(
-        $PSScriptRoot, "..", "evidence", "v0.12.11", "browser", "operator-results.template.json"
+        $PSScriptRoot, "..", "evidence", "v0.12.12", "browser", "operator-results.template.json"
     ))
-    $operator = Read-Json $templatePath "v0.12.11 operator self-test template"
+    $operator = Read-Json $templatePath "v0.12.12 operator self-test template"
+    $operator.releaseCandidateBinding = Copy-JsonObject $ReleaseBinding
     $operator.candidateBinding = [pscustomobject]$Binding
     $operator.environment.browserVersion = "151.0.7390.0"
     foreach ($name in @(
@@ -2094,12 +2345,15 @@ function New-PassingOperatorV2SelfTest {
         "candidateBoundExecutableStarted", "connectedThroughLoopbackServer", "serverApiOnly",
         "exactChromeWindowSelected", "chromeExtensionsLoadCompleted", "browserApiActionCompleted",
         "exactWindowShareActionCompleted", "freshFramesBoundToComputerAction",
-        "ownerForcedSupervisorTermination", "helperDisconnectedAfterTermination",
+        "topologyProtocolBound", "ownerForcedSupervisorTermination", "helperDisconnectedAfterTermination",
         "noHelperChildrenOrListenersRemain", "helperStopped"
     )) {
         $operator.computerHelperChain.$name = $true
     }
-    $operator.computerHelperChain.rawScreenshotCount = 3
+    $operator.computerHelperChain.rawScreenshotCount = 6
+
+    $operator.handback.stop = New-PassingHandbackCaseV2SelfTest "in-page-stop" "released_by_user"
+    $operator.handback.cancel = New-PassingHandbackCaseV2SelfTest "chrome-native-cancel" "canceled_by_user"
 
     foreach ($name in @("performed", "actionTimeHumanConfirmed", "ownershipConfirmed")) {
         $operator.consentCheckpoints.installCandidate.$name = $true
@@ -2155,7 +2409,7 @@ function New-PassingOperatorV2SelfTest {
     )) {
         $operator.humanVisualReview.$name = $true
     }
-    $operator.humanVisualReview.reviewedCropCount = 3
+    $operator.humanVisualReview.reviewedCropCount = 6
     $operator.humanVisualReview.automaticPixelRedactionClaimed = $false
 
     $operator.restoration.candidateExtensionPresence.finalPresent = $false
@@ -2192,8 +2446,8 @@ function New-PassingOperatorV2SelfTest {
     $operator.cleanup.unrelatedExtensionsChanged = $false
 
     $operator.retainedEvidence.exactAllowlistVerified = $true
-    $operator.retainedEvidence.inputFileCount = 11
-    $operator.retainedEvidence.finalFileCount = 12
+    $operator.retainedEvidence.inputFileCount = 17
+    $operator.retainedEvidence.finalFileCount = 18
     foreach ($name in @(
         "rawScreenshotsPresent", "pendingReviewRecordsPresent", "chromeMcpTranscriptPresent",
         "computerUseTranscriptPresent", "secretCredentialPresent",
@@ -2209,8 +2463,42 @@ function Copy-JsonObject {
     return $Value | ConvertTo-Json -Depth 30 -Compress | ConvertFrom-Json
 }
 
+function New-PassingReleaseCandidateBindingV2SelfTest {
+    param([object]$Candidate)
+    $assetNames = @($Candidate.checksumManifest.canonicalNamesInOrder) + "SHA256SUMS.txt"
+    $assetHashes = @(
+        $Candidate.server.sha256,
+        $Candidate.computerHelper.sha256,
+        [String]::new([char]"c", 64),
+        $Candidate.extension.sha256,
+        $Candidate.checksumManifest.sha256
+    )
+    $assets = @()
+    for ($index = 0; $index -lt $assetNames.Count; $index += 1) {
+        $assets += [ordered]@{ file = $assetNames[$index]; bytes = 1000; sha256 = $assetHashes[$index] }
+    }
+    return [ordered]@{
+        productVersion = $Candidate.version
+        repository = "flrngel/local-browser-bridge"
+        tag = "v$($Candidate.version)"
+        sourceSha = $Candidate.finalSha
+        tagObjectSha = [String]::new([char]"c", 40)
+        workflowRunId = "123456789"
+        workflowRunAttempt = "1"
+        artifactId = "987654321"
+        artifactName = "release-candidate"
+        artifactZipBytes = 5000
+        artifactZipSha256 = [String]::new([char]"d", 64)
+        checksumManifestSha256 = $Candidate.checksumManifest.sha256
+        attestationInvocationUri = "https://github.com/flrngel/local-browser-bridge/actions/runs/123456789/attempts/1"
+        attestedAssetCount = 5
+        githubHostedRunner = $true
+        assets = $assets
+    }
+}
+
 function New-PassingComputerHelperRecordV2SelfTest {
-    param([object]$Binding, [object]$Candidate, [string]$ApiMatrixSha256)
+    param([object]$Binding, [object]$ReleaseBinding, [object]$Candidate, [string]$ApiMatrixSha256)
     $start = [DateTimeOffset]::UtcNow
     $helperProcessRef = [String]::new([char]"e", 64)
     $serverProcessRef = [String]::new([char]"f", 64)
@@ -2239,7 +2527,7 @@ function New-PassingComputerHelperRecordV2SelfTest {
     $dedicatedTargetRef = [String]::new([char]"a", 64)
     $dedicatedProcessRef = [String]::new([char]"b", 64)
     for ($index = 0; $index -lt $script:ComputerHelperEpochNames.Count; $index += 1) {
-        $targetRef = if (@(1, 3, 5, 7, 8) -ccontains $index) {
+        $targetRef = if (@(1, 3, 5, 7, 9, 11, 12) -ccontains $index) {
             $dedicatedTargetRef
         }
         else {
@@ -2281,7 +2569,7 @@ function New-PassingComputerHelperRecordV2SelfTest {
                 "computer.click", "computer.status"
             )
         }
-        elseif ($index -eq 16) {
+        elseif ($index -eq 24) {
             $methods = @(
                 "computer.observe", "computer.click", "computer.click",
                 "computer.click", "computer.observe"
@@ -2346,6 +2634,7 @@ function New-PassingComputerHelperRecordV2SelfTest {
         schemaVersion = 1
         evidenceType = "stock-user-chrome-computer-helper-chain"
         version = $script:OperatorV2Version
+        releaseCandidateBinding = Copy-JsonObject $ReleaseBinding
         candidateBinding = $Binding
         passed = $true
         recordedBy = [ordered]@{
@@ -2375,6 +2664,18 @@ function New-PassingComputerHelperRecordV2SelfTest {
             processRef = $helperProcessRef
             sessionBindingSha256 = [String]::new([char]"8", 64)
             rawSessionIdentifierRetained = $false
+            topology = [ordered]@{
+                exactImageDirectChildCount = 1
+                exactImageMatched = $true
+                directChildOfLaunchedSupervisor = $true
+                interactiveSessionMatched = $true
+                stableConsecutivePolls = 2
+                helloStateMatched = $true
+                protocolRoundTrip = $true
+                roundTripMethod = "computer.status"
+                supervisorProcessRef = [String]::new([char]"7", 64)
+                workerProcessRef = [String]::new([char]"6", 64)
+            }
         }
         extensionPayload = [ordered]@{
             fileCount = 11
@@ -2403,6 +2704,12 @@ function New-PassingComputerHelperRecordV2SelfTest {
                 frameRef = [String]::new([char]"3", 64)
                 capturedBeforeMutation = $true
             }
+            candidateCard = [ordered]@{
+                present = $false
+                epochRef = $epochs[1].epochRef
+                frameRef = [String]::new([char]"5", 64)
+                verifiedFromFreshLiveUi = $true
+            }
         }
         windowBinding = [ordered]@{
             application = "google-chrome"
@@ -2426,6 +2733,10 @@ function New-PassingComputerHelperRecordV2SelfTest {
             resultText = "Hello, Bridge Matrix. blue selected."
             resultVerified = $true
         }
+        handback = [ordered]@{
+            stop = New-PassingHandbackCaseV2SelfTest "in-page-stop" "released_by_user"
+            cancel = New-PassingHandbackCaseV2SelfTest "chrome-native-cancel" "canceled_by_user"
+        }
         screenshots = $shots
         cleanup = [ordered]@{
             allSharesStopped = $true
@@ -2434,10 +2745,14 @@ function New-PassingComputerHelperRecordV2SelfTest {
             helperDisconnectedAfterTermination = $true
             helperChildrenRemaining = 0
             helperListenersRemaining = 0
+            exactHelperImageProcessesRemaining = 0
             serverTerminationDisposition = "owner-forced-exact-process"
             serverExitCode = 1
             serverListenersRemaining = 0
+            canonicalPortListenersRemaining = 0
             candidateExtensionRemoved = $true
+            candidateCardAbsentAfterRemoval = $true
+            candidateCardAbsenceVerifiedFromFreshLiveUi = $true
             savedTokenCleared = $true
             developerModeRestored = $true
             fullAccessRestored = $true
@@ -2462,7 +2777,10 @@ function New-PassingComputerHelperRecordV2SelfTest {
 function Assert-OperatorV2SelfTestRejected {
     param([object]$Operator, [object]$Binding, [string]$FailureMessage)
     $rejected = $false
-    try { Assert-OperatorResultsV2 $Operator $script:OperatorV2Version $Binding }
+    try {
+        Assert-OperatorResultsV2 $Operator $script:OperatorV2Version $Binding `
+            $script:SelfTestReleaseCandidateBinding $script:SelfTestCandidateV2
+    }
     catch { $rejected = $true }
     if (-not $rejected) { throw $FailureMessage }
 }
@@ -2478,7 +2796,8 @@ function Assert-HelperV2SelfTestRejected {
     )
     $rejected = $false
     try {
-        Assert-ComputerHelperRecordV2 $Record $Binding $Candidate $Operator $MatrixSha256
+        Assert-ComputerHelperRecordV2 `
+            $Record $Binding $Operator.releaseCandidateBinding $Candidate $Operator $MatrixSha256
     }
     catch { $rejected = $true }
     if (-not $rejected) { throw $FailureMessage }
@@ -2536,35 +2855,65 @@ function Invoke-SelfTest {
         [IO.File]::WriteAllText($preflightPath, (($preflight | ConvertTo-Json -Depth 30) + "`n"), $script:Utf8NoBom)
         $preflightBinding = Get-CandidateBindingDomain $preflight (Get-Sha256 $preflightPath)
 
-        $preflightV2 = Copy-JsonObject $preflight
-        $preflightV2.candidate.version = $script:OperatorV2Version
-        $preflightV2.candidate.checksumManifest.canonicalNamesInOrder = @(
+        $checksumManifestV2 = Copy-JsonObject $preflight.candidate.checksumManifest
+        $checksumManifestV2.canonicalNamesInOrder = @(
             "local-browser-bridge-v$($script:OperatorV2Version)-windows-x86_64.exe",
             "local-computer-helper-v$($script:OperatorV2Version)-windows-x86_64.exe",
             "local-browser-bridge-v$($script:OperatorV2Version)-macos-universal.tar.gz",
             "local-browser-bridge-extension-v$($script:OperatorV2Version).zip"
         )
-        $preflightV2.candidate.server.name = "local-browser-bridge-v$($script:OperatorV2Version)-windows-x86_64.exe"
-        $preflightV2.candidate | Add-Member -NotePropertyName computerHelper -NotePropertyValue ([pscustomobject][ordered]@{
-            name = "local-computer-helper-v$($script:OperatorV2Version)-windows-x86_64.exe"
-            bytes = 1000
-            sha256 = $hash
-        })
-        $preflightV2.candidate.extension.name = "local-browser-bridge-extension-v$($script:OperatorV2Version).zip"
-        $preflightV2.candidate.extension.manifestVersion = $script:OperatorV2Version
-        $preflightV2.candidate.extension.libraryVersion = $script:OperatorV2Version
+        $extensionV2 = Copy-JsonObject $preflight.candidate.extension
+        $extensionV2.name = "local-browser-bridge-extension-v$($script:OperatorV2Version).zip"
+        $extensionV2.manifestVersion = $script:OperatorV2Version
+        $extensionV2.libraryVersion = $script:OperatorV2Version
+        $candidateV2 = [ordered]@{
+            version = $script:OperatorV2Version
+            finalSha = $preflight.candidate.finalSha
+            gitClean = $true
+            checksumManifest = $checksumManifestV2
+            server = [ordered]@{
+                name = "local-browser-bridge-v$($script:OperatorV2Version)-windows-x86_64.exe"
+                bytes = 1000
+                sha256 = $hash
+            }
+            computerHelper = [ordered]@{
+                name = "local-computer-helper-v$($script:OperatorV2Version)-windows-x86_64.exe"
+                bytes = 1000
+                sha256 = $hash
+            }
+            extension = $extensionV2
+        }
+        $releaseCandidateV2 = New-PassingReleaseCandidateBindingV2SelfTest $candidateV2
+        $preflightV2 = [ordered]@{
+            schemaVersion = 1
+            evidenceType = "stock-user-chrome-candidate-binding"
+            phase = "preflight"
+            recordedAtUtc = [DateTime]::UtcNow.ToString("o")
+            passed = $true
+            runNonce = $preflight.runNonce
+            releaseCandidateBinding = $releaseCandidateV2
+            candidate = $candidateV2
+        }
+        $script:SelfTestReleaseCandidateBinding = $releaseCandidateV2
+        $script:SelfTestCandidateV2 = $candidateV2
         $preflightV2Path = [IO.Path]::Combine($root, "preflight-v2.json")
         [IO.File]::WriteAllText($preflightV2Path, (($preflightV2 | ConvertTo-Json -Depth 30) + "`n"), $script:Utf8NoBom)
         $preflightV2Binding = Get-CandidateBindingDomain $preflightV2 (Get-Sha256 $preflightV2Path)
         $initializedV2Path = [IO.Path]::Combine($root, "operator-v2-initialized.json")
         & $PSCommandPath -Mode InitializeOperator -PreflightRecord $preflightV2Path -OutputRecord $initializedV2Path | Out-Null
-        $initializedV2 = Read-Json $initializedV2Path "initialized v0.12.11 operator checklist"
+        $initializedV2 = Read-Json $initializedV2Path "initialized v0.12.12 operator checklist"
         if ($initializedV2.schemaVersion -ne 2 -or $initializedV2.extension.version -cne $script:OperatorV2Version) {
-            throw "Evidence initializer did not select the v0.12.11 operator schema."
+            throw "Evidence initializer did not select the v0.12.12 operator schema."
         }
 
-        $operatorV2 = New-PassingOperatorV2SelfTest $preflightV2Binding
-        Assert-OperatorResults $operatorV2 $script:OperatorV2Version $preflightV2Binding
+        $operatorV2 = New-PassingOperatorV2SelfTest $preflightV2Binding $releaseCandidateV2
+        Assert-OperatorResults $operatorV2 $script:OperatorV2Version $preflightV2Binding `
+            $releaseCandidateV2 $candidateV2
+
+        $badV2 = Copy-JsonObject $operatorV2
+        $badV2.releaseCandidateBinding.workflowRunAttempt = "2"
+        Assert-OperatorV2SelfTestRejected $badV2 $preflightV2Binding `
+            "Evidence finalizer accepted an operator record bound to another workflow attempt."
 
         $badV2 = Copy-JsonObject $operatorV2
         $badV2.initialState.developerMode.changedByRun = $false
@@ -2877,7 +3226,7 @@ function Invoke-SelfTest {
             throw "Evidence finalizer self-test retained a path or placeholder."
         }
 
-        # Exercise the complete v0.12.11 Finalize path with its exact 11-file
+        # Exercise the complete v0.12.12 Finalize path with its exact 17-file
         # retained-input inventory, not only the v2 relation validators.
         $finalizeV2Root = [IO.Path]::Combine($root, "finalize-v2")
         [IO.Directory]::CreateDirectory($finalizeV2Root) | Out-Null
@@ -2885,12 +3234,27 @@ function Invoke-SelfTest {
         [IO.File]::Copy($preflightV2Path, $finalizeV2PreflightPath)
         $finalizeV2Binding = Get-CandidateBindingDomain $preflightV2 (Get-Sha256 $finalizeV2PreflightPath)
 
-        $postflightV2 = Copy-JsonObject $postflight
-        $postflightV2.runNonce = $preflightV2.runNonce
-        $postflightV2.candidate = Copy-JsonObject $preflightV2.candidate
-        $postflightV2.candidateBinding = [pscustomobject]$finalizeV2Binding
-        $postflightV2.preflightRecordSha256 = Get-Sha256 $finalizeV2PreflightPath
-        $postflightV2.unchanged | Add-Member -NotePropertyName computerHelperExecutable -NotePropertyValue $true
+        $postflightV2 = [ordered]@{
+            schemaVersion = 1
+            evidenceType = "stock-user-chrome-candidate-binding"
+            phase = "postflight"
+            recordedAtUtc = [DateTime]::UtcNow.ToString("o")
+            passed = $true
+            runNonce = $preflightV2.runNonce
+            releaseCandidateBinding = Copy-JsonObject $releaseCandidateV2
+            candidate = Copy-JsonObject $preflightV2.candidate
+            candidateBinding = [pscustomobject]$finalizeV2Binding
+            preflightRecordSha256 = Get-Sha256 $finalizeV2PreflightPath
+            unchanged = [ordered]@{
+                checkoutHead = $true
+                checkoutClean = $true
+                checksumManifest = $true
+                serverExecutable = $true
+                computerHelperExecutable = $true
+                extensionZip = $true
+                extractedPayload = $true
+            }
+        }
         $finalizeV2PostflightPath = [IO.Path]::Combine($finalizeV2Root, "candidate-postflight.json")
         [IO.File]::WriteAllText(
             $finalizeV2PostflightPath, (($postflightV2 | ConvertTo-Json -Depth 30) + "`n"), $script:Utf8NoBom
@@ -2908,7 +3272,7 @@ function Invoke-SelfTest {
         )
 
         $helperV2 = New-PassingComputerHelperRecordV2SelfTest `
-            $finalizeV2Binding $preflightV2.candidate (Get-Sha256 $finalizeV2MatrixPath)
+            $finalizeV2Binding $releaseCandidateV2 $preflightV2.candidate (Get-Sha256 $finalizeV2MatrixPath)
         $finalizeV2HelperPath = [IO.Path]::Combine(
             $finalizeV2Root, "browser-computer-helper-chain.json"
         )
@@ -2916,7 +3280,7 @@ function Invoke-SelfTest {
             $finalizeV2HelperPath, (($helperV2 | ConvertTo-Json -Depth 30) + "`n"), $script:Utf8NoBom
         )
 
-        $operatorV2Finalize = New-PassingOperatorV2SelfTest $finalizeV2Binding
+        $operatorV2Finalize = New-PassingOperatorV2SelfTest $finalizeV2Binding $releaseCandidateV2
         $finalizeV2OperatorPath = [IO.Path]::Combine($finalizeV2Root, "operator-results.json")
         [IO.File]::WriteAllText(
             $finalizeV2OperatorPath, (($operatorV2Finalize | ConvertTo-Json -Depth 30) + "`n"), $script:Utf8NoBom
@@ -2929,6 +3293,7 @@ function Invoke-SelfTest {
             [IO.File]::WriteAllBytes($imagePathV2, $png)
             $sidecarV2 = [ordered]@{
                 schemaVersion = 1; evidenceType = "stock-user-chrome-screenshot"; purpose = $purpose
+                releaseCandidateBinding = Copy-JsonObject $releaseCandidateV2
                 candidateBinding = $finalizeV2Binding
                 sourceCapture = [ordered]@{
                     name = [IO.Path]::GetFileNameWithoutExtension($imageName) + ".raw.png"
@@ -2937,7 +3302,7 @@ function Invoke-SelfTest {
                 }
                 image = [ordered]@{ name = $imageName; bytes = $png.Length; sha256 = Get-Sha256 $imagePathV2; width = 120; height = 32 }
                 cropApplied = $true; metadataStrippedByDecodeAndReencode = $true; forbiddenMetadataChunksPresent = $false
-                ocrAvailable = $false; ocrDenylistChecked = $false; ocrDenylistMatches = 0
+                automatedTextInspectionPerformed = $false; manualVisualReviewRequired = $true
                 manualVisualReviewConfirmed = $true; automaticPixelRedactionPerformed = $false; unknownPixelSafetyClaimed = $false
                 reviewStatement = $script:ReviewStatementV2
             }
@@ -2955,11 +3320,11 @@ function Invoke-SelfTest {
             -ComputerHelperRecord $finalizeV2HelperPath -OperatorResults $finalizeV2OperatorPath `
             -ScreenshotRecords $finalizeV2Sidecars `
             -OutputRecord $finalizeV2OutputPath | Out-Null
-        $persistedV2 = Read-Json $finalizeV2OutputPath "finalized v0.12.11 self-test record"
+        $persistedV2 = Read-Json $finalizeV2OutputPath "finalized v0.12.12 self-test record"
         if ($persistedV2.schemaVersion -ne 2 -or $persistedV2.candidate.version -cne $script:OperatorV2Version -or
             $persistedV2.passed -ne $true -or
-            @(Get-ChildItem -LiteralPath $finalizeV2Root -Force).Count -ne 12) {
-            throw "Evidence finalizer complete v0.12.11 self-test failed."
+            @(Get-ChildItem -LiteralPath $finalizeV2Root -Force).Count -ne 18) {
+            throw "Evidence finalizer complete v0.12.12 self-test failed."
         }
 
         $replayedHelperV2 = Copy-JsonObject $helperV2
@@ -2967,7 +3332,8 @@ function Invoke-SelfTest {
         $helperReplayRejected = $false
         try {
             Assert-ComputerHelperRecordV2 `
-                $replayedHelperV2 $finalizeV2Binding $preflightV2.candidate $operatorV2Finalize `
+                $replayedHelperV2 $finalizeV2Binding $releaseCandidateV2 `
+                $preflightV2.candidate $operatorV2Finalize `
                 (Get-Sha256 $finalizeV2MatrixPath)
         }
         catch { $helperReplayRejected = $true }

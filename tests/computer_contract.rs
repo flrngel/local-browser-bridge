@@ -905,9 +905,9 @@ fn background_invariant_failures_use_stage_bound_closed_vocabulary() {
 }
 
 #[test]
-fn macos_v0_12_11_pointer_evidence_is_bounded_corroboration_not_causal_attribution() {
-    let rig = fs::read_to_string("evidence/v0.12.11/computer/helper-evidence-rig.mjs").unwrap();
-    let probe = fs::read_to_string("evidence/v0.12.11/computer/SystemProbe.swift").unwrap();
+fn macos_v0_12_12_pointer_evidence_is_bounded_corroboration_not_causal_attribution() {
+    let rig = fs::read_to_string("evidence/v0.12.12/computer/helper-evidence-rig.mjs").unwrap();
+    let probe = fs::read_to_string("evidence/v0.12.12/computer/SystemProbe.swift").unwrap();
     assert!(rig.contains("failureProbeBaseline"));
     assert!(rig.contains("collectFailureDiagnostics"));
     assert!(rig.contains("systemInvariants(failureProbeBaseline.system, after)"));
@@ -953,7 +953,7 @@ fn macos_v0_12_11_pointer_evidence_is_bounded_corroboration_not_causal_attributi
     ] {
         assert!(
             rig.contains(required),
-            "missing v0.12.11 pointer contract: {required}"
+            "missing v0.12.12 pointer contract: {required}"
         );
     }
     assert!(!rig.contains("cursorUnchanged"));
@@ -1016,17 +1016,17 @@ fn macos_v0_12_11_pointer_evidence_is_bounded_corroboration_not_causal_attributi
 }
 
 #[test]
-fn macos_v0_12_11_pointer_handoff_is_passive_notification_only_and_fail_closed() {
-    let prompt = fs::read_to_string("evidence/v0.12.11/computer/PointerHandoff.swift")
+fn macos_v0_12_12_pointer_handoff_is_passive_notification_only_and_fail_closed() {
+    let prompt = fs::read_to_string("evidence/v0.12.12/computer/PointerHandoff.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.11/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.12/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.11/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.12/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.11/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.12/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let normalized_readme = readme.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -1320,7 +1320,7 @@ fn macos_v0_12_11_pointer_handoff_is_passive_notification_only_and_fail_closed()
         "handoff dispatch state must be false before arm, unknown while awaiting, and true only from returned dispatch evidence"
     );
 
-    let final_cleanup = rig.split("} finally {").nth(1).unwrap();
+    let final_cleanup = rig.rsplit("} finally {").next().unwrap();
     let prompt_cleanup = final_cleanup
         .find("await terminate(pointerHandoffProcess, \"pointer handoff prompt\")")
         .unwrap();
@@ -1348,7 +1348,7 @@ fn macos_v0_12_11_pointer_handoff_is_passive_notification_only_and_fail_closed()
     }
     assert!(!state_writer.contains("POINTER_HANDOFF_WAITING_STATE"));
 
-    let prompt = fs::read_to_string("evidence/v0.12.11/computer/PointerHandoff.swift").unwrap();
+    let prompt = fs::read_to_string("evidence/v0.12.12/computer/PointerHandoff.swift").unwrap();
     assert!(prompt.contains("if priorExpiration.timeIntervalSinceNow <= 0"));
     assert!(prompt.contains("guard transitionExpiration.timeIntervalSinceNow > 0 else"));
 
@@ -2258,7 +2258,7 @@ fn withdrawn_v0_12_9_macos_cursor_invariant_attempt_is_byte_exact_and_fail_close
 
 #[test]
 fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
-    let entries = fs::read_dir("evidence/v0.12.11/computer")
+    let entries = fs::read_dir("evidence/v0.12.12/computer")
         .unwrap()
         .map(Result::unwrap)
         .map(|entry| {
@@ -2282,12 +2282,12 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
         ])
     );
 
-    let rig = fs::read_to_string("evidence/v0.12.11/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.12/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let fixture =
-        fs::read_to_string("evidence/v0.12.11/computer/HelperEvidenceFixture.swift").unwrap();
-    let readme = fs::read_to_string("evidence/v0.12.11/computer/README.md").unwrap();
+        fs::read_to_string("evidence/v0.12.12/computer/HelperEvidenceFixture.swift").unwrap();
+    let readme = fs::read_to_string("evidence/v0.12.12/computer/README.md").unwrap();
 
     assert!(rig.contains(&format!("const EXPECTED_VERSION = \"{VERSION}\";")));
     assert!(rig.contains("const EXPECTED_ARCHIVE = `local-browser-bridge-v${EXPECTED_VERSION}-macos-universal.tar.gz`;"));
@@ -2295,12 +2295,24 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
     assert!(rig.contains("evidenceClass: \"exact-release-candidate-package-live-observation\""));
     assert!(rig.contains("candidateNotice:"));
     assert!(fixture.contains(&format!("LBB v{VERSION} Persistent SCStream Evidence")));
+    assert!(fixture.contains("var evidenceLane = \"\""));
+    assert!(fixture.contains("\"evidence-lane=\\(evidenceLane)\".draw("));
+    assert!(fixture.contains("environment[\"LBB_FIXTURE_EVIDENCE_LANE\"]"));
+    assert!(fixture.contains("[\"quiet\", \"deliberate-concurrency\"].contains(evidenceLane)"));
+    assert!(rig.contains("LBB_FIXTURE_EVIDENCE_LANE: pointerEvidenceLane"));
+    assert!(rig.contains("snapshot.evidenceLane === pointerEvidenceLane"));
+    assert!(rig.contains("evidenceLane: finalFixtureState.evidenceLane"));
+    assert!(rig.contains("acceptanceFinalizerSource"));
+    assert!(rig.contains("acceptanceFinalizerSha256: harnessSha256.acceptanceFinalizer"));
+    assert!(readme.contains("`evidence-lane=quiet`"));
+    assert!(readme.contains("all twelve lane screenshots to have distinct file SHA-256"));
+    assert!(readme.contains("distinct canonical decoded-RGBA pixel SHA-256 digests"));
     assert!(readme.contains(&format!("macOS v{VERSION} server and helper")));
     assert!(readme.contains(&format!(
         "local-browser-bridge-v{VERSION}-macos-universal.tar.gz"
     )));
-    assert!(!rig.replace("v0.12.11", "").contains("v0.12.1"));
-    assert!(!fixture.replace("v0.12.11", "").contains("v0.12.1"));
+    assert!(!rig.replace("v0.12.12", "").contains("v0.12.1"));
+    assert!(!fixture.replace("v0.12.12", "").contains("v0.12.1"));
     assert!(!rig.contains("v0.12.2"));
     assert!(!fixture.contains("v0.12.2"));
     let current_readme = readme
@@ -2349,12 +2361,16 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
 
 #[test]
 fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
-    let rig = fs::read_to_string("evidence/v0.12.11/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.12/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.11/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.12/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
+    let binder = fs::read_to_string("scripts/fetch-verify-release-candidate.sh")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let normalized_readme = readme.split_whitespace().collect::<Vec<_>>().join(" ");
 
     for required in [
         "expectedManifestSha256",
@@ -2368,12 +2384,15 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
         "!contents.endsWith(\"\\n\")",
         "/^([0-9a-f]{64})  ([^\\s/]+)$/",
         "new Set(entries.map((entry) => entry.file)).size !== entries.length",
-        "manifestSha256 === expectedManifestSha256",
+        "manifestBinding.expectedSha256Matched = manifestSha256 === expectedSha256",
         "checksum manifest has the exact canonical four-entry set",
         "archive checksum is bound by the canonical manifest",
         "checksumManifest: manifestBinding",
         "packageBinding: manifestBinding",
         "Candidate parsing and the first invocation of either supplied executable",
+        "async function preparePackage()",
+        "status: \"prepared-package-without-candidate-execution\"",
+        "candidateBytesExecuted: false",
     ] {
         assert!(
             rig.contains(required),
@@ -2381,30 +2400,46 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
         );
     }
     for required in [
-        "$EXPECTED_SHA256SUMS_SHA256",
-        "$EXPECTED_SOURCE_SHA",
-        "mandatory SHA-256 supplied",
-        "exactly the four v0.12.11",
-        "expected and actual manifest hashes",
+        "checked-in candidate binder validates",
+        "raw artifact ZIP size and SHA-256",
+        "exact five-file inventory",
+        "canonical LF checksum manifest",
+        "all five GitHub attestations",
+        "both exact-attempt attestation URI fields",
         "Before invoking either supplied candidate executable—even with `--version`",
         "No supplied server or helper code executes before",
-        "The order below is mandatory",
-        "RELEASE_FILES=(\"${ASSETS[@]}\" \"SHA256SUMS.txt\")",
-        "shasum -a 256 \"$MANIFEST\"",
-        "EXPECTED_LISTING=",
-        "wc -l < \"$MANIFEST\"",
-        "shasum -a 256 -c SHA256SUMS.txt",
-        "gh attestation verify",
-        "--source-ref \"refs/tags/$TAG\"",
-        "--source-digest \"$EXPECTED_SOURCE_SHA\"",
-        "--signer-workflow \"$REPOSITORY/.github/workflows/deploy.yml\"",
-        "--deny-self-hosted-runners",
-        "Only after every trust check passes",
-        "# Extraction and candidate execution are permitted only below this line.",
+        "Extraction and candidate execution are permitted only below this line",
+        "scripts/fetch-verify-release-candidate.sh",
+        "candidate-binding.json",
     ] {
         assert!(
-            readme.contains(required),
+            normalized_readme.contains(required),
             "macOS evidence manifest handoff is undocumented: {required}"
+        );
+    }
+    for required in [
+        "RUN_ATTEMPT",
+        "ARTIFACT_ID",
+        "SOURCE_SHA",
+        "TAG_OBJECT_SHA",
+        "release-candidate",
+        "raw artifact ZIP size mismatch",
+        "outer artifact ZIP inventory changed before bounded extraction",
+        "checksum manifest line count mismatch",
+        "candidate payload checksum mismatch",
+        "gh attestation verify",
+        "--source-ref \"refs/tags/$TAG\"",
+        "--source-digest \"$SOURCE_SHA\"",
+        "--signer-workflow \"$REPOSITORY/.github/workflows/deploy.yml\"",
+        "--deny-self-hosted-runners",
+        ".verificationResult.statement.predicate.runDetails.metadata.invocationId",
+        ".verificationResult.signature.certificate.runInvocationURI",
+        ".verificationResult.signature.certificate.runnerEnvironment == \"github-hosted\"",
+        "candidate-binding.json",
+    ] {
+        assert!(
+            binder.contains(required),
+            "checked-in candidate binder is missing: {required}"
         );
     }
 
@@ -2430,34 +2465,429 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
             && first_candidate_inspection < first_target_execution,
         "candidate package was inspected or executed before exact archive binding"
     );
-
-    let independent_manifest_digest = readme.find("[[ \"$(shasum -a 256 \"$MANIFEST\"").unwrap();
-    let exact_inventory = readme.find("EXPECTED_LISTING=").unwrap();
-    let canonical_manifest = readme.find("-v first=\"${ASSETS[0]}\"").unwrap();
-    let all_checksums = readme.find("shasum -a 256 -c SHA256SUMS.txt").unwrap();
-    let all_attestations = readme.find("gh attestation verify").unwrap();
-    let package_verifier = readme
-        .find("bash scripts/verify-release-assets.sh")
+    let raw_artifact_digest = binder.find("ARTIFACT_ZIP_SHA256=$(sha256_file").unwrap();
+    let exact_inventory = binder
+        .find("outer artifact ZIP inventory changed before bounded extraction")
         .unwrap();
-    let first_documented_extraction = readme.find("tar -xzf").unwrap();
-    let first_documented_execution = readme
-        .find("node evidence/v0.12.11/computer/helper-evidence-rig.mjs")
+    let canonical_manifest = binder
+        .find("checksum manifest line count mismatch")
+        .unwrap();
+    let all_checksums = binder.find("shasum -a 256 -c SHA256SUMS.txt").unwrap();
+    let package_verifier = binder.find("scripts/verify-release-assets.sh").unwrap();
+    let all_attestations = binder.find("gh attestation verify").unwrap();
+    let create_binding = binder
+        .find("BINDING=\"$DESTINATION/candidate-binding.json\"")
         .unwrap();
     assert!(
-        independent_manifest_digest < exact_inventory
+        raw_artifact_digest < exact_inventory
             && exact_inventory < canonical_manifest
             && canonical_manifest < all_checksums
-            && all_checksums < all_attestations
-            && all_attestations < package_verifier
-            && package_verifier < first_documented_extraction
+            && all_checksums < package_verifier
+            && package_verifier < all_attestations
+            && all_attestations < create_binding,
+        "candidate binder must finish artifact, payload, policy, and exact-attempt provenance checks before publishing its binding"
+    );
+
+    let binder_invocation = readme
+        .find("bash scripts/fetch-verify-release-candidate.sh")
+        .unwrap();
+    let first_documented_extraction = readme.find("\n  --prepare-package \\\n").unwrap();
+    let first_documented_execution = readme
+        .find("\n  \"$SERVER\" \"$HELPER\" \"$QUIET_DIR\"")
+        .unwrap();
+    assert!(
+        binder_invocation < first_documented_extraction
             && first_documented_extraction < first_documented_execution,
-        "README must verify independent trust, exact inventory, canonical manifest, every checksum, and every attestation before extraction or execution"
+        "README must run the checked-in candidate binder before extraction or execution"
+    );
+    assert!(
+        !readme.contains("tar -xzf") && !readme.contains("tar --extract"),
+        "README must not bypass the bounded package preparer with raw tar extraction"
     );
 }
 
 #[test]
+fn macos_packaged_evidence_streams_one_exact_bounded_pax_free_archive() {
+    let rig = fs::read_to_string("evidence/v0.12.12/computer/helper-evidence-rig.mjs")
+        .unwrap()
+        .replace("\r\n", "\n");
+
+    for required in [
+        "const MAX_COMPRESSED_MACOS_ARCHIVE_BYTES = 256 * 1024 * 1024;",
+        "const MAX_UNCOMPRESSED_MACOS_ARCHIVE_BYTES = 512 * 1024 * 1024;",
+        "const MAX_CHECKSUM_MANIFEST_BYTES = 16 * 1024;",
+        "const EXPECTED_MACOS_ARCHIVE_ENTRIES = [",
+        "function extractCandidateArchiveBounded(path, destination, expectedArchiveSha256)",
+        "with gzip.GzipFile(fileobj=archive_stream, mode=\"rb\") as tar_stream:",
+        "os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, \"O_NOFOLLOW\", 0)",
+        "macOS tar is not the expected PAX-free ustar format",
+        "macOS tar contains a link, PAX record, or unsupported member type",
+        "macOS tar contains a duplicate member",
+        "macOS tar exceeds the total uncompressed payload bound",
+        "macOS tar member mode is not exact",
+        "macOS archive changed during bounded extraction",
+        "summary.entryCount === EXPECTED_MACOS_ARCHIVE_ENTRIES.length",
+        "ten PAX-free regular-file/directory entries passed bounded streaming extraction",
+        "extractCandidateArchiveBounded(\n    archivePath,\n    archiveExtractRoot,\n    manifest.archiveSha256,",
+        "extractCandidateArchiveBounded(\n      archivePath,\n      outputDir,\n      manifest.archiveSha256,",
+        "os.fchmod(output_descriptor, entry[\"mode\"])",
+        "os.fchmod(directory_descriptor, entry[\"mode\"])",
+    ] {
+        assert!(
+            rig.contains(required),
+            "bounded macOS candidate archive gate is missing `{required}`"
+        );
+    }
+
+    let expected_inventory = rig
+        .split("const EXPECTED_MACOS_ARCHIVE_ENTRIES = [")
+        .nth(1)
+        .unwrap()
+        .split("];\n")
+        .next()
+        .unwrap();
+    assert_eq!(
+        expected_inventory.matches("{ name:").count(),
+        10,
+        "macOS package inventory must contain exactly ten entries"
+    );
+    for required_path in [
+        "local-browser-bridge",
+        "Local Computer Helper.app/Contents/Info.plist",
+        "Local Computer Helper.app/Contents/MacOS/local-computer-helper",
+        "Local Computer Helper.app/Contents/_CodeSignature/CodeResources",
+        "LICENSE",
+        "THIRD_PARTY_LICENSES.txt",
+    ] {
+        assert!(expected_inventory.contains(required_path));
+    }
+    for forbidden in [
+        "run(\"tar\"",
+        "[\"-tzf\", archivePath]",
+        "[\"-tvzf\", archivePath]",
+        "[\"-xzf\", archivePath",
+    ] {
+        assert!(
+            !rig.contains(forbidden),
+            "macOS evidence rig retained unbounded tar handling: {forbidden}"
+        );
+    }
+
+    let main = rig.split("async function main() {").nth(1).unwrap();
+    let canonical_manifest = main.find("bindCanonicalChecksumManifest(").unwrap();
+    let bounded_extraction = main.find("extractCandidateArchiveBounded(").unwrap();
+    let first_candidate_execution = main.find("exactVersion(serverPath").unwrap();
+    assert!(
+        canonical_manifest < bounded_extraction && bounded_extraction < first_candidate_execution
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn macos_package_preparer_accepts_only_the_canonical_bounded_ustar_package() {
+    use std::os::unix::fs::PermissionsExt;
+
+    fn set_mode(path: &std::path::Path, mode: u32) {
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    fn collect_inventory(
+        root: &std::path::Path,
+        directory: &std::path::Path,
+        inventory: &mut BTreeSet<String>,
+    ) {
+        for entry in fs::read_dir(directory).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            inventory.insert(
+                path.strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+            );
+            if entry.file_type().unwrap().is_dir() {
+                collect_inventory(root, &path, inventory);
+            }
+        }
+    }
+
+    let repository = std::env::current_dir().unwrap();
+    let rig = repository.join("evidence/v0.12.12/computer/helper-evidence-rig.mjs");
+    let temporary = tempfile::tempdir().unwrap();
+    set_mode(temporary.path(), 0o700);
+    let generator = temporary.path().join("make-package.py");
+    fs::write(
+        &generator,
+        r#"import io
+import sys
+import tarfile
+
+scenario, archive_path = sys.argv[1:]
+server = b'#!/bin/sh\nprintf executed > "$(dirname "$0")/EXECUTED"\nexit 91\n'
+helper = b'#!/bin/sh\nprintf executed > "$(dirname "$0")/HELPER_EXECUTED"\nexit 91\n'
+entries = [
+    ["local-browser-bridge", "file", 0o755, server],
+    ["Local Computer Helper.app", "directory", 0o755, b""],
+    ["Local Computer Helper.app/Contents", "directory", 0o755, b""],
+    ["Local Computer Helper.app/Contents/Info.plist", "file", 0o644, b"plist"],
+    ["Local Computer Helper.app/Contents/MacOS", "directory", 0o755, b""],
+    ["Local Computer Helper.app/Contents/MacOS/local-computer-helper", "file", 0o755, helper],
+    ["Local Computer Helper.app/Contents/_CodeSignature", "directory", 0o755, b""],
+    ["Local Computer Helper.app/Contents/_CodeSignature/CodeResources", "file", 0o644, b"signature"],
+    ["LICENSE", "file", 0o644, b"license"],
+    ["THIRD_PARTY_LICENSES.txt", "file", 0o644, b"third-party"],
+]
+if scenario == "duplicate":
+    entries.append(entries[0].copy())
+if scenario == "traversal":
+    entries[8][0] = "../escaped"
+if scenario == "mode":
+    entries[0][2] = 0o644
+if scenario == "oversize":
+    entries[3][3] = b"x" * (1024 * 1024 + 1)
+
+archive_format = tarfile.PAX_FORMAT if scenario == "pax" else tarfile.USTAR_FORMAT
+with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
+    for index, (name, kind, mode, payload) in enumerate(entries):
+        member = tarfile.TarInfo(name)
+        member.mode = mode
+        member.uid = 0
+        member.gid = 0
+        member.uname = ""
+        member.gname = ""
+        if kind == "directory":
+            member.type = tarfile.DIRTYPE
+            member.size = 0
+            archive.addfile(member)
+        else:
+            member.type = tarfile.REGTYPE
+            member.size = len(payload)
+            if scenario == "pax" and index == 0:
+                member.pax_headers = {"comment": "forbidden-pax-record"}
+            archive.addfile(member, io.BytesIO(payload))
+"#,
+    )
+    .unwrap();
+    set_mode(&generator, 0o600);
+
+    let mut valid_output = None;
+    for (scenario, expected_failure) in [
+        ("valid", None),
+        ("pax", Some("link, PAX record, or unsupported member type")),
+        ("duplicate", Some("contains a duplicate member")),
+        ("traversal", Some("noncanonical or traversal-capable path")),
+        ("mode", Some("member mode is not exact")),
+        ("oversize", Some("member exceeds its byte bound")),
+    ] {
+        let case_root = temporary.path().join(scenario);
+        fs::create_dir(&case_root).unwrap();
+        set_mode(&case_root, 0o700);
+        let archive = case_root.join("local-browser-bridge-v0.12.12-macos-universal.tar.gz");
+        let generated = Command::new("python3")
+            .arg(&generator)
+            .arg(scenario)
+            .arg(&archive)
+            .output()
+            .unwrap();
+        assert!(
+            generated.status.success(),
+            "archive generator failed for {scenario}: {}",
+            String::from_utf8_lossy(&generated.stderr)
+        );
+        set_mode(&archive, 0o600);
+        let archive_sha256 = file_sha256(archive.to_str().unwrap());
+        let zero_hash = "0".repeat(64);
+        let manifest_text = format!(
+            "{zero_hash}  local-browser-bridge-v0.12.12-windows-x86_64.exe\n\
+             {zero_hash}  local-computer-helper-v0.12.12-windows-x86_64.exe\n\
+             {archive_sha256}  local-browser-bridge-v0.12.12-macos-universal.tar.gz\n\
+             {zero_hash}  local-browser-bridge-extension-v0.12.12.zip\n"
+        );
+        let manifest = case_root.join("SHA256SUMS.txt");
+        fs::write(&manifest, &manifest_text).unwrap();
+        set_mode(&manifest, 0o600);
+        let manifest_sha256 = format!("{:x}", Sha256::digest(manifest_text.as_bytes()));
+        let output_dir = case_root.join("prepared");
+        let prepared = Command::new("node")
+            .arg(&rig)
+            .arg("--prepare-package")
+            .arg(&archive)
+            .arg(&manifest)
+            .arg(&manifest_sha256)
+            .arg(&output_dir)
+            .output()
+            .unwrap();
+
+        if let Some(expected_failure) = expected_failure {
+            assert!(
+                !prepared.status.success(),
+                "unsafe {scenario} archive unexpectedly passed package preparation"
+            );
+            assert!(
+                String::from_utf8_lossy(&prepared.stderr).contains(expected_failure),
+                "unsafe {scenario} archive failed for the wrong reason: {}",
+                String::from_utf8_lossy(&prepared.stderr)
+            );
+            assert!(
+                !output_dir.exists(),
+                "failed {scenario} preparation retained a partial output"
+            );
+            assert!(!case_root.join("escaped").exists());
+            continue;
+        }
+
+        assert!(
+            prepared.status.success(),
+            "canonical archive preparation failed: {}",
+            String::from_utf8_lossy(&prepared.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&prepared.stdout);
+        assert!(stdout.contains("prepared-package-without-candidate-execution"));
+        assert!(stdout.contains("\"candidateBytesExecuted\":false"));
+        assert_eq!(
+            fs::metadata(&output_dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(output_dir.join("local-browser-bridge"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
+        assert_eq!(
+            fs::metadata(output_dir.join("Local Computer Helper.app/Contents/Info.plist"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o644
+        );
+        assert!(!output_dir.join("EXECUTED").exists());
+        assert!(
+            !output_dir
+                .join("Local Computer Helper.app/Contents/MacOS/HELPER_EXECUTED")
+                .exists()
+        );
+        let mut inventory = BTreeSet::new();
+        collect_inventory(&output_dir, &output_dir, &mut inventory);
+        assert_eq!(
+            inventory,
+            BTreeSet::from([
+                "LICENSE".to_string(),
+                "Local Computer Helper.app".to_string(),
+                "Local Computer Helper.app/Contents".to_string(),
+                "Local Computer Helper.app/Contents/Info.plist".to_string(),
+                "Local Computer Helper.app/Contents/MacOS".to_string(),
+                "Local Computer Helper.app/Contents/MacOS/local-computer-helper".to_string(),
+                "Local Computer Helper.app/Contents/_CodeSignature".to_string(),
+                "Local Computer Helper.app/Contents/_CodeSignature/CodeResources".to_string(),
+                "THIRD_PARTY_LICENSES.txt".to_string(),
+                "local-browser-bridge".to_string(),
+            ])
+        );
+        valid_output = Some((archive, manifest, manifest_sha256, output_dir));
+    }
+
+    let (archive, manifest, manifest_sha256, output_dir) = valid_output.unwrap();
+    let reused = Command::new("node")
+        .arg(&rig)
+        .arg("--prepare-package")
+        .arg(&archive)
+        .arg(&manifest)
+        .arg(&manifest_sha256)
+        .arg(&output_dir)
+        .output()
+        .unwrap();
+    assert!(
+        !reused.status.success(),
+        "an existing package output was accepted"
+    );
+    assert!(String::from_utf8_lossy(&reused.stderr).contains("already exists"));
+
+    let mismatch_output = temporary.path().join("manifest-mismatch-output");
+    let mismatch = Command::new("node")
+        .arg(&rig)
+        .arg("--prepare-package")
+        .arg(&archive)
+        .arg(&manifest)
+        .arg("f".repeat(64))
+        .arg(&mismatch_output)
+        .output()
+        .unwrap();
+    assert!(
+        !mismatch.status.success(),
+        "an unbound manifest was accepted"
+    );
+    assert!(
+        String::from_utf8_lossy(&mismatch.stderr)
+            .contains("out-of-band checksum-manifest hash matches")
+    );
+    assert!(!mismatch_output.exists());
+}
+
+#[test]
+fn macos_packaged_evidence_uses_a_clean_tagged_harness_and_fresh_lane_outputs() {
+    let rig = fs::read_to_string("evidence/v0.12.12/computer/helper-evidence-rig.mjs")
+        .unwrap()
+        .replace("\r\n", "\n");
+
+    for required in [
+        "expectedSourceSha",
+        "expectedTagObjectSha",
+        "expectedWorkflowRunId",
+        "expectedWorkflowRunAttempt",
+        "expectedArtifactId",
+        "expectedArtifactZipSha256",
+        "fileURLToPath(import.meta.url)",
+        "const rigSourceDirectory = dirname(rigSourcePath)",
+        "resolve(rigSourceDirectory, \"HelperEvidenceFixture.swift\")",
+        "output parent is an owner-private ordinary directory",
+        "(outputParentState.mode & 0o077) === 0",
+        "await mkdir(outputDir, { recursive: false, mode: 0o700 })",
+        "output directory is newly created and owner-private",
+        "flag: \"wx\", mode: 0o600",
+        "verifyHarnessSourceBinding(\"pre-run\")",
+        "verifyHarnessSourceBinding(\"post-run\")",
+        "status\", \"--porcelain=v2\", \"--untracked-files=all",
+        "diff\", \"--quiet\", \"HEAD\", \"--",
+        "diff\", \"--cached\", \"--quiet",
+        "ls-files\", \"--deleted",
+        "ls-files\", \"--others\", \"--exclude-standard",
+        "fsck\", \"--full",
+        "rev-parse\", `HEAD:${trackedPath}`",
+        "hash-object\", \"--\", sourcePath",
+        "releaseCandidateBinding: { ...releaseCandidateBinding }",
+        "harnessSourceBinding: { ...harnessSourceBinding }",
+    ] {
+        assert!(
+            rig.contains(required),
+            "clean harness binding is missing {required}"
+        );
+    }
+    assert!(!rig.contains("resolve(outputDir, \"HelperEvidenceFixture.swift\")"));
+    assert!(!rig.contains("resolve(outputDir, \"helper-evidence-rig.mjs\")"));
+
+    let main = rig.split("async function main() {").nth(1).unwrap();
+    let reserve = main
+        .find("await mkdir(outputDir, { recursive: false, mode: 0o700 })")
+        .unwrap();
+    let source_gate = main
+        .find("verifyHarnessSourceBinding(\"pre-run\")")
+        .unwrap();
+    let scratch = main.find("scratchDir = await mkdtemp").unwrap();
+    let first_execution = main.find("exactVersion(serverPath").unwrap();
+    let final_source_gate = main
+        .find("verifyHarnessSourceBinding(\"post-run\")")
+        .unwrap();
+    assert!(reserve < source_gate && source_gate < scratch && scratch < first_execution);
+    assert!(first_execution < final_source_gate);
+}
+
+#[test]
 fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
-    let rig = fs::read_to_string("evidence/v0.12.11/computer/helper-evidence-rig.mjs").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.12/computer/helper-evidence-rig.mjs").unwrap();
     assert!(rig.contains("capturedFrameMatchesWindowGeometry"));
     assert!(rig.contains("share-resize-settled"));
     assert!(rig.contains("sample.sourceSequence > resizeTransition.sample.sourceSequence"));
@@ -2469,12 +2899,12 @@ fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
 
 #[test]
 fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.11/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.12/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     assert!(rig.contains("function childEnvironment(overrides = {})"));
     assert!(!rig.contains("...process.env"));
-    let fixture = fs::read_to_string("evidence/v0.12.11/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.12/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -2652,12 +3082,13 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
 
 #[test]
 fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.11/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.12/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.11/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.12/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
+    let normalized_readme = readme.split_whitespace().collect::<Vec<_>>().join(" ");
 
     let cancellation_start = rig.find("const cancellationStartedAt").unwrap();
     let recovery_observe = rig.find("const recoveryObserve").unwrap();
@@ -2778,7 +3209,7 @@ fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() 
         "only after it has requested and observed exit of its exact spawned fixture",
     ] {
         assert!(
-            readme.contains(required),
+            normalized_readme.contains(required),
             "evidence README is missing target-close contract: {required}"
         );
     }
@@ -2786,21 +3217,21 @@ fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() 
 
 #[test]
 fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negative() {
-    let fixture = fs::read_to_string("evidence/v0.12.11/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.12/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.11/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.12/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.11/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.12/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.11/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.12/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
     for required in [
-        "private let siblingFixtureTitle = \"LBB v0.12.11 Same-PID Sibling Receiver\"",
+        "private let siblingFixtureTitle = \"LBB v0.12.12 Same-PID Sibling Receiver\"",
         "var primaryWindowId = 0",
         "var siblingWindowId = 0",
         "var siblingTextLength = 0",
@@ -3055,6 +3486,7 @@ fn windows_live_runner_is_bound_to_one_frozen_release_candidate() {
         "[string]$Version",
         "[string]$ChecksumManifest",
         "[string]$ChecksumManifestSha256",
+        "[string]$CandidateBindingPath",
         "ChecksumManifest must use the canonical SHA256SUMS.txt filename",
         "externally recorded frozen-candidate SHA-256",
         "Read-ExactCandidateChecksums",
@@ -3073,6 +3505,10 @@ fn windows_live_runner_is_bound_to_one_frozen_release_candidate() {
         "checksumManifestMatched = $true",
         "exactAssetSetMatched = $true",
         "candidateBinding = $candidateBinding",
+        "Read-ExactReleaseCandidateBinding",
+        "releaseCandidateBinding = $releaseCandidateBinding",
+        "CandidateBindingPath does not bind the exact frozen workflow candidate",
+        "schemaVersion = 2",
     ] {
         assert!(
             runner.contains(required),
@@ -3081,6 +3517,7 @@ fn windows_live_runner_is_bound_to_one_frozen_release_candidate() {
     }
     assert!(development.contains("out-of-band binding value"));
     assert!(development.contains("candidateBinding.checksumManifestMatched: true"));
+    assert!(development.contains("releaseCandidateBinding"));
 
     let candidate_binding = runner.find("$candidateBinding = [ordered]@{").unwrap();
     let evidence_creation = runner
@@ -3147,11 +3584,11 @@ fn windows_helper_readiness_is_protocol_and_process_bound() {
     assert!(deploy.contains("scripts/test-windows-computer-use.ps1"));
     for workflow in [&ci, &deploy] {
         assert!(workflow.contains(
-            "powershell.exe -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-computer-use.ps1 -SelfTest"
+            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-computer-use.ps1 -SelfTest"
         ));
         assert!(workflow.contains("& ./scripts/test-windows-computer-use.ps1 -SelfTest"));
         assert!(workflow.contains(
-            "powershell.exe -NoLogo -NoProfile -NonInteractive -File ./tests/fixtures/windows/WindowsComputerUseFixture.ps1 -SelfTest"
+            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./tests/fixtures/windows/WindowsComputerUseFixture.ps1 -SelfTest"
         ));
         assert!(
             !workflow
@@ -3718,7 +4155,7 @@ fn windows_foreground_arm_handoff_watcher_is_strict_read_only_and_non_authoritat
         .replace("\r\n", "\n");
 
     for required in [
-        "$script:ProductVersion = \"0.12.11\"",
+        "$script:ProductVersion = \"0.12.12\"",
         "$script:MarkerSchemaVersion = 2",
         "function Assert-ExactPropertyOrder {",
         "function Assert-ExactMarkerSchema {",
@@ -3844,7 +4281,7 @@ fn windows_foreground_arm_handoff_watcher_is_strict_read_only_and_non_authoritat
     );
     assert!(!watcher.contains("}.GetNewClosure() `\n        -ExpectedText"));
     assert!(runner.contains("-ProductVersion $Version"));
-    assert!(runner.contains("-ProductVersion \"0.12.11\""));
+    assert!(runner.contains("-ProductVersion \"0.12.12\""));
     assert!(runner.contains("maximumClickAttempts -ne 1"));
     assert!(runner.contains("maximumClickAttempts -ne 0"));
 }

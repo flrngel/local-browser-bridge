@@ -11,8 +11,11 @@ trap 'rm -rf "$release_stage" "$validation_stage"' EXIT
 
 node --check scripts/wait-macos-pointer-concurrency-handoff.mjs
 node scripts/wait-macos-pointer-concurrency-handoff.mjs --mode self-test
-node --check evidence/v0.12.11/computer/helper-evidence-rig.mjs
-node evidence/v0.12.11/computer/helper-evidence-rig.mjs --self-test
+node --check scripts/finalize-macos-acceptance.mjs
+node scripts/finalize-macos-acceptance.mjs --self-test
+node --check evidence/v0.12.12/computer/helper-evidence-rig.mjs
+node evidence/v0.12.12/computer/helper-evidence-rig.mjs --self-test
+bash -n scripts/fetch-verify-release-candidate.sh
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
@@ -84,11 +87,11 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 bash scripts/verify-macos-build-host.sh
-xcrun swiftc -typecheck evidence/v0.12.11/computer/HelperEvidenceFixture.swift
-xcrun swiftc -typecheck evidence/v0.12.11/computer/SystemProbe.swift
-xcrun swiftc -typecheck evidence/v0.12.11/computer/PointerHandoff.swift
+xcrun swiftc -typecheck evidence/v0.12.12/computer/HelperEvidenceFixture.swift
+xcrun swiftc -typecheck evidence/v0.12.12/computer/SystemProbe.swift
+xcrun swiftc -typecheck evidence/v0.12.12/computer/PointerHandoff.swift
 pointer_handoff_self_test="$validation_stage/lbb-pointer-handoff-self-test"
-xcrun swiftc evidence/v0.12.11/computer/PointerHandoff.swift -o "$pointer_handoff_self_test"
+xcrun swiftc evidence/v0.12.12/computer/PointerHandoff.swift -o "$pointer_handoff_self_test"
 "$pointer_handoff_self_test" --self-test
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 cargo build --locked --release --bins --target aarch64-apple-darwin
@@ -132,7 +135,7 @@ bash scripts/verify-macos-artifacts.sh \
   "$mac_stage/local-browser-bridge" \
   "$mac_stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"
 mac_output="$release_stage/local-browser-bridge-v${version}-macos-universal.tar.gz"
-COPYFILE_DISABLE=1 tar -czf "$mac_output" -C "$mac_stage" local-browser-bridge "Local Computer Helper.app" LICENSE THIRD_PARTY_LICENSES.txt
+COPYFILE_DISABLE=1 tar --format ustar --no-xattrs -czf "$mac_output" -C "$mac_stage" local-browser-bridge "Local Computer Helper.app" LICENSE THIRD_PARTY_LICENSES.txt
 
 checksum_output="$release_stage/SHA256SUMS.txt"
 assets=("$(basename "$windows_output")" "$(basename "$windows_helper_output")" "$(basename "$mac_output")" "$(basename "$extension_output")")

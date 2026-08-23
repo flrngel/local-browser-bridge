@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_root"
@@ -11,6 +12,12 @@ if [[ -z "$version" ]]; then
   exit 1
 fi
 version="${version#v}"
+for command_name in python3 shasum; do
+  command -v "$command_name" >/dev/null || {
+    echo "Required release inspection command is unavailable: $command_name" >&2
+    exit 1
+  }
+done
 bash scripts/audit-versions.sh "$version" >/dev/null
 
 if [[ ! -d "$assets_dir" ]]; then
@@ -54,78 +61,157 @@ for executable in "$windows_server" "$windows_helper"; do
 done
 
 expected_extension_files=(background.js content.js dom-core.js frame-agent.js lib.js manifest.json popup.css popup.html popup.js stop-guard.js LICENSE)
-expected_extension_listing="$(printf '%s\n' "${expected_extension_files[@]}" | LC_ALL=C sort)"
-actual_extension_listing="$(unzip -Z1 "$extension_archive" | LC_ALL=C sort)"
-if [[ "$actual_extension_listing" != "$expected_extension_listing" ]]; then
-  echo "Extension archive contains an unexpected file set." >&2
-  diff -u <(printf '%s\n' "$expected_extension_listing") <(printf '%s\n' "$actual_extension_listing") || true
-  exit 1
-fi
-extension_entry_types="$(zipinfo -l "$extension_archive" | awk '$1 ~ /^[bcdlps-]/ { print substr($1, 1, 1) }')"
-if [[ "$(printf '%s\n' "$extension_entry_types" | wc -l | tr -d ' ')" != "${#expected_extension_files[@]}" ]] \
-  || printf '%s\n' "$extension_entry_types" | grep -qv '^-$'; then
-  echo "Extension archive contains a link or unsupported entry type." >&2
-  exit 1
-fi
-unzip -tq "$extension_archive" >/dev/null
-if ! unzip -p "$extension_archive" LICENSE | cmp -s - LICENSE; then
-  echo "Extension archive project license differs from LICENSE." >&2
-  exit 1
-fi
-archive_manifest_version="$(unzip -p "$extension_archive" manifest.json | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
-archive_library_version="$(unzip -p "$extension_archive" lib.js | sed -n 's/^export const VERSION = "\([^"]*\)";$/\1/p' | head -n 1)"
-if [[ "$archive_manifest_version" != "$version" || "$archive_library_version" != "$version" ]]; then
-  echo "Extension archive version does not match $version." >&2
-  exit 1
-fi
+extension_archive_sha256_before="$(shasum -a 256 "$extension_archive" | awk '{ print $1 }')"
+python3 - "$extension_archive" "$version" "$project_root/LICENSE" "${expected_extension_files[@]}" <<'PY'
+import json
+import re
+import stat
+import sys
+import zipfile
 
-macos_listing="$(tar -tzf "$macos_archive")"
-if printf '%s\n' "$macos_listing" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
-  echo "macOS archive contains an unsafe path." >&2
-  exit 1
-fi
-for required in \
-  local-browser-bridge \
-  LICENSE \
-  THIRD_PARTY_LICENSES.txt \
-  "Local Computer Helper.app/Contents/Info.plist" \
-  "Local Computer Helper.app/Contents/MacOS/local-computer-helper"; do
-  if ! printf '%s\n' "$macos_listing" | grep -Fxq "$required"; then
-    echo "macOS archive is missing: $required" >&2
-    exit 1
-  fi
-done
-if [[ -n "$(printf '%s\n' "$macos_listing" | LC_ALL=C sort | uniq -d)" ]]; then
-  echo "macOS archive contains duplicate paths." >&2
-  exit 1
-fi
-if ! tar -tvzf "$macos_archive" | awk '
-  substr($1, 1, 1) != "-" && substr($1, 1, 1) != "d" { exit 1 }
-'; then
-  echo "macOS archive contains a link or unsupported entry type." >&2
-  exit 1
-fi
-expected_macos_listing="$(printf '%s\n' \
-  local-browser-bridge \
-  LICENSE \
-  THIRD_PARTY_LICENSES.txt \
-  "Local Computer Helper.app" \
-  "Local Computer Helper.app/Contents" \
-  "Local Computer Helper.app/Contents/Info.plist" \
-  "Local Computer Helper.app/Contents/MacOS" \
-  "Local Computer Helper.app/Contents/MacOS/local-computer-helper" \
-  "Local Computer Helper.app/Contents/_CodeSignature" \
-  "Local Computer Helper.app/Contents/_CodeSignature/CodeResources" | LC_ALL=C sort)"
-actual_macos_listing="$(printf '%s\n' "$macos_listing" | sed 's:/$::' | LC_ALL=C sort)"
-if [[ "$actual_macos_listing" != "$expected_macos_listing" ]]; then
-  echo "macOS archive contains an unexpected file set." >&2
-  diff -u <(printf '%s\n' "$expected_macos_listing") <(printf '%s\n' "$actual_macos_listing") || true
-  exit 1
-fi
+archive_path, expected_version, license_path, *expected = sys.argv[1:]
+maximum_entry_bytes = 16 * 1024 * 1024
+maximum_total_bytes = 64 * 1024 * 1024
+selected_payloads = {}
+with zipfile.ZipFile(archive_path, "r") as archive:
+    entries = archive.infolist()
+    names = [item.filename for item in entries]
+    if len(entries) != len(expected) or sorted(names) != sorted(expected) or len(set(names)) != len(names):
+        raise SystemExit("extension archive inventory is duplicated or noncanonical")
+    total = 0
+    for item in entries:
+        unix_mode = (item.external_attr >> 16) & 0xffff
+        if (
+            item.filename not in expected
+            or "/" in item.filename
+            or "\\" in item.filename
+            or item.is_dir()
+            or item.flag_bits & 0x1
+            or item.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
+            or item.file_size < 1
+            or item.file_size > maximum_entry_bytes
+            or item.compress_size < 1
+            or (unix_mode and not stat.S_ISREG(unix_mode))
+        ):
+            raise SystemExit(f"unsafe extension archive entry: {item.filename}")
+        total += item.file_size
+        if total > maximum_total_bytes:
+            raise SystemExit("extension archive exceeds its bounded uncompressed size")
+        payload = bytearray() if item.filename in {"LICENSE", "manifest.json", "lib.js"} else None
+        observed = 0
+        with archive.open(item, "r") as source:
+            while observed < item.file_size:
+                chunk = source.read(min(1024 * 1024, item.file_size - observed))
+                if not chunk:
+                    raise SystemExit(f"truncated extension archive entry: {item.filename}")
+                observed += len(chunk)
+                if payload is not None:
+                    payload.extend(chunk)
+            if source.read(1):
+                raise SystemExit(f"extension archive entry exceeds its declared size: {item.filename}")
+        if payload is not None:
+            selected_payloads[item.filename] = bytes(payload)
+with open(license_path, "rb") as source:
+    if selected_payloads.get("LICENSE") != source.read():
+        raise SystemExit("extension archive project license differs from LICENSE")
+try:
+    manifest = json.loads(selected_payloads["manifest.json"].decode("utf-8"))
+    library = selected_payloads["lib.js"].decode("utf-8")
+except (KeyError, UnicodeDecodeError, json.JSONDecodeError) as error:
+    raise SystemExit(f"extension archive metadata is invalid: {error}")
+if manifest.get("version") != expected_version:
+    raise SystemExit("extension archive manifest version is not candidate-bound")
+matches = re.findall(r'^export const VERSION = "([^"]+)";$', library, re.MULTILINE)
+if matches != [expected_version]:
+    raise SystemExit("extension archive library version is not uniquely candidate-bound")
+PY
+test "$(shasum -a 256 "$extension_archive" | awk '{ print $1 }')" = "$extension_archive_sha256_before" \
+  || { echo "Extension archive changed while it was inspected." >&2; exit 1; }
 
 mac_stage="$(mktemp -d)"
 trap 'rm -rf "$mac_stage"' EXIT
-tar -xzf "$macos_archive" -C "$mac_stage"
+macos_archive_sha256_before="$(shasum -a 256 "$macos_archive" | awk '{ print $1 }')"
+python3 - "$macos_archive" "$mac_stage" <<'PY'
+import os
+import stat
+import sys
+import tarfile
+
+archive_path, destination = sys.argv[1:]
+expected_modes = {
+    "local-browser-bridge": 0o755,
+    "LICENSE": 0o644,
+    "THIRD_PARTY_LICENSES.txt": 0o644,
+    "Local Computer Helper.app": 0o755,
+    "Local Computer Helper.app/Contents": 0o755,
+    "Local Computer Helper.app/Contents/Info.plist": 0o644,
+    "Local Computer Helper.app/Contents/MacOS": 0o755,
+    "Local Computer Helper.app/Contents/MacOS/local-computer-helper": 0o755,
+    "Local Computer Helper.app/Contents/_CodeSignature": 0o755,
+    "Local Computer Helper.app/Contents/_CodeSignature/CodeResources": 0o644,
+}
+expected_directories = {
+    "Local Computer Helper.app",
+    "Local Computer Helper.app/Contents",
+    "Local Computer Helper.app/Contents/MacOS",
+    "Local Computer Helper.app/Contents/_CodeSignature",
+}
+expected_files = set(expected_modes) - expected_directories
+maximum_member_bytes = 128 * 1024 * 1024
+maximum_total_bytes = 256 * 1024 * 1024
+seen = set()
+total = 0
+with tarfile.open(archive_path, "r:gz") as bundle:
+    if bundle.pax_headers:
+        raise SystemExit("macOS archive contains global PAX metadata")
+    for member in bundle:
+        name = member.name.removesuffix("/")
+        if name not in expected_modes or name in seen or member.pax_headers:
+            raise SystemExit(f"macOS archive path is duplicated, unexpected, or PAX-overridden: {name}")
+        seen.add(name)
+        if member.mode != expected_modes[name]:
+            raise SystemExit(f"macOS archive mode is noncanonical: {name}")
+        output_path = os.path.join(destination, *name.split("/"))
+        if name in expected_directories:
+            if not member.isdir() or member.size != 0:
+                raise SystemExit(f"macOS archive directory type is invalid: {name}")
+            os.makedirs(output_path, mode=0o700, exist_ok=True)
+            continue
+        if not member.isfile() or member.issym() or member.islnk() or member.size < 1 or member.size > maximum_member_bytes:
+            raise SystemExit(f"macOS archive file type or size is invalid: {name}")
+        total += member.size
+        if total > maximum_total_bytes:
+            raise SystemExit("macOS archive exceeds its bounded uncompressed size")
+        os.makedirs(os.path.dirname(output_path), mode=0o700, exist_ok=True)
+        descriptor = os.open(
+            output_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        written = 0
+        try:
+            source = bundle.extractfile(member)
+            if source is None:
+                raise SystemExit(f"macOS archive file is unreadable: {name}")
+            with source, os.fdopen(descriptor, "wb", closefd=False) as output:
+                while written < member.size:
+                    chunk = source.read(min(1024 * 1024, member.size - written))
+                    if not chunk:
+                        raise SystemExit(f"macOS archive file is truncated: {name}")
+                    output.write(chunk)
+                    written += len(chunk)
+                if source.read(1):
+                    raise SystemExit(f"macOS archive file exceeds its declared size: {name}")
+                output.flush()
+                os.fsync(output.fileno())
+        finally:
+            os.close(descriptor)
+        os.chmod(output_path, expected_modes[name])
+    if seen != set(expected_modes):
+        raise SystemExit("macOS archive does not contain the exact canonical inventory")
+PY
+test "$(shasum -a 256 "$macos_archive" | awk '{ print $1 }')" = "$macos_archive_sha256_before" \
+  || { echo "macOS archive changed while it was inspected." >&2; exit 1; }
 mac_server="$mac_stage/local-browser-bridge"
 mac_helper="$mac_stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"
 for executable in "$mac_server" "$mac_helper"; do

@@ -336,6 +336,9 @@ function syncBrowserAvailability() {
 
 function renderBrowserControl(state) {
   const control = state.browserControl ?? {};
+  const browserName = typeof state.extension?.browser === "string"
+    ? state.extension.browser
+    : "Browser";
   const active = control.active === true;
   const humanPaused = control.humanPaused === true;
   const target = state.tabs?.find((tab) => tab.id === control.tabId)
@@ -354,7 +357,7 @@ function renderBrowserControl(state) {
     setTextIfChanged(ui["browser-control-summary"], "Remote browser control was paused by a person. Only Resume remote control in the extension popup can authorize it again.");
     setStateBadge(ui["browser-control-badge"], "Paused by you", "warning-state");
   } else if (active) {
-    setTextIfChanged(ui["browser-control-summary"], `Chrome control is attached to tab ${control.tabId}. Chrome's native debugging banner and the in-tab Stop indicator should remain visible.`);
+    setTextIfChanged(ui["browser-control-summary"], `${browserName} control is attached to tab ${control.tabId}. The browser's native debugging notice and the in-tab Stop indicator should remain visible.`);
     setStateBadge(ui["browser-control-badge"], "Control active", "active");
   } else if (control.revocation?.requiresExplicitStart) {
     setTextIfChanged(ui["browser-control-summary"], `Control was revoked (${titleCase(control.revocation.reason)}). Select Start control to create a new explicit lease.`);
@@ -363,7 +366,7 @@ function renderBrowserControl(state) {
     setTextIfChanged(
       ui["browser-control-summary"],
       Number.isInteger(state.targetTabId)
-        ? `Tab ${state.targetTabId} is selected. Start control to attach Chrome's visible debugger-backed lease.`
+        ? `Tab ${state.targetTabId} is selected. Start control to attach ${browserName}'s visible debugger-backed lease.`
         : "Select a browser tab before starting control.",
     );
     setStateBadge(ui["browser-control-badge"], "Inactive", "inactive");

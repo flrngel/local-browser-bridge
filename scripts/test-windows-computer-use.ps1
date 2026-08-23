@@ -24,6 +24,10 @@ param(
 
     [Parameter(ParameterSetName = "Run", Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
+    [string]$CandidateBindingPath,
+
+    [Parameter(ParameterSetName = "Run", Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
     [string]$FixturePath,
 
     [Parameter(ParameterSetName = "Run", Mandatory = $true)]
@@ -169,6 +173,131 @@ function Read-ExactCandidateChecksums {
     return ,$entries
 }
 
+function Assert-ExactJsonProperties {
+    param(
+        [object]$Value,
+        [string[]]$Expected,
+        [string]$Label
+    )
+    if ($null -eq $Value) {
+        throw "$Label is absent."
+    }
+    $actual = @($Value.PSObject.Properties | ForEach-Object { $_.Name })
+    if ($actual.Count -ne $Expected.Count) {
+        throw "$Label does not contain the exact property count."
+    }
+    for ($index = 0; $index -lt $Expected.Count; $index++) {
+        if ($actual[$index] -cne $Expected[$index]) {
+            throw "$Label property order or spelling is not canonical."
+        }
+    }
+}
+
+function Read-ExactReleaseCandidateBinding {
+    param(
+        [string]$Path,
+        [string]$ExpectedVersion,
+        [string]$ExpectedManifestSha256,
+        [Collections.Generic.Dictionary[string, string]]$ExpectedChecksums,
+        [string[]]$ExpectedAssetNames
+    )
+    if ([IO.Path]::GetFileName($Path) -cne "candidate-binding.json") {
+        throw "CandidateBindingPath must use the canonical candidate-binding.json filename."
+    }
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -lt 2 -or $bytes.Length -gt 262144 -or
+        ($bytes.Length -ge 3 -and $bytes[0] -eq 0xef -and $bytes[1] -eq 0xbb -and $bytes[2] -eq 0xbf)) {
+        throw "CandidateBindingPath has an invalid size or encoding marker."
+    }
+    try {
+        $utf8 = [Text.UTF8Encoding]::new($false, $true)
+        $binding = $utf8.GetString($bytes) | ConvertFrom-Json
+    }
+    catch {
+        throw "CandidateBindingPath is not strict UTF-8 JSON."
+    }
+    finally {
+        [Array]::Clear($bytes, 0, $bytes.Length)
+    }
+    $bindingFields = @(
+        "schemaVersion", "productVersion", "repository", "tag", "sourceSha",
+        "tagObjectSha", "workflowRunId", "workflowRunAttempt", "artifactId",
+        "artifactName", "artifactZipBytes", "artifactZipSha256",
+        "checksumManifestSha256", "attestationInvocationUri", "attestedAssetCount",
+        "githubHostedRunner", "assets", "passed"
+    )
+    Assert-ExactJsonProperties $binding $bindingFields "release candidate binding"
+    if (($binding.schemaVersion -isnot [int] -and $binding.schemaVersion -isnot [long]) -or
+        [int64]$binding.schemaVersion -ne 1 -or
+        $binding.productVersion -cne $ExpectedVersion -or
+        $binding.repository -cne "flrngel/local-browser-bridge" -or
+        $binding.tag -cne "v$ExpectedVersion" -or
+        [string]$binding.sourceSha -cnotmatch '^[0-9a-f]{40}$' -or
+        [string]$binding.tagObjectSha -cnotmatch '^[0-9a-f]{40}$' -or
+        [string]$binding.workflowRunId -cnotmatch '^[1-9][0-9]*$' -or
+        [string]$binding.workflowRunAttempt -cnotmatch '^[1-9][0-9]*$' -or
+        [string]$binding.artifactId -cnotmatch '^[1-9][0-9]*$' -or
+        $binding.artifactName -cne "release-candidate" -or
+        ($binding.artifactZipBytes -isnot [int] -and $binding.artifactZipBytes -isnot [long]) -or
+        [int64]$binding.artifactZipBytes -lt 1 -or [int64]$binding.artifactZipBytes -gt 536870912 -or
+        [string]$binding.artifactZipSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        $binding.checksumManifestSha256 -cne $ExpectedManifestSha256 -or
+        $binding.attestationInvocationUri -cne (
+            "https://github.com/flrngel/local-browser-bridge/actions/runs/" +
+            [string]$binding.workflowRunId + "/attempts/" + [string]$binding.workflowRunAttempt
+        ) -or
+        ($binding.attestedAssetCount -isnot [int] -and $binding.attestedAssetCount -isnot [long]) -or
+        [int64]$binding.attestedAssetCount -ne 5 -or
+        $binding.githubHostedRunner -ne $true -or $binding.passed -ne $true) {
+        throw "CandidateBindingPath does not bind the exact frozen workflow candidate."
+    }
+    $expectedFiles = @($ExpectedAssetNames) + "SHA256SUMS.txt"
+    $assets = @($binding.assets)
+    if ($assets.Count -ne $expectedFiles.Count) {
+        throw "CandidateBindingPath does not contain the exact five-file asset inventory."
+    }
+    $normalizedAssets = New-Object Collections.Generic.List[object]
+    for ($index = 0; $index -lt $expectedFiles.Count; $index++) {
+        $asset = $assets[$index]
+        Assert-ExactJsonProperties $asset @("file", "bytes", "sha256") "release candidate asset"
+        $expectedSha256 = if ($index -lt $ExpectedAssetNames.Count) {
+            $ExpectedChecksums[$ExpectedAssetNames[$index]]
+        }
+        else {
+            $ExpectedManifestSha256
+        }
+        if ($asset.file -cne $expectedFiles[$index] -or
+            ($asset.bytes -isnot [int] -and $asset.bytes -isnot [long]) -or
+            [int64]$asset.bytes -lt 1 -or [int64]$asset.bytes -gt 536870912 -or
+            $asset.sha256 -cne $expectedSha256) {
+            throw "CandidateBindingPath contains a mismatched asset fact."
+        }
+        $normalizedAssets.Add([ordered]@{
+            file = [string]$asset.file
+            bytes = [int64]$asset.bytes
+            sha256 = [string]$asset.sha256
+        })
+    }
+    return [ordered]@{
+        productVersion = [string]$binding.productVersion
+        repository = [string]$binding.repository
+        tag = [string]$binding.tag
+        sourceSha = [string]$binding.sourceSha
+        tagObjectSha = [string]$binding.tagObjectSha
+        workflowRunId = [string]$binding.workflowRunId
+        workflowRunAttempt = [string]$binding.workflowRunAttempt
+        artifactId = [string]$binding.artifactId
+        artifactName = [string]$binding.artifactName
+        artifactZipBytes = [int64]$binding.artifactZipBytes
+        artifactZipSha256 = [string]$binding.artifactZipSha256
+        checksumManifestSha256 = [string]$binding.checksumManifestSha256
+        attestationInvocationUri = [string]$binding.attestationInvocationUri
+        attestedAssetCount = [int64]$binding.attestedAssetCount
+        githubHostedRunner = $true
+        assets = @($normalizedAssets)
+    }
+}
+
 function Get-VerifiedCandidateArtifact {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -222,6 +351,7 @@ if (-not $SelfTest) {
     $resolvedServer = Resolve-RequiredFile $ServerPath "ServerPath"
     $resolvedHelper = Resolve-RequiredFile $HelperPath "HelperPath"
     $resolvedChecksumManifest = Resolve-RequiredFile $ChecksumManifest "ChecksumManifest"
+    $resolvedCandidateBinding = Resolve-RequiredFile $CandidateBindingPath "CandidateBindingPath"
     $resolvedFixture = Resolve-RequiredFile $FixturePath "FixturePath"
     $evidenceRoot = [IO.Path]::GetFullPath($EvidenceDirectory)
 
@@ -241,6 +371,12 @@ if (-not $SelfTest) {
         "local-browser-bridge-extension-v$Version.zip"
     )
     $candidateChecksums = Read-ExactCandidateChecksums -Path $resolvedChecksumManifest -ExpectedNames $expectedCandidateNames
+    $releaseCandidateBinding = Read-ExactReleaseCandidateBinding `
+        -Path $resolvedCandidateBinding `
+        -ExpectedVersion $Version `
+        -ExpectedManifestSha256 $manifestSha256 `
+        -ExpectedChecksums $candidateChecksums `
+        -ExpectedAssetNames $expectedCandidateNames
     $candidateBinding = [ordered]@{
         version = $Version
         checksumManifestMatched = $true
@@ -265,6 +401,11 @@ if (-not $SelfTest) {
             -ExpectedSha256 $candidateChecksums[$expectedHelperName] `
             -ExpectedReportedVersion "local-computer-helper $Version" `
             -Label "HelperPath"
+    }
+    if ([int64]$releaseCandidateBinding.assets[0].bytes -ne [int64]$candidateBinding.server.bytes -or
+        [int64]$releaseCandidateBinding.assets[1].bytes -ne [int64]$candidateBinding.helper.bytes -or
+        [int64]$releaseCandidateBinding.assets[4].bytes -ne [int64]$candidateBinding.checksumManifest.bytes) {
+        throw "CandidateBindingPath byte facts do not match the supplied Windows candidate files."
     }
 
     if ([IO.Directory]::Exists($evidenceRoot)) {
@@ -1806,7 +1947,7 @@ if ($SelfTest) {
     try {
         $operatorMarkerSelfTestRequestId = "0123456789abcdef0123456789abcdef"
         $operatorRequestMarker = New-ForegroundArmRequestMarker `
-            -ProductVersion "0.12.11" `
+            -ProductVersion "0.12.12" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -InputStateAtPublication "not-started" `
             -TimeoutSeconds 120 `
@@ -1833,7 +1974,7 @@ if ($SelfTest) {
         )
         if ((@($operatorRequestRecord.PSObject.Properties.Name) -join "|") -cne ($expectedRequestMarkerProperties -join "|") -or
             $operatorRequestRecord.schemaVersion -ne 2 -or
-            $operatorRequestRecord.productVersion -cne "0.12.11" -or
+            $operatorRequestRecord.productVersion -cne "0.12.12" -or
             $operatorRequestRecord.status -cne "action-required" -or
             $operatorRequestRecord.requestId -cne $operatorMarkerSelfTestRequestId -or
             $operatorRequestRecord.operatorActionRequired -ne $true -or
@@ -1878,7 +2019,7 @@ if ($SelfTest) {
         }
 
         $alreadyArmedMarker = New-ForegroundArmRequestMarker `
-            -ProductVersion "0.12.11" `
+            -ProductVersion "0.12.12" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -InputStateAtPublication "already-acknowledged" `
             -TimeoutSeconds 120 `
@@ -1912,7 +2053,7 @@ if ($SelfTest) {
             stableSamplesRequired = 3
         }
         $operatorReceivedMarker = New-ForegroundArmReceivedMarker `
-            -ProductVersion "0.12.11" `
+            -ProductVersion "0.12.12" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -Proof $operatorReceivedProof
         $operatorReceivedPath = Write-NewOperatorMarker `
@@ -1930,7 +2071,7 @@ if ($SelfTest) {
         if ((@($operatorReceivedRecord.PSObject.Properties.Name) -join "|") -cne ($expectedReceivedMarkerProperties -join "|") -or
             $operatorReceivedRecord.status -cne "received" -or
             $operatorReceivedRecord.schemaVersion -ne 2 -or
-            $operatorReceivedRecord.productVersion -cne "0.12.11" -or
+            $operatorReceivedRecord.productVersion -cne "0.12.12" -or
             $operatorReceivedRecord.requestId -cne $operatorRequestRecord.requestId -or
             $operatorReceivedRecord.exactClickCountsMatched -ne $true -or
             $operatorReceivedRecord.stableSamplesObserved -ne 3 -or
@@ -1942,7 +2083,7 @@ if ($SelfTest) {
         $incompleteReceivedMarkerFailure = $null
         try {
             $null = New-ForegroundArmReceivedMarker `
-                -ProductVersion "0.12.11" `
+                -ProductVersion "0.12.12" `
                 -RequestId $operatorMarkerSelfTestRequestId `
                 -Proof $operatorReceivedProof
         }
@@ -1956,6 +2097,104 @@ if ($SelfTest) {
     finally {
         if ([IO.Directory]::Exists($operatorMarkerSelfTestRoot)) {
             [IO.Directory]::Delete($operatorMarkerSelfTestRoot, $true)
+        }
+    }
+
+    $candidateBindingSelfTestRoot = [IO.Path]::Combine(
+        [IO.Path]::GetTempPath(),
+        "lbb-candidate-binding-self-test-" + [Guid]::NewGuid().ToString("N")
+    )
+    [IO.Directory]::CreateDirectory($candidateBindingSelfTestRoot) | Out-Null
+    try {
+        $candidateBindingSelfTestPath = [IO.Path]::Combine($candidateBindingSelfTestRoot, "candidate-binding.json")
+        $candidateBindingNames = @(
+            "local-browser-bridge-v0.12.12-windows-x86_64.exe",
+            "local-computer-helper-v0.12.12-windows-x86_64.exe",
+            "local-browser-bridge-v0.12.12-macos-universal.tar.gz",
+            "local-browser-bridge-extension-v0.12.12.zip"
+        )
+        $candidateBindingChecksums = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
+        for ($index = 0; $index -lt $candidateBindingNames.Count; $index++) {
+            $candidateBindingChecksums.Add(
+                $candidateBindingNames[$index],
+                [String]::new([char]([int][char]'1' + $index), 64)
+            )
+        }
+        $candidateBindingManifestSha = [String]::new([char]'a', 64)
+        $candidateBindingAssets = New-Object Collections.Generic.List[object]
+        for ($index = 0; $index -lt $candidateBindingNames.Count; $index++) {
+            $candidateBindingAssets.Add([ordered]@{
+                file = $candidateBindingNames[$index]
+                bytes = [int64](100 + $index)
+                sha256 = $candidateBindingChecksums[$candidateBindingNames[$index]]
+            })
+        }
+        $candidateBindingAssets.Add([ordered]@{
+            file = "SHA256SUMS.txt"
+            bytes = [int64]500
+            sha256 = $candidateBindingManifestSha
+        })
+        $candidateBindingSelfTestRecord = [ordered]@{
+            schemaVersion = 1
+            productVersion = "0.12.12"
+            repository = "flrngel/local-browser-bridge"
+            tag = "v0.12.12"
+            sourceSha = [String]::new([char]'b', 40)
+            tagObjectSha = [String]::new([char]'c', 40)
+            workflowRunId = "32650000000"
+            workflowRunAttempt = "1"
+            artifactId = "9500000000"
+            artifactName = "release-candidate"
+            artifactZipBytes = [int64]4096
+            artifactZipSha256 = [String]::new([char]'d', 64)
+            checksumManifestSha256 = $candidateBindingManifestSha
+            attestationInvocationUri = "https://github.com/flrngel/local-browser-bridge/actions/runs/32650000000/attempts/1"
+            attestedAssetCount = 5
+            githubHostedRunner = $true
+            assets = @($candidateBindingAssets)
+            passed = $true
+        }
+        [IO.File]::WriteAllText(
+            $candidateBindingSelfTestPath,
+            ($candidateBindingSelfTestRecord | ConvertTo-Json -Depth 10 -Compress) + [Environment]::NewLine,
+            [Text.UTF8Encoding]::new($false)
+        )
+        $candidateBindingSelfTestResult = Read-ExactReleaseCandidateBinding `
+            -Path $candidateBindingSelfTestPath `
+            -ExpectedVersion "0.12.12" `
+            -ExpectedManifestSha256 $candidateBindingManifestSha `
+            -ExpectedChecksums $candidateBindingChecksums `
+            -ExpectedAssetNames $candidateBindingNames
+        if ($candidateBindingSelfTestResult.workflowRunAttempt -cne "1" -or
+            $candidateBindingSelfTestResult.artifactId -cne "9500000000" -or
+            $candidateBindingSelfTestResult.assets.Count -ne 5) {
+            throw "The exact release-candidate binding self-test lost its attempt or asset identity."
+        }
+        $candidateBindingSelfTestRecord.workflowRunAttempt = "0"
+        [IO.File]::WriteAllText(
+            $candidateBindingSelfTestPath,
+            ($candidateBindingSelfTestRecord | ConvertTo-Json -Depth 10 -Compress) + [Environment]::NewLine,
+            [Text.UTF8Encoding]::new($false)
+        )
+        $candidateBindingFailure = $null
+        try {
+            $null = Read-ExactReleaseCandidateBinding `
+                -Path $candidateBindingSelfTestPath `
+                -ExpectedVersion "0.12.12" `
+                -ExpectedManifestSha256 $candidateBindingManifestSha `
+                -ExpectedChecksums $candidateBindingChecksums `
+                -ExpectedAssetNames $candidateBindingNames
+        }
+        catch {
+            $candidateBindingFailure = $_.Exception.Message
+        }
+        if ($candidateBindingFailure -cne "CandidateBindingPath does not bind the exact frozen workflow candidate.") {
+            throw "The release-candidate binding self-test accepted a noncanonical workflow attempt."
+        }
+    }
+    finally {
+        if ([IO.Directory]::Exists($candidateBindingSelfTestRoot)) {
+            [IO.Directory]::Delete($candidateBindingSelfTestRoot, $true)
         }
     }
 
@@ -3969,7 +4208,7 @@ finally {
         }
     }
     $summary = [ordered]@{
-        schemaVersion = 1
+        schemaVersion = 2
         passed = $runPassed
         suites = $selectedSuites
         startedAtUtc = $startedAt.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
@@ -3995,6 +4234,7 @@ finally {
         helperTopologyHistory = @($script:helperTopologyHistory)
         helperTopologyLastObservation = $script:helperTopologyDiagnostic
         foregroundArmProof = $script:foregroundArmProof
+        releaseCandidateBinding = $releaseCandidateBinding
         candidateBinding = $candidateBinding
     }
     Write-EvidenceJson ([IO.Path]::Combine($evidenceRoot, "summary.json")) $summary

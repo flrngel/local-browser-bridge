@@ -53,6 +53,9 @@ jobs:
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
           echo "tag_sha=$tag_sha" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Self-test the release acceptance evidence gate
+        shell: bash
+        run: bash scripts/verify-release-acceptance-evidence.sh --self-test
       - name: Validate the read-only macOS pointer handoff watcher
         run: |
           node --check scripts/wait-macos-pointer-concurrency-handoff.mjs
@@ -97,12 +100,31 @@ jobs:
       - name: Validate stock-user Chrome evidence tooling
         shell: pwsh
         run: |
+          if ([String]::IsNullOrWhiteSpace($env:SystemRoot) -or
+              -not [IO.Path]::IsPathRooted($env:SystemRoot)) {
+            throw "The Windows system root is unavailable."
+          }
+          $windowsPowerShell = [IO.Path]::GetFullPath([IO.Path]::Combine(
+            $env:SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"
+          ))
+          if (-not [IO.File]::Exists($windowsPowerShell) -or
+              ([IO.FileInfo]::new($windowsPowerShell).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw "The exact system Windows PowerShell executable is unavailable or linked."
+          }
+          $ps51IdentityCommand = 'Write-Output ("{0}.{1}|{2}" -f $PSVersionTable.PSVersion.Major, $PSVersionTable.PSVersion.Minor, $PSVersionTable.PSEdition)'
+          $ps51Identity = @(& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -Command $ps51IdentityCommand)
+          if ($LASTEXITCODE -ne 0 -or $ps51Identity.Count -ne 1 -or
+              $ps51Identity[0] -cne "5.1|Desktop") {
+            throw "The exact system PowerShell self-test host is not Windows PowerShell 5.1 Desktop."
+          }
           $scripts = @(
             "scripts/browser-evidence-candidate.ps1",
             "scripts/record-computer-helper-chain.ps1",
             "scripts/sanitize-browser-evidence-screenshot.ps1",
             "scripts/test-windows-browser-api.ps1",
             "scripts/test-windows-computer-use.ps1",
+            "scripts/test-windows-stock-chrome.ps1",
+            "scripts/verify-windows-release-candidate.ps1",
             "scripts/wait-windows-foreground-arm-handoff.ps1",
             "scripts/write-browser-evidence-record.ps1",
             "tests/fixtures/windows/WindowsComputerUseFixture.ps1"
@@ -123,11 +145,25 @@ jobs:
           & ./scripts/record-computer-helper-chain.ps1 -Mode SelfTest
           & ./scripts/sanitize-browser-evidence-screenshot.ps1 -Mode SelfTest
           & ./scripts/test-windows-browser-api.ps1 -SelfTest
-          powershell.exe -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-computer-use.ps1 -SelfTest
+          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/browser-evidence-candidate.ps1 -Mode SelfTest
+          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 candidate binder self-test failed." }
+          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/record-computer-helper-chain.ps1 -Mode SelfTest
+          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 computer-helper recorder self-test failed." }
+          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/sanitize-browser-evidence-screenshot.ps1 -Mode SelfTest
+          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 screenshot sanitizer self-test failed." }
+          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-browser-api.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 browser API self-test failed." }
+          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/write-browser-evidence-record.ps1 -Mode SelfTest
+          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 browser evidence finalizer self-test failed." }
+          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-computer-use.ps1 -SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 computer-use self-test failed." }
-          powershell.exe -NoLogo -NoProfile -NonInteractive -File ./scripts/wait-windows-foreground-arm-handoff.ps1 -Mode SelfTest
+          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-release-candidate.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 release-candidate trust self-test failed." }
+          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-stock-chrome.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 stock-Chrome coordinator self-test failed." }
+          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/wait-windows-foreground-arm-handoff.ps1 -Mode SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 foreground-arm handoff self-test failed." }
-          powershell.exe -NoLogo -NoProfile -NonInteractive -File ./tests/fixtures/windows/WindowsComputerUseFixture.ps1 -SelfTest
+          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./tests/fixtures/windows/WindowsComputerUseFixture.ps1 -SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 fixture self-test failed." }
           & ./scripts/test-windows-computer-use.ps1 -SelfTest
           & ./scripts/wait-windows-foreground-arm-handoff.ps1 -Mode SelfTest
@@ -189,12 +225,15 @@ jobs:
           node scripts/wait-macos-pointer-concurrency-handoff.mjs --mode self-test
       - name: Validate the macOS packaged-evidence harness
         run: |
-          node --check evidence/v0.12.11/computer/helper-evidence-rig.mjs
-          node evidence/v0.12.11/computer/helper-evidence-rig.mjs --self-test
-          xcrun swiftc -typecheck evidence/v0.12.11/computer/HelperEvidenceFixture.swift
-          xcrun swiftc -typecheck evidence/v0.12.11/computer/SystemProbe.swift
-          xcrun swiftc -typecheck evidence/v0.12.11/computer/PointerHandoff.swift
-          xcrun swiftc evidence/v0.12.11/computer/PointerHandoff.swift -o "$RUNNER_TEMP/lbb-pointer-handoff-self-test"
+          bash -n scripts/fetch-verify-release-candidate.sh
+          node --check scripts/finalize-macos-acceptance.mjs
+          node scripts/finalize-macos-acceptance.mjs --self-test
+          node --check evidence/v0.12.12/computer/helper-evidence-rig.mjs
+          node evidence/v0.12.12/computer/helper-evidence-rig.mjs --self-test
+          xcrun swiftc -typecheck evidence/v0.12.12/computer/HelperEvidenceFixture.swift
+          xcrun swiftc -typecheck evidence/v0.12.12/computer/SystemProbe.swift
+          xcrun swiftc -typecheck evidence/v0.12.12/computer/PointerHandoff.swift
+          xcrun swiftc evidence/v0.12.12/computer/PointerHandoff.swift -o "$RUNNER_TEMP/lbb-pointer-handoff-self-test"
           "$RUNNER_TEMP/lbb-pointer-handoff-self-test" --self-test
       - name: Install the minimum supported Rust toolchain and targets
         run: |
@@ -245,7 +284,7 @@ jobs:
             "$version" \
             stage/local-browser-bridge \
             "stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"
-          COPYFILE_DISABLE=1 tar -czf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" -C stage local-browser-bridge "Local Computer Helper.app" LICENSE THIRD_PARTY_LICENSES.txt
+          COPYFILE_DISABLE=1 tar --format ustar --no-xattrs -czf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" -C stage local-browser-bridge "Local Computer Helper.app" LICENSE THIRD_PARTY_LICENSES.txt
           tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | grep -Fxq local-browser-bridge
           tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | grep -Fxq "Local Computer Helper.app/Contents/MacOS/local-computer-helper"
           tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | grep -Fxq LICENSE
@@ -362,6 +401,7 @@ jobs:
     environment:
       name: release
     permissions:
+      actions: read # Re-downloads and raw-hashes the exact frozen workflow artifact.
       contents: write # Creates the immutable release and uploads accepted assets.
       attestations: read # Verifies provenance without minting or publishing attestations.
     steps:
@@ -410,60 +450,19 @@ jobs:
           for subject in dist/*; do
             verify_attestation "$subject"
           done
-      - name: Require exact candidate-bound platform acceptance receipt
+      - name: Require exact candidate-bound committed acceptance evidence
         env:
-          LBB_RELEASE_ACCEPTANCE_V1: ${{ vars.LBB_RELEASE_ACCEPTANCE_V1 }}
+          LBB_RELEASE_ACCEPTANCE_V2: ${{ vars.LBB_RELEASE_ACCEPTANCE_V2 }}
+          GH_TOKEN: ${{ github.token }}
           VERIFIED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
           VERIFIED_TAG_SHA: ${{ needs.verify.outputs.tag_sha }}
         shell: bash
         run: |
-          test -n "${LBB_RELEASE_ACCEPTANCE_V1:-}"
-          test "${#LBB_RELEASE_ACCEPTANCE_V1}" -le 2048
+          test -n "${LBB_RELEASE_ACCEPTANCE_V2:-}"
+          test "${#LBB_RELEASE_ACCEPTANCE_V2}" -le 4096
           receipt_file="$(mktemp)"
-          printf '%s' "$LBB_RELEASE_ACCEPTANCE_V1" > "$receipt_file"
-          test "$(jq -c . "$receipt_file")" = "$LBB_RELEASE_ACCEPTANCE_V1"
-
-          frozen_manifest_sha256="$(sha256sum dist/SHA256SUMS.txt | awk '{ print $1 }')"
-          jq -e \
-            --arg tag "$RELEASE_TAG" \
-            --arg source_sha "$VERIFIED_SOURCE_SHA" \
-            --arg tag_object_sha "$VERIFIED_TAG_SHA" \
-            --arg run_id "$GITHUB_RUN_ID" \
-            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
-            --arg manifest_sha256 "$frozen_manifest_sha256" '
-              (type == "object")
-              and (keys_unsorted == [
-                "schemaVersion", "tag", "sourceSha", "tagObjectSha",
-                "workflowRunId", "workflowRunAttempt", "checksumManifestSha256",
-                "macosPassed", "macosResultSha256",
-                "windowsPassed", "windowsResultSha256",
-                "stockChromePassed", "stockChrome", "stockChromeResultSha256"
-              ])
-              and ((.schemaVersion | type) == "number") and (.schemaVersion == 1)
-              and ((.tag | type) == "string")
-              and (.tag | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) and (.tag == $tag)
-              and ((.sourceSha | type) == "string")
-              and (.sourceSha | test("^[0-9a-f]{40}$")) and (.sourceSha == $source_sha)
-              and ((.tagObjectSha | type) == "string")
-              and (.tagObjectSha | test("^[0-9a-f]{40}$")) and (.tagObjectSha == $tag_object_sha)
-              and ((.workflowRunId | type) == "string")
-              and (.workflowRunId | test("^[1-9][0-9]*$")) and (.workflowRunId == $run_id)
-              and ((.workflowRunAttempt | type) == "string")
-              and (.workflowRunAttempt | test("^[1-9][0-9]*$")) and (.workflowRunAttempt == $run_attempt)
-              and ((.checksumManifestSha256 | type) == "string")
-              and (.checksumManifestSha256 | test("^[0-9a-f]{64}$"))
-              and (.checksumManifestSha256 == $manifest_sha256)
-              and ((.macosPassed | type) == "boolean") and (.macosPassed == true)
-              and ((.macosResultSha256 | type) == "string")
-              and (.macosResultSha256 | test("^[0-9a-f]{64}$"))
-              and ((.windowsPassed | type) == "boolean") and (.windowsPassed == true)
-              and ((.windowsResultSha256 | type) == "string")
-              and (.windowsResultSha256 | test("^[0-9a-f]{64}$"))
-              and ((.stockChromePassed | type) == "boolean") and (.stockChromePassed == true)
-              and ((.stockChrome | type) == "boolean") and (.stockChrome == true)
-              and ((.stockChromeResultSha256 | type) == "string")
-              and (.stockChromeResultSha256 | test("^[0-9a-f]{64}$"))
-            ' "$receipt_file" >/dev/null
+          printf '%s' "$LBB_RELEASE_ACCEPTANCE_V2" > "$receipt_file"
+          bash scripts/verify-release-acceptance-evidence.sh "$receipt_file" dist
           acceptance_receipt_sha256="$(sha256sum "$receipt_file" | awk '{ print $1 }')"
           printf 'LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256=%s\n' \
             "$acceptance_receipt_sha256" >> "$GITHUB_ENV"
@@ -478,7 +477,7 @@ jobs:
           [[ "${LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]
           expected_title="Local Browser Bridge ${version}"
           candidate_manifest_sha256="$(sha256sum dist/SHA256SUMS.txt | awk '{ print $1 }')"
-          release_marker="<!-- local-browser-bridge-release:v1 source-sha=$VERIFIED_SOURCE_SHA tag-object-sha=$VERIFIED_TAG_SHA manifest-sha256=$candidate_manifest_sha256 acceptance-receipt-sha256=$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256 -->"
+          release_marker="<!-- local-browser-bridge-release:v2 source-sha=$VERIFIED_SOURCE_SHA tag-object-sha=$VERIFIED_TAG_SHA manifest-sha256=$candidate_manifest_sha256 acceptance-receipt-sha256=$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256 -->"
           candidate_assets=(
             "local-browser-bridge-v${version}-windows-x86_64.exe"
             "local-computer-helper-v${version}-windows-x86_64.exe"
@@ -493,10 +492,10 @@ jobs:
 
           ## Install
 
-          1. Download the server and computer-helper artifacts for your operating system plus the extension ZIP.
+          1. Download the Windows server and helper executables, or the combined universal macOS archive, plus the extension ZIP.
           2. Verify every file with \`gh release verify-asset $RELEASE_TAG <file> -R $GITHUB_REPOSITORY\` or against \`SHA256SUMS.txt\`. For provenance, also run \`gh attestation verify <file> -R $GITHUB_REPOSITORY --source-ref refs/tags/$RELEASE_TAG --signer-workflow $GITHUB_REPOSITORY/.github/workflows/deploy.yml --deny-self-hosted-runners\`.
-          3. Run the server. Run the separate helper only when desktop control is wanted; macOS will request Screen Recording and Accessibility.
-          4. Extract the extension ZIP, load it from \`chrome://extensions\` with Developer mode enabled, and paste the token printed by the server into its popup.
+          3. Run the server. Run the separate helper only when desktop control is wanted. On macOS, first run \`./Local\\ Computer\\ Helper.app/Contents/MacOS/local-computer-helper --request-permissions\`, grant Screen Recording and Accessibility if prompted, then start the helper normally.
+          4. Extract the extension ZIP, load it from \`chrome://extensions\` in Chrome or \`edge://extensions\` in Edge with Developer mode enabled, and paste the token printed by the server into its popup.
           5. Keep the server, helper, and extension on this same version.
 
           For an upgrade, release control first. Disable the existing unpacked extension and replace the contents of its existing folder before reloading the same card. If you extract to a new folder, remove the old card before loading the new one. Confirm that exactly one Local Browser Bridge card remains.
@@ -519,8 +518,6 @@ jobs:
             local release_json="$1"
             local expected_draft="$2"
             local expected_immutable="$3"
-            local expected_acceptance_receipt_sha256="${4:-$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256}"
-            [[ "$expected_acceptance_receipt_sha256" =~ ^[0-9a-f]{64}$ ]]
             jq -e \
               --arg repository "$GITHUB_REPOSITORY" \
               --arg tag "$RELEASE_TAG" \
@@ -541,29 +538,7 @@ jobs:
             local release_body
             release_body="$(mktemp)"
             jq -ej '.body | select(type == "string")' "$release_json" > "$release_body"
-            if [[ "$expected_acceptance_receipt_sha256" == "$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256" ]]; then
-              cmp -s release-notes.md "$release_body"
-            else
-              local expected_release_body
-              expected_release_body="$(mktemp)"
-              test "$(grep -Fo "$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256" release-notes.md | wc -l | tr -d ' ')" = 2
-              sed "s/$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256/$expected_acceptance_receipt_sha256/g" \
-                release-notes.md > "$expected_release_body"
-              cmp -s "$expected_release_body" "$release_body"
-            fi
-          }
-
-          release_acceptance_receipt_sha256() {
-            local release_json="$1"
-            local release_body
-            release_body="$(mktemp)"
-            jq -ej '.body | select(type == "string")' "$release_json" > "$release_body"
-            local accepted_receipt_sha256
-            accepted_receipt_sha256="$(sed -n \
-              "s/^<!-- local-browser-bridge-release:v1 source-sha=$VERIFIED_SOURCE_SHA tag-object-sha=$VERIFIED_TAG_SHA manifest-sha256=$candidate_manifest_sha256 acceptance-receipt-sha256=\\([0-9a-f]\\{64\\}\\) -->$/\\1/p" \
-              "$release_body")"
-            [[ "$accepted_receipt_sha256" =~ ^[0-9a-f]{64}$ ]]
-            printf '%s\n' "$accepted_receipt_sha256"
+            cmp -s release-notes.md "$release_body"
           }
 
           assert_candidate_asset_name() {
@@ -680,8 +655,7 @@ jobs:
               --json databaseId,apiUrl,assets,body,isDraft,isImmutable,isPrerelease,name,tagName \
               > "$existing_release"
             if jq -e '.isDraft == true and .isImmutable == false' "$existing_release" >/dev/null; then
-              existing_acceptance_receipt_sha256="$(release_acceptance_receipt_sha256 "$existing_release")"
-              assert_release_identity "$existing_release" true false "$existing_acceptance_receipt_sha256"
+              assert_release_identity "$existing_release" true false
               assert_release_assets "$existing_release" subset
               download_and_compare_release_assets "$existing_release"
               draft_fingerprint="$(release_fingerprint "$existing_release")"
@@ -691,7 +665,7 @@ jobs:
                 --repo "$GITHUB_REPOSITORY" \
                 --json databaseId,apiUrl,assets,body,isDraft,isImmutable,isPrerelease,name,tagName \
                 > "$refreshed_draft"
-              assert_release_identity "$refreshed_draft" true false "$existing_acceptance_receipt_sha256"
+              assert_release_identity "$refreshed_draft" true false
               assert_release_assets "$refreshed_draft" subset
               test "$(release_fingerprint "$refreshed_draft")" = "$draft_fingerprint"
               assert_remote_tag
@@ -702,8 +676,7 @@ jobs:
               wait_for_release_absence
               assert_remote_tag
             elif jq -e '.isDraft == false and .isImmutable == true' "$existing_release" >/dev/null; then
-              existing_acceptance_receipt_sha256="$(release_acceptance_receipt_sha256 "$existing_release")"
-              assert_release_identity "$existing_release" false true "$existing_acceptance_receipt_sha256"
+              assert_release_identity "$existing_release" false true
               assert_release_assets "$existing_release" exact
               download_and_compare_release_assets "$existing_release"
               published_fingerprint="$(release_fingerprint "$existing_release")"
@@ -712,7 +685,7 @@ jobs:
                 --repo "$GITHUB_REPOSITORY" \
                 --json databaseId,apiUrl,assets,body,isDraft,isImmutable,isPrerelease,name,tagName \
                 > "$refreshed_published"
-              assert_release_identity "$refreshed_published" false true "$existing_acceptance_receipt_sha256"
+              assert_release_identity "$refreshed_published" false true
               assert_release_assets "$refreshed_published" exact
               test "$(release_fingerprint "$refreshed_published")" = "$published_fingerprint"
               assert_remote_tag

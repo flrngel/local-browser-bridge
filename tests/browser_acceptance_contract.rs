@@ -149,10 +149,22 @@ fn browser_matrix_is_test_owned_loopback_only_and_reobserves_mutations() {
             "missing ownership/freshness proof: {required}"
         );
     }
-    assert!(
-        !source.contains("https://"),
-        "the matrix must never navigate off loopback"
+    assert_eq!(
+        source
+            .matches("Invoke-BridgeCommand \"page.navigate\"")
+            .count(),
+        2,
+        "the matrix must retain exactly its two owned loopback navigations"
     );
+    assert!(source.contains("$historyUrl = \"$demoUrl`?step=2\""));
+    assert!(source.contains("url = $demoUrl"));
+    assert!(source.contains("url = $historyUrl"));
+    for forbidden in ["url = \"https://", "url = 'https://", "url = \"http://"] {
+        assert!(
+            !source.contains(forbidden),
+            "the matrix must never navigate to a literal non-owned URL: {forbidden}"
+        );
+    }
     assert!(
         !source.contains("tabId = 1"),
         "the matrix must never hard-code a Chrome tab id"

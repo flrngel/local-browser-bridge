@@ -211,6 +211,26 @@ function Assert-Acceptance {
     }
 }
 
+function Assert-NoReparseAncestorChain {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Boundary
+    )
+    $full = [IO.Path]::GetFullPath($Path)
+    $directory = if ([IO.Directory]::Exists($full)) {
+        [IO.DirectoryInfo]::new($full)
+    }
+    else {
+        [IO.DirectoryInfo]::new([IO.Path]::GetDirectoryName($full))
+    }
+    while ($null -ne $directory) {
+        Assert-Acceptance (
+            ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0
+        ) "${Boundary}-no-reparse-ancestor"
+        $directory = $directory.Parent
+    }
+}
+
 function Assert-ExactPropertyOrder {
     param(
         [Parameter(Mandatory = $true)]$Value,
@@ -235,20 +255,75 @@ function Get-BytesSha256 {
     }
 }
 
+function Assert-ReleaseCandidateBinding {
+    param(
+        [Parameter(Mandatory = $true)]$Binding,
+        [Parameter(Mandatory = $true)]$Candidate,
+        [Parameter(Mandatory = $true)][string]$Boundary
+    )
+    $fields = @(
+        "productVersion", "repository", "tag", "sourceSha", "tagObjectSha",
+        "workflowRunId", "workflowRunAttempt", "artifactId", "artifactName",
+        "artifactZipBytes", "artifactZipSha256", "checksumManifestSha256",
+        "attestationInvocationUri", "attestedAssetCount", "githubHostedRunner", "assets"
+    )
+    Assert-ExactPropertyOrder $Binding $fields $Boundary
+    Assert-Acceptance ($Binding.productVersion -ceq $Version) "$Boundary-version"
+    Assert-Acceptance ($Binding.repository -ceq "flrngel/local-browser-bridge") "$Boundary-repository"
+    Assert-Acceptance ($Binding.tag -ceq "v$Version") "$Boundary-tag"
+    Assert-Acceptance ($Binding.sourceSha -ceq $Candidate.finalSha) "$Boundary-source"
+    Assert-Acceptance ([string]$Binding.tagObjectSha -cmatch '^[0-9a-f]{40}$') "$Boundary-tag-object"
+    foreach ($name in @("workflowRunId", "workflowRunAttempt", "artifactId")) {
+        Assert-Acceptance ([string]$Binding.$name -cmatch '^[1-9][0-9]*$') "$Boundary-$name"
+    }
+    Assert-Acceptance ($Binding.artifactName -ceq "release-candidate") "$Boundary-artifact-name"
+    Assert-Acceptance ($Binding.artifactZipBytes -is [ValueType] -and
+        [int64]$Binding.artifactZipBytes -gt 0) "$Boundary-artifact-size"
+    Assert-Acceptance ([string]$Binding.artifactZipSha256 -cmatch '^[0-9a-f]{64}$') "$Boundary-artifact-hash"
+    Assert-Acceptance ($Binding.checksumManifestSha256 -ceq $Candidate.checksumManifest.sha256) `
+        "$Boundary-manifest-hash"
+    $invocationUri = "https://github.com/flrngel/local-browser-bridge/actions/runs/$($Binding.workflowRunId)/attempts/$($Binding.workflowRunAttempt)"
+    Assert-Acceptance ($Binding.attestationInvocationUri -ceq $invocationUri) "$Boundary-invocation"
+    Assert-Acceptance ($Binding.attestedAssetCount -eq 5 -and
+        $Binding.githubHostedRunner -eq $true) "$Boundary-attestation"
+    $expectedNames = @($Candidate.checksumManifest.canonicalNamesInOrder) + "SHA256SUMS.txt"
+    $assets = @($Binding.assets)
+    Assert-Acceptance ($assets.Count -eq 5) "$Boundary-asset-count"
+    for ($index = 0; $index -lt $assets.Count; $index += 1) {
+        Assert-ExactPropertyOrder $assets[$index] @("file", "bytes", "sha256") "$Boundary-asset"
+        Assert-Acceptance ($assets[$index].file -ceq $expectedNames[$index]) "$Boundary-asset-name"
+        Assert-Acceptance ($assets[$index].bytes -is [ValueType] -and
+            [int64]$assets[$index].bytes -gt 0) "$Boundary-asset-size"
+        Assert-Acceptance ([string]$assets[$index].sha256 -cmatch '^[0-9a-f]{64}$') "$Boundary-asset-hash"
+    }
+    Assert-Acceptance ($assets[0].sha256 -ceq $Candidate.server.sha256) "$Boundary-server-asset"
+    Assert-Acceptance ($assets[1].sha256 -ceq $Candidate.computerHelper.sha256) "$Boundary-helper-asset"
+    Assert-Acceptance ($assets[3].sha256 -ceq $Candidate.extension.sha256) "$Boundary-extension-asset"
+    Assert-Acceptance ($assets[4].sha256 -ceq $Candidate.checksumManifest.sha256) "$Boundary-manifest-asset"
+}
+
 function Get-CandidateBindingFromPreflight {
     param([Parameter(Mandatory = $true)][string]$Path)
     $resolved = [IO.Path]::GetFullPath($Path)
     Assert-Acceptance ([IO.File]::Exists($resolved)) "preflight-record-exists"
     $item = [IO.FileInfo]::new($resolved)
     Assert-Acceptance (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) "preflight-record-not-reparse-point"
+    Assert-NoReparseAncestorChain $resolved "preflight-record"
     Assert-Acceptance ($item.Length -gt 0 -and $item.Length -le 1MB) "preflight-record-size"
     $bytes = [IO.File]::ReadAllBytes($resolved)
     try {
         $utf8 = [Text.UTF8Encoding]::new($false, $true)
         $record = $utf8.GetString($bytes) | ConvertFrom-Json
-        Assert-ExactPropertyOrder $record @(
+        $preflightFields = @(
             "schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed", "runNonce", "candidate"
-        ) "preflight-record"
+        )
+        if ($Version -ceq "0.12.12") {
+            $preflightFields = @(
+                "schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed",
+                "runNonce", "releaseCandidateBinding", "candidate"
+            )
+        }
+        Assert-ExactPropertyOrder $record $preflightFields "preflight-record"
         Assert-Acceptance ($record.schemaVersion -eq 1 -and
             $record.evidenceType -ceq "stock-user-chrome-candidate-binding" -and
             $record.phase -ceq "preflight" -and $record.passed -eq $true) "preflight-record-identity"
@@ -258,11 +333,16 @@ function Get-CandidateBindingFromPreflight {
         foreach ($value in @(
             [string]$record.candidate.checksumManifest.sha256,
             [string]$record.candidate.server.sha256,
-            $(if ($Version -ceq "0.12.11") { [string]$record.candidate.computerHelper.sha256 } else { [string]$record.candidate.server.sha256 }),
+            $(if ($Version -ceq "0.12.12") { [string]$record.candidate.computerHelper.sha256 } else { [string]$record.candidate.server.sha256 }),
             [string]$record.candidate.extension.sha256,
             [string]$record.candidate.extension.combinedPayloadSha256
         )) {
             Assert-Acceptance ($value -cmatch '^[0-9a-f]{64}$') "preflight-candidate-hash"
+        }
+        if ($Version -ceq "0.12.12") {
+            Assert-ReleaseCandidateBinding $record.releaseCandidateBinding $record.candidate `
+                "preflight-release-candidate-binding"
+            $script:ReleaseCandidateBinding = $record.releaseCandidateBinding
         }
         $binding = [ordered]@{
             runNonce = [string]$record.runNonce
@@ -271,7 +351,7 @@ function Get-CandidateBindingFromPreflight {
             checksumManifestSha256 = [string]$record.candidate.checksumManifest.sha256
             serverSha256 = [string]$record.candidate.server.sha256
         }
-        if ($Version -ceq "0.12.11") {
+        if ($Version -ceq "0.12.12") {
             $binding.computerHelperSha256 = [string]$record.candidate.computerHelper.sha256
         }
         $binding.extensionZipSha256 = [string]$record.candidate.extension.sha256
@@ -333,7 +413,7 @@ function Assert-ReducedEvidenceRecord {
         "runNonce", "preflightRecordSha256", "finalSha", "checksumManifestSha256",
         "serverSha256", "extensionZipSha256", "extractedPayloadSha256"
     )
-    if ($Version -ceq "0.12.11") {
+    if ($Version -ceq "0.12.12") {
         $bindingFields = @(
             "runNonce", "preflightRecordSha256", "finalSha", "checksumManifestSha256",
             "serverSha256", "computerHelperSha256", "extensionZipSha256", "extractedPayloadSha256"
@@ -424,12 +504,71 @@ function Invoke-RecordSelfTest {
         checksumManifestSha256 = [String]::new([char]"d", 64)
         serverSha256 = [String]::new([char]"e", 64)
     }
-    if ($Version -ceq "0.12.11") {
+    if ($Version -ceq "0.12.12") {
         $selfTestBinding.computerHelperSha256 = [String]::new([char]"1", 64)
     }
     $selfTestBinding.extensionZipSha256 = [String]::new([char]"f", 64)
     $selfTestBinding.extractedPayloadSha256 = [String]::new([char]"0", 64)
     $script:CandidateBinding = [pscustomobject]$selfTestBinding
+    if ($Version -ceq "0.12.12") {
+        $selfTestCandidate = [pscustomobject][ordered]@{
+            version = $Version
+            finalSha = $selfTestBinding.finalSha
+            checksumManifest = [pscustomobject][ordered]@{
+                sha256 = $selfTestBinding.checksumManifestSha256
+                canonicalNamesInOrder = @(
+                    "local-browser-bridge-v$Version-windows-x86_64.exe",
+                    "local-computer-helper-v$Version-windows-x86_64.exe",
+                    "local-browser-bridge-v$Version-macos-universal.tar.gz",
+                    "local-browser-bridge-extension-v$Version.zip"
+                )
+            }
+            server = [pscustomobject][ordered]@{ sha256 = $selfTestBinding.serverSha256 }
+            computerHelper = [pscustomobject][ordered]@{ sha256 = $selfTestBinding.computerHelperSha256 }
+            extension = [pscustomobject][ordered]@{ sha256 = $selfTestBinding.extensionZipSha256 }
+        }
+        $assetNames = @($selfTestCandidate.checksumManifest.canonicalNamesInOrder) + "SHA256SUMS.txt"
+        $assetHashes = @(
+            $selfTestBinding.serverSha256, $selfTestBinding.computerHelperSha256,
+            [String]::new([char]"2", 64), $selfTestBinding.extensionZipSha256,
+            $selfTestBinding.checksumManifestSha256
+        )
+        $assets = @()
+        for ($index = 0; $index -lt 5; $index += 1) {
+            $assets += [pscustomobject][ordered]@{
+                file = $assetNames[$index]; bytes = 1000; sha256 = $assetHashes[$index]
+            }
+        }
+        $releaseBinding = [pscustomobject][ordered]@{
+            productVersion = $Version
+            repository = "flrngel/local-browser-bridge"
+            tag = "v$Version"
+            sourceSha = $selfTestBinding.finalSha
+            tagObjectSha = [String]::new([char]"3", 40)
+            workflowRunId = "123"
+            workflowRunAttempt = "1"
+            artifactId = "456"
+            artifactName = "release-candidate"
+            artifactZipBytes = 5000
+            artifactZipSha256 = [String]::new([char]"4", 64)
+            checksumManifestSha256 = $selfTestBinding.checksumManifestSha256
+            attestationInvocationUri = "https://github.com/flrngel/local-browser-bridge/actions/runs/123/attempts/1"
+            attestedAssetCount = 5
+            githubHostedRunner = $true
+            assets = $assets
+        }
+        Assert-ReleaseCandidateBinding $releaseBinding $selfTestCandidate "self-test-release-binding"
+        $script:ReleaseCandidateBinding = $releaseBinding
+        $mismatchedRelease = Copy-JsonObject $releaseBinding
+        $mismatchedRelease.workflowRunAttempt = "2"
+        $mismatchRejected = $false
+        try {
+            Assert-ReleaseCandidateBinding $mismatchedRelease $selfTestCandidate `
+                "self-test-mismatched-release-binding"
+        }
+        catch { $mismatchRejected = $true }
+        Assert-Acceptance $mismatchRejected "self-test-release-attempt-mismatch-rejected"
+    }
     foreach ($method in $ActionMethods) {
         $MethodPassed[$method] = $true
         $MethodCommandInvoked[$method] = $true
@@ -475,7 +614,7 @@ function Invoke-RecordSelfTest {
 
 if ($SelfTest) {
     if ([String]::IsNullOrWhiteSpace($Version)) {
-        $Version = "0.0.0"
+        $Version = "0.12.12"
     }
     Invoke-RecordSelfTest
     exit 0
@@ -487,7 +626,7 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 if ([String]::IsNullOrWhiteSpace($Version) -or $Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
     throw "Version must be an explicit stable semantic version."
 }
-if ($Version -ceq "0.12.11") {
+if ($Version -ceq "0.12.12") {
     $MethodScreenshots = $MethodScreenshotsV2
 }
 if ([String]::IsNullOrWhiteSpace($PreflightRecord)) {
@@ -505,6 +644,7 @@ $outputParent = [IO.Path]::GetDirectoryName($resolvedOutput)
 if ([String]::IsNullOrWhiteSpace($outputParent) -or -not [IO.Directory]::Exists($outputParent)) {
     throw "OutputPath must have a pre-existing parent directory."
 }
+Assert-NoReparseAncestorChain $outputParent "output-parent"
 if ([IO.File]::Exists($resolvedOutput) -or [IO.Directory]::Exists($resolvedOutput)) {
     throw "OutputPath already exists; acceptance evidence is append-never."
 }

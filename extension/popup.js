@@ -50,7 +50,7 @@ function render(next) {
       ? "All remote browser control is paused. Pause persistence needs popup recovery before Resume can authorize it again."
       : "All remote browser control is paused by you. Only Resume in this popup can authorize it again."
     : control.revocationPending
-    ? `Release cleanup pending for tab ${control.cleanup?.tabId ?? "unknown"}. Chrome attachment verification will retry automatically.`
+    ? `Release cleanup pending for tab ${control.cleanup?.tabId ?? "unknown"}. Browser attachment verification will retry automatically.`
     : control.active
     ? `Attached to tab ${control.tabId} · turn ${control.turn} · move ${control.moveSequence}`
     : control.revocation

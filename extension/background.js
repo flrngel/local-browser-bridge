@@ -1828,7 +1828,7 @@ async function browserNodeAncestry(tabId, locator, authority, commandContext, bu
     }
     const node = described?.node;
     if (!node || !Number.isInteger(node.nodeId) || seen.has(node.nodeId)) {
-      throw new Error("Chrome could not describe a bounded unique browser-node ancestry");
+      throw new Error("The browser could not describe a bounded unique browser-node ancestry");
     }
     seen.add(node.nodeId);
     if (startNodeId === null) {
@@ -1871,7 +1871,7 @@ function boundedTopLayerNodeIds(rawNodeIds) {
     || rawNodeIds.length === 0
     || rawNodeIds.length > CONTROL_UI_TOP_LAYER_MAX_NODES
     || rawNodeIds.some((nodeId) => !Number.isInteger(nodeId))) {
-    throw new Error("Chrome did not expose a bounded ordered top-layer list");
+    throw new Error("The browser did not expose a bounded ordered top-layer list");
   }
   return rawNodeIds;
 }
@@ -2033,7 +2033,7 @@ async function verifyControlUiBrowserTopLayer(
     if (!Array.isArray(result?.nodeIds)
       || result.nodeIds.length !== 1
       || !Number.isInteger(result.nodeIds[0])) {
-      throw new Error("Chrome did not resolve the unique closed-shadow identity marker");
+      throw new Error("The browser did not resolve the unique closed-shadow identity marker");
     }
     markerAncestry = await browserNodeAncestry(
       lease.tabId,
@@ -2120,7 +2120,7 @@ async function verifyControlUiBrowserTopLayer(
         : Number.isInteger(hit?.backendNodeId)
           ? { backendNodeId: hit.backendNodeId }
           : null;
-      if (!locator) throw new Error("Chrome did not resolve a control-surface browser hit test");
+      if (!locator) throw new Error("The browser did not resolve a control-surface browser hit test");
       const hitAncestry = await browserNodeAncestry(
         lease.tabId,
         locator,
@@ -3136,7 +3136,7 @@ async function startControl(tabId, {
     assertNoPendingControlLifecycle();
   }
   if (!explicit && lastControlRevocation?.tabId === tab.id && lastControlRevocation.requiresExplicitStart) {
-    throw new Error("CONTROL_REVOKED: Chrome or the user revoked control; explicitly start a new browser control session");
+    throw new Error("CONTROL_REVOKED: The browser or the user revoked control; explicitly start a new browser control session");
   }
   assertCommandActive(commandContext, "debugger attach intent");
   assertHumanControlAvailable();
@@ -3200,7 +3200,7 @@ async function startControl(tabId, {
       await settleUnknownDebuggerAttach(tab.id, attachToken, "debugger_attach_rejected");
     }
     if (error.code === "DEBUGGER_ATTACH_TIMEOUT") {
-      const unknown = new Error("DEBUGGER_ATTACH_OUTCOME_UNKNOWN: Chrome did not acknowledge attachment; late attachment will be detached and explicit restart is required");
+      const unknown = new Error("DEBUGGER_ATTACH_OUTCOME_UNKNOWN: The browser did not acknowledge attachment; late attachment will be detached and explicit restart is required");
       unknown.code = "DEBUGGER_ATTACH_OUTCOME_UNKNOWN";
       unknown.cause = error;
       throw unknown;
@@ -3378,7 +3378,7 @@ async function captureTab(tab, commandContext = null, existingAuthority = null) 
       fromSurface: true,
       captureBeyondViewport: false,
     }, authority, commandContext);
-    if (!capture?.data) throw new Error("SCREENSHOT_FAILED: Chrome returned no screenshot data");
+    if (!capture?.data) throw new Error("SCREENSHOT_FAILED: The browser returned no screenshot data");
     await verifyDocumentAuthority(tab.id, authority, commandContext, "screenshot completion");
     return `data:image/jpeg;base64,${capture.data}`;
   } finally {
@@ -5188,7 +5188,7 @@ async function runBatchActions(actions, dispatchAction) {
 
 async function groupBridgeCreatedTab(tab, commandContext = null) {
   await initializeControlState();
-  if (!Number.isInteger(tab?.id)) throw new Error("BAD_TAB: Chrome did not return a new tab identifier");
+  if (!Number.isInteger(tab?.id)) throw new Error("BAD_TAB: The browser did not return a new tab identifier");
   // Provenance is the first uncancellable commit after Chrome returns any
   // bridge-created tab. In Safe mode it is also what makes a canceled
   // omitted-URL about:blank creation visible to tabs.list for reconciliation.

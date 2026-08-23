@@ -1,4 +1,4 @@
-use std::fs;
+use std::{fs, process::Command};
 
 fn source(path: &str) -> String {
     fs::read_to_string(path).unwrap().replace("\r\n", "\n")
@@ -80,6 +80,8 @@ fn windows_ci_and_release_validate_the_complete_browser_evidence_toolchain() {
             "scripts/sanitize-browser-evidence-screenshot.ps1",
             "scripts/test-windows-browser-api.ps1",
             "scripts/test-windows-computer-use.ps1",
+            "scripts/test-windows-stock-chrome.ps1",
+            "scripts/verify-windows-release-candidate.ps1",
             "scripts/wait-windows-foreground-arm-handoff.ps1",
             "scripts/write-browser-evidence-record.ps1",
             "tests/fixtures/windows/WindowsComputerUseFixture.ps1",
@@ -104,13 +106,80 @@ fn windows_ci_and_release_validate_the_complete_browser_evidence_toolchain() {
                 "Windows validation in {path} does not run {invocation}"
             );
         }
+        for required in [
+            "$windowsPowerShell = [IO.Path]::GetFullPath([IO.Path]::Combine(",
+            "$env:SystemRoot, \"System32\", \"WindowsPowerShell\", \"v1.0\", \"powershell.exe\"",
+            "$PSVersionTable.PSVersion.Major",
+            "$PSVersionTable.PSVersion.Minor",
+            "$PSVersionTable.PSEdition",
+            "$ps51Identity[0] -cne \"5.1|Desktop\"",
+            "The exact system PowerShell self-test host is not Windows PowerShell 5.1 Desktop.",
+        ] {
+            assert!(
+                workflow.contains(required),
+                "Windows PowerShell 5.1 validation in {path} is missing {required}"
+            );
+        }
+        let identity_gate = workflow
+            .find("$ps51Identity[0] -cne \"5.1|Desktop\"")
+            .unwrap();
+        let first_self_test = workflow
+            .find("./scripts/browser-evidence-candidate.ps1 -Mode SelfTest")
+            .unwrap();
+        assert!(
+            identity_gate < first_self_test,
+            "Windows PowerShell identity must be proven before any PowerShell self-test in {path}"
+        );
+        assert!(
+            !workflow.contains("\n          powershell.exe -NoLogo"),
+            "Windows validation in {path} must not resolve an ambient powershell.exe"
+        );
+        for invocation in [
+            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/browser-evidence-candidate.ps1 -Mode SelfTest",
+            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/record-computer-helper-chain.ps1 -Mode SelfTest",
+            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/sanitize-browser-evidence-screenshot.ps1 -Mode SelfTest",
+            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-browser-api.ps1 -SelfTest",
+            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/write-browser-evidence-record.ps1 -Mode SelfTest",
+            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-computer-use.ps1 -SelfTest",
+            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-stock-chrome.ps1 -SelfTest",
+            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-release-candidate.ps1 -SelfTest",
+            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/wait-windows-foreground-arm-handoff.ps1 -Mode SelfTest",
+            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./tests/fixtures/windows/WindowsComputerUseFixture.ps1 -SelfTest",
+        ] {
+            assert!(
+                workflow.contains(invocation),
+                "Windows validation in {path} does not run through the exact system PowerShell: {invocation}"
+            );
+        }
+    }
+}
+
+#[test]
+fn release_runs_every_browser_evidence_self_test_under_windows_powershell_51() {
+    let workflow = source(".github/workflows/deploy.yml");
+    for invocation in [
+        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/browser-evidence-candidate.ps1 -Mode SelfTest",
+        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/record-computer-helper-chain.ps1 -Mode SelfTest",
+        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/sanitize-browser-evidence-screenshot.ps1 -Mode SelfTest",
+        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-browser-api.ps1 -SelfTest",
+        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/write-browser-evidence-record.ps1 -Mode SelfTest",
+        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-computer-use.ps1 -SelfTest",
+        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-stock-chrome.ps1 -SelfTest",
+        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-release-candidate.ps1 -SelfTest",
+        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/wait-windows-foreground-arm-handoff.ps1 -Mode SelfTest",
+        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./tests/fixtures/windows/WindowsComputerUseFixture.ps1 -SelfTest",
+    ] {
+        assert!(
+            workflow.contains(invocation),
+            "release validation does not run under Windows PowerShell 5.1: {invocation}"
+        );
     }
 }
 
 #[test]
 fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
     let watcher = source("scripts/wait-macos-pointer-concurrency-handoff.mjs");
-    let producer = source("evidence/v0.12.11/computer/helper-evidence-rig.mjs");
+    let producer = source("evidence/v0.12.12/computer/helper-evidence-rig.mjs");
     let ci = source(".github/workflows/ci.yml");
     let release = source(".github/workflows/deploy.yml");
     let local = source("scripts/deploy.sh");
@@ -138,7 +207,7 @@ fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
     );
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.11\";",
+        "const PRODUCT_VERSION = \"0.12.12\";",
         "const SCHEMA_VERSION = 1;",
         "const OPERATOR_DIRECTORY = \"operator\";",
         "macos-pointer-concurrency-handoff-request.json",
@@ -189,12 +258,12 @@ fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
 
     for integration in [&ci, &release, &local] {
         assert!(
-            integration.contains("node --check evidence/v0.12.11/computer/helper-evidence-rig.mjs"),
+            integration.contains("node --check evidence/v0.12.12/computer/helper-evidence-rig.mjs"),
             "release path does not syntax-check the exact macOS evidence rig"
         );
         assert!(
             integration
-                .contains("node evidence/v0.12.11/computer/helper-evidence-rig.mjs --self-test")
+                .contains("node evidence/v0.12.12/computer/helper-evidence-rig.mjs --self-test")
         );
     }
     for integration in [&ci, &release] {
@@ -205,7 +274,7 @@ fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
         ] {
             assert!(
                 integration.contains(&format!(
-                    "xcrun swiftc -typecheck evidence/v0.12.11/computer/{source}"
+                    "xcrun swiftc -typecheck evidence/v0.12.12/computer/{source}"
                 )),
                 "macOS workflow does not typecheck {source}"
             );
@@ -291,7 +360,8 @@ fn release_license_inventory_is_locked_sanitized_and_shipped() {
     }
     assert!(package.contains("source_path=\"LICENSE\""));
     for required in [
-        "unzip -p \"$extension_archive\" LICENSE",
+        "selected_payloads.get(\"LICENSE\") != source.read()",
+        "extension archive project license differs from LICENSE",
         "cmp -s \"$mac_stage/$notice\" \"$notice\"",
         "THIRD_PARTY_LICENSES.txt",
     ] {
@@ -302,6 +372,67 @@ fn release_license_inventory_is_locked_sanitized_and_shipped() {
     }
     assert!(verifier.contains("bash scripts/verify-macos-artifacts.sh"));
     assert!(macos_verifier.contains("--licenses"));
+}
+
+#[test]
+fn release_asset_archive_readers_are_exact_bounded_and_fail_closed() {
+    let verifier = source("scripts/verify-release-assets.sh");
+    for required in [
+        "maximum_entry_bytes = 16 * 1024 * 1024",
+        "maximum_total_bytes = 64 * 1024 * 1024",
+        "extension archive inventory is duplicated or noncanonical",
+        "extension archive exceeds its bounded uncompressed size",
+        "item.flag_bits & 0x1",
+        "item.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)",
+        "maximum_member_bytes = 128 * 1024 * 1024",
+        "maximum_total_bytes = 256 * 1024 * 1024",
+        "macOS archive contains global PAX metadata",
+        "macOS archive path is duplicated, unexpected, or PAX-overridden",
+        "macOS archive does not contain the exact canonical inventory",
+        "os.O_EXCL | getattr(os, \"O_NOFOLLOW\", 0)",
+        "source.read(1)",
+        "os.fsync(output.fileno())",
+        "Extension archive changed while it was inspected.",
+        "macOS archive changed while it was inspected.",
+    ] {
+        assert!(
+            verifier.contains(required),
+            "release asset verifier is missing bounded archive invariant: {required}"
+        );
+    }
+    for forbidden in [
+        "unzip -Z1",
+        "unzip -tq",
+        "unzip -p",
+        "zipinfo",
+        "tar -tzf",
+        "tar -tvzf",
+        "tar -xzf",
+        "extractall(",
+        "getmembers()",
+    ] {
+        assert!(
+            !verifier.contains(forbidden),
+            "release asset verifier uses an unbounded archive primitive: {forbidden}"
+        );
+    }
+
+    let extension_before = verifier.find("extension_archive_sha256_before=").unwrap();
+    let extension_reader = verifier
+        .find("python3 - \"$extension_archive\" \"$version\"")
+        .unwrap();
+    let extension_after = verifier
+        .find("Extension archive changed while it was inspected.")
+        .unwrap();
+    assert!(extension_before < extension_reader && extension_reader < extension_after);
+    let mac_before = verifier.find("macos_archive_sha256_before=").unwrap();
+    let mac_reader = verifier
+        .find("python3 - \"$macos_archive\" \"$mac_stage\"")
+        .unwrap();
+    let mac_after = verifier
+        .find("macOS archive changed while it was inspected.")
+        .unwrap();
+    assert!(mac_before < mac_reader && mac_reader < mac_after);
 }
 
 #[test]
@@ -463,11 +594,11 @@ fn release_gates_javascript_macos_and_published_provenance() {
 }
 
 #[test]
-fn release_requires_a_canonical_run_and_candidate_bound_acceptance_receipt() {
+fn release_requires_canonical_schema_two_receipt_and_committed_evidence() {
     let release = source(".github/workflows/deploy.yml");
-    let development = source("docs/DEVELOPMENT.md");
+    let verifier = source("scripts/verify-release-acceptance-evidence.sh");
     let receipt_gate = release
-        .split("- name: Require exact candidate-bound platform acceptance receipt")
+        .split("- name: Require exact candidate-bound committed acceptance evidence")
         .nth(1)
         .unwrap()
         .split("- name: Recover a verified draft or publish immutable release assets")
@@ -475,16 +606,61 @@ fn release_requires_a_canonical_run_and_candidate_bound_acceptance_receipt() {
         .unwrap();
 
     for required in [
-        "LBB_RELEASE_ACCEPTANCE_V1: ${{ vars.LBB_RELEASE_ACCEPTANCE_V1 }}",
-        "test -n \"${LBB_RELEASE_ACCEPTANCE_V1:-}\"",
-        "test \"${#LBB_RELEASE_ACCEPTANCE_V1}\" -le 2048",
-        "test \"$(jq -c . \"$receipt_file\")\" = \"$LBB_RELEASE_ACCEPTANCE_V1\"",
-        "frozen_manifest_sha256=\"$(sha256sum dist/SHA256SUMS.txt",
+        "actions: read # Re-downloads and raw-hashes the exact frozen workflow artifact.",
+        "LBB_RELEASE_ACCEPTANCE_V2: ${{ vars.LBB_RELEASE_ACCEPTANCE_V2 }}",
+        "test -n \"${LBB_RELEASE_ACCEPTANCE_V2:-}\"",
+        "test \"${#LBB_RELEASE_ACCEPTANCE_V2}\" -le 4096",
+        "printf '%s' \"$LBB_RELEASE_ACCEPTANCE_V2\" > \"$receipt_file\"",
+        "bash scripts/verify-release-acceptance-evidence.sh \"$receipt_file\" dist",
         "acceptance_receipt_sha256=\"$(sha256sum \"$receipt_file\"",
         "printf 'LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256=%s\\n'",
         ">> \"$GITHUB_ENV\"",
+        "GH_TOKEN: ${{ github.token }}",
         "VERIFIED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}",
         "VERIFIED_TAG_SHA: ${{ needs.verify.outputs.tag_sha }}",
+    ] {
+        assert!(
+            release.contains(required),
+            "release acceptance evidence gate is missing {required}"
+        );
+    }
+    assert!(
+        release.contains("run: bash scripts/verify-release-acceptance-evidence.sh --self-test")
+    );
+    assert!(!release.contains("LBB_RELEASE_ACCEPTANCE_V1"));
+    assert!(!release.contains("local-browser-bridge-release:v1"));
+    assert!(!receipt_gate.contains("secrets.LBB_RELEASE_ACCEPTANCE_V2"));
+
+    for key in [
+        "schemaVersion",
+        "tag",
+        "sourceSha",
+        "tagObjectSha",
+        "workflowRunId",
+        "workflowRunAttempt",
+        "releaseCandidateArtifactId",
+        "releaseCandidateArtifactZipSha256",
+        "checksumManifestSha256",
+        "evidenceRef",
+        "evidenceCommitSha",
+        "macosPassed",
+        "macosAcceptanceSha256",
+        "macosQuietResultSha256",
+        "macosDeliberateConcurrencyResultSha256",
+        "windowsPassed",
+        "windowsResultSha256",
+        "stockChromePassed",
+        "stockChrome",
+        "stockChromeResultSha256",
+    ] {
+        assert!(
+            verifier.contains(&format!("\"{key}\"")),
+            "canonical schema-2 receipt omits {key}"
+        );
+    }
+    for required in [
+        "keys_unsorted == [",
+        ".schemaVersion == 2",
         ".tag == $tag",
         ".sourceSha == $source_sha",
         ".tagObjectSha == $tag_object_sha",
@@ -495,45 +671,24 @@ fn release_requires_a_canonical_run_and_candidate_bound_acceptance_receipt() {
         ".windowsPassed == true",
         ".stockChromePassed == true",
         ".stockChrome == true",
+        "refs/heads/evidence/",
+        "macos/macos-acceptance.json",
+        "macos/quiet/helper-results.json",
+        "macos/deliberate-concurrency/helper-results.json",
+        "windows/computer/summary.json",
+        "windows/browser/browser-acceptance.json",
     ] {
         assert!(
-            receipt_gate.contains(required),
-            "release acceptance receipt gate is missing {required}"
+            verifier.contains(required),
+            "schema-2 verifier is missing {required}"
         );
     }
-    assert!(!receipt_gate.contains("secrets.LBB_RELEASE_ACCEPTANCE_V1"));
-    assert_eq!(receipt_gate.matches("test(\"^[0-9a-f]{64}$\")").count(), 4);
-    assert_eq!(receipt_gate.matches("test(\"^[0-9a-f]{40}$\")").count(), 2);
-    assert_eq!(receipt_gate.matches("test(\"^[1-9][0-9]*$\")").count(), 2);
-    let expected_keys = [
-        "schemaVersion",
-        "tag",
-        "sourceSha",
-        "tagObjectSha",
-        "workflowRunId",
-        "workflowRunAttempt",
-        "checksumManifestSha256",
-        "macosPassed",
-        "macosResultSha256",
-        "windowsPassed",
-        "windowsResultSha256",
-        "stockChromePassed",
-        "stockChrome",
-        "stockChromeResultSha256",
-    ];
-    for key in expected_keys {
-        assert!(
-            receipt_gate.contains(&format!("\"{key}\"")),
-            "canonical acceptance receipt omits {key}"
-        );
-    }
-    assert!(receipt_gate.contains("keys_unsorted == ["));
 
     let freeze = release
         .find("Freeze the exact candidate for interactive acceptance")
         .unwrap();
     let receipt = release
-        .find("Require exact candidate-bound platform acceptance receipt")
+        .find("Require exact candidate-bound committed acceptance evidence")
         .unwrap();
     let release_mutation = release
         .find("Recover a verified draft or publish immutable release assets")
@@ -547,8 +702,6 @@ fn release_requires_a_canonical_run_and_candidate_bound_acceptance_receipt() {
         "[[ \"${LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256:-}\" =~ ^[0-9a-f]{64}$ ]]",
         "acceptance-receipt-sha256=$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256",
         "Acceptance receipt SHA-256: \\`$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256\\`",
-        "release_acceptance_receipt_sha256()",
-        "existing_acceptance_receipt_sha256=\"$(release_acceptance_receipt_sha256",
         "cmp -s release-notes.md \"$release_body\"",
     ] {
         assert!(
@@ -556,30 +709,158 @@ fn release_requires_a_canonical_run_and_candidate_bound_acceptance_receipt() {
             "published release does not bind the accepted receipt: {required}"
         );
     }
-    assert!(
-        !publication
-            .contains("Acceptance receipt SHA-256: `$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256`")
-    );
-    assert!(
-        publication.find("acceptance-receipt-sha256=").unwrap()
-            < publication
-                .find("gh release create \"$RELEASE_TAG\"")
-                .unwrap()
-    );
-
-    for required in [
-        "protected `release` environment variable `LBB_RELEASE_ACCEPTANCE_V1`",
-        "helper-results.json",
-        "Windows `summary.json`",
-        "stock-Chrome `browser-acceptance.json`",
-        "wrong-run",
-        "wrong-attempt",
-        "A rerun has a new `workflowRunAttempt`",
-        "embeds only that SHA-256 in both the immutable release marker and the visible release notes",
+    for forbidden in [
+        "release_acceptance_receipt_sha256()",
+        "existing_acceptance_receipt_sha256=\"$(release_acceptance_receipt_sha256",
+        "sed \"s/$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256/$expected_acceptance_receipt_sha256/g\"",
     ] {
         assert!(
-            development.contains(required),
-            "operator receipt process is missing {required}"
+            !publication.contains(forbidden),
+            "release recovery must not trust a receipt hash embedded by an existing release: {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn release_evidence_verifier_fails_closed_on_artifact_or_commit_substitution() {
+    let verifier = source("scripts/verify-release-acceptance-evidence.sh");
+    for required in [
+        "actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT",
+        "actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100",
+        "actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100",
+        "actions/artifacts/$artifact_id/zip",
+        "raw release-candidate artifact ZIP SHA-256 mismatch",
+        "cmp -s \"$extracted/$asset\" \"$candidate_dir/$asset\"",
+        "git ls-remote --refs origin \"$evidence_ref\"",
+        "git -c protocol.version=2 fetch --quiet --no-tags origin \"$evidence_ref\"",
+        "evidence commit must have the verified source as its sole parent",
+        "git diff-tree --no-commit-id --name-status -r -z",
+        "test \"$status\" = A",
+        "test \"$mode\" = 100644 && test \"$type\" = blob",
+        "evidence tree contains a symlink, executable, submodule, or non-blob",
+        "evidence commit contains an unreferenced or unexpected sidecar",
+        "scan_evidence_for_leaks",
+        "retained evidence contains a forbidden",
+        "raw release-candidate artifact ZIP byte count differs from GitHub metadata",
+        "receipt artifact ZIP SHA-256 differs from GitHub metadata",
+        "--format json > \"$attestation_json\"",
+        "runInvocationURI == $invocation",
+        "verify_png_dimensions()",
+        "verify_png_dimensions \"$lane_root/$filename\" \"$width\" \"$height\"",
+        "verify_png_dimensions \"$image\" \"$image_width\" \"$image_height\"",
+        "maximum_entry_bytes = 256 * 1024 * 1024",
+        "maximum_total_bytes = 512 * 1024 * 1024",
+        "release-candidate artifact ZIP exceeds its bounded uncompressed size",
+        "os.O_EXCL | getattr(os, \"O_NOFOLLOW\", 0)",
+        "maximum_member_bytes = 128 * 1024 * 1024",
+        "maximum_total_bytes = 256 * 1024 * 1024",
+        "macOS package contains global PAX metadata",
+        "macOS package does not have the exact independently inspected inventory",
+        "macOS deliberate-concurrency lane did not start after the quiet lane passed",
+        "aggregate lane start timestamp differs from its raw result",
+    ] {
+        assert!(
+            verifier.contains(required),
+            "release evidence substitution defense is missing {required}"
+        );
+    }
+    for lane_assertion in [
+        ".pointerEvidence.requestedLane == $lane",
+        ".pointerEvidence.quietObserved == true",
+        ".pointerEvidence.unknownObserved == false",
+        ".pointerEvidence.concurrentSharedSeatActivityObserved == false",
+        ".pointerEvidence.concurrentSharedSeatActivityObserved == true",
+        ".operatorHandoff.clickFreeMotionObserved == true",
+        ".operatorHandoff.productBoundaryContaminated == true",
+        ".operatorHandoff.independentBoundaryContaminated == true",
+    ] {
+        assert!(verifier.contains(lane_assertion));
+    }
+    assert!(verifier.contains("Release acceptance evidence verifier self-test passed."));
+}
+
+#[test]
+fn release_evidence_verifier_executes_adversarial_replay_and_decoder_tests() {
+    let output = Command::new("bash")
+        .args([
+            "scripts/verify-release-acceptance-evidence.sh",
+            "--self-test",
+        ])
+        .output()
+        .expect("release evidence verifier self-test must start");
+    assert!(
+        output.status.success(),
+        "release evidence verifier self-test failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("Release acceptance evidence verifier self-test passed.")
+    );
+
+    let verifier = source("scripts/verify-release-acceptance-evidence.sh");
+    for required in [
+        "self-test accepted release-candidate evidence replayed from another workflow attempt",
+        "self-test accepted a truncated Windows step inventory",
+        "self-test accepted a reordered Windows step inventory",
+        "self-test accepted an arm receipt without the request ID",
+        "self-test accepted an empty stock-Chrome method matrix",
+        "self-test accepted a macOS screenshot hash replayed across lanes",
+        "self-test accepted decoded macOS pixels replayed across lanes",
+        "encoding-replay.png",
+        "self-test failed to construct a byte-distinct PNG encoding replay",
+        "self-test accepted an undecodable zero-length PNG IDAT",
+    ] {
+        assert!(
+            verifier.contains(required),
+            "executable adversarial verifier self-test is missing: {required}"
+        );
+    }
+}
+
+#[test]
+fn release_evidence_gate_requires_exact_current_attempt_and_complete_ui_proofs() {
+    let verifier = source("scripts/verify-release-acceptance-evidence.sh");
+    for required in [
+        "assert_release_candidate_binding \"$summary\" '.releaseCandidateBinding'",
+        "assert_release_candidate_binding \"$final\" '.releaseCandidateBinding'",
+        "assert_release_candidate_binding \"$preflight\" '.releaseCandidateBinding'",
+        "assert_release_candidate_binding \"$postflight\" '.releaseCandidateBinding'",
+        "assert_release_candidate_binding \"$helper\" '.releaseCandidateBinding'",
+        "assert_release_candidate_binding \"$operator\" '.releaseCandidateBinding'",
+        "assert_release_candidate_binding \"$sidecar\" '.releaseCandidateBinding'",
+        "workflowRunAttempt: $workflow_run_attempt",
+        "length == 62",
+        "62-foreground-cursor-focus-desktop-invariants.json",
+        "test \"${#windows_screenshots[@]}\" = 20",
+        "stableSamplesRequired == 3",
+        "methodCount == 25",
+        "page.handleDialog",
+        "operatorRecordSha256",
+        "browser-04-stop-paused.png",
+        "browser-05-cancel-paused.png",
+        "browser-06-post-handback-resume.png",
+        ".retainedEvidence.inputFileCount == 17 and .retainedEvidence.finalFileCount == 18",
+        "source-schema complete contract replay",
+        "zlib.decompressobj()",
+        "PNG IDAT does not decode to the claimed raster",
+        "PNG decoded pixels do not match the aggregate hash",
+        "pixel-bound PNG contains unexpected metadata or ancillary chunks",
+        "twelve globally file- and decoded-pixel-distinct screenshots",
+        ".pixelSha256",
+        ".aggregateChecks.screenshotPixelHashesMatched == true",
+        ".automatedTextInspectionPerformed == false",
+        ".manualVisualReviewRequired == true",
+        "stock-Chrome screenshot sidecar is not the exact manual-only V2 review schema",
+        "extract_macos_candidate_facts",
+        "LC_CODE_SIGNATURE",
+        ".package.serverSha256 == $package_facts[0].serverSha256",
+        ".package.helperSha256 == $package_facts[0].helperSha256",
+    ] {
+        assert!(
+            verifier.contains(required),
+            "release evidence gate is missing the exact proof: {required}"
         );
     }
 }
@@ -589,7 +870,7 @@ fn release_reruns_delete_only_a_candidate_bound_byte_exact_draft() {
     let release = source(".github/workflows/deploy.yml");
 
     for binding in [
-        "local-browser-bridge-release:v1",
+        "local-browser-bridge-release:v2",
         "source-sha=$VERIFIED_SOURCE_SHA",
         "tag-object-sha=$VERIFIED_TAG_SHA",
         "manifest-sha256=$candidate_manifest_sha256",
@@ -842,13 +1123,29 @@ fn packaged_macos_helper_freezes_targeted_input_apis_per_architecture() {
         release_macos_job
             .find("bash scripts/verify-macos-artifacts.sh")
             .unwrap()
-            < release_macos_job.find("tar -czf").unwrap()
+            < release_macos_job
+                .find("COPYFILE_DISABLE=1 tar --format ustar --no-xattrs -czf")
+                .unwrap()
     );
     assert!(
         local
             .find("bash scripts/verify-macos-artifacts.sh")
             .unwrap()
-            < local.find("tar -czf").unwrap()
+            < local
+                .find("COPYFILE_DISABLE=1 tar --format ustar --no-xattrs -czf")
+                .unwrap()
+    );
+    assert_eq!(
+        release_macos_job
+            .matches("COPYFILE_DISABLE=1 tar --format ustar --no-xattrs -czf")
+            .count(),
+        1
+    );
+    assert_eq!(
+        local
+            .matches("COPYFILE_DISABLE=1 tar --format ustar --no-xattrs -czf")
+            .count(),
+        1
     );
     assert!(archive.contains("bash scripts/verify-macos-artifacts.sh"));
 }

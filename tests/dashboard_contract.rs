@@ -54,6 +54,10 @@ fn dashboard_describes_native_capture_evidence_and_development_builds_honestly()
 
     assert!(page.contains("One-shot observe"));
     assert!(page.contains("Start persistent share"));
+    assert!(page.contains("Browser control lease"));
+    assert!(!page.contains("Chrome control lease"));
+    assert!(app.contains("state.extension?.browser"));
+    assert!(app.contains("The browser's native debugging notice"));
     assert!(page.contains("Share keeps a persistent operating-system exact-window stream open"));
     assert!(page.contains("do not prove zero interruption"));
     assert!(page.contains("may briefly make the exact target <code>AXFrontmost</code>"));

@@ -366,7 +366,7 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
       host.showPopover();
     } catch (error) {
       host.remove();
-      throw new Error(`CONTROL_UI_RENDER_FAILED: Chrome refused the control popover: ${error.message}`);
+      throw new Error(`CONTROL_UI_RENDER_FAILED: The browser refused the control popover: ${error.message}`);
     }
     if (!host.matches(":popover-open")) {
       host.remove();
@@ -735,7 +735,7 @@ if (!globalThis.__LOCAL_BROWSER_BRIDGE_CONTENT__) {
   }
 
   function showControlStopFailure() {
-    stopFailureMessage = "Stop failed—use Chrome Cancel or the extension popup.";
+    stopFailureMessage = "Stop failed—use the browser's Cancel action or the extension popup.";
     const ui = createControlUi();
     ui.pill.classList.add("error");
     ui.label.textContent = "Local Browser Bridge may still be using this tab";

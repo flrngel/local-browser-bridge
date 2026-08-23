@@ -16,7 +16,8 @@ param(
     [ValidateSet(
         "extensions-card", "extension-details", "popup-connected", "native-debugger-warning", "page-control-pill", "action-result",
         "stop-after", "stop-paused-popup", "cancel-after", "cancel-paused-popup",
-        "resume-active", "extension-loaded", "api-action-result", "computer-share-action"
+        "resume-active", "extension-loaded", "api-action-result", "computer-share-action",
+        "stop-paused", "cancel-paused", "post-handback-resume"
     )]
     [string]$Purpose,
 
@@ -40,8 +41,8 @@ $script:MinOutputWidth = 120
 $script:MinOutputHeight = 32
 $script:ForbiddenPngChunks = @("tEXt", "zTXt", "iTXt", "eXIf", "iCCP", "tIME")
 $script:LegacyReviewStatement = "A human reviewed this tight crop; OCR is supplemental and unknown sensitive pixels are not automatically redacted."
-$script:PendingReviewStatement = "Sanitization completed; a human has not yet reviewed this crop, and OCR is supplemental."
-$script:CompletedReviewStatement = "A human reviewed this tight crop after sanitization; OCR is supplemental and unknown sensitive pixels are not automatically redacted."
+$script:PendingReviewStatement = "Sanitization completed; no automated text inspection or pixel redaction is claimed, and human review is required."
+$script:CompletedReviewStatement = "A human reviewed this tight crop after sanitization; no automated text inspection or pixel redaction is claimed."
 $script:ExpectedScreenshots = [ordered]@{
     "extensions-card" = "browser-01-extensions-card.png"
     "extension-details" = "browser-02-extension-details.png"
@@ -59,6 +60,9 @@ $script:ExpectedScreenshotsV2 = [ordered]@{
     "extension-loaded" = "browser-01-extension-loaded.png"
     "api-action-result" = "browser-02-api-action-result.png"
     "computer-share-action" = "browser-03-computer-share-action.png"
+    "stop-paused" = "browser-04-stop-paused.png"
+    "cancel-paused" = "browser-05-cancel-paused.png"
+    "post-handback-resume" = "browser-06-post-handback-resume.png"
 }
 
 function Assert-RequiredArgument {
@@ -78,7 +82,22 @@ function Resolve-RequiredFile {
     if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
         throw "$Label must not be a reparse point."
     }
+    Assert-NoReparseAncestorChain $resolved $Label
     return $resolved
+}
+
+function Assert-NoReparseAncestorChain {
+    param([string]$Path, [string]$Label)
+    $directory = if ([IO.Directory]::Exists([IO.Path]::GetFullPath($Path))) {
+        [IO.DirectoryInfo]::new([IO.Path]::GetFullPath($Path))
+    }
+    else { [IO.DirectoryInfo]::new([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($Path))) }
+    while ($null -ne $directory) {
+        if ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw "$Label must not traverse a reparse-point directory."
+        }
+        $directory = $directory.Parent
+    }
 }
 
 function Resolve-NewOutputFile {
@@ -98,12 +117,49 @@ function Resolve-NewOutputFile {
     if (($parentInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
         throw "$Label parent directory must not be a reparse point."
     }
+    Assert-NoReparseAncestorChain $parent "$Label parent"
     return $resolved
 }
 
 function Get-Sha256 {
     param([string]$Path)
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Assert-ReleaseCandidateBindingBasic {
+    param([object]$Binding, [object]$Candidate)
+    $fields = @(
+        "productVersion", "repository", "tag", "sourceSha", "tagObjectSha",
+        "workflowRunId", "workflowRunAttempt", "artifactId", "artifactName",
+        "artifactZipBytes", "artifactZipSha256", "checksumManifestSha256",
+        "attestationInvocationUri", "attestedAssetCount", "githubHostedRunner", "assets"
+    )
+    Assert-ExactKeys $Binding $fields "preflight releaseCandidateBinding"
+    if ($Binding.productVersion -cne $Candidate.version -or
+        $Binding.repository -cne "flrngel/local-browser-bridge" -or
+        $Binding.tag -cne "v$($Candidate.version)" -or
+        $Binding.sourceSha -cne $Candidate.finalSha -or
+        [string]$Binding.tagObjectSha -cnotmatch '^[0-9a-f]{40}$' -or
+        [string]$Binding.workflowRunId -cnotmatch '^[1-9][0-9]*$' -or
+        [string]$Binding.workflowRunAttempt -cnotmatch '^[1-9][0-9]*$' -or
+        [string]$Binding.artifactId -cnotmatch '^[1-9][0-9]*$' -or
+        $Binding.artifactName -cne "release-candidate" -or
+        $Binding.artifactZipBytes -isnot [ValueType] -or [int64]$Binding.artifactZipBytes -le 0 -or
+        [string]$Binding.artifactZipSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        $Binding.checksumManifestSha256 -cne $Candidate.checksumManifest.sha256 -or
+        $Binding.attestationInvocationUri -cne ("https://github.com/flrngel/local-browser-bridge/actions/runs/{0}/attempts/{1}" -f
+            [string]$Binding.workflowRunId, [string]$Binding.workflowRunAttempt) -or
+        $Binding.attestedAssetCount -ne 5 -or $Binding.githubHostedRunner -ne $true -or
+        @($Binding.assets).Count -ne 5) {
+        throw "Preflight releaseCandidateBinding is invalid."
+    }
+    foreach ($asset in @($Binding.assets)) {
+        Assert-ExactKeys $asset @("file", "bytes", "sha256") "preflight release asset"
+        if ($asset.bytes -isnot [ValueType] -or [int64]$asset.bytes -le 0 -or
+            [string]$asset.sha256 -cnotmatch '^[0-9a-f]{64}$') {
+            throw "Preflight releaseCandidateBinding contains an invalid asset."
+        }
+    }
 }
 
 function Get-CandidateBindingFromPreflight {
@@ -118,19 +174,25 @@ function Get-CandidateBindingFromPreflight {
         $record = $script:Utf8NoBom.GetString($bytes) | ConvertFrom-Json
         $actual = @($record.PSObject.Properties.Name)
         $expected = @("schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed", "runNonce", "candidate")
+        if ([string]$record.candidate.version -ceq "0.12.12") {
+            $expected = @(
+                "schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed",
+                "runNonce", "releaseCandidateBinding", "candidate"
+            )
+        }
         if (($actual -join "`n") -cne ($expected -join "`n") -or
             $record.schemaVersion -ne 1 -or
             $record.evidenceType -cne "stock-user-chrome-candidate-binding" -or
             $record.phase -cne "preflight" -or $record.passed -ne $true -or
             [string]$record.runNonce -cnotmatch '^[0-9a-f]{64}$' -or
             [string]$record.candidate.finalSha -cnotmatch '^[0-9a-f]{40}$' -or
-            @("0.12.2", "0.12.11") -cnotcontains [string]$record.candidate.version) {
+            @("0.12.2", "0.12.12") -cnotcontains [string]$record.candidate.version) {
             throw "PreflightRecord identity is invalid."
         }
         foreach ($value in @(
             [string]$record.candidate.checksumManifest.sha256,
             [string]$record.candidate.server.sha256,
-            $(if ([string]$record.candidate.version -ceq "0.12.11") { [string]$record.candidate.computerHelper.sha256 } else { [string]$record.candidate.server.sha256 }),
+            $(if ([string]$record.candidate.version -ceq "0.12.12") { [string]$record.candidate.computerHelper.sha256 } else { [string]$record.candidate.server.sha256 }),
             [string]$record.candidate.extension.sha256,
             [string]$record.candidate.extension.combinedPayloadSha256
         )) {
@@ -139,6 +201,11 @@ function Get-CandidateBindingFromPreflight {
             }
         }
         $script:CandidateVersionFromPreflight = [string]$record.candidate.version
+        if ($script:CandidateVersionFromPreflight -ceq "0.12.12") {
+            Assert-ReleaseCandidateBindingBasic $record.releaseCandidateBinding $record.candidate
+            $script:ReleaseCandidateBindingFromPreflight = $record.releaseCandidateBinding
+        }
+        else { $script:ReleaseCandidateBindingFromPreflight = $null }
         $binding = [ordered]@{
             runNonce = [string]$record.runNonce
             preflightRecordSha256 = Get-Sha256 $resolved
@@ -146,7 +213,7 @@ function Get-CandidateBindingFromPreflight {
             checksumManifestSha256 = [string]$record.candidate.checksumManifest.sha256
             serverSha256 = [string]$record.candidate.server.sha256
         }
-        if ($script:CandidateVersionFromPreflight -ceq "0.12.11") {
+        if ($script:CandidateVersionFromPreflight -ceq "0.12.12") {
             $binding.computerHelperSha256 = [string]$record.candidate.computerHelper.sha256
         }
         $binding.extensionZipSha256 = [string]$record.candidate.extension.sha256
@@ -270,7 +337,18 @@ function Get-PngChunkTypes {
 function Write-NewJson {
     param([string]$TemporaryPath, [object]$Value)
     $json = $Value | ConvertTo-Json -Depth 12
-    [IO.File]::WriteAllText($TemporaryPath, "$json`n", $script:Utf8NoBom)
+    $bytes = $script:Utf8NoBom.GetBytes("$json`n")
+    $stream = [IO.File]::Open(
+        $TemporaryPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None
+    )
+    try {
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush($true)
+    }
+    finally {
+        $stream.Dispose()
+        [Array]::Clear($bytes, 0, $bytes.Length)
+    }
 }
 
 function Assert-ExactKeys {
@@ -390,7 +468,7 @@ function Invoke-Sanitize {
                         $expectedScreenshots[$Purpose]
                     ) + ".raw.png"
                     if ([IO.Path]::GetFileName($inputPath) -cne $expectedRawName) {
-                        throw "v0.12.11 InputImage must use the canonical raw helper-capture filename."
+                        throw "v0.12.12 InputImage must use the canonical raw helper-capture filename."
                     }
                     $sourceCapture = [ordered]@{
                         name = $expectedRawName
@@ -423,7 +501,15 @@ function Invoke-Sanitize {
                         $graphics.DrawImage($source, $destination, $left, $top, $width, $height, [Drawing.GraphicsUnit]::Pixel)
                     }
                     finally { $graphics.Dispose() }
-                    $bitmap.Save($temporaryImage, [Drawing.Imaging.ImageFormat]::Png)
+                    $imageStream = [IO.File]::Open(
+                        $temporaryImage, [IO.FileMode]::CreateNew,
+                        [IO.FileAccess]::Write, [IO.FileShare]::None
+                    )
+                    try {
+                        $bitmap.Save($imageStream, [Drawing.Imaging.ImageFormat]::Png)
+                        $imageStream.Flush($true)
+                    }
+                    finally { $imageStream.Dispose() }
                 }
                 finally { $bitmap.Dispose() }
             }
@@ -442,46 +528,50 @@ function Invoke-Sanitize {
             }
         }
 
-        $ocrCommand = Get-Command tesseract.exe, tesseract -ErrorAction SilentlyContinue | Select-Object -First 1
-        $ocrAvailable = $null -ne $ocrCommand
-        $ocrChecked = $false
-        if ($ocrAvailable) {
-            $ocrLines = & $ocrCommand.Source $temporaryImage stdout --psm 6 2>$null
-            if ($LASTEXITCODE -ne 0) {
-                throw "Optional OCR was available but failed."
-            }
-            $ocrChecked = $true
-            $ocrText = @($ocrLines) -join "`n"
-            if (Test-ForbiddenText $ocrText $denyValues) {
-                throw "OCR found denylisted or sensitive-looking text; no screenshot was retained."
+        if ($legacyOnePhase) {
+            $record = [ordered]@{
+                schemaVersion = 1
+                evidenceType = "stock-user-chrome-screenshot"
+                purpose = $Purpose
+                candidateBinding = $candidateBinding
+                image = [ordered]@{
+                    name = [IO.Path]::GetFileName($outputPath); bytes = ([IO.FileInfo]::new($temporaryImage)).Length
+                    sha256 = Get-Sha256 $temporaryImage; width = $width; height = $height
+                }
+                cropApplied = $hasCrop
+                metadataStrippedByDecodeAndReencode = $true
+                forbiddenMetadataChunksPresent = $false
+                ocrAvailable = $false
+                ocrDenylistChecked = $false
+                ocrDenylistMatches = 0
+                manualVisualReviewConfirmed = $true
+                automaticPixelRedactionPerformed = $false
+                unknownPixelSafetyClaimed = $false
+                reviewStatement = $script:LegacyReviewStatement
             }
         }
-
-        $record = [ordered]@{
-            schemaVersion = 1
-            evidenceType = if ($legacyOnePhase) { "stock-user-chrome-screenshot" } else { "stock-user-chrome-screenshot-review-pending" }
-            purpose = $Purpose
-            candidateBinding = $candidateBinding
-            image = [ordered]@{
-                name = [IO.Path]::GetFileName($outputPath)
-                bytes = ([IO.FileInfo]::new($temporaryImage)).Length
-                sha256 = Get-Sha256 $temporaryImage
-                width = $width
-                height = $height
+        else {
+            $record = [ordered]@{
+                schemaVersion = 1
+                evidenceType = "stock-user-chrome-screenshot-review-pending"
+                purpose = $Purpose
+                releaseCandidateBinding = $script:ReleaseCandidateBindingFromPreflight
+                candidateBinding = $candidateBinding
+                sourceCapture = $sourceCapture
+                image = [ordered]@{
+                    name = [IO.Path]::GetFileName($outputPath); bytes = ([IO.FileInfo]::new($temporaryImage)).Length
+                    sha256 = Get-Sha256 $temporaryImage; width = $width; height = $height
+                }
+                cropApplied = $hasCrop
+                metadataStrippedByDecodeAndReencode = $true
+                forbiddenMetadataChunksPresent = $false
+                automatedTextInspectionPerformed = $false
+                manualVisualReviewRequired = $true
+                manualVisualReviewConfirmed = $false
+                automaticPixelRedactionPerformed = $false
+                unknownPixelSafetyClaimed = $false
+                reviewStatement = $script:PendingReviewStatement
             }
-            cropApplied = $hasCrop
-            metadataStrippedByDecodeAndReencode = $true
-            forbiddenMetadataChunksPresent = $false
-            ocrAvailable = $ocrAvailable
-            ocrDenylistChecked = $ocrChecked
-            ocrDenylistMatches = 0
-            manualVisualReviewConfirmed = $legacyOnePhase
-            automaticPixelRedactionPerformed = $false
-            unknownPixelSafetyClaimed = $false
-            reviewStatement = if ($legacyOnePhase) { $script:LegacyReviewStatement } else { $script:PendingReviewStatement }
-        }
-        if (-not $legacyOnePhase) {
-            $record.Insert(4, "sourceCapture", $sourceCapture)
         }
         $serialized = $record | ConvertTo-Json -Depth 12 -Compress
         if (Test-ForbiddenText $serialized $denyValues -AllowCanonicalBindingHex -AllowCanonicalEvidenceType) {
@@ -534,14 +624,14 @@ function Invoke-AttestReview {
     }
     $denyValues = @(Read-DenyValues $DenyValuesFile)
     $candidateBinding = Get-CandidateBindingFromPreflight $PreflightRecord
-    if ($script:CandidateVersionFromPreflight -cne "0.12.11") {
-        throw "AttestReview is available only for the v0.12.11 two-phase screenshot protocol."
+    if ($script:CandidateVersionFromPreflight -cne "0.12.12") {
+        throw "AttestReview is available only for the v0.12.12 two-phase screenshot protocol."
     }
     $pending = Read-StrictJson $pendingPath "PendingRecord"
     $fields = @(
-        "schemaVersion", "evidenceType", "purpose", "candidateBinding", "sourceCapture", "image", "cropApplied",
-        "metadataStrippedByDecodeAndReencode", "forbiddenMetadataChunksPresent", "ocrAvailable",
-        "ocrDenylistChecked", "ocrDenylistMatches", "manualVisualReviewConfirmed",
+        "schemaVersion", "evidenceType", "purpose", "releaseCandidateBinding", "candidateBinding", "sourceCapture", "image", "cropApplied",
+        "metadataStrippedByDecodeAndReencode", "forbiddenMetadataChunksPresent",
+        "automatedTextInspectionPerformed", "manualVisualReviewRequired", "manualVisualReviewConfirmed",
         "automaticPixelRedactionPerformed", "unknownPixelSafetyClaimed", "reviewStatement"
     )
     Assert-ExactKeys $pending $fields "pending screenshot record"
@@ -549,6 +639,10 @@ function Invoke-AttestReview {
         $pending.evidenceType -cne "stock-user-chrome-screenshot-review-pending" -or
         $pending.purpose -isnot [string] -or -not $script:ExpectedScreenshotsV2.Contains($pending.purpose)) {
         throw "PendingRecord identity is invalid."
+    }
+    if (($pending.releaseCandidateBinding | ConvertTo-Json -Depth 10 -Compress) -cne
+        ($script:ReleaseCandidateBindingFromPreflight | ConvertTo-Json -Depth 10 -Compress)) {
+        throw "Pending screenshot does not bind the exact release candidate attempt."
     }
     Assert-CandidateBindingEqual $pending.candidateBinding $candidateBinding
     Assert-ExactKeys $pending.sourceCapture @(
@@ -597,16 +691,15 @@ function Invoke-AttestReview {
         }
     }
     foreach ($name in @(
-        "forbiddenMetadataChunksPresent", "manualVisualReviewConfirmed",
+        "forbiddenMetadataChunksPresent", "automatedTextInspectionPerformed", "manualVisualReviewConfirmed",
         "automaticPixelRedactionPerformed", "unknownPixelSafetyClaimed"
     )) {
         if ($pending.$name -isnot [bool] -or $pending.$name -ne $false) {
             throw "PendingRecord $name must be false."
         }
     }
-    if ($pending.ocrAvailable -isnot [bool] -or $pending.ocrDenylistChecked -isnot [bool] -or
-        $pending.ocrDenylistChecked -ne $pending.ocrAvailable -or
-        $pending.ocrDenylistMatches -ne 0 -or $pending.reviewStatement -cne $script:PendingReviewStatement) {
+    if ($pending.manualVisualReviewRequired -ne $true -or
+        $pending.reviewStatement -cne $script:PendingReviewStatement) {
         throw "PendingRecord sanitization or pending-review state is invalid."
     }
     $imageInfo = [IO.FileInfo]::new($imagePath)
@@ -638,7 +731,16 @@ function Invoke-AttestReview {
         schemaVersion = 1
         evidenceType = "stock-user-chrome-screenshot"
         purpose = [string]$pending.purpose
+        releaseCandidateBinding = $script:ReleaseCandidateBindingFromPreflight
         candidateBinding = $candidateBinding
+        sourceCapture = [ordered]@{
+            name = [string]$pending.sourceCapture.name
+            endpoint = [string]$pending.sourceCapture.endpoint
+            bytes = [int64]$pending.sourceCapture.bytes
+            sha256 = [string]$pending.sourceCapture.sha256
+            width = [int64]$pending.sourceCapture.width
+            height = [int64]$pending.sourceCapture.height
+        }
         image = [ordered]@{
             name = [string]$pending.image.name
             bytes = [int64]$pending.image.bytes
@@ -649,22 +751,13 @@ function Invoke-AttestReview {
         cropApplied = $true
         metadataStrippedByDecodeAndReencode = $true
         forbiddenMetadataChunksPresent = $false
-        ocrAvailable = [bool]$pending.ocrAvailable
-        ocrDenylistChecked = [bool]$pending.ocrDenylistChecked
-        ocrDenylistMatches = 0
+        automatedTextInspectionPerformed = $false
+        manualVisualReviewRequired = $true
         manualVisualReviewConfirmed = $true
         automaticPixelRedactionPerformed = $false
         unknownPixelSafetyClaimed = $false
         reviewStatement = $script:CompletedReviewStatement
     }
-    $record.Insert(4, "sourceCapture", [ordered]@{
-        name = [string]$pending.sourceCapture.name
-        endpoint = [string]$pending.sourceCapture.endpoint
-        bytes = [int64]$pending.sourceCapture.bytes
-        sha256 = [string]$pending.sourceCapture.sha256
-        width = [int64]$pending.sourceCapture.width
-        height = [int64]$pending.sourceCapture.height
-    })
     $serialized = $record | ConvertTo-Json -Depth 12 -Compress
     if (Test-ForbiddenText $serialized $denyValues -AllowCanonicalBindingHex) {
         throw "Final screenshot review attestation failed its text safety check."
@@ -728,8 +821,19 @@ function Invoke-SelfTest {
             recordedAtUtc = [DateTime]::UtcNow.ToString("o")
             passed = $true
             runNonce = $bindingHash
+            releaseCandidateBinding = [ordered]@{
+                productVersion = "0.12.12"; repository = "flrngel/local-browser-bridge"; tag = "v0.12.12"
+                sourceSha = [String]::new([char]"0", 40); tagObjectSha = [String]::new([char]"1", 40)
+                workflowRunId = "1"; workflowRunAttempt = "1"; artifactId = "1"; artifactName = "release-candidate"
+                artifactZipBytes = 1; artifactZipSha256 = $bindingHash; checksumManifestSha256 = $bindingHash
+                attestationInvocationUri = "https://github.com/flrngel/local-browser-bridge/actions/runs/1/attempts/1"
+                attestedAssetCount = 5; githubHostedRunner = $true
+                assets = @(1..5 | ForEach-Object {
+                    [ordered]@{ file = "asset-$_.bin"; bytes = 1; sha256 = $bindingHash }
+                })
+            }
             candidate = [ordered]@{
-                version = "0.12.11"
+                version = "0.12.12"
                 finalSha = [String]::new([char]"0", 40)
                 checksumManifest = [ordered]@{ sha256 = $bindingHash }
                 server = [ordered]@{ sha256 = $bindingHash }
@@ -794,6 +898,7 @@ function Invoke-SelfTest {
         $legacyPreflightPath = [IO.Path]::Combine($root, "candidate-preflight-v0.12.2.json")
         $legacyPreflight = $preflight | ConvertTo-Json -Depth 8 | ConvertFrom-Json
         $legacyPreflight.candidate.version = "0.12.2"
+        $legacyPreflight.PSObject.Properties.Remove("releaseCandidateBinding")
         [IO.File]::WriteAllText(
             $legacyPreflightPath, (($legacyPreflight | ConvertTo-Json -Depth 8) + "`n"), $script:Utf8NoBom
         )

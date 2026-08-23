@@ -351,7 +351,7 @@ mod tests {
                 "v0.11.1",
                 "https://github.com/flrngel/local-browser-bridge/releases/tag/v0.11.1",
             ),
-            "0.12.11",
+            "0.12.12",
         )
         .unwrap();
 

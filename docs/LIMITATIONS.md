@@ -144,7 +144,13 @@ negative handoff result, not product-action success. The candidate was not
 retried; Windows and stock-Chrome were not started, publication was canceled,
 and no v0.12.10 Release exists.
 
-Version 0.12.11 keeps sealed route provenance plus conservative shared-pointer
+Version 0.12.11 passed its build and provenance gates but was withdrawn before
+execution. Its release receipt had one macOS result digest even though policy
+required fresh, non-mergeable quiet and deliberate-concurrency lanes; one hash
+could not authenticate both without collapsing the boundary the test was meant
+to prove.
+
+Version 0.12.12 keeps sealed route provenance plus conservative shared-pointer
 monitoring and adds a persistent runner-owned, nonactivating macOS handoff
 panel. Its request and completion files are notification-only and are never
 acceptance authority. The actual gate still requires sustained independent HID

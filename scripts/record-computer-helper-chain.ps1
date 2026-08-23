@@ -21,12 +21,15 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $script:Utf8NoBom = [Text.UTF8Encoding]::new($false, $true)
-$script:Version = "0.12.11"
+$script:Version = "0.12.12"
 $script:Source = "local-browser-bridge-computer-helper-via-loopback-api"
 $script:Screenshots = [ordered]@{
     "extension-loaded" = "browser-01-extension-loaded.raw.png"
     "api-action-result" = "browser-02-api-action-result.raw.png"
     "computer-share-action" = "browser-03-computer-share-action.raw.png"
+    "stop-paused" = "browser-04-stop-paused.raw.png"
+    "cancel-paused" = "browser-05-cancel-paused.raw.png"
+    "post-handback-resume" = "browser-06-post-handback-resume.raw.png"
 }
 $script:ExtensionFiles = @(
     "background.js", "content.js", "dom-core.js", "frame-agent.js", "lib.js",
@@ -35,17 +38,22 @@ $script:ExtensionFiles = @(
 $script:EpochNames = @(
     "existing-chrome-bootstrap", "dedicated-chrome-extensions", "native-load-picker",
     "dedicated-chrome-installed", "extension-popup-setup", "dedicated-chrome-demo",
+    "stop-paused-popup", "stop-recovered-demo", "cancel-paused-popup", "cancel-recovered-demo",
     "extension-popup-cleanup", "cleanup-chrome-extensions", "dedicated-chrome-close"
 )
 $script:EpochSurfaces = @(
     "chrome-window", "chrome-window", "native-file-picker", "chrome-window",
-    "extension-popup", "chrome-window", "extension-popup", "chrome-window", "chrome-window"
+    "extension-popup", "chrome-window", "extension-popup", "chrome-window", "extension-popup",
+    "chrome-window", "extension-popup", "chrome-window", "chrome-window"
 )
 $script:ActionNames = @(
     "dedicated-window-created", "chrome-extensions-navigated", "developer-mode-ready",
     "load-unpacked-clicked", "native-picker-completed", "candidate-card-verified",
     "extension-popup-opened", "full-access-ready", "popup-token-saved",
-    "extension-proof-revealed", "browser-api-result-revealed", "computer-demo-clicked", "cleanup-popup-opened",
+    "extension-proof-revealed", "browser-api-result-revealed", "computer-demo-clicked",
+    "in-page-stop-clicked", "stop-popup-opened", "stop-resume-clicked", "stop-recovery-verified",
+    "chrome-native-cancel-clicked", "cancel-popup-opened", "cancel-resume-clicked", "cancel-recovery-verified",
+    "cleanup-popup-opened",
     "token-clear-initiated", "token-clear-confirmed", "full-access-restored",
     "test-card-removed", "developer-mode-restored", "test-window-closed"
 )
@@ -58,6 +66,7 @@ function Resolve-OrdinaryFile {
     if ([IO.FileInfo]::new($full).Attributes -band [IO.FileAttributes]::ReparsePoint) {
         throw "$Label must not be a reparse point."
     }
+    Assert-NoReparseAncestorChain $full $Label
     return $full
 }
 
@@ -69,7 +78,22 @@ function Resolve-OrdinaryDirectory {
     if ([IO.DirectoryInfo]::new($full).Attributes -band [IO.FileAttributes]::ReparsePoint) {
         throw "$Label must not be a reparse point."
     }
+    Assert-NoReparseAncestorChain $full $Label
     return $full
+}
+
+function Assert-NoReparseAncestorChain {
+    param([string]$Path, [string]$Label)
+    $directory = if ([IO.Directory]::Exists([IO.Path]::GetFullPath($Path))) {
+        [IO.DirectoryInfo]::new([IO.Path]::GetFullPath($Path))
+    }
+    else { [IO.DirectoryInfo]::new([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($Path))) }
+    while ($null -ne $directory) {
+        if ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw "$Label must not traverse a reparse-point directory."
+        }
+        $directory = $directory.Parent
+    }
 }
 
 function Resolve-NewJson {
@@ -85,6 +109,7 @@ function Resolve-NewJson {
         ([IO.DirectoryInfo]::new($parent).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
         throw "OutputRecord parent must be an existing ordinary directory."
     }
+    Assert-NoReparseAncestorChain $parent "OutputRecord parent"
     return $full
 }
 
@@ -215,8 +240,10 @@ function Get-CandidateBinding {
     param([object]$Preflight, [string]$PreflightSha256)
     if ($Preflight.phase -cne "preflight" -or $Preflight.passed -ne $true -or
         $Preflight.candidate.version -cne $script:Version) {
-        throw "PreflightRecord is not a passing v0.12.11 preflight."
+        throw "PreflightRecord is not a passing v0.12.12 preflight."
     }
+    Assert-ReleaseCandidateBinding $Preflight.releaseCandidateBinding $Preflight.candidate
+    $script:ReleaseCandidateBinding = $Preflight.releaseCandidateBinding
     foreach ($value in @(
         $Preflight.runNonce, $PreflightSha256, $Preflight.candidate.checksumManifest.sha256,
         $Preflight.candidate.server.sha256, $Preflight.candidate.computerHelper.sha256,
@@ -232,6 +259,41 @@ function Get-CandidateBinding {
         computerHelperSha256 = [string]$Preflight.candidate.computerHelper.sha256
         extensionZipSha256 = [string]$Preflight.candidate.extension.sha256
         extractedPayloadSha256 = [string]$Preflight.candidate.extension.combinedPayloadSha256
+    }
+}
+
+function Assert-ReleaseCandidateBinding {
+    param([object]$Binding, [object]$Candidate)
+    Assert-ExactKeys $Binding @(
+        "productVersion", "repository", "tag", "sourceSha", "tagObjectSha",
+        "workflowRunId", "workflowRunAttempt", "artifactId", "artifactName",
+        "artifactZipBytes", "artifactZipSha256", "checksumManifestSha256",
+        "attestationInvocationUri", "attestedAssetCount", "githubHostedRunner", "assets"
+    ) "releaseCandidateBinding"
+    if ($Binding.productVersion -cne $script:Version -or
+        $Binding.repository -cne "flrngel/local-browser-bridge" -or
+        $Binding.tag -cne "v$($script:Version)" -or
+        $Binding.sourceSha -cne $Candidate.finalSha -or
+        [string]$Binding.tagObjectSha -cnotmatch '^[0-9a-f]{40}$' -or
+        [string]$Binding.workflowRunId -cnotmatch '^[1-9][0-9]*$' -or
+        [string]$Binding.workflowRunAttempt -cnotmatch '^[1-9][0-9]*$' -or
+        [string]$Binding.artifactId -cnotmatch '^[1-9][0-9]*$' -or
+        $Binding.artifactName -cne "release-candidate" -or
+        $Binding.artifactZipBytes -isnot [ValueType] -or [int64]$Binding.artifactZipBytes -le 0 -or
+        [string]$Binding.artifactZipSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        $Binding.checksumManifestSha256 -cne $Candidate.checksumManifest.sha256 -or
+        $Binding.attestationInvocationUri -cne ("https://github.com/flrngel/local-browser-bridge/actions/runs/{0}/attempts/{1}" -f
+            [string]$Binding.workflowRunId, [string]$Binding.workflowRunAttempt) -or
+        $Binding.attestedAssetCount -ne 5 -or $Binding.githubHostedRunner -ne $true -or
+        @($Binding.assets).Count -ne 5) {
+        throw "releaseCandidateBinding does not bind the exact release workflow attempt."
+    }
+    foreach ($asset in @($Binding.assets)) {
+        Assert-ExactKeys $asset @("file", "bytes", "sha256") "releaseCandidateBinding asset"
+        if ($asset.bytes -isnot [ValueType] -or [int64]$asset.bytes -le 0 -or
+            [string]$asset.sha256 -cnotmatch '^[0-9a-f]{64}$') {
+            throw "releaseCandidateBinding asset is invalid."
+        }
     }
 }
 
@@ -663,6 +725,28 @@ function Read-LiveSavedTokenState {
     }
 }
 
+function Read-LiveCandidateCardState {
+    param([object]$Context, [string]$ExpectedState, [string]$Label)
+    if ($ExpectedState -notin @("present", "absent")) { throw "Candidate-card expected state is invalid." }
+    $fresh = Get-FreshObservation $Context.WindowId $Context.Pid ([string]$Context.Observation.frameId)
+    $Context.Observation = $fresh.Observation
+    $Context.ObservationCount += 1
+    $frameRef = Get-OpaqueRef "frame" ([string]$fresh.Observation.frameId)
+    $Context.LastFrameRef = $frameRef
+    $actual = (Read-Host "$Label in this fresh exact chrome://extensions helper frame (present/absent)").Trim().ToLowerInvariant()
+    if ($actual -cne $ExpectedState) {
+        throw "The exact test-owned candidate card did not match the required $ExpectedState state."
+    }
+    Read-ExactReceipt "Confirm candidate-card $ExpectedState was read from this fresh exact helper frame." `
+        "VERIFIED:candidate-card-$ExpectedState"
+    return [ordered]@{
+        present = $ExpectedState -ceq "present"
+        epochRef = $Context.EpochRef
+        frameRef = $frameRef
+        verifiedFromFreshLiveUi = $true
+    }
+}
+
 function Invoke-RecordedAction {
     param(
         [object]$Context,
@@ -805,6 +889,112 @@ function Invoke-BrowserCommand {
     return $response
 }
 
+function Wait-ReducedBrowserControlStatus {
+    param([bool]$Active, [bool]$HumanPaused, [AllowNull()][string]$Reason)
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    do {
+        $status = Invoke-BrowserCommand "browser.control.status" @{}
+        $result = $status.Body.result
+        $actualReason = if ($null -eq $result.humanPause) { $null } else { [string]$result.humanPause.reason }
+        if ($result.active -eq $Active -and $result.humanPaused -eq $HumanPaused -and
+            $result.revocationPending -eq $false -and $actualReason -ceq $Reason) {
+            $reduced = [ordered]@{
+                active = $Active
+                humanPaused = $HumanPaused
+                revocationPending = $false
+            }
+            if ($HumanPaused) {
+                $withReason = [ordered]@{
+                    active = $Active
+                    humanPaused = $HumanPaused
+                    reason = $Reason
+                    revocationPending = $false
+                }
+                return $withReason
+            }
+            return $reduced
+        }
+        Start-Sleep -Milliseconds 150
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Timed out waiting for the exact reduced browser-control status."
+}
+
+function Invoke-ExpectedHumanPauseRefusal {
+    param([string]$Method, [hashtable]$Params)
+    $payload = [ordered]@{
+        method = $Method
+        params = $Params
+        callId = "helper-paused-" + [Guid]::NewGuid().ToString("N")
+    } | ConvertTo-Json -Depth 10 -Compress
+    $response = $null
+    $content = $null
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/api/v1/command" -Method Post `
+            -Headers @{ Authorization = "Bearer $($script:Token)" } -ContentType "application/json" `
+            -Body $payload -TimeoutSec 25 | Out-Null
+        throw "A browser mutation unexpectedly succeeded while human control was paused."
+    }
+    catch {
+        $response = $_.Exception.Response
+        if ($null -eq $response -or [int]$response.StatusCode -ne 423) { throw }
+        $stream = $response.GetResponseStream()
+        try {
+            $reader = [IO.StreamReader]::new($stream, $script:Utf8NoBom, $true)
+            try { $content = $reader.ReadToEnd() }
+            finally { $reader.Dispose() }
+        }
+        finally { $response.Close() }
+    }
+    try { $body = $content | ConvertFrom-Json }
+    catch { throw "The human-pause refusal body was not JSON." }
+    finally { $content = $null; $payload = $null }
+    if ($body.error.code -cne "HUMAN_CONTROL_PAUSED" -or
+        $body.taxonomy.code -cne "needs_user" -or
+        $body.taxonomy.recoveryHint -cne "handback" -or
+        $body.taxonomy.retriable -ne $false) {
+        throw "The human-pause refusal did not carry the canonical fail-closed taxonomy."
+    }
+    return [ordered]@{
+        httpStatus = 423
+        errorCode = "HUMAN_CONTROL_PAUSED"
+        taxonomyState = "needs_user"
+        taxonomyAction = "handback"
+        retriable = $false
+    }
+}
+
+function Complete-TrustedPopupResume {
+    param([long]$TabId)
+    $reduced = Wait-ReducedBrowserControlStatus $false $false $null
+    $started = Invoke-BrowserCommand "browser.control.start" @{ tabId = $TabId; ttlMs = 900000 }
+    if ($started.Body.result.active -ne $true) {
+        throw "A trusted-popup Resume did not permit an explicit new lease."
+    }
+    $active = Wait-ReducedBrowserControlStatus $true $false $null
+    return [ordered]@{
+        trustedPopupClick = $true
+        operatorSurface = "local-browser-bridge-computer-helper"
+        statusPollMethod = "browser.control.status"
+        statusPolledAfterResume = $true
+        reducedStatus = $reduced
+        postResumeStartSucceeded = $true
+        activeStatusPolled = $true
+        activeStatus = $active
+    }
+}
+
+function Get-HumanPauseMachineProof {
+    param([long]$TabId, [string]$Reason)
+    return [ordered]@{
+        statusPollMethod = "browser.control.status"
+        statusPolledAfterTrigger = $true
+        reducedStatus = Wait-ReducedBrowserControlStatus $false $true $Reason
+        controlStartRefusal = Invoke-ExpectedHumanPauseRefusal "browser.control.start" @{ tabId = $TabId; ttlMs = 900000 }
+        tabMutationRefusal = Invoke-ExpectedHumanPauseRefusal "tabs.new" @{}
+        indicatorsRemoved = $true
+    }
+}
+
 function Show-DeterministicGreeting {
     param([object]$OwnedTarget)
     if ($OwnedTarget.runNonce -cne $script:Binding.runNonce -or
@@ -935,6 +1125,102 @@ function Get-ProcessFamilyIds {
     return @($ids | Sort-Object -Unique)
 }
 
+function Get-ExactImageProcessRows {
+    param([string]$ExecutablePath)
+    $expected = [IO.Path]::GetFullPath($ExecutablePath)
+    return @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop | Where-Object {
+        -not [String]::IsNullOrWhiteSpace([string]$_.ExecutablePath) -and
+        [String]::Equals(
+            [IO.Path]::GetFullPath([string]$_.ExecutablePath),
+            $expected,
+            [StringComparison]::OrdinalIgnoreCase
+        )
+    })
+}
+
+function Wait-ProtocolBoundHelperWorker {
+    param([Diagnostics.Process]$Supervisor, [string]$HelperPath, [string]$ExpectedSessionId)
+    $interactiveSessionId = [int](Get-Process -Id $PID -ErrorAction Stop).SessionId
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    $stableIdentity = $null
+    $stablePolls = 0
+    do {
+        $Supervisor.Refresh()
+        if ($Supervisor.HasExited) { throw "The exact helper supervisor exited before topology binding." }
+        $state = Get-BridgeState
+        $computer = $state.computer
+        $reportedWorkerPid = [int64]$computer.processId
+        $reportedSessionId = [string]$computer.sessionId
+        $direct = @(Get-ExactImageProcessRows $HelperPath | Where-Object {
+            [int64]$_.ParentProcessId -eq [int64]$Supervisor.Id
+        })
+        if ($direct.Count -gt 1) {
+            throw "The exact helper supervisor has multiple exact-image direct workers."
+        }
+        if ($state.computerConnected -eq $true -and $direct.Count -eq 1 -and
+            $reportedWorkerPid -gt 0 -and [int64]$direct[0].ProcessId -eq $reportedWorkerPid -and
+            -not [String]::IsNullOrWhiteSpace($reportedSessionId) -and
+            $reportedSessionId -ceq $ExpectedSessionId -and
+            [int]$direct[0].SessionId -eq $interactiveSessionId) {
+            $identity = "$reportedSessionId|$reportedWorkerPid"
+            if ($identity -ceq $stableIdentity) { $stablePolls += 1 }
+            else { $stableIdentity = $identity; $stablePolls = 1 }
+            if ($stablePolls -ge 2) {
+                $roundTrip = Invoke-ComputerCommand "computer.status" @{}
+                if ($roundTrip.Body.state.computerConnected -ne $true -or
+                    [string]$roundTrip.Body.state.computer.sessionId -cne $ExpectedSessionId -or
+                    [int64]$roundTrip.Body.state.computer.processId -ne $reportedWorkerPid) {
+                    throw "computer.status did not round-trip through the topology-bound helper worker."
+                }
+                $script:BoundHelperWorkerPid = [int]$reportedWorkerPid
+                return [ordered]@{
+                    exactImageDirectChildCount = 1
+                    exactImageMatched = $true
+                    directChildOfLaunchedSupervisor = $true
+                    interactiveSessionMatched = $true
+                    stableConsecutivePolls = $stablePolls
+                    helloStateMatched = $true
+                    protocolRoundTrip = $true
+                    roundTripMethod = "computer.status"
+                    supervisorProcessRef = Get-OpaqueRef "helper-supervisor" ([string]$Supervisor.Id)
+                    workerProcessRef = Get-OpaqueRef "helper-worker" ([string]$reportedWorkerPid)
+                }
+            }
+        }
+        else {
+            $stableIdentity = $null
+            $stablePolls = 0
+        }
+        Start-Sleep -Milliseconds 150
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Timed out waiting for one stable exact-image, direct-child, same-session helper worker."
+}
+
+function Get-CanonicalPortListenerCount {
+    return @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop | Where-Object {
+        [string]$_.LocalAddress -in @("127.0.0.1", "0.0.0.0", "::", "::1")
+    }).Count
+}
+
+function Wait-NoExactImageProcess {
+    param([string]$ExecutablePath, [string]$Label)
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        if (@(Get-ExactImageProcessRows $ExecutablePath).Count -eq 0) { return }
+        Start-Sleep -Milliseconds 150
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "An exact-image process remained after $Label."
+}
+
+function Wait-CanonicalPortReleased {
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        if ((Get-CanonicalPortListenerCount) -eq 0) { return }
+        Start-Sleep -Milliseconds 150
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "A relevant listener still covered 127.0.0.1:$Port after server termination."
+}
+
 function Get-ListenerCountForProcesses {
     param([int[]]$ProcessIds)
     if ($ProcessIds.Count -eq 0) { return 0 }
@@ -1058,7 +1344,7 @@ function Read-RollbackCandidateCardState {
     param([string]$WindowId, [int64]$ExpectedPid)
     [void](Get-ExactChromeWindow $WindowId $ExpectedPid)
     [void](Get-FreshObservation $WindowId $ExpectedPid $null)
-    $value = (Read-Host "Exact v0.12.11 test-owned candidate card in this fresh chrome://extensions frame (present/absent)").Trim().ToLowerInvariant()
+    $value = (Read-Host "Exact v0.12.12 test-owned candidate card in this fresh chrome://extensions frame (present/absent)").Trim().ToLowerInvariant()
     if ($value -notin @("present", "absent")) {
         throw "Candidate-card rollback state was not reduced to present or absent."
     }
@@ -1160,7 +1446,7 @@ function Invoke-BestEffortUiRollback {
                 if ($cardState -ceq "present") {
                     Invoke-UnrecordedNativeSteps `
                         "Use only the exact bound test-owned chrome://extensions window." @(
-                            [ordered]@{ kind="click"; label="Remove on the exact v0.12.11 test-owned candidate card" },
+                            [ordered]@{ kind="click"; label="Remove on the exact v0.12.12 test-owned candidate card" },
                             [ordered]@{ kind="click"; label="confirm removal of that exact candidate card" }
                         ) "CONSENT:extensionDisposition:rollback" `
                         $script:DedicatedWindowId $script:DedicatedWindowPid
@@ -1211,7 +1497,7 @@ function Invoke-Run {
         throw "The live computer-helper chain recorder runs only on Windows."
     }
     if ($Port -ne 17373) {
-        throw "The v0.12.11 acceptance recorder requires the canonical 127.0.0.1:17373 endpoint."
+        throw "The v0.12.12 acceptance recorder requires the canonical 127.0.0.1:17373 endpoint."
     }
     $preflightPath = Resolve-OrdinaryFile $PreflightRecord "PreflightRecord"
     $runnerPath = Resolve-OrdinaryFile $ApiMatrixRunner "ApiMatrixRunner"
@@ -1260,13 +1546,18 @@ function Invoke-Run {
     $script:DedicatedCreatedAsOnlyNewChromeWindow = $false
     $script:LastOwnedPopupWindowId = $null
     $script:LastOwnedPopupWindowPid = 0
+    $script:BoundHelperWorkerPid = 0
     $helperProcess = $null
     $helperFamilyIds = @()
     $serverProcessRef = $null
     $helperProcessRef = $null
     $sessionBinding = $null
+    $helperTopology = $null
     $ownedTarget = $null
     $browserAction = $null
+    $handback = $null
+    $initialCandidateCard = $null
+    $finalCandidateCard = $null
     $capturedDeveloperMode = $null
     $capturedFullAccess = $null
     $capturedSavedToken = $null
@@ -1287,8 +1578,11 @@ function Invoke-Run {
     $previousPort = [Environment]::GetEnvironmentVariable("LBB_PORT", "Process")
 
     try {
-        if (@(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue).Count -ne 0) {
+        if ((Get-CanonicalPortListenerCount) -ne 0) {
             throw "The acceptance port was not free before server start."
+        }
+        if (@(Get-ExactImageProcessRows $helperPath).Count -ne 0) {
+            throw "An exact-image candidate helper process already existed before this run."
         }
         [Environment]::SetEnvironmentVariable("LBB_TOKEN", $script:Token, "Process")
         [Environment]::SetEnvironmentVariable("LBB_PORT", [string]$Port, "Process")
@@ -1314,6 +1608,8 @@ function Invoke-Run {
             param($state)
             $state.computerConnected -eq $true -and $null -ne $state.computer
         } "candidate helper connection"
+        $helperTopology = Wait-ProtocolBoundHelperWorker `
+            $helperProcess $helperPath ([string]$connected.computer.sessionId)
         $helperFamilyIds = @(Get-ProcessFamilyIds $helperProcess.Id)
         if ((Get-ListenerCountForProcesses $helperFamilyIds) -ne 0) {
             throw "The candidate helper family unexpectedly owned a TCP listener."
@@ -1335,6 +1631,8 @@ function Invoke-Run {
             [ordered]@{ kind="typeText"; value="chrome://extensions" },
             [ordered]@{ kind="key"; value="Enter" }
         ) "none" "Verify chrome://extensions is visible in the dedicated window and no candidate card exists."
+        $initialCandidateCard = Read-LiveCandidateCardState `
+            $epoch "absent" "Exact v0.12.12 test-owned candidate card before installation"
         $capturedDeveloperMode = Read-LiveToggleState $epoch "DeveloperMode"
         $developerSteps = if ($capturedDeveloperMode.value -ceq "disabled") {
             Set-MutationDisposition $mutation "DeveloperMode" "outcome_unknown"
@@ -1361,7 +1659,7 @@ function Invoke-Run {
         [void](Get-ExactExtensionPayloadDigest $extensionDirectoryPath $payloadInventory $preflight.candidate.extension.combinedPayloadSha256)
 
         $epoch = Start-RecordedEpoch $script:EpochNames[3] $script:EpochSurfaces[3] "Reselect the dedicated stock Chrome extensions window."
-        Invoke-RecordedAction $epoch $script:ActionNames[5] @() "none" "Verify exactly one enabled unpacked Local Browser Bridge v0.12.11 card, no duplicate, and no load error."
+        Invoke-RecordedAction $epoch $script:ActionNames[5] @() "none" "Verify exactly one enabled unpacked Local Browser Bridge v0.12.12 card, no duplicate, and no load error."
         Set-MutationDisposition $mutation "CandidateExtension" "verified_applied"
         Invoke-RecordedAction $epoch $script:ActionNames[6] @(
             [ordered]@{ kind="click"; label="Chrome Extensions menu button" },
@@ -1385,7 +1683,7 @@ function Invoke-Run {
             [ordered]@{ kind="click"; label="popup token field" },
             [ordered]@{ kind="typeText"; value=$script:Token },
             [ordered]@{ kind="click"; label="popup Connect button" }
-        ) "acceptanceTokenSave" "Verify v0.12.11 is connected and the credential field is empty."
+        ) "acceptanceTokenSave" "Verify v0.12.12 is connected and the credential field is empty."
         Set-MutationDisposition $mutation "SavedToken" "verified_applied"
         Stop-RecordedEpoch $epoch
 
@@ -1400,13 +1698,80 @@ function Invoke-Run {
         $browserAction = Show-DeterministicGreeting $ownedTarget
 
         $epoch = Start-RecordedEpoch $script:EpochNames[5] $script:EpochSurfaces[5] "Select the dedicated Chrome window containing chrome://extensions and the matrix-owned demo."
-        Invoke-RecordedAction $epoch $script:ActionNames[9] @([ordered]@{ kind="click"; label="the exact chrome://extensions tab" }) "none" "Verify exactly one enabled unpacked Local Browser Bridge v0.12.11 card, no error, and Chrome's native debugger-use indicator while the exact bridge lease is active."
+        Invoke-RecordedAction $epoch $script:ActionNames[9] @([ordered]@{ kind="click"; label="the exact chrome://extensions tab" }) "none" "Verify exactly one enabled unpacked Local Browser Bridge v0.12.12 card, no error, and Chrome's native debugger-use indicator while the exact bridge lease is active."
         Save-RecordedScreenshot $epoch "extension-loaded"
         Invoke-RecordedAction $epoch $script:ActionNames[10] @([ordered]@{ kind="click"; label="the exact matrix-owned loopback demo tab" }) "none" "Verify the exact visible result is Hello, Bridge Matrix. blue selected."
         Save-RecordedScreenshot $epoch "api-action-result"
         Invoke-RecordedAction $epoch $script:ActionNames[11] @([ordered]@{ kind="click"; label="Coordinate target button on the exact loopback demo" }) "none" "Verify the visible Action log says coordinate:true and the synthetic session pointer is present."
         Save-RecordedScreenshot $epoch "computer-share-action"
         Invoke-RecordedAction $epoch $script:ActionNames[12] @(
+            [ordered]@{ kind="click"; label="visible in-page Local Browser Bridge Stop button" }
+        ) "none" "Verify the page-owned control pill and Chrome debugger-use indicator disappeared after the visible Stop click."
+        $stopMachine = Get-HumanPauseMachineProof ([long]$ownedTarget.tabId) "released_by_user"
+        Invoke-RecordedAction $epoch $script:ActionNames[13] @(
+            [ordered]@{ kind="click"; label="Chrome Extensions menu button" },
+            [ordered]@{ kind="click"; label="Local Browser Bridge entry in the Extensions menu" }
+        ) "none" "Verify the trusted Local Browser Bridge popup opened and visibly offers Resume remote control."
+        Stop-RecordedEpoch $epoch
+
+        $epoch = Start-RecordedEpoch $script:EpochNames[6] $script:EpochSurfaces[6] "Select only the trusted Local Browser Bridge popup paused by visible Stop."
+        Save-RecordedScreenshot $epoch "stop-paused"
+        Invoke-RecordedAction $epoch $script:ActionNames[14] @(
+            [ordered]@{ kind="click"; label="trusted popup Resume remote control button after Stop" }
+        ) "none" "Verify the trusted popup no longer reports remote control paused."
+        $stopResume = Complete-TrustedPopupResume ([long]$ownedTarget.tabId)
+        Stop-RecordedEpoch $epoch
+
+        $epoch = Start-RecordedEpoch $script:EpochNames[7] $script:EpochSurfaces[7] "Reselect the exact matrix-owned demo in the dedicated Chrome window after Stop recovery."
+        Invoke-RecordedAction $epoch $script:ActionNames[15] @() "none" "Verify Chrome's debugger-use indicator and the page-owned control pill returned after trusted-popup Resume and an explicit new lease."
+        Invoke-RecordedAction $epoch $script:ActionNames[16] @(
+            [ordered]@{ kind="click"; label="Chrome browser-owned debugger notice Cancel button" }
+        ) "none" "Verify the browser-owned Cancel removed both the Chrome debugger-use indicator and page-owned control pill."
+        $cancelMachine = Get-HumanPauseMachineProof ([long]$ownedTarget.tabId) "canceled_by_user"
+        Invoke-RecordedAction $epoch $script:ActionNames[17] @(
+            [ordered]@{ kind="click"; label="Chrome Extensions menu button" },
+            [ordered]@{ kind="click"; label="Local Browser Bridge entry in the Extensions menu" }
+        ) "none" "Verify the trusted Local Browser Bridge popup opened and visibly offers Resume remote control after Chrome Cancel."
+        Stop-RecordedEpoch $epoch
+
+        $epoch = Start-RecordedEpoch $script:EpochNames[8] $script:EpochSurfaces[8] "Select only the trusted Local Browser Bridge popup paused by Chrome Cancel."
+        Save-RecordedScreenshot $epoch "cancel-paused"
+        Invoke-RecordedAction $epoch $script:ActionNames[18] @(
+            [ordered]@{ kind="click"; label="trusted popup Resume remote control button after Chrome Cancel" }
+        ) "none" "Verify the trusted popup no longer reports remote control paused."
+        $cancelResume = Complete-TrustedPopupResume ([long]$ownedTarget.tabId)
+        Stop-RecordedEpoch $epoch
+
+        $handback = [ordered]@{
+            stop = [ordered]@{
+                trigger = "in-page-stop"
+                operatorSurface = "local-browser-bridge-computer-helper"
+                statusPollMethod = $stopMachine.statusPollMethod
+                statusPolledAfterTrigger = $stopMachine.statusPolledAfterTrigger
+                reducedStatus = $stopMachine.reducedStatus
+                controlStartRefusal = $stopMachine.controlStartRefusal
+                tabMutationRefusal = $stopMachine.tabMutationRefusal
+                indicatorsRemoved = $stopMachine.indicatorsRemoved
+                resume = $stopResume
+            }
+            cancel = [ordered]@{
+                trigger = "chrome-native-cancel"
+                operatorSurface = "local-browser-bridge-computer-helper"
+                statusPollMethod = $cancelMachine.statusPollMethod
+                statusPolledAfterTrigger = $cancelMachine.statusPolledAfterTrigger
+                reducedStatus = $cancelMachine.reducedStatus
+                controlStartRefusal = $cancelMachine.controlStartRefusal
+                tabMutationRefusal = $cancelMachine.tabMutationRefusal
+                indicatorsRemoved = $cancelMachine.indicatorsRemoved
+                resume = $cancelResume
+            }
+        }
+        $stopMachine = $null; $stopResume = $null; $cancelMachine = $null; $cancelResume = $null
+
+        $epoch = Start-RecordedEpoch $script:EpochNames[9] $script:EpochSurfaces[9] "Reselect the exact matrix-owned demo after Chrome Cancel recovery."
+        Invoke-RecordedAction $epoch $script:ActionNames[19] @() "none" "Verify the active debugger-use indicator, page control pill, and deterministic demo state all recovered after the second trusted-popup Resume."
+        Save-RecordedScreenshot $epoch "post-handback-resume"
+        Invoke-RecordedAction $epoch $script:ActionNames[20] @(
             [ordered]@{ kind="click"; label="Chrome Extensions menu button" },
             [ordered]@{ kind="click"; label="Local Browser Bridge entry in the Extensions menu" }
         ) "none" "Verify the cleanup Local Browser Bridge popup opened."
@@ -1416,10 +1781,10 @@ function Invoke-Run {
         }
         Stop-RecordedEpoch $epoch
 
-        $epoch = Start-RecordedEpoch $script:EpochNames[6] $script:EpochSurfaces[6] "Select only the Local Browser Bridge cleanup popup."
+        $epoch = Start-RecordedEpoch $script:EpochNames[10] $script:EpochSurfaces[10] "Select only the Local Browser Bridge cleanup popup."
         Set-MutationDisposition $mutation "SavedToken" "outcome_unknown"
-        Invoke-RecordedAction $epoch $script:ActionNames[13] @([ordered]@{ kind="click"; label="Clear saved token button" }) "clearSavedTokenInitiate" "Verify the clear-token confirmation dialog appeared."
-        Invoke-RecordedAction $epoch $script:ActionNames[14] @([ordered]@{ kind="click"; label="affirmative clear-token confirmation button" }) "clearSavedTokenConfirm" "Verify Not configured and the disabled Clear saved token button."
+        Invoke-RecordedAction $epoch $script:ActionNames[21] @([ordered]@{ kind="click"; label="Clear saved token button" }) "clearSavedTokenInitiate" "Verify the clear-token confirmation dialog appeared."
+        Invoke-RecordedAction $epoch $script:ActionNames[22] @([ordered]@{ kind="click"; label="affirmative clear-token confirmation button" }) "clearSavedTokenConfirm" "Verify Not configured and the disabled Clear saved token button."
         Set-MutationDisposition $mutation "SavedToken" "restored"
         $restoreFullSteps = if ($capturedFullAccess.value -ceq "disabled") {
             @([ordered]@{ kind="click"; label="Full Access toggle back to disabled" })
@@ -1427,19 +1792,21 @@ function Invoke-Run {
         if ($restoreFullSteps.Count -ne 0) {
             Set-MutationDisposition $mutation "FullAccess" "outcome_unknown"
         }
-        Invoke-RecordedAction $epoch $script:ActionNames[15] $restoreFullSteps "fullAccessUse" "Verify Full Access exactly equals its live-captured $($capturedFullAccess.value) value."
+        Invoke-RecordedAction $epoch $script:ActionNames[23] $restoreFullSteps "fullAccessUse" "Verify Full Access exactly equals its live-captured $($capturedFullAccess.value) value."
         if ($restoreFullSteps.Count -ne 0) {
             Set-MutationDisposition $mutation "FullAccess" "restored"
         }
         Stop-RecordedEpoch $epoch
 
-        $epoch = Start-RecordedEpoch $script:EpochNames[7] $script:EpochSurfaces[7] "Select only the dedicated test-owned stock Chrome window."
+        $epoch = Start-RecordedEpoch $script:EpochNames[11] $script:EpochSurfaces[11] "Select only the dedicated test-owned stock Chrome window."
         Set-MutationDisposition $mutation "CandidateExtension" "outcome_unknown"
-        Invoke-RecordedAction $epoch $script:ActionNames[16] @(
+        Invoke-RecordedAction $epoch $script:ActionNames[24] @(
             [ordered]@{ kind="click"; label="the exact existing chrome://extensions tab" },
-            [ordered]@{ kind="click"; label="Remove on the exact v0.12.11 test-owned candidate card" },
+            [ordered]@{ kind="click"; label="Remove on the exact v0.12.12 test-owned candidate card" },
             [ordered]@{ kind="click"; label="confirm removal of that exact candidate card" }
-        ) "extensionDisposition" "Verify the helper switched to the protected chrome://extensions tab before removing only the new test-owned v0.12.11 card."
+        ) "extensionDisposition" "Verify the helper switched to the protected chrome://extensions tab before removing only the new test-owned v0.12.12 card."
+        $finalCandidateCard = Read-LiveCandidateCardState `
+            $epoch "absent" "Exact v0.12.12 test-owned candidate card after removal"
         Set-MutationDisposition $mutation "CandidateExtension" "restored"
         $restoreDeveloperSteps = if ($capturedDeveloperMode.value -ceq "disabled") {
             @([ordered]@{ kind="click"; label="Developer Mode toggle back to disabled" })
@@ -1448,16 +1815,16 @@ function Invoke-Run {
         if ($restoreDeveloperSteps.Count -ne 0) {
             Set-MutationDisposition $mutation "DeveloperMode" "outcome_unknown"
         }
-        Invoke-RecordedAction $epoch $script:ActionNames[17] $restoreDeveloperSteps $restoreDeveloperConsent "Verify Developer Mode exactly equals its live-captured $($capturedDeveloperMode.value) value."
+        Invoke-RecordedAction $epoch $script:ActionNames[25] $restoreDeveloperSteps $restoreDeveloperConsent "Verify Developer Mode exactly equals its live-captured $($capturedDeveloperMode.value) value."
         if ($restoreDeveloperSteps.Count -ne 0) {
             Set-MutationDisposition $mutation "DeveloperMode" "restored"
         }
         Stop-RecordedEpoch $epoch
         [void](Get-ExactExtensionPayloadDigest $extensionDirectoryPath $payloadInventory $preflight.candidate.extension.combinedPayloadSha256)
 
-        $epoch = Start-RecordedEpoch $script:EpochNames[8] $script:EpochSurfaces[8] "Reselect only the dedicated test-owned stock Chrome window for closure."
+        $epoch = Start-RecordedEpoch $script:EpochNames[12] $script:EpochSurfaces[12] "Reselect only the dedicated test-owned stock Chrome window for closure."
         Set-MutationDisposition $mutation "DedicatedWindow" "outcome_unknown"
-        Invoke-RecordedAction $epoch $script:ActionNames[18] @([ordered]@{ kind="key"; value="Control+Shift+W" }) "none" "Verify only the dedicated test-owned Chrome window closed." -ExpectTargetClosed
+        Invoke-RecordedAction $epoch $script:ActionNames[26] @([ordered]@{ kind="key"; value="Control+Shift+W" }) "none" "Verify only the dedicated test-owned Chrome window closed." -ExpectTargetClosed
         Stop-RecordedEpoch $epoch -TargetClosed
         Set-MutationDisposition $mutation "DedicatedWindow" "restored"
 
@@ -1474,9 +1841,9 @@ function Invoke-Run {
         Add-LifecycleEvent "helper-owner-forced-terminated" "connected" $helperProcessRef $preflight.candidate.computerHelper.sha256 $helperExitCode
         [void](Wait-BridgeState { param($state) $state.computerConnected -ne $true } "helper disconnection after exact supervisor termination")
         Add-LifecycleEvent "computer-disconnected-after-helper-termination" "disconnected" "not-applicable" "not-applicable" -1
-        if (@(Get-Process -Id $helperFamilyIds -ErrorAction SilentlyContinue).Count -ne 0 -or
-            (Get-ListenerCountForProcesses $helperFamilyIds) -ne 0) {
-            throw "The exact helper supervisor family retained a process or listener."
+        Wait-NoExactImageProcess $helperPath "exact helper supervisor termination"
+        if ((Get-ListenerCountForProcesses $helperFamilyIds) -ne 0) {
+            throw "The exact helper supervisor family retained a listener."
         }
         if ((Get-Sha256 $helperPath) -cne $preflight.candidate.computerHelper.sha256) {
             throw "The candidate helper executable changed during the run."
@@ -1487,18 +1854,16 @@ function Invoke-Run {
             throw "The exact candidate server did not terminate within ten seconds."
         }
         $serverExitCode = [int]$script:ServerProcess.ExitCode
-        if (@(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object {
-            [int]$_.OwningProcess -eq $script:ServerProcess.Id
-        }).Count -ne 0) {
-            throw "The exact candidate server retained a listener after termination."
-        }
+        Wait-CanonicalPortReleased
         if ((Get-Sha256 $serverPath) -cne $preflight.candidate.server.sha256) {
             throw "The candidate server executable changed during the run."
         }
         Add-LifecycleEvent "server-owner-forced-terminated" "disconnected" $serverProcessRef $preflight.candidate.server.sha256 $serverExitCode
 
-        if ($script:Lifecycle.Count -ne 8 -or $script:Epochs.Count -ne 9 -or
-            $script:Actions.Count -ne 19 -or $script:ScreenshotRecords.Count -ne 3) {
+        if ($script:Lifecycle.Count -ne 8 -or $script:Epochs.Count -ne 13 -or
+            $script:Actions.Count -ne 27 -or $script:ScreenshotRecords.Count -ne 6 -or
+            $null -eq $handback -or $initialCandidateCard.present -ne $false -or
+            $finalCandidateCard.present -ne $false) {
             throw "The live helper chain is incomplete."
         }
         $matrix = Read-Json $script:MatrixOutputPath "ApiMatrixRecord"
@@ -1512,6 +1877,7 @@ function Invoke-Run {
             schemaVersion = 1
             evidenceType = "stock-user-chrome-computer-helper-chain"
             version = $script:Version
+            releaseCandidateBinding = $script:ReleaseCandidateBinding
             candidateBinding = $script:Binding
             passed = $true
             recordedBy = [ordered]@{
@@ -1541,6 +1907,7 @@ function Invoke-Run {
                 processRef = $helperProcessRef
                 sessionBindingSha256 = $sessionBinding
                 rawSessionIdentifierRetained = $false
+                topology = $helperTopology
             }
             extensionPayload = [ordered]@{
                 fileCount = 11
@@ -1554,6 +1921,7 @@ function Invoke-Run {
                 developerMode = $capturedDeveloperMode
                 fullAccess = $capturedFullAccess
                 savedToken = $capturedSavedToken
+                candidateCard = $initialCandidateCard
             }
             windowBinding = [ordered]@{
                 application = "google-chrome"
@@ -1569,6 +1937,7 @@ function Invoke-Run {
             windowEpochs = $script:Epochs
             actions = $script:Actions
             browserAction = $browserAction
+            handback = $handback
             screenshots = $script:ScreenshotRecords
             cleanup = [ordered]@{
                 allSharesStopped = $true
@@ -1577,10 +1946,14 @@ function Invoke-Run {
                 helperDisconnectedAfterTermination = $true
                 helperChildrenRemaining = 0
                 helperListenersRemaining = 0
+                exactHelperImageProcessesRemaining = 0
                 serverTerminationDisposition = "owner-forced-exact-process"
                 serverExitCode = $serverExitCode
                 serverListenersRemaining = 0
+                canonicalPortListenersRemaining = 0
                 candidateExtensionRemoved = $true
+                candidateCardAbsentAfterRemoval = $true
+                candidateCardAbsenceVerifiedFromFreshLiveUi = $true
                 savedTokenCleared = $true
                 developerModeRestored = $true
                 fullAccessRestored = $true
@@ -1637,15 +2010,30 @@ function Invoke-Run {
                 $cleanupErrors.Add("UI rollback was unavailable because the exact helper/server transport was not alive; inspect the dedicated test Chrome window, candidate card, Developer Mode, Full Access, and saved-token state.")
             }
         }
-        if ($null -ne $helperProcess -and -not $helperProcess.HasExited) {
+        if ($null -ne $helperProcess) {
             try {
-                $failureFamily = @(Get-ProcessFamilyIds $helperProcess.Id)
-                Stop-Process -Id $helperProcess.Id -Force -ErrorAction Stop
-                if (-not $helperProcess.WaitForExit(10000)) { throw "helper termination timeout" }
-                if (@(Get-Process -Id $failureFamily -ErrorAction SilentlyContinue).Count -ne 0) { throw "helper child remained" }
+                $ownedHelperIds = @([int]$helperProcess.Id)
+                if ($script:BoundHelperWorkerPid -gt 0) {
+                    $ownedHelperIds += [int]$script:BoundHelperWorkerPid
+                }
+                $ownedHelperIds = @($ownedHelperIds | Sort-Object -Unique)
+                $exactRows = @(Get-ExactImageProcessRows $helperPath | Where-Object {
+                    $ownedHelperIds -contains [int]$_.ProcessId
+                })
+                foreach ($row in $exactRows) {
+                    Stop-Process -Id ([int]$row.ProcessId) -Force -ErrorAction Stop
+                }
+                if (-not $helperProcess.HasExited -and -not $helperProcess.WaitForExit(10000)) {
+                    throw "helper termination timeout"
+                }
+                if (@(Get-Process -Id $ownedHelperIds -ErrorAction SilentlyContinue).Count -ne 0) {
+                    throw "an ownership-bound helper process remained"
+                }
             }
             catch { $cleanupErrors.Add("helper: $($_.Exception.Message)") }
         }
+        try { Wait-NoExactImageProcess $helperPath "failure/success cleanup" }
+        catch { $cleanupErrors.Add("helper-rescan: $($_.Exception.Message)") }
         if ($null -ne $script:ServerProcess -and -not $script:ServerProcess.HasExited) {
             try {
                 Stop-Process -Id $script:ServerProcess.Id -Force -ErrorAction Stop
@@ -1653,6 +2041,8 @@ function Invoke-Run {
             }
             catch { $cleanupErrors.Add("server: $($_.Exception.Message)") }
         }
+        try { Wait-CanonicalPortReleased }
+        catch { $cleanupErrors.Add("listener-rescan: $($_.Exception.Message)") }
         try {
             if ($tokenWasPresent) { [Environment]::SetEnvironmentVariable("LBB_TOKEN", $previousToken, "Process") }
             else { [Environment]::SetEnvironmentVariable("LBB_TOKEN", $null, "Process") }
@@ -1665,6 +2055,8 @@ function Invoke-Run {
         if ($null -ne $credential) { [Array]::Clear($credential, 0, $credential.Length) }
         $ownedTarget = $null
         $sessionBinding = $null
+        $helperTopology = $null
+        $script:BoundHelperWorkerPid = 0
         $script:ActiveEpoch = $null
 
         if ($null -ne $primaryFailure) {
@@ -1706,7 +2098,20 @@ function Invoke-Run {
 
     $temporary = "$outputPath.new"
     try {
-        [IO.File]::WriteAllText($temporary, (($record | ConvertTo-Json -Depth 30) + [Environment]::NewLine), $script:Utf8NoBom)
+        $recordBytes = $script:Utf8NoBom.GetBytes(
+            (($record | ConvertTo-Json -Depth 30) + [Environment]::NewLine)
+        )
+        $recordStream = [IO.File]::Open(
+            $temporary, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None
+        )
+        try {
+            $recordStream.Write($recordBytes, 0, $recordBytes.Length)
+            $recordStream.Flush($true)
+        }
+        finally {
+            $recordStream.Dispose()
+            [Array]::Clear($recordBytes, 0, $recordBytes.Length)
+        }
         [IO.File]::Move($temporary, $outputPath)
     }
     catch {
@@ -1732,9 +2137,9 @@ function Invoke-SelfTest {
     $hexRejected = $false
     try { Assert-Hex "not-a-digest" 64 "self-test digest" } catch { $hexRejected = $true }
     if (-not $hexRejected) { throw "Computer-helper recorder digest self-test failed." }
-    if ($script:Screenshots.Count -ne 3 -or $script:EpochNames.Count -ne 9 -or
-        $script:ActionNames.Count -ne 19 -or
-        @($script:Screenshots.Values | Select-Object -Unique).Count -ne 3) {
+    if ($script:Screenshots.Count -ne 6 -or $script:EpochNames.Count -ne 13 -or
+        $script:ActionNames.Count -ne 27 -or
+        @($script:Screenshots.Values | Select-Object -Unique).Count -ne 6) {
         throw "Computer-helper recorder canonical sequence self-test failed."
     }
     $mutationSelfTest = @{
@@ -1792,6 +2197,12 @@ function Invoke-SelfTest {
         -not $source.Contains("Invoke-BestEffortUiRollback") -or
         -not $source.Contains("Read-LiveToggleState") -or
         -not $source.Contains("Read-LiveSavedTokenState") -or
+        -not $source.Contains("Read-LiveCandidateCardState") -or
+        -not $source.Contains("Wait-ProtocolBoundHelperWorker") -or
+        -not $source.Contains("Invoke-ExpectedHumanPauseRefusal") -or
+        -not $source.Contains("Complete-TrustedPopupResume") -or
+        -not $source.Contains("Wait-NoExactImageProcess") -or
+        -not $source.Contains("Wait-CanonicalPortReleased") -or
         -not $source.Contains("[void](Bind-NewDedicatedChromeWindow)") -or
         -not $source.Contains("Control+N did not produce exactly one new stock-Chrome window") -or
         -not $source.Contains("Test-ExactSharedFrame") -or
