@@ -1179,7 +1179,6 @@ async function writeCreateOnce(outputDirectory, aggregate) {
     `.${OUTPUT_FILE}.${process.pid}.${createHash("sha256").update(bytes).digest("hex").slice(0, 16)}.tmp`,
   );
   let handle;
-  let directoryHandle;
   let temporaryExists = false;
   try {
     handle = await open(temporaryPath, "wx", 0o600);
@@ -1196,20 +1195,23 @@ async function writeCreateOnce(outputDirectory, aggregate) {
     }
     await unlink(temporaryPath);
     temporaryExists = false;
-    directoryHandle = await open(
-      outputDirectory,
-      constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0),
-    );
-    await directoryHandle.sync();
-    await directoryHandle.close();
-    directoryHandle = null;
+    if (!IS_WINDOWS) {
+      const directoryHandle = await open(
+        outputDirectory,
+        constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0),
+      );
+      try {
+        await directoryHandle.sync();
+      } finally {
+        await directoryHandle.close();
+      }
+    }
     exactArray((await readdir(outputDirectory)).sort(), [OUTPUT_FILE], "aggregate output inventory");
     const persisted = await readStableFile(outputPath, OUTPUT_FILE, MAX_RESULT_BYTES);
     if (!persisted.bytes.equals(bytes)) fail(`${OUTPUT_FILE} changed after create-once publication.`);
     return { path: outputPath, sha256: persisted.sha256, bytes: persisted.bytes.length };
   } finally {
     if (handle) await handle.close().catch(() => {});
-    if (directoryHandle) await directoryHandle.close().catch(() => {});
     if (temporaryExists) await unlink(temporaryPath).catch(() => {});
   }
 }

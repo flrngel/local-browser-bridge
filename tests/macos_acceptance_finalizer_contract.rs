@@ -85,6 +85,7 @@ fn macos_v0_12_12_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
         "await open(temporaryPath, \"wx\", 0o600)",
         "await handle.sync()",
         "await link(temporaryPath, outputPath)",
+        "if (!IS_WINDOWS) {",
         "await directoryHandle.sync()",
         "aggregate output inventory",
         "already exists; refusing to overwrite it",
