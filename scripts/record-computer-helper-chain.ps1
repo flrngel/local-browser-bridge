@@ -27,7 +27,21 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $script:Utf8NoBom = [Text.UTF8Encoding]::new($false, $true)
-$script:Version = "0.12.15"
+$script:Version = "0.12.16"
+
+function ConvertFrom-JsonPreservingStrings {
+    param([Parameter(Mandatory = $true, ValueFromPipeline = $true)][string]$Json)
+    process {
+        $command = Get-Command ConvertFrom-Json -CommandType Cmdlet -ErrorAction Stop
+        if ($command.Parameters.ContainsKey("DateKind")) {
+            Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $Json -DateKind String
+        }
+        else {
+            Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $Json
+        }
+    }
+}
+
 $script:Source = "local-browser-bridge-computer-helper-via-loopback-api"
 $script:OperatorExchange = $null
 $script:OperatorExchangeArtifacts = New-Object Collections.Generic.List[string]
@@ -208,7 +222,7 @@ function Read-StableJsonWithDigest {
             $offset += $read
         }
         if ($stream.Position -ne $stream.Length) { throw "$Label was not read exactly once." }
-        try { $value = $script:Utf8NoBom.GetString($bytes) | ConvertFrom-Json }
+        try { $value = ConvertFrom-JsonPreservingStrings ($script:Utf8NoBom.GetString($bytes)) }
         catch { throw "$Label is not strict UTF-8 JSON." }
         return [pscustomobject]@{
             Value = $value
@@ -392,7 +406,7 @@ function Get-CandidateBinding {
     param([object]$Preflight, [string]$PreflightSha256)
     if ($Preflight.phase -cne "preflight" -or $Preflight.passed -ne $true -or
         $Preflight.candidate.version -cne $script:Version) {
-        throw "PreflightRecord is not a passing v0.12.15 preflight."
+        throw "PreflightRecord is not a passing v0.12.16 preflight."
     }
     Assert-ReleaseCandidateBinding $Preflight.releaseCandidateBinding $Preflight.candidate
     $script:ReleaseCandidateBinding = $Preflight.releaseCandidateBinding
@@ -1027,7 +1041,7 @@ function Invoke-LoopbackJson {
     if ([int]$response.StatusCode -ne 200) { throw "Loopback request failed." }
     return [pscustomobject]@{
         Status = [int]$response.StatusCode
-        Body = $response.Content | ConvertFrom-Json
+        Body = ConvertFrom-JsonPreservingStrings $response.Content
         Digest = Get-TextSha256 ([string]$response.Content)
     }
 }
@@ -1833,7 +1847,7 @@ function Invoke-ExpectedHumanPauseRefusal {
         }
         finally { $response.Close() }
     }
-    try { $body = $content | ConvertFrom-Json }
+    try { $body = ConvertFrom-JsonPreservingStrings $content }
     catch { throw "The human-pause refusal body was not JSON." }
     finally { $content = $null; $payload = $null }
     if ($body.error.code -cne "HUMAN_CONTROL_PAUSED" -or
@@ -1983,7 +1997,7 @@ function Wait-ServerReady {
         try {
             $health = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/health" `
                 -Method Get -TimeoutSec 2
-            $body = $health.Content | ConvertFrom-Json
+            $body = ConvertFrom-JsonPreservingStrings $health.Content
             if ([int]$health.StatusCode -eq 200 -and $body.ok -eq $true -and
                 $body.version -ceq $ExpectedVersion) {
                 return Get-BridgeState
@@ -2243,7 +2257,7 @@ function Read-RollbackCandidateCardState {
     [void](Get-ExactChromeWindow $WindowId $ExpectedPid)
     $fresh = Get-FreshObservation $WindowId $ExpectedPid $null
     $exchange = Invoke-OperatorExchange "ui-state" "rollback-candidate-card" `
-        "Interpret exact v0.12.15 test-owned candidate-card presence from this fresh owned frame." `
+        "Interpret exact v0.12.16 test-owned candidate-card presence from this fresh owned frame." `
         ([ordered]@{ type = "enum"; values = @("present", "absent") }) $fresh.Observation $null
     Assert-ExactKeys $exchange.Decision @("value") "candidate-card rollback-state decision"
     $value = ([string]$exchange.Decision.value).Trim().ToLowerInvariant()
@@ -2533,7 +2547,7 @@ function Invoke-BestEffortUiRollback {
                     Set-MutationDisposition $State "RemoveExtensionDialog" "outcome_unknown"
                     Invoke-UnrecordedNativeSteps `
                         "Use only the exact bound test-owned chrome://extensions window." @(
-                            [ordered]@{ kind="click"; label="Remove on the exact v0.12.15 test-owned candidate card" },
+                            [ordered]@{ kind="click"; label="Remove on the exact v0.12.16 test-owned candidate card" },
                             [ordered]@{ kind="click"; label="confirm removal of that exact candidate card" }
                         ) "extensionDisposition" `
                         $script:DedicatedWindowId $script:DedicatedWindowPid
@@ -2585,7 +2599,7 @@ function Invoke-Run {
         throw "The live computer-helper chain recorder runs only on Windows."
     }
     if ($Port -ne 17373) {
-        throw "The v0.12.15 acceptance recorder requires the canonical 127.0.0.1:17373 endpoint."
+        throw "The v0.12.16 acceptance recorder requires the canonical 127.0.0.1:17373 endpoint."
     }
     $preflightPath = Resolve-OrdinaryFile $PreflightRecord "PreflightRecord"
     $runnerPath = Resolve-OrdinaryFile $ApiMatrixRunner "ApiMatrixRunner"
@@ -2766,7 +2780,7 @@ function Invoke-Run {
             [ordered]@{ kind="key"; value="Enter" }
         ) "none" "Verify chrome://extensions is visible in the dedicated window and no candidate card exists."
         $initialCandidateCard = Read-LiveCandidateCardState `
-            $epoch "absent" "Exact v0.12.15 test-owned candidate card before installation"
+            $epoch "absent" "Exact v0.12.16 test-owned candidate card before installation"
         $capturedDeveloperMode = Read-LiveToggleState $epoch "DeveloperMode"
         Request-ScopedActionTimeApproval $epoch $preflight $capturedDeveloperMode $initialCandidateCard
         Confirm-ApprovalPreDispatchStateUnchanged `
@@ -2799,7 +2813,7 @@ function Invoke-Run {
         [void](Get-ExactExtensionPayloadDigest $extensionDirectoryPath $payloadInventory $preflight.candidate.extension.combinedPayloadSha256)
 
         $epoch = Start-RecordedEpoch $script:EpochNames[3] $script:EpochSurfaces[3] "Reselect the dedicated stock Chrome extensions window."
-        Invoke-RecordedAction $epoch $script:ActionNames[5] @() "none" "Verify exactly one enabled unpacked Local Browser Bridge v0.12.15 card, no duplicate, and no load error."
+        Invoke-RecordedAction $epoch $script:ActionNames[5] @() "none" "Verify exactly one enabled unpacked Local Browser Bridge v0.12.16 card, no duplicate, and no load error."
         Set-MutationDisposition $mutation "CandidateExtension" "verified_applied"
         Invoke-RecordedAction $epoch $script:ActionNames[6] @(
             [ordered]@{ kind="click"; label="Chrome Extensions menu button" },
@@ -2823,7 +2837,7 @@ function Invoke-Run {
             [ordered]@{ kind="click"; label="popup token field" },
             [ordered]@{ kind="typeText"; value=$script:Token },
             [ordered]@{ kind="click"; label="popup Connect button" }
-        ) "acceptanceTokenSave" "Verify v0.12.15 is connected and the credential field is empty."
+        ) "acceptanceTokenSave" "Verify v0.12.16 is connected and the credential field is empty."
         Set-MutationDisposition $mutation "SavedToken" "verified_applied"
         Stop-RecordedEpoch $epoch
 
@@ -2832,7 +2846,7 @@ function Invoke-Run {
         if ($handoffOutput.Count -ne 1 -or $handoffOutput[0] -isnot [string]) {
             throw "The browser API matrix did not return exactly one in-memory owned-target JSON value."
         }
-        try { $ownedTarget = [string]$handoffOutput[0] | ConvertFrom-Json }
+        try { $ownedTarget = ConvertFrom-JsonPreservingStrings ([string]$handoffOutput[0]) }
         catch { throw "The browser API matrix owned-target handoff was not JSON." }
         $stableMatrix = Read-StableJsonWithDigest $script:MatrixOutputPath "ApiMatrixRecord"
         $matrix = $stableMatrix.Value
@@ -2846,7 +2860,7 @@ function Invoke-Run {
         $browserAction = Show-DeterministicGreeting $ownedTarget
 
         $epoch = Start-RecordedEpoch $script:EpochNames[5] $script:EpochSurfaces[5] "Select the dedicated Chrome window containing chrome://extensions and the matrix-owned demo."
-        Invoke-RecordedAction $epoch $script:ActionNames[9] @([ordered]@{ kind="click"; label="the exact chrome://extensions tab" }) "none" "Verify exactly one enabled unpacked Local Browser Bridge v0.12.15 card, no error, and Chrome's native debugger-use indicator while the exact bridge lease is active."
+        Invoke-RecordedAction $epoch $script:ActionNames[9] @([ordered]@{ kind="click"; label="the exact chrome://extensions tab" }) "none" "Verify exactly one enabled unpacked Local Browser Bridge v0.12.16 card, no error, and Chrome's native debugger-use indicator while the exact bridge lease is active."
         Save-RecordedScreenshot $epoch "extension-loaded"
         Invoke-RecordedAction $epoch $script:ActionNames[10] @([ordered]@{ kind="click"; label="the exact matrix-owned loopback demo tab" }) "none" "Verify the exact visible result is Hello, Bridge Matrix. blue selected."
         Save-RecordedScreenshot $epoch "api-action-result"
@@ -2954,11 +2968,11 @@ function Invoke-Run {
         Set-MutationDisposition $mutation "RemoveExtensionDialog" "outcome_unknown"
         Invoke-RecordedAction $epoch $script:ActionNames[24] @(
             [ordered]@{ kind="click"; label="the exact existing chrome://extensions tab" },
-            [ordered]@{ kind="click"; label="Remove on the exact v0.12.15 test-owned candidate card" },
+            [ordered]@{ kind="click"; label="Remove on the exact v0.12.16 test-owned candidate card" },
             [ordered]@{ kind="click"; label="confirm removal of that exact candidate card" }
-        ) "extensionDisposition" "Verify the helper switched to the protected chrome://extensions tab before removing only the new test-owned v0.12.15 card."
+        ) "extensionDisposition" "Verify the helper switched to the protected chrome://extensions tab before removing only the new test-owned v0.12.16 card."
         $finalCandidateCard = Read-LiveCandidateCardState `
-            $epoch "absent" "Exact v0.12.15 test-owned candidate card after removal"
+            $epoch "absent" "Exact v0.12.16 test-owned candidate card after removal"
         Set-MutationDisposition $mutation "RemoveExtensionDialog" "restored"
         Set-MutationDisposition $mutation "CandidateExtension" "restored"
         $restoreDeveloperSteps = if ($capturedDeveloperMode.value -ceq "disabled") {
@@ -3508,7 +3522,7 @@ function Invoke-SelfTest {
     foreach ($envelopeMutation in @(
         "request-replay", "input-swap", "same-session", "reviewer-change", "old-human-field"
     )) {
-        $invalidEnvelope = ($goodEnvelope | ConvertTo-Json -Depth 8) | ConvertFrom-Json
+        $invalidEnvelope = ConvertFrom-JsonPreservingStrings ($goodEnvelope | ConvertTo-Json -Depth 8)
         $existingReviewer = $null
         switch ($envelopeMutation) {
             "request-replay" { $invalidEnvelope.requestSha256 = [String]::new([char]"8", 64) }
@@ -3530,7 +3544,7 @@ function Invoke-SelfTest {
             throw "Computer-helper recorder accepted $envelopeMutation in an operator response."
         }
     }
-    $approvalEnvelope = ($goodEnvelope | ConvertTo-Json -Depth 8) | ConvertFrom-Json
+    $approvalEnvelope = ConvertFrom-JsonPreservingStrings ($goodEnvelope | ConvertTo-Json -Depth 8)
     $approvalEnvelope.responderKind = "user-via-orchestrator"
     $approvalEnvelope.responderSessionRef = $envelopeOrchestratorRef
     Assert-OperatorResponseEnvelope $approvalEnvelope $envelopeRequestId $envelopeRequestSha `
@@ -3744,12 +3758,14 @@ function Invoke-SelfTest {
         (Test-ExactSharedFrame $goodSharedFrame "window-1" 42 "share-1" 2)) {
         throw "Computer-helper recorder exact shared-frame self-test failed."
     }
-    $wrongPidFrame = $goodSharedFrame | ConvertTo-Json -Depth 5 -Compress | ConvertFrom-Json
+    $wrongPidFrame = ConvertFrom-JsonPreservingStrings `
+        ($goodSharedFrame | ConvertTo-Json -Depth 5 -Compress)
     $wrongPidFrame.pid = 43
     if (Test-ExactObservationIdentity $wrongPidFrame "window-1" 42) {
         throw "Computer-helper recorder accepted an observation from a reused HWND/wrong PID."
     }
-    $wrongAppFrame = $goodSharedFrame | ConvertTo-Json -Depth 5 -Compress | ConvertFrom-Json
+    $wrongAppFrame = ConvertFrom-JsonPreservingStrings `
+        ($goodSharedFrame | ConvertTo-Json -Depth 5 -Compress)
     $wrongAppFrame.appName = "notepad.exe"
     if (Test-ExactObservationIdentity $wrongAppFrame "window-1" 42) {
         throw "Computer-helper recorder accepted an observation from a non-Chrome application."

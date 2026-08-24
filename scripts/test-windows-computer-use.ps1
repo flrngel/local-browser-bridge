@@ -58,6 +58,19 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
+function ConvertFrom-JsonPreservingStrings {
+    param([Parameter(Mandatory = $true, ValueFromPipeline = $true)][string]$Json)
+    process {
+        $command = Get-Command ConvertFrom-Json -CommandType Cmdlet -ErrorAction Stop
+        if ($command.Parameters.ContainsKey("DateKind")) {
+            Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $Json -DateKind String
+        }
+        else {
+            Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $Json
+        }
+    }
+}
+
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     throw "The Windows acceptance runner can run only on Windows."
 }
@@ -230,7 +243,7 @@ function Read-ExactReleaseCandidateBinding {
     }
     try {
         $utf8 = [Text.UTF8Encoding]::new($false, $true)
-        $binding = $utf8.GetString($bytes) | ConvertFrom-Json
+        $binding = ConvertFrom-JsonPreservingStrings ($utf8.GetString($bytes))
     }
     catch {
         throw "CandidateBindingPath is not strict UTF-8 JSON."
@@ -1966,7 +1979,7 @@ if ($SelfTest) {
     try {
         $operatorMarkerSelfTestRequestId = "0123456789abcdef0123456789abcdef"
         $operatorRequestMarker = New-ForegroundArmRequestMarker `
-            -ProductVersion "0.12.15" `
+            -ProductVersion "0.12.16" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -InputStateAtPublication "not-started" `
             -TimeoutSeconds 120 `
@@ -1979,7 +1992,7 @@ if ($SelfTest) {
             -Value $operatorRequestMarker
         $operatorRequestBytesBefore = [IO.File]::ReadAllBytes($operatorRequestPath)
         $operatorRequestJson = [Text.Encoding]::UTF8.GetString($operatorRequestBytesBefore)
-        $operatorRequestRecord = $operatorRequestJson | ConvertFrom-Json
+        $operatorRequestRecord = ConvertFrom-JsonPreservingStrings $operatorRequestJson
         $expectedRequestMarkerProperties = @(
             "schemaVersion", "productVersion", "kind", "status", "requestId", "publishedAtUtc",
             "timeoutSeconds", "operatorActionRequired", "preferredRelaySurface", "fallbackRelaySurface",
@@ -1993,7 +2006,7 @@ if ($SelfTest) {
         )
         if ((@($operatorRequestRecord.PSObject.Properties.Name) -join "|") -cne ($expectedRequestMarkerProperties -join "|") -or
             $operatorRequestRecord.schemaVersion -ne 2 -or
-            $operatorRequestRecord.productVersion -cne "0.12.15" -or
+            $operatorRequestRecord.productVersion -cne "0.12.16" -or
             $operatorRequestRecord.status -cne "action-required" -or
             $operatorRequestRecord.requestId -cne $operatorMarkerSelfTestRequestId -or
             $operatorRequestRecord.operatorActionRequired -ne $true -or
@@ -2038,7 +2051,7 @@ if ($SelfTest) {
         }
 
         $alreadyArmedMarker = New-ForegroundArmRequestMarker `
-            -ProductVersion "0.12.15" `
+            -ProductVersion "0.12.16" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -InputStateAtPublication "already-acknowledged" `
             -TimeoutSeconds 120 `
@@ -2072,14 +2085,15 @@ if ($SelfTest) {
             stableSamplesRequired = 3
         }
         $operatorReceivedMarker = New-ForegroundArmReceivedMarker `
-            -ProductVersion "0.12.15" `
+            -ProductVersion "0.12.16" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -Proof $operatorReceivedProof
         $operatorReceivedPath = Write-NewOperatorMarker `
             -Directory $operatorMarkerSelfTestRoot `
             -FileName "foreground-arm-received.json" `
             -Value $operatorReceivedMarker
-        $operatorReceivedRecord = [IO.File]::ReadAllText($operatorReceivedPath, [Text.Encoding]::UTF8) | ConvertFrom-Json
+        $operatorReceivedRecord = ConvertFrom-JsonPreservingStrings `
+            ([IO.File]::ReadAllText($operatorReceivedPath, [Text.Encoding]::UTF8))
         $expectedReceivedMarkerProperties = @(
             "schemaVersion", "productVersion", "kind", "status", "requestId", "receivedAtUtc",
             "exactClickCountsMatched", "stableSamplesObserved", "stableSamplesRequired", "nativeTopologyMatched",
@@ -2090,7 +2104,7 @@ if ($SelfTest) {
         if ((@($operatorReceivedRecord.PSObject.Properties.Name) -join "|") -cne ($expectedReceivedMarkerProperties -join "|") -or
             $operatorReceivedRecord.status -cne "received" -or
             $operatorReceivedRecord.schemaVersion -ne 2 -or
-            $operatorReceivedRecord.productVersion -cne "0.12.15" -or
+            $operatorReceivedRecord.productVersion -cne "0.12.16" -or
             $operatorReceivedRecord.requestId -cne $operatorRequestRecord.requestId -or
             $operatorReceivedRecord.exactClickCountsMatched -ne $true -or
             $operatorReceivedRecord.stableSamplesObserved -ne 3 -or
@@ -2102,7 +2116,7 @@ if ($SelfTest) {
         $incompleteReceivedMarkerFailure = $null
         try {
             $null = New-ForegroundArmReceivedMarker `
-                -ProductVersion "0.12.15" `
+                -ProductVersion "0.12.16" `
                 -RequestId $operatorMarkerSelfTestRequestId `
                 -Proof $operatorReceivedProof
         }
@@ -2133,10 +2147,10 @@ if ($SelfTest) {
         }
         $candidateBindingSelfTestPath = [IO.Path]::Combine($candidateBindingSelfTestRoot, "candidate-binding.json")
         $candidateBindingNames = @(
-            "local-browser-bridge-v0.12.15-windows-x86_64.exe",
-            "local-computer-helper-v0.12.15-windows-x86_64.exe",
-            "local-browser-bridge-v0.12.15-macos-universal.tar.gz",
-            "local-browser-bridge-extension-v0.12.15.zip"
+            "local-browser-bridge-v0.12.16-windows-x86_64.exe",
+            "local-computer-helper-v0.12.16-windows-x86_64.exe",
+            "local-browser-bridge-v0.12.16-macos-universal.tar.gz",
+            "local-browser-bridge-extension-v0.12.16.zip"
         )
         $candidateBindingChecksums = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
         for ($index = 0; $index -lt $candidateBindingNames.Count; $index++) {
@@ -2161,9 +2175,9 @@ if ($SelfTest) {
         })
         $candidateBindingSelfTestRecord = [ordered]@{
             schemaVersion = 1
-            productVersion = "0.12.15"
+            productVersion = "0.12.16"
             repository = "flrngel/local-browser-bridge"
-            tag = "v0.12.15"
+            tag = "v0.12.16"
             sourceSha = [String]::new([char]'b', 40)
             tagObjectSha = [String]::new([char]'c', 40)
             workflowRunId = "32650000000"
@@ -2186,7 +2200,7 @@ if ($SelfTest) {
         )
         $candidateBindingSelfTestResult = Read-ExactReleaseCandidateBinding `
             -Path $candidateBindingSelfTestPath `
-            -ExpectedVersion "0.12.15" `
+            -ExpectedVersion "0.12.16" `
             -ExpectedManifestSha256 $candidateBindingManifestSha `
             -ExpectedChecksums $candidateBindingChecksums `
             -ExpectedAssetNames $candidateBindingNames
@@ -2205,7 +2219,7 @@ if ($SelfTest) {
         try {
             $null = Read-ExactReleaseCandidateBinding `
                 -Path $candidateBindingSelfTestPath `
-                -ExpectedVersion "0.12.15" `
+                -ExpectedVersion "0.12.16" `
                 -ExpectedManifestSha256 $candidateBindingManifestSha `
                 -ExpectedChecksums $candidateBindingChecksums `
                 -ExpectedAssetNames $candidateBindingNames
@@ -2365,7 +2379,8 @@ function Read-JsonFile {
     do {
         if ([IO.File]::Exists($Path)) {
             try {
-                return ([IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8) | ConvertFrom-Json)
+                return ConvertFrom-JsonPreservingStrings `
+                    ([IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8))
             }
             catch {
                 # The fixture replaces this small state document in place; retry a partial read.
@@ -2572,7 +2587,7 @@ function Receive-LbbJsonResponse {
         if ([String]::IsNullOrWhiteSpace($json)) {
             throw "Loopback API returned an empty JSON response."
         }
-        $body = $json | ConvertFrom-Json
+        $body = ConvertFrom-JsonPreservingStrings $json
         return [pscustomobject]@{
             status = [int]$httpResponse.StatusCode
             httpOk = $httpResponse.IsSuccessStatusCode
@@ -2609,7 +2624,7 @@ function Invoke-LbbJsonGet {
         return [pscustomobject]@{
             status = [int]$httpResponse.StatusCode
             httpOk = $httpResponse.IsSuccessStatusCode
-            body = ($json | ConvertFrom-Json)
+            body = ConvertFrom-JsonPreservingStrings $json
         }
     }
     catch {
@@ -2707,7 +2722,7 @@ function Get-FixtureStateSnapshot {
         if ([String]::IsNullOrWhiteSpace($json)) {
             return $null
         }
-        return ($json | ConvertFrom-Json)
+        return ConvertFrom-JsonPreservingStrings $json
     }
     catch {
         # The fixture replaces this small state document in place. A partial
@@ -3739,7 +3754,10 @@ try {
             param($state)
             return [int]$state.messageCounters.sysKeyDown -gt [int]$beforeSystemKeys.sysKeyDown -and [int]$state.messageCounters.sysKeyUp -gt [int]$beforeSystemKeys.sysKeyUp
         } "WM_SYSKEYDOWN and WM_SYSKEYUP"
-        $events = @([IO.File]::ReadAllLines([IO.Path]::Combine($fixtureEvidence, "fixture-events.ndjson")) | ForEach-Object { $_ | ConvertFrom-Json })
+        $events = @(
+            [IO.File]::ReadAllLines([IO.Path]::Combine($fixtureEvidence, "fixture-events.ndjson")) |
+                ForEach-Object { ConvertFrom-JsonPreservingStrings $_ }
+        )
         $systemDown = @($events | Where-Object { $_.event -eq "sysKeyDown" -and $_.source -eq "focusedTextInput" } | Select-Object -Last 1)
         $systemUp = @($events | Where-Object { $_.event -eq "sysKeyUp" -and $_.source -eq "focusedTextInput" } | Select-Object -Last 1)
         Assert-True ($systemDown.Count -eq 1 -and $systemDown[0].repeatCount -eq 1 -and $systemDown[0].scanCode -gt 0 -and $systemDown[0].altContext -eq $true -and $systemDown[0].previousState -eq $false -and $systemDown[0].transitionState -eq $false) "WM_SYSKEYDOWN carried an invalid lParam."
@@ -3994,7 +4012,8 @@ try {
         $replayedCanceled = Invoke-LbbCommandResponse "computer.move" $cancelParams $cancelCallId
         Assert-True ($replayedCanceled.status -eq 504 -and $replayedCanceled.httpOk -eq $false -and $replayedCanceled.body.error.code -eq "COMMAND_OUTCOME_UNKNOWN" -and $replayedCanceled.body.callId -eq $cancelCallId -and $replayedCanceled.body.replayed -eq $true) "The exact canceled call did not replay its cached outcome without redispatch."
         $originalComparable = $canceledOriginal.body | ConvertTo-Json -Depth 40 -Compress
-        $replayComparableObject = ($replayedCanceled.body | ConvertTo-Json -Depth 40 -Compress) | ConvertFrom-Json
+        $replayComparableObject = ConvertFrom-JsonPreservingStrings `
+            ($replayedCanceled.body | ConvertTo-Json -Depth 40 -Compress)
         $replayComparableObject.PSObject.Properties.Remove("replayed")
         $replayComparable = $replayComparableObject | ConvertTo-Json -Depth 40 -Compress
         Assert-True ($replayComparable -ceq $originalComparable) "The replayed cancellation body differed from the original after removing only the replay marker."

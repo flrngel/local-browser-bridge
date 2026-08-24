@@ -23,7 +23,20 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $script:Utf8 = [Text.UTF8Encoding]::new($false, $true)
-$script:Version = "0.12.15"
+$script:Version = "0.12.16"
+
+function ConvertFrom-JsonPreservingStrings {
+    param([Parameter(Mandatory = $true, ValueFromPipeline = $true)][string]$Json)
+    process {
+        $command = Get-Command ConvertFrom-Json -CommandType Cmdlet -ErrorAction Stop
+        if ($command.Parameters.ContainsKey("DateKind")) {
+            Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $Json -DateKind String
+        }
+        else {
+            Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $Json
+        }
+    }
+}
 
 function Assert-NoReparseAncestorChain([string]$Path, [string]$Label) {
     $Full = [IO.Path]::GetFullPath($Path)
@@ -241,7 +254,7 @@ function Read-StableJson([string]$Path, [string]$Label) {
             $Offset += $Read
         }
         if ($Stream.ReadByte() -ne -1) { throw "$Label grew during its stable read." }
-        try { $Value = $script:Utf8.GetString($Bytes) | ConvertFrom-Json }
+        try { $Value = ConvertFrom-JsonPreservingStrings ($script:Utf8.GetString($Bytes)) }
         catch { throw "$Label is not strict UTF-8 JSON." }
         return [pscustomobject]@{
             Value = $Value
@@ -362,7 +375,7 @@ function Convert-StrictDecision([string]$Json) {
     if ([String]::IsNullOrWhiteSpace($Json) -or $Json.Length -gt 1MB) {
         throw "DecisionJson is empty or oversized."
     }
-    try { $Decision = $Json | ConvertFrom-Json }
+    try { $Decision = ConvertFrom-JsonPreservingStrings $Json }
     catch { throw "DecisionJson is not strict JSON." }
     $Canonical = $Decision | ConvertTo-Json -Depth 30 -Compress
     if ($Canonical -cne $Json) {
@@ -1167,7 +1180,7 @@ function Invoke-SelfTest {
         [void](Invoke-SelfTestPublication `
             $SixRequest "independent-agent" $ReviewerRef $UnsafeSixJson)
         foreach ($SixMutation in @("string-sequence", "string-bool", "string-count")) {
-            $BadSix = ($UnsafeSixJson | ConvertFrom-Json)
+            $BadSix = ConvertFrom-JsonPreservingStrings $UnsafeSixJson
             switch ($SixMutation) {
                 "string-sequence" { $BadSix.entries[0].sequence = "1" }
                 "string-bool" { $BadSix.entries[0].digestMatched = "True" }
@@ -1189,13 +1202,14 @@ function Invoke-SelfTest {
             [pscustomobject]@{ Request = $CropRequest; Responder = "independent-agent"; Session = $ReviewerRef },
             [pscustomobject]@{ Request = $SixRequest; Responder = "independent-agent"; Session = $ReviewerRef }
         )) {
-            $UnableCopy = ($UnableKind.Request | ConvertTo-Json -Depth 30) | ConvertFrom-Json
+            $UnableCopy = ConvertFrom-JsonPreservingStrings `
+                ($UnableKind.Request | ConvertTo-Json -Depth 30)
             $UnableCopy.requestId = [Guid]::NewGuid().ToString("N")
             [void](Invoke-SelfTestPublication $UnableCopy $UnableKind.Responder `
                 $UnableKind.Session '{"unable":true}')
         }
 
-        $RoleMismatch = ($Request | ConvertTo-Json -Depth 30) | ConvertFrom-Json
+        $RoleMismatch = ConvertFrom-JsonPreservingStrings ($Request | ConvertTo-Json -Depth 30)
         $RoleMismatch.requestId = [String]::new([char]"d", 32)
         $script:RequestPath = Write-SelfTestRequest $RoleMismatch
         $script:ResponderKind = "user-via-orchestrator"
@@ -1205,7 +1219,7 @@ function Invoke-SelfTest {
         try { Invoke-Respond | Out-Null } catch { $RoleRejected = $true }
         if (-not $RoleRejected) { throw "Responder self-test accepted a responder-role mismatch." }
 
-        $StaleRequest = ($Request | ConvertTo-Json -Depth 30) | ConvertFrom-Json
+        $StaleRequest = ConvertFrom-JsonPreservingStrings ($Request | ConvertTo-Json -Depth 30)
         $StaleRequest.requestId = [String]::new([char]"e", 32)
         $StaleRequest.createdAtUtc = Format-CanonicalUtc ([DateTimeOffset]::UtcNow.AddMinutes(-2))
         $StaleRequest.expiresAtUtc = Format-CanonicalUtc ([DateTimeOffset]::UtcNow.AddMinutes(-1))

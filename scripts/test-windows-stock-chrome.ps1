@@ -20,6 +20,19 @@ param(
   [string]$CleanCoordinatorNonce
 )
 
+function ConvertFrom-JsonPreservingStrings {
+  param([Parameter(Mandatory = $true, ValueFromPipeline = $true)][string]$Json)
+  process {
+    $Command = Get-Command ConvertFrom-Json -CommandType Cmdlet -ErrorAction Stop
+    if ($Command.Parameters.ContainsKey("DateKind")) {
+      Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $Json -DateKind String
+    }
+    else {
+      Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $Json
+    }
+  }
+}
+
 function Invoke-CoordinatorSelfTest {
   $Source = [IO.File]::ReadAllText($PSCommandPath, [Text.UTF8Encoding]::new($false))
   foreach ($Required in @(
@@ -238,7 +251,7 @@ function Invoke-CoordinatorSelfTest {
       $EnvelopeRequestSha $EnvelopeCandidateSha $EnvelopeInputSha `
       $EnvelopeExecutorRef $EnvelopeReviewerRef
     foreach ($EnvelopeMutation in @("request-replay", "input-swap", "same-session", "old-human-field")) {
-      $InvalidEnvelope = ($GoodEnvelope | ConvertTo-Json -Depth 8) | ConvertFrom-Json
+      $InvalidEnvelope = ConvertFrom-JsonPreservingStrings ($GoodEnvelope | ConvertTo-Json -Depth 8)
       switch ($EnvelopeMutation) {
         "request-replay" { $InvalidEnvelope.requestSha256 = [String]::new([char]"7", 64) }
         "input-swap" { $InvalidEnvelope.inputDigestSha256 = [String]::new([char]"8", 64) }
@@ -453,7 +466,7 @@ function Invoke-CoordinatorSelfTest {
     foreach ($CropMutation in @(
       "extra-human", "uncertain", "sensitive", "bounds", "fractional", "string-bool"
     )) {
-      $InvalidCrop = ($GoodCrop | ConvertTo-Json) | ConvertFrom-Json
+      $InvalidCrop = ConvertFrom-JsonPreservingStrings ($GoodCrop | ConvertTo-Json)
       switch ($CropMutation) {
         "extra-human" {
           $InvalidCrop | Add-Member -NotePropertyName humanReviewed -NotePropertyValue $true
@@ -502,7 +515,7 @@ function Invoke-CoordinatorSelfTest {
       "reordered", "digest", "uncertain", "sensitive", "aggregate",
       "string-number", "string-bool", "aggregate-count"
     )) {
-      $InvalidReview = ($GoodReview | ConvertTo-Json -Depth 8) | ConvertFrom-Json
+      $InvalidReview = ConvertFrom-JsonPreservingStrings ($GoodReview | ConvertTo-Json -Depth 8)
       switch ($ReviewMutation) {
         "reordered" { $InvalidReview.entries[0].sequence = 2 }
         "digest" { $InvalidReview.entries[0].sha256 = [String]::new([char]"f", 64) }
@@ -731,7 +744,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$Version = "0.12.15"
+$Version = "0.12.16"
 $script:ReviewExchangeDirectory = $null
 $script:ReviewExchangeArtifacts = New-Object Collections.Generic.List[string]
 $script:ReviewResponseReservations = New-Object Collections.Generic.List[object]
@@ -748,7 +761,7 @@ $Origin = "https://github.com/flrngel/local-browser-bridge.git"
 $ExpectedInvocationUri = "https://github.com/flrngel/local-browser-bridge/actions/runs/$WorkflowRunId/attempts/$WorkflowRunAttempt"
 
 if (-not $SelfTestRequested) {
-  if ($Version -cne "0.12.15" -or $FinalSha -cnotmatch '^[0-9a-f]{40}$' -or
+  if ($Version -cne "0.12.16" -or $FinalSha -cnotmatch '^[0-9a-f]{40}$' -or
       $TagObjectSha -cnotmatch '^[0-9a-f]{40}$' -or
       $WorkflowRunId -cnotmatch '^[1-9][0-9]*$' -or
       $WorkflowRunAttempt -cnotmatch '^[1-9][0-9]*$' -or
@@ -1333,7 +1346,10 @@ function Read-StablePrivateJson([string]$Path, [string]$Label) {
       if ($Read -le 0) { throw "$Label ended during its stable read." }
       $Offset += $Read
     }
-    try { $Value = [Text.UTF8Encoding]::new($false, $true).GetString($Bytes) | ConvertFrom-Json }
+    try {
+      $Value = ConvertFrom-JsonPreservingStrings `
+        ([Text.UTF8Encoding]::new($false, $true).GetString($Bytes))
+    }
     catch { throw "$Label is not strict UTF-8 JSON." }
     $Hasher = [Security.Cryptography.SHA256]::Create()
     try { $Digest = ([BitConverter]::ToString($Hasher.ComputeHash($Bytes))).Replace("-", "").ToLowerInvariant() }
@@ -2411,7 +2427,8 @@ if ($CandidateBindingInfo.Length -le 0 -or $CandidateBindingInfo.Length -gt 2MB)
 }
 $BindingBytes = [IO.File]::ReadAllBytes($CandidateBindingInfo.FullName)
 try {
-  $Binding = [Text.UTF8Encoding]::new($false, $true).GetString($BindingBytes) | ConvertFrom-Json
+  $Binding = ConvertFrom-JsonPreservingStrings `
+    ([Text.UTF8Encoding]::new($false, $true).GetString($BindingBytes))
 }
 finally { [Array]::Clear($BindingBytes, 0, $BindingBytes.Length) }
 $BindingProperties = @($Binding.PSObject.Properties.Name)
@@ -2458,7 +2475,8 @@ if ((Get-TrustedSha256 $StableCandidateBinding) -cne (Get-TrustedSha256 $Candida
 }
 $StableBindingBytes = [IO.File]::ReadAllBytes($StableCandidateBinding)
 try {
-  $StableBinding = [Text.UTF8Encoding]::new($false, $true).GetString($StableBindingBytes) | ConvertFrom-Json
+  $StableBinding = ConvertFrom-JsonPreservingStrings `
+    ([Text.UTF8Encoding]::new($false, $true).GetString($StableBindingBytes))
 }
 finally { [Array]::Clear($StableBindingBytes, 0, $StableBindingBytes.Length) }
 if (($StableBinding | ConvertTo-Json -Depth 20 -Compress) -cne
@@ -2568,7 +2586,7 @@ function Invoke-TrustedGhAttestation([string]$Name) {
     $Output = $OutputTask.GetAwaiter().GetResult()
     [void]$ErrorTask.GetAwaiter().GetResult()
     if ($Process.ExitCode -ne 0) { throw "GitHub attestation verification failed." }
-    $Attestations = @($Output | ConvertFrom-Json)
+    $Attestations = @($Output | ConvertFrom-JsonPreservingStrings)
     if ($Attestations.Count -lt 1) { throw "GitHub attestation verification returned no statement." }
     $ExpectedAssetSha = Get-TrustedSha256 (Join-Path $Candidate $Name)
     foreach ($Attestation in $Attestations) {
@@ -2663,12 +2681,12 @@ $TrustedRelativeFiles = @(
   "scripts/record-computer-helper-chain.ps1",
   "scripts/sanitize-browser-evidence-screenshot.ps1",
   "scripts/write-stock-chrome-operator-response.ps1",
-  "evidence/v0.12.15/browser/operator-results.template.json",
-  "evidence/v0.12.15/browser/operator-results.schema.json",
-  "evidence/v0.12.15/browser/computer-helper-chain.schema.json",
-  "evidence/v0.12.15/browser/scoped-action-approval.schema.json",
-  "evidence/v0.12.15/browser/independent-visual-review.schema.json",
-  "evidence/v0.12.15/browser/external-surface-attestation.schema.json"
+  "evidence/v0.12.16/browser/operator-results.template.json",
+  "evidence/v0.12.16/browser/operator-results.schema.json",
+  "evidence/v0.12.16/browser/computer-helper-chain.schema.json",
+  "evidence/v0.12.16/browser/scoped-action-approval.schema.json",
+  "evidence/v0.12.16/browser/independent-visual-review.schema.json",
+  "evidence/v0.12.16/browser/external-surface-attestation.schema.json"
 )
 function Export-ExactTrustedBlob([string]$ObjectId, [string]$Relative) {
   if ($ObjectId -cnotmatch '^[0-9a-f]{40}$' -or $TrustedRelativeFiles -cnotcontains $Relative) {
@@ -2850,7 +2868,7 @@ $Captures = [ordered]@{
   "post-handback-resume" = "browser-06-post-handback-resume"
 }
 $RequiredVisibleStates = [ordered]@{
-  "extension-loaded" = "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.15 card with no load errors and Chrome's debugger-use indicator during the active bridge lease"
+  "extension-loaded" = "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.16 card with no load errors and Chrome's debugger-use indicator during the active bridge lease"
   "api-action-result" = "the loopback demo visibly shows Hello, Bridge Matrix. blue selected. after the browser API action"
   "computer-share-action" = "the exact shared Chrome window visibly shows the post-click demo state and synthetic session pointer from a fresh helper frame"
   "stop-paused" = "the trusted extension popup visibly shows the human pause and Resume remote control after the in-page Stop handback"

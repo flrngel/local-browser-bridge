@@ -41,6 +41,19 @@ $script:MaxPixels = 50MB
 $script:MinOutputWidth = 120
 $script:MinOutputHeight = 32
 $script:ForbiddenPngChunks = @("tEXt", "zTXt", "iTXt", "eXIf", "iCCP", "tIME")
+
+function ConvertFrom-JsonPreservingStrings {
+    param([Parameter(Mandatory = $true, ValueFromPipeline = $true)][string]$Json)
+    process {
+        $command = Get-Command ConvertFrom-Json -CommandType Cmdlet -ErrorAction Stop
+        if ($command.Parameters.ContainsKey("DateKind")) {
+            Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $Json -DateKind String
+        }
+        else {
+            Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $Json
+        }
+    }
+}
 $script:LegacyReviewStatement = "A human reviewed this tight crop; OCR is supplemental and unknown sensitive pixels are not automatically redacted."
 $script:PendingReviewStatement = "Sanitization completed; independent visual review is pending and no automated text inspection or pixel-redaction safety proof is claimed."
 $script:CompletedReviewStatement = "A separate agent reviewed this exact digest-bound crop; no sensitive pixels were observed, but visual judgment is not a pixel-safety proof."
@@ -66,7 +79,7 @@ $script:ExpectedScreenshotsV2 = [ordered]@{
     "post-handback-resume" = "browser-06-post-handback-resume.png"
 }
 $script:RequiredVisibleStatesV2 = [ordered]@{
-    "extension-loaded" = "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.15 card with no load errors and Chrome's debugger-use indicator during the active bridge lease"
+    "extension-loaded" = "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.16 card with no load errors and Chrome's debugger-use indicator during the active bridge lease"
     "api-action-result" = "the loopback demo visibly shows Hello, Bridge Matrix. blue selected. after the browser API action"
     "computer-share-action" = "the exact shared Chrome window visibly shows the post-click demo state and synthetic session pointer from a fresh helper frame"
     "stop-paused" = "the trusted extension popup visibly shows the human pause and Resume remote control after the in-page Stop handback"
@@ -265,10 +278,10 @@ function Get-CandidateBindingFromPreflight {
     $bytes = Read-StableBytes $resolved 1MB "PreflightRecord"
     $preflightSha256 = Get-BytesSha256 $bytes
     try {
-        $record = $script:Utf8NoBom.GetString($bytes) | ConvertFrom-Json
+        $record = ConvertFrom-JsonPreservingStrings ($script:Utf8NoBom.GetString($bytes))
         $actual = @($record.PSObject.Properties.Name)
         $expected = @("schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed", "runNonce", "candidate")
-        if ([string]$record.candidate.version -ceq "0.12.15") {
+        if ([string]$record.candidate.version -ceq "0.12.16") {
             $expected = @(
                 "schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed",
                 "runNonce", "releaseCandidateBinding", "candidate"
@@ -280,13 +293,13 @@ function Get-CandidateBindingFromPreflight {
             $record.phase -cne "preflight" -or $record.passed -ne $true -or
             [string]$record.runNonce -cnotmatch '^[0-9a-f]{64}$' -or
             [string]$record.candidate.finalSha -cnotmatch '^[0-9a-f]{40}$' -or
-            @("0.12.2", "0.12.15") -cnotcontains [string]$record.candidate.version) {
+            @("0.12.2", "0.12.16") -cnotcontains [string]$record.candidate.version) {
             throw "PreflightRecord identity is invalid."
         }
         foreach ($value in @(
             [string]$record.candidate.checksumManifest.sha256,
             [string]$record.candidate.server.sha256,
-            $(if ([string]$record.candidate.version -ceq "0.12.15") { [string]$record.candidate.computerHelper.sha256 } else { [string]$record.candidate.server.sha256 }),
+            $(if ([string]$record.candidate.version -ceq "0.12.16") { [string]$record.candidate.computerHelper.sha256 } else { [string]$record.candidate.server.sha256 }),
             [string]$record.candidate.extension.sha256,
             [string]$record.candidate.extension.combinedPayloadSha256
         )) {
@@ -295,7 +308,7 @@ function Get-CandidateBindingFromPreflight {
             }
         }
         $script:CandidateVersionFromPreflight = [string]$record.candidate.version
-        if ($script:CandidateVersionFromPreflight -ceq "0.12.15") {
+        if ($script:CandidateVersionFromPreflight -ceq "0.12.16") {
             Assert-ReleaseCandidateBindingBasic $record.releaseCandidateBinding $record.candidate
             $script:ReleaseCandidateBindingFromPreflight = $record.releaseCandidateBinding
         }
@@ -307,7 +320,7 @@ function Get-CandidateBindingFromPreflight {
             checksumManifestSha256 = [string]$record.candidate.checksumManifest.sha256
             serverSha256 = [string]$record.candidate.server.sha256
         }
-        if ($script:CandidateVersionFromPreflight -ceq "0.12.15") {
+        if ($script:CandidateVersionFromPreflight -ceq "0.12.16") {
             $binding.computerHelperSha256 = [string]$record.candidate.computerHelper.sha256
         }
         $binding.extensionZipSha256 = [string]$record.candidate.extension.sha256
@@ -493,7 +506,7 @@ function Read-StrictJsonWithDigest {
     param([string]$Path, [string]$Label)
     $bytes = Read-StableBytes $Path 2MB $Label
     try {
-        try { $value = $script:Utf8NoBom.GetString($bytes) | ConvertFrom-Json }
+        try { $value = ConvertFrom-JsonPreservingStrings ($script:Utf8NoBom.GetString($bytes)) }
         catch { throw "$Label is not strict UTF-8 JSON." }
         return [pscustomobject]@{ Value = $value; Sha256 = Get-BytesSha256 $bytes }
     }
@@ -533,7 +546,7 @@ function Invoke-Sanitize {
         throw "LegacyV0122ReviewConfirmed is mandatory for v0.12.2 compatibility."
     }
     if (-not $legacyOnePhase -and $LegacyV0122ReviewConfirmed) {
-        throw "LegacyV0122ReviewConfirmed is forbidden for the v0.12.15 independent-review protocol."
+        throw "LegacyV0122ReviewConfirmed is forbidden for the v0.12.16 independent-review protocol."
     }
     $cropValues = @($CropX, $CropY, $CropWidth, $CropHeight)
     $hasCrop = @($cropValues | Where-Object { $_ -ne -1 }).Count -gt 0
@@ -570,7 +583,7 @@ function Invoke-Sanitize {
                         $expectedScreenshots[$Purpose]
                     ) + ".raw.png"
                     if ([IO.Path]::GetFileName($inputPath) -cne $expectedRawName) {
-                        throw "v0.12.15 InputImage must use the canonical raw helper-capture filename."
+                        throw "v0.12.16 InputImage must use the canonical raw helper-capture filename."
                     }
                     $sourceCapture = [ordered]@{
                         name = $expectedRawName
@@ -725,8 +738,8 @@ function Invoke-BindReview {
     }
     $denyValues = @(Read-DenyValues $DenyValuesFile)
     $candidateBinding = Get-CandidateBindingFromPreflight $PreflightRecord
-    if ($script:CandidateVersionFromPreflight -cne "0.12.15") {
-        throw "BindReview is available only for the v0.12.15 independent-review protocol."
+    if ($script:CandidateVersionFromPreflight -cne "0.12.16") {
+        throw "BindReview is available only for the v0.12.16 independent-review protocol."
     }
     $pendingStable = Read-StrictJsonWithDigest $pendingPath "PendingRecord"
     $pending = $pendingStable.Value
@@ -1016,7 +1029,7 @@ function Invoke-SelfTest {
             passed = $true
             runNonce = $bindingHash
             releaseCandidateBinding = [ordered]@{
-                productVersion = "0.12.15"; repository = "flrngel/local-browser-bridge"; tag = "v0.12.15"
+                productVersion = "0.12.16"; repository = "flrngel/local-browser-bridge"; tag = "v0.12.16"
                 sourceSha = [String]::new([char]"0", 40); tagObjectSha = [String]::new([char]"1", 40)
                 workflowRunId = "1"; workflowRunAttempt = "1"; artifactId = "1"; artifactName = "release-candidate"
                 artifactZipBytes = 1; artifactZipSha256 = $bindingHash; checksumManifestSha256 = $bindingHash
@@ -1027,7 +1040,7 @@ function Invoke-SelfTest {
                 })
             }
             candidate = [ordered]@{
-                version = "0.12.15"
+                version = "0.12.16"
                 finalSha = [String]::new([char]"0", 40)
                 checksumManifest = [ordered]@{ sha256 = $bindingHash }
                 server = [ordered]@{ sha256 = $bindingHash }
@@ -1053,7 +1066,8 @@ function Invoke-SelfTest {
             [IO.File]::Exists($recordPath)) {
             throw "Screenshot sanitizer self-test failed."
         }
-        $pending = [IO.File]::ReadAllText($pendingPath, $script:Utf8NoBom) | ConvertFrom-Json
+        $pending = ConvertFrom-JsonPreservingStrings `
+            ([IO.File]::ReadAllText($pendingPath, $script:Utf8NoBom))
         if ($pending.evidenceType -cne "stock-user-chrome-screenshot-review-pending" -or
             $pending.independentVisualReviewRequired -ne $true -or
             $pending.independentVisualReviewCompleted -ne $false -or
@@ -1125,7 +1139,7 @@ function Invoke-SelfTest {
             "string-session-boundary", "string-sequence", "string-entry-bool",
             "string-aggregate-count", "string-aggregate-bool", "legacy-human-field"
         )) {
-            $invalidReview = ($review | ConvertTo-Json -Depth 12) | ConvertFrom-Json
+            $invalidReview = ConvertFrom-JsonPreservingStrings ($review | ConvertTo-Json -Depth 12)
             switch ($negative) {
                 "same-session" { $invalidReview.reviewerSessionRef = $invalidReview.executorSessionRef }
                 "reordered" { $invalidReview.entries[0].sequence = 2 }
@@ -1164,7 +1178,8 @@ function Invoke-SelfTest {
         if (-not [IO.File]::Exists($recordPath)) {
             throw "Screenshot independent review binding was not created."
         }
-        $record = [IO.File]::ReadAllText($recordPath, $script:Utf8NoBom) | ConvertFrom-Json
+        $record = ConvertFrom-JsonPreservingStrings `
+            ([IO.File]::ReadAllText($recordPath, $script:Utf8NoBom))
         if ($record.image.width -ne 240 -or $record.image.height -ne 120 -or
             $record.sourceCapture.name -cne "browser-02-api-action-result.raw.png" -or
             $record.sourceCapture.endpoint -cne "/api/computer/screenshot" -or
@@ -1184,7 +1199,7 @@ function Invoke-SelfTest {
         }
 
         $legacyPreflightPath = [IO.Path]::Combine($root, "candidate-preflight-v0.12.2.json")
-        $legacyPreflight = $preflight | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+        $legacyPreflight = ConvertFrom-JsonPreservingStrings ($preflight | ConvertTo-Json -Depth 8)
         $legacyPreflight.candidate.version = "0.12.2"
         $legacyPreflight.PSObject.Properties.Remove("releaseCandidateBinding")
         [IO.File]::WriteAllText(
@@ -1206,7 +1221,8 @@ function Invoke-SelfTest {
         & $PSCommandPath -Mode Sanitize -InputImage $inputPath -OutputImage $legacyOutputPath `
             -OutputRecord $legacyRecordPath -PreflightRecord $legacyPreflightPath -Purpose action-result `
             -CropX 4 -CropY 4 -CropWidth 240 -CropHeight 120 -LegacyV0122ReviewConfirmed | Out-Null
-        $legacyRecord = [IO.File]::ReadAllText($legacyRecordPath, $script:Utf8NoBom) | ConvertFrom-Json
+        $legacyRecord = ConvertFrom-JsonPreservingStrings `
+            ([IO.File]::ReadAllText($legacyRecordPath, $script:Utf8NoBom))
         if ($legacyRecord.evidenceType -cne "stock-user-chrome-screenshot" -or
             $legacyRecord.manualVisualReviewConfirmed -ne $true -or
             $legacyRecord.reviewStatement -cne $script:LegacyReviewStatement) {

@@ -103,7 +103,7 @@ Test one-shot observation and persistent sharing as separate lifecycles:
 
 Do not report cross-Space, minimized, protected, elevated, or framework-specific behavior as supported merely because a stream or message API returned success.
 
-The v0.12.15 macOS harness defines two fresh, non-mergeable pointer-evidence lanes in [`evidence/v0.12.15/computer/README.md`](../evidence/v0.12.15/computer/README.md). The default `quiet` lane requires a healthy monitor, unchanged sampled position, no shared activity, and `sharedPointerActivityState: quiet` for every evidence cell. The separately authorized `deliberate-concurrency` lane requires at least one `contaminated` cell while the sealed helper route, helper-global-pointer preservation, target postcondition, and foreground/focus/Space boundaries still hold. Never convert or merge concurrency-lane bytes into quiet release evidence. An unknown monitor or boundary is a failure in both lanes.
+The v0.12.16 macOS harness defines two fresh, non-mergeable pointer-evidence lanes in [`evidence/v0.12.16/computer/README.md`](../evidence/v0.12.16/computer/README.md). The default `quiet` lane requires a healthy monitor, unchanged sampled position, no shared activity, and `sharedPointerActivityState: quiet` for every evidence cell. The separately authorized `deliberate-concurrency` lane requires at least one `contaminated` cell while the sealed helper route, helper-global-pointer preservation, target postcondition, and foreground/focus/Space boundaries still hold. Never convert or merge concurrency-lane bytes into quiet release evidence. An unknown monitor or boundary is a failure in both lanes.
 
 Before either lane invokes a candidate binary—even with `--version`—the exact
 tagged SystemProbe must complete a 30-second native quiet-seat epoch with at
@@ -116,7 +116,7 @@ whole-run proof unchanged. The deliberate lane uses this gate before its
 required initial quiet cells; intentional pointer movement begins only at the
 separately verified orange prompt.
 
-For the deliberate-concurrency lane, start the packaged evidence runner and then run `node scripts/wait-macos-pointer-concurrency-handoff.mjs --mode watch --evidence-dir "$ABSOLUTE_EVIDENCE_DIRECTORY" --runner-pid "$RUNNER_PID"` in a separate terminal. The watcher opens only the exact request and completion markers under the evidence directory's `operator` subdirectory, read-only and without following links. It requires schema 1, v0.12.15, fresh file-bound timestamps, the exact live runner/request/prompt identity, a visible nonactivating panel, notification-only/non-authoritative flags, and final `clickFreeMotionObserved: true` proof. `ACTION REQUIRED` means continuously move the shared pointer without clicking. Before product dispatch, button/drag/scroll/tablet activity or a foreground/focus/Space change resets the clean-motion arm under the same absolute deadline; an `ACTION` transition contaminated before dispatch returns to `MOVE`. Unknown monitoring, deadline-independent probe failure, or contamination once dispatch is in flight still fails closed. Stop only after `COMPLETE`, which requires click-free movement to advance through the independently observed green completion state and both product and independent boundaries to report sustained contamination. Entering `ACTION` starts a separate 10-second hard action/completion grace, capped by a 310-second total prompt lifetime, and the panel exits at the earlier deadline in every state. The watcher never writes an acknowledgement and its output is not acceptance authority. A stale or changed marker, dead runner or prompt, mismatched completion, unknown boundary, or timeout fails closed. Validate the observer and producer classifier without UI or evidence files with `node --check scripts/wait-macos-pointer-concurrency-handoff.mjs`, `node scripts/wait-macos-pointer-concurrency-handoff.mjs --mode self-test`, `node --check evidence/v0.12.15/computer/helper-evidence-rig.mjs`, and `node evidence/v0.12.15/computer/helper-evidence-rig.mjs --self-test`.
+For the deliberate-concurrency lane, start the packaged evidence runner and then run `node scripts/wait-macos-pointer-concurrency-handoff.mjs --mode watch --evidence-dir "$ABSOLUTE_EVIDENCE_DIRECTORY" --runner-pid "$RUNNER_PID"` in a separate terminal. The watcher opens only the exact request and completion markers under the evidence directory's `operator` subdirectory, read-only and without following links. It requires schema 1, v0.12.16, fresh file-bound timestamps, the exact live runner/request/prompt identity, a visible nonactivating panel, notification-only/non-authoritative flags, and final `clickFreeMotionObserved: true` proof. `ACTION REQUIRED` means continuously move the shared pointer without clicking. Before product dispatch, button/drag/scroll/tablet activity or a foreground/focus/Space change resets the clean-motion arm under the same absolute deadline; an `ACTION` transition contaminated before dispatch returns to `MOVE`. Unknown monitoring, deadline-independent probe failure, or contamination once dispatch is in flight still fails closed. Stop only after `COMPLETE`, which requires click-free movement to advance through the independently observed green completion state and both product and independent boundaries to report sustained contamination. Entering `ACTION` starts a separate 10-second hard action/completion grace, capped by a 310-second total prompt lifetime, and the panel exits at the earlier deadline in every state. The watcher never writes an acknowledgement and its output is not acceptance authority. A stale or changed marker, dead runner or prompt, mismatched completion, unknown boundary, or timeout fails closed. Validate the observer and producer classifier without UI or evidence files with `node --check scripts/wait-macos-pointer-concurrency-handoff.mjs`, `node scripts/wait-macos-pointer-concurrency-handoff.mjs --mode self-test`, `node --check evidence/v0.12.16/computer/helper-evidence-rig.mjs`, and `node evidence/v0.12.16/computer/helper-evidence-rig.mjs --self-test`.
 
 ### Deterministic Windows live acceptance
 
@@ -181,7 +181,7 @@ repository's read-only watcher from a separate process:
 ```
 
 The watcher reads only `operator/foreground-arm-request.json`. It requires the
-exact v0.12.15/schema-2 field set and order, a fresh non-expired publication,
+exact v0.12.16/schema-2 field set and order, a fresh non-expired publication,
 ordinary non-reparse paths, and the same live runner PID/start time both before
 and after parsing. It emits exactly one compact sanitized
 `foreground-arm-visual-handoff` JSON object or fails closed. It neither writes
@@ -273,7 +273,7 @@ Plan verification before changing a capability. Keep these evidence classes sepa
 
 Record negative results. A candidate run must not be described as published release evidence. Screenshots should show the relevant browser or OS indicator, target result, and non-interruption state without exposing tokens, personal data, or authenticated URLs.
 
-The exact v0.12.9 packaged macOS attempt is a required negative-history reference: it stopped at the first semantic `setValue` after a cursor-position delta that the old record could not attribute. The exact [v0.12.10 attempt](../evidence/v0.12.10/computer/attempts/withdrawn-de59840-macos-deliberate-pointer-timeout/README.md) then passed 69 assertions before timing out with no separately authorized pointer movement and no final action. Version v0.12.11 was withdrawn before execution when its receipt could not authenticate both required fresh macOS lanes. The exact tagged v0.12.12 candidate was withdrawn after three deliberate-concurrency attempts stopped before product dispatch: a final probe inherited the nearly exhausted arm budget, a pre-arm pointer interval contained disallowed input, and an `ACTION` transition contained input plus user-context contamination. The three records remain isolated on their evidence-only branches. Windows/stock-Chrome never completed for those candidates. Do not rewrite those historical failures with v0.12.15 field names. A v0.12.15 success must come from fresh artifacts and the new pre-dispatch re-arm plus route/activity/postcondition contract.
+The exact v0.12.9 packaged macOS attempt is a required negative-history reference: it stopped at the first semantic `setValue` after a cursor-position delta that the old record could not attribute. The exact [v0.12.10 attempt](../evidence/v0.12.10/computer/attempts/withdrawn-de59840-macos-deliberate-pointer-timeout/README.md) then passed 69 assertions before timing out with no separately authorized pointer movement and no final action. Version v0.12.11 was withdrawn before execution when its receipt could not authenticate both required fresh macOS lanes. The exact tagged v0.12.12 candidate was withdrawn after three deliberate-concurrency attempts stopped before product dispatch: a final probe inherited the nearly exhausted arm budget, a pre-arm pointer interval contained disallowed input, and an `ACTION` transition contained input plus user-context contamination. The three records remain isolated on their evidence-only branches. Windows/stock-Chrome never completed for those candidates. Do not rewrite those historical failures with v0.12.16 field names. A v0.12.16 success must come from fresh artifacts and the new pre-dispatch re-arm plus route/activity/postcondition contract.
 
 See [SOTA audit](SOTA_AUDIT.md) and the [evidence index](../evidence/) for current boundaries.
 
@@ -296,10 +296,10 @@ The canonical release path is `.github/workflows/deploy.yml` from a matching ann
 
 Publication also requires one candidate-bound evidence commit and a nonsecret
 canonical V2 receipt. The evidence branch is exactly
-`evidence/v0.12.15-release-run-RUN_ID-attempt-RUN_ATTEMPT`; its tip must be one
+`evidence/v0.12.16-release-run-RUN_ID-attempt-RUN_ATTEMPT`; its tip must be one
 commit whose sole parent is the tagged source commit. That commit may only add
 ordinary mode-`100644` allowlisted files beneath
-`evidence/v0.12.15/release/run-RUN_ID-attempt-RUN_ATTEMPT/`. The five required
+`evidence/v0.12.16/release/run-RUN_ID-attempt-RUN_ATTEMPT/`. The five required
 machine records are:
 
 - `macos/macos-acceptance.json`;
@@ -324,7 +324,7 @@ canonical; run and artifact identifiers are strings:
 
 ```bash
 receipt="$(jq -cn \
-  --arg tag "v0.12.15" \
+  --arg tag "v0.12.16" \
   --arg source_sha "EXACT_VERIFIED_SOURCE_SHA" \
   --arg tag_object_sha "EXACT_ANNOTATED_TAG_OBJECT_SHA" \
   --arg run_id "EXACT_GITHUB_RUN_ID" \
@@ -332,7 +332,7 @@ receipt="$(jq -cn \
   --arg artifact_id "EXACT_RELEASE_CANDIDATE_ARTIFACT_ID" \
   --arg artifact_zip_sha256 "EXACT_RAW_ARTIFACT_ZIP_SHA256" \
   --arg manifest_sha256 "$(shasum -a 256 SHA256SUMS.txt | awk '{ print $1 }')" \
-  --arg evidence_ref "refs/heads/evidence/v0.12.15-release-run-EXACT_GITHUB_RUN_ID-attempt-EXACT_GITHUB_RUN_ATTEMPT" \
+  --arg evidence_ref "refs/heads/evidence/v0.12.16-release-run-EXACT_GITHUB_RUN_ID-attempt-EXACT_GITHUB_RUN_ATTEMPT" \
   --arg evidence_commit_sha "EXACT_REMOTE_EVIDENCE_COMMIT_SHA" \
   --arg macos_acceptance_sha256 "$(shasum -a 256 macos/macos-acceptance.json | awk '{ print $1 }')" \
   --arg macos_quiet_sha256 "$(shasum -a 256 macos/quiet/helper-results.json | awk '{ print $1 }')" \

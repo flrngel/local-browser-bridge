@@ -42,6 +42,19 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
+function ConvertFrom-JsonPreservingStrings {
+    param([Parameter(Mandatory = $true, ValueFromPipeline = $true)][string]$Json)
+    process {
+        $command = Get-Command ConvertFrom-Json -CommandType Cmdlet -ErrorAction Stop
+        if ($command.Parameters.ContainsKey("DateKind")) {
+            Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $Json -DateKind String
+        }
+        else {
+            Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $Json
+        }
+    }
+}
+
 $ActionMethods = @(
     "status",
     "browser.control.start",
@@ -313,11 +326,11 @@ function Get-CandidateBindingFromPreflight {
     $bytes = [IO.File]::ReadAllBytes($resolved)
     try {
         $utf8 = [Text.UTF8Encoding]::new($false, $true)
-        $record = $utf8.GetString($bytes) | ConvertFrom-Json
+        $record = ConvertFrom-JsonPreservingStrings ($utf8.GetString($bytes))
         $preflightFields = @(
             "schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed", "runNonce", "candidate"
         )
-        if ($Version -ceq "0.12.15") {
+        if ($Version -ceq "0.12.16") {
             $preflightFields = @(
                 "schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed",
                 "runNonce", "releaseCandidateBinding", "candidate"
@@ -333,13 +346,13 @@ function Get-CandidateBindingFromPreflight {
         foreach ($value in @(
             [string]$record.candidate.checksumManifest.sha256,
             [string]$record.candidate.server.sha256,
-            $(if ($Version -ceq "0.12.15") { [string]$record.candidate.computerHelper.sha256 } else { [string]$record.candidate.server.sha256 }),
+            $(if ($Version -ceq "0.12.16") { [string]$record.candidate.computerHelper.sha256 } else { [string]$record.candidate.server.sha256 }),
             [string]$record.candidate.extension.sha256,
             [string]$record.candidate.extension.combinedPayloadSha256
         )) {
             Assert-Acceptance ($value -cmatch '^[0-9a-f]{64}$') "preflight-candidate-hash"
         }
-        if ($Version -ceq "0.12.15") {
+        if ($Version -ceq "0.12.16") {
             Assert-ReleaseCandidateBinding $record.releaseCandidateBinding $record.candidate `
                 "preflight-release-candidate-binding"
             $script:ReleaseCandidateBinding = $record.releaseCandidateBinding
@@ -351,7 +364,7 @@ function Get-CandidateBindingFromPreflight {
             checksumManifestSha256 = [string]$record.candidate.checksumManifest.sha256
             serverSha256 = [string]$record.candidate.server.sha256
         }
-        if ($Version -ceq "0.12.15") {
+        if ($Version -ceq "0.12.16") {
             $binding.computerHelperSha256 = [string]$record.candidate.computerHelper.sha256
         }
         $binding.extensionZipSha256 = [string]$record.candidate.extension.sha256
@@ -413,7 +426,7 @@ function Assert-ReducedEvidenceRecord {
         "runNonce", "preflightRecordSha256", "finalSha", "checksumManifestSha256",
         "serverSha256", "extensionZipSha256", "extractedPayloadSha256"
     )
-    if ($Version -ceq "0.12.15") {
+    if ($Version -ceq "0.12.16") {
         $bindingFields = @(
             "runNonce", "preflightRecordSha256", "finalSha", "checksumManifestSha256",
             "serverSha256", "computerHelperSha256", "extensionZipSha256", "extractedPayloadSha256"
@@ -482,7 +495,7 @@ function Assert-ReducedEvidenceRecord {
 
 function Copy-JsonObject {
     param([Parameter(Mandatory = $true)]$Value)
-    return (($Value | ConvertTo-Json -Depth 8 -Compress) | ConvertFrom-Json)
+    return ConvertFrom-JsonPreservingStrings ($Value | ConvertTo-Json -Depth 8 -Compress)
 }
 
 function Test-RejectedEvidence {
@@ -504,13 +517,13 @@ function Invoke-RecordSelfTest {
         checksumManifestSha256 = [String]::new([char]"d", 64)
         serverSha256 = [String]::new([char]"e", 64)
     }
-    if ($Version -ceq "0.12.15") {
+    if ($Version -ceq "0.12.16") {
         $selfTestBinding.computerHelperSha256 = [String]::new([char]"1", 64)
     }
     $selfTestBinding.extensionZipSha256 = [String]::new([char]"f", 64)
     $selfTestBinding.extractedPayloadSha256 = [String]::new([char]"0", 64)
     $script:CandidateBinding = [pscustomobject]$selfTestBinding
-    if ($Version -ceq "0.12.15") {
+    if ($Version -ceq "0.12.16") {
         $selfTestCandidate = [pscustomobject][ordered]@{
             version = $Version
             finalSha = $selfTestBinding.finalSha
@@ -614,7 +627,7 @@ function Invoke-RecordSelfTest {
 
 if ($SelfTest) {
     if ([String]::IsNullOrWhiteSpace($Version)) {
-        $Version = "0.12.15"
+        $Version = "0.12.16"
     }
     Invoke-RecordSelfTest
     exit 0
@@ -626,7 +639,7 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 if ([String]::IsNullOrWhiteSpace($Version) -or $Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
     throw "Version must be an explicit stable semantic version."
 }
-if ($Version -ceq "0.12.15") {
+if ($Version -ceq "0.12.16") {
     $MethodScreenshots = $MethodScreenshotsV2
 }
 if ([String]::IsNullOrWhiteSpace($PreflightRecord)) {
@@ -725,7 +738,7 @@ function Invoke-BridgeCommand {
 
     Assert-Acceptance ([int]$response.StatusCode -eq 200) "command-http-ok"
     try {
-        $body = $response.Content | ConvertFrom-Json
+        $body = ConvertFrom-JsonPreservingStrings $response.Content
     }
     catch {
         throw [InvalidOperationException]::new("Bridge command returned invalid JSON for $Method.")
@@ -799,7 +812,7 @@ function Invoke-BridgeCommandExpectError {
     Assert-Acceptance ($statusCode -eq $ExpectedHttpStatus) "expected-refusal-http-status"
     Assert-Acceptance (-not [String]::IsNullOrWhiteSpace($responseText) -and $responseText.Length -le 256KB) "expected-refusal-body-bounded"
     try {
-        $body = $responseText | ConvertFrom-Json
+        $body = ConvertFrom-JsonPreservingStrings $responseText
     }
     catch {
         throw [InvalidOperationException]::new("Bridge refusal returned invalid JSON for $Method.")
@@ -829,7 +842,7 @@ function Invoke-Health {
     try {
         $response = Invoke-WebRequest -UseBasicParsing -Uri $script:HealthUri -Method Get -TimeoutSec 10
         Assert-Acceptance ([int]$response.StatusCode -eq 200) "health-http-ok"
-        return ($response.Content | ConvertFrom-Json)
+        return ConvertFrom-JsonPreservingStrings $response.Content
     }
     catch {
         throw [InvalidOperationException]::new("Candidate health preflight failed.")
