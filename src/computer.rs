@@ -833,12 +833,12 @@ impl ComputerController {
             self.recent_frames.push_front(previous);
             self.recent_frames.truncate(32);
         }
-        let capture_age_ms = captured_at.elapsed().as_secs_f64() * 1_000.0;
+        let (captured_at_wall, capture_age_ms) = capture_publication_metadata(captured_at, now_iso);
         let mut result = json!({
             "screenshot": format!("data:image/png;base64,{}", BASE64_STANDARD.encode(png.into_inner())),
             "frame": {
                 "id": frame_id,
-                "capturedAt": now_iso(),
+                "capturedAt": captured_at_wall,
                 "captureAgeMs": capture_age_ms,
                 "windowId": target.id,
                 "pid": target.pid,
@@ -1836,6 +1836,18 @@ fn now_iso() -> String {
         .unwrap_or_else(|_| "unknown".to_owned())
 }
 
+fn capture_publication_metadata(
+    captured_at: Instant,
+    wall_timestamp: impl FnOnce() -> String,
+) -> (String, f64) {
+    // Take the wall timestamp first. The monotonic age sampled afterward then
+    // includes any scheduling delay between the two reads, so combining this
+    // pair with elapsed wall time cannot become optimistic because of that gap.
+    let captured_at_wall = wall_timestamp();
+    let capture_age_ms = captured_at.elapsed().as_secs_f64() * 1_000.0;
+    (captured_at_wall, capture_age_ms)
+}
+
 fn set_semantic_truncation_metadata(frame: &mut Value, reason: Option<&str>) {
     let frame = frame
         .as_object_mut()
@@ -1857,6 +1869,18 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn capture_publication_metadata_samples_wall_time_before_monotonic_age() {
+        let captured_at = Instant::now();
+        let (captured_at_wall, capture_age_ms) = capture_publication_metadata(captured_at, || {
+            std::thread::sleep(Duration::from_millis(20));
+            "publication-wall-time".to_owned()
+        });
+
+        assert_eq!(captured_at_wall, "publication-wall-time");
+        assert!(capture_age_ms >= 10.0);
+    }
 
     #[test]
     fn helper_rejects_unbounded_native_text_before_frame_resolution() {
@@ -2531,6 +2555,42 @@ mod tests {
             .execute_cancellable(
                 "computer.move",
                 &json!({ "frameId": frame_id, "x": 10, "y": 10 }),
+                &cancellation,
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code, "COMPUTER_STALE_FRAME");
+        assert!(!cancellation.was_dispatched());
+    }
+
+    #[test]
+    fn expired_recent_same_share_frame_rejects_click_before_any_dispatch() {
+        let now = Instant::now();
+        let mut controller = ComputerController::new();
+        let mut current = frame();
+        current.id = "fresh-current-share-frame".to_owned();
+        current.captured_at = now;
+        current.share_id = Some("share-1".to_owned());
+        current.source_sequence = Some(42);
+        let mut expired = current.clone();
+        expired.id = "expired-recent-share-frame".to_owned();
+        expired.captured_at = now - MAX_FRAME_AGE - Duration::from_millis(1);
+        expired.source_sequence = Some(41);
+        controller.frame = Some(current);
+        controller.recent_frames.push_front(expired);
+        controller.share = Some(test_share(false));
+        let cancellation = CommandCancellation::new();
+
+        let error = controller
+            .execute_cancellable(
+                "computer.click",
+                &json!({
+                    "frameId": "expired-recent-share-frame",
+                    "x": 10,
+                    "y": 10,
+                    "button": "left",
+                    "clickCount": 1
+                }),
                 &cancellation,
             )
             .unwrap_err();

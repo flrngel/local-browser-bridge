@@ -22,8 +22,8 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { deflateSync, inflateSync } from "node:zlib";
 
-const PRODUCT_VERSION = "0.12.23";
-const RESULT_SCHEMA_VERSION = 7;
+const PRODUCT_VERSION = "0.12.24";
+const RESULT_SCHEMA_VERSION = 8;
 const AGGREGATE_SCHEMA_VERSION = 2;
 const APP_SHARE_MARKER_SCHEMA_VERSION = 2;
 const OUTPUT_FILE = "macos-acceptance.json";
@@ -200,6 +200,8 @@ const APP_SHARE_HANDOFF_FIELDS = [
   "appShareSurfaceObservedAtProductBoundaries",
   "sharedHidInputObserved",
   "sampledSharedContextUnchanged",
+  "authorityRefreshedAfterReceipt",
+  "authorityFreshAtDispatch",
   "actionDispatched",
   "targetPostconditionObserved",
   "productBoundaryQuiet",
@@ -211,6 +213,12 @@ const APP_SHARE_HANDOFF_FIELDS = [
   "markerAcceptedAsProductAuthority",
   "rawAppIdentityRetainedInResult",
   "rawPointerDataRetained",
+];
+const DELIBERATE_AUTHORITY_ASSERTION_NAMES = [
+  "app-share receipt retained the exact persistent share",
+  "post-handoff share action authority is fresh and exact",
+  "app-share handoff and frame refresh caused no target mutation",
+  "post-handoff share action authority remained fresh at dispatch",
 ];
 const QUIET_SEAT_FIELDS = [
   "required",
@@ -882,6 +890,8 @@ function validateAppShareHandoff(value, lane, label) {
     "acceptanceButtonActionObserved",
     "appShareSurfaceObservedAtProductBoundaries",
     "sampledSharedContextUnchanged",
+    "authorityRefreshedAfterReceipt",
+    "authorityFreshAtDispatch",
     "actionDispatched",
     "targetPostconditionObserved",
     "productBoundaryQuiet",
@@ -964,7 +974,7 @@ function validateQuietSeatStabilization(value, lane, label) {
   exactBoolean(value.rawPointerDataRetained, false, `${label} rawPointerDataRetained`);
 }
 
-function validateAssertions(value, label) {
+function validateAssertions(value, lane, label) {
   exactKeys(value, ["passed", "failed", "total", "details"], label);
   const passed = exactInteger(value.passed, 1, 1_000_000, `${label} passed`);
   const failed = exactInteger(value.failed, 0, 0, `${label} failed`);
@@ -972,15 +982,29 @@ function validateAssertions(value, label) {
   if (passed !== total || failed !== 0 || !Array.isArray(value.details) || value.details.length !== total) {
     fail(`${label} counts do not describe one completely passing detail set.`);
   }
+  const names = new Set();
   for (const [index, detail] of value.details.entries()) {
     exactKeys(detail, ["name", "passed", "detail"], `${label} detail ${index + 1}`);
     if (typeof detail.name !== "string" || detail.name.length < 1 || detail.name.length > 512) {
       fail(`${label} detail ${index + 1} name is invalid.`);
     }
+    if (names.has(detail.name)) {
+      fail(`${label} contains duplicate assertion name ${JSON.stringify(detail.name)}.`);
+    }
+    names.add(detail.name);
     exactBoolean(detail.passed, true, `${label} detail ${index + 1} passed`);
     if (typeof detail.detail !== "string" || detail.detail.length > 4_096 || detail.detail.includes("\0")) {
       fail(`${label} detail ${index + 1} text is invalid.`);
     }
+  }
+  if (lane === "deliberate-concurrency") {
+    for (const name of DELIBERATE_AUTHORITY_ASSERTION_NAMES) {
+      if (!names.has(name)) {
+        fail(`${label} is missing required deliberate authority assertion ${JSON.stringify(name)}.`);
+      }
+    }
+  } else if (DELIBERATE_AUTHORITY_ASSERTION_NAMES.some((name) => names.has(name))) {
+    fail(`${label} contains a deliberate-only authority assertion in the quiet lane.`);
   }
   return { passed, failed, total };
 }
@@ -1026,7 +1050,7 @@ function validateResultEnvelope(result, lane, resultMtimeMs, now, label) {
     capability: validateCapabilityBinding(result.capabilityBinding, `${label} capabilityBinding`),
     package: validatePackageBinding(result.package, `${label} package`),
     harness: validateHarnessBinding(result.harness, `${label} harness`),
-    assertions: validateAssertions(result.assertions, `${label} assertions`),
+    assertions: validateAssertions(result.assertions, lane, `${label} assertions`),
   };
 }
 
@@ -1690,6 +1714,8 @@ function selfTestPointer(lane) {
       appShareSurfaceObservedAtProductBoundaries: deliberate,
       sharedHidInputObserved: deliberate ? false : null,
       sampledSharedContextUnchanged: deliberate,
+      authorityRefreshedAfterReceipt: deliberate,
+      authorityFreshAtDispatch: deliberate,
       actionDispatched: deliberate,
       targetPostconditionObserved: deliberate,
       productBoundaryQuiet: deliberate,
@@ -1750,6 +1776,16 @@ async function createSelfTestLane(parent, name, lane, mutate = null) {
   }
   const bindings = selfTestBindings();
   const pointer = selfTestPointer(lane);
+  const assertionDetails = [
+    { name: "self-test", passed: true, detail: "passed" },
+    ...(lane === "deliberate-concurrency"
+      ? DELIBERATE_AUTHORITY_ASSERTION_NAMES.map((name) => ({
+        name,
+        passed: true,
+        detail: "passed",
+      }))
+      : []),
+  ];
   const result = {
     schemaVersion: RESULT_SCHEMA_VERSION,
     productVersion: PRODUCT_VERSION,
@@ -1774,10 +1810,10 @@ async function createSelfTestLane(parent, name, lane, mutate = null) {
     checks: { selfTest: true },
     screenshots,
     assertions: {
-      passed: 1,
+      passed: assertionDetails.length,
       failed: 0,
-      total: 1,
-      details: [{ name: "self-test", passed: true, detail: "passed" }],
+      total: assertionDetails.length,
+      details: assertionDetails,
     },
     limitations: ["Synthetic finalizer self-test fixture."],
   };
@@ -2142,6 +2178,59 @@ async function runSelfTest() {
       "deliberate-concurrency",
       (result) => { result.appShareHandoff.targetPostconditionObserved = false; },
       "appShareHandoff targetPostconditionObserved",
+    );
+    await expectSelfTestResultTamper(
+      root,
+      "missing-authority-refresh",
+      "deliberate-concurrency",
+      (result) => { result.appShareHandoff.authorityRefreshedAfterReceipt = false; },
+      "appShareHandoff authorityRefreshedAfterReceipt",
+    );
+    await expectSelfTestResultTamper(
+      root,
+      "stale-authority-at-dispatch",
+      "deliberate-concurrency",
+      (result) => { result.appShareHandoff.authorityFreshAtDispatch = false; },
+      "appShareHandoff authorityFreshAtDispatch",
+    );
+    await expectSelfTestResultTamper(
+      root,
+      "missing-authority-assertion",
+      "deliberate-concurrency",
+      (result) => {
+        result.assertions.details = result.assertions.details.filter(
+          ({ name }) => name !== DELIBERATE_AUTHORITY_ASSERTION_NAMES[1],
+        );
+        result.assertions.passed = result.assertions.details.length;
+        result.assertions.total = result.assertions.details.length;
+      },
+      "missing required deliberate authority assertion",
+    );
+    await expectSelfTestResultTamper(
+      root,
+      "duplicate-assertion-name",
+      "deliberate-concurrency",
+      (result) => {
+        result.assertions.details.push({ ...result.assertions.details[0] });
+        result.assertions.passed = result.assertions.details.length;
+        result.assertions.total = result.assertions.details.length;
+      },
+      "contains duplicate assertion name",
+    );
+    await expectSelfTestResultTamper(
+      root,
+      "quiet-deliberate-authority-assertion",
+      "quiet",
+      (result) => {
+        result.assertions.details.push({
+          name: DELIBERATE_AUTHORITY_ASSERTION_NAMES[0],
+          passed: true,
+          detail: "passed",
+        });
+        result.assertions.passed = result.assertions.details.length;
+        result.assertions.total = result.assertions.details.length;
+      },
+      "contains a deliberate-only authority assertion",
     );
 
     const overlapQuiet = await createSelfTestLane(root, "overlap-quiet", "quiet");

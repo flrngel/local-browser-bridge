@@ -6,7 +6,7 @@ export LC_ALL=C
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly API_VERSION="2026-03-10"
 readonly RECEIPT_SCHEMA_VERSION="2"
-readonly EVIDENCE_PRODUCT_VERSION="0.12.23"
+readonly EVIDENCE_PRODUCT_VERSION="0.12.24"
 readonly EVIDENCE_MAX_BLOB_BYTES=20971520
 readonly EVIDENCE_MAX_TOTAL_BYTES=209715200
 readonly EVIDENCE_MAX_PATH_BYTES=1024
@@ -951,7 +951,8 @@ validate_macos_pointer_app_share_contract() {
         "completePublicationAcknowledged", "promptClosed", "exactAppBundleObserved",
         "exactWindowObserved", "exactButtonObserved", "buttonDisabledAfterAction",
         "acceptanceButtonActionObserved", "appShareSurfaceObservedAtProductBoundaries",
-        "sharedHidInputObserved", "sampledSharedContextUnchanged", "actionDispatched",
+        "sharedHidInputObserved", "sampledSharedContextUnchanged",
+        "authorityRefreshedAfterReceipt", "authorityFreshAtDispatch", "actionDispatched",
         "targetPostconditionObserved", "productBoundaryQuiet", "independentBoundaryQuiet",
         "physicalHumanProvenanceClaimed", "cryptographicToolIdentityClaimed",
         "orchestrationNotProductControl", "markerNotificationOnly",
@@ -973,6 +974,8 @@ validate_macos_pointer_app_share_contract() {
           appShareSurfaceObservedAtProductBoundaries: false,
           sharedHidInputObserved: null,
           sampledSharedContextUnchanged: false,
+          authorityRefreshedAfterReceipt: false,
+          authorityFreshAtDispatch: false,
           actionDispatched: false,
           targetPostconditionObserved: false,
           productBoundaryQuiet: false,
@@ -1000,6 +1003,8 @@ validate_macos_pointer_app_share_contract() {
           appShareSurfaceObservedAtProductBoundaries: true,
           sharedHidInputObserved: false,
           sampledSharedContextUnchanged: true,
+          authorityRefreshedAfterReceipt: true,
+          authorityFreshAtDispatch: true,
           actionDispatched: true,
           targetPostconditionObserved: true,
           productBoundaryQuiet: true,
@@ -1012,6 +1017,33 @@ validate_macos_pointer_app_share_contract() {
           rawAppIdentityRetainedInResult: false,
           rawPointerDataRetained: false
         }
+      end)
+    ' "$result" >/dev/null
+}
+
+validate_macos_authority_assertion_contract() {
+  local result="$1"
+  local lane="$2"
+  [[ "$lane" == quiet || "$lane" == deliberate-concurrency ]] || return 1
+  jq -e --arg lane "$lane" '
+      (.assertions.details | type) == "array"
+      and ([.assertions.details[].name] | all(type == "string" and length > 0))
+      and ([.assertions.details[].name] | length) ==
+        ([.assertions.details[].name] | unique | length)
+      and (if $lane == "deliberate-concurrency" then
+        ([
+          "app-share receipt retained the exact persistent share",
+          "post-handoff share action authority is fresh and exact",
+          "app-share handoff and frame refresh caused no target mutation",
+          "post-handoff share action authority remained fresh at dispatch"
+        ] - [.assertions.details[].name] | length == 0)
+      else
+        ([.assertions.details[].name] | map(select(
+          . == "app-share receipt retained the exact persistent share" or
+          . == "post-handoff share action authority is fresh and exact" or
+          . == "app-share handoff and frame refresh caused no target mutation" or
+          . == "post-handoff share action authority remained fresh at dispatch"
+        )) | length == 0)
       end)
     ' "$result" >/dev/null
 }
@@ -1268,7 +1300,7 @@ verify_mac_lane() {
     --arg archive_sha256 "$(manifest_asset_sha256 "$CANDIDATE_DIR/SHA256SUMS.txt" "local-browser-bridge-v${EVIDENCE_PRODUCT_VERSION}-macos-universal.tar.gz")" \
     --arg acceptance_finalizer_sha256 "$(sha256_file scripts/finalize-macos-acceptance.mjs)" \
     --slurpfile package_facts "$MACOS_CANDIDATE_FACTS" '
-      .schemaVersion == 7
+      .schemaVersion == 8
       and .productVersion == $version
       and .status == "passed-release-candidate"
       and .evidenceClass == "exact-release-candidate-package-live-observation"
@@ -1331,6 +1363,8 @@ verify_mac_lane() {
     ' "$result" >/dev/null || die "macOS $lane_name result failed its pass, binding, or lane invariants"
   validate_macos_pointer_app_share_contract "$result" "$lane_name" \
     || die "macOS $lane_name pointer/app-share contract is noncanonical"
+  validate_macos_authority_assertion_contract "$result" "$lane_name" \
+    || die "macOS $lane_name authority assertion contract is noncanonical"
 
   log_file="$(jq -er --arg key "$aggregate_lane_key" '.lanes[$key].logFile' "$aggregate")"
   log_sha256="$(jq -er --arg key "$aggregate_lane_key" '.lanes[$key].logSha256' "$aggregate")"
@@ -1943,7 +1977,7 @@ PY
   jq -e '
       .schemaVersion == 1
       and .evidenceType == "stock-user-chrome-api-matrix"
-      and .version == "0.12.23" and .target == "loopback-demo" and .passed == true
+      and .version == "0.12.24" and .target == "loopback-demo" and .passed == true
       and .methodCount == 25 and (.methods | length) == 25
       and ([.methods[].name] == [
         "status","browser.control.start","browser.control.status","browser.control.stop",
@@ -1982,7 +2016,7 @@ PY
       . as $root
       |
       .schemaVersion == 2 and .evidenceType == "stock-user-chrome-computer-helper-chain"
-      and .version == "0.12.23" and .passed == true
+      and .version == "0.12.24" and .passed == true
       and .server.soleListener == "127.0.0.1:17373" and .server.updateCheckDisabled == true
       and .helper.connectedThroughLoopbackServer == true and .helper.serverApiOnly == true
       and .extensionPayload.fileCount == 11
@@ -2121,7 +2155,7 @@ PY
       and ([.computerHelperChain[] | select(type == "boolean")] | all(. == true))
       and .initialState.capturedBeforeRelevantMutation == true
       and .initialState.candidateExtensionPresent == false and .initialState.savedTokenConfigured == false
-      and .extension.cardCount == 1 and .extension.version == "0.12.23" and .extension.enabled == true
+      and .extension.cardCount == 1 and .extension.version == "0.12.24" and .extension.enabled == true
       and .extension.loadErrors == 0 and .extension.loadedVia == "chrome://extensions-load-unpacked"
       and .extension.loadedDirectoryByteMatchesCandidateZip == true and .extension.popupConnected == true
       and .extension.debuggerLeaseActiveAtFirstCapture == true and .extension.nativeDebuggerUseIndicatorSeen == true
@@ -2696,7 +2730,7 @@ verify_evidence_commit() {
       and .aggregateChecks.laneDirectoriesDisjoint == true
       and .aggregateChecks.exactInventories == true
       and .aggregateChecks.resultsByteDistinct == true
-      and .aggregateChecks.passingResultSchemaVersion == 7
+      and .aggregateChecks.passingResultSchemaVersion == 8
       and .aggregateChecks.inventoryFileCount == 19
       and .aggregateChecks.screenshotCount == 12
       and .aggregateChecks.screenshotHashesMatched == true
@@ -2910,15 +2944,15 @@ self_test() {
   local sha1_b="2222222222222222222222222222222222222222"
   local sha256_a="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   local receipt="$scratch/receipt.json"
-  printf '%s' '{"schemaVersion":2,"tag":"v0.12.23","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"1","releaseCandidateArtifactId":"456","releaseCandidateArtifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","evidenceRef":"refs/heads/evidence/v0.12.23-release-run-123-attempt-1","evidenceCommitSha":"3333333333333333333333333333333333333333","macosPassed":true,"macosAcceptanceSha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","macosQuietResultSha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","macosDeliberateConcurrencyResultSha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","windowsPassed":true,"windowsResultSha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","stockChromePassed":true,"stockChrome":true,"stockChromeResultSha256":"9999999999999999999999999999999999999999999999999999999999999999"}' > "$receipt"
-  validate_receipt "$receipt" v0.12.23 "$sha1_a" "$sha1_b" 123 1 "$sha256_a" \
+  printf '%s' '{"schemaVersion":2,"tag":"v0.12.24","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"1","releaseCandidateArtifactId":"456","releaseCandidateArtifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","evidenceRef":"refs/heads/evidence/v0.12.24-release-run-123-attempt-1","evidenceCommitSha":"3333333333333333333333333333333333333333","macosPassed":true,"macosAcceptanceSha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","macosQuietResultSha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","macosDeliberateConcurrencyResultSha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","windowsPassed":true,"windowsResultSha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","stockChromePassed":true,"stockChrome":true,"stockChromeResultSha256":"9999999999999999999999999999999999999999999999999999999999999999"}' > "$receipt"
+  validate_receipt "$receipt" v0.12.24 "$sha1_a" "$sha1_b" 123 1 "$sha256_a" \
     || die "self-test rejected a valid canonical schema-2 receipt"
   jq -cS . "$receipt" > "$scratch/noncanonical.json"
-  if validate_receipt "$scratch/noncanonical.json" v0.12.23 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
+  if validate_receipt "$scratch/noncanonical.json" v0.12.24 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
     die "self-test accepted reordered receipt keys"
   fi
   jq -c '.schemaVersion = 1' "$receipt" > "$scratch/stale.json"
-  if validate_receipt "$scratch/stale.json" v0.12.23 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
+  if validate_receipt "$scratch/stale.json" v0.12.24 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
     die "self-test accepted a stale schema-1 receipt"
   fi
   mkdir "$scratch/safe"
@@ -2938,7 +2972,7 @@ self_test() {
   fi
 
   EXPECTED_RELEASE_CANDIDATE_BINDING="$scratch/expected-binding.json"
-  printf '%s' '{"productVersion":"0.12.23","repository":"flrngel/local-browser-bridge","tag":"v0.12.23","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"2","artifactId":"456","artifactName":"release-candidate","artifactZipBytes":789,"artifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","attestationInvocationUri":"https://github.com/flrngel/local-browser-bridge/actions/runs/123/attempts/2","attestedAssetCount":5,"githubHostedRunner":true,"assets":[]}' > "$EXPECTED_RELEASE_CANDIDATE_BINDING"
+  printf '%s' '{"productVersion":"0.12.24","repository":"flrngel/local-browser-bridge","tag":"v0.12.24","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"2","artifactId":"456","artifactName":"release-candidate","artifactZipBytes":789,"artifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","attestationInvocationUri":"https://github.com/flrngel/local-browser-bridge/actions/runs/123/attempts/2","attestedAssetCount":5,"githubHostedRunner":true,"assets":[]}' > "$EXPECTED_RELEASE_CANDIDATE_BINDING"
   printf '%s' "{\"releaseCandidateBinding\":$(<"$EXPECTED_RELEASE_CANDIDATE_BINDING")}" > "$scratch/current-binding.json"
   assert_release_candidate_binding "$scratch/current-binding.json" '.releaseCandidateBinding'
   jq -c '.releaseCandidateBinding.workflowRunAttempt = "1"' "$scratch/current-binding.json" > "$scratch/replayed-binding.json"
@@ -3038,6 +3072,8 @@ self_test() {
           appShareSurfaceObservedAtProductBoundaries: $deliberate,
           sharedHidInputObserved: null,
           sampledSharedContextUnchanged: $deliberate,
+          authorityRefreshedAfterReceipt: $deliberate,
+          authorityFreshAtDispatch: $deliberate,
           actionDispatched: $deliberate,
           targetPostconditionObserved: $deliberate,
           productBoundaryQuiet: $deliberate,
@@ -3078,6 +3114,8 @@ self_test() {
           appShareSurfaceObservedAtProductBoundaries: $deliberate,
           sharedHidInputObserved: false,
           sampledSharedContextUnchanged: $deliberate,
+          authorityRefreshedAfterReceipt: $deliberate,
+          authorityFreshAtDispatch: $deliberate,
           actionDispatched: $deliberate,
           targetPostconditionObserved: $deliberate,
           productBoundaryQuiet: $deliberate,
@@ -3110,6 +3148,57 @@ self_test() {
   if validate_macos_pointer_app_share_contract \
       "$scratch/mac-deliberate-legacy-operator-contract.json" deliberate-concurrency; then
     die "self-test accepted the removed legacy pointer operator contract"
+  fi
+  jq -c '.appShareHandoff.authorityRefreshedAfterReceipt = false' \
+    "$scratch/mac-deliberate-app-share-contract.json" \
+    > "$scratch/mac-deliberate-unrefreshed-authority-contract.json"
+  if validate_macos_pointer_app_share_contract \
+      "$scratch/mac-deliberate-unrefreshed-authority-contract.json" deliberate-concurrency; then
+    die "self-test accepted deliberate app-share authority that was not refreshed after receipt"
+  fi
+  jq -c '.appShareHandoff.authorityFreshAtDispatch = false' \
+    "$scratch/mac-deliberate-app-share-contract.json" \
+    > "$scratch/mac-deliberate-stale-dispatch-authority-contract.json"
+  if validate_macos_pointer_app_share_contract \
+      "$scratch/mac-deliberate-stale-dispatch-authority-contract.json" deliberate-concurrency; then
+    die "self-test accepted deliberate app-share authority that was stale at dispatch"
+  fi
+
+  jq -cn '{assertions:{details:[{name:"self-test"}]}}' \
+    > "$scratch/mac-quiet-authority-assertions.json"
+  validate_macos_authority_assertion_contract \
+    "$scratch/mac-quiet-authority-assertions.json" quiet \
+    || die "self-test rejected canonical quiet authority assertions"
+  jq -cn '{assertions:{details:[
+      {name:"self-test"},
+      {name:"app-share receipt retained the exact persistent share"},
+      {name:"post-handoff share action authority is fresh and exact"},
+      {name:"app-share handoff and frame refresh caused no target mutation"},
+      {name:"post-handoff share action authority remained fresh at dispatch"}
+    ]}}' > "$scratch/mac-deliberate-authority-assertions.json"
+  validate_macos_authority_assertion_contract \
+    "$scratch/mac-deliberate-authority-assertions.json" deliberate-concurrency \
+    || die "self-test rejected canonical deliberate authority assertions"
+  jq -c 'del(.assertions.details[2])' \
+    "$scratch/mac-deliberate-authority-assertions.json" \
+    > "$scratch/mac-deliberate-missing-authority-assertion.json"
+  if validate_macos_authority_assertion_contract \
+      "$scratch/mac-deliberate-missing-authority-assertion.json" deliberate-concurrency; then
+    die "self-test accepted a missing deliberate authority assertion"
+  fi
+  jq -c '.assertions.details += [.assertions.details[0]]' \
+    "$scratch/mac-deliberate-authority-assertions.json" \
+    > "$scratch/mac-deliberate-duplicate-authority-assertion.json"
+  if validate_macos_authority_assertion_contract \
+      "$scratch/mac-deliberate-duplicate-authority-assertion.json" deliberate-concurrency; then
+    die "self-test accepted a duplicate authority assertion name"
+  fi
+  jq -c '.assertions.details += [{name:"post-handoff share action authority is fresh and exact"}]' \
+    "$scratch/mac-quiet-authority-assertions.json" \
+    > "$scratch/mac-quiet-deliberate-authority-assertion.json"
+  if validate_macos_authority_assertion_contract \
+      "$scratch/mac-quiet-deliberate-authority-assertion.json" quiet; then
+    die "self-test accepted a deliberate authority assertion in the quiet lane"
   fi
 
   local app_share_request="$scratch/macos-app-share-request.json"
@@ -3249,15 +3338,15 @@ self_test() {
     die "self-test allowed an optional physical-pointer artifact to satisfy the mandatory app-share allowlist"
   fi
 
-  printf '%s' '{"aggregateChecks":{"passingResultSchemaVersion":7}}' > "$scratch/mac-schema-aggregate.json"
-  printf '%s' '{"schemaVersion":7}' > "$scratch/mac-schema-quiet.json"
-  printf '%s' '{"schemaVersion":7}' > "$scratch/mac-schema-deliberate.json"
+  printf '%s' '{"aggregateChecks":{"passingResultSchemaVersion":8}}' > "$scratch/mac-schema-aggregate.json"
+  printf '%s' '{"schemaVersion":8}' > "$scratch/mac-schema-quiet.json"
+  printf '%s' '{"schemaVersion":8}' > "$scratch/mac-schema-deliberate.json"
   validate_mac_result_schema_binding \
     "$scratch/mac-schema-aggregate.json" \
     "$scratch/mac-schema-quiet.json" \
     "$scratch/mac-schema-deliberate.json" \
     || die "self-test rejected aligned macOS result schemas"
-  jq -c '.aggregateChecks.passingResultSchemaVersion = 6' \
+  jq -c '.aggregateChecks.passingResultSchemaVersion = 7' \
     "$scratch/mac-schema-aggregate.json" > "$scratch/mac-schema-stale-aggregate.json"
   if validate_mac_result_schema_binding \
       "$scratch/mac-schema-stale-aggregate.json" \
@@ -3265,7 +3354,7 @@ self_test() {
       "$scratch/mac-schema-deliberate.json"; then
     die "self-test accepted a stale macOS aggregate result schema"
   fi
-  jq -c '.schemaVersion = 6' \
+  jq -c '.schemaVersion = 7' \
     "$scratch/mac-schema-deliberate.json" > "$scratch/mac-schema-stale-deliberate.json"
   if validate_mac_result_schema_binding \
       "$scratch/mac-schema-aggregate.json" \

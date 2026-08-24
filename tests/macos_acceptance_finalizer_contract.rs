@@ -6,23 +6,23 @@ fn finalizer_source() -> String {
 }
 
 #[test]
-fn macos_v0_12_23_result_and_aggregate_schemas_are_aligned_end_to_end() {
+fn macos_v0_12_24_result_and_aggregate_schemas_are_aligned_end_to_end() {
     let finalizer = finalizer_source().replace("\r\n", "\n");
-    let producer = fs::read_to_string("evidence/v0.12.23/computer/helper-evidence-rig.mjs")
+    let producer = fs::read_to_string("evidence/v0.12.24/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let documentation = fs::read_to_string("evidence/v0.12.23/computer/README.md")
+    let documentation = fs::read_to_string("evidence/v0.12.24/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let verifier = fs::read_to_string("scripts/verify-release-acceptance-evidence.sh")
         .unwrap()
         .replace("\r\n", "\n");
 
-    assert!(finalizer.contains("const PRODUCT_VERSION = \"0.12.23\";"));
-    assert!(finalizer.contains("const RESULT_SCHEMA_VERSION = 7;"));
+    assert!(finalizer.contains("const PRODUCT_VERSION = \"0.12.24\";"));
+    assert!(finalizer.contains("const RESULT_SCHEMA_VERSION = 8;"));
     assert!(finalizer.contains("const AGGREGATE_SCHEMA_VERSION = 2;"));
-    assert!(producer.matches("schemaVersion: 7,").count() >= 2);
-    assert!(documentation.contains("schema-7 result"));
+    assert!(producer.matches("schemaVersion: 8,").count() >= 2);
+    assert!(documentation.contains("schema-8 result"));
     assert!(documentation.contains("marker schema 2"));
     for producer_contract in [
         "passingResultSchemaVersion: RESULT_SCHEMA_VERSION",
@@ -35,7 +35,7 @@ fn macos_v0_12_23_result_and_aggregate_schemas_are_aligned_end_to_end() {
         );
     }
     for required in [
-        ".schemaVersion == 7",
+        ".schemaVersion == 8",
         ".schemaVersion == 2",
         "validate_mac_result_schema_binding()",
         "--argjson quiet_result_schema_version",
@@ -48,13 +48,13 @@ fn macos_v0_12_23_result_and_aggregate_schemas_are_aligned_end_to_end() {
     ] {
         assert!(
             verifier.contains(required),
-            "release evidence verifier is missing the v0.12.23 schema binding: {required}"
+            "release evidence verifier is missing the v0.12.24 schema binding: {required}"
         );
     }
 }
 
 #[test]
-fn macos_v0_12_23_release_verifier_recomputes_every_tagged_harness_hash() {
+fn macos_v0_12_24_release_verifier_recomputes_every_tagged_harness_hash() {
     let verifier = fs::read_to_string("scripts/verify-release-acceptance-evidence.sh")
         .unwrap()
         .replace("\r\n", "\n");
@@ -112,7 +112,7 @@ fn macos_v0_12_23_release_verifier_recomputes_every_tagged_harness_hash() {
 }
 
 #[test]
-fn macos_v0_12_23_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
+fn macos_v0_12_24_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
     let source = finalizer_source().replace("\r\n", "\n");
 
     for import in source.lines().filter(|line| line.contains(" from \"")) {
@@ -128,8 +128,8 @@ fn macos_v0_12_23_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
     }
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.23\";",
-        "const RESULT_SCHEMA_VERSION = 7;",
+        "const PRODUCT_VERSION = \"0.12.24\";",
+        "const RESULT_SCHEMA_VERSION = 8;",
         "const AGGREGATE_SCHEMA_VERSION = 2;",
         "const APP_SHARE_MARKER_SCHEMA_VERSION = 2;",
         "const OUTPUT_FILE = \"macos-acceptance.json\";",
@@ -246,7 +246,7 @@ fn macos_v0_12_23_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
 }
 
 #[test]
-fn macos_v0_12_23_finalizer_enforces_exact_app_share_and_quiet_pointer_invariants() {
+fn macos_v0_12_24_finalizer_enforces_exact_app_share_and_quiet_pointer_invariants() {
     let source = finalizer_source().replace("\r\n", "\n");
     for required in [
         "exactString(value.requestedLane, lane",
@@ -268,6 +268,8 @@ fn macos_v0_12_23_finalizer_enforces_exact_app_share_and_quiet_pointer_invariant
         "appShareSurfaceObservedAtProductBoundaries",
         "sharedHidInputObserved",
         "sampledSharedContextUnchanged",
+        "authorityRefreshedAfterReceipt",
+        "authorityFreshAtDispatch",
         "actionDispatched",
         "targetPostconditionObserved",
         "productBoundaryQuiet",
@@ -297,6 +299,11 @@ fn macos_v0_12_23_finalizer_enforces_exact_app_share_and_quiet_pointer_invariant
         "cryptographic-tool-claim",
         "orchestration-authority",
         "missing-target-postcondition",
+        "missing-authority-refresh",
+        "stale-authority-at-dispatch",
+        "missing-authority-assertion",
+        "duplicate-assertion-name",
+        "quiet-deliberate-authority-assertion",
         "result.screenshots.length !== SCREENSHOT_FILES.length",
         "exactKeys(screenshot, SCREENSHOT_FIELDS",
         "record.bytes.length !== bytes || record.sha256 !== screenshot.sha256",
@@ -313,6 +320,14 @@ fn macos_v0_12_23_finalizer_enforces_exact_app_share_and_quiet_pointer_invariant
         "screenshots are not bound to one exact window",
         "screenshots reuse a frame identity",
         "value.details.length !== total",
+        "const DELIBERATE_AUTHORITY_ASSERTION_NAMES = [",
+        "app-share receipt retained the exact persistent share",
+        "post-handoff share action authority is fresh and exact",
+        "app-share handoff and frame refresh caused no target mutation",
+        "post-handoff share action authority remained fresh at dispatch",
+        "contains duplicate assertion name",
+        "missing required deliberate authority assertion",
+        "contains a deliberate-only authority assertion in the quiet lane",
         "exactBoolean(detail.passed, true",
         "result.fixture.evidenceLane = \"quiet\"",
     ] {
@@ -346,7 +361,7 @@ fn macos_v0_12_23_finalizer_enforces_exact_app_share_and_quiet_pointer_invariant
 }
 
 #[test]
-fn macos_v0_12_23_dual_lane_finalizer_self_test_passes() {
+fn macos_v0_12_24_dual_lane_finalizer_self_test_passes() {
     let syntax = Command::new("node")
         .args(["--check", "scripts/finalize-macos-acceptance.mjs"])
         .output()

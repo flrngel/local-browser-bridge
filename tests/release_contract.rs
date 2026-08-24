@@ -213,8 +213,8 @@ fn windows_release_tooling_hashes_without_module_discovery() {
 fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_only() {
     let watcher = source("scripts/wait-macos-app-share-concurrency-handoff.mjs");
     let adversarial_watcher = source("scripts/wait-macos-pointer-concurrency-handoff.mjs");
-    let producer = source("evidence/v0.12.23/computer/helper-evidence-rig.mjs");
-    let playbook = source("evidence/v0.12.23/computer/README.md");
+    let producer = source("evidence/v0.12.24/computer/helper-evidence-rig.mjs");
+    let playbook = source("evidence/v0.12.24/computer/README.md");
     let finalizer = source("scripts/finalize-macos-acceptance.mjs");
     let verifier = source("scripts/verify-release-acceptance-evidence.sh");
     let ci = source(".github/workflows/ci.yml");
@@ -256,7 +256,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
             "the legacy pointer watcher must not gate or satisfy release"
         );
     }
-    assert!(adversarial_watcher.contains("const PRODUCT_VERSION = \"0.12.23\";"));
+    assert!(adversarial_watcher.contains("const PRODUCT_VERSION = \"0.12.24\";"));
     assert!(
         adversarial_watcher.contains("macOS pointer-concurrency handoff watcher self-test passed.")
     );
@@ -275,8 +275,8 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         }
     }
     for aggregate_contract in [
-        "const PRODUCT_VERSION = \"0.12.23\";",
-        "const RESULT_SCHEMA_VERSION = 7;",
+        "const PRODUCT_VERSION = \"0.12.24\";",
+        "const RESULT_SCHEMA_VERSION = 8;",
         "const AGGREGATE_SCHEMA_VERSION = 2;",
         "const REQUEST_MARKER = \"operator/macos-app-share-concurrency-handoff-request.json\";",
         "const START_MARKER = \"operator/macos-app-share-concurrency-handoff-start.json\";",
@@ -292,7 +292,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
     }
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.23\";",
+        "const PRODUCT_VERSION = \"0.12.24\";",
         "const SCHEMA_VERSION = 2;",
         "const OPERATOR_DIRECTORY = \"operator\";",
         "const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;",
@@ -389,7 +389,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         "jq -er '.screenshots[] | \"\\(.sha256)  \\(.file)\"' helper-results.json",
         ".status == \"passed-release-candidate\"",
         ".schemaVersion == 2",
-        ".aggregateChecks.passingResultSchemaVersion == 7",
+        ".aggregateChecks.passingResultSchemaVersion == 8",
         ".aggregateChecks.inventoryFileCount == 19",
         "macos-app-share-concurrency-handoff-start.json",
         ".appShareHandoff.startReceiptAcknowledged == true",
@@ -408,12 +408,12 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
 
     for integration in [&ci, &release, &local] {
         assert!(
-            integration.contains("node --check evidence/v0.12.23/computer/helper-evidence-rig.mjs"),
-            "release path does not syntax-check the exact v0.12.23 macOS evidence rig"
+            integration.contains("node --check evidence/v0.12.24/computer/helper-evidence-rig.mjs"),
+            "release path does not syntax-check the exact v0.12.24 macOS evidence rig"
         );
         assert!(
             integration
-                .contains("node evidence/v0.12.23/computer/helper-evidence-rig.mjs --self-test")
+                .contains("node evidence/v0.12.24/computer/helper-evidence-rig.mjs --self-test")
         );
         assert!(
             !integration.contains("evidence/v0.12.20/computer/"),
@@ -428,7 +428,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         ] {
             assert!(
                 integration.contains(&format!(
-                    "xcrun swiftc -typecheck evidence/v0.12.23/computer/{source}"
+                    "xcrun swiftc -typecheck evidence/v0.12.24/computer/{source}"
                 )),
                 "macOS workflow does not typecheck {source}"
             );
@@ -436,7 +436,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         assert!(integration.contains("lbb-app-share-handoff-self-test\" --self-test"));
     }
     assert!(ci.contains(
-        "xcrun swiftc -typecheck evidence/v0.12.23/computer/PhysicalPointerHandoff.swift"
+        "xcrun swiftc -typecheck evidence/v0.12.24/computer/PhysicalPointerHandoff.swift"
     ));
     for release_path in [&release, &local] {
         assert!(
@@ -944,8 +944,17 @@ fn release_evidence_verifier_fails_closed_on_artifact_or_commit_substitution() {
         "macOS package does not have the exact independently inspected inventory",
         "macOS deliberate-concurrency lane did not start after the quiet lane passed",
         "aggregate lane start timestamp differs from its raw result",
-        ".schemaVersion == 7",
-        ".aggregateChecks.passingResultSchemaVersion == 7",
+        "validate_macos_authority_assertion_contract()",
+        "app-share receipt retained the exact persistent share",
+        "post-handoff share action authority is fresh and exact",
+        "app-share handoff and frame refresh caused no target mutation",
+        "post-handoff share action authority remained fresh at dispatch",
+        "self-test accepted deliberate app-share authority that was not refreshed after receipt",
+        "self-test accepted deliberate app-share authority that was stale at dispatch",
+        "self-test accepted a missing deliberate authority assertion",
+        "self-test accepted a duplicate authority assertion name",
+        ".schemaVersion == 8",
+        ".aggregateChecks.passingResultSchemaVersion == 8",
         ".aggregateChecks.inventoryFileCount == 19",
         "macos-app-share-concurrency-handoff-request.json",
         "macos-app-share-concurrency-handoff-start.json",
@@ -988,6 +997,10 @@ fn release_evidence_verifier_fails_closed_on_artifact_or_commit_substitution() {
         "sharedHidInputObserved: null,",
         "sharedHidInputObserved: false,",
         "sampledSharedContextUnchanged: true,",
+        "authorityRefreshedAfterReceipt: false,",
+        "authorityFreshAtDispatch: false,",
+        "authorityRefreshedAfterReceipt: true,",
+        "authorityFreshAtDispatch: true,",
         "actionDispatched: true,",
         "targetPostconditionObserved: true,",
         "productBoundaryQuiet: true,",

@@ -905,9 +905,9 @@ fn background_invariant_failures_use_stage_bound_closed_vocabulary() {
 }
 
 #[test]
-fn macos_v0_12_23_pointer_evidence_is_bounded_corroboration_not_causal_attribution() {
-    let rig = fs::read_to_string("evidence/v0.12.23/computer/helper-evidence-rig.mjs").unwrap();
-    let probe = fs::read_to_string("evidence/v0.12.23/computer/SystemProbe.swift").unwrap();
+fn macos_v0_12_24_pointer_evidence_is_bounded_corroboration_not_causal_attribution() {
+    let rig = fs::read_to_string("evidence/v0.12.24/computer/helper-evidence-rig.mjs").unwrap();
+    let probe = fs::read_to_string("evidence/v0.12.24/computer/SystemProbe.swift").unwrap();
     assert!(rig.contains("failureProbeBaseline"));
     assert!(rig.contains("collectFailureDiagnostics"));
     assert!(rig.contains("systemInvariants(failureProbeBaseline.system, after)"));
@@ -915,7 +915,7 @@ fn macos_v0_12_23_pointer_evidence_is_bounded_corroboration_not_causal_attributi
     assert!(rig.contains("semanticValueMatchesExpected"));
     assert!(rig.contains("failureDiagnostics,"));
     for required in [
-        "schemaVersion: 7",
+        "schemaVersion: 8",
         "computer.input-delivery-provenance.v1",
         "computer.pointer-activity-monitor.v1",
         "inputDeliveryProvenanceV1",
@@ -953,7 +953,7 @@ fn macos_v0_12_23_pointer_evidence_is_bounded_corroboration_not_causal_attributi
     ] {
         assert!(
             rig.contains(required),
-            "missing v0.12.23 pointer contract: {required}"
+            "missing v0.12.24 pointer contract: {required}"
         );
     }
     assert!(!rig.contains("cursorUnchanged"));
@@ -998,8 +998,8 @@ fn macos_v0_12_23_pointer_evidence_is_bounded_corroboration_not_causal_attributi
 }
 
 #[test]
-fn macos_v0_12_23_action_pointer_classifier_matches_the_sealed_action_schema() {
-    let rig = fs::read_to_string("evidence/v0.12.23/computer/helper-evidence-rig.mjs")
+fn macos_v0_12_24_action_pointer_classifier_matches_the_sealed_action_schema() {
+    let rig = fs::read_to_string("evidence/v0.12.24/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let server = fs::read_to_string("src/server.rs")
@@ -1122,10 +1122,10 @@ fn macos_v0_12_23_action_pointer_classifier_matches_the_sealed_action_schema() {
 
 #[test]
 fn macos_v0_12_14_quiet_lane_stabilizes_the_native_seat_before_candidate_execution() {
-    let rig = fs::read_to_string("evidence/v0.12.23/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.24/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.23/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.24/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1199,23 +1199,23 @@ fn macos_v0_12_14_quiet_lane_stabilizes_the_native_seat_before_candidate_executi
 }
 
 #[test]
-fn macos_v0_12_23_app_share_handoff_is_exact_non_authoritative_and_fail_closed() {
-    let app = fs::read_to_string("evidence/v0.12.23/computer/AppShareHandoff.swift")
+fn macos_v0_12_24_app_share_handoff_is_exact_non_authoritative_and_fail_closed() {
+    let app = fs::read_to_string("evidence/v0.12.24/computer/AppShareHandoff.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.23/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.24/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.23/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.24/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.23/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.24/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let normalized_readme = readme.split_whitespace().collect::<Vec<_>>().join(" ");
 
     for required in [
-        "private let productVersion = \"0.12.23\"",
+        "private let productVersion = \"0.12.24\"",
         "private let stableWindowTitle = \"LBB macOS Acceptance App Share\"",
         "private let readyButtonTitle = \"START APP-SHARE CHECK\"",
         "private final class NonactivatingHandoffPanel: NSPanel",
@@ -1452,10 +1452,182 @@ fn macos_v0_12_23_app_share_handoff_is_exact_non_authoritative_and_fail_closed()
 }
 
 #[test]
+fn macos_v0_12_24_refreshes_post_handoff_share_action_authority_before_click() {
+    let rig = fs::read_to_string("evidence/v0.12.24/computer/helper-evidence-rig.mjs")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let computer = fs::read_to_string("src/computer.rs")
+        .unwrap()
+        .replace("\r\n", "\n");
+
+    assert!(computer.contains("capture_publication_metadata(captured_at, now_iso)"));
+    assert!(
+        computer.contains("capture_publication_metadata_samples_wall_time_before_monotonic_age")
+    );
+
+    let screenshot_mapper_start = rig
+        .find("async function saveCurrentScreenshot(publicState, filename, expectedWindowId)")
+        .unwrap();
+    let screenshot_mapper_end = rig[screenshot_mapper_start..]
+        .find("\nfunction actionSummary(body)")
+        .map(|offset| screenshot_mapper_start + offset)
+        .unwrap();
+    let screenshot_mapper = &rig[screenshot_mapper_start..screenshot_mapper_end];
+    assert!(
+        !screenshot_mapper.contains("capturedAt: observation.capturedAt")
+            && !screenshot_mapper.contains("captureAgeMs: observation.captureAgeMs"),
+        "retained screenshot records must stay within the finalizer's closed schema"
+    );
+
+    let mapper_start = rig
+        .find("function shareActionAuthority(observation, sample)")
+        .unwrap();
+    let mapper_end = rig[mapper_start..]
+        .find("\n}\n\nfunction exactShareActionAuthorityAdvanced")
+        .map(|offset| mapper_start + offset)
+        .unwrap();
+    let mapper = &rig[mapper_start..mapper_end];
+    for required in [
+        "capturedAt: observation.capturedAt",
+        "captureAgeMs: observation.captureAgeMs",
+    ] {
+        assert!(
+            mapper.contains(required),
+            "share-action authority mapper omits {required}"
+        );
+    }
+
+    for required in [
+        "function shareActionAuthority(observation, sample)",
+        "shareAuthorityBaseline = shareActionAuthority({",
+        "share action authority mapper self-test failed",
+        "function exactShareActionAuthorityAdvanced(reference, candidate)",
+        "candidate.frameId !== reference.frameId",
+        "reference.topLevelShareId === reference.shareId",
+        "candidate.topLevelShareId === candidate.shareId",
+        "candidate.sourceSequence > reference.sourceSequence",
+        "candidate.topLevelSourceSequence === candidate.sourceSequence",
+        "candidate.sequence > reference.sequence",
+        "candidate.windowId === reference.windowId",
+        "candidate.pid === reference.pid",
+        "candidate.windowTitle === reference.windowTitle",
+        "candidate.windowWidth === reference.windowWidth",
+        "candidate.windowHeight === reference.windowHeight",
+        "candidate.imageWidth === reference.imageWidth",
+        "candidate.imageHeight === reference.imageHeight",
+        "function estimatedShareActionAuthorityAgeMs(authority, nowMilliseconds = Date.now())",
+        "function decideShareActionAuthorityRefresh(reference, candidate, nowMilliseconds)",
+        "function decideShareActionAuthorityDispatch(",
+        "exactShareActionAuthorityAdvanced(reference, authority)",
+        "const APP_SHARE_ACTION_FRAME_MAX_ESTIMATED_AGE_MS = 1_000;",
+        "estimatedAgeMs <= APP_SHARE_ACTION_FRAME_MAX_ESTIMATED_AGE_MS",
+        "function freshShareActionAuthorityTimeout(remainingMilliseconds)",
+        "APP_SHARE_HANDOFF_COMPLETION_RESERVE_MS",
+        "APP_SHARE_HANDOFF_MINIMUM_ACTION_BUDGET_MS",
+        "post-handoff share action authority refresh self-test failed",
+        "Post-handoff share action authority regressions passed: newer same-share frame required; stale, wrong-share, and changed-geometry frames refused.",
+        "app-share receipt retained the exact persistent share",
+        "share-after-app-share-action-authority",
+        "post-handoff share action authority is fresh and exact",
+        "post-handoff share action authority remained fresh at dispatch",
+        "app-share handoff and frame refresh caused no target mutation",
+        "pointerHandoffAuthorityRefreshedAfterReceipt = true",
+        "pointerHandoffAuthorityFreshAtDispatch = true",
+        "authorityRefreshedAfterReceipt: pointerHandoffAuthorityRefreshedAfterReceipt",
+        "authorityFreshAtDispatch: pointerHandoffAuthorityFreshAtDispatch",
+        "cross-share dispatch authority",
+        "cross-target dispatch authority",
+        "dispatch geometry race",
+        "insufficient bounded time remained to refresh share action authority",
+    ] {
+        assert!(
+            rig.contains(required),
+            "post-handoff share-authority contract omits {required}"
+        );
+    }
+
+    let action_receipt = rig
+        .find("actionPromptBaseline = await waitForDeliberatePointerActivity(armedBaseline);")
+        .unwrap();
+    let read_only_barrier = rig[action_receipt..]
+        .find("const armedShareSnapshot = await apiState();")
+        .map(|offset| action_receipt + offset)
+        .unwrap();
+    let strict_successor = rig[read_only_barrier..]
+        .find("current = await waitForNextShareState(\n      armedShareSample.sequence,\n      \"share-after-app-share-action-authority\"")
+        .map(|offset| read_only_barrier + offset)
+        .unwrap();
+    let authority_assignment = rig[strict_successor..]
+        .find("const beforePostResizeAction = current.sample;")
+        .map(|offset| strict_successor + offset)
+        .unwrap();
+    let observation_assignment = rig[authority_assignment..]
+        .find("observation = current.snapshot.computerObservation;")
+        .map(|offset| authority_assignment + offset)
+        .unwrap();
+    let action_baseline = rig[observation_assignment..]
+        .find("stage: \"postResizePixelAction\"")
+        .map(|offset| observation_assignment + offset)
+        .unwrap();
+    let fixture_recheck = rig[strict_successor..]
+        .find("postResizeFixtureBefore = await fixtureState(fixtureStatePath);")
+        .map(|offset| strict_successor + offset)
+        .unwrap();
+    let dispatch_decision = rig[action_baseline..]
+        .find("const dispatchAuthorityDecision = decideShareActionAuthorityDispatch(")
+        .map(|offset| action_baseline + offset)
+        .unwrap();
+    let dispatch_age_guard = rig[action_baseline..]
+        .find("post-handoff share action authority remained fresh at dispatch")
+        .map(|offset| action_baseline + offset)
+        .unwrap();
+    let product_action = rig[action_baseline..]
+        .find("const postResizeClickResponse = await commandResponse(\n    \"computer.click\"")
+        .map(|offset| action_baseline + offset)
+        .unwrap();
+    assert!(
+        action_receipt < read_only_barrier
+            && read_only_barrier < strict_successor
+            && strict_successor < authority_assignment
+            && authority_assignment < observation_assignment
+            && observation_assignment < action_baseline
+            && strict_successor < fixture_recheck
+            && fixture_recheck < dispatch_age_guard
+            && action_baseline < dispatch_decision
+            && dispatch_decision < dispatch_age_guard
+            && dispatch_age_guard < product_action,
+        "ACTION receipt, read-only barrier, strict successor, fresh authority, and click are out of order"
+    );
+
+    let rebase_segment = &rig[read_only_barrier..product_action];
+    assert!(
+        !rebase_segment.contains("computer.observe"),
+        "live-share action rebasing must not race the stream with a one-shot observe"
+    );
+    assert!(rebase_segment.contains(
+        "const postResizeSystemBefore = pointerEvidenceLane === \"deliberate-concurrency\"\n    ? actionPromptBaseline"
+    ));
+    let dispatch_guard_segment = &rig[dispatch_decision..product_action];
+    for required in [
+        "const dispatchAuthorityDecision = decideShareActionAuthorityDispatch(",
+        "receiptBoundShareActionAuthority,",
+        "postHandoffShareActionAuthority,",
+        "observation.frameId,",
+        "dispatchAuthorityDecision.accepted",
+        "pointerHandoffAuthorityFreshAtDispatch = true;",
+    ] {
+        assert!(
+            dispatch_guard_segment.contains(required),
+            "live dispatch authority guard omits {required}"
+        );
+    }
+}
+
+#[test]
 fn macos_pointer_arm_state_machine_execution_regressions_pass() {
     let output = match Command::new("node")
         .args([
-            "evidence/v0.12.23/computer/helper-evidence-rig.mjs",
+            "evidence/v0.12.24/computer/helper-evidence-rig.mjs",
             "--self-test",
         ])
         .output()
@@ -1474,14 +1646,17 @@ fn macos_pointer_arm_state_machine_execution_regressions_pass() {
         "macOS pointer-arm execution regressions passed: deadline expiry, MOVE re-arm, final ACTION re-arm."
     ));
     assert!(stdout.contains(
+        "Post-handoff share action authority regressions passed: newer same-share frame required; stale, wrong-share, and changed-geometry frames refused."
+    ));
+    assert!(stdout.contains(
         "Cross-platform marker identity regressions passed: exact BigInt binding, Windows metadata projection, POSIX private mode."
     ));
     assert!(stdout.contains("macOS packaged-evidence rig self-test passed."));
 }
 
 #[test]
-fn v0_12_23_marker_identity_is_exact_on_windows_and_posix() {
-    let rig = fs::read_to_string("evidence/v0.12.23/computer/helper-evidence-rig.mjs")
+fn v0_12_24_marker_identity_is_exact_on_windows_and_posix() {
+    let rig = fs::read_to_string("evidence/v0.12.24/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -2444,7 +2619,7 @@ fn withdrawn_v0_12_9_macos_cursor_invariant_attempt_is_byte_exact_and_fail_close
 
 #[test]
 fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
-    let entries = fs::read_dir("evidence/v0.12.23/computer")
+    let entries = fs::read_dir("evidence/v0.12.24/computer")
         .unwrap()
         .map(Result::unwrap)
         .map(|entry| {
@@ -2469,12 +2644,12 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
         ])
     );
 
-    let rig = fs::read_to_string("evidence/v0.12.23/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.24/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let fixture =
-        fs::read_to_string("evidence/v0.12.23/computer/HelperEvidenceFixture.swift").unwrap();
-    let readme = fs::read_to_string("evidence/v0.12.23/computer/README.md").unwrap();
+        fs::read_to_string("evidence/v0.12.24/computer/HelperEvidenceFixture.swift").unwrap();
+    let readme = fs::read_to_string("evidence/v0.12.24/computer/README.md").unwrap();
 
     assert!(rig.contains(&format!("const EXPECTED_VERSION = \"{VERSION}\";")));
     assert!(rig.contains("const EXPECTED_ARCHIVE = `local-browser-bridge-v${EXPECTED_VERSION}-macos-universal.tar.gz`;"));
@@ -2498,10 +2673,10 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
     assert!(readme.contains(&format!(
         "local-browser-bridge-v{VERSION}-macos-universal.tar.gz"
     )));
-    assert!(!rig.replace("v0.12.23", "").contains("v0.12.1"));
-    assert!(!fixture.replace("v0.12.23", "").contains("v0.12.1"));
-    assert!(!rig.replace("v0.12.23", "").contains("v0.12.2"));
-    assert!(!fixture.replace("v0.12.23", "").contains("v0.12.2"));
+    assert!(!rig.replace("v0.12.24", "").contains("v0.12.1"));
+    assert!(!fixture.replace("v0.12.24", "").contains("v0.12.1"));
+    assert!(!rig.replace("v0.12.24", "").contains("v0.12.2"));
+    assert!(!fixture.replace("v0.12.24", "").contains("v0.12.2"));
     let current_readme = readme
         .split("## Withdrawn v0.12.10 exact-candidate result")
         .next()
@@ -2548,10 +2723,10 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
 
 #[test]
 fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
-    let rig = fs::read_to_string("evidence/v0.12.23/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.24/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.23/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.24/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let binder = fs::read_to_string("scripts/fetch-verify-release-candidate.sh")
@@ -2695,7 +2870,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
 
 #[test]
 fn macos_packaged_evidence_streams_one_exact_bounded_pax_free_archive() {
-    let rig = fs::read_to_string("evidence/v0.12.23/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.24/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -2799,7 +2974,7 @@ fn macos_package_preparer_accepts_only_the_canonical_bounded_ustar_package() {
     }
 
     let repository = std::env::current_dir().unwrap();
-    let rig = repository.join("evidence/v0.12.23/computer/helper-evidence-rig.mjs");
+    let rig = repository.join("evidence/v0.12.24/computer/helper-evidence-rig.mjs");
     let temporary = tempfile::tempdir().unwrap();
     set_mode(temporary.path(), 0o700);
     let generator = temporary.path().join("make-package.py");
@@ -2869,7 +3044,7 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
         let case_root = temporary.path().join(scenario);
         fs::create_dir(&case_root).unwrap();
         set_mode(&case_root, 0o700);
-        let archive = case_root.join("local-browser-bridge-v0.12.23-macos-universal.tar.gz");
+        let archive = case_root.join("local-browser-bridge-v0.12.24-macos-universal.tar.gz");
         let generated = Command::new("python3")
             .arg(&generator)
             .arg(scenario)
@@ -2885,10 +3060,10 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
         let archive_sha256 = file_sha256(archive.to_str().unwrap());
         let zero_hash = "0".repeat(64);
         let manifest_text = format!(
-            "{zero_hash}  local-browser-bridge-v0.12.23-windows-x86_64.exe\n\
-             {zero_hash}  local-computer-helper-v0.12.23-windows-x86_64.exe\n\
-             {archive_sha256}  local-browser-bridge-v0.12.23-macos-universal.tar.gz\n\
-             {zero_hash}  local-browser-bridge-extension-v0.12.23.zip\n"
+            "{zero_hash}  local-browser-bridge-v0.12.24-windows-x86_64.exe\n\
+             {zero_hash}  local-computer-helper-v0.12.24-windows-x86_64.exe\n\
+             {archive_sha256}  local-browser-bridge-v0.12.24-macos-universal.tar.gz\n\
+             {zero_hash}  local-browser-bridge-extension-v0.12.24.zip\n"
         );
         let manifest = case_root.join("SHA256SUMS.txt");
         fs::write(&manifest, &manifest_text).unwrap();
@@ -3016,7 +3191,7 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
 
 #[test]
 fn macos_packaged_evidence_uses_a_clean_tagged_harness_and_fresh_lane_outputs() {
-    let rig = fs::read_to_string("evidence/v0.12.23/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.24/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -3074,7 +3249,7 @@ fn macos_packaged_evidence_uses_a_clean_tagged_harness_and_fresh_lane_outputs() 
 
 #[test]
 fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
-    let rig = fs::read_to_string("evidence/v0.12.23/computer/helper-evidence-rig.mjs").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.24/computer/helper-evidence-rig.mjs").unwrap();
     assert!(rig.contains("capturedFrameMatchesWindowGeometry"));
     assert!(rig.contains("share-resize-settled"));
     assert!(rig.contains("sample.sourceSequence > resizeTransition.sample.sourceSequence"));
@@ -3086,12 +3261,12 @@ fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
 
 #[test]
 fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.23/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.24/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     assert!(rig.contains("function childEnvironment(overrides = {})"));
     assert!(!rig.contains("...process.env"));
-    let fixture = fs::read_to_string("evidence/v0.12.23/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.24/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -3255,7 +3430,7 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
             "packaged evidence uses an impossible, synthetic, or unsafe shortcut: {forbidden}"
         );
     }
-    assert!(rig.contains("schemaVersion: 7"));
+    assert!(rig.contains("schemaVersion: 8"));
     assert!(
         rig.contains("const NATIVE_TEXT_SUFFIX = `-native-${randomBytes(6).toString(\"hex\")}`;")
     );
@@ -3269,10 +3444,10 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
 
 #[test]
 fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.23/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.24/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.23/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.24/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let normalized_readme = readme.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -3404,21 +3579,21 @@ fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() 
 
 #[test]
 fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negative() {
-    let fixture = fs::read_to_string("evidence/v0.12.23/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.24/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.23/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.24/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.23/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.24/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.23/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.24/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
     for required in [
-        "private let siblingFixtureTitle = \"LBB v0.12.23 Same-PID Sibling Receiver\"",
+        "private let siblingFixtureTitle = \"LBB v0.12.24 Same-PID Sibling Receiver\"",
         "var primaryWindowId = 0",
         "var siblingWindowId = 0",
         "var siblingTextLength = 0",
@@ -4349,7 +4524,7 @@ fn windows_foreground_arm_handoff_watcher_is_strict_read_only_and_non_authoritat
         .replace("\r\n", "\n");
 
     for required in [
-        "$script:ProductVersion = \"0.12.23\"",
+        "$script:ProductVersion = \"0.12.24\"",
         "$script:MarkerSchemaVersion = 2",
         "function Assert-ExactPropertyOrder {",
         "function Assert-ExactMarkerSchema {",
@@ -4475,7 +4650,7 @@ fn windows_foreground_arm_handoff_watcher_is_strict_read_only_and_non_authoritat
     );
     assert!(!watcher.contains("}.GetNewClosure() `\n        -ExpectedText"));
     assert!(runner.contains("-ProductVersion $Version"));
-    assert!(runner.contains("-ProductVersion \"0.12.23\""));
+    assert!(runner.contains("-ProductVersion \"0.12.24\""));
     assert!(runner.contains("maximumClickAttempts -ne 1"));
     assert!(runner.contains("maximumClickAttempts -ne 0"));
 }

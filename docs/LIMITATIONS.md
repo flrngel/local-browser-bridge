@@ -167,7 +167,7 @@ Version 0.12.20 passed its quiet macOS lane but timed out before product dispatc
 in its then-mandatory physical-pointer lane. Its Windows run separately timed out
 because the action surface could not be found under a state-mutating title.
 Both outcomes are preserved as negative evidence; Chrome never started and no
-Release was published. That pointer lane is historical in v0.12.23; its tools
+Release was published. That pointer lane is historical in v0.12.24; its tools
 remain optional adversarial coverage and cannot satisfy publication.
 
 The exact v0.12.22 quiet run later returned a Confirmed semantic action with a
@@ -177,8 +177,20 @@ closed after 55 of 56 checks. That was a harness false negative, not proof of an
 unsafe action; deliberate macOS, Windows, and Chrome did not run, publication
 was canceled, and no v0.12.22 Release exists.
 
-Version 0.12.23 keeps sealed route provenance plus conservative shared-pointer
-monitoring. Before either lane invokes a candidate executable, fixture, server,
+Version 0.12.23 separated that sealed action-pointer classifier from the
+keyboard-aware independent-system classifier without weakening either. Its
+quiet packaged lane passed 208/208 checks. Its deliberate lane accepted the
+exact app-share start receipt and completed 89/89 recorded assertions, then
+reused a pre-handoff stream frame after 43.807 seconds. `computer.click`
+correctly returned HTTP 409 `COMPUTER_STALE_FRAME` before dispatch; no completion
+receipt, Windows, Chrome, publication, or Release followed. The exact negative
+record is retained on the immutable [v0.12.23 evidence commit](https://github.com/flrngel/local-browser-bridge/tree/4e4db75a4ede915d982d139a82dacac8a6c4772a/evidence/v0.12.23/computer/attempts/withdrawn-9e50811-macos-app-share-stale-frame).
+
+Version 0.12.24 retains sealed route provenance, the v0.12.23 classifier
+separation, and conservative shared-pointer monitoring. After the app-share
+`ACTION` receipt it must obtain a strictly newer frame from the same share,
+target, and geometry within the reserved deadline before deriving click
+authority. Before either lane invokes a candidate executable, fixture, server,
 or helper, a native SystemProbe gate requires a 30-second sampled quiet epoch
 with at least 60 stable transitions sampled every 500 ms. Pointer, cursor,
 foreground, AX-focus/front-window, or active-Space activity resets the complete

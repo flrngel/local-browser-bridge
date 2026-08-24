@@ -157,9 +157,18 @@ transient focus/window manipulation. The chain also cannot identify the
 controller cryptographically, prove physical-human input, authorize product
 control, or create a separate OS input seat. All product authority and effect
 proof still comes from the authenticated bridge protocol, sealed exact-target
-route, and application-owned postcondition. The v0.12.20 physical-pointer lane
-is retained only as historical, optional adversarial coverage; its artifacts
-cannot satisfy the v0.12.23 release contract.
+route, and application-owned postcondition. Version 0.12.22 introduced this
+exact app-share surface; v0.12.23 retained it and separated the sealed
+action-pointer classifier from the keyboard-aware independent-system
+classifier. The exact v0.12.23 deliberate run then proved its app-share start
+receipt and 89/89 completed assertions before a pre-handoff stream frame was
+reused after 43.807 seconds; `computer.click` correctly refused it with HTTP 409
+`COMPUTER_STALE_FRAME` before dispatch. Version 0.12.24 therefore requires a
+strictly newer frame with the same share, target, and geometry after the
+`ACTION` receipt and within the reserved deadline before deriving click
+authority. The v0.12.20 physical-pointer lane is retained only as historical,
+optional adversarial coverage; its artifacts cannot satisfy the v0.12.24
+release contract.
 
 ## Capture is not isolation
 
