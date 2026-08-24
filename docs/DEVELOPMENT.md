@@ -310,11 +310,12 @@ machine records are:
 
 The verifier also requires the result-referenced lane screenshots, logs,
 operator markers, Windows steps/fixture records, and the browser finalizer's
-exact V2 inventory of 17 input files and 18 finalized files. It validates
+exact schema-V3 inventory of 21 input files and 22 finalized files. It validates
 duplicate-free JSON/NDJSON, PNG structure and metadata policy, cleanup,
-human-review bindings, candidate identity, and a leakage denylist. Never copy
-credentials, tokens, paths, operator identity, raw browser/API data, or
-unrelated screen content into the evidence commit.
+candidate-bound approval, digest-bound independent exported-file review, the
+preflight/postflight external-surface attestations, candidate identity, and a
+leakage denylist. Never copy credentials, tokens, paths, operator identity, raw
+browser/API data, or unrelated screen content into the evidence commit.
 
 Only after both fresh macOS lanes, interactive Windows helper acceptance, and
 stock-Chrome acceptance pass against the same frozen artifact should the

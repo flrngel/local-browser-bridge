@@ -1174,7 +1174,7 @@ function Assert-OperatorResultsV2 {
     }
     if ($surfaces.orchestrationAndConsent -cne `
         "user-orchestrator-secured-ssh-exported-file-review") {
-        throw "v0.12.15 requires the independent Windows app-share orchestration surface."
+        throw "v0.12.15 requires the secured-SSH exported-file review orchestration surface."
     }
     foreach ($name in @(
         "dedicatedWindowCreation", "chromeExtensionsPage", "nativeLoadUnpackedPicker",
