@@ -163,7 +163,7 @@ $ProgressPreference = "SilentlyContinue"
 $Repository = "flrngel/local-browser-bridge"
 $Origin = "https://github.com/$Repository.git"
 $WorkflowPath = ".github/workflows/deploy.yml"
-$ProductVersion = "0.12.16"
+$ProductVersion = "0.12.17"
 $MaximumCandidateBytes = [int64]536870912
 
 function Get-TrustedSha256([string]$Path) {
@@ -720,7 +720,7 @@ if ($Version -cne $ProductVersion -or $Version -cnotmatch '^[0-9]+\.[0-9]+\.[0-9
     $ArtifactId -cnotmatch '^[1-9][0-9]*$' -or
     $SourceSha -cnotmatch '^[0-9a-f]{40}$' -or
     $TagObjectSha -cnotmatch '^[0-9a-f]{40}$') {
-  throw "Candidate identifiers are not canonical v0.12.16 identifiers."
+  throw "Candidate identifiers are not canonical v0.12.17 identifiers."
 }
 $Tag = "v$Version"
 $ExpectedInvocationUri = "https://github.com/$Repository/actions/runs/$WorkflowRunId/attempts/$WorkflowRunAttempt"
@@ -741,6 +741,29 @@ if ($Destination.Length -gt 90 -or [IO.File]::Exists($Destination) -or [IO.Direc
 $DestinationParent = [IO.Path]::GetDirectoryName($Destination)
 $null = Assert-OrdinaryAbsolutePath $DestinationParent $false "Destination parent"
 
+function Get-DirectoryAccessControlPortable([string]$Path) {
+  $Sections = [Security.AccessControl.AccessControlSections]::Access -bor
+    [Security.AccessControl.AccessControlSections]::Owner
+  if ($PSVersionTable.PSEdition -ceq "Core") {
+    return [IO.FileSystemAclExtensions]::GetAccessControl(
+      [IO.DirectoryInfo]::new($Path), $Sections
+    )
+  }
+  return [IO.Directory]::GetAccessControl($Path, $Sections)
+}
+
+function Set-DirectoryAccessControlPortable(
+  [string]$Path,
+  [Security.AccessControl.DirectorySecurity]$Security
+) {
+  if ($PSVersionTable.PSEdition -ceq "Core") {
+    [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($Path), $Security)
+  }
+  else {
+    [IO.Directory]::SetAccessControl($Path, $Security)
+  }
+}
+
 function Set-PrivateDirectoryAcl([string]$Path) {
   $Identity = [Security.Principal.WindowsIdentity]::GetCurrent()
   $Security = [Security.AccessControl.DirectorySecurity]::new()
@@ -756,8 +779,8 @@ function Set-PrivateDirectoryAcl([string]$Path) {
     [Security.AccessControl.AccessControlType]::Allow
   )
   [void]$Security.AddAccessRule($Rule)
-  [IO.Directory]::SetAccessControl($Path, $Security)
-  $Observed = [IO.Directory]::GetAccessControl($Path)
+  Set-DirectoryAccessControlPortable $Path $Security
+  $Observed = Get-DirectoryAccessControlPortable $Path
   $Rules = @($Observed.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
   if (-not $Observed.AreAccessRulesProtected -or
       @($Rules | Where-Object {

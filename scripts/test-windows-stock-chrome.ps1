@@ -33,6 +33,29 @@ function ConvertFrom-JsonPreservingStrings {
   }
 }
 
+function Get-DirectoryAccessControlPortable([string]$Path) {
+  $Sections = [Security.AccessControl.AccessControlSections]::Access -bor
+    [Security.AccessControl.AccessControlSections]::Owner
+  if ($PSVersionTable.PSEdition -ceq "Core") {
+    return [IO.FileSystemAclExtensions]::GetAccessControl(
+      [IO.DirectoryInfo]::new($Path), $Sections
+    )
+  }
+  return [IO.Directory]::GetAccessControl($Path, $Sections)
+}
+
+function Set-DirectoryAccessControlPortable(
+  [string]$Path,
+  [Security.AccessControl.DirectorySecurity]$Security
+) {
+  if ($PSVersionTable.PSEdition -ceq "Core") {
+    [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($Path), $Security)
+  }
+  else {
+    [IO.Directory]::SetAccessControl($Path, $Security)
+  }
+}
+
 function Invoke-CoordinatorSelfTest {
   $Source = [IO.File]::ReadAllText($PSCommandPath, [Text.UTF8Encoding]::new($false))
   foreach ($Required in @(
@@ -744,7 +767,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$Version = "0.12.16"
+$Version = "0.12.17"
 $script:ReviewExchangeDirectory = $null
 $script:ReviewExchangeArtifacts = New-Object Collections.Generic.List[string]
 $script:ReviewResponseReservations = New-Object Collections.Generic.List[object]
@@ -761,7 +784,7 @@ $Origin = "https://github.com/flrngel/local-browser-bridge.git"
 $ExpectedInvocationUri = "https://github.com/flrngel/local-browser-bridge/actions/runs/$WorkflowRunId/attempts/$WorkflowRunAttempt"
 
 if (-not $SelfTestRequested) {
-  if ($Version -cne "0.12.16" -or $FinalSha -cnotmatch '^[0-9a-f]{40}$' -or
+  if ($Version -cne "0.12.17" -or $FinalSha -cnotmatch '^[0-9a-f]{40}$' -or
       $TagObjectSha -cnotmatch '^[0-9a-f]{40}$' -or
       $WorkflowRunId -cnotmatch '^[1-9][0-9]*$' -or
       $WorkflowRunAttempt -cnotmatch '^[1-9][0-9]*$' -or
@@ -1189,11 +1212,7 @@ function Assert-OwnerPrivateDirectoryAcl([string]$Path, [string]$Label) {
   Assert-NoReparseAncestorChain $Full $Label
   $Identity = [Security.Principal.WindowsIdentity]::GetCurrent()
   try {
-    $Observed = [IO.Directory]::GetAccessControl(
-      $Full,
-      [Security.AccessControl.AccessControlSections]::Access -bor
-        [Security.AccessControl.AccessControlSections]::Owner
-    )
+    $Observed = Get-DirectoryAccessControlPortable $Full
     $Owner = $Observed.GetOwner([Security.Principal.SecurityIdentifier])
     $Rules = @($Observed.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
     $FullControlRule = @($Rules | Where-Object {
@@ -1231,7 +1250,7 @@ function Set-OwnerPrivateDirectoryAcl([string]$Path) {
       [Security.AccessControl.AccessControlType]::Allow
     )
     [void]$Security.AddAccessRule($Rule)
-    [IO.Directory]::SetAccessControl($Path, $Security)
+    Set-DirectoryAccessControlPortable $Path $Security
   }
   finally { $Identity.Dispose() }
   Assert-OwnerPrivateDirectoryAcl $Path "Fresh acceptance directory"
@@ -2681,12 +2700,12 @@ $TrustedRelativeFiles = @(
   "scripts/record-computer-helper-chain.ps1",
   "scripts/sanitize-browser-evidence-screenshot.ps1",
   "scripts/write-stock-chrome-operator-response.ps1",
-  "evidence/v0.12.16/browser/operator-results.template.json",
-  "evidence/v0.12.16/browser/operator-results.schema.json",
-  "evidence/v0.12.16/browser/computer-helper-chain.schema.json",
-  "evidence/v0.12.16/browser/scoped-action-approval.schema.json",
-  "evidence/v0.12.16/browser/independent-visual-review.schema.json",
-  "evidence/v0.12.16/browser/external-surface-attestation.schema.json"
+  "evidence/v0.12.17/browser/operator-results.template.json",
+  "evidence/v0.12.17/browser/operator-results.schema.json",
+  "evidence/v0.12.17/browser/computer-helper-chain.schema.json",
+  "evidence/v0.12.17/browser/scoped-action-approval.schema.json",
+  "evidence/v0.12.17/browser/independent-visual-review.schema.json",
+  "evidence/v0.12.17/browser/external-surface-attestation.schema.json"
 )
 function Export-ExactTrustedBlob([string]$ObjectId, [string]$Relative) {
   if ($ObjectId -cnotmatch '^[0-9a-f]{40}$' -or $TrustedRelativeFiles -cnotcontains $Relative) {
@@ -2868,7 +2887,7 @@ $Captures = [ordered]@{
   "post-handback-resume" = "browser-06-post-handback-resume"
 }
 $RequiredVisibleStates = [ordered]@{
-  "extension-loaded" = "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.16 card with no load errors and Chrome's debugger-use indicator during the active bridge lease"
+  "extension-loaded" = "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.17 card with no load errors and Chrome's debugger-use indicator during the active bridge lease"
   "api-action-result" = "the loopback demo visibly shows Hello, Bridge Matrix. blue selected. after the browser API action"
   "computer-share-action" = "the exact shared Chrome window visibly shows the post-click demo state and synthetic session pointer from a fresh helper frame"
   "stop-paused" = "the trusted extension popup visibly shows the human pause and Resume remote control after the in-page Stop handback"

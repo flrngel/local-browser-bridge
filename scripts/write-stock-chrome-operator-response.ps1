@@ -23,7 +23,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $script:Utf8 = [Text.UTF8Encoding]::new($false, $true)
-$script:Version = "0.12.16"
+$script:Version = "0.12.17"
 
 function ConvertFrom-JsonPreservingStrings {
     param([Parameter(Mandatory = $true, ValueFromPipeline = $true)][string]$Json)
@@ -35,6 +35,29 @@ function ConvertFrom-JsonPreservingStrings {
         else {
             Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $Json
         }
+    }
+}
+
+function Get-DirectoryAccessControlPortable([string]$Path) {
+    $Sections = [Security.AccessControl.AccessControlSections]::Access -bor
+        [Security.AccessControl.AccessControlSections]::Owner
+    if ($PSVersionTable.PSEdition -ceq "Core") {
+        return [IO.FileSystemAclExtensions]::GetAccessControl(
+            [IO.DirectoryInfo]::new($Path), $Sections
+        )
+    }
+    return [IO.Directory]::GetAccessControl($Path, $Sections)
+}
+
+function Set-DirectoryAccessControlPortable(
+    [string]$Path,
+    [Security.AccessControl.DirectorySecurity]$Security
+) {
+    if ($PSVersionTable.PSEdition -ceq "Core") {
+        [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($Path), $Security)
+    }
+    else {
+        [IO.Directory]::SetAccessControl($Path, $Security)
     }
 }
 
@@ -63,11 +86,7 @@ function Assert-PrivateDirectory([string]$Path) {
         if ($null -eq $Identity -or $null -eq $Identity.User) {
             throw "The current Windows identity is unavailable."
         }
-        $Acl = [IO.Directory]::GetAccessControl(
-            $Full,
-            [Security.AccessControl.AccessControlSections]::Access -bor
-                [Security.AccessControl.AccessControlSections]::Owner
-        )
+        $Acl = Get-DirectoryAccessControlPortable $Full
         $Owner = $Acl.GetOwner([Security.Principal.SecurityIdentifier])
         $Rules = @($Acl.GetAccessRules(
             $true, $true, [Security.Principal.SecurityIdentifier]
@@ -830,7 +849,7 @@ function Set-PrivateDirectoryAcl([string]$Path) {
             [Security.AccessControl.AccessControlType]::Allow
         )
         [void]$Security.AddAccessRule($Rule)
-        [IO.Directory]::SetAccessControl($Path, $Security)
+        Set-DirectoryAccessControlPortable $Path $Security
     }
     finally { if ($null -ne $Identity) { $Identity.Dispose() } }
 }

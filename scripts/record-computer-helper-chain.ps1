@@ -27,7 +27,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $script:Utf8NoBom = [Text.UTF8Encoding]::new($false, $true)
-$script:Version = "0.12.16"
+$script:Version = "0.12.17"
 
 function ConvertFrom-JsonPreservingStrings {
     param([Parameter(Mandatory = $true, ValueFromPipeline = $true)][string]$Json)
@@ -40,6 +40,17 @@ function ConvertFrom-JsonPreservingStrings {
             Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $Json
         }
     }
+}
+
+function Get-DirectoryAccessControlPortable([string]$Path) {
+    $Sections = [Security.AccessControl.AccessControlSections]::Access -bor
+        [Security.AccessControl.AccessControlSections]::Owner
+    if ($PSVersionTable.PSEdition -ceq "Core") {
+        return [IO.FileSystemAclExtensions]::GetAccessControl(
+            [IO.DirectoryInfo]::new($Path), $Sections
+        )
+    }
+    return [IO.Directory]::GetAccessControl($Path, $Sections)
 }
 
 $script:Source = "local-browser-bridge-computer-helper-via-loopback-api"
@@ -125,11 +136,7 @@ function Assert-PrivateOperatorExchangeDirectory {
         if ($null -eq $identity -or $null -eq $identity.User) {
             throw "The current Windows identity is unavailable for operator-exchange ACL validation."
         }
-        $acl = [IO.Directory]::GetAccessControl(
-            [IO.Path]::GetFullPath($Path),
-            [Security.AccessControl.AccessControlSections]::Access -bor
-                [Security.AccessControl.AccessControlSections]::Owner
-        )
+        $acl = Get-DirectoryAccessControlPortable ([IO.Path]::GetFullPath($Path))
         $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier])
         $rules = @($acl.GetAccessRules(
             $true, $true, [Security.Principal.SecurityIdentifier]
@@ -406,7 +413,7 @@ function Get-CandidateBinding {
     param([object]$Preflight, [string]$PreflightSha256)
     if ($Preflight.phase -cne "preflight" -or $Preflight.passed -ne $true -or
         $Preflight.candidate.version -cne $script:Version) {
-        throw "PreflightRecord is not a passing v0.12.16 preflight."
+        throw "PreflightRecord is not a passing v0.12.17 preflight."
     }
     Assert-ReleaseCandidateBinding $Preflight.releaseCandidateBinding $Preflight.candidate
     $script:ReleaseCandidateBinding = $Preflight.releaseCandidateBinding
@@ -2257,7 +2264,7 @@ function Read-RollbackCandidateCardState {
     [void](Get-ExactChromeWindow $WindowId $ExpectedPid)
     $fresh = Get-FreshObservation $WindowId $ExpectedPid $null
     $exchange = Invoke-OperatorExchange "ui-state" "rollback-candidate-card" `
-        "Interpret exact v0.12.16 test-owned candidate-card presence from this fresh owned frame." `
+        "Interpret exact v0.12.17 test-owned candidate-card presence from this fresh owned frame." `
         ([ordered]@{ type = "enum"; values = @("present", "absent") }) $fresh.Observation $null
     Assert-ExactKeys $exchange.Decision @("value") "candidate-card rollback-state decision"
     $value = ([string]$exchange.Decision.value).Trim().ToLowerInvariant()
@@ -2547,7 +2554,7 @@ function Invoke-BestEffortUiRollback {
                     Set-MutationDisposition $State "RemoveExtensionDialog" "outcome_unknown"
                     Invoke-UnrecordedNativeSteps `
                         "Use only the exact bound test-owned chrome://extensions window." @(
-                            [ordered]@{ kind="click"; label="Remove on the exact v0.12.16 test-owned candidate card" },
+                            [ordered]@{ kind="click"; label="Remove on the exact v0.12.17 test-owned candidate card" },
                             [ordered]@{ kind="click"; label="confirm removal of that exact candidate card" }
                         ) "extensionDisposition" `
                         $script:DedicatedWindowId $script:DedicatedWindowPid
@@ -2599,7 +2606,7 @@ function Invoke-Run {
         throw "The live computer-helper chain recorder runs only on Windows."
     }
     if ($Port -ne 17373) {
-        throw "The v0.12.16 acceptance recorder requires the canonical 127.0.0.1:17373 endpoint."
+        throw "The v0.12.17 acceptance recorder requires the canonical 127.0.0.1:17373 endpoint."
     }
     $preflightPath = Resolve-OrdinaryFile $PreflightRecord "PreflightRecord"
     $runnerPath = Resolve-OrdinaryFile $ApiMatrixRunner "ApiMatrixRunner"
@@ -2780,7 +2787,7 @@ function Invoke-Run {
             [ordered]@{ kind="key"; value="Enter" }
         ) "none" "Verify chrome://extensions is visible in the dedicated window and no candidate card exists."
         $initialCandidateCard = Read-LiveCandidateCardState `
-            $epoch "absent" "Exact v0.12.16 test-owned candidate card before installation"
+            $epoch "absent" "Exact v0.12.17 test-owned candidate card before installation"
         $capturedDeveloperMode = Read-LiveToggleState $epoch "DeveloperMode"
         Request-ScopedActionTimeApproval $epoch $preflight $capturedDeveloperMode $initialCandidateCard
         Confirm-ApprovalPreDispatchStateUnchanged `
@@ -2813,7 +2820,7 @@ function Invoke-Run {
         [void](Get-ExactExtensionPayloadDigest $extensionDirectoryPath $payloadInventory $preflight.candidate.extension.combinedPayloadSha256)
 
         $epoch = Start-RecordedEpoch $script:EpochNames[3] $script:EpochSurfaces[3] "Reselect the dedicated stock Chrome extensions window."
-        Invoke-RecordedAction $epoch $script:ActionNames[5] @() "none" "Verify exactly one enabled unpacked Local Browser Bridge v0.12.16 card, no duplicate, and no load error."
+        Invoke-RecordedAction $epoch $script:ActionNames[5] @() "none" "Verify exactly one enabled unpacked Local Browser Bridge v0.12.17 card, no duplicate, and no load error."
         Set-MutationDisposition $mutation "CandidateExtension" "verified_applied"
         Invoke-RecordedAction $epoch $script:ActionNames[6] @(
             [ordered]@{ kind="click"; label="Chrome Extensions menu button" },
@@ -2837,7 +2844,7 @@ function Invoke-Run {
             [ordered]@{ kind="click"; label="popup token field" },
             [ordered]@{ kind="typeText"; value=$script:Token },
             [ordered]@{ kind="click"; label="popup Connect button" }
-        ) "acceptanceTokenSave" "Verify v0.12.16 is connected and the credential field is empty."
+        ) "acceptanceTokenSave" "Verify v0.12.17 is connected and the credential field is empty."
         Set-MutationDisposition $mutation "SavedToken" "verified_applied"
         Stop-RecordedEpoch $epoch
 
@@ -2860,7 +2867,7 @@ function Invoke-Run {
         $browserAction = Show-DeterministicGreeting $ownedTarget
 
         $epoch = Start-RecordedEpoch $script:EpochNames[5] $script:EpochSurfaces[5] "Select the dedicated Chrome window containing chrome://extensions and the matrix-owned demo."
-        Invoke-RecordedAction $epoch $script:ActionNames[9] @([ordered]@{ kind="click"; label="the exact chrome://extensions tab" }) "none" "Verify exactly one enabled unpacked Local Browser Bridge v0.12.16 card, no error, and Chrome's native debugger-use indicator while the exact bridge lease is active."
+        Invoke-RecordedAction $epoch $script:ActionNames[9] @([ordered]@{ kind="click"; label="the exact chrome://extensions tab" }) "none" "Verify exactly one enabled unpacked Local Browser Bridge v0.12.17 card, no error, and Chrome's native debugger-use indicator while the exact bridge lease is active."
         Save-RecordedScreenshot $epoch "extension-loaded"
         Invoke-RecordedAction $epoch $script:ActionNames[10] @([ordered]@{ kind="click"; label="the exact matrix-owned loopback demo tab" }) "none" "Verify the exact visible result is Hello, Bridge Matrix. blue selected."
         Save-RecordedScreenshot $epoch "api-action-result"
@@ -2968,11 +2975,11 @@ function Invoke-Run {
         Set-MutationDisposition $mutation "RemoveExtensionDialog" "outcome_unknown"
         Invoke-RecordedAction $epoch $script:ActionNames[24] @(
             [ordered]@{ kind="click"; label="the exact existing chrome://extensions tab" },
-            [ordered]@{ kind="click"; label="Remove on the exact v0.12.16 test-owned candidate card" },
+            [ordered]@{ kind="click"; label="Remove on the exact v0.12.17 test-owned candidate card" },
             [ordered]@{ kind="click"; label="confirm removal of that exact candidate card" }
-        ) "extensionDisposition" "Verify the helper switched to the protected chrome://extensions tab before removing only the new test-owned v0.12.16 card."
+        ) "extensionDisposition" "Verify the helper switched to the protected chrome://extensions tab before removing only the new test-owned v0.12.17 card."
         $finalCandidateCard = Read-LiveCandidateCardState `
-            $epoch "absent" "Exact v0.12.16 test-owned candidate card after removal"
+            $epoch "absent" "Exact v0.12.17 test-owned candidate card after removal"
         Set-MutationDisposition $mutation "RemoveExtensionDialog" "restored"
         Set-MutationDisposition $mutation "CandidateExtension" "restored"
         $restoreDeveloperSteps = if ($capturedDeveloperMode.value -ceq "disabled") {
