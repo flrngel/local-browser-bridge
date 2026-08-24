@@ -1,0 +1,244 @@
+{
+    "schemaVersion":  2,
+    "passed":  false,
+    "suites":  [
+                   "Smoke",
+                   "Recovery",
+                   "Semantic",
+                   "Keyboard",
+                   "Pixel",
+                   "Capture",
+                   "Cancellation"
+               ],
+    "startedAtUtc":  "2026-08-24T19:21:48.1869626Z",
+    "finishedAtUtc":  "2026-08-24T19:26:50.5266058Z",
+    "interactiveSessionId":  2,
+    "loopbackPort":  63724,
+    "targetPid":  18928,
+    "targetWindowId":  "263826",
+    "steps":  [
+                  {
+                      "name":  "protocol-bound helper readiness",
+                      "passed":  true,
+                      "evidence":  "01-protocol-bound-helper-readiness.json"
+                  },
+                  {
+                      "name":  "foreground arm request delivery",
+                      "passed":  true,
+                      "evidence":  "02-foreground-arm-request-delivery.json"
+                  }
+              ],
+    "failure":  "Timed out waiting for a fresh foreground-arm click and 3 stable native samples.",
+    "failureDetails":  {
+                           "stage":  "wait-foreground-arm",
+                           "exceptionType":  "System.Management.Automation.RuntimeException",
+                           "fullyQualifiedErrorId":  "Timed out waiting for a fresh foreground-arm click and 3 stable native samples.",
+                           "category":  "OperationStopped",
+                           "scriptLineNumber":  1681,
+                           "offsetInLine":  5,
+                           "line":  "throw \"Timed out waiting for a fresh foreground-arm click and $RequiredStableSamples stable native samples.\"",
+                           "scriptStackTrace":  "at Wait-ForStableForegroundArm, [RUNNER]: line 1681\r\nat \u003cScriptBlock\u003e, [RUNNER]: line 3491",
+                           "pathsRecorded":  false
+                       },
+    "cleanupIssues":  [
+
+                      ],
+    "childHandleInheritancePolicy":  "PROC_THREAD_ATTRIBUTE_HANDLE_LIST:NUL-only",
+    "allowedInheritedHandleCount":  1,
+    "tokenPersistenceVerified":  true,
+    "tokenPersisted":  false,
+    "tokenBearingEvidenceRemoved":  0,
+    "unrelatedProcessesTerminated":  false,
+    "recoveryEventReleased":  true,
+    "helperTopologyChecks":  [
+                                 {
+                                     "description":  "the initial disposable helper worker",
+                                     "supervisorPid":  10568,
+                                     "workerPid":  6480,
+                                     "exactImageMatched":  true,
+                                     "interactiveSessionId":  2,
+                                     "stableConsecutivePolls":  2,
+                                     "helloStateMatched":  true,
+                                     "protocolRoundTrip":  true,
+                                     "roundTripMethod":  "computer.status"
+                                 }
+                             ],
+    "helperTopologyPollCount":  3,
+    "helperTopologyTransitionCount":  2,
+    "helperTopologyHistory":  [
+                                  {
+                                      "stage":  "the initial disposable helper worker",
+                                      "observedAtUtc":  "2026-08-24T19:21:49.5370705Z",
+                                      "poll":  1,
+                                      "supervisorExited":  false,
+                                      "reportedWorkerPid":  6480,
+                                      "matchingHelperChildCount":  1,
+                                      "matchingHelperChildPids":  [
+                                                                      6480
+                                                                  ],
+                                      "connected":  true,
+                                      "helloStateMatched":  true,
+                                      "workerSessionId":  2,
+                                      "runnerSessionMatched":  true,
+                                      "stablePolls":  1,
+                                      "nativeErrorCode":  null
+                                  },
+                                  {
+                                      "stage":  "the initial disposable helper worker",
+                                      "observedAtUtc":  "2026-08-24T19:21:49.7035921Z",
+                                      "poll":  3,
+                                      "supervisorExited":  false,
+                                      "reportedWorkerPid":  6480,
+                                      "matchingHelperChildCount":  1,
+                                      "matchingHelperChildPids":  [
+                                                                      6480
+                                                                  ],
+                                      "connected":  true,
+                                      "helloStateMatched":  true,
+                                      "workerSessionId":  2,
+                                      "runnerSessionMatched":  true,
+                                      "stablePolls":  2,
+                                      "nativeErrorCode":  null
+                                  }
+                              ],
+    "helperTopologyLastObservation":  {
+                                          "supervisorPid":  10568,
+                                          "supervisorExited":  false,
+                                          "supervisorExitCode":  null,
+                                          "reportedWorkerPid":  6480,
+                                          "matchingHelperChildCount":  1,
+                                          "matchingHelperChildPids":  [
+                                                                          6480
+                                                                      ],
+                                          "connected":  true,
+                                          "helloStateMatched":  true,
+                                          "workerSessionId":  2,
+                                          "runnerSessionMatched":  true,
+                                          "stablePolls":  2,
+                                          "nativeErrorCode":  null,
+                                          "imagePathRecorded":  false,
+                                          "commandLineRecorded":  false
+                                      },
+    "foregroundArmProof":  {
+                               "requestedGeneration":  1441971375,
+                               "requestPosted":  true,
+                               "acknowledgementMode":  "fresh-foreground-focused-left-mouse-down-up",
+                               "nativeForegroundAndFocusRequired":  true,
+                               "fixtureRequestedGeneration":  1441971375,
+                               "fixtureAcknowledgedGeneration":  0,
+                               "fixtureRequestMatched":  true,
+                               "fixtureAcknowledgementMatched":  false,
+                               "fixtureRequestCount":  1,
+                               "fixtureAcknowledgementCount":  0,
+                               "fixtureLeftMouseDownCount":  0,
+                               "fixtureLeftMouseUpCount":  0,
+                               "requestDeliveryPublicationGeneration":  5,
+                               "fixtureStatePublicationGeneration":  1352,
+                               "statePublicationAdvanced":  true,
+                               "armAndNativeMatched":  false,
+                               "requestCountMatched":  true,
+                               "acknowledgementCountMatched":  false,
+                               "leftMouseDownCountMatched":  false,
+                               "leftMouseUpCountMatched":  false,
+                               "requestDelivered":  true,
+                               "requestDeliveryTimeoutSeconds":  10,
+                               "armButtonEnabled":  true,
+                               "armButtonIdentityMatched":  true,
+                               "nativeTopologyMatched":  true,
+                               "foregroundMatched":  false,
+                               "foregroundStable":  false,
+                               "focusMatched":  false,
+                               "focusStable":  false,
+                               "cursorAvailable":  true,
+                               "cursorStable":  false,
+                               "inputDesktopAvailable":  true,
+                               "inputDesktopStable":  false,
+                               "stableSamplesRequired":  3,
+                               "stableSamplesObserved":  0,
+                               "stablePublicationSamplesObserved":  0,
+                               "timeoutSeconds":  300,
+                               "completed":  false,
+                               "baselineContinuityMatched":  false,
+                               "rawWindowHandlesRecorded":  false,
+                               "rawCursorCoordinatesRecorded":  false
+                           },
+    "releaseCandidateBinding":  {
+                                    "productVersion":  "0.12.25",
+                                    "repository":  "flrngel/local-browser-bridge",
+                                    "tag":  "v0.12.25",
+                                    "sourceSha":  "d193dafe40cf39fa113adb8a10d2fd20cdae4f39",
+                                    "tagObjectSha":  "248185a3e971075b3ba9f789200fab0c9957002e",
+                                    "workflowRunId":  "32762398086",
+                                    "workflowRunAttempt":  "1",
+                                    "artifactId":  "9533729815",
+                                    "artifactName":  "release-candidate",
+                                    "artifactZipBytes":  10430333,
+                                    "artifactZipSha256":  "a24e70a8ddd90a16aff71bcaecb06be5d67d15462038192089413a6fff5a4ed9",
+                                    "checksumManifestSha256":  "47a9ce87964b069614ec370c3bdb989c59bff744c3d633eededa3e343aacd62b",
+                                    "attestationInvocationUri":  "https://github.com/flrngel/local-browser-bridge/actions/runs/32762398086/attempts/1",
+                                    "attestedAssetCount":  5,
+                                    "githubHostedRunner":  true,
+                                    "assets":  [
+                                                   {
+                                                       "file":  "local-browser-bridge-v0.12.25-windows-x86_64.exe",
+                                                       "bytes":  6714368,
+                                                       "sha256":  "40a65223f9b8d2acfe1f4a706ef7aaf0e4ddf09142a8509effa6eaba57f88c29"
+                                                   },
+                                                   {
+                                                       "file":  "local-computer-helper-v0.12.25-windows-x86_64.exe",
+                                                       "bytes":  2595328,
+                                                       "sha256":  "41df065a17c8c57e28f022b1ba6b01949ff4b7285275912b41d601efaa18b739"
+                                                   },
+                                                   {
+                                                       "file":  "local-browser-bridge-v0.12.25-macos-universal.tar.gz",
+                                                       "bytes":  6700629,
+                                                       "sha256":  "8529b8151f5b8a714f74b991d2cec22ce58a7c0c2a6880b5f048b381c6ecef0a"
+                                                   },
+                                                   {
+                                                       "file":  "local-browser-bridge-extension-v0.12.25.zip",
+                                                       "bytes":  89024,
+                                                       "sha256":  "58d06902a137eb4852b166937dc8f5df88a64cbe4be0bf3a2a2c86ff865f0231"
+                                                   },
+                                                   {
+                                                       "file":  "SHA256SUMS.txt",
+                                                       "bytes":  460,
+                                                       "sha256":  "47a9ce87964b069614ec370c3bdb989c59bff744c3d633eededa3e343aacd62b"
+                                                   }
+                                               ]
+                                },
+    "candidateBinding":  {
+                             "version":  "0.12.25",
+                             "checksumManifestMatched":  true,
+                             "exactAssetSetMatched":  true,
+                             "checksumManifest":  {
+                                                      "name":  "SHA256SUMS.txt",
+                                                      "bytes":  460,
+                                                      "sha256":  "47a9ce87964b069614ec370c3bdb989c59bff744c3d633eededa3e343aacd62b",
+                                                      "expectedSha256":  "47a9ce87964b069614ec370c3bdb989c59bff744c3d633eededa3e343aacd62b",
+                                                      "exactEntryCount":  4,
+                                                      "pathRecorded":  false
+                                                  },
+                             "server":  {
+                                            "name":  "local-browser-bridge-v0.12.25-windows-x86_64.exe",
+                                            "bytes":  6714368,
+                                            "sha256":  "40a65223f9b8d2acfe1f4a706ef7aaf0e4ddf09142a8509effa6eaba57f88c29",
+                                            "checksumManifestMatched":  true,
+                                            "fileVersion":  "0.12.25",
+                                            "productVersion":  "0.12.25",
+                                            "reportedVersion":  "local-browser-bridge 0.12.25",
+                                            "versionMatched":  true,
+                                            "pathRecorded":  false
+                                        },
+                             "helper":  {
+                                            "name":  "local-computer-helper-v0.12.25-windows-x86_64.exe",
+                                            "bytes":  2595328,
+                                            "sha256":  "41df065a17c8c57e28f022b1ba6b01949ff4b7285275912b41d601efaa18b739",
+                                            "checksumManifestMatched":  true,
+                                            "fileVersion":  "0.12.25",
+                                            "productVersion":  "0.12.25",
+                                            "reportedVersion":  "local-computer-helper 0.12.25",
+                                            "versionMatched":  true,
+                                            "pathRecorded":  false
+                                        }
+                         }
+}

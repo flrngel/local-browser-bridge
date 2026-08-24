@@ -1,0 +1,9 @@
+{"schemaVersion":1,"sequence":1,"utc":"2026-08-24T19:21:48.9737815Z","source":"backdrop","event":"shown"}
+{"schemaVersion":1,"sequence":2,"utc":"2026-08-24T19:21:49.0057936Z","source":"target","event":"activated","activatedCount":1}
+{"schemaVersion":1,"sequence":3,"utc":"2026-08-24T19:21:49.0369232Z","source":"target","event":"shown"}
+{"schemaVersion":1,"sequence":4,"utc":"2026-08-24T19:21:49.0566718Z","source":"sentinel","event":"activated"}
+{"schemaVersion":1,"sequence":5,"utc":"2026-08-24T19:21:49.0773615Z","source":"sentinel","event":"shown"}
+{"schemaVersion":1,"sequence":6,"utc":"2026-08-24T19:21:49.0843589Z","source":"occluder","event":"shown"}
+{"schemaVersion":1,"sequence":7,"utc":"2026-08-24T19:21:49.1536049Z","source":"fixture","event":"ready"}
+{"schemaVersion":1,"sequence":8,"utc":"2026-08-24T19:21:49.8868884Z","source":"sentinel","event":"foregroundArmRequested","generation":1441971375}
+{"schemaVersion":1,"sequence":9,"utc":"2026-08-24T19:26:50.1992692Z","source":"target","event":"closed"}
