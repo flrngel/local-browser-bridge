@@ -208,9 +208,13 @@ runner waits up to 300 seconds and requires three consecutive `mouseMoved`
 counter advances spanning at least 500 ms. Before any product request exists,
 a button, drag, scroll, tablet, foreground, focus, or Space change resets the
 clean-motion arm to a fresh cumulative-counter baseline under the same absolute
-300-second deadline. If contamination is observed while the prompt changes to
-`ACTION RUNNING`, the prompt returns to `MOVE` and requires a new clean arm. No such
-reset is allowed once dispatch is in flight: unknown monitoring or any
+300-second deadline. Every `MOVE` sample is checked for all of those context
+changes, not only HID-counter progress. If contamination is observed while the
+prompt changes to `ACTION RUNNING` or in the final independent sample immediately
+before dispatch, the prompt returns to `MOVE` and requires a new clean arm. The
+state machine returns that final clean sample directly as the product-action
+baseline; it does not take another pre-dispatch sample outside the retry loop. No
+such reset is allowed once dispatch is in flight: unknown monitoring or any
 post-dispatch disallowed input still fails closed. A SystemProbe timeout is
 treated as ordinary arm expiration only when the original absolute arm deadline
 has actually elapsed; earlier probe failures remain fatal.

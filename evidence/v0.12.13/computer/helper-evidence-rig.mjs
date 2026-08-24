@@ -107,7 +107,7 @@ const GENERATED_OUTPUT_NAMES = [
 
 const rigArguments = process.argv.slice(2);
 if (rigArguments.length === 1 && rigArguments[0] === "--self-test") {
-  runRigSelfTest();
+  await runRigSelfTest();
   process.exit(0);
 }
 
@@ -1132,7 +1132,399 @@ function armProbeExpired(error, deadlineMilliseconds, nowMilliseconds = Date.now
   return error?.code === "SUBPROCESS_TIMEOUT" && nowMilliseconds >= deadlineMilliseconds;
 }
 
-function runRigSelfTest() {
+function deliberatePointerTimeoutError() {
+  return new Error(
+    "separately authorized deliberate shared-pointer activity timed out at stage waitDeliberatePointerActivity",
+  );
+}
+
+async function runPreDispatchPointerArmStateMachine({
+  baseline,
+  armDeadlineMilliseconds,
+  hardDeadlineMilliseconds,
+  nowMilliseconds = () => Date.now(),
+  promptAlive,
+  probePrompt,
+  transitionPrompt,
+  waitForPrompt,
+  setActionDeadlineMilliseconds = () => {},
+  pause = delay,
+  report = log,
+}) {
+  if (
+    !Number.isSafeInteger(armDeadlineMilliseconds) ||
+    !Number.isSafeInteger(hardDeadlineMilliseconds) ||
+    hardDeadlineMilliseconds < armDeadlineMilliseconds
+  ) {
+    throw new Error("the deliberate pointer handoff has no shared absolute deadline");
+  }
+  if (
+    typeof promptAlive !== "function" ||
+    typeof probePrompt !== "function" ||
+    typeof transitionPrompt !== "function" ||
+    typeof waitForPrompt !== "function"
+  ) {
+    throw new Error("the deliberate pointer handoff state machine is incomplete");
+  }
+
+  let previous = baseline;
+  let consecutive = 0;
+  let firstAdvanceAt = 0;
+
+  const resetCleanMotionEpoch = (sample, message) => {
+    report(message);
+    previous = sample;
+    consecutive = 0;
+    firstAdvanceAt = 0;
+  };
+  const returnActionToMove = async (message) => {
+    report(message);
+    setActionDeadlineMilliseconds(null);
+    await transitionPrompt(POINTER_HANDOFF_MOVE_STATE);
+    if (nowMilliseconds() >= armDeadlineMilliseconds) {
+      throw deliberatePointerTimeoutError();
+    }
+    previous = await waitForPrompt(
+      POINTER_HANDOFF_MOVE_STATE,
+      armDeadlineMilliseconds,
+    );
+    if (!pointerPromptDeliveryObserved(previous)) {
+      throw new Error("the independently probed pointer handoff panel did not return to MOVE while re-arming");
+    }
+    consecutive = 0;
+    firstAdvanceAt = 0;
+    await pause(DELIBERATE_MOTION_SAMPLE_MS);
+  };
+
+  while (nowMilliseconds() < armDeadlineMilliseconds) {
+    if (!promptAlive()) {
+      throw new Error("the pointer handoff prompt exited while operator motion was required");
+    }
+    const armProbeBudgetMs = armDeadlineMilliseconds - nowMilliseconds();
+    if (!Number.isSafeInteger(armProbeBudgetMs) || armProbeBudgetMs < 1) break;
+    let sample;
+    try {
+      sample = await probePrompt(
+        POINTER_HANDOFF_MOVE_STATE,
+        Math.min(SYSTEM_PROBE_TIMEOUT_MS, armProbeBudgetMs),
+      );
+    } catch (error) {
+      if (armProbeExpired(error, armDeadlineMilliseconds, nowMilliseconds())) break;
+      throw error;
+    }
+    if (nowMilliseconds() >= armDeadlineMilliseconds) break;
+    if (!pointerPromptDeliveryObserved(sample)) {
+      throw new Error("the independently probed pointer handoff panel was not visible and nonactivating while arming");
+    }
+
+    const progress = clickFreePointerMotionProgress(previous, sample);
+    const moveInvariants = systemInvariants(previous, sample);
+    const moveDisposition = preDispatchPointerTransitionDisposition(
+      progress,
+      moveInvariants,
+    );
+    if (moveDisposition === "unknown") {
+      throw new Error("the independent HID pointer monitor became unreadable while arming");
+    }
+    if (moveDisposition === "rearm") {
+      resetCleanMotionEpoch(
+        sample,
+        "Pre-dispatch input or user-context activity reset the MOVE clean-motion arm; no product action was sent.",
+      );
+      await pause(DELIBERATE_MOTION_SAMPLE_MS);
+      continue;
+    }
+
+    const observedAt = nowMilliseconds();
+    if (progress === "advanced") {
+      if (consecutive === 0) firstAdvanceAt = observedAt;
+      consecutive += 1;
+      const span = observedAt - firstAdvanceAt;
+      if (
+        consecutive >= DELIBERATE_MOTION_REQUIRED_SAMPLES &&
+        span >= DELIBERATE_MOTION_MINIMUM_SPAN_MS
+      ) {
+        if (nowMilliseconds() >= armDeadlineMilliseconds) break;
+        const actionDeadlineMilliseconds = Math.min(
+          hardDeadlineMilliseconds,
+          nowMilliseconds() + POINTER_HANDOFF_COMPLETION_GRACE_MS,
+        );
+        setActionDeadlineMilliseconds(actionDeadlineMilliseconds);
+        report("Sustained shared-pointer activity observed; keep moving while the action runs.");
+        await transitionPrompt(POINTER_HANDOFF_ACTION_STATE);
+        const actionPromptSample = await waitForPrompt(
+          POINTER_HANDOFF_ACTION_STATE,
+          actionDeadlineMilliseconds,
+        );
+        if (!pointerPromptDeliveryObserved(actionPromptSample)) {
+          throw new Error("the independently probed pointer handoff panel was not visible and nonactivating during the ACTION transition");
+        }
+        const actionTransitionProgress = clickFreePointerMotionProgress(
+          sample,
+          actionPromptSample,
+        );
+        const actionTransitionInvariants = systemInvariants(sample, actionPromptSample);
+        const actionTransitionDisposition = preDispatchPointerTransitionDisposition(
+          actionTransitionProgress,
+          actionTransitionInvariants,
+        );
+        if (actionTransitionDisposition === "unknown") {
+          throw new Error("the independent HID pointer monitor became unreadable during the ACTION transition");
+        }
+        if (actionTransitionDisposition === "rearm") {
+          await returnActionToMove(
+            "Pre-dispatch input or user-context activity reset the ACTION transition; no product action was sent.",
+          );
+          continue;
+        }
+
+        const finalProbeBudgetMs = actionDeadlineMilliseconds - nowMilliseconds();
+        if (!Number.isSafeInteger(finalProbeBudgetMs) || finalProbeBudgetMs < 1) {
+          throw new Error("the pointer handoff pre-dispatch deadline elapsed");
+        }
+        const dispatchBaseline = await probePrompt(
+          POINTER_HANDOFF_ACTION_STATE,
+          Math.min(SYSTEM_PROBE_TIMEOUT_MS, finalProbeBudgetMs),
+        );
+        if (!pointerPromptDeliveryObserved(dispatchBaseline)) {
+          throw new Error("the pointer handoff panel was not independently visible immediately before dispatch");
+        }
+        const dispatchProgress = clickFreePointerMotionProgress(
+          actionPromptSample,
+          dispatchBaseline,
+        );
+        const dispatchInvariants = systemInvariants(
+          actionPromptSample,
+          dispatchBaseline,
+        );
+        const dispatchDisposition = preDispatchPointerTransitionDisposition(
+          dispatchProgress,
+          dispatchInvariants,
+        );
+        if (dispatchDisposition === "unknown") {
+          throw new Error("the independent HID pointer monitor became unreadable before dispatch");
+        }
+        if (dispatchDisposition === "rearm") {
+          await returnActionToMove(
+            "Pre-dispatch input or user-context activity reset the final ACTION boundary; no product action was sent.",
+          );
+          continue;
+        }
+        return {
+          actionDeadlineMilliseconds,
+          actionTransitionInvariants,
+          dispatchBaseline,
+          dispatchInvariants,
+          sustainedMotionSamples: consecutive,
+          sustainedMotionSpanMilliseconds: span,
+        };
+      }
+    } else {
+      consecutive = 0;
+      firstAdvanceAt = 0;
+    }
+    previous = sample;
+    await pause(DELIBERATE_MOTION_SAMPLE_MS);
+  }
+  throw deliberatePointerTimeoutError();
+}
+
+function rigSelfTestPointerSample({
+  mouseMoved = 0,
+  leftMouseDown = 0,
+  identity = 1,
+} = {}) {
+  const counters = Object.fromEntries(HID_POINTER_COUNTER_FIELDS.map((field) => [field, 0]));
+  counters.mouseMoved = mouseMoved;
+  counters.leftMouseDown = leftMouseDown;
+  const foregroundPID = 500 + identity;
+  const frontWindowID = 700 + identity;
+  return {
+    pointerActivityMonitorHealthy: true,
+    hidPointerCounters: counters,
+    pointerBoundaryActivityObserved: false,
+    cursorX: 100,
+    cursorY: 100,
+    foregroundPID,
+    foregroundIdentityStable: true,
+    rawForegroundIdentityStable: true,
+    rawForegroundPID: foregroundPID,
+    rawForegroundPSN: identity.toString(16).padStart(16, "0"),
+    frontWindowID,
+    foregroundAXFocusedWindowID: frontWindowID,
+    foregroundAXMainWindowID: frontWindowID,
+    foregroundAXFrontmost: true,
+    activeSpace: 1,
+    pointerPromptProbeRequested: true,
+    pointerPromptOwnerMatched: true,
+    pointerPromptTitleMatched: true,
+    pointerPromptOnScreen: true,
+    pointerPromptNonactivating: true,
+  };
+}
+
+function rigSelfTestAssert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+async function runPointerArmExecutionSelfTests() {
+  {
+    const clock = { value: 9_990 };
+    const timeout = Object.assign(new Error("bounded timeout"), { code: "SUBPROCESS_TIMEOUT" });
+    let probeCalls = 0;
+    let failure = null;
+    try {
+      await runPreDispatchPointerArmStateMachine({
+        baseline: rigSelfTestPointerSample(),
+        armDeadlineMilliseconds: 10_000,
+        hardDeadlineMilliseconds: 20_000,
+        nowMilliseconds: () => clock.value,
+        promptAlive: () => true,
+        probePrompt: (_state, timeoutMilliseconds) => {
+          rigSelfTestAssert(timeoutMilliseconds === 10, "deadline test did not use the remaining absolute budget");
+          probeCalls += 1;
+          clock.value = 10_000;
+          throw timeout;
+        },
+        transitionPrompt: async () => {
+          throw new Error("deadline test transitioned the prompt");
+        },
+        waitForPrompt: async () => {
+          throw new Error("deadline test waited for a prompt transition");
+        },
+        pause: async () => {},
+        report: () => {},
+      });
+    } catch (error) {
+      failure = error;
+    }
+    rigSelfTestAssert(
+      probeCalls === 1 && failure?.message === deliberatePointerTimeoutError().message,
+      "deadline-expired process-probe execution did not become canonical arm expiry",
+    );
+  }
+
+  {
+    const clock = { value: 1_000 };
+    const armDeadlineMilliseconds = 10_000;
+    const moveSamples = [
+      rigSelfTestPointerSample({ mouseMoved: 1, identity: 2 }),
+      rigSelfTestPointerSample({ mouseMoved: 2, identity: 2 }),
+      rigSelfTestPointerSample({ mouseMoved: 3, identity: 2 }),
+      rigSelfTestPointerSample({ mouseMoved: 4, identity: 2 }),
+    ];
+    const actionProbeSamples = [rigSelfTestPointerSample({ mouseMoved: 6, identity: 2 })];
+    const transitions = [];
+    const events = [];
+    const result = await runPreDispatchPointerArmStateMachine({
+      baseline: rigSelfTestPointerSample({ identity: 1 }),
+      armDeadlineMilliseconds,
+      hardDeadlineMilliseconds: 20_000,
+      nowMilliseconds: () => clock.value,
+      promptAlive: () => true,
+      probePrompt: (state) => {
+        const sample = state === POINTER_HANDOFF_MOVE_STATE
+          ? moveSamples.shift()
+          : actionProbeSamples.shift();
+        rigSelfTestAssert(sample != null, `MOVE contamination test exhausted ${state} samples`);
+        return sample;
+      },
+      transitionPrompt: async (state) => transitions.push(state),
+      waitForPrompt: async (state, deadlineMilliseconds) => {
+        rigSelfTestAssert(
+          state === POINTER_HANDOFF_ACTION_STATE && deadlineMilliseconds > armDeadlineMilliseconds,
+          "MOVE contamination test lost its bounded ACTION transition",
+        );
+        return rigSelfTestPointerSample({ mouseMoved: 5, identity: 2 });
+      },
+      pause: async (milliseconds) => {
+        clock.value += milliseconds;
+      },
+      report: (message) => events.push(message),
+    });
+    rigSelfTestAssert(
+      moveSamples.length === 0 &&
+        actionProbeSamples.length === 0 &&
+        transitions.join(",") === POINTER_HANDOFF_ACTION_STATE &&
+        result.sustainedMotionSamples === 3 &&
+        result.sustainedMotionSpanMilliseconds === 500 &&
+        events.some((message) => message.includes("reset the MOVE clean-motion arm")),
+      "foreground-contaminated MOVE samples were absorbed into the clean arm",
+    );
+  }
+
+  {
+    const clock = { value: 2_000 };
+    const armDeadlineMilliseconds = 20_000;
+    const moveSamples = [1, 2, 3, 6, 7, 8].map((mouseMoved) =>
+      rigSelfTestPointerSample({ mouseMoved, leftMouseDown: mouseMoved >= 6 ? 1 : 0 })
+    );
+    const actionWaitSamples = [
+      rigSelfTestPointerSample({ mouseMoved: 4 }),
+      rigSelfTestPointerSample({ mouseMoved: 9, leftMouseDown: 1 }),
+    ];
+    const actionProbeSamples = [
+      rigSelfTestPointerSample({ mouseMoved: 5, leftMouseDown: 1 }),
+      rigSelfTestPointerSample({ mouseMoved: 10, leftMouseDown: 1 }),
+    ];
+    const moveWaitSamples = [rigSelfTestPointerSample({ mouseMoved: 5, leftMouseDown: 1 })];
+    const transitions = [];
+    const actionDeadlines = [];
+    const observedArmDeadlines = [];
+    const result = await runPreDispatchPointerArmStateMachine({
+      baseline: rigSelfTestPointerSample(),
+      armDeadlineMilliseconds,
+      hardDeadlineMilliseconds: 30_000,
+      nowMilliseconds: () => clock.value,
+      promptAlive: () => true,
+      probePrompt: (state) => {
+        const sample = state === POINTER_HANDOFF_MOVE_STATE
+          ? moveSamples.shift()
+          : actionProbeSamples.shift();
+        rigSelfTestAssert(sample != null, `ACTION contamination test exhausted ${state} samples`);
+        return sample;
+      },
+      transitionPrompt: async (state) => transitions.push(state),
+      waitForPrompt: async (state, deadlineMilliseconds) => {
+        if (state === POINTER_HANDOFF_MOVE_STATE) {
+          observedArmDeadlines.push(deadlineMilliseconds);
+          return moveWaitSamples.shift();
+        }
+        return actionWaitSamples.shift();
+      },
+      setActionDeadlineMilliseconds: (deadlineMilliseconds) => {
+        actionDeadlines.push(deadlineMilliseconds);
+      },
+      pause: async (milliseconds) => {
+        clock.value += milliseconds;
+      },
+      report: () => {},
+    });
+    rigSelfTestAssert(
+      moveSamples.length === 0 &&
+        actionWaitSamples.length === 0 &&
+        actionProbeSamples.length === 0 &&
+        moveWaitSamples.length === 0 &&
+        transitions.join(",") === [
+          POINTER_HANDOFF_ACTION_STATE,
+          POINTER_HANDOFF_MOVE_STATE,
+          POINTER_HANDOFF_ACTION_STATE,
+        ].join(",") &&
+        actionDeadlines.length === 3 &&
+        actionDeadlines[1] === null &&
+        observedArmDeadlines.length === 1 &&
+        observedArmDeadlines[0] === armDeadlineMilliseconds &&
+        result.sustainedMotionSamples === 3 &&
+        result.sustainedMotionSpanMilliseconds === 500,
+      "final ACTION contamination did not return through MOVE to a fresh absolute-deadline arm",
+    );
+  }
+  console.log(
+    "macOS pointer-arm execution regressions passed: deadline expiry, MOVE re-arm, final ACTION re-arm.",
+  );
+}
+
+async function runRigSelfTest() {
   const counters = Object.fromEntries(HID_POINTER_COUNTER_FIELDS.map((field) => [field, 100]));
   const sample = { pointerActivityMonitorHealthy: true, hidPointerCounters: counters };
   const changed = (field, value = 101) => ({
@@ -1170,7 +1562,15 @@ function runRigSelfTest() {
     preDispatchPointerTransitionDisposition("disallowed", preservedContext) !== "rearm" ||
     preDispatchPointerTransitionDisposition("advanced", {
       ...preservedContext,
+      foregroundUnchanged: false,
+    }) !== "rearm" ||
+    preDispatchPointerTransitionDisposition("advanced", {
+      ...preservedContext,
       userFocusUnchanged: false,
+    }) !== "rearm" ||
+    preDispatchPointerTransitionDisposition("advanced", {
+      ...preservedContext,
+      spaceUnchanged: false,
     }) !== "rearm" ||
     preDispatchPointerTransitionDisposition("unknown", preservedContext) !== "unknown"
   ) {
@@ -1184,6 +1584,7 @@ function runRigSelfTest() {
   ) {
     throw new Error("pointer-arm deadline classification self-test failed");
   }
+  await runPointerArmExecutionSelfTests();
   console.log("macOS packaged-evidence rig self-test passed.");
 }
 
@@ -1513,121 +1914,44 @@ async function waitForDeliberatePointerActivity(baseline) {
   ) {
     throw new Error("the deliberate pointer handoff has no shared absolute deadline");
   }
-  let previous = baseline;
-  let consecutive = 0;
-  let firstAdvanceAt = 0;
-  while (Date.now() < pointerHandoffArmDeadlineMilliseconds) {
-    if (
-      pointerHandoffProcess.exitCode !== null ||
-      pointerHandoffProcess.signalCode !== null
-    ) {
-      throw new Error("the pointer handoff prompt exited while operator motion was required");
-    }
-    const armProbeBudgetMs = remainingPointerHandoffTime(
-      pointerHandoffArmDeadlineMilliseconds,
-      "arm probe",
-    );
-    let sample;
-    try {
-      sample = processProbe(
-        systemProbeBinary,
-        null,
-        {
-          pid: pointerHandoffProcess.pid,
-          state: POINTER_HANDOFF_MOVE_STATE,
-        },
-        Math.min(SYSTEM_PROBE_TIMEOUT_MS, armProbeBudgetMs),
-      );
-    } catch (error) {
-      if (armProbeExpired(error, pointerHandoffArmDeadlineMilliseconds)) break;
-      throw error;
-    }
-    if (Date.now() >= pointerHandoffArmDeadlineMilliseconds) break;
-    if (!pointerPromptDeliveryObserved(sample)) {
-      throw new Error("the independently probed pointer handoff panel was not visible and nonactivating while arming");
-    }
-    const progress = clickFreePointerMotionProgress(previous, sample);
-    if (progress === "unknown") {
-      throw new Error("the independent HID pointer monitor became unreadable while arming");
-    }
-    if (progress === "disallowed") {
-      // No product request exists yet. Cumulative counters let a later sample
-      // establish a new clean epoch without erasing activity from an in-flight
-      // or completed action boundary.
-      log("Pre-dispatch pointer activity reset the clean-motion arm; no product action was sent.");
-      previous = sample;
-      consecutive = 0;
-      firstAdvanceAt = 0;
-      await delay(DELIBERATE_MOTION_SAMPLE_MS);
-      continue;
-    }
-    const observedAt = Date.now();
-    if (progress === "advanced") {
-      if (consecutive === 0) firstAdvanceAt = observedAt;
-      consecutive += 1;
-      const span = observedAt - firstAdvanceAt;
-      if (
-        consecutive >= DELIBERATE_MOTION_REQUIRED_SAMPLES &&
-        span >= DELIBERATE_MOTION_MINIMUM_SPAN_MS
-      ) {
-        remainingPointerHandoffTime(pointerHandoffArmDeadlineMilliseconds, "arm acceptance");
-        pointerHandoffActionDeadlineMilliseconds = Math.min(
-          pointerHandoffHardDeadlineMilliseconds,
-          Date.now() + POINTER_HANDOFF_COMPLETION_GRACE_MS,
-        );
-        log("Sustained shared-pointer activity observed; keep moving while the action runs.");
-        await writePointerHandoffState(POINTER_HANDOFF_ACTION_STATE);
-        const actionPromptSample = await waitForPointerPromptState(
-          POINTER_HANDOFF_ACTION_STATE,
-          pointerHandoffActionDeadlineMilliseconds,
-        );
-        const actionTransitionProgress = clickFreePointerMotionProgress(sample, actionPromptSample);
-        const actionTransitionInvariants = systemInvariants(sample, actionPromptSample);
-        const transitionDisposition = preDispatchPointerTransitionDisposition(
-          actionTransitionProgress,
-          actionTransitionInvariants,
-        );
-        if (transitionDisposition === "unknown") {
-          throw new Error("the independent HID pointer monitor became unreadable during the ACTION transition");
-        }
-        if (transitionDisposition === "rearm") {
-          // ACTION is presentation only at this point. Return to MOVE before
-          // creating the product request; once dispatch starts, contamination
-          // remains terminal and this path is unreachable.
-          log("Pre-dispatch input or user-context activity reset the clean-motion arm; no product action was sent.");
-          await writePointerHandoffState(POINTER_HANDOFF_MOVE_STATE);
-          previous = await waitForPointerPromptState(
-            POINTER_HANDOFF_MOVE_STATE,
-            pointerHandoffArmDeadlineMilliseconds,
-          );
-          pointerHandoffActionDeadlineMilliseconds = null;
-          consecutive = 0;
-          firstAdvanceAt = 0;
-          await delay(DELIBERATE_MOTION_SAMPLE_MS);
-          continue;
-        }
-        requireCheck(
-          "pointer handoff ACTION transition preserved foreground, focus, and Space",
-          actionTransitionInvariants.foregroundUnchanged === true &&
-            actionTransitionInvariants.userFocusUnchanged === true &&
-            actionTransitionInvariants.spaceUnchanged === true,
-          "the bounded action grace began without activating the notification",
-        );
-        pointerHandoffSustainedMotionSamples = consecutive;
-        pointerHandoffSustainedMotionSpanMilliseconds = span;
-        pointerHandoffClickFreeArmObserved = true;
-        return actionPromptSample;
-      }
-    } else {
-      consecutive = 0;
-      firstAdvanceAt = 0;
-    }
-    previous = sample;
-    await delay(DELIBERATE_MOTION_SAMPLE_MS);
-  }
-  throw new Error(
-    `separately authorized deliberate shared-pointer activity timed out at stage waitDeliberatePointerActivity`,
+  const result = await runPreDispatchPointerArmStateMachine({
+    baseline,
+    armDeadlineMilliseconds: pointerHandoffArmDeadlineMilliseconds,
+    hardDeadlineMilliseconds: pointerHandoffHardDeadlineMilliseconds,
+    promptAlive: () =>
+      pointerHandoffProcess != null &&
+      pointerHandoffProcess.exitCode === null &&
+      pointerHandoffProcess.signalCode === null,
+    probePrompt: (state, timeoutMilliseconds) => processProbe(
+      systemProbeBinary,
+      null,
+      { pid: pointerHandoffProcess.pid, state },
+      timeoutMilliseconds,
+    ),
+    transitionPrompt: writePointerHandoffState,
+    waitForPrompt: waitForPointerPromptState,
+    setActionDeadlineMilliseconds: (deadlineMilliseconds) => {
+      pointerHandoffActionDeadlineMilliseconds = deadlineMilliseconds;
+    },
+  });
+  requireCheck(
+    "pointer handoff ACTION transition preserved foreground, focus, and Space",
+    result.actionTransitionInvariants.foregroundUnchanged === true &&
+      result.actionTransitionInvariants.userFocusUnchanged === true &&
+      result.actionTransitionInvariants.spaceUnchanged === true,
+    "the bounded action grace began without activating the notification",
   );
+  requireCheck(
+    "pointer handoff final pre-dispatch boundary preserved foreground, focus, and Space",
+    result.dispatchInvariants.foregroundUnchanged === true &&
+      result.dispatchInvariants.userFocusUnchanged === true &&
+      result.dispatchInvariants.spaceUnchanged === true,
+    "the product request boundary remained inside the clean pre-dispatch epoch",
+  );
+  pointerHandoffSustainedMotionSamples = result.sustainedMotionSamples;
+  pointerHandoffSustainedMotionSpanMilliseconds = result.sustainedMotionSpanMilliseconds;
+  pointerHandoffClickFreeArmObserved = true;
+  return result.dispatchBaseline;
 }
 
 async function completePointerHandoff(pointerHandoffCompletionBaseline) {
@@ -2651,30 +2975,12 @@ async function main() {
     failureProbeBaseline.system = armedBaseline;
     actionPromptBaseline = await waitForDeliberatePointerActivity(armedBaseline);
   }
+  // The deliberate lane returns only after its MOVE, ACTION-transition, and
+  // final pre-dispatch samples share one clean epoch. Re-probing here would
+  // create another contamination seam outside the ACTION -> MOVE retry loop.
   const postResizeSystemBefore = pointerEvidenceLane === "deliberate-concurrency"
-    ? processProbe(systemProbeBinary, null, {
-      pid: pointerHandoffProcess.pid,
-      state: POINTER_HANDOFF_ACTION_STATE,
-    })
+    ? actionPromptBaseline
     : processProbe(systemProbeBinary);
-  if (
-    pointerEvidenceLane === "deliberate-concurrency" &&
-    !pointerPromptDeliveryObserved(postResizeSystemBefore)
-  ) {
-    throw new Error("the pointer handoff panel was not independently visible immediately before dispatch");
-  }
-  if (pointerEvidenceLane === "deliberate-concurrency") {
-    const preActionTransitionProgress = clickFreePointerMotionProgress(
-      actionPromptBaseline,
-      postResizeSystemBefore,
-    );
-    if (preActionTransitionProgress === "unknown") {
-      throw new Error("the independent HID pointer monitor became unreadable before dispatch");
-    }
-    if (preActionTransitionProgress === "disallowed") {
-      throw new Error("click, drag, scroll, or tablet activity invalidated the pre-dispatch boundary");
-    }
-  }
   failureProbeBaseline = {
     stage: "postResizePixelAction",
     actionDispatched: false,

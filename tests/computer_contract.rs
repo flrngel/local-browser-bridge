@@ -1243,16 +1243,25 @@ fn macos_v0_12_13_pointer_handoff_is_passive_notification_only_and_fail_closed()
         "consecutive >= DELIBERATE_MOTION_REQUIRED_SAMPLES",
         "span >= DELIBERATE_MOTION_MINIMUM_SPAN_MS",
         "const progress = clickFreePointerMotionProgress(previous, sample)",
-        "if (progress === \"unknown\")",
-        "if (progress === \"disallowed\")",
-        "Pre-dispatch pointer activity reset the clean-motion arm; no product action was sent.",
+        "const moveInvariants = systemInvariants(previous, sample)",
+        "const moveDisposition = preDispatchPointerTransitionDisposition(",
+        "if (moveDisposition === \"unknown\")",
+        "if (moveDisposition === \"rearm\")",
+        "Pre-dispatch input or user-context activity reset the MOVE clean-motion arm; no product action was sent.",
         "function preDispatchPointerTransitionDisposition(progress, invariants)",
-        "Pre-dispatch input or user-context activity reset the clean-motion arm; no product action was sent.",
-        "await writePointerHandoffState(POINTER_HANDOFF_MOVE_STATE)",
-        "pointerHandoffActionDeadlineMilliseconds = null",
+        "async function runPreDispatchPointerArmStateMachine({",
+        "Pre-dispatch input or user-context activity reset the ACTION transition; no product action was sent.",
+        "Pre-dispatch input or user-context activity reset the final ACTION boundary; no product action was sent.",
+        "await transitionPrompt(POINTER_HANDOFF_MOVE_STATE)",
+        "setActionDeadlineMilliseconds(null)",
+        "const dispatchInvariants = systemInvariants(",
+        "const dispatchDisposition = preDispatchPointerTransitionDisposition(",
+        "if (dispatchDisposition === \"rearm\")",
+        "const postResizeSystemBefore = pointerEvidenceLane === \"deliberate-concurrency\"\n    ? actionPromptBaseline\n    : processProbe(systemProbeBinary);",
         "function armProbeExpired(error, deadlineMilliseconds, nowMilliseconds = Date.now())",
         "error.code = \"SUBPROCESS_TIMEOUT\"",
-        "if (armProbeExpired(error, pointerHandoffArmDeadlineMilliseconds)) break",
+        "if (armProbeExpired(error, armDeadlineMilliseconds, nowMilliseconds())) break",
+        "macOS pointer-arm execution regressions passed: deadline expiry, MOVE re-arm, final ACTION re-arm.",
         "const clickFreeActionProgress = clickFreePointerMotionProgress(",
         "click, drag, scroll, or tablet activity invalidated the action boundary",
         "pointerHandoffClickFreeActionObserved = clickFreeActionProgress === \"advanced\"",
@@ -1268,9 +1277,8 @@ fn macos_v0_12_13_pointer_handoff_is_passive_notification_only_and_fail_closed()
         "pointerHandoffArmDeadlineMilliseconds",
         "pointerHandoffHardDeadlineMilliseconds",
         "pointerHandoffActionDeadlineMilliseconds",
-        "const armProbeBudgetMs = remainingPointerHandoffTime(\n      pointerHandoffArmDeadlineMilliseconds,\n      \"arm probe\",\n    )",
+        "const armProbeBudgetMs = armDeadlineMilliseconds - nowMilliseconds()",
         "Math.min(SYSTEM_PROBE_TIMEOUT_MS, armProbeBudgetMs)",
-        "remainingPointerHandoffTime(pointerHandoffArmDeadlineMilliseconds, \"arm acceptance\")",
         "POINTER_HANDOFF_COMPLETION_RESERVE_MS",
         "AbortSignal.timeout(timeoutMs)",
         "timeout: timeoutMs",
@@ -1291,6 +1299,11 @@ fn macos_v0_12_13_pointer_handoff_is_passive_notification_only_and_fail_closed()
     );
     assert!(
         !rig.contains("click, drag, scroll, or tablet activity invalidated the ACTION transition")
+    );
+    assert!(
+        !rig.contains(
+            "click, drag, scroll, or tablet activity invalidated the pre-dispatch boundary"
+        )
     );
 
     let start_handoff = rig.find("await startPointerHandoff(").unwrap();
@@ -1392,6 +1405,31 @@ fn macos_v0_12_13_pointer_handoff_is_passive_notification_only_and_fail_closed()
             "macOS pointer handoff boundary is undocumented: {required}"
         );
     }
+}
+
+#[test]
+fn macos_pointer_arm_state_machine_execution_regressions_pass() {
+    let output = match Command::new("node")
+        .args([
+            "evidence/v0.12.13/computer/helper-evidence-rig.mjs",
+            "--self-test",
+        ])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to execute macOS pointer-arm self-test: {error}"),
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "macOS pointer-arm execution self-test failed:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(stdout.contains(
+        "macOS pointer-arm execution regressions passed: deadline expiry, MOVE re-arm, final ACTION re-arm."
+    ));
+    assert!(stdout.contains("macOS packaged-evidence rig self-test passed."));
 }
 
 #[test]

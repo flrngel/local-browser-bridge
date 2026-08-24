@@ -166,8 +166,11 @@ stable, a fresh immediately-pre-action baseline, and the same click-free motion
 plus contamination at both the product and independent post-action boundaries.
 Before product dispatch only, disallowed input or foreground/focus/Space
 contamination resets the clean-motion baseline under the original absolute
-deadline; an affected `ACTION` transition returns to `MOVE`. Unknown monitoring
-and all contamination after dispatch remain terminal fail-closed outcomes.
+deadline. Each `MOVE` interval, the transition into `ACTION`, and the final
+independent pre-dispatch sample use that same classifier; an affected `ACTION`
+sample returns to `MOVE`, and the final accepted sample becomes the dispatch
+baseline without another probe seam. Unknown monitoring and all contamination
+after dispatch remain terminal fail-closed outcomes.
 Entering `ACTION` starts a separate 10-second hard action/completion grace,
 capped by a 310-second total prompt lifetime; the nonactivating panel terminates
 at the earlier deadline even after turning green. Its source contract
