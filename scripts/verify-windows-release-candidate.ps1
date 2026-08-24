@@ -163,7 +163,7 @@ $ProgressPreference = "SilentlyContinue"
 $Repository = "flrngel/local-browser-bridge"
 $Origin = "https://github.com/$Repository.git"
 $WorkflowPath = ".github/workflows/deploy.yml"
-$ProductVersion = "0.12.22"
+$ProductVersion = "0.12.23"
 $MaximumCandidateBytes = [int64]536870912
 
 function Get-TrustedSha256([string]$Path) {
@@ -720,7 +720,7 @@ if ($Version -cne $ProductVersion -or $Version -cnotmatch '^[0-9]+\.[0-9]+\.[0-9
     $ArtifactId -cnotmatch '^[1-9][0-9]*$' -or
     $SourceSha -cnotmatch '^[0-9a-f]{40}$' -or
     $TagObjectSha -cnotmatch '^[0-9a-f]{40}$') {
-  throw "Candidate identifiers are not canonical v0.12.22 identifiers."
+  throw "Candidate identifiers are not canonical v0.12.23 identifiers."
 }
 $Tag = "v$Version"
 $ExpectedInvocationUri = "https://github.com/$Repository/actions/runs/$WorkflowRunId/attempts/$WorkflowRunAttempt"

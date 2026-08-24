@@ -8048,6 +8048,15 @@ mod tests {
             &shared_seat
         ));
 
+        let mut synthetic_keyboard_boundary = valid.clone();
+        synthetic_keyboard_boundary["invariants"]["hidSystemKeyboardActivityObserved"] =
+            json!(false);
+        assert!(!valid_native_computer_action_result(
+            "computer.click",
+            "windows",
+            &synthetic_keyboard_boundary
+        ));
+
         let mut inconsistent_evidence = valid.clone();
         set_test_action_evidence_observed(&mut inconsistent_evidence, "foregroundUnchanged", false);
         assert!(!valid_native_computer_action_result(

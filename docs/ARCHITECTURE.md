@@ -159,7 +159,7 @@ control, or create a separate OS input seat. All product authority and effect
 proof still comes from the authenticated bridge protocol, sealed exact-target
 route, and application-owned postcondition. The v0.12.20 physical-pointer lane
 is retained only as historical, optional adversarial coverage; its artifacts
-cannot satisfy the v0.12.22 release contract.
+cannot satisfy the v0.12.23 release contract.
 
 ## Capture is not isolation
 
