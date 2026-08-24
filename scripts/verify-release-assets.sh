@@ -7,8 +7,18 @@ cd "$project_root"
 
 version="${1:-}"
 assets_dir="${2:-dist}"
+verification_mode="runtime"
+if (( $# > 3 )); then
+  echo "Usage: $0 VERSION [ASSETS_DIRECTORY] [--static-only]" >&2
+  exit 1
+elif (( $# == 3 )) && [[ "$3" == "--static-only" ]]; then
+  verification_mode="static-only"
+elif (( $# == 3 )); then
+  echo "Usage: $0 VERSION [ASSETS_DIRECTORY] [--static-only]" >&2
+  exit 1
+fi
 if [[ -z "$version" ]]; then
-  echo "Usage: $0 VERSION [ASSETS_DIRECTORY]" >&2
+  echo "Usage: $0 VERSION [ASSETS_DIRECTORY] [--static-only]" >&2
   exit 1
 fi
 version="${version#v}"
@@ -243,7 +253,11 @@ if [[ "$(grep -Fc "<string>$version</string>" "$plist")" -lt 2 ]]; then
 fi
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
-  bash scripts/verify-macos-artifacts.sh "$version" "$mac_server" "$mac_helper"
+  macos_verifier_arguments=("$version" "$mac_server" "$mac_helper")
+  if [[ "$verification_mode" == "static-only" ]]; then
+    macos_verifier_arguments+=("--static-only")
+  fi
+  bash scripts/verify-macos-artifacts.sh "${macos_verifier_arguments[@]}"
 fi
 
 if [[ ! -f "$checksum_manifest" || -L "$checksum_manifest" || ! -s "$checksum_manifest" ]]; then

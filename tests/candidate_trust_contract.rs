@@ -335,6 +335,25 @@ fn candidate_binder_is_source_attempt_artifact_and_attestation_bound() {
 }
 
 #[test]
+fn bash_candidate_binder_requires_static_only_release_asset_verification() {
+    let script = normalized_source("scripts/fetch-verify-release-candidate.sh");
+    let expected_call = concat!(
+        "bash \"$SOURCE_ROOT/scripts/verify-release-assets.sh\" \\\n",
+        "  \"$VERSION\" \"$PAYLOAD_DIRECTORY\" --static-only >/dev/null"
+    );
+
+    assert!(
+        script.contains(expected_call),
+        "the candidate binder must explicitly select the non-executing release-asset verifier path"
+    );
+    assert_eq!(
+        script.matches("--static-only").count(),
+        1,
+        "the binder must have one unambiguous static-only policy call"
+    );
+}
+
+#[test]
 fn withdrawn_v01211_candidate_metadata_is_explicitly_non_runtime_evidence() {
     let root = "evidence/v0.12.11/computer/attempts/withdrawn-414dd7f-macos-dual-lane-receipt-gap";
     let readme = fs::read_to_string(format!("{root}/README.md")).unwrap();

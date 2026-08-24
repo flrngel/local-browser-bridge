@@ -347,7 +347,8 @@ done
 (cd "$PAYLOAD_DIRECTORY" && shasum -a 256 -c SHA256SUMS.txt >/dev/null) || fail "candidate payload checksum mismatch"
 MANIFEST_SHA256=$(sha256_file "$MANIFEST")
 
-bash "$SOURCE_ROOT/scripts/verify-release-assets.sh" "$VERSION" "$PAYLOAD_DIRECTORY" >/dev/null ||
+bash "$SOURCE_ROOT/scripts/verify-release-assets.sh" \
+  "$VERSION" "$PAYLOAD_DIRECTORY" --static-only >/dev/null ||
   fail "release asset policy verification failed"
 
 INVOCATION_URI="https://github.com/$REPOSITORY/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT"

@@ -103,7 +103,7 @@ Test one-shot observation and persistent sharing as separate lifecycles:
 
 Do not report cross-Space, minimized, protected, elevated, or framework-specific behavior as supported merely because a stream or message API returned success.
 
-The v0.12.21 macOS harness defines two fresh, non-mergeable release lanes in [`evidence/v0.12.21/computer/README.md`](../evidence/v0.12.21/computer/README.md). Both require a healthy monitor, unchanged sampled cursor, no shared input activity, and `sharedPointerActivityState: quiet` for every evidence cell. The `deliberate-concurrency` compatibility lane adds a separately authorized exact-app-share button action and proves—through a target-owned request/start/complete chain plus independent bundle/window/button and shared-seat probes—that app-scoped orchestration spanned the real product action without using the shared desktop. It does not claim physical-human or cryptographic Computer Use provider identity. Never convert, merge, or substitute optional physical-pointer adversarial bytes into either release lane. An unknown monitor or boundary fails closed.
+The v0.12.22 macOS harness defines two fresh, non-mergeable release lanes in [`evidence/v0.12.22/computer/README.md`](../evidence/v0.12.22/computer/README.md). Both require a healthy monitor, unchanged sampled cursor, no shared input activity, and `sharedPointerActivityState: quiet` for every evidence cell. The `deliberate-concurrency` compatibility lane adds a separately authorized exact-app-share button action and proves—through a target-owned request/start/complete chain plus independent bundle/window/button and shared-seat probes—that app-scoped orchestration spanned the real product action without using the shared desktop. It does not claim physical-human or cryptographic Computer Use provider identity. Never convert, merge, or substitute optional physical-pointer adversarial bytes into either release lane. An unknown monitor or boundary fails closed.
 
 Before either lane invokes a candidate binary—even with `--version`—the exact
 tagged SystemProbe must complete a 30-second native quiet-seat epoch with at
@@ -115,7 +115,7 @@ fixture/server/helper after completion, and keeps every later per-action and
 whole-run proof unchanged. The deliberate lane uses this gate before its
 exact-app-share request; no shared-pointer movement is required or accepted.
 
-For the deliberate-concurrency lane, start the packaged evidence runner and then run `node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode watch --evidence-dir "$ABSOLUTE_EVIDENCE_DIRECTORY" --runner-pid "$RUNNER_PID"` in a separate terminal. The read-only watcher waits for the exact runner-created lane, opens only the request/start/complete records without following links, validates schema 2, v0.12.21, the stable app surface, request hash, start-receipt hash, canonical timestamps, and process binding, and writes nothing. On `ACTION REQUIRED`, use the separately authorized exact-app share for bundle `dev.flrngel.local-browser-bridge.acceptance.app-share`, press `START APP-SHARE CHECK` exactly once, do not use the shared desktop or retry, and stop all UI use after `START RECEIVED`. The app independently verifies the request hash before writing its create-once start receipt and disabling the button. The runner then proves unchanged foreground/focus/Space/cursor/HID state, dispatches the real bounded product action, requires the target postcondition and quiet product/independent boundaries, and completes the app-owned receipt chain. A copied, stale, changed, or missing record, duplicate action, unknown native boundary, dead runner/app, shared-seat activity, or timeout fails closed. The marker chain and watcher are orchestration evidence, never product authority. Validate with `node --check scripts/wait-macos-app-share-concurrency-handoff.mjs`, `node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test`, `node --check evidence/v0.12.21/computer/helper-evidence-rig.mjs`, `node evidence/v0.12.21/computer/helper-evidence-rig.mjs --self-test`, and Swift typechecks for `AppShareHandoff.swift`, `PhysicalPointerHandoff.swift`, and `SystemProbe.swift`. The old pointer watcher and physical prompt remain optional adversarial tooling and cannot satisfy release.
+For the deliberate-concurrency lane, start the packaged evidence runner and then run `node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode watch --evidence-dir "$ABSOLUTE_EVIDENCE_DIRECTORY" --runner-pid "$RUNNER_PID"` in a separate terminal. The read-only watcher waits for the exact runner-created lane, opens only the request/start/complete records without following links, validates schema 2, v0.12.22, the stable app surface, request hash, start-receipt hash, canonical timestamps, and process binding, and writes nothing. On `ACTION REQUIRED`, use the separately authorized exact-app share for bundle `dev.flrngel.local-browser-bridge.acceptance.app-share`, press `START APP-SHARE CHECK` exactly once, do not use the shared desktop or retry, and stop all UI use after `START RECEIVED`. The app independently verifies the request hash before writing its create-once start receipt and disabling the button. The runner then proves unchanged foreground/focus/Space/cursor/HID state, dispatches the real bounded product action, requires the target postcondition and quiet product/independent boundaries, and completes the app-owned receipt chain. A copied, stale, changed, or missing record, duplicate action, unknown native boundary, dead runner/app, shared-seat activity, or timeout fails closed. The marker chain and watcher are orchestration evidence, never product authority. Validate with `node --check scripts/wait-macos-app-share-concurrency-handoff.mjs`, `node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test`, `node --check evidence/v0.12.22/computer/helper-evidence-rig.mjs`, `node evidence/v0.12.22/computer/helper-evidence-rig.mjs --self-test`, and Swift typechecks for `AppShareHandoff.swift`, `PhysicalPointerHandoff.swift`, and `SystemProbe.swift`. The old pointer watcher and physical prompt remain optional adversarial tooling and cannot satisfy release.
 
 ### Deterministic Windows live acceptance
 
@@ -180,7 +180,7 @@ repository's read-only watcher from a separate process:
 ```
 
 The watcher reads only `operator/foreground-arm-request.json`. It requires the
-exact v0.12.21/schema-2 field set and order, a fresh non-expired publication,
+exact v0.12.22/schema-2 field set and order, a fresh non-expired publication,
 ordinary non-reparse paths, and the same live runner PID/start time both before
 and after parsing. It emits exactly one compact sanitized
 `foreground-arm-visual-handoff` JSON object or fails closed. It neither writes
@@ -274,7 +274,7 @@ Plan verification before changing a capability. Keep these evidence classes sepa
 
 Record negative results. A candidate run must not be described as published release evidence. Screenshots should show the relevant browser or OS indicator, target result, and non-interruption state without exposing tokens, personal data, or authenticated URLs.
 
-The exact v0.12.9 packaged macOS attempt is a required negative-history reference: it stopped at the first semantic `setValue` after a cursor-position delta that the old record could not attribute. The exact [v0.12.10 attempt](../evidence/v0.12.10/computer/attempts/withdrawn-de59840-macos-deliberate-pointer-timeout/README.md) then passed 69 assertions before timing out with no separately authorized pointer movement and no final action. Version v0.12.11 was withdrawn before execution when its receipt could not authenticate both required fresh macOS lanes. The exact tagged v0.12.12 candidate was withdrawn after three deliberate-concurrency attempts stopped before product dispatch. Version v0.12.19 stopped before tagging after its second same-process PowerShell 7 relay self-test exposed a disposed task-backed async wait handle. The exact v0.12.20 quiet macOS lane passed, but its mandatory physical-pointer lane timed out before product dispatch; its Windows lane separately timed out because the action window was not discoverable under the state-mutating title. Both negative records are preserved on evidence-only branches, Chrome never started, and the protected publication job was never approved. Do not rewrite or reuse those historical bytes. A v0.12.21 success must come from fresh artifacts and the new exact-app-share plus stable Windows-title contracts.
+The exact v0.12.9 packaged macOS attempt is a required negative-history reference: it stopped at the first semantic `setValue` after a cursor-position delta that the old record could not attribute. The exact [v0.12.10 attempt](../evidence/v0.12.10/computer/attempts/withdrawn-de59840-macos-deliberate-pointer-timeout/README.md) then passed 69 assertions before timing out with no separately authorized pointer movement and no final action. Version v0.12.11 was withdrawn before execution when its receipt could not authenticate both required fresh macOS lanes. The exact tagged v0.12.12 candidate was withdrawn after three deliberate-concurrency attempts stopped before product dispatch. Version v0.12.19 stopped before tagging after its second same-process PowerShell 7 relay self-test exposed a disposed task-backed async wait handle. The exact v0.12.20 quiet macOS lane passed, but its mandatory physical-pointer lane timed out before product dispatch; its Windows lane separately timed out because the action window was not discoverable under the state-mutating title. Both negative records are preserved on evidence-only branches, Chrome never started, and the protected publication job was never approved. v0.12.21 was withdrawn before frozen candidate assembly or execution after review found that the macOS candidate binder could run `--version` and `--licenses` before the quiet-seat gate; its Windows CI lane also exposed a POSIX-only file-mode assertion under Node's Windows metadata projection. Do not rewrite or reuse those historical bytes. A v0.12.22 success must come from fresh artifacts and the corrected non-executing binder, portable marker checks, exact-app-share, and stable Windows-title contracts.
 
 See [SOTA audit](SOTA_AUDIT.md) and the [evidence index](../evidence/) for current boundaries.
 
@@ -297,10 +297,10 @@ The canonical release path is `.github/workflows/deploy.yml` from a matching ann
 
 Publication also requires one candidate-bound evidence commit and a nonsecret
 canonical V2 receipt. The evidence branch is exactly
-`evidence/v0.12.21-release-run-RUN_ID-attempt-RUN_ATTEMPT`; its tip must be one
+`evidence/v0.12.22-release-run-RUN_ID-attempt-RUN_ATTEMPT`; its tip must be one
 commit whose sole parent is the tagged source commit. That commit may only add
 ordinary mode-`100644` allowlisted files beneath
-`evidence/v0.12.21/release/run-RUN_ID-attempt-RUN_ATTEMPT/`. The five required
+`evidence/v0.12.22/release/run-RUN_ID-attempt-RUN_ATTEMPT/`. The five required
 machine records are:
 
 - `macos/macos-acceptance.json`;
@@ -325,7 +325,7 @@ canonical; run and artifact identifiers are strings:
 
 ```bash
 receipt="$(jq -cn \
-  --arg tag "v0.12.21" \
+  --arg tag "v0.12.22" \
   --arg source_sha "EXACT_VERIFIED_SOURCE_SHA" \
   --arg tag_object_sha "EXACT_ANNOTATED_TAG_OBJECT_SHA" \
   --arg run_id "EXACT_GITHUB_RUN_ID" \
@@ -333,7 +333,7 @@ receipt="$(jq -cn \
   --arg artifact_id "EXACT_RELEASE_CANDIDATE_ARTIFACT_ID" \
   --arg artifact_zip_sha256 "EXACT_RAW_ARTIFACT_ZIP_SHA256" \
   --arg manifest_sha256 "$(shasum -a 256 SHA256SUMS.txt | awk '{ print $1 }')" \
-  --arg evidence_ref "refs/heads/evidence/v0.12.21-release-run-EXACT_GITHUB_RUN_ID-attempt-EXACT_GITHUB_RUN_ATTEMPT" \
+  --arg evidence_ref "refs/heads/evidence/v0.12.22-release-run-EXACT_GITHUB_RUN_ID-attempt-EXACT_GITHUB_RUN_ATTEMPT" \
   --arg evidence_commit_sha "EXACT_REMOTE_EVIDENCE_COMMIT_SHA" \
   --arg macos_acceptance_sha256 "$(shasum -a 256 macos/macos-acceptance.json | awk '{ print $1 }')" \
   --arg macos_quiet_sha256 "$(shasum -a 256 macos/quiet/helper-results.json | awk '{ print $1 }')" \

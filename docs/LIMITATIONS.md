@@ -167,10 +167,10 @@ Version 0.12.20 passed its quiet macOS lane but timed out before product dispatc
 in its then-mandatory physical-pointer lane. Its Windows run separately timed out
 because the action surface could not be found under a state-mutating title.
 Both outcomes are preserved as negative evidence; Chrome never started and no
-Release was published. That pointer lane is historical in v0.12.21; its tools
+Release was published. That pointer lane is historical in v0.12.22; its tools
 remain optional adversarial coverage and cannot satisfy publication.
 
-Version 0.12.21 keeps sealed route provenance plus conservative shared-pointer
+Version 0.12.22 keeps sealed route provenance plus conservative shared-pointer
 monitoring. Before either lane invokes a candidate executable, fixture, server,
 or helper, a native SystemProbe gate requires a 30-second sampled quiet epoch
 with at least 60 stable transitions sampled every 500 ms. Pointer, cursor,

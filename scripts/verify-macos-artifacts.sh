@@ -4,8 +4,18 @@ set -euo pipefail
 version="${1:-}"
 server_path="${2:-}"
 helper_path="${3:-}"
+verification_mode="runtime"
+if (( $# != 3 && $# != 4 )); then
+  echo "Usage: $0 VERSION SERVER_PATH HELPER_PATH [--static-only]" >&2
+  exit 1
+elif (( $# == 4 )) && [[ "$4" == "--static-only" ]]; then
+  verification_mode="static-only"
+elif (( $# == 4 )); then
+  echo "Usage: $0 VERSION SERVER_PATH HELPER_PATH [--static-only]" >&2
+  exit 1
+fi
 if [[ -z "$version" || -z "$server_path" || -z "$helper_path" ]]; then
-  echo "Usage: $0 VERSION SERVER_PATH HELPER_PATH" >&2
+  echo "Usage: $0 VERSION SERVER_PATH HELPER_PATH [--static-only]" >&2
   exit 1
 fi
 version="${version#v}"
@@ -156,20 +166,23 @@ for architecture in arm64 x86_64; do
   audit_helper_api_slice "$architecture"
 done
 
-if [[ "$("$server_path" --version)" != "local-browser-bridge $version" ]]; then
-  echo "macOS server version does not match $version." >&2
-  exit 1
-fi
-if [[ "$("$helper_path" --version)" != "local-computer-helper $version" ]]; then
-  echo "macOS helper version does not match $version." >&2
-  exit 1
-fi
+if [[ "$verification_mode" == "runtime" ]]; then
+  if [[ "$("$server_path" --version)" != "local-browser-bridge $version" ]]; then
+    echo "macOS server version does not match $version." >&2
+    exit 1
+  fi
+  if [[ "$("$helper_path" --version)" != "local-computer-helper $version" ]]; then
+    echo "macOS helper version does not match $version." >&2
+    exit 1
+  fi
 
-for executable in "$server_path" "$helper_path"; do
-  license_report="$("$executable" --licenses)"
-  grep -Fq 'Local Browser Bridge third-party licenses' <<<"$license_report"
-  grep -Fq 'MIT License' <<<"$license_report"
-  grep -Fq 'Apache License' <<<"$license_report"
-done
-
-echo "Verified macOS universal artifacts for $version."
+  for executable in "$server_path" "$helper_path"; do
+    license_report="$("$executable" --licenses)"
+    grep -Fq 'Local Browser Bridge third-party licenses' <<<"$license_report"
+    grep -Fq 'MIT License' <<<"$license_report"
+    grep -Fq 'Apache License' <<<"$license_report"
+  done
+  echo "Verified macOS universal artifacts for $version."
+else
+  echo "Verified macOS universal artifact structure for $version without candidate execution."
+fi

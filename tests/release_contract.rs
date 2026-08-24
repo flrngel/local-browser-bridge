@@ -213,8 +213,8 @@ fn windows_release_tooling_hashes_without_module_discovery() {
 fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_only() {
     let watcher = source("scripts/wait-macos-app-share-concurrency-handoff.mjs");
     let adversarial_watcher = source("scripts/wait-macos-pointer-concurrency-handoff.mjs");
-    let producer = source("evidence/v0.12.21/computer/helper-evidence-rig.mjs");
-    let playbook = source("evidence/v0.12.21/computer/README.md");
+    let producer = source("evidence/v0.12.22/computer/helper-evidence-rig.mjs");
+    let playbook = source("evidence/v0.12.22/computer/README.md");
     let finalizer = source("scripts/finalize-macos-acceptance.mjs");
     let verifier = source("scripts/verify-release-acceptance-evidence.sh");
     let ci = source(".github/workflows/ci.yml");
@@ -256,7 +256,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
             "the legacy pointer watcher must not gate or satisfy release"
         );
     }
-    assert!(adversarial_watcher.contains("const PRODUCT_VERSION = \"0.12.21\";"));
+    assert!(adversarial_watcher.contains("const PRODUCT_VERSION = \"0.12.22\";"));
     assert!(
         adversarial_watcher.contains("macOS pointer-concurrency handoff watcher self-test passed.")
     );
@@ -275,7 +275,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         }
     }
     for aggregate_contract in [
-        "const PRODUCT_VERSION = \"0.12.21\";",
+        "const PRODUCT_VERSION = \"0.12.22\";",
         "const RESULT_SCHEMA_VERSION = 7;",
         "const AGGREGATE_SCHEMA_VERSION = 2;",
         "const REQUEST_MARKER = \"operator/macos-app-share-concurrency-handoff-request.json\";",
@@ -292,7 +292,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
     }
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.21\";",
+        "const PRODUCT_VERSION = \"0.12.22\";",
         "const SCHEMA_VERSION = 2;",
         "const OPERATOR_DIRECTORY = \"operator\";",
         "const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;",
@@ -408,12 +408,12 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
 
     for integration in [&ci, &release, &local] {
         assert!(
-            integration.contains("node --check evidence/v0.12.21/computer/helper-evidence-rig.mjs"),
-            "release path does not syntax-check the exact v0.12.21 macOS evidence rig"
+            integration.contains("node --check evidence/v0.12.22/computer/helper-evidence-rig.mjs"),
+            "release path does not syntax-check the exact v0.12.22 macOS evidence rig"
         );
         assert!(
             integration
-                .contains("node evidence/v0.12.21/computer/helper-evidence-rig.mjs --self-test")
+                .contains("node evidence/v0.12.22/computer/helper-evidence-rig.mjs --self-test")
         );
         assert!(
             !integration.contains("evidence/v0.12.20/computer/"),
@@ -428,7 +428,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         ] {
             assert!(
                 integration.contains(&format!(
-                    "xcrun swiftc -typecheck evidence/v0.12.21/computer/{source}"
+                    "xcrun swiftc -typecheck evidence/v0.12.22/computer/{source}"
                 )),
                 "macOS workflow does not typecheck {source}"
             );
@@ -436,7 +436,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         assert!(integration.contains("lbb-app-share-handoff-self-test\" --self-test"));
     }
     assert!(ci.contains(
-        "xcrun swiftc -typecheck evidence/v0.12.21/computer/PhysicalPointerHandoff.swift"
+        "xcrun swiftc -typecheck evidence/v0.12.22/computer/PhysicalPointerHandoff.swift"
     ));
     for release_path in [&release, &local] {
         assert!(
@@ -1242,6 +1242,67 @@ fn macos_artifacts_enforce_the_supported_floor_per_macho_slice() {
     for caller in [release, local, archive] {
         assert!(caller.contains("bash scripts/verify-macos-artifacts.sh"));
     }
+}
+
+#[test]
+fn macos_candidate_binding_is_static_only_while_default_verification_executes_runtime_checks() {
+    let archive = source("scripts/verify-release-assets.sh");
+    let macos = source("scripts/verify-macos-artifacts.sh");
+    let workflow = source(".github/workflows/deploy.yml");
+    let local = source("scripts/deploy.sh");
+
+    for required in [
+        "verification_mode=\"runtime\"",
+        "macos_verifier_arguments=(\"$version\" \"$mac_server\" \"$mac_helper\")",
+        "if [[ \"$verification_mode\" == \"static-only\" ]]; then",
+        "macos_verifier_arguments+=(\"--static-only\")",
+        "bash scripts/verify-macos-artifacts.sh \"${macos_verifier_arguments[@]}\"",
+    ] {
+        assert!(
+            archive.contains(required),
+            "release-asset verifier is missing static-only propagation contract: {required}"
+        );
+    }
+    for required in [
+        "verification_mode=\"runtime\"",
+        "elif (( $# == 4 )) && [[ \"$4\" == \"--static-only\" ]]; then",
+        "if [[ \"$verification_mode\" == \"runtime\" ]]; then",
+        "\"$(\"$server_path\" --version)\"",
+        "\"$(\"$helper_path\" --version)\"",
+        "license_report=\"$(\"$executable\" --licenses)\"",
+        "without candidate execution",
+    ] {
+        assert!(
+            macos.contains(required),
+            "macOS verifier is missing runtime/static separation contract: {required}"
+        );
+    }
+
+    let static_structure = macos
+        .find("for executable in \"$server_path\" \"$helper_path\"; do")
+        .unwrap();
+    let api_audit = macos
+        .find("  audit_helper_api_slice \"$architecture\"")
+        .unwrap();
+    let runtime_gate = macos
+        .find("if [[ \"$verification_mode\" == \"runtime\" ]]; then")
+        .unwrap();
+    let first_runtime_execution = macos
+        .find("if [[ \"$(\"$server_path\" --version)\"")
+        .unwrap();
+    let static_success = macos.find("without candidate execution").unwrap();
+    assert!(
+        static_structure < api_audit
+            && api_audit < runtime_gate
+            && runtime_gate < first_runtime_execution
+            && first_runtime_execution < static_success,
+        "all static Mach-O/signature/API checks must precede the guarded runtime-only block"
+    );
+
+    assert!(
+        !workflow.contains("--static-only") && !local.contains("--static-only"),
+        "build, package, and publication verification must retain default runtime checks"
+    );
 }
 
 #[test]
