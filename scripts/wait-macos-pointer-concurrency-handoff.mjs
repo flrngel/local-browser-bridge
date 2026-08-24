@@ -4,7 +4,7 @@ import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 
-const PRODUCT_VERSION = "0.12.18";
+const PRODUCT_VERSION = "0.12.19";
 const SCHEMA_VERSION = 1;
 const OPERATOR_DIRECTORY = "operator";
 const REQUEST_FILE = "macos-pointer-concurrency-handoff-request.json";
@@ -17,7 +17,11 @@ const FUTURE_TOLERANCE_MS = 5_000;
 const FILE_TIME_TOLERANCE_MS = 5_000;
 const MAX_MOTION_SPAN_MS = 300_000;
 const MAX_REQUEST_TO_COMPLETE_MS = 310_000;
-const WATCH_TIMEOUT_MS = 600_000;
+const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;
+const PRODUCER_PRE_REQUEST_WORK_BUDGET_MS = 30 * 60_000;
+const REQUEST_PUBLICATION_MAXIMUM_WAIT_MS =
+  QUIET_SEAT_MAXIMUM_WAIT_MS + PRODUCER_PRE_REQUEST_WORK_BUDGET_MS;
+const EVIDENCE_DIRECTORY_WAIT_TIMEOUT_MS = 60_000;
 const POLL_MS = 100;
 const MAX_PID = 2_147_483_647;
 
@@ -333,22 +337,29 @@ async function watchHandoff({
   now,
   pause,
   emit,
-  timeoutMs = WATCH_TIMEOUT_MS,
+  timeoutMs = REQUEST_PUBLICATION_MAXIMUM_WAIT_MS,
 }) {
   const deadline = now() + timeoutMs;
   let requestRecord;
   let request;
   while (now() <= deadline) {
-    if (!isAlive(runnerPid)) fail("The watched macOS acceptance runner is not alive.");
     requestRecord = await loadMarker(REQUEST_FILE, "request marker");
     if (requestRecord !== null) {
       request = validateRequest(requestRecord, runnerPid, now());
+      const completeRecord = await loadMarker(COMPLETE_FILE, "complete marker");
+      if (completeRecord !== null) {
+        validateComplete(completeRecord, request, runnerPid, now());
+        emit("COMPLETE: Both boundaries observed sustained click-free shared-pointer movement.");
+        return;
+      }
+      if (!isAlive(runnerPid)) fail("The watched macOS acceptance runner is not alive.");
       if (!isAlive(request.marker.promptPid)) fail("The nonactivating pointer prompt is not alive.");
       break;
     }
     if ((await loadMarker(COMPLETE_FILE, "complete marker")) !== null) {
       fail("A complete marker appeared without its request marker.");
     }
+    if (!isAlive(runnerPid)) fail("The watched macOS acceptance runner is not alive.");
     await pause(POLL_MS);
   }
   if (!request) fail("Timed out waiting for a fresh macOS pointer-concurrency request marker.");
@@ -358,7 +369,6 @@ async function watchHandoff({
   const completionDeadline =
     request.createdAtMs + MAX_REQUEST_TO_COMPLETE_MS + FUTURE_TOLERANCE_MS;
   while (now() <= completionDeadline) {
-    if (!isAlive(runnerPid)) fail("The watched macOS acceptance runner exited before completion.");
     const currentRequest = await loadMarker(REQUEST_FILE, "request marker");
     if (
       currentRequest === null ||
@@ -373,6 +383,7 @@ async function watchHandoff({
       emit("COMPLETE: Both boundaries observed sustained click-free shared-pointer movement.");
       return;
     }
+    if (!isAlive(runnerPid)) fail("The watched macOS acceptance runner exited before completion.");
     if (!isAlive(request.marker.promptPid)) {
       fail("The nonactivating pointer prompt exited before completion.");
     }
@@ -413,11 +424,12 @@ function parseArguments(argv) {
   return { mode, evidenceDir: resolve(evidenceDir), runnerPid };
 }
 
-async function validateEvidenceDirectory(path) {
+async function inspectEvidenceDirectory(path) {
   let stats;
   try {
     stats = await lstat(path, { bigint: true });
-  } catch {
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
     fail("--evidence-dir could not be inspected safely.");
   }
   if (!stats.isDirectory() || stats.isSymbolicLink() || stats.nlink < 1n) {
@@ -431,6 +443,26 @@ async function validateEvidenceDirectory(path) {
     if (error instanceof WatcherError) throw error;
     fail("--evidence-dir could not be resolved safely.");
   }
+  return true;
+}
+
+async function waitForEvidenceDirectory({
+  runnerPid,
+  inspect,
+  isAlive,
+  now,
+  pause,
+  timeoutMs = EVIDENCE_DIRECTORY_WAIT_TIMEOUT_MS,
+}) {
+  const deadline = now() + timeoutMs;
+  while (now() <= deadline) {
+    if (await inspect()) return;
+    if (!isAlive(runnerPid)) {
+      fail("The watched macOS acceptance runner exited before creating its evidence directory.");
+    }
+    await pause(POLL_MS);
+  }
+  fail("Timed out waiting for the runner-created macOS evidence directory.");
 }
 
 function makeMarker(kind, createdAt, runnerPid, promptPid) {
@@ -491,13 +523,20 @@ async function selfTest() {
   const requestRecord = record(requestMarker, nowMs - 1_000);
   const completeRecord = record(completeMarker, nowMs - 100);
   const emissions = [];
+  let normalActionEmitted = false;
   await watchHandoff({
     runnerPid,
-    loadMarker: async (name) => name === REQUEST_FILE ? requestRecord : completeRecord,
+    loadMarker: async (name) => {
+      if (name === REQUEST_FILE) return requestRecord;
+      return normalActionEmitted ? completeRecord : null;
+    },
     isAlive: (pid) => pid === runnerPid || pid === promptPid,
     now: () => nowMs,
     pause: async () => {},
-    emit: (message) => emissions.push(message),
+    emit: (message) => {
+      emissions.push(message);
+      if (message.startsWith("ACTION REQUIRED:")) normalActionEmitted = true;
+    },
     timeoutMs: 1_000,
   });
   if (
@@ -507,6 +546,167 @@ async function selfTest() {
   ) {
     fail("Self-test did not emit one exact action and completion notification.");
   }
+
+  let directoryInspectionCount = 0;
+  await waitForEvidenceDirectory({
+    runnerPid,
+    inspect: async () => {
+      directoryInspectionCount += 1;
+      return directoryInspectionCount === 3;
+    },
+    isAlive: (pid) => pid === runnerPid,
+    now: () => nowMs,
+    pause: async () => {},
+    timeoutMs: 1_000,
+  });
+  if (directoryInspectionCount !== 3) {
+    fail("Self-test did not wait for the runner-created evidence directory.");
+  }
+  await expectFailure(
+    async () => waitForEvidenceDirectory({
+      runnerPid,
+      inspect: async () => false,
+      isAlive: () => false,
+      now: () => nowMs,
+      pause: async () => {},
+      timeoutMs: 1_000,
+    }),
+    "exited before creating its evidence directory",
+  );
+
+  let delayedNowMs = nowMs;
+  const delayedRequestAtMs = nowMs + 11 * 60_000;
+  const delayedRequest = record(
+    makeMarker(
+      REQUEST_KIND,
+      new Date(delayedRequestAtMs - 1_000).toISOString(),
+      runnerPid,
+      promptPid,
+    ),
+    delayedRequestAtMs - 1_000,
+  );
+  const delayedComplete = record(
+    {
+      ...makeMarker(
+        COMPLETE_KIND,
+        new Date(delayedRequestAtMs - 100).toISOString(),
+        runnerPid,
+        promptPid,
+      ),
+      sustainedMotionSamples: 3,
+      sustainedMotionSpanMilliseconds: 500,
+      productBoundaryContaminated: true,
+      independentBoundaryContaminated: true,
+      clickFreeMotionObserved: true,
+    },
+    delayedRequestAtMs - 100,
+  );
+  const delayedEmissions = [];
+  let delayedActionEmitted = false;
+  await watchHandoff({
+    runnerPid,
+    loadMarker: async (name) => {
+      if (delayedNowMs < delayedRequestAtMs) return null;
+      if (name === REQUEST_FILE) return delayedRequest;
+      return delayedActionEmitted ? delayedComplete : null;
+    },
+    isAlive: (pid) => pid === runnerPid || pid === promptPid,
+    now: () => delayedNowMs,
+    pause: async () => {
+      delayedNowMs += 60_000;
+    },
+    emit: (message) => {
+      delayedEmissions.push(message);
+      if (message.startsWith("ACTION REQUIRED:")) delayedActionEmitted = true;
+    },
+  });
+  if (
+    delayedNowMs - nowMs <= 10 * 60_000 ||
+    delayedEmissions.length !== 2 ||
+    !delayedEmissions[1].startsWith("COMPLETE:")
+  ) {
+    fail("Self-test did not permit a producer-bound request after the old ten-minute limit.");
+  }
+
+  const exitedRunnerEmissions = [];
+  let exitedRunnerLivenessChecks = 0;
+  let exitedRunnerActionEmitted = false;
+  await watchHandoff({
+    runnerPid,
+    loadMarker: async (name) => {
+      if (name === REQUEST_FILE) return requestRecord;
+      return exitedRunnerActionEmitted ? completeRecord : null;
+    },
+    isAlive: (pid) => {
+      if (pid === promptPid) return true;
+      exitedRunnerLivenessChecks += 1;
+      return exitedRunnerLivenessChecks === 1;
+    },
+    now: () => nowMs,
+    pause: async () => {},
+    emit: (message) => {
+      exitedRunnerEmissions.push(message);
+      if (message.startsWith("ACTION REQUIRED:")) exitedRunnerActionEmitted = true;
+    },
+    timeoutMs: 1_000,
+  });
+  if (exitedRunnerEmissions.length !== 2) {
+    fail("Self-test rejected a valid bound completion after runner exit.");
+  }
+  const catchUpEmissions = [];
+  await watchHandoff({
+    runnerPid,
+    loadMarker: async (name) => name === REQUEST_FILE ? requestRecord : completeRecord,
+    isAlive: () => false,
+    now: () => nowMs,
+    pause: async () => {},
+    emit: (message) => catchUpEmissions.push(message),
+    timeoutMs: 1_000,
+  });
+  if (
+    catchUpEmissions.length !== 1 ||
+    !catchUpEmissions[0].startsWith("COMPLETE:")
+  ) {
+    fail("Self-test rejected valid bound catch-up markers after runner and prompt exit.");
+  }
+  let missingCompletionRunnerChecks = 0;
+  await expectFailure(
+    async () => watchHandoff({
+      runnerPid,
+      loadMarker: async (name) => name === REQUEST_FILE ? requestRecord : null,
+      isAlive: (pid) => {
+        if (pid === promptPid) return true;
+        missingCompletionRunnerChecks += 1;
+        return missingCompletionRunnerChecks === 1;
+      },
+      now: () => nowMs,
+      pause: async () => {},
+      emit: () => {},
+      timeoutMs: 1_000,
+    }),
+    "exited before completion",
+  );
+  const invalidComplete = record(
+    { ...completeMarker, requestId: "fedcba9876543210fedcba9876543210" },
+    nowMs - 100,
+  );
+  let invalidCompletionRunnerChecks = 0;
+  await expectFailure(
+    async () => watchHandoff({
+      runnerPid,
+      loadMarker: async (name) => name === REQUEST_FILE ? requestRecord : invalidComplete,
+      isAlive: (pid) => {
+        if (pid === promptPid) return true;
+        invalidCompletionRunnerChecks += 1;
+        return invalidCompletionRunnerChecks === 1;
+      },
+      now: () => nowMs,
+      pause: async () => {},
+      emit: () => {},
+      timeoutMs: 1_000,
+    }),
+    "requestId",
+  );
 
   await expectFailure(
     async () => validateRequest(record(requestMarker, nowMs - 31_001), runnerPid, nowMs + 30_001),
@@ -624,7 +824,13 @@ async function main() {
     return;
   }
   if (process.platform !== "darwin") fail("Watch mode is supported only on macOS.");
-  await validateEvidenceDirectory(options.evidenceDir);
+  await waitForEvidenceDirectory({
+    runnerPid: options.runnerPid,
+    inspect: () => inspectEvidenceDirectory(options.evidenceDir),
+    isAlive: processAlive,
+    now: Date.now,
+    pause: sleep,
+  });
   await watchHandoff({
     runnerPid: options.runnerPid,
     loadMarker: (name, label) => readEvidenceMarker(options.evidenceDir, name, label),

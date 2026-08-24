@@ -215,7 +215,8 @@ fn windows_release_tooling_hashes_without_module_discovery() {
 #[test]
 fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
     let watcher = source("scripts/wait-macos-pointer-concurrency-handoff.mjs");
-    let producer = source("evidence/v0.12.18/computer/helper-evidence-rig.mjs");
+    let producer = source("evidence/v0.12.19/computer/helper-evidence-rig.mjs");
+    let playbook = source("evidence/v0.12.19/computer/README.md");
     let ci = source(".github/workflows/ci.yml");
     let release = source(".github/workflows/deploy.yml");
     let local = source("scripts/deploy.sh");
@@ -243,9 +244,13 @@ fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
     );
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.18\";",
+        "const PRODUCT_VERSION = \"0.12.19\";",
         "const SCHEMA_VERSION = 1;",
         "const OPERATOR_DIRECTORY = \"operator\";",
+        "const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;",
+        "const PRODUCER_PRE_REQUEST_WORK_BUDGET_MS = 30 * 60_000;",
+        "const REQUEST_PUBLICATION_MAXIMUM_WAIT_MS =",
+        "const EVIDENCE_DIRECTORY_WAIT_TIMEOUT_MS = 60_000;",
         "macos-pointer-concurrency-handoff-request.json",
         "macos-pointer-concurrency-handoff-complete.json",
         "macos-pointer-concurrency-handoff-request",
@@ -260,6 +265,12 @@ fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
         "The request marker disappeared or changed after notification.",
         "does not match the request marker.",
         "The watched macOS acceptance runner is not alive.",
+        "The watched macOS acceptance runner exited before creating its evidence directory.",
+        "Timed out waiting for the runner-created macOS evidence directory.",
+        "Self-test did not wait for the runner-created evidence directory.",
+        "Self-test did not permit a producer-bound request after the old ten-minute limit.",
+        "Self-test rejected a valid bound completion after runner exit.",
+        "Self-test rejected valid bound catch-up markers after runner and prompt exit.",
         "The nonactivating pointer prompt is not alive.",
         "ACTION REQUIRED: Continuously move the shared pointer without clicking; keep moving until COMPLETE.",
         "COMPLETE: Both boundaries observed sustained click-free shared-pointer movement.",
@@ -289,17 +300,69 @@ fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
         );
     }
     assert!(producer.contains("const POINTER_HANDOFF_MARKER_SCHEMA = 1;"));
+    assert!(producer.contains("const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;"));
+    for shared_timing_contract in [
+        "const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;",
+        "const PRODUCER_PRE_REQUEST_WORK_BUDGET_MS = 30 * 60_000;",
+        "const REQUEST_PUBLICATION_MAXIMUM_WAIT_MS =",
+        "QUIET_SEAT_MAXIMUM_WAIT_MS + PRODUCER_PRE_REQUEST_WORK_BUDGET_MS;",
+    ] {
+        assert!(watcher.contains(shared_timing_contract));
+        assert!(
+            producer.contains(shared_timing_contract),
+            "macOS handoff producer and watcher disagree on {shared_timing_contract}"
+        );
+    }
+    for producer_deadline_contract in [
+        "outputReservationStartedAtMilliseconds + REQUEST_PUBLICATION_MAXIMUM_WAIT_MS",
+        "remainingRequestPublicationTime(",
+        "pointerHandoffRequestPublicationDeadlineMilliseconds",
+        "request-publication absolute deadline self-test failed",
+    ] {
+        assert!(
+            producer.contains(producer_deadline_contract),
+            "macOS handoff producer is missing {producer_deadline_contract}"
+        );
+    }
     assert!(producer.contains("const operatorDirectory = join(outputDir, \"operator\");"));
     assert!(watcher.contains("join(evidenceDir, OPERATOR_DIRECTORY)"));
 
+    for playbook_boundary in [
+        "never concatenate the phases into one script",
+        "### Phase 1: bind the candidate, run quiet, then stop for review",
+        "### Phase 2: require quiet review, run deliberate, then stop for review",
+        "### Phase 3: require both reviews and finalize create-once",
+        "SOURCE_ROOT=\"$(cd \"$SOURCE_ROOT\" && pwd -P)\"",
+        "PRIVATE_PARENT=\"$(cd \"$PRIVATE_PARENT\" && pwd -P)\"",
+        "IFS= read -r QUIET_REVIEWED_RESULT_SHA256",
+        "IFS= read -r DELIBERATE_REVIEWED_RESULT_SHA256",
+        "QUIET_EXPECTED_INVENTORY=",
+        "DELIBERATE_EXPECTED_INVENTORY=",
+        "find . -mindepth 1 -print",
+        "QUIET_REVIEW_MANIFEST=",
+        "DELIBERATE_REVIEW_MANIFEST=",
+        "jq -er '.screenshots[] | \"\\(.sha256)  \\(.file)\"' helper-results.json",
+        ".status == \"passed-release-candidate\"",
+        ".aggregateChecks.passingResultSchemaVersion == 6",
+        ".aggregateChecks.inventoryFileCount == 18",
+        "MACOS_ACCEPTANCE_SHA256=",
+        "complete Phase 1 visual review first",
+        "complete Phase 2 visual review first",
+    ] {
+        assert!(
+            playbook.contains(playbook_boundary),
+            "macOS acceptance playbook is missing a review boundary: {playbook_boundary}"
+        );
+    }
+
     for integration in [&ci, &release, &local] {
         assert!(
-            integration.contains("node --check evidence/v0.12.18/computer/helper-evidence-rig.mjs"),
+            integration.contains("node --check evidence/v0.12.19/computer/helper-evidence-rig.mjs"),
             "release path does not syntax-check the exact macOS evidence rig"
         );
         assert!(
             integration
-                .contains("node evidence/v0.12.18/computer/helper-evidence-rig.mjs --self-test")
+                .contains("node evidence/v0.12.19/computer/helper-evidence-rig.mjs --self-test")
         );
     }
     for integration in [&ci, &release] {
@@ -310,7 +373,7 @@ fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
         ] {
             assert!(
                 integration.contains(&format!(
-                    "xcrun swiftc -typecheck evidence/v0.12.18/computer/{source}"
+                    "xcrun swiftc -typecheck evidence/v0.12.19/computer/{source}"
                 )),
                 "macOS workflow does not typecheck {source}"
             );

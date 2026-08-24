@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { deflateSync, inflateSync } from "node:zlib";
 
-const PRODUCT_VERSION = "0.12.18";
+const PRODUCT_VERSION = "0.12.19";
 const RESULT_SCHEMA_VERSION = 6;
 const AGGREGATE_SCHEMA_VERSION = 1;
 const OUTPUT_FILE = "macos-acceptance.json";
@@ -1650,6 +1650,7 @@ async function runSelfTest() {
     const aggregate = parseJsonWithoutDuplicateKeys(aggregateText, "self-test aggregate");
     if (
       aggregate.schemaVersion !== AGGREGATE_SCHEMA_VERSION ||
+      aggregate.aggregateChecks.passingResultSchemaVersion !== RESULT_SCHEMA_VERSION ||
       aggregate.lanes.quiet.resultSha256 === aggregate.lanes.deliberateConcurrency.resultSha256 ||
       aggregate.lanes.quiet.operatorMarkers.length !== 0 ||
       aggregate.lanes.deliberateConcurrency.operatorMarkers.length !== 2 ||

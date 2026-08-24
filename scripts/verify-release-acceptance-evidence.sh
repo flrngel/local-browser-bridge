@@ -6,7 +6,7 @@ export LC_ALL=C
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly API_VERSION="2026-03-10"
 readonly RECEIPT_SCHEMA_VERSION="2"
-readonly EVIDENCE_PRODUCT_VERSION="0.12.18"
+readonly EVIDENCE_PRODUCT_VERSION="0.12.19"
 readonly EVIDENCE_MAX_BLOB_BYTES=20971520
 readonly EVIDENCE_MAX_TOTAL_BYTES=209715200
 readonly EVIDENCE_MAX_PATH_BYTES=1024
@@ -833,6 +833,89 @@ if expected_pixel_sha256:
 PY
 }
 
+validate_mac_result_schema_binding() {
+  local aggregate="$1"
+  local quiet_result="$2"
+  local deliberate_result="$3"
+  jq -e \
+    --argjson quiet_result_schema_version "$(jq -er '.schemaVersion | select(type == "number" and . == floor)' "$quiet_result")" \
+    --argjson deliberate_result_schema_version "$(jq -er '.schemaVersion | select(type == "number" and . == floor)' "$deliberate_result")" '
+      (.aggregateChecks | type) == "object"
+      and .aggregateChecks.passingResultSchemaVersion == $quiet_result_schema_version
+      and $quiet_result_schema_version == $deliberate_result_schema_version
+    ' "$aggregate" >/dev/null
+}
+
+write_mac_harness_source_binding() {
+  local output="$1"
+  local harness_root="evidence/v${EVIDENCE_PRODUCT_VERSION}/computer"
+  local runner="$harness_root/helper-evidence-rig.mjs"
+  local fixture="$harness_root/HelperEvidenceFixture.swift"
+  local system_probe="$harness_root/SystemProbe.swift"
+  local pointer_handoff="$harness_root/PointerHandoff.swift"
+  local finalizer="scripts/finalize-macos-acceptance.mjs"
+  local source_path
+  local runner_sha256 fixture_sha256 system_probe_sha256 pointer_handoff_sha256 finalizer_sha256
+
+  test ! -e "$output" && test ! -L "$output" || return 1
+  for source_path in "$runner" "$fixture" "$system_probe" "$pointer_handoff" "$finalizer"; do
+    test -f "$source_path" && test ! -L "$source_path" || return 1
+  done
+  runner_sha256="$(sha256_file "$runner")"
+  fixture_sha256="$(sha256_file "$fixture")"
+  system_probe_sha256="$(sha256_file "$system_probe")"
+  pointer_handoff_sha256="$(sha256_file "$pointer_handoff")"
+  finalizer_sha256="$(sha256_file "$finalizer")"
+  for source_path in \
+    "$runner_sha256" "$fixture_sha256" "$system_probe_sha256" \
+    "$pointer_handoff_sha256" "$finalizer_sha256"; do
+    is_sha256 "$source_path" || return 1
+  done
+
+  (umask 077; jq -cn \
+    --arg runner_sha256 "$runner_sha256" \
+    --arg fixture_sha256 "$fixture_sha256" \
+    --arg system_probe_sha256 "$system_probe_sha256" \
+    --arg pointer_handoff_sha256 "$pointer_handoff_sha256" \
+    --arg finalizer_sha256 "$finalizer_sha256" '
+      {
+        runnerSha256: $runner_sha256,
+        fixtureSha256: $fixture_sha256,
+        systemProbeSha256: $system_probe_sha256,
+        pointerHandoffSha256: $pointer_handoff_sha256,
+        acceptanceFinalizerSha256: $finalizer_sha256,
+        packagedHelperSpawnCount: 1
+      }
+    ' > "$output")
+}
+
+validate_mac_harness_source_binding() {
+  local expected="$1"
+  local aggregate="$2"
+  local quiet_result="$3"
+  local deliberate_result="$4"
+
+  test -f "$expected" && test ! -L "$expected" || return 1
+  jq -e '
+      (keys_unsorted == [
+        "runnerSha256", "fixtureSha256", "systemProbeSha256",
+        "pointerHandoffSha256", "acceptanceFinalizerSha256",
+        "packagedHelperSpawnCount"
+      ])
+      and ([
+        .runnerSha256, .fixtureSha256, .systemProbeSha256,
+        .pointerHandoffSha256, .acceptanceFinalizerSha256
+      ] | all(type == "string" and test("^[0-9a-f]{64}$")))
+      and .packagedHelperSpawnCount == 1
+    ' "$expected" >/dev/null || return 1
+  jq -e --slurpfile expected "$expected" '
+      .bindings.harness == $expected[0]
+    ' "$aggregate" >/dev/null || return 1
+  jq -se --slurpfile expected "$expected" '
+      length == 2 and all(.[]; .harness == $expected[0])
+    ' "$quiet_result" "$deliberate_result" >/dev/null
+}
+
 verify_mac_lane() {
   local evidence_root="$1"
   local aggregate="$2"
@@ -1626,7 +1709,7 @@ PY
   jq -e '
       .schemaVersion == 1
       and .evidenceType == "stock-user-chrome-api-matrix"
-      and .version == "0.12.18" and .target == "loopback-demo" and .passed == true
+      and .version == "0.12.19" and .target == "loopback-demo" and .passed == true
       and .methodCount == 25 and (.methods | length) == 25
       and ([.methods[].name] == [
         "status","browser.control.start","browser.control.status","browser.control.stop",
@@ -1665,7 +1748,7 @@ PY
       . as $root
       |
       .schemaVersion == 2 and .evidenceType == "stock-user-chrome-computer-helper-chain"
-      and .version == "0.12.18" and .passed == true
+      and .version == "0.12.19" and .passed == true
       and .server.soleListener == "127.0.0.1:17373" and .server.updateCheckDisabled == true
       and .helper.connectedThroughLoopbackServer == true and .helper.serverApiOnly == true
       and .extensionPayload.fileCount == 11
@@ -1804,7 +1887,7 @@ PY
       and ([.computerHelperChain[] | select(type == "boolean")] | all(. == true))
       and .initialState.capturedBeforeRelevantMutation == true
       and .initialState.candidateExtensionPresent == false and .initialState.savedTokenConfigured == false
-      and .extension.cardCount == 1 and .extension.version == "0.12.18" and .extension.enabled == true
+      and .extension.cardCount == 1 and .extension.version == "0.12.19" and .extension.enabled == true
       and .extension.loadErrors == 0 and .extension.loadedVia == "chrome://extensions-load-unpacked"
       and .extension.loadedDirectoryByteMatchesCandidateZip == true and .extension.popupConnected == true
       and .extension.debuggerLeaseActiveAtFirstCapture == true and .extension.nativeDebuggerUseIndicatorSeen == true
@@ -2336,6 +2419,14 @@ verify_evidence_commit() {
   assert_json_hash "$chrome_result" "$(jq -er '.stockChromeResultSha256' "$receipt_file")"
   add_allowed "macos/macos-acceptance.json"
 
+  local mac_harness_source_binding="$scratch_root/macos-harness-source-binding.json"
+  write_mac_harness_source_binding "$mac_harness_source_binding" \
+    || die "could not independently hash the exact tagged macOS harness sources"
+  validate_mac_harness_source_binding \
+    "$mac_harness_source_binding" "$mac_aggregate" "$quiet_result" "$deliberate_result" \
+    || die "macOS retained lanes or aggregate do not match the exact tagged harness source hashes"
+  validate_mac_result_schema_binding "$mac_aggregate" "$quiet_result" "$deliberate_result" \
+    || die "macOS aggregate result schema does not match both retained lanes"
   jq -e \
     --arg version "$EVIDENCE_PRODUCT_VERSION" \
     --arg source_sha "$VERIFIED_SOURCE_SHA" \
@@ -2371,7 +2462,6 @@ verify_evidence_commit() {
       and .aggregateChecks.laneDirectoriesDisjoint == true
       and .aggregateChecks.exactInventories == true
       and .aggregateChecks.resultsByteDistinct == true
-      and .aggregateChecks.passingResultSchemaVersion == 5
       and .aggregateChecks.inventoryFileCount == 18
       and .aggregateChecks.screenshotCount == 12
       and .aggregateChecks.screenshotHashesMatched == true
@@ -2585,15 +2675,15 @@ self_test() {
   local sha1_b="2222222222222222222222222222222222222222"
   local sha256_a="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   local receipt="$scratch/receipt.json"
-  printf '%s' '{"schemaVersion":2,"tag":"v0.12.18","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"1","releaseCandidateArtifactId":"456","releaseCandidateArtifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","evidenceRef":"refs/heads/evidence/v0.12.18-release-run-123-attempt-1","evidenceCommitSha":"3333333333333333333333333333333333333333","macosPassed":true,"macosAcceptanceSha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","macosQuietResultSha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","macosDeliberateConcurrencyResultSha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","windowsPassed":true,"windowsResultSha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","stockChromePassed":true,"stockChrome":true,"stockChromeResultSha256":"9999999999999999999999999999999999999999999999999999999999999999"}' > "$receipt"
-  validate_receipt "$receipt" v0.12.18 "$sha1_a" "$sha1_b" 123 1 "$sha256_a" \
+  printf '%s' '{"schemaVersion":2,"tag":"v0.12.19","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"1","releaseCandidateArtifactId":"456","releaseCandidateArtifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","evidenceRef":"refs/heads/evidence/v0.12.19-release-run-123-attempt-1","evidenceCommitSha":"3333333333333333333333333333333333333333","macosPassed":true,"macosAcceptanceSha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","macosQuietResultSha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","macosDeliberateConcurrencyResultSha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","windowsPassed":true,"windowsResultSha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","stockChromePassed":true,"stockChrome":true,"stockChromeResultSha256":"9999999999999999999999999999999999999999999999999999999999999999"}' > "$receipt"
+  validate_receipt "$receipt" v0.12.19 "$sha1_a" "$sha1_b" 123 1 "$sha256_a" \
     || die "self-test rejected a valid canonical schema-2 receipt"
   jq -cS . "$receipt" > "$scratch/noncanonical.json"
-  if validate_receipt "$scratch/noncanonical.json" v0.12.18 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
+  if validate_receipt "$scratch/noncanonical.json" v0.12.19 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
     die "self-test accepted reordered receipt keys"
   fi
   jq -c '.schemaVersion = 1' "$receipt" > "$scratch/stale.json"
-  if validate_receipt "$scratch/stale.json" v0.12.18 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
+  if validate_receipt "$scratch/stale.json" v0.12.19 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
     die "self-test accepted a stale schema-1 receipt"
   fi
   mkdir "$scratch/safe"
@@ -2613,7 +2703,7 @@ self_test() {
   fi
 
   EXPECTED_RELEASE_CANDIDATE_BINDING="$scratch/expected-binding.json"
-  printf '%s' '{"productVersion":"0.12.18","repository":"flrngel/local-browser-bridge","tag":"v0.12.18","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"2","artifactId":"456","artifactName":"release-candidate","artifactZipBytes":789,"artifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","attestationInvocationUri":"https://github.com/flrngel/local-browser-bridge/actions/runs/123/attempts/2","attestedAssetCount":5,"githubHostedRunner":true,"assets":[]}' > "$EXPECTED_RELEASE_CANDIDATE_BINDING"
+  printf '%s' '{"productVersion":"0.12.19","repository":"flrngel/local-browser-bridge","tag":"v0.12.19","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"2","artifactId":"456","artifactName":"release-candidate","artifactZipBytes":789,"artifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","attestationInvocationUri":"https://github.com/flrngel/local-browser-bridge/actions/runs/123/attempts/2","attestedAssetCount":5,"githubHostedRunner":true,"assets":[]}' > "$EXPECTED_RELEASE_CANDIDATE_BINDING"
   printf '%s' "{\"releaseCandidateBinding\":$(<"$EXPECTED_RELEASE_CANDIDATE_BINDING")}" > "$scratch/current-binding.json"
   assert_release_candidate_binding "$scratch/current-binding.json" '.releaseCandidateBinding'
   jq -c '.releaseCandidateBinding.workflowRunAttempt = "1"' "$scratch/current-binding.json" > "$scratch/replayed-binding.json"
@@ -2686,6 +2776,81 @@ self_test() {
   if validate_global_mac_screenshot_hashes "$scratch/mac-pixel-overlap.json"; then
     die "self-test accepted decoded macOS pixels replayed across lanes"
   fi
+
+  printf '%s' '{"aggregateChecks":{"passingResultSchemaVersion":6}}' > "$scratch/mac-schema-aggregate.json"
+  printf '%s' '{"schemaVersion":6}' > "$scratch/mac-schema-quiet.json"
+  printf '%s' '{"schemaVersion":6}' > "$scratch/mac-schema-deliberate.json"
+  validate_mac_result_schema_binding \
+    "$scratch/mac-schema-aggregate.json" \
+    "$scratch/mac-schema-quiet.json" \
+    "$scratch/mac-schema-deliberate.json" \
+    || die "self-test rejected aligned macOS result schemas"
+  jq -c '.aggregateChecks.passingResultSchemaVersion = 5' \
+    "$scratch/mac-schema-aggregate.json" > "$scratch/mac-schema-stale-aggregate.json"
+  if validate_mac_result_schema_binding \
+      "$scratch/mac-schema-stale-aggregate.json" \
+      "$scratch/mac-schema-quiet.json" \
+      "$scratch/mac-schema-deliberate.json"; then
+    die "self-test accepted a stale macOS aggregate result schema"
+  fi
+  jq -c '.schemaVersion = 5' \
+    "$scratch/mac-schema-deliberate.json" > "$scratch/mac-schema-stale-deliberate.json"
+  if validate_mac_result_schema_binding \
+      "$scratch/mac-schema-aggregate.json" \
+      "$scratch/mac-schema-quiet.json" \
+      "$scratch/mac-schema-stale-deliberate.json"; then
+    die "self-test accepted mismatched macOS lane result schemas"
+  fi
+
+  local mac_harness_source_binding="$scratch/mac-harness-source-binding.json"
+  local mac_harness_aggregate="$scratch/mac-harness-aggregate.json"
+  local mac_harness_quiet="$scratch/mac-harness-quiet.json"
+  local mac_harness_deliberate="$scratch/mac-harness-deliberate.json"
+  write_mac_harness_source_binding "$mac_harness_source_binding" \
+    || die "self-test could not independently hash the exact macOS harness sources"
+  jq -cn --slurpfile expected "$mac_harness_source_binding" \
+    '{bindings:{harness:$expected[0]}}' > "$mac_harness_aggregate"
+  jq -cn --slurpfile expected "$mac_harness_source_binding" \
+    '{harness:$expected[0]}' > "$mac_harness_quiet"
+  jq -cn --slurpfile expected "$mac_harness_source_binding" \
+    '{harness:$expected[0]}' > "$mac_harness_deliberate"
+  validate_mac_harness_source_binding \
+    "$mac_harness_source_binding" "$mac_harness_aggregate" \
+    "$mac_harness_quiet" "$mac_harness_deliberate" \
+    || die "self-test rejected exact tagged macOS harness source hashes"
+
+  local harness_field
+  local wrong_harness_sha256="0000000000000000000000000000000000000000000000000000000000000000"
+  for harness_field in \
+    runnerSha256 fixtureSha256 systemProbeSha256 \
+    pointerHandoffSha256 acceptanceFinalizerSha256; do
+    jq -c --arg field "$harness_field" --arg wrong "$wrong_harness_sha256" \
+      '.bindings.harness[$field] = $wrong' \
+      "$mac_harness_aggregate" > "$scratch/mac-harness-tampered-aggregate.json"
+    if validate_mac_harness_source_binding \
+        "$mac_harness_source_binding" "$scratch/mac-harness-tampered-aggregate.json" \
+        "$mac_harness_quiet" "$mac_harness_deliberate"; then
+      die "self-test accepted a macOS aggregate tagged-harness hash mismatch: $harness_field"
+    fi
+
+    jq -c --arg field "$harness_field" --arg wrong "$wrong_harness_sha256" \
+      '.harness[$field] = $wrong' \
+      "$mac_harness_quiet" > "$scratch/mac-harness-tampered-quiet.json"
+    if validate_mac_harness_source_binding \
+        "$mac_harness_source_binding" "$mac_harness_aggregate" \
+        "$scratch/mac-harness-tampered-quiet.json" "$mac_harness_deliberate"; then
+      die "self-test accepted a quiet-lane tagged-harness hash mismatch: $harness_field"
+    fi
+
+    jq -c --arg field "$harness_field" --arg wrong "$wrong_harness_sha256" \
+      '.harness[$field] = $wrong' \
+      "$mac_harness_deliberate" > "$scratch/mac-harness-tampered-deliberate.json"
+    if validate_mac_harness_source_binding \
+        "$mac_harness_source_binding" "$mac_harness_aggregate" \
+        "$mac_harness_quiet" "$scratch/mac-harness-tampered-deliberate.json"; then
+      die "self-test accepted a deliberate-lane tagged-harness hash mismatch: $harness_field"
+    fi
+  done
 
   python3 - "$scratch/valid.png" "$scratch/empty-idat.png" "$scratch/encoding-replay.png" "$scratch/pixel-sha256.txt" <<'PY'
 import hashlib, struct, sys, zlib

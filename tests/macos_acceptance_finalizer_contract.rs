@@ -6,6 +6,105 @@ fn finalizer_source() -> String {
 }
 
 #[test]
+fn macos_v0_12_19_result_schema_is_aligned_end_to_end() {
+    let finalizer = finalizer_source().replace("\r\n", "\n");
+    let producer = fs::read_to_string("evidence/v0.12.19/computer/helper-evidence-rig.mjs")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let documentation = fs::read_to_string("evidence/v0.12.19/computer/README.md")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let verifier = fs::read_to_string("scripts/verify-release-acceptance-evidence.sh")
+        .unwrap()
+        .replace("\r\n", "\n");
+
+    assert!(finalizer.contains("const RESULT_SCHEMA_VERSION = 6;"));
+    assert!(producer.matches("schemaVersion: 6,").count() >= 2);
+    assert!(documentation.contains("retained schema-v6 result"));
+    assert!(documentation.contains("Schema v6 uses a tri-state dispatch field"));
+    for producer_contract in [
+        "passingResultSchemaVersion: RESULT_SCHEMA_VERSION",
+        "aggregate.aggregateChecks.passingResultSchemaVersion !== RESULT_SCHEMA_VERSION",
+    ] {
+        assert!(
+            finalizer.contains(producer_contract),
+            "macOS finalizer is missing result-schema producer contract: {producer_contract}"
+        );
+    }
+    for required in [
+        ".schemaVersion == 6",
+        "validate_mac_result_schema_binding()",
+        "--argjson quiet_result_schema_version",
+        "--argjson deliberate_result_schema_version",
+        ".aggregateChecks.passingResultSchemaVersion == $quiet_result_schema_version",
+        "$quiet_result_schema_version == $deliberate_result_schema_version",
+        "self-test accepted a stale macOS aggregate result schema",
+        "self-test accepted mismatched macOS lane result schemas",
+    ] {
+        assert!(
+            verifier.contains(required),
+            "release evidence verifier is missing the result-schema binding: {required}"
+        );
+    }
+    assert!(!verifier.contains(".aggregateChecks.passingResultSchemaVersion == 5"));
+}
+
+#[test]
+fn macos_v0_12_19_release_verifier_recomputes_every_tagged_harness_hash() {
+    let verifier = fs::read_to_string("scripts/verify-release-acceptance-evidence.sh")
+        .unwrap()
+        .replace("\r\n", "\n");
+
+    for required in [
+        "write_mac_harness_source_binding()",
+        "validate_mac_harness_source_binding()",
+        "local harness_root=\"evidence/v${EVIDENCE_PRODUCT_VERSION}/computer\"",
+        "helper-evidence-rig.mjs",
+        "HelperEvidenceFixture.swift",
+        "SystemProbe.swift",
+        "PointerHandoff.swift",
+        "scripts/finalize-macos-acceptance.mjs",
+        "test -f \"$source_path\" && test ! -L \"$source_path\"",
+        "runner_sha256=\"$(sha256_file \"$runner\")\"",
+        "fixture_sha256=\"$(sha256_file \"$fixture\")\"",
+        "system_probe_sha256=\"$(sha256_file \"$system_probe\")\"",
+        "pointer_handoff_sha256=\"$(sha256_file \"$pointer_handoff\")\"",
+        "finalizer_sha256=\"$(sha256_file \"$finalizer\")\"",
+        ".bindings.harness == $expected[0]",
+        "length == 2 and all(.[]; .harness == $expected[0])",
+        "macOS retained lanes or aggregate do not match the exact tagged harness source hashes",
+        "self-test accepted a macOS aggregate tagged-harness hash mismatch",
+        "self-test accepted a quiet-lane tagged-harness hash mismatch",
+        "self-test accepted a deliberate-lane tagged-harness hash mismatch",
+    ] {
+        assert!(
+            verifier.contains(required),
+            "release evidence verifier is missing tagged-harness binding: {required}"
+        );
+    }
+    for field in [
+        "runnerSha256",
+        "fixtureSha256",
+        "systemProbeSha256",
+        "pointerHandoffSha256",
+        "acceptanceFinalizerSha256",
+    ] {
+        assert!(
+            verifier.contains(field),
+            "release evidence verifier does not bind tagged harness field {field}"
+        );
+    }
+    assert!(
+        verifier.contains(".harness.acceptanceFinalizerSha256 == $acceptance_finalizer_sha256")
+    );
+    assert!(
+        verifier.contains(
+            ".bindings.harness.acceptanceFinalizerSha256 == $acceptance_finalizer_sha256"
+        )
+    );
+}
+
+#[test]
 fn macos_v0_12_14_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
     let source = finalizer_source().replace("\r\n", "\n");
 
@@ -22,7 +121,7 @@ fn macos_v0_12_14_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
     }
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.18\";",
+        "const PRODUCT_VERSION = \"0.12.19\";",
         "const RESULT_SCHEMA_VERSION = 6;",
         "const AGGREGATE_SCHEMA_VERSION = 1;",
         "const OUTPUT_FILE = \"macos-acceptance.json\";",
