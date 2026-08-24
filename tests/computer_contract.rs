@@ -1361,10 +1361,16 @@ fn v0_12_22_marker_identity_is_exact_on_windows_and_posix() {
         "typeof state?.dev === \"bigint\" && state.dev > 0n",
         "typeof state.ino === \"bigint\" && state.ino > 0n",
         "typeof state.mtimeNs === \"bigint\" && typeof state.ctimeNs === \"bigint\"",
+        "function samePersistentFileObjectIdentity(left, right)",
         "function sameOrdinaryFileIdentity(left, right)",
-        "left.dev === right.dev && left.ino === right.ino",
-        "left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs",
+        "function samePublishedFileAcrossWriterClose(left, right, platform = process.platform)",
+        "left.dev === right.dev && left.ino === right.ino && left.size === right.size",
+        "left.mode === right.mode && left.uid === right.uid && left.gid === right.gid",
+        "left.birthtimeNs === right.birthtimeNs",
+        "left.mtimeNs === right.mtimeNs",
+        "left.ctimeNs === right.ctimeNs",
         "left.nlink === right.nlink",
+        "!samePersistentFileObjectIdentity(left, right) || left.nlink !== right.nlink",
         "handle.stat({ bigint: true })",
         "lstat(temporaryPath, { bigint: true })",
         "lstat(path, { bigint: true })",
@@ -1377,8 +1383,12 @@ fn v0_12_22_marker_identity_is_exact_on_windows_and_posix() {
         "async function syncMarkerDirectory(path, deadlineMilliseconds, platform = process.platform)",
         "operator marker linked descriptor inspection",
         "sameCoreFileIdentity(descriptorState, linkedDescriptorState)",
+        "operator marker post-close identity inspection",
+        "settledPublishedState.nlink !== 1n",
+        "samePublishedFileAcrossWriterClose(publishedState, settledPublishedState)",
         "operator marker published-file descriptor inspection",
         "publishedBytes.equals(Buffer.from(serialized, \"utf8\"))",
+        "sameOrdinaryFileIdentity(settledPublishedState, reboundDescriptorState)",
         "operator marker published path lost its stable ordinary-file binding",
     ] {
         assert!(
@@ -1388,6 +1398,7 @@ fn v0_12_22_marker_identity_is_exact_on_windows_and_posix() {
     }
     for forbidden in [
         "process.platform === \"win32\" || (state.mode & 0o077n) === 0n",
+        "if (platform === \"win32\") return true",
         "descriptorState.mode & 0o077) !== 0",
         "handle.stat(),",
     ] {
@@ -1396,6 +1407,33 @@ fn v0_12_22_marker_identity_is_exact_on_windows_and_posix() {
             "marker identity contract contains a lossy or global Windows bypass: {forbidden}"
         );
     }
+
+    let publisher = rig
+        .split_once("async function publishAtomicMarkerOnce")
+        .unwrap()
+        .1
+        .split_once("async function writePointerHandoffState")
+        .unwrap()
+        .0;
+    assert_eq!(
+        publisher
+            .matches("samePublishedFileAcrossWriterClose(")
+            .count(),
+        1,
+        "the Windows close-time exception must be confined to one publication boundary"
+    );
+    let receipt_reader = rig
+        .split_once("async function readBoundAppShareReceipt")
+        .unwrap()
+        .1
+        .split_once("async function readAppShareStartReceipt")
+        .unwrap()
+        .0;
+    assert!(!receipt_reader.contains("samePublishedFileAcrossWriterClose("));
+    assert!(
+        receipt_reader.matches("sameOrdinaryFileIdentity(").count() >= 3,
+        "receipt reads must keep strict descriptor/path/timestamp equality"
+    );
 }
 
 #[test]

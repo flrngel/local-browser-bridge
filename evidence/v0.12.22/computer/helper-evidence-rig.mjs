@@ -848,17 +848,36 @@ function hasExactBigIntFileIdentity(state) {
     typeof state.birthtimeNs === "bigint";
 }
 
-function sameCoreFileIdentity(left, right) {
+function samePersistentFileObjectIdentity(left, right) {
   return hasExactBigIntFileIdentity(left) && hasExactBigIntFileIdentity(right) &&
     left.dev === right.dev && left.ino === right.ino && left.size === right.size &&
     left.mode === right.mode && left.uid === right.uid && left.gid === right.gid &&
-    left.mtimeNs === right.mtimeNs && left.birthtimeNs === right.birthtimeNs;
+    left.birthtimeNs === right.birthtimeNs;
+}
+
+function sameCoreFileIdentity(left, right) {
+  return samePersistentFileObjectIdentity(left, right) &&
+    left.mtimeNs === right.mtimeNs;
 }
 
 function sameOrdinaryFileIdentity(left, right) {
   return sameCoreFileIdentity(left, right) &&
-    left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs &&
+    left.ctimeNs === right.ctimeNs &&
     left.nlink === right.nlink;
+}
+
+function samePublishedFileAcrossWriterClose(left, right, platform = process.platform) {
+  if (!samePersistentFileObjectIdentity(left, right) || left.nlink !== right.nlink) return false;
+  if (platform === "win32") {
+    // Windows can defer LastWriteTime and ChangeTime finalization until the
+    // last writable handle closes. Permit only those two timestamp fields to
+    // settle across that exact close boundary. The volume/file ID, creation
+    // time, size, metadata projection, ownership projection, and link count
+    // remain exact; the post-close descriptor/path/read sequence below again
+    // requires every compared timestamp to be stable.
+    return true;
+  }
+  return left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
 }
 
 function hasPlatformPrivateMarkerMetadata(
@@ -1033,6 +1052,19 @@ async function publishAtomicMarkerOnce(path, marker, timeoutMs = MARKER_PUBLISH_
       () => handle.close(),
     );
     handle = null;
+    const settledPublishedState = await deadlineCheckedFilesystemStep(
+      deadlineMilliseconds,
+      "operator marker post-close identity inspection",
+      () => lstat(path, { bigint: true }),
+    );
+    if (
+      settledPublishedState.nlink !== 1n || !settledPublishedState.isFile() ||
+      settledPublishedState.isSymbolicLink() ||
+      !hasPlatformPrivateMarkerMetadata(settledPublishedState) ||
+      !samePublishedFileAcrossWriterClose(publishedState, settledPublishedState)
+    ) {
+      throw new Error("operator marker identity changed while its writer closed");
+    }
     const publishedHandle = await deadlineCheckedFilesystemStep(
       deadlineMilliseconds,
       "operator marker published-file open",
@@ -1072,7 +1104,7 @@ async function publishAtomicMarkerOnce(path, marker, timeoutMs = MARKER_PUBLISH_
         reboundPublishedState.isSymbolicLink() ||
         !hasPlatformPrivateMarkerMetadata(reboundDescriptorState) ||
         !publishedBytes.equals(Buffer.from(serialized, "utf8")) ||
-        !sameOrdinaryFileIdentity(publishedState, reboundDescriptorState) ||
+        !sameOrdinaryFileIdentity(settledPublishedState, reboundDescriptorState) ||
         !sameOrdinaryFileIdentity(reboundDescriptorState, reboundDescriptorAfterRead) ||
         !sameOrdinaryFileIdentity(reboundDescriptorAfterRead, reboundPublishedState)
       ) {
@@ -2361,8 +2393,33 @@ async function runAppShareFilesystemSelfTests() {
       uid: 0n,
       gid: 0n,
     };
+    const windowsWriterClosedState = {
+      ...windowsIdentityState,
+      mtimeNs: 201n,
+      ctimeNs: 202n,
+    };
     rigSelfTestAssert(
       sameOrdinaryFileIdentity(identityState, { ...identityState }) &&
+        sameCoreFileIdentity(identityState, { ...identityState, ctimeNs: 202n, nlink: 2n }) &&
+        samePublishedFileAcrossWriterClose(
+          windowsIdentityState,
+          { ...windowsIdentityState, mtimeNs: 201n },
+          "win32",
+        ) &&
+        samePublishedFileAcrossWriterClose(
+          windowsIdentityState,
+          { ...windowsIdentityState, ctimeNs: 202n },
+          "win32",
+        ) &&
+        samePublishedFileAcrossWriterClose(
+          windowsIdentityState,
+          windowsWriterClosedState,
+          "win32",
+        ) &&
+        sameOrdinaryFileIdentity(
+          windowsWriterClosedState,
+          { ...windowsWriterClosedState },
+        ) &&
         hasPlatformPrivateMarkerMetadata(identityState, "darwin", 501n) &&
         hasPlatformPrivateMarkerMetadata(windowsIdentityState, "win32", null),
       "cross-platform exact marker metadata was rejected",
@@ -2372,6 +2429,70 @@ async function runAppShareFilesystemSelfTests() {
         !sameOrdinaryFileIdentity(identityState, { ...identityState, ctimeNs: 103n }) &&
         !sameOrdinaryFileIdentity(identityState, { ...identityState, nlink: 2n }) &&
         !sameOrdinaryFileIdentity(identityState, { ...identityState, ino: Number(23n) }) &&
+        !sameCoreFileIdentity(identityState, { ...identityState, mtimeNs: 201n }) &&
+        !sameOrdinaryFileIdentity(
+          windowsWriterClosedState,
+          { ...windowsWriterClosedState, mtimeNs: 203n },
+        ) &&
+        !sameOrdinaryFileIdentity(
+          windowsWriterClosedState,
+          { ...windowsWriterClosedState, ctimeNs: 203n },
+        ) &&
+        !samePublishedFileAcrossWriterClose(
+          windowsIdentityState,
+          { ...windowsWriterClosedState, ino: 24n },
+          "win32",
+        ) &&
+        !samePublishedFileAcrossWriterClose(
+          windowsIdentityState,
+          { ...windowsWriterClosedState, dev: 18n },
+          "win32",
+        ) &&
+        !samePublishedFileAcrossWriterClose(
+          windowsIdentityState,
+          { ...windowsWriterClosedState, size: 42n },
+          "win32",
+        ) &&
+        !samePublishedFileAcrossWriterClose(
+          windowsIdentityState,
+          { ...windowsWriterClosedState, mode: 0o100444n },
+          "win32",
+        ) &&
+        !samePublishedFileAcrossWriterClose(
+          windowsIdentityState,
+          { ...windowsWriterClosedState, uid: 1n },
+          "win32",
+        ) &&
+        !samePublishedFileAcrossWriterClose(
+          windowsIdentityState,
+          { ...windowsWriterClosedState, gid: 1n },
+          "win32",
+        ) &&
+        !samePublishedFileAcrossWriterClose(
+          windowsIdentityState,
+          { ...windowsWriterClosedState, nlink: 2n },
+          "win32",
+        ) &&
+        !samePublishedFileAcrossWriterClose(
+          windowsIdentityState,
+          { ...windowsWriterClosedState, birthtimeNs: 99n },
+          "win32",
+        ) &&
+        !samePublishedFileAcrossWriterClose(
+          identityState,
+          { ...identityState, mtimeNs: 201n },
+          "darwin",
+        ) &&
+        !samePublishedFileAcrossWriterClose(
+          identityState,
+          { ...identityState, ctimeNs: 202n },
+          "darwin",
+        ) &&
+        !samePublishedFileAcrossWriterClose(
+          identityState,
+          { ...identityState, mtimeNs: 201n, ctimeNs: 202n },
+          "darwin",
+        ) &&
         !hasPlatformPrivateMarkerMetadata(
           { ...windowsIdentityState, mode: 0o100600n },
           "win32",
