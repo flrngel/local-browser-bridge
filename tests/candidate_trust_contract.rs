@@ -225,8 +225,12 @@ fn all_candidate_consumers_select_one_exact_attempt_from_valid_same_run_attestat
         "both Windows trust gates must execute the same attestation selector"
     );
     for required in [
+        "$Attestations.Count -eq 1 -and\n      $Attestations[0] -is [Array]",
+        "$Attestations = [object[]]$Attestations[0]",
         "$ExpectedInvocationUri.StartsWith($SameRunInvocationPrefix, [StringComparison]::Ordinal)",
         "$EntryInvocation.StartsWith($SameRunInvocationPrefix, [StringComparison]::Ordinal)",
+        "$Attestation -is [Array]",
+        "$Statement.subject -isnot [Array]",
         "$EntryAttemptSuffix -cnotmatch '^[1-9][0-9]*$'",
         "$EntryInvocation -cne $CertificateInvocation",
         "$MatchingSubjects.Count -ne 1",
@@ -244,12 +248,17 @@ fn all_candidate_consumers_select_one_exact_attempt_from_valid_same_run_attestat
             "duplicate-current",
             "malformed-current",
             "wrong-current-subject",
+            "scalar-current-subject",
+            "malformed-current-subject",
+            "nested-attestation-array",
         ] {
             assert!(
                 source.contains(case),
                 "PowerShell attestation self-test is missing `{case}`"
             );
         }
+        assert!(source.contains("$Ps51WrappedRoundTrip = New-Object object[] 1"));
+        assert!(source.contains("$Ps51WrappedRoundTrip[0] = [object[]]@($Old, $Current)"));
         assert!(source.contains("Invoke-AttestationSelectionSelfTest"));
     }
 }

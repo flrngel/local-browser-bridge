@@ -660,6 +660,14 @@ function Assert-ExactAttemptAttestationSet(
   [string]$SubjectName,
   [string]$SubjectSha256
 ) {
+  # Windows PowerShell 5.1 emits a top-level JSON array as one non-enumerated
+  # Object[]; @(... | ConvertFrom-Json) consequently adds one wrapper layer.
+  # Remove exactly that compatibility wrapper while retaining strict nested
+  # array validation below.
+  if ($null -ne $Attestations -and $Attestations.Count -eq 1 -and
+      $Attestations[0] -is [Array]) {
+    $Attestations = [object[]]$Attestations[0]
+  }
   $SameRunInvocationPrefix = "https://github.com/$Repository/actions/runs/$WorkflowRunId/attempts/"
   $ExpectedAttemptSuffix = $(if ($null -ne $ExpectedInvocationUri -and
       $ExpectedInvocationUri.StartsWith($SameRunInvocationPrefix, [StringComparison]::Ordinal)) {
@@ -678,7 +686,8 @@ function Assert-ExactAttemptAttestationSet(
     $EntryIsValid = $false
     $EntryInvocation = $null
     try {
-      if ($null -eq $Attestation -or $Attestation -is [string] -or
+      if ($null -eq $Attestation -or $Attestation -is [Array] -or
+          $Attestation -is [string] -or
           $Attestation -is [ValueType]) {
         throw "Attestation entry is not an object."
       }
@@ -817,17 +826,44 @@ function Invoke-AttestationSelectionSelfTest {
     Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $Serialized
   )
   Assert-ExactAttemptAttestationSet -Attestations $RoundTripped @Arguments
+  $Ps51WrappedRoundTrip = New-Object object[] 1
+  $Ps51WrappedRoundTrip[0] = [object[]]@($Old, $Current)
+  Assert-ExactAttemptAttestationSet -Attestations $Ps51WrappedRoundTrip @Arguments
+  $NestedWrappedRoundTrip = New-Object object[] 1
+  $NestedWrappedRoundTrip[0] = $Ps51WrappedRoundTrip
+  $NestedWrapperRejected = $false
+  try {
+    Assert-ExactAttemptAttestationSet -Attestations $NestedWrappedRoundTrip @Arguments
+  }
+  catch { $NestedWrapperRejected = $true }
+  if (-not $NestedWrapperRejected) {
+    throw "Attestation selection self-test accepted nested-attestation-array."
+  }
 
   $MalformedCurrent = New-AttestationSelectionSelfTestEntry `
     $CurrentInvocation $TestRepository $TestWorkflow $TestTagRef $TestSource $TestSubject $TestSubjectSha
   $MalformedCurrent.verificationResult.signature = [pscustomobject]@{}
   $WrongSubjectCurrent = New-AttestationSelectionSelfTestEntry `
     $CurrentInvocation $TestRepository $TestWorkflow $TestTagRef $TestSource "wrong.bin" $TestSubjectSha
+  $ScalarSubjectCurrent = New-AttestationSelectionSelfTestEntry `
+    $CurrentInvocation $TestRepository $TestWorkflow $TestTagRef $TestSource $TestSubject $TestSubjectSha
+  $ScalarSubjectCurrent.verificationResult.statement.subject = [pscustomobject]@{
+    name = $TestSubject
+    digest = [pscustomobject]@{ sha256 = $TestSubjectSha }
+  }
+  $MalformedSubjectCurrent = New-AttestationSelectionSelfTestEntry `
+    $CurrentInvocation $TestRepository $TestWorkflow $TestTagRef $TestSource $TestSubject $TestSubjectSha
+  $MalformedSubjectCurrent.verificationResult.statement.subject = @([pscustomobject]@{
+    name = $TestSubject
+    digest = [pscustomobject]@{ sha256 = "not-a-sha256" }
+  })
   foreach ($RejectedCase in @(
     [pscustomobject]@{ Label = "old-only"; Entries = @($Old) },
     [pscustomobject]@{ Label = "duplicate-current"; Entries = @($Current, $Current) },
     [pscustomobject]@{ Label = "malformed-current"; Entries = @($Old, $MalformedCurrent) },
-    [pscustomobject]@{ Label = "wrong-current-subject"; Entries = @($Old, $WrongSubjectCurrent) }
+    [pscustomobject]@{ Label = "wrong-current-subject"; Entries = @($Old, $WrongSubjectCurrent) },
+    [pscustomobject]@{ Label = "scalar-current-subject"; Entries = @($Old, $ScalarSubjectCurrent) },
+    [pscustomobject]@{ Label = "malformed-current-subject"; Entries = @($Old, $MalformedSubjectCurrent) }
   )) {
     $Rejected = $false
     try {
