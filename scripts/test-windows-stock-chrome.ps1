@@ -306,7 +306,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$Version = "0.12.13"
+$Version = "0.12.14"
 $CanonicalExtensionEntries = @(
   "background.js", "content.js", "dom-core.js", "frame-agent.js", "lib.js",
   "manifest.json", "popup.css", "popup.html", "popup.js", "stop-guard.js", "LICENSE"
@@ -319,7 +319,7 @@ $Origin = "https://github.com/flrngel/local-browser-bridge.git"
 $ExpectedInvocationUri = "https://github.com/flrngel/local-browser-bridge/actions/runs/$WorkflowRunId/attempts/$WorkflowRunAttempt"
 
 if (-not $SelfTestRequested) {
-  if ($Version -cne "0.12.13" -or $FinalSha -cnotmatch '^[0-9a-f]{40}$' -or
+  if ($Version -cne "0.12.14" -or $FinalSha -cnotmatch '^[0-9a-f]{40}$' -or
       $TagObjectSha -cnotmatch '^[0-9a-f]{40}$' -or
       $WorkflowRunId -cnotmatch '^[1-9][0-9]*$' -or
       $WorkflowRunAttempt -cnotmatch '^[1-9][0-9]*$' -or
@@ -1192,7 +1192,7 @@ $TrustedRelativeFiles = @(
   "scripts/test-windows-browser-api.ps1",
   "scripts/record-computer-helper-chain.ps1",
   "scripts/sanitize-browser-evidence-screenshot.ps1",
-  "evidence/v0.12.13/browser/operator-results.template.json"
+  "evidence/v0.12.14/browser/operator-results.template.json"
 )
 function Export-ExactTrustedBlob([string]$ObjectId, [string]$Relative) {
   if ($ObjectId -cnotmatch '^[0-9a-f]{40}$' -or $TrustedRelativeFiles -cnotcontains $Relative) {

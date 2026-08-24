@@ -22,8 +22,8 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { deflateSync, inflateSync } from "node:zlib";
 
-const PRODUCT_VERSION = "0.12.13";
-const RESULT_SCHEMA_VERSION = 5;
+const PRODUCT_VERSION = "0.12.14";
+const RESULT_SCHEMA_VERSION = 6;
 const AGGREGATE_SCHEMA_VERSION = 1;
 const OUTPUT_FILE = "macos-acceptance.json";
 const MAX_FRESH_AGE_MS = 12 * 60 * 60 * 1_000;
@@ -35,6 +35,10 @@ const MAX_MARKER_BYTES = 16 * 1024;
 const MAX_SCREENSHOT_BYTES = 64 * 1024 * 1024;
 const MAX_MOTION_SPAN_MS = 300_000;
 const MAX_REQUEST_TO_COMPLETE_MS = 310_000;
+const QUIET_SEAT_REQUIRED_STABLE_MS = 30_000;
+const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;
+const QUIET_SEAT_SAMPLE_INTERVAL_MS = 500;
+const QUIET_SEAT_REQUIRED_STABLE_TRANSITIONS = 60;
 const MAX_LANE_DURATION_MS = 2 * 60 * 60 * 1_000;
 const MAX_DELIBERATE_REVIEW_DELAY_MS = 30 * 60 * 1_000;
 const MAX_PID = 2_147_483_647;
@@ -80,6 +84,7 @@ const RESULT_FIELDS = [
   "releaseCandidateBinding",
   "harnessSourceBinding",
   "capabilityBinding",
+  "quietSeatStabilization",
   "pointerEvidence",
   "operatorHandoff",
   "environment",
@@ -184,6 +189,21 @@ const HANDOFF_FIELDS = [
   "markerAcceptedAsAuthority",
   "externalAcknowledgementConsumed",
   "rawPromptIdentityRetainedInResult",
+  "rawPointerDataRetained",
+];
+const QUIET_SEAT_FIELDS = [
+  "required",
+  "completed",
+  "requiredStableMilliseconds",
+  "maximumWaitMilliseconds",
+  "sampleIntervalMilliseconds",
+  "requiredStableTransitions",
+  "stableDurationMilliseconds",
+  "observedSamples",
+  "stableTransitions",
+  "resetCount",
+  "monitoringUnknown",
+  "completedBeforeCandidateExecution",
   "rawPointerDataRetained",
 ];
 const REQUEST_MARKER_FIELDS = [
@@ -825,6 +845,63 @@ function validateOperatorHandoff(value, lane, label) {
   }
 }
 
+function validateQuietSeatStabilization(value, lane, label) {
+  exactKeys(value, QUIET_SEAT_FIELDS, label);
+  const required = lane === "quiet" || lane === "deliberate-concurrency";
+  exactBoolean(value.required, required, `${label} required`);
+  exactInteger(
+    value.requiredStableMilliseconds,
+    QUIET_SEAT_REQUIRED_STABLE_MS,
+    QUIET_SEAT_REQUIRED_STABLE_MS,
+    `${label} requiredStableMilliseconds`,
+  );
+  exactInteger(
+    value.maximumWaitMilliseconds,
+    QUIET_SEAT_MAXIMUM_WAIT_MS,
+    QUIET_SEAT_MAXIMUM_WAIT_MS,
+    `${label} maximumWaitMilliseconds`,
+  );
+  exactInteger(
+    value.sampleIntervalMilliseconds,
+    QUIET_SEAT_SAMPLE_INTERVAL_MS,
+    QUIET_SEAT_SAMPLE_INTERVAL_MS,
+    `${label} sampleIntervalMilliseconds`,
+  );
+  exactInteger(
+    value.requiredStableTransitions,
+    QUIET_SEAT_REQUIRED_STABLE_TRANSITIONS,
+    QUIET_SEAT_REQUIRED_STABLE_TRANSITIONS,
+    `${label} requiredStableTransitions`,
+  );
+  exactBoolean(value.completed, required, `${label} completed`);
+  exactInteger(
+    value.stableDurationMilliseconds,
+    required ? QUIET_SEAT_REQUIRED_STABLE_MS : 0,
+    required ? QUIET_SEAT_MAXIMUM_WAIT_MS : 0,
+    `${label} stableDurationMilliseconds`,
+  );
+  exactInteger(
+    value.observedSamples,
+    required ? QUIET_SEAT_REQUIRED_STABLE_TRANSITIONS + 1 : 0,
+    required ? 1_000_000 : 0,
+    `${label} observedSamples`,
+  );
+  exactInteger(
+    value.stableTransitions,
+    required ? QUIET_SEAT_REQUIRED_STABLE_TRANSITIONS : 0,
+    required ? 1_000_000 : 0,
+    `${label} stableTransitions`,
+  );
+  exactInteger(value.resetCount, 0, required ? 1_000_000 : 0, `${label} resetCount`);
+  exactBoolean(value.monitoringUnknown, false, `${label} monitoringUnknown`);
+  exactBoolean(
+    value.completedBeforeCandidateExecution,
+    required,
+    `${label} completedBeforeCandidateExecution`,
+  );
+  exactBoolean(value.rawPointerDataRetained, false, `${label} rawPointerDataRetained`);
+}
+
 function validateAssertions(value, label) {
   exactKeys(value, ["passed", "failed", "total", "details"], label);
   const passed = exactInteger(value.passed, 1, 1_000_000, `${label} passed`);
@@ -874,6 +951,11 @@ function validateResultEnvelope(result, lane, resultMtimeMs, now, label) {
   }
   validatePointerEvidence(result.pointerEvidence, lane, `${label} pointerEvidence`);
   validateOperatorHandoff(result.operatorHandoff, lane, `${label} operatorHandoff`);
+  validateQuietSeatStabilization(
+    result.quietSeatStabilization,
+    lane,
+    `${label} quietSeatStabilization`,
+  );
   return {
     startedAt: result.startedAt,
     capturedAt: result.capturedAt,
@@ -1422,6 +1504,25 @@ function selfTestPointer(lane) {
   };
 }
 
+function selfTestQuietSeatStabilization(lane) {
+  const required = lane === "quiet" || lane === "deliberate-concurrency";
+  return {
+    required,
+    completed: required,
+    requiredStableMilliseconds: QUIET_SEAT_REQUIRED_STABLE_MS,
+    maximumWaitMilliseconds: QUIET_SEAT_MAXIMUM_WAIT_MS,
+    sampleIntervalMilliseconds: QUIET_SEAT_SAMPLE_INTERVAL_MS,
+    requiredStableTransitions: QUIET_SEAT_REQUIRED_STABLE_TRANSITIONS,
+    stableDurationMilliseconds: required ? QUIET_SEAT_REQUIRED_STABLE_MS : 0,
+    observedSamples: required ? QUIET_SEAT_REQUIRED_STABLE_TRANSITIONS + 1 : 0,
+    stableTransitions: required ? QUIET_SEAT_REQUIRED_STABLE_TRANSITIONS : 0,
+    resetCount: 0,
+    monitoringUnknown: false,
+    completedBeforeCandidateExecution: required,
+    rawPointerDataRetained: false,
+  };
+}
+
 async function createSelfTestLane(parent, name, lane, mutate = null) {
   const lanePath = join(parent, name);
   await mkdir(lanePath, { mode: 0o700 });
@@ -1462,6 +1563,7 @@ async function createSelfTestLane(parent, name, lane, mutate = null) {
       inputDeliveryProvenanceV1: true,
       pointerActivityMonitorV1: true,
     },
+    quietSeatStabilization: selfTestQuietSeatStabilization(lane),
     pointerEvidence: pointer.pointerEvidence,
     operatorHandoff: pointer.operatorHandoff,
     environment: { selfTest: true },
@@ -1642,6 +1744,53 @@ async function runSelfTest() {
     await expectSelfTestFailure(
       () => finalize(laneMismatchQuiet, laneMismatchDeliberate, laneMismatchOutput),
       "fixture evidenceLane",
+    );
+
+    const shortGateQuiet = await createSelfTestLane(
+      root,
+      "short-gate-quiet",
+      "quiet",
+      (result) => { result.quietSeatStabilization.stableDurationMilliseconds = 29_999; },
+    );
+    const shortGateDeliberate = await createSelfTestLane(
+      root,
+      "short-gate-deliberate",
+      "deliberate-concurrency",
+    );
+    const shortGateOutput = await freshSelfTestOutput(root, "short-gate-output");
+    await expectSelfTestFailure(
+      () => finalize(shortGateQuiet, shortGateDeliberate, shortGateOutput),
+      "quietSeatStabilization stableDurationMilliseconds",
+    );
+
+    const unknownGateQuiet = await createSelfTestLane(root, "unknown-gate-quiet", "quiet");
+    const unknownGateDeliberate = await createSelfTestLane(
+      root,
+      "unknown-gate-deliberate",
+      "deliberate-concurrency",
+      (result) => { result.quietSeatStabilization.monitoringUnknown = true; },
+    );
+    const unknownGateOutput = await freshSelfTestOutput(root, "unknown-gate-output");
+    await expectSelfTestFailure(
+      () => finalize(unknownGateQuiet, unknownGateDeliberate, unknownGateOutput),
+      "quietSeatStabilization monitoringUnknown",
+    );
+
+    const missingGateQuiet = await createSelfTestLane(
+      root,
+      "missing-gate-quiet",
+      "quiet",
+      (result) => { delete result.quietSeatStabilization; },
+    );
+    const missingGateDeliberate = await createSelfTestLane(
+      root,
+      "missing-gate-deliberate",
+      "deliberate-concurrency",
+    );
+    const missingGateOutput = await freshSelfTestOutput(root, "missing-gate-output");
+    await expectSelfTestFailure(
+      () => finalize(missingGateQuiet, missingGateDeliberate, missingGateOutput),
+      "fields are not in exact canonical order",
     );
 
     const overlapQuiet = await createSelfTestLane(root, "overlap-quiet", "quiet");

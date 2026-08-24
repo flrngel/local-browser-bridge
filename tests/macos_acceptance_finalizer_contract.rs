@@ -6,7 +6,7 @@ fn finalizer_source() -> String {
 }
 
 #[test]
-fn macos_v0_12_13_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
+fn macos_v0_12_14_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
     let source = finalizer_source().replace("\r\n", "\n");
 
     for import in source.lines().filter(|line| line.contains(" from \"")) {
@@ -22,13 +22,17 @@ fn macos_v0_12_13_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
     }
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.13\";",
-        "const RESULT_SCHEMA_VERSION = 5;",
+        "const PRODUCT_VERSION = \"0.12.14\";",
+        "const RESULT_SCHEMA_VERSION = 6;",
         "const AGGREGATE_SCHEMA_VERSION = 1;",
         "const OUTPUT_FILE = \"macos-acceptance.json\";",
         "const MAX_FRESH_AGE_MS = 12 * 60 * 60 * 1_000;",
         "const MAX_LANE_DURATION_MS = 2 * 60 * 60 * 1_000;",
         "const MAX_DELIBERATE_REVIEW_DELAY_MS = 30 * 60 * 1_000;",
+        "const QUIET_SEAT_REQUIRED_STABLE_MS = 30_000;",
+        "const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;",
+        "const QUIET_SEAT_SAMPLE_INTERVAL_MS = 500;",
+        "const QUIET_SEAT_REQUIRED_STABLE_TRANSITIONS = 60;",
         "const IS_WINDOWS = process.platform === \"win32\";",
         "const POSIX_PERMISSION_METADATA_AVAILABLE = !IS_WINDOWS && typeof process.getuid === \"function\";",
         "const SCREENSHOT_FILES = [",
@@ -50,6 +54,9 @@ fn macos_v0_12_13_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
         "POSIX_PERMISSION_METADATA_AVAILABLE && (stats.mode & 0o077n) !== 0n",
         "POSIX_PERMISSION_METADATA_AVAILABLE && (entry.mode & 0o077n) !== 0n",
         "validateFreshTimestamp",
+        "validateQuietSeatStabilization",
+        "completedBeforeCandidateExecution",
+        "monitoringUnknown",
         "walkLane",
         "exactArray(inventory.files, expectedFiles",
         "exactArray(inventory.directories, expectedDirectories",
@@ -120,7 +127,7 @@ fn macos_v0_12_13_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
 }
 
 #[test]
-fn macos_v0_12_13_dual_lane_finalizer_enforces_lane_and_screenshot_invariants() {
+fn macos_v0_12_14_dual_lane_finalizer_enforces_lane_and_screenshot_invariants() {
     let source = finalizer_source().replace("\r\n", "\n");
     for required in [
         "exactString(value.requestedLane, lane",
@@ -196,7 +203,7 @@ fn macos_v0_12_13_dual_lane_finalizer_enforces_lane_and_screenshot_invariants() 
 }
 
 #[test]
-fn macos_v0_12_13_dual_lane_finalizer_self_test_passes() {
+fn macos_v0_12_14_dual_lane_finalizer_self_test_passes() {
     let syntax = Command::new("node")
         .args(["--check", "scripts/finalize-macos-acceptance.mjs"])
         .output()

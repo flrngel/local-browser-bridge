@@ -48,7 +48,9 @@ See [Capabilities](docs/CAPABILITIES.md) for the exact platform matrix and [Limi
 
 Download one version-matched set from [GitHub Releases](https://github.com/flrngel/local-browser-bridge/releases/latest):
 
-> Version 0.12.13 is the current source and release target. It is not published until its two macOS lanes, Windows, stock-Chrome, evidence-commit, and immutable-release gates all pass. Version 0.12.12 was withdrawn after three macOS deliberate-concurrency attempts stopped before product dispatch; Windows and stock-Chrome did not complete. It never became a Release. Install only one version-matched set from an actual published Release.
+> Version 0.12.14 is the current source and release target. It is not published until its two macOS lanes, Windows, stock-Chrome, evidence-commit, and immutable-release gates all pass. Version 0.12.13 was withdrawn after its quiet macOS lane passed 192 of 193 assertions but the unchanged whole-run boundary detected unrelated shared-seat pointer activity; deliberate macOS, Windows, and stock-Chrome never started, publication was canceled, and it never became a Release. Version 0.12.14 adds a 30-second native quiet-seat gate before candidate execution in both macOS lanes without weakening later action or whole-run checks. Install only one version-matched set from an actual published Release.
+
+The v0.12.13 negative record is retained only on branch `evidence/v0.12.13-macos-quiet-pointer-contamination-32695400912` at commit `bdcc3620e28260e31a3a78bf7e584adf1f0db44e`, under `evidence/v0.12.13/computer/attempts/withdrawn-7d2692d-macos-quiet-pointer-contamination/`; it is historical evidence, not v0.12.14 input.
 
 - the server for your platform;
 - `local-browser-bridge-extension-vVERSION.zip`; and

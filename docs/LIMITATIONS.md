@@ -157,10 +157,23 @@ pointer input; and one `ACTION` transition contained input plus foreground/focus
 contamination. Those failures remain valid negative evidence, not proof of a
 helper action.
 
-Version 0.12.13 keeps sealed route provenance plus conservative shared-pointer
-monitoring and adds a persistent runner-owned, nonactivating macOS handoff
-panel. Its request and completion files are notification-only and are never
-acceptance authority. The actual gate still requires sustained independent HID
+Version 0.12.13 was withdrawn after its quiet macOS lane completed 192 of 193
+assertions. All product/fixture cells passed, but the unchanged final whole-run
+boundary observed unrelated shared-seat `mouseMoved`/cursor activity. That is
+valid contamination evidence, not helper attribution. The deliberate lane,
+Windows, and stock-Chrome were not started and publication was canceled.
+
+Version 0.12.14 keeps sealed route provenance plus conservative shared-pointer
+monitoring. Before either lane invokes a candidate executable, fixture, server,
+or helper, a native SystemProbe gate requires 30 continuous quiet seconds and
+at least 60 stable transitions sampled every 500 ms. Pointer, cursor,
+foreground, AX-focus/front-window, or active-Space activity resets the complete
+epoch under one immutable 30-minute deadline; unknown or unhealthy monitoring
+fails immediately. This reduces ambient pre-run contamination but cannot
+reserve the shared login seat, so every later per-action and whole-run boundary
+remains unchanged and mandatory. The persistent runner-owned, nonactivating
+macOS handoff panel's request and completion files are notification-only and
+are never acceptance authority. The deliberate action gate still requires sustained independent HID
 `mouseMoved` counter advances with button, drag, scroll, and tablet counters
 stable, a fresh immediately-pre-action baseline, and the same click-free motion
 plus contamination at both the product and independent post-action boundaries.
