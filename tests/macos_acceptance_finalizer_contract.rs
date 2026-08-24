@@ -6,19 +6,19 @@ fn finalizer_source() -> String {
 }
 
 #[test]
-fn macos_v0_12_24_result_and_aggregate_schemas_are_aligned_end_to_end() {
+fn macos_v0_12_25_result_and_aggregate_schemas_are_aligned_end_to_end() {
     let finalizer = finalizer_source().replace("\r\n", "\n");
-    let producer = fs::read_to_string("evidence/v0.12.24/computer/helper-evidence-rig.mjs")
+    let producer = fs::read_to_string("evidence/v0.12.25/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let documentation = fs::read_to_string("evidence/v0.12.24/computer/README.md")
+    let documentation = fs::read_to_string("evidence/v0.12.25/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let verifier = fs::read_to_string("scripts/verify-release-acceptance-evidence.sh")
         .unwrap()
         .replace("\r\n", "\n");
 
-    assert!(finalizer.contains("const PRODUCT_VERSION = \"0.12.24\";"));
+    assert!(finalizer.contains("const PRODUCT_VERSION = \"0.12.25\";"));
     assert!(finalizer.contains("const RESULT_SCHEMA_VERSION = 8;"));
     assert!(finalizer.contains("const AGGREGATE_SCHEMA_VERSION = 2;"));
     assert!(producer.matches("schemaVersion: 8,").count() >= 2);
@@ -48,13 +48,13 @@ fn macos_v0_12_24_result_and_aggregate_schemas_are_aligned_end_to_end() {
     ] {
         assert!(
             verifier.contains(required),
-            "release evidence verifier is missing the v0.12.24 schema binding: {required}"
+            "release evidence verifier is missing the v0.12.25 schema binding: {required}"
         );
     }
 }
 
 #[test]
-fn macos_v0_12_24_release_verifier_recomputes_every_tagged_harness_hash() {
+fn macos_v0_12_25_release_verifier_recomputes_every_tagged_harness_hash() {
     let verifier = fs::read_to_string("scripts/verify-release-acceptance-evidence.sh")
         .unwrap()
         .replace("\r\n", "\n");
@@ -112,7 +112,7 @@ fn macos_v0_12_24_release_verifier_recomputes_every_tagged_harness_hash() {
 }
 
 #[test]
-fn macos_v0_12_24_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
+fn macos_v0_12_25_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
     let source = finalizer_source().replace("\r\n", "\n");
 
     for import in source.lines().filter(|line| line.contains(" from \"")) {
@@ -128,7 +128,7 @@ fn macos_v0_12_24_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
     }
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.24\";",
+        "const PRODUCT_VERSION = \"0.12.25\";",
         "const RESULT_SCHEMA_VERSION = 8;",
         "const AGGREGATE_SCHEMA_VERSION = 2;",
         "const APP_SHARE_MARKER_SCHEMA_VERSION = 2;",
@@ -246,7 +246,7 @@ fn macos_v0_12_24_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
 }
 
 #[test]
-fn macos_v0_12_24_finalizer_enforces_exact_app_share_and_quiet_pointer_invariants() {
+fn macos_v0_12_25_finalizer_enforces_exact_app_share_and_quiet_pointer_invariants() {
     let source = finalizer_source().replace("\r\n", "\n");
     for required in [
         "exactString(value.requestedLane, lane",
@@ -361,7 +361,7 @@ fn macos_v0_12_24_finalizer_enforces_exact_app_share_and_quiet_pointer_invariant
 }
 
 #[test]
-fn macos_v0_12_24_dual_lane_finalizer_self_test_passes() {
+fn macos_v0_12_25_dual_lane_finalizer_self_test_passes() {
     let syntax = Command::new("node")
         .args(["--check", "scripts/finalize-macos-acceptance.mjs"])
         .output()

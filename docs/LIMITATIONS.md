@@ -167,7 +167,7 @@ Version 0.12.20 passed its quiet macOS lane but timed out before product dispatc
 in its then-mandatory physical-pointer lane. Its Windows run separately timed out
 because the action surface could not be found under a state-mutating title.
 Both outcomes are preserved as negative evidence; Chrome never started and no
-Release was published. That pointer lane is historical in v0.12.24; its tools
+Release was published. That pointer lane has been historical since v0.12.24; its tools
 remain optional adversarial coverage and cannot satisfy publication.
 
 The exact v0.12.22 quiet run later returned a Confirmed semantic action with a
@@ -186,7 +186,12 @@ correctly returned HTTP 409 `COMPUTER_STALE_FRAME` before dispatch; no completio
 receipt, Windows, Chrome, publication, or Release followed. The exact negative
 record is retained on the immutable [v0.12.23 evidence commit](https://github.com/flrngel/local-browser-bridge/tree/4e4db75a4ede915d982d139a82dacac8a6c4772a/evidence/v0.12.23/computer/attempts/withdrawn-9e50811-macos-app-share-stale-frame).
 
-Version 0.12.24 retains sealed route provenance, the v0.12.23 classifier
+Version 0.12.24 added the bounded post-`ACTION` frame refresh, then its exact
+Windows read-only handoff watcher failed before operator action because a
+closure-created PowerShell 5.1 dynamic module could not resolve the atomic
+marker reader. Chrome and publication did not follow.
+
+Version 0.12.25 retains sealed route provenance, the v0.12.23 classifier
 separation, and conservative shared-pointer monitoring. After the app-share
 `ACTION` receipt it must obtain a strictly newer frame from the same share,
 target, and geometry within the reserved deadline before deriving click

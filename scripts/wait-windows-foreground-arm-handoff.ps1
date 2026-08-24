@@ -32,7 +32,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$script:ProductVersion = "0.12.24"
+$script:ProductVersion = "0.12.25"
 $script:ForegroundSentinelWindowTitle = "LBB Foreground Sentinel"
 $script:MarkerSchemaVersion = 2
 $script:MaximumMarkerBytes = 16384
@@ -477,6 +477,7 @@ function Wait-ForegroundArmHandoff {
         [DateTimeOffset]$ExpectedRunnerStart,
         [scriptblock]$RunnerStateReader,
         [scriptblock]$MarkerReader,
+        [object[]]$MarkerReaderArguments = @(),
         [scriptblock]$ClockReader,
         [scriptblock]$Sleeper,
         [int]$TimeoutMilliseconds,
@@ -490,7 +491,7 @@ function Wait-ForegroundArmHandoff {
         do {
             $beforeRunner = & $RunnerStateReader $ExpectedRunnerProcessId
             Assert-BoundRunnerState $beforeRunner $ExpectedRunnerStart
-            $atomicMarker = & $MarkerReader
+            $atomicMarker = & $MarkerReader @MarkerReaderArguments
             if ($null -ne $atomicMarker) {
                 $now = ConvertTo-UtcTimestamp (& $ClockReader) "clock reader"
                 $published = Assert-FreshMarkerBinding `
@@ -520,7 +521,7 @@ function New-SelfTestMarker {
     $actionRequired = $Status -ceq "action-required"
     $record = [ordered]@{
         schemaVersion = 2
-        productVersion = "0.12.24"
+        productVersion = "0.12.25"
         kind = "foreground-arm"
         status = $Status
         requestId = "0123456789abcdef0123456789abcdef"
@@ -622,6 +623,26 @@ function Invoke-SelfTest {
     Assert-Condition ($singleEmission.Count -eq 1 -and
         $singleEmission[0].IndexOf("`n", [StringComparison]::Ordinal) -lt 0 -and
         $singleEmission[0].IndexOf("`r", [StringComparison]::Ordinal) -lt 0) "The watcher did not produce one sanitized JSON emission."
+
+    # Exercise the exact live callback shape without writing any evidence.
+    # GetNewClosure() is deliberately absent: under Windows PowerShell 5.1 it
+    # creates a dynamic module that cannot resolve this script's reader
+    # function. Explicit callback arguments preserve script-scope function
+    # resolution without moving either bound path into global state.
+    $liveStyleRoot = [IO.Path]::Combine(
+        [IO.Path]::GetTempPath(),
+        "lbb-foreground-arm-watcher-self-test-$([Guid]::NewGuid().ToString('N'))"
+    )
+    $liveStyleOperatorDirectory = [IO.Path]::Combine($liveStyleRoot, "operator")
+    $liveStyleMarkerPath = [IO.Path]::Combine($liveStyleOperatorDirectory, "foreground-arm-request.json")
+    Assert-Condition (-not [IO.Directory]::Exists($liveStyleRoot)) "The live-style self-test path unexpectedly exists."
+    $liveStyleMarkerReader = {
+        param([string]$boundMarkerPath, [string]$boundOperatorDirectory)
+        return Read-AtomicRequestMarker $boundMarkerPath $boundOperatorDirectory
+    }
+    $liveStyleMissingMarker = & $liveStyleMarkerReader $liveStyleMarkerPath $liveStyleOperatorDirectory
+    Assert-Condition ($null -eq $liveStyleMissingMarker -and
+        -not [IO.Directory]::Exists($liveStyleRoot)) "The zero-write live-style marker callback failed its self-test."
 
     $alreadyAtomic = New-SelfTestMarker $now.AddSeconds(-1) "already-armed" 300
     $alreadyResult = Wait-ForegroundArmHandoff `
@@ -730,7 +751,10 @@ $expectedRunnerStart = ConvertFrom-CanonicalUtcTimestamp $RunnerStartedAtUtc "Ru
 $operatorDirectory = [IO.Path]::Combine($resolvedEvidenceDirectory, "operator")
 $markerPath = [IO.Path]::Combine($operatorDirectory, "foreground-arm-request.json")
 $runnerReader = { param($processId) return Get-RunnerState $processId }
-$markerReader = { return Read-AtomicRequestMarker $markerPath $operatorDirectory }.GetNewClosure()
+$markerReader = {
+    param([string]$boundMarkerPath, [string]$boundOperatorDirectory)
+    return Read-AtomicRequestMarker $boundMarkerPath $boundOperatorDirectory
+}
 $clockReader = { return [DateTimeOffset]::UtcNow }
 $sleeper = { param($milliseconds) Start-Sleep -Milliseconds $milliseconds }
 
@@ -739,6 +763,7 @@ $handoff = Wait-ForegroundArmHandoff `
     -ExpectedRunnerStart $expectedRunnerStart `
     -RunnerStateReader $runnerReader `
     -MarkerReader $markerReader `
+    -MarkerReaderArguments @($markerPath, $operatorDirectory) `
     -ClockReader $clockReader `
     -Sleeper $sleeper `
     -TimeoutMilliseconds ($WaitTimeoutSeconds * 1000) `

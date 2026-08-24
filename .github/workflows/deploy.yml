@@ -170,6 +170,26 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 stock-Chrome coordinator self-test failed." }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/wait-windows-foreground-arm-handoff.ps1 -Mode SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 foreground-arm handoff self-test failed." }
+          $watcherPathForPs51 = (Resolve-Path ./scripts/wait-windows-foreground-arm-handoff.ps1).Path
+          $previousWatcherPathForPs51 = $env:LBB_PS51_WATCHER_SELF_TEST
+          $watcherCallOperatorCommand = '$ErrorActionPreference = "Stop"; $watcherScript = [ScriptBlock]::Create([IO.File]::ReadAllText([IO.Path]::GetFullPath($env:LBB_PS51_WATCHER_SELF_TEST))); & $watcherScript -Mode SelfTest'
+          try {
+            $env:LBB_PS51_WATCHER_SELF_TEST = $watcherPathForPs51
+            $watcherCallOperatorOutput = @(& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -Command $watcherCallOperatorCommand)
+            if ($LASTEXITCODE -ne 0 -or
+                $watcherCallOperatorOutput.Count -ne 1 -or
+                $watcherCallOperatorOutput[0] -cne "Windows foreground-arm handoff watcher self-test passed.") {
+              throw "Windows PowerShell 5.1 foreground-arm call-operator self-test failed."
+            }
+          }
+          finally {
+            if ($null -eq $previousWatcherPathForPs51) {
+              Remove-Item Env:\LBB_PS51_WATCHER_SELF_TEST -ErrorAction SilentlyContinue
+            }
+            else {
+              $env:LBB_PS51_WATCHER_SELF_TEST = $previousWatcherPathForPs51
+            }
+          }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./tests/fixtures/windows/WindowsComputerUseFixture.ps1 -SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 fixture self-test failed." }
           & ./scripts/test-windows-computer-use.ps1 -SelfTest
@@ -236,12 +256,12 @@ jobs:
           bash -n scripts/fetch-verify-release-candidate.sh
           node --check scripts/finalize-macos-acceptance.mjs
           node scripts/finalize-macos-acceptance.mjs --self-test
-          node --check evidence/v0.12.24/computer/helper-evidence-rig.mjs
-          node evidence/v0.12.24/computer/helper-evidence-rig.mjs --self-test
-          xcrun swiftc -typecheck evidence/v0.12.24/computer/HelperEvidenceFixture.swift
-          xcrun swiftc -typecheck evidence/v0.12.24/computer/SystemProbe.swift
-          xcrun swiftc -typecheck evidence/v0.12.24/computer/AppShareHandoff.swift
-          xcrun swiftc evidence/v0.12.24/computer/AppShareHandoff.swift -o "$RUNNER_TEMP/lbb-app-share-handoff-self-test"
+          node --check evidence/v0.12.25/computer/helper-evidence-rig.mjs
+          node evidence/v0.12.25/computer/helper-evidence-rig.mjs --self-test
+          xcrun swiftc -typecheck evidence/v0.12.25/computer/HelperEvidenceFixture.swift
+          xcrun swiftc -typecheck evidence/v0.12.25/computer/SystemProbe.swift
+          xcrun swiftc -typecheck evidence/v0.12.25/computer/AppShareHandoff.swift
+          xcrun swiftc evidence/v0.12.25/computer/AppShareHandoff.swift -o "$RUNNER_TEMP/lbb-app-share-handoff-self-test"
           "$RUNNER_TEMP/lbb-app-share-handoff-self-test" --self-test
       - name: Install the minimum supported Rust toolchain and targets
         run: |

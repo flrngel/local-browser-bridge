@@ -117,6 +117,12 @@ fn windows_ci_and_release_validate_the_complete_browser_evidence_toolchain() {
             "$PSVersionTable.PSEdition",
             "$ps51Identity[0] -cne \"5.1|Desktop\"",
             "The exact system PowerShell self-test host is not Windows PowerShell 5.1 Desktop.",
+            "$watcherPathForPs51 = (Resolve-Path ./scripts/wait-windows-foreground-arm-handoff.ps1).Path",
+            "$watcherScript = [ScriptBlock]::Create([IO.File]::ReadAllText([IO.Path]::GetFullPath($env:LBB_PS51_WATCHER_SELF_TEST)))",
+            "& $watcherScript -Mode SelfTest",
+            "$watcherCallOperatorOutput.Count -ne 1",
+            "Windows PowerShell 5.1 foreground-arm call-operator self-test failed.",
+            "Remove-Item Env:\\LBB_PS51_WATCHER_SELF_TEST -ErrorAction SilentlyContinue",
         ] {
             assert!(
                 workflow.contains(required),
@@ -213,8 +219,8 @@ fn windows_release_tooling_hashes_without_module_discovery() {
 fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_only() {
     let watcher = source("scripts/wait-macos-app-share-concurrency-handoff.mjs");
     let adversarial_watcher = source("scripts/wait-macos-pointer-concurrency-handoff.mjs");
-    let producer = source("evidence/v0.12.24/computer/helper-evidence-rig.mjs");
-    let playbook = source("evidence/v0.12.24/computer/README.md");
+    let producer = source("evidence/v0.12.25/computer/helper-evidence-rig.mjs");
+    let playbook = source("evidence/v0.12.25/computer/README.md");
     let finalizer = source("scripts/finalize-macos-acceptance.mjs");
     let verifier = source("scripts/verify-release-acceptance-evidence.sh");
     let ci = source(".github/workflows/ci.yml");
@@ -256,7 +262,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
             "the legacy pointer watcher must not gate or satisfy release"
         );
     }
-    assert!(adversarial_watcher.contains("const PRODUCT_VERSION = \"0.12.24\";"));
+    assert!(adversarial_watcher.contains("const PRODUCT_VERSION = \"0.12.25\";"));
     assert!(
         adversarial_watcher.contains("macOS pointer-concurrency handoff watcher self-test passed.")
     );
@@ -275,7 +281,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         }
     }
     for aggregate_contract in [
-        "const PRODUCT_VERSION = \"0.12.24\";",
+        "const PRODUCT_VERSION = \"0.12.25\";",
         "const RESULT_SCHEMA_VERSION = 8;",
         "const AGGREGATE_SCHEMA_VERSION = 2;",
         "const REQUEST_MARKER = \"operator/macos-app-share-concurrency-handoff-request.json\";",
@@ -292,7 +298,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
     }
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.24\";",
+        "const PRODUCT_VERSION = \"0.12.25\";",
         "const SCHEMA_VERSION = 2;",
         "const OPERATOR_DIRECTORY = \"operator\";",
         "const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;",
@@ -408,12 +414,12 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
 
     for integration in [&ci, &release, &local] {
         assert!(
-            integration.contains("node --check evidence/v0.12.24/computer/helper-evidence-rig.mjs"),
-            "release path does not syntax-check the exact v0.12.24 macOS evidence rig"
+            integration.contains("node --check evidence/v0.12.25/computer/helper-evidence-rig.mjs"),
+            "release path does not syntax-check the exact v0.12.25 macOS evidence rig"
         );
         assert!(
             integration
-                .contains("node evidence/v0.12.24/computer/helper-evidence-rig.mjs --self-test")
+                .contains("node evidence/v0.12.25/computer/helper-evidence-rig.mjs --self-test")
         );
         assert!(
             !integration.contains("evidence/v0.12.20/computer/"),
@@ -428,7 +434,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         ] {
             assert!(
                 integration.contains(&format!(
-                    "xcrun swiftc -typecheck evidence/v0.12.24/computer/{source}"
+                    "xcrun swiftc -typecheck evidence/v0.12.25/computer/{source}"
                 )),
                 "macOS workflow does not typecheck {source}"
             );
@@ -436,7 +442,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         assert!(integration.contains("lbb-app-share-handoff-self-test\" --self-test"));
     }
     assert!(ci.contains(
-        "xcrun swiftc -typecheck evidence/v0.12.24/computer/PhysicalPointerHandoff.swift"
+        "xcrun swiftc -typecheck evidence/v0.12.25/computer/PhysicalPointerHandoff.swift"
     ));
     for release_path in [&release, &local] {
         assert!(

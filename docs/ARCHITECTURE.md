@@ -163,11 +163,11 @@ action-pointer classifier from the keyboard-aware independent-system
 classifier. The exact v0.12.23 deliberate run then proved its app-share start
 receipt and 89/89 completed assertions before a pre-handoff stream frame was
 reused after 43.807 seconds; `computer.click` correctly refused it with HTTP 409
-`COMPUTER_STALE_FRAME` before dispatch. Version 0.12.24 therefore requires a
+`COMPUTER_STALE_FRAME` before dispatch. Version 0.12.24 therefore added a
 strictly newer frame with the same share, target, and geometry after the
 `ACTION` receipt and within the reserved deadline before deriving click
-authority. The v0.12.20 physical-pointer lane is retained only as historical,
-optional adversarial coverage; its artifacts cannot satisfy the v0.12.24
+authority; version 0.12.25 retains that boundary. The v0.12.20 physical-pointer lane is retained only as historical,
+optional adversarial coverage; its artifacts cannot satisfy the v0.12.25
 release contract.
 
 ## Capture is not isolation
