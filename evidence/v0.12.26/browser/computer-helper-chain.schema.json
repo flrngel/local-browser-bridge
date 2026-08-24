@@ -1,0 +1,557 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/flrngel/local-browser-bridge/evidence/v0.12.26/browser/computer-helper-chain.schema.json",
+  "title": "Local Browser Bridge v0.12.26 packaged computer-helper chain evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "evidenceType", "version", "releaseCandidateBinding", "candidateBinding", "passed", "recordedBy",
+    "run", "operatorExchange", "scopedActionApproval", "server", "helper", "extensionPayload",
+    "initialState", "windowBinding", "lifecycle", "windowEpochs", "actions",
+    "browserAction", "handback", "screenshots", "cleanup", "privacy"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "evidenceType": { "const": "stock-user-chrome-computer-helper-chain" },
+    "version": { "const": "0.12.26" },
+    "releaseCandidateBinding": { "$ref": "#/$defs/releaseCandidateBinding" },
+    "candidateBinding": { "$ref": "#/$defs/candidateBinding" },
+    "passed": { "const": true },
+    "recordedBy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "sha256", "source"],
+      "properties": {
+        "name": { "const": "record-computer-helper-chain.ps1" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "source": { "const": "candidate-final-sha-blob" }
+      }
+    },
+    "run": {
+      "type": "object", "additionalProperties": false,
+      "required": ["runNonce", "preflightRecordSha256", "apiMatrixRecordSha256", "startedAtUtc", "finishedAtUtc"],
+      "properties": {
+        "runNonce": { "$ref": "#/$defs/sha256" },
+        "preflightRecordSha256": { "$ref": "#/$defs/sha256" },
+        "apiMatrixRecordSha256": { "$ref": "#/$defs/sha256" },
+        "startedAtUtc": { "$ref": "#/$defs/utcTimestamp" },
+        "finishedAtUtc": { "$ref": "#/$defs/utcTimestamp" }
+      }
+    },
+    "operatorExchange": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "protocolVersion", "executorSessionRef", "reviewerSessionRef", "independentSessionBoundary",
+        "requestCount", "statusDecisionCount", "freshFrameDecisionCount",
+        "allRequestsCreateOnce", "allResponsesCreateOnce",
+        "everyFrameDependentDecisionBoundToFreshFrame", "everyStatusDecisionBoundToFreshStatus",
+        "responseChainSha256", "scratchDeleted"
+      ],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "executorSessionRef": { "$ref": "#/$defs/sha256" },
+        "reviewerSessionRef": { "$ref": "#/$defs/sha256" },
+        "independentSessionBoundary": { "const": true },
+        "requestCount": { "type": "integer", "minimum": 1 },
+        "statusDecisionCount": { "type": "integer", "minimum": 1 },
+        "freshFrameDecisionCount": { "type": "integer", "minimum": 1 },
+        "allRequestsCreateOnce": { "const": true },
+        "allResponsesCreateOnce": { "const": true },
+        "everyFrameDependentDecisionBoundToFreshFrame": { "const": true },
+        "everyStatusDecisionBoundToFreshStatus": { "const": true },
+        "responseChainSha256": { "$ref": "#/$defs/sha256" },
+        "scratchDeleted": { "const": true }
+      }
+    },
+    "scopedActionApproval": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "recordSha256", "approvalId", "scopeSha256", "executorSessionRef",
+        "approvalConfirmedAtUtc", "approvalExpiresAtUtc", "approvalChallengeFrameRef",
+        "preDispatchFrameRef", "preDispatchDecisionRef", "preDispatchVerifiedAtUtc",
+        "firstCoveredActionSequence",
+        "firstCoveredActionDispatchedAtUtc", "consumedBeforeFirstCoveredAction",
+        "consumedBeforeExpiry", "freshStateRevalidatedAfterApproval", "scopeUnchangedThroughRun"
+      ],
+      "properties": {
+        "recordSha256": { "$ref": "#/$defs/sha256" },
+        "approvalId": { "$ref": "#/$defs/sha256" },
+        "scopeSha256": { "$ref": "#/$defs/sha256" },
+        "executorSessionRef": { "$ref": "#/$defs/sha256" },
+        "approvalConfirmedAtUtc": { "$ref": "#/$defs/utcTimestamp" },
+        "approvalExpiresAtUtc": { "$ref": "#/$defs/utcTimestamp" },
+        "approvalChallengeFrameRef": { "$ref": "#/$defs/sha256" },
+        "preDispatchFrameRef": { "$ref": "#/$defs/sha256" },
+        "preDispatchDecisionRef": { "$ref": "#/$defs/sha256" },
+        "preDispatchVerifiedAtUtc": { "$ref": "#/$defs/utcTimestamp" },
+        "firstCoveredActionSequence": { "type": "integer", "minimum": 1, "maximum": 27 },
+        "firstCoveredActionDispatchedAtUtc": { "$ref": "#/$defs/utcTimestamp" },
+        "consumedBeforeFirstCoveredAction": { "const": true },
+        "consumedBeforeExpiry": { "const": true },
+        "freshStateRevalidatedAfterApproval": { "const": true },
+        "scopeUnchangedThroughRun": { "const": true }
+      }
+    },
+    "server": {
+      "type": "object", "additionalProperties": false,
+      "required": ["executableName", "sha256", "processRef", "soleListener", "updateCheckDisabled"],
+      "properties": {
+        "executableName": { "const": "local-browser-bridge-v0.12.26-windows-x86_64.exe" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "processRef": { "$ref": "#/$defs/sha256" },
+        "soleListener": { "const": "127.0.0.1:17373" },
+        "updateCheckDisabled": { "const": true }
+      }
+    },
+    "helper": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "executableName", "sha256", "connectedThroughLoopbackServer", "serverApiOnly",
+        "processRef", "sessionBindingSha256", "rawSessionIdentifierRetained", "topology"
+      ],
+      "properties": {
+        "executableName": { "const": "local-computer-helper-v0.12.26-windows-x86_64.exe" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "connectedThroughLoopbackServer": { "const": true },
+        "serverApiOnly": { "const": true },
+        "processRef": { "$ref": "#/$defs/sha256" },
+        "sessionBindingSha256": { "$ref": "#/$defs/sha256" },
+        "rawSessionIdentifierRetained": { "const": false },
+        "topology": {
+          "type": "object", "additionalProperties": false,
+          "required": [
+            "exactImageDirectChildCount", "exactImageMatched", "directChildOfLaunchedSupervisor",
+            "interactiveSessionMatched", "stableConsecutivePolls", "helloStateMatched",
+            "protocolRoundTrip", "roundTripMethod", "supervisorProcessRef", "workerProcessRef"
+          ],
+          "properties": {
+            "exactImageDirectChildCount": { "const": 1 },
+            "exactImageMatched": { "const": true },
+            "directChildOfLaunchedSupervisor": { "const": true },
+            "interactiveSessionMatched": { "const": true },
+            "stableConsecutivePolls": { "type": "integer", "minimum": 2 },
+            "helloStateMatched": { "const": true },
+            "protocolRoundTrip": { "const": true },
+            "roundTripMethod": { "const": "computer.status" },
+            "supervisorProcessRef": { "$ref": "#/$defs/sha256" },
+            "workerProcessRef": { "$ref": "#/$defs/sha256" }
+          }
+        }
+      }
+    },
+    "extensionPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["fileCount", "combinedPayloadSha256", "verifiedBeforeLoad", "verifiedAfterLoad", "verifiedAfterCleanup"],
+      "properties": {
+        "fileCount": { "const": 11 },
+        "combinedPayloadSha256": { "$ref": "#/$defs/sha256" },
+        "verifiedBeforeLoad": { "const": true },
+        "verifiedAfterLoad": { "const": true },
+        "verifiedAfterCleanup": { "const": true }
+      }
+    },
+    "initialState": {
+      "type": "object", "additionalProperties": false,
+      "required": ["capturedFromFreshHelperFrames", "developerMode", "fullAccess", "savedToken", "candidateCard"],
+      "properties": {
+        "capturedFromFreshHelperFrames": { "const": true },
+        "developerMode": { "$ref": "#/$defs/liveToggleState" },
+        "fullAccess": { "$ref": "#/$defs/liveToggleState" },
+        "savedToken": {
+          "type": "object", "additionalProperties": false,
+          "required": ["configured", "epochRef", "frameRef", "operatorDecisionRef", "capturedBeforeMutation"],
+          "properties": {
+            "configured": { "const": false },
+            "epochRef": { "$ref": "#/$defs/sha256" },
+            "frameRef": { "$ref": "#/$defs/sha256" },
+            "operatorDecisionRef": { "$ref": "#/$defs/sha256" },
+            "capturedBeforeMutation": { "const": true }
+          }
+        },
+        "candidateCard": {
+          "type": "object", "additionalProperties": false,
+          "required": ["present", "epochRef", "frameRef", "operatorDecisionRef", "verifiedFromFreshLiveUi"],
+          "properties": {
+            "present": { "const": false },
+            "epochRef": { "$ref": "#/$defs/sha256" },
+            "frameRef": { "$ref": "#/$defs/sha256" },
+            "operatorDecisionRef": { "$ref": "#/$defs/sha256" },
+            "verifiedFromFreshLiveUi": { "const": true }
+          }
+        }
+      }
+    },
+    "windowBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "application", "baselineChromeWindowCount", "baselineTargetSetSha256",
+        "dedicatedTargetRef", "dedicatedProcessRef", "dedicatedAbsentBeforeCreation",
+        "dedicatedCreatedAsOnlyNewChromeWindow", "sameDedicatedTargetAcrossEpochs"
+      ],
+      "properties": {
+        "application": { "const": "google-chrome" },
+        "baselineChromeWindowCount": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "baselineTargetSetSha256": { "$ref": "#/$defs/sha256" },
+        "dedicatedTargetRef": { "$ref": "#/$defs/sha256" },
+        "dedicatedProcessRef": { "$ref": "#/$defs/sha256" },
+        "dedicatedAbsentBeforeCreation": { "const": true },
+        "dedicatedCreatedAsOnlyNewChromeWindow": { "const": true },
+        "sameDedicatedTargetAcrossEpochs": { "const": true }
+      }
+    },
+    "lifecycle": {
+      "type": "array", "minItems": 8, "maxItems": 8,
+      "items": { "$ref": "#/$defs/lifecycleEvent" }
+    },
+    "windowEpochs": {
+      "type": "array", "minItems": 13, "maxItems": 13,
+      "items": { "$ref": "#/$defs/epoch" }
+    },
+    "actions": {
+      "type": "array", "minItems": 27, "maxItems": 27,
+      "items": { "$ref": "#/$defs/action" }
+    },
+    "browserAction": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "source", "apiMatrixRecordSha256", "targetBindingSha256", "methodSequence",
+        "requestResponseSha256", "resultText", "resultVerified"
+      ],
+      "properties": {
+        "source": { "const": "local-browser-bridge-api" },
+        "apiMatrixRecordSha256": { "$ref": "#/$defs/sha256" },
+        "targetBindingSha256": { "$ref": "#/$defs/sha256" },
+        "methodSequence": {
+          "const": [
+            "browser.control.start", "page.observe", "page.fill", "page.observe",
+            "page.select", "page.observe", "page.click", "page.observe", "page.evaluate"
+          ]
+        },
+        "requestResponseSha256": { "$ref": "#/$defs/sha256" },
+        "resultText": { "const": "Hello, Bridge Matrix. blue selected." },
+        "resultVerified": { "const": true }
+      }
+    },
+    "handback": { "$ref": "#/$defs/handbackMatrix" },
+    "screenshots": {
+      "type": "array", "minItems": 6, "maxItems": 6,
+      "items": { "$ref": "#/$defs/screenshot" }
+    },
+    "cleanup": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "allSharesStopped", "helperTerminationDisposition", "helperExitCode",
+        "helperDisconnectedAfterTermination", "helperChildrenRemaining", "helperListenersRemaining",
+        "exactHelperImageProcessesRemaining", "serverTerminationDisposition", "serverExitCode",
+        "serverListenersRemaining", "canonicalPortListenersRemaining", "candidateExtensionRemoved",
+        "candidateCardAbsentAfterRemoval", "candidateCardAbsenceVerifiedFromFreshLiveUi",
+        "savedTokenCleared", "developerModeRestored",
+        "fullAccessRestored", "testWindowClosed", "helperExecutableUnchanged",
+        "serverExecutableUnchanged", "extensionPayloadUnchanged", "rawIdentifiersCleared"
+      ],
+      "properties": {
+        "allSharesStopped": { "const": true },
+        "helperTerminationDisposition": { "const": "owner-forced-exact-supervisor" },
+        "helperExitCode": { "type": "integer", "not": { "const": 0 } },
+        "helperDisconnectedAfterTermination": { "const": true },
+        "helperChildrenRemaining": { "const": 0 },
+        "helperListenersRemaining": { "const": 0 },
+        "exactHelperImageProcessesRemaining": { "const": 0 },
+        "serverTerminationDisposition": { "const": "owner-forced-exact-process" },
+        "serverExitCode": { "type": "integer" },
+        "serverListenersRemaining": { "const": 0 },
+        "canonicalPortListenersRemaining": { "const": 0 },
+        "candidateExtensionRemoved": { "const": true },
+        "candidateCardAbsentAfterRemoval": { "const": true },
+        "candidateCardAbsenceVerifiedFromFreshLiveUi": { "const": true },
+        "savedTokenCleared": { "const": true },
+        "developerModeRestored": { "const": true },
+        "fullAccessRestored": { "const": true },
+        "testWindowClosed": { "const": true },
+        "helperExecutableUnchanged": { "const": true },
+        "serverExecutableUnchanged": { "const": true },
+        "extensionPayloadUnchanged": { "const": true },
+        "rawIdentifiersCleared": { "const": true }
+      }
+    },
+    "privacy": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "rawWindowIdsRetained", "rawFrameIdsRetained", "rawShareIdsRetained", "rawSessionIdsRetained",
+        "rawTabIdsRetained", "credentialRetained", "apiResponseBodiesRetained", "opaqueReferenceMapDiscarded"
+      ],
+      "properties": {
+        "rawWindowIdsRetained": { "const": false },
+        "rawFrameIdsRetained": { "const": false },
+        "rawShareIdsRetained": { "const": false },
+        "rawSessionIdsRetained": { "const": false },
+        "rawTabIdsRetained": { "const": false },
+        "credentialRetained": { "const": false },
+        "apiResponseBodiesRetained": { "const": false },
+        "opaqueReferenceMapDiscarded": { "const": true }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "sha1": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "utcTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{7}Z$"
+    },
+    "candidateBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "runNonce", "preflightRecordSha256", "finalSha", "checksumManifestSha256",
+        "serverSha256", "computerHelperSha256", "extensionZipSha256", "extractedPayloadSha256"
+      ],
+      "properties": {
+        "runNonce": { "$ref": "#/$defs/sha256" },
+        "preflightRecordSha256": { "$ref": "#/$defs/sha256" },
+        "finalSha": { "$ref": "#/$defs/sha1" },
+        "checksumManifestSha256": { "$ref": "#/$defs/sha256" },
+        "serverSha256": { "$ref": "#/$defs/sha256" },
+        "computerHelperSha256": { "$ref": "#/$defs/sha256" },
+        "extensionZipSha256": { "$ref": "#/$defs/sha256" },
+        "extractedPayloadSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "releaseAsset": {
+      "type": "object", "additionalProperties": false,
+      "required": ["file", "bytes", "sha256"],
+      "properties": {
+        "file": { "type": "string" },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 104857600 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "releaseCandidateBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "productVersion", "repository", "tag", "sourceSha", "tagObjectSha",
+        "workflowRunId", "workflowRunAttempt", "artifactId", "artifactName",
+        "artifactZipBytes", "artifactZipSha256", "checksumManifestSha256",
+        "attestationInvocationUri", "attestedAssetCount", "githubHostedRunner", "assets"
+      ],
+      "properties": {
+        "productVersion": { "const": "0.12.26" },
+        "repository": { "const": "flrngel/local-browser-bridge" },
+        "tag": { "const": "v0.12.26" },
+        "sourceSha": { "$ref": "#/$defs/sha1" },
+        "tagObjectSha": { "$ref": "#/$defs/sha1" },
+        "workflowRunId": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+        "workflowRunAttempt": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+        "artifactId": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+        "artifactName": { "const": "release-candidate" },
+        "artifactZipBytes": { "type": "integer", "minimum": 1 },
+        "artifactZipSha256": { "$ref": "#/$defs/sha256" },
+        "checksumManifestSha256": { "$ref": "#/$defs/sha256" },
+        "attestationInvocationUri": { "type": "string", "pattern": "^https://github\\.com/flrngel/local-browser-bridge/actions/runs/[1-9][0-9]*/attempts/[1-9][0-9]*$" },
+        "attestedAssetCount": { "const": 5 },
+        "githubHostedRunner": { "const": true },
+        "assets": { "type": "array", "minItems": 5, "maxItems": 5, "items": { "$ref": "#/$defs/releaseAsset" } }
+      }
+    },
+    "pauseRefusal": {
+      "type": "object", "additionalProperties": false,
+      "required": ["httpStatus", "errorCode", "taxonomyState", "taxonomyAction", "retriable"],
+      "properties": {
+        "httpStatus": { "const": 423 }, "errorCode": { "const": "HUMAN_CONTROL_PAUSED" },
+        "taxonomyState": { "const": "needs_user" }, "taxonomyAction": { "const": "handback" },
+        "retriable": { "const": false }
+      }
+    },
+    "resumeProof": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "trustedPopupClick", "operatorSurface", "statusPollMethod", "statusPolledAfterResume",
+        "reducedStatus", "postResumeStartSucceeded", "activeStatusPolled", "activeStatus"
+      ],
+      "properties": {
+        "trustedPopupClick": { "const": true },
+        "operatorSurface": { "const": "local-browser-bridge-computer-helper" },
+        "statusPollMethod": { "const": "browser.control.status" },
+        "statusPolledAfterResume": { "const": true },
+        "reducedStatus": {
+          "type": "object", "additionalProperties": false,
+          "required": ["active", "humanPaused", "revocationPending"],
+          "properties": { "active": { "const": false }, "humanPaused": { "const": false }, "revocationPending": { "const": false } }
+        },
+        "postResumeStartSucceeded": { "const": true }, "activeStatusPolled": { "const": true },
+        "activeStatus": {
+          "type": "object", "additionalProperties": false,
+          "required": ["active", "humanPaused", "revocationPending"],
+          "properties": { "active": { "const": true }, "humanPaused": { "const": false }, "revocationPending": { "const": false } }
+        }
+      }
+    },
+    "handbackCase": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "trigger", "operatorSurface", "statusPollMethod", "statusPolledAfterTrigger", "reducedStatus",
+        "controlStartRefusal", "tabMutationRefusal", "indicatorsRemoved", "resume"
+      ],
+      "properties": {
+        "trigger": { "enum": ["in-page-stop", "chrome-native-cancel"] },
+        "operatorSurface": { "const": "local-browser-bridge-computer-helper" },
+        "statusPollMethod": { "const": "browser.control.status" },
+        "statusPolledAfterTrigger": { "const": true },
+        "reducedStatus": {
+          "type": "object", "additionalProperties": false,
+          "required": ["active", "humanPaused", "reason", "revocationPending"],
+          "properties": {
+            "active": { "const": false }, "humanPaused": { "const": true },
+            "reason": { "enum": ["released_by_user", "canceled_by_user"] },
+            "revocationPending": { "const": false }
+          }
+        },
+        "controlStartRefusal": { "$ref": "#/$defs/pauseRefusal" },
+        "tabMutationRefusal": { "$ref": "#/$defs/pauseRefusal" },
+        "indicatorsRemoved": { "const": true }, "resume": { "$ref": "#/$defs/resumeProof" }
+      }
+    },
+    "handbackMatrix": {
+      "type": "object", "additionalProperties": false, "required": ["stop", "cancel"],
+      "properties": { "stop": { "$ref": "#/$defs/handbackCase" }, "cancel": { "$ref": "#/$defs/handbackCase" } }
+    },
+    "liveToggleState": {
+      "type": "object", "additionalProperties": false,
+      "required": ["value", "epochRef", "frameRef", "operatorDecisionRef", "capturedBeforeMutation"],
+      "properties": {
+        "value": { "enum": ["enabled", "disabled"] },
+        "epochRef": { "$ref": "#/$defs/sha256" },
+        "frameRef": { "$ref": "#/$defs/sha256" },
+        "operatorDecisionRef": { "$ref": "#/$defs/sha256" },
+        "capturedBeforeMutation": { "const": true }
+      }
+    },
+    "lifecycleEvent": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "sequence", "name", "atUtc", "source", "connectionState", "processRef",
+        "executableSha256", "exitCode", "resultVerified"
+      ],
+      "properties": {
+        "sequence": { "type": "integer", "minimum": 1, "maximum": 8 },
+        "name": { "enum": [
+          "server-ready", "computer-disconnected-before-helper-start", "helper-started",
+          "computer-connected", "helper-owner-forced-termination-requested",
+          "helper-owner-forced-terminated", "computer-disconnected-after-helper-termination",
+          "server-owner-forced-terminated"
+        ] },
+        "atUtc": { "$ref": "#/$defs/utcTimestamp" },
+        "source": { "const": "local-browser-bridge-computer-helper-via-loopback-api" },
+        "connectionState": { "enum": ["connected", "disconnected"] },
+        "processRef": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "const": "not-applicable" }] },
+        "executableSha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "const": "not-applicable" }] },
+        "exitCode": { "type": "integer" },
+        "resultVerified": { "const": true }
+      }
+    },
+    "epoch": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "sequence", "name", "surface", "application", "processRef", "epochRef", "targetRef", "shareRef", "selectedExactly",
+        "shareStartSequence", "shareStartSucceeded", "firstFreshFrameRef", "lastFreshFrameRef",
+        "freshObservationCount", "shareStopSequence", "shareStopSucceeded", "rawIdentifiersRetained"
+      ],
+      "properties": {
+        "sequence": { "type": "integer", "minimum": 1, "maximum": 13 },
+        "name": { "enum": [
+          "existing-chrome-bootstrap", "dedicated-chrome-extensions", "native-load-picker",
+          "dedicated-chrome-installed", "extension-popup-setup", "dedicated-chrome-demo",
+          "stop-paused-popup", "stop-recovered-demo", "cancel-paused-popup", "cancel-recovered-demo",
+          "extension-popup-cleanup", "cleanup-chrome-extensions", "dedicated-chrome-close"
+        ] },
+        "surface": { "enum": ["chrome-window", "native-file-picker", "extension-popup"] },
+        "application": { "const": "google-chrome" },
+        "processRef": { "$ref": "#/$defs/sha256" },
+        "epochRef": { "$ref": "#/$defs/sha256" },
+        "targetRef": { "$ref": "#/$defs/sha256" },
+        "shareRef": { "$ref": "#/$defs/sha256" },
+        "selectedExactly": { "const": true },
+        "shareStartSequence": { "type": "integer", "minimum": 1 },
+        "shareStartSucceeded": { "const": true },
+        "firstFreshFrameRef": { "$ref": "#/$defs/sha256" },
+        "lastFreshFrameRef": { "$ref": "#/$defs/sha256" },
+        "freshObservationCount": { "type": "integer", "minimum": 2 },
+        "shareStopSequence": { "type": "integer", "minimum": 2 },
+        "shareStopSucceeded": { "const": true },
+        "rawIdentifiersRetained": { "const": false }
+      }
+    },
+    "action": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "sequence", "name", "atUtc", "source", "epochRef", "methods", "preFrameRef",
+        "postFrameRef", "normalizedParamsSha256", "responseSha256", "httpStatus",
+        "resultVerified", "postconditionVerified", "dispatchedAtUtc", "operatorDecisionRef",
+        "riskRef", "approvalRef"
+      ],
+      "properties": {
+        "sequence": { "type": "integer", "minimum": 1, "maximum": 27 },
+        "name": { "enum": [
+          "dedicated-window-created", "chrome-extensions-navigated", "developer-mode-ready",
+          "load-unpacked-clicked", "native-picker-completed", "candidate-card-verified",
+          "extension-popup-opened", "full-access-ready", "popup-token-saved",
+          "extension-proof-revealed", "browser-api-result-revealed", "computer-demo-clicked",
+          "in-page-stop-clicked", "stop-popup-opened", "stop-resume-clicked", "stop-recovery-verified",
+          "chrome-native-cancel-clicked", "cancel-popup-opened", "cancel-resume-clicked", "cancel-recovery-verified",
+          "cleanup-popup-opened",
+          "token-clear-initiated", "token-clear-confirmed", "full-access-restored",
+          "test-card-removed", "developer-mode-restored", "test-window-closed"
+        ] },
+        "atUtc": { "$ref": "#/$defs/utcTimestamp" },
+        "source": { "const": "local-browser-bridge-computer-helper-via-loopback-api" },
+        "epochRef": { "$ref": "#/$defs/sha256" },
+        "methods": {
+          "type": "array", "minItems": 3,
+          "items": { "enum": ["computer.observe", "computer.click", "computer.typeText", "computer.key", "computer.status"] }
+        },
+        "preFrameRef": { "$ref": "#/$defs/sha256" },
+        "postFrameRef": { "$ref": "#/$defs/sha256" },
+        "normalizedParamsSha256": { "$ref": "#/$defs/sha256" },
+        "responseSha256": { "$ref": "#/$defs/sha256" },
+        "httpStatus": { "const": 200 },
+        "resultVerified": { "const": true },
+        "postconditionVerified": { "const": true },
+        "dispatchedAtUtc": { "$ref": "#/$defs/utcTimestamp" },
+        "operatorDecisionRef": { "$ref": "#/$defs/sha256" },
+        "riskRef": { "enum": ["none", "installCandidate", "developerModeChange", "fullAccessUse", "acceptanceTokenSave", "clearSavedTokenInitiate", "clearSavedTokenConfirm", "extensionDisposition"] },
+        "approvalRef": { "oneOf": [{ "const": "none" }, { "$ref": "#/$defs/sha256" }] }
+      }
+    },
+    "screenshot": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "sequence", "purpose", "source", "epochRef", "shareRef", "frameRef", "rawImage",
+        "endpoint", "bytes", "sha256", "width", "height", "exactWindowFrame",
+        "shareFrameFresh", "rawImageRetained"
+      ],
+      "properties": {
+        "sequence": { "type": "integer", "minimum": 1, "maximum": 6 },
+        "purpose": { "enum": ["extension-loaded", "api-action-result", "computer-share-action", "stop-paused", "cancel-paused", "post-handback-resume"] },
+        "source": { "const": "local-browser-bridge-computer-helper-via-loopback-api" },
+        "epochRef": { "$ref": "#/$defs/sha256" },
+        "shareRef": { "$ref": "#/$defs/sha256" },
+        "frameRef": { "$ref": "#/$defs/sha256" },
+        "rawImage": { "enum": [
+          "browser-01-extension-loaded.raw.png",
+          "browser-02-api-action-result.raw.png",
+          "browser-03-computer-share-action.raw.png",
+          "browser-04-stop-paused.raw.png",
+          "browser-05-cancel-paused.raw.png",
+          "browser-06-post-handback-resume.raw.png"
+        ] },
+        "endpoint": { "const": "/api/computer/screenshot" },
+        "bytes": { "type": "integer", "minimum": 1001, "maximum": 104857600 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "width": { "type": "integer", "minimum": 120, "maximum": 8192 },
+        "height": { "type": "integer", "minimum": 32, "maximum": 8192 },
+        "exactWindowFrame": { "const": true },
+        "shareFrameFresh": { "const": true },
+        "rawImageRetained": { "const": false }
+      }
+    }
+  }
+}

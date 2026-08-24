@@ -166,8 +166,8 @@ reused after 43.807 seconds; `computer.click` correctly refused it with HTTP 409
 `COMPUTER_STALE_FRAME` before dispatch. Version 0.12.24 therefore added a
 strictly newer frame with the same share, target, and geometry after the
 `ACTION` receipt and within the reserved deadline before deriving click
-authority; version 0.12.25 retains that boundary. The v0.12.20 physical-pointer lane is retained only as historical,
-optional adversarial coverage; its artifacts cannot satisfy the v0.12.25
+authority; version 0.12.26 retains that boundary. The v0.12.20 physical-pointer lane is retained only as historical,
+optional adversarial coverage; its artifacts cannot satisfy the v0.12.26
 release contract.
 
 ## Capture is not isolation

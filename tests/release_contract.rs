@@ -166,6 +166,78 @@ fn windows_ci_and_release_validate_the_complete_browser_evidence_toolchain() {
 }
 
 #[test]
+fn windows_ci_and_release_compile_execute_and_self_clean_the_dedicated_fixture() {
+    for path in [".github/workflows/ci.yml", ".github/workflows/deploy.yml"] {
+        let workflow = source(path);
+        for required in [
+            "$fixtureExecutableSelfTest = Join-Path $env:RUNNER_TEMP (\"lbb-windows-fixture-\" + [Guid]::NewGuid().ToString(\"N\") + \".exe\")",
+            "$fixtureSourcePath = (Resolve-Path ./tests/fixtures/windows/WindowsComputerUseFixture.ps1).Path",
+            "$fixtureSourceStream = [IO.File]::OpenRead($fixtureSourcePath)",
+            "$fixtureSourceHasher = [Security.Cryptography.SHA256]::Create()",
+            "$fixtureSourceSha256 = (($fixtureSourceHasher.ComputeHash($fixtureSourceStream) | ForEach-Object { $_.ToString(\"x2\") }) -join '')",
+            "$fixtureSourceHasher.Dispose()",
+            "$fixtureSourceStream.Dispose()",
+            "$fixtureBuildOutput = @(& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File $fixtureSourcePath -BuildExecutablePath $fixtureExecutableSelfTest -ExpectedSourceSha256 $fixtureSourceSha256)",
+            "$fixtureBuildOutput.Count -ne 1",
+            "$fixtureBuildOutput[0] -cne \"Windows computer-use fixture executable built.\"",
+            "throw \"Windows PowerShell 5.1 dedicated fixture build failed.\"",
+            "& $fixtureExecutableSelfTest --self-test",
+            "throw \"Dedicated Windows fixture executable self-test failed.\"",
+            "Remove-Item -LiteralPath $fixtureExecutableSelfTest -Force -ErrorAction Stop",
+            "throw \"The dedicated Windows fixture executable self-test artifact remained after cleanup.\"",
+        ] {
+            assert!(
+                workflow.contains(required),
+                "dedicated fixture CI gate in {path} is missing: {required}"
+            );
+        }
+
+        let ps_self_test = workflow
+            .find("& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./tests/fixtures/windows/WindowsComputerUseFixture.ps1 -SelfTest")
+            .unwrap();
+        let temp_executable = workflow
+            .find("$fixtureExecutableSelfTest = Join-Path $env:RUNNER_TEMP")
+            .unwrap();
+        let source_hash = workflow
+            .find("$fixtureSourceSha256 = (($fixtureSourceHasher.ComputeHash")
+            .unwrap();
+        let compile = workflow
+            .find("$fixtureBuildOutput = @(& $windowsPowerShell")
+            .unwrap();
+        let execute = workflow
+            .find("& $fixtureExecutableSelfTest --self-test")
+            .unwrap();
+        let cleanup = workflow[execute..]
+            .find("finally {")
+            .map(|offset| execute + offset)
+            .unwrap();
+        let remove = workflow
+            .find("Remove-Item -LiteralPath $fixtureExecutableSelfTest -Force -ErrorAction Stop")
+            .unwrap();
+        let refuse_remnant = workflow
+            .find("The dedicated Windows fixture executable self-test artifact remained after cleanup.")
+            .unwrap();
+        assert!(ps_self_test < temp_executable);
+        assert!(temp_executable < source_hash);
+        assert!(source_hash < compile);
+        assert!(compile < execute);
+        assert!(execute < cleanup);
+        assert!(cleanup < remove);
+        assert!(remove < refuse_remnant);
+
+        let dedicated_fixture_gate = &workflow[temp_executable..refuse_remnant];
+        assert!(
+            !dedicated_fixture_gate.contains("dist/"),
+            "the CI-only dedicated fixture executable in {path} must never enter dist"
+        );
+        assert!(
+            !dedicated_fixture_gate.contains("actions/upload-artifact"),
+            "the CI-only dedicated fixture executable in {path} must never be uploaded"
+        );
+    }
+}
+
+#[test]
 fn release_runs_every_browser_evidence_self_test_under_windows_powershell_51() {
     let workflow = source(".github/workflows/deploy.yml");
     for invocation in [
@@ -219,8 +291,8 @@ fn windows_release_tooling_hashes_without_module_discovery() {
 fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_only() {
     let watcher = source("scripts/wait-macos-app-share-concurrency-handoff.mjs");
     let adversarial_watcher = source("scripts/wait-macos-pointer-concurrency-handoff.mjs");
-    let producer = source("evidence/v0.12.25/computer/helper-evidence-rig.mjs");
-    let playbook = source("evidence/v0.12.25/computer/README.md");
+    let producer = source("evidence/v0.12.26/computer/helper-evidence-rig.mjs");
+    let playbook = source("evidence/v0.12.26/computer/README.md");
     let finalizer = source("scripts/finalize-macos-acceptance.mjs");
     let verifier = source("scripts/verify-release-acceptance-evidence.sh");
     let ci = source(".github/workflows/ci.yml");
@@ -262,7 +334,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
             "the legacy pointer watcher must not gate or satisfy release"
         );
     }
-    assert!(adversarial_watcher.contains("const PRODUCT_VERSION = \"0.12.25\";"));
+    assert!(adversarial_watcher.contains("const PRODUCT_VERSION = \"0.12.26\";"));
     assert!(
         adversarial_watcher.contains("macOS pointer-concurrency handoff watcher self-test passed.")
     );
@@ -281,7 +353,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         }
     }
     for aggregate_contract in [
-        "const PRODUCT_VERSION = \"0.12.25\";",
+        "const PRODUCT_VERSION = \"0.12.26\";",
         "const RESULT_SCHEMA_VERSION = 8;",
         "const AGGREGATE_SCHEMA_VERSION = 2;",
         "const REQUEST_MARKER = \"operator/macos-app-share-concurrency-handoff-request.json\";",
@@ -298,7 +370,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
     }
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.25\";",
+        "const PRODUCT_VERSION = \"0.12.26\";",
         "const SCHEMA_VERSION = 2;",
         "const OPERATOR_DIRECTORY = \"operator\";",
         "const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;",
@@ -414,12 +486,12 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
 
     for integration in [&ci, &release, &local] {
         assert!(
-            integration.contains("node --check evidence/v0.12.25/computer/helper-evidence-rig.mjs"),
-            "release path does not syntax-check the exact v0.12.25 macOS evidence rig"
+            integration.contains("node --check evidence/v0.12.26/computer/helper-evidence-rig.mjs"),
+            "release path does not syntax-check the exact v0.12.26 macOS evidence rig"
         );
         assert!(
             integration
-                .contains("node evidence/v0.12.25/computer/helper-evidence-rig.mjs --self-test")
+                .contains("node evidence/v0.12.26/computer/helper-evidence-rig.mjs --self-test")
         );
         assert!(
             !integration.contains("evidence/v0.12.20/computer/"),
@@ -434,7 +506,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         ] {
             assert!(
                 integration.contains(&format!(
-                    "xcrun swiftc -typecheck evidence/v0.12.25/computer/{source}"
+                    "xcrun swiftc -typecheck evidence/v0.12.26/computer/{source}"
                 )),
                 "macOS workflow does not typecheck {source}"
             );
@@ -442,7 +514,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         assert!(integration.contains("lbb-app-share-handoff-self-test\" --self-test"));
     }
     assert!(ci.contains(
-        "xcrun swiftc -typecheck evidence/v0.12.25/computer/PhysicalPointerHandoff.swift"
+        "xcrun swiftc -typecheck evidence/v0.12.26/computer/PhysicalPointerHandoff.swift"
     ));
     for release_path in [&release, &local] {
         assert!(

@@ -191,7 +191,11 @@ Windows read-only handoff watcher failed before operator action because a
 closure-created PowerShell 5.1 dynamic module could not resolve the atomic
 marker reader. Chrome and publication did not follow.
 
-Version 0.12.25 retains sealed route provenance, the v0.12.23 classifier
+Version 0.12.25 retained the authority refresh and made that watcher portable
+to exact system PowerShell 5.1 by passing marker paths as explicit callback
+arguments.
+
+Version 0.12.26 retains sealed route provenance, the v0.12.23 classifier
 separation, and conservative shared-pointer monitoring. After the app-share
 `ACTION` receipt it must obtain a strictly newer frame from the same share,
 target, and geometry within the reserved deadline before deriving click

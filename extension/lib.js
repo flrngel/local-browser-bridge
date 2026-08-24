@@ -1,4 +1,4 @@
-export const VERSION = "0.12.25";
+export const VERSION = "0.12.26";
 export const PROTOCOL_VERSION = 1;
 export const DEFAULT_PORT = 17_373;
 

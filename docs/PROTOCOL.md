@@ -1,6 +1,6 @@
 # Bridge protocol
 
-Protocol version: `1`. Package version examples below use `0.12.25`.
+Protocol version: `1`. Package version examples below use `0.12.26`.
 
 ## Transport and trust boundary
 
@@ -88,7 +88,7 @@ After mutual authentication succeeds, the server sends the normal welcome for th
   "type": "welcome",
   "protocolVersion": 1,
   "sessionId": "82b6b311-f71d-4a88-ae07-0b5e7a897815",
-  "serverVersion": "0.12.25",
+  "serverVersion": "0.12.26",
   "connector": "browser-extension"
 }
 ```
@@ -104,7 +104,7 @@ The connector must validate `protocolVersion`, `serverVersion`, `sessionId`, and
   "controllerSequence": 81,
   "controllerId": "38a72d1f-d124-4335-8f1e-9cb85777df14",
   "connectionId": "2f9ad9af-5bb7-42b3-a77d-a0c83a625792",
-  "version": "0.12.25",
+  "version": "0.12.26",
   "browser": "Google Chrome",
   "mode": "full-access",
   "capabilities": ["tabs.list", "page.observe", "browser.control.start"]
@@ -120,7 +120,7 @@ The computer helper uses the same negotiated envelope and reports its bounded na
   "type": "hello",
   "protocolVersion": 1,
   "sessionId": "d559c7b3-56fb-49e6-b661-801cfcb8807f",
-  "version": "0.12.25",
+  "version": "0.12.26",
   "processId": 4242,
   "platform": "macos",
   "architecture": "aarch64",
@@ -407,7 +407,7 @@ element       ::= "e" [1-9][0-9]{0,3}         ; e1 .. e9999
 
 The exact published 0.11.1 boundary run added a live top-level `same_process_frame` skip and a live `FRAME_ACTION_UNSUPPORTED` refusal, but failed 2 of 19 checks because the root-only auto-attach did not discover a depth-two OOPIF. Version 0.11.2 recursively arms each verified child session and handles child-originated target lifecycle events. A packaged local candidate then passed 22 of 22 checks: two OOPIF levels merged with accumulated offsets and a depth-two click landed with `event.isTrusted === true` ([../evidence/v0.11.1/README.md](../evidence/v0.11.1/README.md)). That candidate is developer-build evidence, not immutable release proof. Isolated-world survival across a frame's own same-document navigation and nested in-process-frame reporting remain harness-only or deferred.
 
-The first command to every child remains a discriminating routing probe: it must return that child's own frame ID. If a browser or intermediary strips `sessionId` and returns the root tree, frame support is disabled for the lease with `reason: "session_routing_unverified"`, every attached record is dropped, and the observation stays top-document-only. The checked-in negative run is an explicitly labelled fault injection; no released Chrome version is known to accept and silently ignore that field. Chrome 118–124 did not expose child-session routing in the extension API schema and rejected the child command, while Chrome 125 added the routed form. Version 0.12.25 declares Chrome 140 as its minimum because that line also supports restricting persisted local extension storage to trusted contexts, so every supported browser has the routed form.
+The first command to every child remains a discriminating routing probe: it must return that child's own frame ID. If a browser or intermediary strips `sessionId` and returns the root tree, frame support is disabled for the lease with `reason: "session_routing_unverified"`, every attached record is dropped, and the observation stays top-document-only. The checked-in negative run is an explicitly labelled fault injection; no released Chrome version is known to accept and silently ignore that field. Chrome 118–124 did not expose child-session routing in the extension API schema and rejected the child command, while Chrome 125 added the routed form. Version 0.12.26 declares Chrome 140 as its minimum because that line also supports restricting persisted local extension storage to trusted contexts, so every supported browser has the routed form.
 
 ### Condition waits
 
@@ -553,7 +553,7 @@ On macOS, either intentional server shutdown or unexpected transport loss termin
 
 To avoid a live-share render/action race, the helper keeps a bounded recent-frame lease: a rendered `frameId` remains usable for at most three seconds only while the current share ID, PID, native window ID, and complete window geometry still match. Everything else is stale. A native exact-window stream still shares the user's login and input environment; it is not an OS virtual display, remote-desktop session, VM, sandbox, or independent input seat.
 
-The exact v0.12.23 deliberate-concurrency run demonstrated this refusal boundary without weakening it: its app-share start receipt and 89/89 completed assertions passed, but the harness reused a pre-handoff frame after 43.807 seconds and the helper returned HTTP 409 `COMPUTER_STALE_FRAME` before dispatch. Version 0.12.24 retained the three-second helper lease and added a release-harness wait, within the already reserved handoff deadline, for a strictly newer streamed frame whose share ID, exact target, and complete window/image geometry match the pre-refresh authority; only that successor may derive the product click. Version 0.12.25 retains that contract. A timeout or mismatch fails closed; there is no retry with the stale frame and no relaxed helper freshness limit.
+The exact v0.12.23 deliberate-concurrency run demonstrated this refusal boundary without weakening it: its app-share start receipt and 89/89 completed assertions passed, but the harness reused a pre-handoff frame after 43.807 seconds and the helper returned HTTP 409 `COMPUTER_STALE_FRAME` before dispatch. Version 0.12.24 retained the three-second helper lease and added a release-harness wait, within the already reserved handoff deadline, for a strictly newer streamed frame whose share ID, exact target, and complete window/image geometry match the pre-refresh authority; only that successor may derive the product click. Version 0.12.26 retains that contract. A timeout or mismatch fails closed; there is no retry with the stale frame and no relaxed helper freshness limit.
 
 The helper re-enumerates the exact `(pid, native window id)` target before input and returns `COMPUTER_STALE_FRAME` if identity or geometry changed. macOS keyboard eligibility uses an independent all-window inventory, requires a known on-screen exact owner/layer/geometry row and a non-minimized AX top-level mapping, and does not treat same-PID sibling count as receiver authority. ScreenCaptureKit can add a same-PID layer-0 `AXDialog` for its title-bar indicator, so dispatch instead requires the app's exact `AXFocusedWindow`; text also requires the focused element to resolve to that window.
 

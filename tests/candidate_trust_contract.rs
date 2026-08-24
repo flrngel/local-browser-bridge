@@ -144,6 +144,136 @@ fn windows_candidate_binder_is_a_clean_child_binary_safe_fail_closed_gate() {
 }
 
 #[test]
+fn dedicated_windows_fixture_is_trusted_source_only_not_a_release_asset() {
+    let windows_binder = normalized_source("scripts/verify-windows-release-candidate.ps1");
+    let bash_binder = normalized_source("scripts/fetch-verify-release-candidate.sh");
+    let release = normalized_source(".github/workflows/deploy.yml");
+    let asset_verifier = normalized_source("scripts/verify-release-assets.sh");
+
+    let windows_assets = windows_binder
+        .split("$ExpectedAssets = @(")
+        .nth(1)
+        .unwrap()
+        .split("$ExpectedFiles = @($ExpectedAssets) + \"SHA256SUMS.txt\"")
+        .next()
+        .unwrap();
+    for expected in [
+        "local-browser-bridge-v$Version-windows-x86_64.exe",
+        "local-computer-helper-v$Version-windows-x86_64.exe",
+        "local-browser-bridge-v$Version-macos-universal.tar.gz",
+        "local-browser-bridge-extension-v$Version.zip",
+    ] {
+        assert!(windows_assets.contains(expected));
+    }
+    assert_eq!(
+        windows_assets
+            .lines()
+            .filter(|line| line.trim_start().starts_with("\"local-"))
+            .count(),
+        4,
+        "the Windows candidate binder must expose exactly four product assets"
+    );
+    assert!(!windows_assets.to_ascii_lowercase().contains("fixture"));
+    assert!(windows_binder.contains("attestedAssetCount = 5"));
+
+    let trusted_source = windows_binder
+        .split("$TrustedRelativeFiles = @(")
+        .nth(1)
+        .unwrap()
+        .split("foreach ($Relative in $TrustedRelativeFiles)")
+        .next()
+        .unwrap();
+    assert!(trusted_source.contains("tests/fixtures/windows/WindowsComputerUseFixture.ps1"));
+    assert!(
+        windows_binder.contains(
+            "$Blob = Invoke-SourceGit @(\"rev-parse\", \"--verify\", \"HEAD:$Relative\")"
+        )
+    );
+    assert!(windows_binder.contains(
+        "$WorktreeBlob = Invoke-SourceGit @(\"hash-object\", \"--no-filters\", \"--\", $Relative)"
+    ));
+    assert!(
+        windows_binder
+            .contains("Required wrapper, runner, or fixture does not match its exact source blob.")
+    );
+
+    let bash_assets = bash_binder
+        .split("ASSETS=(")
+        .nth(1)
+        .unwrap()
+        .split("RELEASE_FILES=(\"${ASSETS[@]}\" \"SHA256SUMS.txt\")")
+        .next()
+        .unwrap();
+    for expected in [
+        "local-browser-bridge-v$VERSION-windows-x86_64.exe",
+        "local-computer-helper-v$VERSION-windows-x86_64.exe",
+        "local-browser-bridge-v$VERSION-macos-universal.tar.gz",
+        "local-browser-bridge-extension-v$VERSION.zip",
+    ] {
+        assert!(bash_assets.contains(expected));
+    }
+    assert_eq!(
+        bash_assets
+            .lines()
+            .filter(|line| line.trim_start().starts_with("\"local-"))
+            .count(),
+        4,
+        "the cross-platform candidate binder must expose exactly four product assets"
+    );
+    assert!(!bash_assets.to_ascii_lowercase().contains("fixture"));
+    assert!(bash_binder.contains("attestedAssetCount:5"));
+
+    let assembled_assets = release
+        .split("          assets=(\n")
+        .nth(1)
+        .unwrap()
+        .split("          )\n")
+        .next()
+        .unwrap();
+    assert_eq!(
+        assembled_assets
+            .lines()
+            .filter(|line| line.trim_start().starts_with("\"local-"))
+            .count(),
+        4,
+        "release assembly must contain exactly four product assets before the manifest"
+    );
+    assert!(!assembled_assets.to_ascii_lowercase().contains("fixture"));
+    assert!(release.contains("(cd dist && sha256sum \"${assets[@]}\" > SHA256SUMS.txt)"));
+    assert!(release.contains("name: release-candidate\n          path: dist/*"));
+    assert!(release.contains(
+        "$fixtureExecutableSelfTest = Join-Path $env:RUNNER_TEMP (\"lbb-windows-fixture-\""
+    ));
+    assert!(!release.contains("dist/lbb-windows-fixture-"));
+    assert!(!release.contains("dist/lbb-windows-computer-use-fixture"));
+    assert!(!release.contains("Copy-Item $fixtureExecutableSelfTest"));
+
+    for required in [
+        "windows_server=\"$assets_dir/local-browser-bridge-v${version}-windows-x86_64.exe\"",
+        "windows_helper=\"$assets_dir/local-computer-helper-v${version}-windows-x86_64.exe\"",
+        "macos_archive=\"$assets_dir/local-browser-bridge-v${version}-macos-universal.tar.gz\"",
+        "extension_archive=\"$assets_dir/local-browser-bridge-extension-v${version}.zip\"",
+        "checksum_manifest=\"$assets_dir/SHA256SUMS.txt\"",
+        "assets=(\"$windows_server\" \"$windows_helper\" \"$macos_archive\" \"$extension_archive\")",
+        "$(basename \"$checksum_manifest\")",
+        "Release directory contains an unexpected file set.",
+    ] {
+        assert!(
+            asset_verifier.contains(required),
+            "release five-file verifier is missing: {required}"
+        );
+    }
+    let release_listing = asset_verifier
+        .split("expected_release_listing=\"")
+        .nth(1)
+        .unwrap()
+        .split("actual_release_listing=")
+        .next()
+        .unwrap();
+    assert!(!release_listing.to_ascii_lowercase().contains("fixture"));
+}
+
+#[test]
 fn windows_candidate_binder_does_not_leak_tokens_or_execute_candidate_bytes() {
     let script = normalized_source("scripts/verify-windows-release-candidate.ps1");
 

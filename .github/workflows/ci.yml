@@ -169,6 +169,35 @@ jobs:
           }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./tests/fixtures/windows/WindowsComputerUseFixture.ps1 -SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 fixture self-test failed." }
+          $fixtureExecutableSelfTest = Join-Path $env:RUNNER_TEMP ("lbb-windows-fixture-" + [Guid]::NewGuid().ToString("N") + ".exe")
+          $fixtureSourcePath = (Resolve-Path ./tests/fixtures/windows/WindowsComputerUseFixture.ps1).Path
+          $fixtureSourceStream = [IO.File]::OpenRead($fixtureSourcePath)
+          $fixtureSourceHasher = [Security.Cryptography.SHA256]::Create()
+          try {
+            $fixtureSourceSha256 = (($fixtureSourceHasher.ComputeHash($fixtureSourceStream) | ForEach-Object { $_.ToString("x2") }) -join '')
+          }
+          finally {
+            $fixtureSourceHasher.Dispose()
+            $fixtureSourceStream.Dispose()
+          }
+          try {
+            $fixtureBuildOutput = @(& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File $fixtureSourcePath -BuildExecutablePath $fixtureExecutableSelfTest -ExpectedSourceSha256 $fixtureSourceSha256)
+            if ($LASTEXITCODE -ne 0 -or
+                $fixtureBuildOutput.Count -ne 1 -or
+                $fixtureBuildOutput[0] -cne "Windows computer-use fixture executable built.") {
+              throw "Windows PowerShell 5.1 dedicated fixture build failed."
+            }
+            & $fixtureExecutableSelfTest --self-test
+            if ($LASTEXITCODE -ne 0) { throw "Dedicated Windows fixture executable self-test failed." }
+          }
+          finally {
+            if (Test-Path -LiteralPath $fixtureExecutableSelfTest) {
+              Remove-Item -LiteralPath $fixtureExecutableSelfTest -Force -ErrorAction Stop
+            }
+            if (Test-Path -LiteralPath $fixtureExecutableSelfTest) {
+              throw "The dedicated Windows fixture executable self-test artifact remained after cleanup."
+            }
+          }
           & ./scripts/test-windows-computer-use.ps1 -SelfTest
           & ./scripts/wait-windows-foreground-arm-handoff.ps1 -Mode SelfTest
           & ./scripts/write-browser-evidence-record.ps1 -Mode SelfTest
@@ -221,14 +250,14 @@ jobs:
           node scripts/finalize-macos-acceptance.mjs --self-test
       - name: Validate the macOS packaged-evidence harness
         run: |
-          node --check evidence/v0.12.25/computer/helper-evidence-rig.mjs
-          node evidence/v0.12.25/computer/helper-evidence-rig.mjs --self-test
-          xcrun swiftc -typecheck evidence/v0.12.25/computer/HelperEvidenceFixture.swift
-          xcrun swiftc -typecheck evidence/v0.12.25/computer/SystemProbe.swift
-          xcrun swiftc -typecheck evidence/v0.12.25/computer/AppShareHandoff.swift
-          xcrun swiftc evidence/v0.12.25/computer/AppShareHandoff.swift -o "$RUNNER_TEMP/lbb-app-share-handoff-self-test"
+          node --check evidence/v0.12.26/computer/helper-evidence-rig.mjs
+          node evidence/v0.12.26/computer/helper-evidence-rig.mjs --self-test
+          xcrun swiftc -typecheck evidence/v0.12.26/computer/HelperEvidenceFixture.swift
+          xcrun swiftc -typecheck evidence/v0.12.26/computer/SystemProbe.swift
+          xcrun swiftc -typecheck evidence/v0.12.26/computer/AppShareHandoff.swift
+          xcrun swiftc evidence/v0.12.26/computer/AppShareHandoff.swift -o "$RUNNER_TEMP/lbb-app-share-handoff-self-test"
           "$RUNNER_TEMP/lbb-app-share-handoff-self-test" --self-test
-          xcrun swiftc -typecheck evidence/v0.12.25/computer/PhysicalPointerHandoff.swift
+          xcrun swiftc -typecheck evidence/v0.12.26/computer/PhysicalPointerHandoff.swift
       - name: Install the minimum supported Rust toolchain
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy

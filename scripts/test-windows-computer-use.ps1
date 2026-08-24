@@ -85,6 +85,9 @@ if (-not $SelfTest -and (
 
 Add-Type -AssemblyName System.Net.Http -ErrorAction Stop
 
+$fixtureBuildDirectory = $null
+$fixtureExecutablePath = $null
+
 function Resolve-RequiredFile {
     param([string]$Path, [string]$Label)
     $resolved = [IO.Path]::GetFullPath($Path)
@@ -734,6 +737,21 @@ namespace LbbWindowsAcceptance
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not inspect the helper worker session");
             }
             return checked((int)processSessionId);
+        }
+
+        public static bool ProcessImageMatches(int processId, string expectedImagePath)
+        {
+            if (processId <= 0 || String.IsNullOrWhiteSpace(expectedImagePath))
+            {
+                return false;
+            }
+            string observed = ReadProcessImagePath((uint)processId);
+            return observed != null &&
+                String.Equals(
+                    Path.GetFullPath(observed),
+                    Path.GetFullPath(expectedImagePath),
+                    StringComparison.OrdinalIgnoreCase
+                );
         }
 
         private static string ReadProcessImagePath(uint processId)
@@ -1681,12 +1699,148 @@ function Wait-ForStableForegroundArm {
     throw "Timed out waiting for a fresh foreground-arm click and $RequiredStableSamples stable native samples."
 }
 
+function Remove-OwnedFixtureBuildDirectory {
+    param([string]$Path, [string]$ExpectedExecutable)
+    if ([String]::IsNullOrWhiteSpace($Path)) {
+        return
+    }
+    $resolvedPath = [IO.Path]::GetFullPath($Path)
+    $resolvedExecutable = [IO.Path]::GetFullPath($ExpectedExecutable)
+    if (-not [String]::Equals(
+            [IO.Path]::GetDirectoryName($resolvedExecutable),
+            $resolvedPath,
+            [StringComparison]::OrdinalIgnoreCase
+        )) {
+        throw "The dedicated fixture executable is outside its runner-owned build directory."
+    }
+    try {
+        $directoryAttributes = [IO.File]::GetAttributes($resolvedPath)
+    }
+    catch [IO.FileNotFoundException] {
+        return
+    }
+    catch [IO.DirectoryNotFoundException] {
+        return
+    }
+    if (($directoryAttributes -band [IO.FileAttributes]::Directory) -eq 0 -or
+        ($directoryAttributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "The runner-owned dedicated fixture build directory is not an ordinary directory."
+    }
+    $entries = @([IO.Directory]::EnumerateFileSystemEntries($resolvedPath))
+    if ($entries.Count -gt 1 -or
+        ($entries.Count -eq 1 -and
+            -not [String]::Equals(
+                [IO.Path]::GetFullPath($entries[0]),
+                $resolvedExecutable,
+                [StringComparison]::OrdinalIgnoreCase
+            ))) {
+        throw "The runner-owned dedicated fixture build directory contains an unexpected entry."
+    }
+    if ([IO.File]::Exists($resolvedExecutable)) {
+        $executableAttributes = [IO.File]::GetAttributes($resolvedExecutable)
+        if (($executableAttributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            ($executableAttributes -band [IO.FileAttributes]::Directory) -ne 0) {
+            throw "The runner-owned dedicated fixture executable is not an ordinary file."
+        }
+    }
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+    $lastError = $null
+    do {
+        try {
+            if ([IO.File]::Exists($resolvedExecutable)) {
+                [IO.File]::SetAttributes($resolvedExecutable, [IO.FileAttributes]::Normal)
+                [IO.File]::Delete($resolvedExecutable)
+            }
+            [IO.Directory]::Delete($resolvedPath, $false)
+            return
+        }
+        catch {
+            $lastError = $_.Exception
+            Start-Sleep -Milliseconds 100
+        }
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw [InvalidOperationException]::new(
+        "The runner-owned dedicated fixture build directory could not be removed.",
+        $lastError
+    )
+}
+
 if ($SelfTest) {
     $selfTestHost = Get-Process -Id $PID
     $selfTestHostPath = $selfTestHost.Path
     $selfTestSessionId = $selfTestHost.SessionId
     if ($script:nativeProbeType::GetProcessSessionId($PID) -ne $selfTestSessionId) {
         throw "The native process-session probe did not identify the PowerShell runner session."
+    }
+    if (-not $script:nativeProbeType::ProcessImageMatches($PID, $selfTestHostPath)) {
+        throw "The native exact process-image probe did not identify the PowerShell runner image."
+    }
+    $selfTestWrongImage = [IO.Path]::Combine(
+        [IO.Path]::GetDirectoryName($selfTestHostPath),
+        "lbb-self-test-wrong-image.exe"
+    )
+    if ($script:nativeProbeType::ProcessImageMatches($PID, $selfTestWrongImage)) {
+        throw "The native exact process-image probe accepted a different image path."
+    }
+
+    $fixtureCleanupSelfTestRoot = [IO.Path]::Combine(
+        [IO.Path]::GetTempPath(),
+        "lbb-fixture-cleanup-self-test-" + [Guid]::NewGuid().ToString("N")
+    )
+    $fixtureCleanupExpected = [IO.Path]::Combine($fixtureCleanupSelfTestRoot, "fixture.exe")
+    try {
+        [IO.Directory]::CreateDirectory($fixtureCleanupSelfTestRoot) | Out-Null
+        [IO.File]::WriteAllBytes($fixtureCleanupExpected, [byte[]](0x4d, 0x5a))
+        Remove-OwnedFixtureBuildDirectory $fixtureCleanupSelfTestRoot $fixtureCleanupExpected
+        if ([IO.File]::Exists($fixtureCleanupExpected) -or [IO.Directory]::Exists($fixtureCleanupSelfTestRoot)) {
+            throw "The exact dedicated fixture cleanup left its owned executable or directory behind."
+        }
+
+        [IO.Directory]::CreateDirectory($fixtureCleanupSelfTestRoot) | Out-Null
+        [IO.File]::WriteAllBytes($fixtureCleanupExpected, [byte[]](0x4d, 0x5a))
+        $fixtureCleanupUnexpected = [IO.Path]::Combine($fixtureCleanupSelfTestRoot, "unexpected.bin")
+        [IO.File]::WriteAllBytes($fixtureCleanupUnexpected, [byte[]](0x01))
+        $fixtureCleanupUnexpectedFailure = $null
+        try {
+            Remove-OwnedFixtureBuildDirectory $fixtureCleanupSelfTestRoot $fixtureCleanupExpected
+        }
+        catch {
+            $fixtureCleanupUnexpectedFailure = $_.Exception.Message
+        }
+        if ($fixtureCleanupUnexpectedFailure -cne "The runner-owned dedicated fixture build directory contains an unexpected entry." -or
+            -not [IO.File]::Exists($fixtureCleanupExpected) -or
+            -not [IO.File]::Exists($fixtureCleanupUnexpected)) {
+            throw "The dedicated fixture cleanup did not preserve an unexpected directory entry fail closed."
+        }
+        [IO.File]::Delete($fixtureCleanupUnexpected)
+        [IO.File]::Delete($fixtureCleanupExpected)
+        [IO.Directory]::Delete($fixtureCleanupSelfTestRoot, $false)
+
+        [IO.File]::WriteAllBytes($fixtureCleanupSelfTestRoot, [byte[]](0x01))
+        $fixtureCleanupReplacementFailure = $null
+        try {
+            Remove-OwnedFixtureBuildDirectory $fixtureCleanupSelfTestRoot $fixtureCleanupExpected
+        }
+        catch {
+            $fixtureCleanupReplacementFailure = $_.Exception.Message
+        }
+        if ($fixtureCleanupReplacementFailure -cne "The runner-owned dedicated fixture build directory is not an ordinary directory." -or
+            -not [IO.File]::Exists($fixtureCleanupSelfTestRoot)) {
+            throw "The dedicated fixture cleanup accepted a file replacement for its owned directory."
+        }
+    }
+    finally {
+        if ([IO.File]::Exists($fixtureCleanupSelfTestRoot)) {
+            [IO.File]::SetAttributes($fixtureCleanupSelfTestRoot, [IO.FileAttributes]::Normal)
+            [IO.File]::Delete($fixtureCleanupSelfTestRoot)
+        }
+        if ([IO.Directory]::Exists($fixtureCleanupSelfTestRoot)) {
+            foreach ($fixtureCleanupEntry in @([IO.Directory]::EnumerateFiles($fixtureCleanupSelfTestRoot))) {
+                [IO.File]::SetAttributes($fixtureCleanupEntry, [IO.FileAttributes]::Normal)
+                [IO.File]::Delete($fixtureCleanupEntry)
+            }
+            [IO.Directory]::Delete($fixtureCleanupSelfTestRoot, $false)
+        }
     }
 
     $selfTestJob = $script:ownedJobType::new()
@@ -1980,7 +2134,7 @@ if ($SelfTest) {
     try {
         $operatorMarkerSelfTestRequestId = "0123456789abcdef0123456789abcdef"
         $operatorRequestMarker = New-ForegroundArmRequestMarker `
-            -ProductVersion "0.12.25" `
+            -ProductVersion "0.12.26" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -InputStateAtPublication "not-started" `
             -TimeoutSeconds 120 `
@@ -2007,7 +2161,7 @@ if ($SelfTest) {
         )
         if ((@($operatorRequestRecord.PSObject.Properties.Name) -join "|") -cne ($expectedRequestMarkerProperties -join "|") -or
             $operatorRequestRecord.schemaVersion -ne 2 -or
-            $operatorRequestRecord.productVersion -cne "0.12.25" -or
+            $operatorRequestRecord.productVersion -cne "0.12.26" -or
             $operatorRequestRecord.status -cne "action-required" -or
             $operatorRequestRecord.requestId -cne $operatorMarkerSelfTestRequestId -or
             $operatorRequestRecord.operatorActionRequired -ne $true -or
@@ -2053,7 +2207,7 @@ if ($SelfTest) {
         }
 
         $alreadyArmedMarker = New-ForegroundArmRequestMarker `
-            -ProductVersion "0.12.25" `
+            -ProductVersion "0.12.26" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -InputStateAtPublication "already-acknowledged" `
             -TimeoutSeconds 120 `
@@ -2088,7 +2242,7 @@ if ($SelfTest) {
             stableSamplesRequired = 3
         }
         $operatorReceivedMarker = New-ForegroundArmReceivedMarker `
-            -ProductVersion "0.12.25" `
+            -ProductVersion "0.12.26" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -Proof $operatorReceivedProof
         $operatorReceivedPath = Write-NewOperatorMarker `
@@ -2107,7 +2261,7 @@ if ($SelfTest) {
         if ((@($operatorReceivedRecord.PSObject.Properties.Name) -join "|") -cne ($expectedReceivedMarkerProperties -join "|") -or
             $operatorReceivedRecord.status -cne "received" -or
             $operatorReceivedRecord.schemaVersion -ne 2 -or
-            $operatorReceivedRecord.productVersion -cne "0.12.25" -or
+            $operatorReceivedRecord.productVersion -cne "0.12.26" -or
             $operatorReceivedRecord.requestId -cne $operatorRequestRecord.requestId -or
             $operatorReceivedRecord.exactClickCountsMatched -ne $true -or
             $operatorReceivedRecord.stableSamplesObserved -ne 3 -or
@@ -2119,7 +2273,7 @@ if ($SelfTest) {
         $incompleteReceivedMarkerFailure = $null
         try {
             $null = New-ForegroundArmReceivedMarker `
-                -ProductVersion "0.12.25" `
+                -ProductVersion "0.12.26" `
                 -RequestId $operatorMarkerSelfTestRequestId `
                 -Proof $operatorReceivedProof
         }
@@ -2150,10 +2304,10 @@ if ($SelfTest) {
         }
         $candidateBindingSelfTestPath = [IO.Path]::Combine($candidateBindingSelfTestRoot, "candidate-binding.json")
         $candidateBindingNames = @(
-            "local-browser-bridge-v0.12.25-windows-x86_64.exe",
-            "local-computer-helper-v0.12.25-windows-x86_64.exe",
-            "local-browser-bridge-v0.12.25-macos-universal.tar.gz",
-            "local-browser-bridge-extension-v0.12.25.zip"
+            "local-browser-bridge-v0.12.26-windows-x86_64.exe",
+            "local-computer-helper-v0.12.26-windows-x86_64.exe",
+            "local-browser-bridge-v0.12.26-macos-universal.tar.gz",
+            "local-browser-bridge-extension-v0.12.26.zip"
         )
         $candidateBindingChecksums = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
         for ($index = 0; $index -lt $candidateBindingNames.Count; $index++) {
@@ -2178,9 +2332,9 @@ if ($SelfTest) {
         })
         $candidateBindingSelfTestRecord = [ordered]@{
             schemaVersion = 1
-            productVersion = "0.12.25"
+            productVersion = "0.12.26"
             repository = "flrngel/local-browser-bridge"
-            tag = "v0.12.25"
+            tag = "v0.12.26"
             sourceSha = [String]::new([char]'b', 40)
             tagObjectSha = [String]::new([char]'c', 40)
             workflowRunId = "32650000000"
@@ -2203,7 +2357,7 @@ if ($SelfTest) {
         )
         $candidateBindingSelfTestResult = Read-ExactReleaseCandidateBinding `
             -Path $candidateBindingSelfTestPath `
-            -ExpectedVersion "0.12.25" `
+            -ExpectedVersion "0.12.26" `
             -ExpectedManifestSha256 $candidateBindingManifestSha `
             -ExpectedChecksums $candidateBindingChecksums `
             -ExpectedAssetNames $candidateBindingNames
@@ -2222,7 +2376,7 @@ if ($SelfTest) {
         try {
             $null = Read-ExactReleaseCandidateBinding `
                 -Path $candidateBindingSelfTestPath `
-                -ExpectedVersion "0.12.25" `
+                -ExpectedVersion "0.12.26" `
                 -ExpectedManifestSha256 $candidateBindingManifestSha `
                 -ExpectedChecksums $candidateBindingChecksums `
                 -ExpectedAssetNames $candidateBindingNames
@@ -2497,6 +2651,8 @@ function ConvertTo-SafeFailureText {
         @($resolvedServer, "[SERVER]"),
         @($resolvedHelper, "[HELPER]"),
         @($resolvedFixture, "[FIXTURE]"),
+        @($fixtureBuildDirectory, "[FIXTURE_BUILD_DIRECTORY]"),
+        @($fixtureExecutablePath, "[FIXTURE_EXECUTABLE]"),
         @($resolvedChecksumManifest, "[CHECKSUM_MANIFEST]"),
         @($PSCommandPath, "[RUNNER]")
     )) {
@@ -3250,6 +3406,8 @@ if ($selectedSuites -contains "Recovery" -and $TimeoutSeconds -lt 25) {
 }
 
 $fixtureProcess = $null
+$fixtureBuilderProcess = $null
+$fixtureExecutableSelfTestProcess = $null
 $serverProcess = $null
 $helperProcess = $null
 $pendingCancellationRequest = $null
@@ -3267,6 +3425,31 @@ $baselineProbe = $null
 $script:lastInvariantPublicationGeneration = 0
 $targetWindowId = $null
 $targetPid = 0
+$fixtureBuildDirectory = [IO.Path]::Combine(
+    [IO.Path]::GetTempPath(),
+    "lbb-windows-computer-use-fixture-" + [Guid]::NewGuid().ToString("N")
+)
+$fixtureExecutablePath = [IO.Path]::Combine(
+    $fixtureBuildDirectory,
+    "lbb-windows-computer-use-fixture.exe"
+)
+$fixtureProcessBinding = [ordered]@{
+    executionMode = "dedicated-windows-application"
+    appUserModelId = "LocalBrowserBridge.WindowsAcceptance"
+    sourceScriptSha256 = (Get-FileSha256 $resolvedFixture)
+    sourceStableAcrossBuild = $false
+    executableBytes = $null
+    executableSha256 = $null
+    executableStableAcrossLaunch = $false
+    entryPointSelfTestPassed = $false
+    directChildMatched = $false
+    exactImageMatched = $false
+    interactiveSessionMatched = $false
+    readyPidMatched = $false
+    executableRemoved = $false
+    terminalHostUsed = $false
+    pathsRecorded = $false
+}
 $recoveryEventName = "Local\LBBTestSharePump-" + [Guid]::NewGuid().ToString("N")
 $initialWorkerPid = $null
 $initialHelperSessionId = $null
@@ -3349,13 +3532,79 @@ $script:helperTopologyDiagnostic = [ordered]@{
 
 try {
     $script:ownedJob = $script:ownedJobType::new()
-    $script:runStage = "start-fixture"
     $hostPath = (Get-Process -Id $PID).Path
-    $fixtureArguments = @("-NoLogo", "-NoProfile", "-NonInteractive", "-File", $resolvedFixture, "-EvidenceDirectory", $fixtureEvidence)
-    if ($ShowOccluder) {
-        $fixtureArguments += "-ShowOccluder"
+    $script:runStage = "build-dedicated-fixture"
+    $fixtureBuildParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+    $fixtureBuildParentAttributes = [IO.File]::GetAttributes($fixtureBuildParent)
+    Assert-True (($fixtureBuildParentAttributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) "The fixture build parent must not be a reparse point."
+    Assert-True (-not [IO.Directory]::Exists($fixtureBuildDirectory) -and -not [IO.File]::Exists($fixtureBuildDirectory)) "The runner-owned fixture build directory already exists."
+    [IO.Directory]::CreateDirectory($fixtureBuildDirectory) | Out-Null
+    $fixtureBuildAttributes = [IO.File]::GetAttributes($fixtureBuildDirectory)
+    Assert-True (($fixtureBuildAttributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) "The runner-owned fixture build directory must not be a reparse point."
+    $fixtureBuilderArguments = @(
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        $resolvedFixture,
+        "-BuildExecutablePath",
+        $fixtureExecutablePath,
+        "-ExpectedSourceSha256",
+        $fixtureProcessBinding.sourceScriptSha256
+    )
+    $fixtureBuilderProcess = Start-IsolatedProcess $hostPath $fixtureBuilderArguments @{}
+    if (-not $fixtureBuilderProcess.WaitForExit(120000)) {
+        throw "The source-bound dedicated Windows fixture build timed out."
     }
-    $fixtureProcess = Start-IsolatedProcess $hostPath $fixtureArguments @{}
+    if ($fixtureBuilderProcess.ExitCode -ne 0) {
+        throw "The source-bound dedicated Windows fixture build failed."
+    }
+    $fixtureProcessBinding.sourceStableAcrossBuild = (
+        (Get-FileSha256 $resolvedFixture) -ceq $fixtureProcessBinding.sourceScriptSha256
+    )
+    Assert-True ($fixtureProcessBinding.sourceStableAcrossBuild -eq $true) "The fixture source changed during the dedicated executable build."
+    Assert-True ([IO.File]::Exists($fixtureExecutablePath)) "The dedicated Windows fixture executable is absent."
+    $fixtureProcessBinding.executableBytes = ([IO.FileInfo]::new($fixtureExecutablePath)).Length
+    $fixtureProcessBinding.executableSha256 = Get-FileSha256 $fixtureExecutablePath
+    Assert-True ($fixtureProcessBinding.executableBytes -gt 0 -and $fixtureProcessBinding.executableBytes -le 20971520) "The dedicated Windows fixture executable size is outside the bounded range."
+    Assert-True ($fixtureProcessBinding.executableSha256 -cmatch '^[0-9a-f]{64}$') "The dedicated Windows fixture executable hash is invalid."
+    $fixtureBuilderProcess.Dispose()
+    $fixtureBuilderProcess = $null
+
+    $script:runStage = "self-test-dedicated-fixture"
+    $fixtureExecutableSelfTestProcess = Start-IsolatedProcess $fixtureExecutablePath @("--self-test") @{}
+    if (-not $fixtureExecutableSelfTestProcess.WaitForExit(30000)) {
+        throw "The dedicated Windows fixture executable self-test timed out."
+    }
+    if ($fixtureExecutableSelfTestProcess.ExitCode -ne 0) {
+        throw "The dedicated Windows fixture executable self-test failed."
+    }
+    $fixtureProcessBinding.entryPointSelfTestPassed = $true
+    $fixtureExecutableSelfTestProcess.Dispose()
+    $fixtureExecutableSelfTestProcess = $null
+    Assert-True (
+        (Get-FileSha256 $fixtureExecutablePath) -ceq $fixtureProcessBinding.executableSha256
+    ) "The dedicated Windows fixture executable changed during its entry-point self-test."
+
+    $script:runStage = "start-dedicated-fixture"
+    $fixtureArguments = @("--evidence-directory", $fixtureEvidence)
+    if ($ShowOccluder) {
+        $fixtureArguments += "--show-occluder"
+    }
+    $fixtureProcess = Start-IsolatedProcess $fixtureExecutablePath $fixtureArguments @{}
+    $fixtureProcessBinding.exactImageMatched = $script:nativeProbeType::ProcessImageMatches(
+        $fixtureProcess.Id,
+        $fixtureExecutablePath
+    )
+    $fixtureProcessBinding.interactiveSessionMatched = (
+        $script:nativeProbeType::GetProcessSessionId($fixtureProcess.Id) -eq $sessionId
+    )
+    $fixtureProcessBinding.executableStableAcrossLaunch = (
+        (Get-FileSha256 $fixtureExecutablePath) -ceq $fixtureProcessBinding.executableSha256
+    )
+    Assert-True ($fixtureProcessBinding.exactImageMatched -eq $true) "The fixture process image did not match the source-bound dedicated executable."
+    Assert-True ($fixtureProcessBinding.interactiveSessionMatched -eq $true) "The dedicated fixture did not start in the runner's interactive session."
+    Assert-True ($fixtureProcessBinding.executableStableAcrossLaunch -eq $true) "The dedicated Windows fixture executable changed before its live image binding completed."
     $script:fixtureReady = Wait-Condition {
         if ($fixtureProcess.HasExited) { throw "The fixture exited during startup." }
         $path = [IO.Path]::Combine($fixtureEvidence, "fixture-ready.json")
@@ -3363,7 +3612,14 @@ try {
         return $false
     } "the Windows fixture"
     $targetPid = [int]$script:fixtureReady.processId
-    Assert-True ($targetPid -eq $fixtureProcess.Id) "The fixture-ready process identity did not match the exact runner-owned fixture process."
+    $fixtureProcessBinding.readyPidMatched = $targetPid -eq $fixtureProcess.Id
+    Assert-True ($fixtureProcessBinding.readyPidMatched -eq $true) "The fixture-ready process identity did not match the exact runner-owned fixture process."
+    $fixtureDirectChildren = @($script:nativeProbeType::GetDirectChildProcessIds($PID, $fixtureExecutablePath))
+    $fixtureProcessBinding.directChildMatched = (
+        $fixtureDirectChildren.Count -eq 1 -and
+        [int]$fixtureDirectChildren[0] -eq $fixtureProcess.Id
+    )
+    Assert-True ($fixtureProcessBinding.directChildMatched -eq $true) "The dedicated fixture was not the runner's sole exact-image direct child."
 
     $script:runStage = "start-loopback-server"
     $processEnvironment = @{
@@ -4192,7 +4448,9 @@ finally {
     }
     if ($null -ne $fixtureProcess) {
         try {
-            $null = Request-FixtureStop $fixtureProcess
+            if (-not (Request-FixtureStop $fixtureProcess)) {
+                $cleanupIssues.Add("The runner-owned fixture did not complete graceful shutdown before Job cleanup.")
+            }
         }
         catch {
             $cleanupIssues.Add("The runner-owned fixture did not complete graceful shutdown before Job cleanup.")
@@ -4222,6 +4480,40 @@ finally {
             $script:ownedJob.Dispose()
             $script:ownedJob = $null
         }
+    }
+    if ($null -ne $fixtureProcess) {
+        try {
+            $fixtureProcess.Dispose()
+        }
+        catch {
+            $cleanupIssues.Add("The dedicated fixture process handle did not close cleanly.")
+        }
+        $fixtureProcess = $null
+    }
+    if ($null -ne $fixtureBuilderProcess) {
+        try {
+            $fixtureBuilderProcess.Dispose()
+        }
+        catch {
+            $cleanupIssues.Add("The dedicated fixture builder process handle did not close cleanly.")
+        }
+        $fixtureBuilderProcess = $null
+    }
+    if ($null -ne $fixtureExecutableSelfTestProcess) {
+        try {
+            $fixtureExecutableSelfTestProcess.Dispose()
+        }
+        catch {
+            $cleanupIssues.Add("The dedicated fixture executable self-test process handle did not close cleanly.")
+        }
+        $fixtureExecutableSelfTestProcess = $null
+    }
+    try {
+        Remove-OwnedFixtureBuildDirectory $fixtureBuildDirectory $fixtureExecutablePath
+        $fixtureProcessBinding.executableRemoved = $true
+    }
+    catch {
+        $cleanupIssues.Add("The runner-owned dedicated fixture build directory remained after process cleanup.")
     }
     if ($selectedSuites -contains "Recovery") {
         $recoveryEventReleased = $script:nativeProbeType::GetKernelEventState($recoveryEventName) -eq 0
@@ -4281,6 +4573,7 @@ finally {
         helperTopologyHistory = @($script:helperTopologyHistory)
         helperTopologyLastObservation = $script:helperTopologyDiagnostic
         foregroundArmProof = $script:foregroundArmProof
+        fixtureProcessBinding = $fixtureProcessBinding
         releaseCandidateBinding = $releaseCandidateBinding
         candidateBinding = $candidateBinding
     }

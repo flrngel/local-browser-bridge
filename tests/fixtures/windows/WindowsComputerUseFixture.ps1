@@ -9,6 +9,14 @@ param(
     [Parameter(ParameterSetName = "Run")]
     [switch]$ShowOccluder,
 
+    [Parameter(ParameterSetName = "Build", Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [string]$BuildExecutablePath,
+
+    [Parameter(ParameterSetName = "Build", Mandatory = $true)]
+    [ValidatePattern('^[0-9a-f]{64}$')]
+    [string]$ExpectedSourceSha256,
+
     [Parameter(ParameterSetName = "SelfTest", Mandatory = $true)]
     [switch]$SelfTest
 )
@@ -16,12 +24,25 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Get-FixtureSourceSha256 {
+    param([string]$Path)
+    $stream = [IO.File]::OpenRead([IO.Path]::GetFullPath($Path))
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        return (($sha256.ComputeHash($stream) | ForEach-Object { $_.ToString("x2") }) -join '')
+    }
+    finally {
+        $sha256.Dispose()
+        $stream.Dispose()
+    }
+}
+
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     throw "The Windows computer-use fixture can run only on Windows."
 }
 
 $evidenceRoot = $null
-if (-not $SelfTest) {
+if ($PSCmdlet.ParameterSetName -eq "Run") {
     $evidenceRoot = [IO.Path]::GetFullPath($EvidenceDirectory)
     [IO.Directory]::CreateDirectory($evidenceRoot) | Out-Null
 
@@ -1243,6 +1264,270 @@ namespace LbbWindowsFixture
 
 $fixtureNamespace = "LbbWindowsFixture_" + [Guid]::NewGuid().ToString("N")
 $fixtureSource = $fixtureSource.Replace("namespace LbbWindowsFixture", "namespace $fixtureNamespace")
+$fixtureProgramSource = @'
+namespace LbbWindowsFixture
+{
+    using System;
+    using System.IO;
+    using System.Runtime.InteropServices;
+
+    internal static class FixtureProgram
+    {
+        private const string AppUserModelId = "LocalBrowserBridge.WindowsAcceptance";
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        private static extern int SetCurrentProcessExplicitAppUserModelID(string appId);
+
+        private static bool TryParseArguments(
+            string[] args,
+            out bool selfTest,
+            out string evidenceDirectory,
+            out bool showOccluder)
+        {
+            selfTest = args != null && args.Length == 1 &&
+                String.Equals(args[0], "--self-test", StringComparison.Ordinal);
+            evidenceDirectory = null;
+            showOccluder = false;
+            if (selfTest)
+            {
+                return true;
+            }
+            if (args == null || (args.Length != 2 && args.Length != 3) ||
+                !String.Equals(args[0], "--evidence-directory", StringComparison.Ordinal) ||
+                String.IsNullOrWhiteSpace(args[1]) ||
+                !IsDriveAbsoluteNonRootPath(args[1]) ||
+                (args.Length == 3 &&
+                    !String.Equals(args[2], "--show-occluder", StringComparison.Ordinal)))
+            {
+                return false;
+            }
+            evidenceDirectory = Path.GetFullPath(args[1]);
+            showOccluder = args.Length == 3;
+            return true;
+        }
+
+        private static bool IsDriveAbsoluteNonRootPath(string value)
+        {
+            if (String.IsNullOrWhiteSpace(value) || value.Length <= 3 ||
+                !Char.IsLetter(value[0]) || value[1] != ':' ||
+                (value[2] != Path.DirectorySeparatorChar && value[2] != Path.AltDirectorySeparatorChar))
+            {
+                return false;
+            }
+            string fullPath = Path.GetFullPath(value);
+            string root = Path.GetPathRoot(fullPath);
+            return !String.IsNullOrEmpty(root) &&
+                !String.Equals(fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                    root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                    StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static void RunArgumentSelfTest()
+        {
+            string root = Path.GetPathRoot(Environment.SystemDirectory);
+            string absoluteEvidence = Path.Combine(root, "lbb-fixture-self-test-evidence");
+            bool selfTest;
+            string evidenceDirectory;
+            bool showOccluder;
+            if (TryParseArguments(null, out selfTest, out evidenceDirectory, out showOccluder) ||
+                TryParseArguments(new string[0], out selfTest, out evidenceDirectory, out showOccluder) ||
+                TryParseArguments(new string[] { "--unknown" }, out selfTest, out evidenceDirectory, out showOccluder) ||
+                TryParseArguments(new string[] { "--self-test", "extra" }, out selfTest, out evidenceDirectory, out showOccluder) ||
+                TryParseArguments(new string[] { "--SELF-TEST" }, out selfTest, out evidenceDirectory, out showOccluder) ||
+                TryParseArguments(new string[] { "--evidence-directory" }, out selfTest, out evidenceDirectory, out showOccluder) ||
+                TryParseArguments(new string[] { "--evidence-directory", "relative" }, out selfTest, out evidenceDirectory, out showOccluder) ||
+                TryParseArguments(new string[] { "--evidence-directory", "C:drive-relative" }, out selfTest, out evidenceDirectory, out showOccluder) ||
+                TryParseArguments(new string[] { "--evidence-directory", "C:\\" }, out selfTest, out evidenceDirectory, out showOccluder) ||
+                TryParseArguments(new string[] { "--evidence-directory", "\\root-relative" }, out selfTest, out evidenceDirectory, out showOccluder) ||
+                TryParseArguments(new string[] { "--evidence-directory", "\\\\server\\share\\evidence" }, out selfTest, out evidenceDirectory, out showOccluder) ||
+                TryParseArguments(new string[] { absoluteEvidence, "--evidence-directory" }, out selfTest, out evidenceDirectory, out showOccluder) ||
+                TryParseArguments(new string[] { "--evidence-directory", absoluteEvidence, "--show-occluder", "--show-occluder" }, out selfTest, out evidenceDirectory, out showOccluder) ||
+                TryParseArguments(new string[] { "--evidence-directory", absoluteEvidence, "--SHOW-OCCLUDER" }, out selfTest, out evidenceDirectory, out showOccluder))
+            {
+                throw new InvalidOperationException("The dedicated fixture accepted an invalid argument sequence.");
+            }
+            if (!TryParseArguments(new string[] { "--self-test" }, out selfTest, out evidenceDirectory, out showOccluder) ||
+                !selfTest || evidenceDirectory != null || showOccluder ||
+                !TryParseArguments(new string[] { "--evidence-directory", absoluteEvidence }, out selfTest, out evidenceDirectory, out showOccluder) ||
+                selfTest || evidenceDirectory != absoluteEvidence || showOccluder ||
+                !TryParseArguments(new string[] { "--evidence-directory", absoluteEvidence, "--show-occluder" }, out selfTest, out evidenceDirectory, out showOccluder) ||
+                selfTest || evidenceDirectory != absoluteEvidence || !showOccluder)
+            {
+                throw new InvalidOperationException("The dedicated fixture rejected a canonical argument sequence.");
+            }
+
+            string freshnessRoot = Path.Combine(
+                Path.GetTempPath(),
+                "lbb-fixture-entrypoint-self-test-" + Guid.NewGuid().ToString("N"));
+            string protectedFile = Path.Combine(freshnessRoot, "fixture-state.json");
+            string protectedDirectory = Path.Combine(freshnessRoot, "fixture-ready.json");
+            try
+            {
+                Directory.CreateDirectory(freshnessRoot);
+                if (!IsFreshEvidenceDirectory(freshnessRoot))
+                {
+                    throw new InvalidOperationException("The dedicated fixture rejected a fresh evidence directory.");
+                }
+                File.WriteAllBytes(protectedFile, new byte[] { 1 });
+                if (IsFreshEvidenceDirectory(freshnessRoot))
+                {
+                    throw new InvalidOperationException("The dedicated fixture accepted a protected evidence file.");
+                }
+                File.Delete(protectedFile);
+                Directory.CreateDirectory(protectedDirectory);
+                if (IsFreshEvidenceDirectory(freshnessRoot))
+                {
+                    throw new InvalidOperationException("The dedicated fixture accepted a protected evidence directory.");
+                }
+                Directory.Delete(protectedDirectory, false);
+            }
+            finally
+            {
+                if (File.Exists(protectedFile))
+                {
+                    File.Delete(protectedFile);
+                }
+                if (Directory.Exists(protectedDirectory))
+                {
+                    Directory.Delete(protectedDirectory, false);
+                }
+                if (Directory.Exists(freshnessRoot))
+                {
+                    Directory.Delete(freshnessRoot, false);
+                }
+            }
+        }
+
+        private static bool PathEntryExists(string path)
+        {
+            try
+            {
+                File.GetAttributes(path);
+                return true;
+            }
+            catch (FileNotFoundException)
+            {
+                return false;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return false;
+            }
+        }
+
+        private static bool IsFreshEvidenceDirectory(string evidenceDirectory)
+        {
+            if (!Directory.Exists(evidenceDirectory))
+            {
+                return false;
+            }
+            FileAttributes attributes = File.GetAttributes(evidenceDirectory);
+            if ((attributes & FileAttributes.Directory) == 0 ||
+                (attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                return false;
+            }
+            string[] protectedNames = new string[]
+            {
+                "fixture-state.json",
+                "fixture-events.ndjson",
+                "fixture-ready.json"
+            };
+            foreach (string protectedName in protectedNames)
+            {
+                if (PathEntryExists(Path.Combine(evidenceDirectory, protectedName)))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        [STAThread]
+        private static int Main(string[] args)
+        {
+            try
+            {
+                bool selfTest;
+                string evidenceDirectory;
+                bool showOccluder;
+                if (!TryParseArguments(args, out selfTest, out evidenceDirectory, out showOccluder))
+                {
+                    return 2;
+                }
+                if (!selfTest && !IsFreshEvidenceDirectory(evidenceDirectory))
+                {
+                    return 2;
+                }
+                int appIdResult = SetCurrentProcessExplicitAppUserModelID(AppUserModelId);
+                if (appIdResult != 0)
+                {
+                    return 3;
+                }
+                if (selfTest)
+                {
+                    RunArgumentSelfTest();
+                    FixtureRuntime.RunSelfTest();
+                }
+                else
+                {
+                    FixtureRuntime.Run(evidenceDirectory, showOccluder);
+                }
+                return 0;
+            }
+            catch
+            {
+                return 1;
+            }
+        }
+    }
+}
+'@
+$fixtureProgramSource = $fixtureProgramSource.Replace(
+    "namespace LbbWindowsFixture",
+    "namespace $fixtureNamespace"
+)
+
+if ($PSCmdlet.ParameterSetName -eq "Build") {
+    $sourceSha256BeforeBuild = Get-FixtureSourceSha256 $PSCommandPath
+    if ($sourceSha256BeforeBuild -cne $ExpectedSourceSha256) {
+        throw "ExpectedSourceSha256 does not match the exact fixture source."
+    }
+    $outputPath = [IO.Path]::GetFullPath($BuildExecutablePath)
+    if ([IO.Path]::GetExtension($outputPath) -cne ".exe") {
+        throw "BuildExecutablePath must name a new .exe file."
+    }
+    if ([IO.File]::Exists($outputPath) -or [IO.Directory]::Exists($outputPath)) {
+        throw "BuildExecutablePath must not already exist."
+    }
+    $outputDirectory = [IO.Path]::GetDirectoryName($outputPath)
+    if ([String]::IsNullOrWhiteSpace($outputDirectory) -or
+        -not [IO.Directory]::Exists($outputDirectory)) {
+        throw "BuildExecutablePath must have an existing parent directory."
+    }
+    Add-Type -TypeDefinition ($fixtureSource + [Environment]::NewLine + $fixtureProgramSource) `
+        -Language CSharp `
+        -OutputAssembly $outputPath `
+        -OutputType WindowsApplication `
+        -ReferencedAssemblies @(
+            "System.Windows.Forms",
+            "System.Drawing",
+            "System.Web.Extensions"
+        )
+    $sourceSha256AfterBuild = Get-FixtureSourceSha256 $PSCommandPath
+    if ($sourceSha256AfterBuild -cne $ExpectedSourceSha256) {
+        if ([IO.File]::Exists($outputPath)) {
+            [IO.File]::Delete($outputPath)
+        }
+        throw "The fixture source changed during the dedicated executable build."
+    }
+    if (-not [IO.File]::Exists($outputPath) -or ([IO.FileInfo]::new($outputPath)).Length -le 0) {
+        throw "The dedicated Windows fixture executable was not produced."
+    }
+    Write-Output "Windows computer-use fixture executable built."
+    return
+}
+
 Add-Type -TypeDefinition $fixtureSource -Language CSharp -ReferencedAssemblies @(
     "System.Windows.Forms",
     "System.Drawing",
@@ -1284,6 +1569,36 @@ if ($SelfTest) {
     if ($sentinelSource.IndexOf('LBB Windows Acceptance - ACTION REQUIRED', [StringComparison]::Ordinal) -ge 0 -or
         $sentinelSource.IndexOf('LBB Windows Acceptance - ARMED', [StringComparison]::Ordinal) -ge 0) {
         throw "The foreground-sentinel top-level title must not encode its arm state."
+    }
+    if ($fixtureProgramSource.IndexOf(
+            'private const string AppUserModelId = "LocalBrowserBridge.WindowsAcceptance";',
+            [StringComparison]::Ordinal
+        ) -lt 0 -or
+        $fixtureProgramSource.IndexOf(
+            'SetCurrentProcessExplicitAppUserModelID(AppUserModelId)',
+            [StringComparison]::Ordinal
+        ) -lt 0 -or
+        $fixtureProgramSource.IndexOf(
+            'String.Equals(args[0], "--evidence-directory", StringComparison.Ordinal)',
+            [StringComparison]::Ordinal
+        ) -lt 0 -or
+        $fixtureProgramSource.IndexOf(
+            '!IsDriveAbsoluteNonRootPath(args[1])',
+            [StringComparison]::Ordinal
+        ) -lt 0 -or
+        $fixtureProgramSource.IndexOf(
+            'String.Equals(args[0], "--self-test", StringComparison.Ordinal)',
+            [StringComparison]::Ordinal
+        ) -lt 0 -or
+        $fixtureProgramSource.IndexOf(
+            'String.Equals(args[2], "--show-occluder", StringComparison.Ordinal)',
+            [StringComparison]::Ordinal
+        ) -lt 0 -or
+        $fixtureProgramSource.IndexOf(
+            'if (PathEntryExists(Path.Combine(evidenceDirectory, protectedName)))',
+            [StringComparison]::Ordinal
+        ) -lt 0) {
+        throw "The dedicated fixture executable identity or exact argument grammar failed its self-test."
     }
     $fixtureRuntimeType::RunSelfTest()
     Write-Output "Windows computer-use fixture self-test passed."
