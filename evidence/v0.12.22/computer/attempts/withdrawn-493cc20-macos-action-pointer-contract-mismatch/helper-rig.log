@@ -1,0 +1,61 @@
+2026-08-24T15:09:12.443Z PASS evidence output parent is an owner-private ordinary directory: the direct evidence parent is ordinary, owner-private, and current-user owned
+2026-08-24T15:09:12.445Z PASS evidence output directory is newly created and owner-private: the runner created one private lane output directory
+2026-08-24T15:09:13.017Z PASS pre-run harness source commit matches coordinator binding: exact source SHA matched
+2026-08-24T15:09:13.017Z PASS pre-run harness annotated tag object matches coordinator binding: annotated tag object and peel matched
+2026-08-24T15:09:13.017Z PASS pre-run harness checkout is detached: detached HEAD
+2026-08-24T15:09:13.017Z PASS pre-run harness checkout is clean: tracked, staged, deleted, and untracked sets are empty
+2026-08-24T15:09:13.017Z PASS pre-run harness source repository passes git fsck: git fsck --full passed
+2026-08-24T15:09:13.017Z PASS pre-run harness files are exact tracked blobs: runner, native probes, and acceptance finalizer match HEAD blobs
+2026-08-24T15:09:13.019Z PASS macOS host: Darwin
+2026-08-24T15:09:13.025Z PASS expected checksum-manifest hash format: 64 lowercase hexadecimal characters
+2026-08-24T15:09:13.026Z PASS canonical checksum-manifest name: SHA256SUMS.txt
+2026-08-24T15:09:13.026Z PASS exact archive name: local-browser-bridge-v0.12.22-macos-universal.tar.gz
+2026-08-24T15:09:13.026Z PASS checksum manifest is one bounded current-user-owned ordinary file: ordinary, singly linked, owner-controlled, and within the manifest byte bound
+2026-08-24T15:09:13.026Z PASS checksum manifest stayed stable while it was bound: path and descriptor identity, size, links, and timestamps remained unchanged
+2026-08-24T15:09:13.026Z PASS out-of-band checksum-manifest hash matches: 1b2650f51664ede3f238267d13eabef12af36f74f9e6f41e9e5864fa369c1835
+2026-08-24T15:09:13.026Z PASS checksum manifest has the exact canonical four-entry set: local-browser-bridge-v0.12.22-windows-x86_64.exe,local-computer-helper-v0.12.22-windows-x86_64.exe,local-browser-bridge-v0.12.22-macos-universal.tar.gz,local-browser-bridge-extension-v0.12.22.zip
+2026-08-24T15:09:13.026Z PASS canonical manifest contains the macOS archive checksum: a66d13b56a7176543dbaa38e0a68dbc3a6512af16c9555f1218391aaf773bc1d
+2026-08-24T15:09:13.066Z PASS macOS archive bounded exact inventory: ten PAX-free regular-file/directory entries passed bounded streaming extraction
+2026-08-24T15:09:13.066Z PASS archive checksum is bound by the canonical manifest: a66d13b56a7176543dbaa38e0a68dbc3a6512af16c9555f1218391aaf773bc1d
+2026-08-24T15:09:13.070Z PASS supplied server is archive-exact: 95343e5ef6ce11f20c81185baf2648484c0bf41892ff963e75218416bfb1ba9f
+2026-08-24T15:09:13.072Z PASS supplied helper is archive-exact: 5e256f76bd6799d99202ef7b271586478c730c7b4ecc877ca10cba270cd2c607
+2026-08-24T15:09:13.084Z PASS server universal architecture: arm64,x86_64
+2026-08-24T15:09:13.084Z PASS helper universal architecture: arm64,x86_64
+2026-08-24T15:09:13.084Z PASS helper uses packaged app layout: Local Computer Helper.app
+2026-08-24T15:09:13.105Z PASS strict code-signature verification: server, helper executable, and helper app bundle passed strict verification
+2026-08-24T15:09:13.112Z PASS helper bundle version: 0.12.22/0.12.22
+2026-08-24T15:09:14.460Z PASS optional physical-pointer adversarial prompt self-test: source-only optional adversarial prompt cannot satisfy either release lane
+2026-08-24T15:09:15.038Z PASS app-share handoff bundle identity: dev.flrngel.local-browser-bridge.acceptance.app-share
+2026-08-24T15:09:15.405Z PASS app-share handoff self-test: stable bundle/window/button vocabulary and create-once receipts
+2026-08-24T15:09:15.697Z PASS screen-capture permission preflight: preexisting permission; no request was made
+2026-08-24T15:09:15.697Z PASS accessibility permission preflight: preexisting permission; no request was made
+2026-08-24T15:09:15.697Z PASS active Space probe available: nonzero active Space identity
+2026-08-24T15:09:15.697Z PASS sandwiched foreground AX focus probe available: stable NSWorkspace/raw PSN plus exact AX focused/main-window identities are available
+2026-08-24T15:09:52.307Z PASS native quiet-seat stabilization completed before candidate execution: 36610 ms across 60 stable native transitions after 0 reset(s)
+2026-08-24T15:09:52.612Z PASS server version: 0.12.22
+2026-08-24T15:09:52.822Z PASS helper version: 0.12.22
+2026-08-24T15:09:53.333Z PASS fixture process identity: state belongs to the spawned fixture
+2026-08-24T15:09:53.495Z PASS startup same-PID sibling is the target app's remembered receiver: sibling-main-and-focused=true, fixture-background=true
+2026-08-24T15:09:53.826Z PASS packaged helper compatible: protocol-compatible helper 0.12.22
+2026-08-24T15:09:53.826Z PASS single helper spawn: 1 packaged helper process
+2026-08-24T15:09:53.826Z PASS acknowledged share advertised: computer.share.ack present
+2026-08-24T15:09:53.826Z PASS native stream advertised: computer.capture.native-stream.v1 present
+2026-08-24T15:09:53.826Z PASS input-delivery provenance advertised: computer.input-delivery-provenance.v1 present
+2026-08-24T15:09:53.826Z PASS pointer-activity monitor advertised: computer.pointer-activity-monitor.v1 present
+2026-08-24T15:09:54.017Z PASS helper status backend: background-window/ax+skylight+screencapturekit-stream
+2026-08-24T15:09:54.017Z PASS background shared-session mode: background-window/shared-user-session/target-routed
+2026-08-24T15:09:54.017Z PASS background input backend ready: target-routed input is ready
+2026-08-24T15:09:54.017Z PASS semantic backend ready: macos-accessibility is ready without prompting
+2026-08-24T15:09:54.017Z PASS fixture exact window discovered: 1 matching windows
+2026-08-24T15:09:54.017Z PASS genuine same-PID sibling window discovered: 1 sibling matches, distinct=true
+2026-08-24T15:09:54.017Z PASS fixture is a background target: neither same-PID fixture window owns the user's foreground process or front window
+2026-08-24T15:09:54.279Z PASS exact fixture window observed: 1209x826
+2026-08-24T15:09:54.279Z PASS semantic snapshot available: 4 elements
+2026-08-24T15:09:54.282Z PASS semantic value element discovered: AXTextField
+2026-08-24T15:09:55.432Z PASS semantic setValue confirmed: Confirmed/value-confirmed
+2026-08-24T15:09:55.432Z FAIL semantic setValue route, helper-preservation, and shared-pointer invariants: {"cursorPositionUnchanged":true,"foregroundUnchanged":true,"hardwareCursorPreservedByHelper":true,"helperGlobalPointerPreservation":"confirmed","hidSystemPointerActivityObserved":false,"injectedPointerActivityObserved":false,"inputDelivery":{"dispatchAttemptRecorded":true,"exactTargetBound":true,"globalHidInputUsed":false,"hardwareCursorMutationRequested":false,"osAcceptanceObserved":true,"osAcceptanceSignalAvailable":true,"route":"macosAccessibility","sharedInputSeatUsed":false,"supportLevel":"publicDocumented"},"pointerActivityMonitorHealthy":true,"rawInputPointerActivityObserved":false,"sharedPointerActivityObserved":false,"sharedPointerActivityState":"quiet","sharedPointerBoundaryCorroborated":true,"sharedPointerBoundaryState":"corroborated","spaceUnchanged":true,"userFocusUnchanged":true}
+2026-08-24T15:09:55.509Z FATAL semantic setValue route, helper-preservation, and shared-pointer invariants: {"cursorPositionUnchanged":true,"foregroundUnchanged":true,"hardwareCursorPreservedByHelper":true,"helperGlobalPointerPreservation":"confirmed","hidSystemPointerActivityObserved":false,"injectedPointerActivityObserved":false,"inputDelivery":{"dispatchAttemptRecorded":true,"exactTargetBound":true,"globalHidInputUsed":false,"hardwareCursorMutationRequested":false,"osAcceptanceObserved":true,"osAcceptanceSignalAvailable":true,"route":"macosAccessibility","sharedInputSeatUsed":false,"supportLevel":"publicDocumented"},"pointerActivityMonitorHealthy":true,"rawInputPointerActivityObserved":false,"sharedPointerActivityObserved":false,"sharedPointerActivityState":"quiet","sharedPointerBoundaryCorroborated":true,"sharedPointerBoundaryState":"corroborated","spaceUnchanged":true,"userFocusUnchanged":true}
+2026-08-24T15:09:55.510Z helper stopped
+2026-08-24T15:09:55.512Z server stopped
+2026-08-24T15:09:55.515Z fixture stopped
+2026-08-24T15:09:55.516Z scratch directory removed
