@@ -12,7 +12,13 @@ param(
     [string]$HelperExecutable,
     [string]$ExtensionDirectory,
     [string]$RawScreenshotDirectory,
+    [string]$OperatorExchangeDirectory,
+    [string]$ScopedApprovalRecord,
+    [string]$ExecutorSessionRef,
+    [string]$ExpectedOrchestratorSessionRef,
     [string]$OutputRecord,
+    [ValidateRange(60, 1800)]
+    [int]$OperatorResponseTimeoutSeconds = 900,
     [ValidateRange(1, 65535)]
     [int]$Port = 17373
 )
@@ -21,8 +27,24 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $script:Utf8NoBom = [Text.UTF8Encoding]::new($false, $true)
-$script:Version = "0.12.14"
+$script:Version = "0.12.15"
 $script:Source = "local-browser-bridge-computer-helper-via-loopback-api"
+$script:OperatorExchange = $null
+$script:OperatorExchangeArtifacts = New-Object Collections.Generic.List[string]
+$script:OperatorResponseReservations = New-Object Collections.Generic.List[object]
+$script:OperatorExpectedTransientArtifacts = New-Object Collections.Generic.List[string]
+$script:ServerProcess = $null
+$script:ExpectedOrchestratorRef = $null
+$script:CoveredApprovalActions = @(
+    "conditional-developer-mode-change",
+    "load-and-run-exact-unpacked-candidate",
+    "conditional-full-access-change",
+    "save-ephemeral-loopback-credential",
+    "clear-ephemeral-loopback-credential",
+    "remove-exact-test-owned-extension",
+    "restore-captured-browser-settings",
+    "failure-rollback"
+)
 $script:Screenshots = [ordered]@{
     "extension-loaded" = "browser-01-extension-loaded.raw.png"
     "api-action-result" = "browser-02-api-action-result.raw.png"
@@ -82,6 +104,41 @@ function Resolve-OrdinaryDirectory {
     return $full
 }
 
+function Assert-PrivateOperatorExchangeDirectory {
+    param([string]$Path)
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    try {
+        if ($null -eq $identity -or $null -eq $identity.User) {
+            throw "The current Windows identity is unavailable for operator-exchange ACL validation."
+        }
+        $acl = [IO.Directory]::GetAccessControl(
+            [IO.Path]::GetFullPath($Path),
+            [Security.AccessControl.AccessControlSections]::Access -bor
+                [Security.AccessControl.AccessControlSections]::Owner
+        )
+        $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier])
+        $rules = @($acl.GetAccessRules(
+            $true, $true, [Security.Principal.SecurityIdentifier]
+        ))
+        $currentSid = $identity.User.Value
+        $currentFullControl = @($rules | Where-Object {
+            $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+            $_.IdentityReference.Value -ceq $currentSid -and -not $_.IsInherited -and
+            ($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -eq
+                [Security.AccessControl.FileSystemRights]::FullControl
+        })
+        if ($owner.Value -cne $currentSid -or -not $acl.AreAccessRulesProtected -or
+            $rules.Count -lt 1 -or $currentFullControl.Count -lt 1 -or
+            @($rules | Where-Object {
+                $_.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or
+                $_.IdentityReference.Value -cne $currentSid -or $_.IsInherited
+            }).Count -ne 0) {
+            throw "OperatorExchangeDirectory must be owned by and grant only explicit FullControl to the current executor."
+        }
+    }
+    finally { if ($null -ne $identity) { $identity.Dispose() } }
+}
+
 function Assert-NoReparseAncestorChain {
     param([string]$Path, [string]$Label)
     $directory = if ([IO.Directory]::Exists([IO.Path]::GetFullPath($Path))) {
@@ -113,13 +170,70 @@ function Resolve-NewJson {
     return $full
 }
 
-function Read-Json {
+function Get-BytesSha256 {
+    param([byte[]]$Bytes)
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    $digest = $null
+    try {
+        $digest = $hasher.ComputeHash($Bytes)
+        return ([BitConverter]::ToString($digest)).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        if ($null -ne $digest) { [Array]::Clear($digest, 0, $digest.Length) }
+        $hasher.Dispose()
+    }
+}
+
+function Read-StableJsonWithDigest {
     param([string]$Path, [string]$Label)
-    $bytes = [IO.File]::ReadAllBytes($Path)
-    if ($bytes.Length -le 0 -or $bytes.Length -gt 4MB) { throw "$Label has an invalid size." }
-    try { return $script:Utf8NoBom.GetString($bytes) | ConvertFrom-Json }
-    catch { throw "$Label is not strict UTF-8 JSON." }
-    finally { [Array]::Clear($bytes, 0, $bytes.Length) }
+    $item = [IO.FileInfo]::new([IO.Path]::GetFullPath($Path))
+    if (-not $item.Exists -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        $item.Length -le 0 -or $item.Length -gt 4MB) {
+        throw "$Label must be an ordinary non-empty JSON file within the size limit."
+    }
+    Assert-NoReparseAncestorChain $item.FullName $Label
+    $stream = [IO.File]::Open(
+        $item.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None
+    )
+    $bytes = $null
+    try {
+        if ($stream.Length -ne $item.Length -or $stream.Length -gt [int]::MaxValue) {
+            throw "$Label changed before its stable read."
+        }
+        $bytes = New-Object byte[] ([int]$stream.Length)
+        $offset = 0
+        while ($offset -lt $bytes.Length) {
+            $read = $stream.Read($bytes, $offset, $bytes.Length - $offset)
+            if ($read -le 0) { throw "$Label ended during its stable read." }
+            $offset += $read
+        }
+        if ($stream.Position -ne $stream.Length) { throw "$Label was not read exactly once." }
+        try { $value = $script:Utf8NoBom.GetString($bytes) | ConvertFrom-Json }
+        catch { throw "$Label is not strict UTF-8 JSON." }
+        return [pscustomobject]@{
+            Value = $value
+            Sha256 = Get-BytesSha256 $bytes
+            Bytes = $bytes.Length
+        }
+    }
+    finally {
+        $stream.Dispose()
+        if ($null -ne $bytes) { [Array]::Clear($bytes, 0, $bytes.Length) }
+    }
+}
+
+function Assert-CanonicalCompactJsonResponse {
+    param([object]$Stable, [string]$Label)
+    $canonicalBytes = $script:Utf8NoBom.GetBytes(
+        (($Stable.Value | ConvertTo-Json -Depth 30 -Compress) + "`n")
+    )
+    try {
+        if ($canonicalBytes.Length -ne [int64]$Stable.Bytes -or
+            (Get-BytesSha256 $canonicalBytes) -cne [string]$Stable.Sha256) {
+            throw "$Label must be canonical compact UTF-8 JSON followed by one LF; duplicate, case-colliding, reordered, or trailing data is forbidden."
+        }
+    }
+    finally { [Array]::Clear($canonicalBytes, 0, $canonicalBytes.Length) }
 }
 
 function Get-Sha256 {
@@ -184,27 +298,65 @@ function Assert-Hex {
     }
 }
 
-function Get-PngDimensions {
-    param([string]$Path)
-    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+function Read-StablePngWithDigest {
+    param([string]$Path, [string]$Label)
+    $item = [IO.FileInfo]::new([IO.Path]::GetFullPath($Path))
+    if (-not $item.Exists -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        $item.Length -lt 24 -or $item.Length -gt 20MB) {
+        throw "$Label must be an ordinary bounded PNG file."
+    }
+    Assert-NoReparseAncestorChain $item.FullName $Label
+    $stream = [IO.File]::Open(
+        $item.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None
+    )
+    $bytes = $null
     try {
-        $header = New-Object byte[] 24
-        if ($stream.Read($header, 0, $header.Length) -ne $header.Length -or
-            ([BitConverter]::ToString($header, 0, 8)) -cne "89-50-4E-47-0D-0A-1A-0A" -or
-            [Text.Encoding]::ASCII.GetString($header, 12, 4) -cne "IHDR") {
-            throw "Raw helper screenshot is not a canonical PNG."
+        if ($stream.Length -ne $item.Length -or $stream.Length -gt [int]::MaxValue) {
+            throw "$Label changed before its stable read."
         }
-        $width = ([uint32]$header[16] -shl 24) -bor ([uint32]$header[17] -shl 16) -bor
-            ([uint32]$header[18] -shl 8) -bor [uint32]$header[19]
-        $height = ([uint32]$header[20] -shl 24) -bor ([uint32]$header[21] -shl 16) -bor
-            ([uint32]$header[22] -shl 8) -bor [uint32]$header[23]
+        $bytes = New-Object byte[] ([int]$stream.Length)
+        $offset = 0
+        while ($offset -lt $bytes.Length) {
+            $read = $stream.Read($bytes, $offset, $bytes.Length - $offset)
+            if ($read -le 0) { throw "$Label ended during its stable read." }
+            $offset += $read
+        }
+        if ($stream.Position -ne $stream.Length -or
+            ([BitConverter]::ToString($bytes, 0, 8)) -cne "89-50-4E-47-0D-0A-1A-0A" -or
+            [Text.Encoding]::ASCII.GetString($bytes, 12, 4) -cne "IHDR") {
+            throw "$Label is not a canonical PNG."
+        }
+        $width = ([uint32]$bytes[16] -shl 24) -bor ([uint32]$bytes[17] -shl 16) -bor
+            ([uint32]$bytes[18] -shl 8) -bor [uint32]$bytes[19]
+        $height = ([uint32]$bytes[20] -shl 24) -bor ([uint32]$bytes[21] -shl 16) -bor
+            ([uint32]$bytes[22] -shl 8) -bor [uint32]$bytes[23]
         if ($width -lt 120 -or $height -lt 32 -or $width -gt 8192 -or $height -gt 8192 -or
             ([uint64]$width * [uint64]$height) -gt 50MB) {
-            throw "Raw helper screenshot dimensions are invalid."
+            throw "$Label dimensions are invalid."
         }
-        return [pscustomobject]@{ Width = [int64]$width; Height = [int64]$height }
+        return [pscustomobject]@{
+            Bytes = $bytes.Length
+            Sha256 = Get-BytesSha256 $bytes
+            Width = [int64]$width
+            Height = [int64]$height
+        }
     }
-    finally { $stream.Dispose() }
+    finally {
+        $stream.Dispose()
+        if ($null -ne $bytes) { [Array]::Clear($bytes, 0, $bytes.Length) }
+    }
+}
+
+function Assert-UnchangedOperatorFrame {
+    param([string]$Path, [object]$Expected, [string]$Label)
+    $observed = Read-StablePngWithDigest $Path $Label
+    if ($observed.Sha256 -cne [string]$Expected.sha256 -or
+        $observed.Bytes -ne [int64]$Expected.bytes -or
+        $observed.Width -ne [int64]$Expected.width -or
+        $observed.Height -ne [int64]$Expected.height) {
+        throw "$Label changed before its digest-bound response was accepted."
+    }
+    return $observed
 }
 
 function Remove-CanonicalRawScreenshots {
@@ -240,7 +392,7 @@ function Get-CandidateBinding {
     param([object]$Preflight, [string]$PreflightSha256)
     if ($Preflight.phase -cne "preflight" -or $Preflight.passed -ne $true -or
         $Preflight.candidate.version -cne $script:Version) {
-        throw "PreflightRecord is not a passing v0.12.14 preflight."
+        throw "PreflightRecord is not a passing v0.12.15 preflight."
     }
     Assert-ReleaseCandidateBinding $Preflight.releaseCandidateBinding $Preflight.candidate
     $script:ReleaseCandidateBinding = $Preflight.releaseCandidateBinding
@@ -308,16 +460,554 @@ function Get-TextSha256 {
     finally { [Array]::Clear($bytes, 0, $bytes.Length) }
 }
 
+function Format-CanonicalUtc {
+    param([DateTimeOffset]$Value)
+    return $Value.UtcDateTime.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Assert-FreshCanonicalResponseTimestamp {
+    param([object]$Value, [DateTimeOffset]$CreatedAt, [DateTimeOffset]$ExpiresAt, [string]$Label)
+    $parsed = [DateTimeOffset]::MinValue
+    if ($Value -isnot [string] -or
+        [string]$Value -cnotmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{7}Z$' -or
+        -not [DateTimeOffset]::TryParseExact(
+            [string]$Value, "o", [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed
+        ) -or $parsed -lt $CreatedAt -or $parsed -gt $ExpiresAt) {
+        throw "$Label is stale, premature, noncanonical, or not Z-suffixed UTC."
+    }
+    return $parsed
+}
+
 function Get-OpaqueRef {
     param([string]$Domain, [string]$RawValue)
     if ([String]::IsNullOrWhiteSpace($RawValue)) { throw "A raw value was missing for $Domain binding." }
     return Get-TextSha256 "$($script:Binding.runNonce)`n$Domain`n$RawValue"
 }
 
-function Read-ExactReceipt {
-    param([string]$Instruction, [string]$Receipt)
-    Write-Host $Instruction
-    if ((Read-Host "Type $Receipt") -cne $Receipt) { throw "Required human receipt was not supplied." }
+function Write-CreateOnceJson {
+    param([string]$Path, [object]$Value, [string]$Label, [ref]$Sha256Out)
+    if ([IO.File]::Exists($Path) -or [IO.Directory]::Exists($Path)) {
+        throw "$Label already exists; operator exchange artifacts are create-once."
+    }
+    $temporary = "$Path.new"
+    if ([IO.File]::Exists($temporary) -or [IO.Directory]::Exists($temporary)) {
+        throw "$Label has a stale temporary artifact."
+    }
+    $bytes = $null
+    try {
+        $bytes = $script:Utf8NoBom.GetBytes((($Value | ConvertTo-Json -Depth 30) + "`n"))
+        $stream = [IO.File]::Open(
+            $temporary, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None
+        )
+        try {
+            $stream.Write($bytes, 0, $bytes.Length)
+            $stream.Flush($true)
+        }
+        finally { $stream.Dispose() }
+        [IO.File]::Move($temporary, $Path)
+        if ($null -ne $Sha256Out) { $Sha256Out.Value = Get-BytesSha256 $bytes }
+    }
+    finally {
+        if ($null -ne $bytes) { [Array]::Clear($bytes, 0, $bytes.Length) }
+        if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) }
+    }
+}
+
+function Register-OperatorExchangeArtifact {
+    param([string]$Path)
+    $full = [IO.Path]::GetFullPath($Path)
+    $prefix = [IO.Path]::GetFullPath($script:OperatorExchange).TrimEnd('\') + '\'
+    if (-not $full.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Operator exchange artifact registration escaped the exact private directory."
+    }
+    $name = [IO.Path]::GetFileName($full)
+    if ($script:OperatorExchangeArtifacts.Contains($name)) {
+        throw "Operator exchange artifact registration was duplicated."
+    }
+    $script:OperatorExchangeArtifacts.Add($name)
+}
+
+function Register-ExpectedOperatorTransientArtifact {
+    param([string]$Path)
+    $full = [IO.Path]::GetFullPath($Path)
+    $prefix = [IO.Path]::GetFullPath($script:OperatorExchange).TrimEnd('\') + '\'
+    $name = [IO.Path]::GetFileName($full)
+    if (-not $full.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -or
+        $name -notmatch '^response-[0-9a-f]{32}(?:\.claimed)?\.json(?:\.new)?$' -or
+        $script:OperatorExchangeArtifacts.Contains($name) -or
+        $script:OperatorExpectedTransientArtifacts.Contains($name)) {
+        throw "Expected operator transient registration is invalid or duplicated."
+    }
+    $script:OperatorExpectedTransientArtifacts.Add($name)
+}
+
+function Complete-ExpectedOperatorTransientArtifacts {
+    param([string[]]$Paths)
+    foreach ($path in $Paths) {
+        if (-not $script:OperatorExpectedTransientArtifacts.Remove(
+            [IO.Path]::GetFileName([IO.Path]::GetFullPath($path))
+        )) {
+            throw "An expected operator transient artifact was not registered."
+        }
+    }
+}
+
+function Remove-OperatorExchangeArtifact {
+    param([string]$Path)
+    $full = [IO.Path]::GetFullPath($Path)
+    $prefix = [IO.Path]::GetFullPath($script:OperatorExchange).TrimEnd('\') + '\'
+    if (-not $full.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -or
+        -not [IO.File]::Exists($full)) {
+        throw "Operator exchange cleanup refused an unowned artifact."
+    }
+    $item = [IO.FileInfo]::new($full)
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw "Operator exchange cleanup refused a reparse point."
+    }
+    [IO.File]::Delete($full)
+    if (-not $script:OperatorExchangeArtifacts.Remove([IO.Path]::GetFileName($full))) {
+        throw "Operator exchange cleanup encountered an unregistered artifact."
+    }
+}
+
+function Remove-OperatorExchangeScratch {
+    if ([String]::IsNullOrWhiteSpace([string]$script:OperatorExchange) -or
+        -not [IO.Directory]::Exists($script:OperatorExchange)) { return }
+    $directory = [IO.DirectoryInfo]::new($script:OperatorExchange)
+    if ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw "Operator exchange cleanup refused a reparse-point directory."
+    }
+    $entries = @($directory.GetFileSystemInfos())
+    $actualNames = @($entries | ForEach-Object { $_.Name } | Sort-Object)
+    $registeredNames = @($script:OperatorExchangeArtifacts | Sort-Object)
+    $transientNames = @($script:OperatorExpectedTransientArtifacts | Sort-Object)
+    $allowedNames = @($registeredNames + $transientNames | Sort-Object -Unique)
+    $inventoryMatches = @($actualNames | Where-Object { $allowedNames -cnotcontains $_ }).Count -eq 0 -and
+        @($registeredNames | Where-Object { $actualNames -cnotcontains $_ }).Count -eq 0
+    $reservationsValid = $true
+    try {
+        foreach ($held in $script:OperatorResponseReservations) {
+            $entry = $entries | Where-Object { $_.Name -ceq $held.Name } | Select-Object -First 1
+            if ($entry -isnot [IO.FileInfo] -or
+                ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                $entry.Length -ne 0 -or $held.Stream.Length -ne 0) {
+                $reservationsValid = $false
+            }
+        }
+    }
+    finally {
+        foreach ($held in $script:OperatorResponseReservations) {
+            try { $held.Stream.Dispose() } catch { $reservationsValid = $false }
+        }
+        $script:OperatorResponseReservations.Clear()
+    }
+    if (-not $inventoryMatches -or -not $reservationsValid) {
+        throw "Operator exchange cleanup found an unregistered, missing, extra, or replaced reservation artifact."
+    }
+    foreach ($entry in $entries) {
+        if ($entry -isnot [IO.FileInfo] -or
+            ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            $entry.Name -notmatch '^(?:(?:request|response|frame)-[0-9a-f]{32}\.(?:json|png)(?:\.new)?|response-[0-9a-f]{32}\.claimed\.json)$') {
+            throw "Operator exchange cleanup found an unexpected or linked artifact."
+        }
+        $deadline = [DateTimeOffset]::UtcNow.AddSeconds(2)
+        do {
+            try { [IO.File]::Delete($entry.FullName); break }
+            catch [IO.IOException] {
+                if ([DateTimeOffset]::UtcNow -ge $deadline) { throw }
+                Start-Sleep -Milliseconds 50
+            }
+        } while ($true)
+    }
+    if (@($directory.GetFileSystemInfos()).Count -ne 0) {
+        throw "Operator exchange cleanup did not reach an exact empty directory."
+    }
+    [IO.Directory]::Delete($script:OperatorExchange, $false)
+    $script:OperatorExchangeArtifacts.Clear()
+    $script:OperatorExpectedTransientArtifacts.Clear()
+    $script:OperatorExchangeScratchDeleted = $true
+}
+
+function Save-LoopbackBinaryCreateOnce {
+    param([string]$RelativePath, [string]$OutputPath)
+    if ([IO.File]::Exists($OutputPath) -or [IO.Directory]::Exists($OutputPath)) {
+        throw "The loopback binary output path is not new."
+    }
+    $request = [Net.HttpWebRequest]::Create("http://127.0.0.1:$Port$RelativePath")
+    $request.Method = "GET"
+    $request.Timeout = 25000
+    $request.ReadWriteTimeout = 25000
+    $request.AllowAutoRedirect = $false
+    $request.Headers["Authorization"] = "Bearer $($script:Token)"
+    $response = $null
+    $input = $null
+    $output = $null
+    try {
+        $response = [Net.HttpWebResponse]$request.GetResponse()
+        if ([int]$response.StatusCode -ne 200 -or
+            -not ([string]$response.ContentType).StartsWith("image/png", [StringComparison]::OrdinalIgnoreCase) -or
+            $response.ContentLength -gt 20MB) {
+            throw "The loopback screenshot response was not a bounded PNG."
+        }
+        $input = $response.GetResponseStream()
+        $output = [IO.File]::Open(
+            $OutputPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None
+        )
+        $buffer = New-Object byte[] 65536
+        $total = 0L
+        try {
+            while (($read = $input.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                $total += $read
+                if ($total -gt 20MB) { throw "The loopback screenshot exceeded the byte limit." }
+                $output.Write($buffer, 0, $read)
+            }
+            if ($total -le 0) { throw "The loopback screenshot was empty." }
+            $output.Flush($true)
+        }
+        finally { [Array]::Clear($buffer, 0, $buffer.Length) }
+    }
+    catch {
+        if ($null -ne $output) { $output.Dispose(); $output = $null }
+        if ([IO.File]::Exists($OutputPath)) { [IO.File]::Delete($OutputPath) }
+        throw
+    }
+    finally {
+        if ($null -ne $output) { $output.Dispose() }
+        if ($null -ne $input) { $input.Dispose() }
+        if ($null -ne $response) { $response.Close() }
+    }
+}
+
+function Save-OperatorFrame {
+    param([object]$Observation, [string]$RequestId)
+    if ($null -eq $Observation -or [String]::IsNullOrWhiteSpace([string]$Observation.frameId) -or
+        $null -eq $Observation.PSObject.Properties["screenshotUrl"]) {
+        throw "A fresh helper observation with a screenshot endpoint is required for UI interpretation."
+    }
+    $relative = [string]$Observation.screenshotUrl
+    if (-not $relative.StartsWith("/api/computer/screenshot?id=", [StringComparison]::Ordinal) -or
+        $relative.Contains("://")) {
+        throw "The operator frame endpoint is invalid."
+    }
+    $name = "frame-$RequestId.png"
+    $path = [IO.Path]::Combine($script:OperatorExchange, $name)
+    if ([IO.File]::Exists($path) -or [IO.Directory]::Exists($path)) {
+        throw "The operator frame path is not new."
+    }
+    Save-LoopbackBinaryCreateOnce $relative $path
+    Register-OperatorExchangeArtifact $path
+    $facts = Read-StablePngWithDigest $path "operator frame"
+    return [ordered]@{
+        name = $name
+        bytes = $facts.Bytes
+        sha256 = $facts.Sha256
+        width = $facts.Width
+        height = $facts.Height
+        frameRef = Get-OpaqueRef "frame" ([string]$Observation.frameId)
+    }
+}
+
+function Test-ExactOperatorInteger([object]$Value) {
+    return $Value -is [int] -or $Value -is [long]
+}
+
+function Assert-OperatorDecision {
+    param([string]$Kind, [object]$Decision, [object]$AllowedResponse)
+    switch ($Kind) {
+        "window-selection" {
+            Assert-ExactKeys $Decision @("index") "window-selection decision"
+            if (-not (Test-ExactOperatorInteger $Decision.index)) {
+                throw "Window-selection index must be an exact integer."
+            }
+        }
+        "ui-point" {
+            Assert-ExactKeys $Decision @("x", "y") "UI-point decision"
+            if (-not (Test-ExactOperatorInteger $Decision.x) -or
+                -not (Test-ExactOperatorInteger $Decision.y)) {
+                throw "UI-point coordinates must be exact integers."
+            }
+        }
+        "ui-state" {
+            Assert-ExactKeys $Decision @("value") "UI-state decision"
+            if ($Decision.value -isnot [string] -or
+                @($AllowedResponse.values) -cnotcontains [string]$Decision.value) {
+                throw "UI-state decision is outside the request's exact enum."
+            }
+        }
+        "ui-verification" {
+            Assert-ExactKeys $Decision @("passed") "UI-verification decision"
+            if ($Decision.passed -isnot [bool]) { throw "UI-verification decision must be boolean." }
+        }
+        "scoped-user-approval" {
+            Assert-ExactKeys $Decision @("approved", "approvedBy", "confirmationMode") `
+                "scoped-user-approval decision"
+            if ($Decision.approved -isnot [bool] -or $Decision.approvedBy -isnot [string] -or
+                $Decision.confirmationMode -isnot [string]) {
+                throw "Scoped-user-approval decision types are invalid."
+            }
+            if ($Decision.approved -ne $true -or $Decision.approvedBy -cne "user" -or
+                $Decision.confirmationMode -cne "batched-action-time") {
+                throw "Scoped-user-approval decision was not an exact approval."
+            }
+        }
+        default { throw "The operator request kind is unsupported." }
+    }
+}
+
+function Test-UnableOperatorDecision([object]$Decision) {
+    if ($null -eq $Decision.PSObject.Properties["unable"]) { return $false }
+    Assert-ExactKeys $Decision @("unable") "unable operator decision"
+    if ($Decision.unable -isnot [bool] -or $Decision.unable -ne $true) {
+        throw 'Unable operator decision must be exactly {"unable":true}.'
+    }
+    return $true
+}
+
+function Assert-OperatorResponseEnvelope {
+    param(
+        [object]$Response,
+        [string]$RequestId,
+        [string]$RequestSha256,
+        [string]$CandidateBindingSha256,
+        [string]$InputDigestSha256,
+        [string]$ExpectedResponder,
+        [string]$ExecutorSessionRef,
+        [AllowNull()][string]$ExistingReviewerSessionRef,
+        [string]$ExpectedOrchestratorSessionRef
+    )
+    Assert-ExactKeys $Response @(
+        "schemaVersion", "evidenceType", "requestId", "requestSha256", "candidateBindingSha256",
+        "inputDigestSha256", "responderKind", "responderSessionRef", "respondedAtUtc", "decision"
+    ) "operator response"
+    if ($Response.schemaVersion -ne 1 -or
+        $Response.evidenceType -cne "stock-user-chrome-operator-response" -or
+        $Response.requestId -cne $RequestId -or $Response.requestSha256 -cne $RequestSha256 -or
+        $Response.candidateBindingSha256 -cne $CandidateBindingSha256 -or
+        $Response.inputDigestSha256 -cne $InputDigestSha256 -or
+        $Response.responderKind -cne $ExpectedResponder) {
+        throw "The operator response is not bound to the exact request, input, candidate, or responder role."
+    }
+    Assert-Hex $Response.responderSessionRef 64 "operator responder session reference"
+    if ($Response.responderSessionRef -ceq $ExecutorSessionRef) {
+        throw "The operator response reused the executor session."
+    }
+    if ($ExpectedResponder -ceq "independent-agent") {
+        if (-not [String]::IsNullOrWhiteSpace($ExistingReviewerSessionRef) -and
+            $Response.responderSessionRef -cne $ExistingReviewerSessionRef) {
+            throw "The operator exchange changed independent reviewer sessions mid-run."
+        }
+    }
+    elseif ($ExpectedResponder -ceq "user-via-orchestrator") {
+        if ([String]::IsNullOrWhiteSpace($ExpectedOrchestratorSessionRef) -or
+            $Response.responderSessionRef -cne $ExpectedOrchestratorSessionRef -or
+            (-not [String]::IsNullOrWhiteSpace($ExistingReviewerSessionRef) -and
+                $Response.responderSessionRef -ceq $ExistingReviewerSessionRef)) {
+            throw "The scoped user approval did not use the exact preflight attestor session."
+        }
+    }
+    else {
+        throw "The operator response used an unsupported responder role."
+    }
+}
+
+function Claim-PublishedOperatorResponse {
+    param(
+        [string]$ResponsePath,
+        [string]$ClaimedResponsePath,
+        [DateTimeOffset]$ExpiresAt
+    )
+    $temporaryResponsePath = "$ResponsePath.new"
+    if ([IO.File]::Exists($ClaimedResponsePath) -or
+        [IO.Directory]::Exists($ClaimedResponsePath)) {
+        throw "The operator response claim path was not new."
+    }
+    while ([DateTimeOffset]::UtcNow -le $ExpiresAt) {
+        if ([IO.Directory]::Exists($temporaryResponsePath) -or
+            [IO.Directory]::Exists($ResponsePath) -or
+            [IO.Directory]::Exists($ClaimedResponsePath)) {
+            throw "An operator response publication path became a directory."
+        }
+        if ($null -ne $script:ServerProcess -and $script:ServerProcess.HasExited) {
+            throw "The candidate server exited while waiting for an operator response."
+        }
+        if ([IO.File]::Exists($temporaryResponsePath)) {
+            $temporaryItem = [IO.FileInfo]::new($temporaryResponsePath)
+            if ($temporaryItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw "The operator response temporary file is a reparse point."
+            }
+        }
+        elseif ([IO.File]::Exists($ResponsePath)) {
+            $responseItem = [IO.FileInfo]::new($ResponsePath)
+            if ($responseItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw "The operator response is a reparse point."
+            }
+            try {
+                [IO.File]::Move($ResponsePath, $ClaimedResponsePath)
+                foreach ($reservationPath in @($ResponsePath, $temporaryResponsePath)) {
+                    $reservation = [IO.File]::Open(
+                        $reservationPath, [IO.FileMode]::CreateNew,
+                        [IO.FileAccess]::ReadWrite, [IO.FileShare]::None
+                    )
+                    $reservation.Flush($true)
+                    Register-OperatorExchangeArtifact $reservationPath
+                    $script:OperatorResponseReservations.Add([pscustomobject]@{
+                        Name = [IO.Path]::GetFileName($reservationPath)
+                        Stream = $reservation
+                    })
+                }
+                Register-OperatorExchangeArtifact $ClaimedResponsePath
+                if ([DateTimeOffset]::UtcNow -gt $ExpiresAt) {
+                    throw "The operator response was claimed after request expiry."
+                }
+                return
+            }
+            catch [IO.IOException] {
+                if ([IO.File]::Exists($ClaimedResponsePath)) { throw }
+            }
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    throw "Timed out waiting for the atomically published create-once operator response."
+}
+
+function Invoke-OperatorExchange {
+    param(
+        [ValidateSet("window-selection", "ui-point", "ui-state", "ui-verification", "scoped-user-approval")]
+        [string]$Kind,
+        [string]$ActionName,
+        [string]$Instruction,
+        [object]$AllowedResponse,
+        [AllowNull()][object]$Observation,
+        [AllowNull()][object]$Context,
+        [ValidateSet("independent-agent", "user-via-orchestrator")]
+        [string]$ExpectedResponder = "independent-agent"
+    )
+    if ([String]::IsNullOrWhiteSpace([string]$script:OperatorExchange) -or
+        -not [IO.Directory]::Exists($script:OperatorExchange)) {
+        throw "The private operator exchange is unavailable."
+    }
+    if (($Kind -ceq "scoped-user-approval") -ne ($ExpectedResponder -ceq "user-via-orchestrator")) {
+        throw "Only the scoped approval request may use the user-via-orchestrator responder role."
+    }
+    $frameRequired = $Kind -in @("ui-point", "ui-state", "scoped-user-approval") -or
+        ($Kind -ceq "ui-verification" -and
+            ($null -eq $Context -or $Context.targetClosed -ne $true))
+    if ($frameRequired -and $null -eq $Observation) {
+        throw "$Kind requires an exact fresh helper frame."
+    }
+    if (-not $frameRequired -and $Kind -eq "window-selection" -and $null -ne $Observation) {
+        throw "Window selection must bind the exact status inventory rather than a frame."
+    }
+    $requestId = [Guid]::NewGuid().ToString("N")
+    $createdAt = [DateTimeOffset]::UtcNow
+    $expiresAt = $createdAt.AddSeconds($OperatorResponseTimeoutSeconds)
+    $frame = if ($null -ne $Observation) { Save-OperatorFrame $Observation $requestId } else { $null }
+    $inputDigestSha256 = if ($null -ne $frame) {
+        [string]$frame.sha256
+    }
+    elseif ($null -ne $Context -and
+        $null -ne $Context.PSObject.Properties["statusResponseSha256"]) {
+        [string]$Context.statusResponseSha256
+    }
+    else {
+        throw "$Kind lacks an exact frame or status-response digest."
+    }
+    Assert-Hex $inputDigestSha256 64 "operator request input digest"
+    $request = [ordered]@{
+        schemaVersion = 1
+        evidenceType = "stock-user-chrome-operator-request"
+        productVersion = $script:Version
+        releaseCandidateBinding = $script:ReleaseCandidateBinding
+        candidateBinding = $script:Binding
+        candidateBindingSha256 = $script:CandidateBindingSha256
+        requestId = $requestId
+        sequence = $script:OperatorRequestCount + 1
+        kind = $Kind
+        actionName = $ActionName
+        createdAtUtc = Format-CanonicalUtc $createdAt
+        expiresAtUtc = Format-CanonicalUtc $expiresAt
+        executorSessionRef = $script:ExecutorRef
+        inputDigestSha256 = $inputDigestSha256
+        frame = $frame
+        context = $Context
+        allowedResponse = $AllowedResponse
+        instruction = $Instruction
+    }
+    $requestPath = [IO.Path]::Combine($script:OperatorExchange, "request-$requestId.json")
+    $responsePath = [IO.Path]::Combine($script:OperatorExchange, "response-$requestId.json")
+    $temporaryResponsePath = "$responsePath.new"
+    $claimedResponsePath = [IO.Path]::Combine(
+        $script:OperatorExchange, "response-$requestId.claimed.json"
+    )
+    foreach ($newResponseArtifact in @($responsePath, $temporaryResponsePath, $claimedResponsePath)) {
+        if ([IO.File]::Exists($newResponseArtifact) -or
+            [IO.Directory]::Exists($newResponseArtifact)) {
+            throw "The operator response publication paths were not all new."
+        }
+        Register-ExpectedOperatorTransientArtifact $newResponseArtifact
+    }
+    $requestSha256 = $null
+    Write-CreateOnceJson $requestPath $request "operator request" ([ref]$requestSha256)
+    Register-OperatorExchangeArtifact $requestPath
+    $script:OperatorRequestCount += 1
+    Write-Host "OPERATOR_REQUEST $requestPath"
+    Claim-PublishedOperatorResponse $responsePath $claimedResponsePath $expiresAt
+    Complete-ExpectedOperatorTransientArtifacts @(
+        $responsePath, $temporaryResponsePath, $claimedResponsePath
+    )
+    $stableResponse = Read-StableJsonWithDigest $claimedResponsePath "operator response"
+    Assert-CanonicalCompactJsonResponse $stableResponse "operator response"
+    $response = $stableResponse.Value
+    Assert-OperatorResponseEnvelope $response $requestId $requestSha256 `
+        $script:CandidateBindingSha256 $inputDigestSha256 $ExpectedResponder `
+        $script:ExecutorRef $script:ReviewerSessionRef $script:ExpectedOrchestratorRef
+    [void](Assert-FreshCanonicalResponseTimestamp $response.respondedAtUtc `
+        $createdAt $expiresAt "The operator response timestamp")
+    if ($ExpectedResponder -ceq "independent-agent") {
+        if ([String]::IsNullOrWhiteSpace([string]$script:ReviewerSessionRef)) {
+            $script:ReviewerSessionRef = [string]$response.responderSessionRef
+        }
+        if ($null -eq $Observation) { $script:StatusDecisionCount += 1 }
+        else { $script:FreshFrameDecisionCount += 1 }
+    }
+    $UnableDecision = Test-UnableOperatorDecision $response.decision
+    if (-not $UnableDecision) {
+        Assert-OperatorDecision $Kind $response.decision $AllowedResponse
+    }
+    $stableRequest = Read-StableJsonWithDigest $requestPath "operator request after response"
+    if ($stableRequest.Sha256 -cne $requestSha256) {
+        throw "The exact operator request changed before its response was accepted."
+    }
+    if ($null -ne $frame) {
+        $framePath = [IO.Path]::Combine($script:OperatorExchange, [string]$frame.name)
+        [void](Assert-UnchangedOperatorFrame `
+            $framePath $frame "operator frame after response")
+    }
+    if ($UnableDecision) {
+        throw "The independent operator reported that the exact request could not be interpreted safely."
+    }
+    $responseSha256 = $stableResponse.Sha256
+    $script:OperatorResponseChainSha256 = Get-TextSha256 (
+        "$($script:OperatorResponseChainSha256)`n$requestSha256`n$responseSha256"
+    )
+    $decision = $response.decision
+    Remove-OperatorExchangeArtifact $requestPath
+    Remove-OperatorExchangeArtifact $claimedResponsePath
+    if ($null -ne $frame) {
+        Remove-OperatorExchangeArtifact ([IO.Path]::Combine($script:OperatorExchange, [string]$frame.name))
+    }
+    return [pscustomobject]@{
+        Decision = $decision
+        RequestSha256 = $requestSha256
+        ResponseSha256 = $responseSha256
+        DecisionRef = Get-TextSha256 "operator-decision`n$requestSha256`n$responseSha256"
+        ResponderKind = [string]$response.responderKind
+        ResponderSessionRef = [string]$response.responderSessionRef
+        CreatedAtUtc = $request.createdAtUtc
+        ExpiresAtUtc = $request.expiresAtUtc
+        RespondedAtUtc = [string]$response.respondedAtUtc
+    }
 }
 
 function Invoke-LoopbackJson {
@@ -495,12 +1185,21 @@ function Select-ExactWindow {
     $status = Invoke-ComputerCommand "computer.status" @{}
     $windows = @($status.Body.result.windows)
     if ($windows.Count -eq 0) { throw "The helper reported no selectable windows." }
-    Write-Host $Instruction
+    $choices = @()
     for ($index = 0; $index -lt $windows.Count; $index += 1) {
-        Write-Host "[$index] $($windows[$index].title) ($($windows[$index].appName))"
+        $choices += [ordered]@{
+            index = $index
+            title = [string]$windows[$index].title
+            application = [string]$windows[$index].appName
+        }
     }
+    $exchange = Invoke-OperatorExchange "window-selection" "select-exact-window" $Instruction `
+        ([ordered]@{ type = "window-index"; minimum = 0; maximum = $windows.Count - 1 }) $null `
+        ([ordered]@{ statusResponseSha256 = $status.Digest; windows = $choices })
+    Assert-ExactKeys $exchange.Decision @("index") "window-selection decision"
     $selection = 0
-    if (-not [int]::TryParse((Read-Host "Exact window index"), [ref]$selection) -or
+    if ($exchange.Decision.index -isnot [ValueType] -or
+        -not [int]::TryParse([string]$exchange.Decision.index, [ref]$selection) -or
         $selection -lt 0 -or $selection -ge $windows.Count) {
         throw "Exact-window selection was invalid."
     }
@@ -622,6 +1321,10 @@ function Start-RecordedEpoch {
         $script:LastOwnedPopupWindowId = $windowId
         $script:LastOwnedPopupWindowPid = $selected.Pid
     }
+    elseif ($Surface -ceq "native-file-picker") {
+        $script:NativePickerWindowId = $windowId
+        $script:NativePickerWindowPid = $selected.Pid
+    }
     $startSequence = $script:CommandSequence + 1
     $start = Invoke-ComputerCommand "computer.share.start" @{ windowId = $windowId; fps = 4 }
     $rawShareId = [string]$start.Body.result.id
@@ -678,14 +1381,22 @@ function Stop-RecordedEpoch {
 
 function Read-ClickParams {
     param([object]$Observation, [string]$Label)
+    $exchange = Invoke-OperatorExchange "ui-point" $Label "Select only the named target in this exact fresh helper frame." `
+        ([ordered]@{
+            type = "point"; minimumX = 0; minimumY = 0
+            maximumXExclusive = [double]$Observation.imageWidth
+            maximumYExclusive = [double]$Observation.imageHeight
+        }) $Observation $null
+    Assert-ExactKeys $exchange.Decision @("x", "y") "$Label point decision"
     $x = 0.0; $y = 0.0
-    if (-not [double]::TryParse((Read-Host "$Label x in captured-image pixels"),
+    if (-not [double]::TryParse([string]$exchange.Decision.x,
             [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$x) -or
-        -not [double]::TryParse((Read-Host "$Label y in captured-image pixels"),
+        -not [double]::TryParse([string]$exchange.Decision.y,
             [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$y) -or
         $x -lt 0 -or $y -lt 0 -or $x -ge [double]$Observation.imageWidth -or $y -ge [double]$Observation.imageHeight) {
         throw "Click coordinates were outside the fresh exact-window frame."
     }
+    $script:LastOperatorDecisionRef = $exchange.DecisionRef
     return [ordered]@{ x = $x; y = $y; coordinateSpace = "image"; button = "left"; clickCount = 1; durationMs = 80 }
 }
 
@@ -696,15 +1407,19 @@ function Read-LiveToggleState {
     $Context.ObservationCount += 1
     $frameRef = Get-OpaqueRef "frame" ([string]$fresh.Observation.frameId)
     $Context.LastFrameRef = $frameRef
-    $value = (Read-Host "$Label in this fresh exact-window helper frame (enabled/disabled)").Trim().ToLowerInvariant()
+    $exchange = Invoke-OperatorExchange "ui-state" "read-$Label" `
+        "Interpret the named toggle from this exact fresh helper frame before mutation." `
+        ([ordered]@{ type = "enum"; values = @("enabled", "disabled") }) $fresh.Observation $null
+    Assert-ExactKeys $exchange.Decision @("value") "$Label state decision"
+    $value = ([string]$exchange.Decision.value).Trim().ToLowerInvariant()
     if ($value -cne "enabled" -and $value -cne "disabled") {
         throw "$Label live state must be entered exactly as enabled or disabled."
     }
-    Read-ExactReceipt "Confirm that $Label=$value was read from this fresh helper frame before mutation." "VERIFIED:live-$Label-$value"
     return [ordered]@{
         value = $value
         epochRef = $Context.EpochRef
         frameRef = $frameRef
+        operatorDecisionRef = $exchange.DecisionRef
         capturedBeforeMutation = $true
     }
 }
@@ -716,11 +1431,18 @@ function Read-LiveSavedTokenState {
     $Context.ObservationCount += 1
     $frameRef = Get-OpaqueRef "frame" ([string]$fresh.Observation.frameId)
     $Context.LastFrameRef = $frameRef
-    Read-ExactReceipt "Verify the fresh exact-popup helper frame says the saved token is Not configured." "VERIFIED:live-saved-token-unconfigured"
+    $exchange = Invoke-OperatorExchange "ui-state" "read-saved-token-state" `
+        "Interpret the saved-token state from this exact fresh extension-popup frame." `
+        ([ordered]@{ type = "enum"; values = @("unconfigured") }) $fresh.Observation $null
+    Assert-ExactKeys $exchange.Decision @("value") "saved-token state decision"
+    if ([string]$exchange.Decision.value -cne "unconfigured") {
+        throw "The exact new candidate popup was not in its required unconfigured state."
+    }
     return [ordered]@{
         configured = $false
         epochRef = $Context.EpochRef
         frameRef = $frameRef
+        operatorDecisionRef = $exchange.DecisionRef
         capturedBeforeMutation = $true
     }
 }
@@ -733,18 +1455,125 @@ function Read-LiveCandidateCardState {
     $Context.ObservationCount += 1
     $frameRef = Get-OpaqueRef "frame" ([string]$fresh.Observation.frameId)
     $Context.LastFrameRef = $frameRef
-    $actual = (Read-Host "$Label in this fresh exact chrome://extensions helper frame (present/absent)").Trim().ToLowerInvariant()
+    $exchange = Invoke-OperatorExchange "ui-state" "read-candidate-card-state" $Label `
+        ([ordered]@{ type = "enum"; values = @("present", "absent") }) $fresh.Observation $null
+    Assert-ExactKeys $exchange.Decision @("value") "candidate-card state decision"
+    $actual = ([string]$exchange.Decision.value).Trim().ToLowerInvariant()
     if ($actual -cne $ExpectedState) {
         throw "The exact test-owned candidate card did not match the required $ExpectedState state."
     }
-    Read-ExactReceipt "Confirm candidate-card $ExpectedState was read from this fresh exact helper frame." `
-        "VERIFIED:candidate-card-$ExpectedState"
     return [ordered]@{
         present = $ExpectedState -ceq "present"
         epochRef = $Context.EpochRef
         frameRef = $frameRef
+        operatorDecisionRef = $exchange.DecisionRef
         verifiedFromFreshLiveUi = $true
     }
+}
+
+function Request-ScopedActionTimeApproval {
+    param([object]$Context, [object]$Preflight, [object]$InitialDeveloperMode, [object]$InitialCandidateCard)
+    if (-not [String]::IsNullOrWhiteSpace([string]$script:ApprovalId)) {
+        throw "The scoped action-time approval is single-use and was already requested."
+    }
+    if ($InitialCandidateCard.present -ne $false -or
+        $InitialDeveloperMode.value -notin @("enabled", "disabled")) {
+        throw "The scoped approval cannot be requested before fresh initial Chrome state is known."
+    }
+    $approvalObservation = Get-FreshObservation `
+        $Context.WindowId $Context.Pid ([string]$Context.Observation.frameId)
+    $Context.Observation = $approvalObservation.Observation
+    $Context.ObservationCount += 1
+    $script:ApprovalChallengeFrameRef = Get-OpaqueRef `
+        "frame" ([string]$approvalObservation.Observation.frameId)
+    $scopeFacts = [ordered]@{
+        productVersion = $script:Version
+        candidateBindingSha256 = $script:CandidateBindingSha256
+        extensionZipSha256 = $script:Binding.extensionZipSha256
+        extractedPayloadSha256 = $script:Binding.extractedPayloadSha256
+        manifestPermissions = @($Preflight.candidate.extension.permissions)
+        manifestHostPermissions = @($Preflight.candidate.extension.hostPermissions)
+        dedicatedTargetRef = $script:DedicatedTargetRef
+        loopbackEndpoint = "http://127.0.0.1:17373"
+        initialDeveloperMode = [string]$InitialDeveloperMode.value
+        candidateAbsentBeforeInstall = $true
+        coveredActions = @($script:CoveredApprovalActions)
+        restoreCapturedState = $true
+        failureRollback = $true
+    }
+    $scopeSha256 = Get-TextSha256 ($scopeFacts | ConvertTo-Json -Depth 12 -Compress)
+    $exchange = Invoke-OperatorExchange "scoped-user-approval" "scoped-action-time-approval" `
+        "The exact unpacked candidate can read and change browser pages and grants loopback control while temporary Full Access and an ephemeral saved credential are enabled. Approve this exact candidate-bound run, its exact test-owned cleanup, and failure rollback?" `
+        ([ordered]@{
+            type = "approval"; approvedBy = "user"; confirmationMode = "batched-action-time"
+            scopeSha256 = $scopeSha256; coveredActions = @($script:CoveredApprovalActions)
+        }) $approvalObservation.Observation $scopeFacts "user-via-orchestrator"
+    Assert-ExactKeys $exchange.Decision @("approved", "approvedBy", "confirmationMode") `
+        "scoped action-time approval decision"
+    if ($exchange.Decision.approved -ne $true -or
+        $exchange.Decision.approvedBy -cne "user" -or
+        $exchange.Decision.confirmationMode -cne "batched-action-time") {
+        throw "The exact candidate-bound action-time approval was not granted by the user."
+    }
+    $script:ApprovalId = Get-TextSha256 (
+        "scoped-action-approval`n$($exchange.RequestSha256)`n$($exchange.ResponseSha256)"
+    )
+    $script:ApprovalScopeSha256 = $scopeSha256
+    $script:ApprovalConfirmedAtUtc = [string]$exchange.RespondedAtUtc
+    $script:ApprovalExpiresAtUtc = [string]$exchange.ExpiresAtUtc
+    $script:ApprovalRequest = [ordered]@{
+        createdAtUtc = [string]$exchange.CreatedAtUtc
+        expiresAtUtc = [string]$exchange.ExpiresAtUtc
+        challengeFrameRef = $script:ApprovalChallengeFrameRef
+        scopeSha256 = $scopeSha256
+        coveredActions = @($script:CoveredApprovalActions)
+        loopbackOnly = $true
+        dedicatedWindowOnly = $true
+        restoreCapturedState = $true
+        noUnrelatedExtensionMutation = $true
+    }
+    $script:ApprovalResponse = [ordered]@{
+        approvedBy = "user"
+        deliveredBy = "user-via-orchestrator"
+        orchestratorSessionRef = [string]$exchange.ResponderSessionRef
+        confirmationMode = "batched-action-time"
+        confirmedAtUtc = [string]$exchange.RespondedAtUtc
+        requestSha256 = [string]$exchange.RequestSha256
+        singleCandidateRun = $true
+    }
+}
+
+function Confirm-ApprovalPreDispatchStateUnchanged {
+    param([object]$Context, [object]$InitialDeveloperMode, [object]$InitialCandidateCard)
+    if ([String]::IsNullOrWhiteSpace([string]$script:ApprovalId) -or
+        [String]::IsNullOrWhiteSpace([string]$script:ApprovalChallengeFrameRef)) {
+        throw "Post-approval state revalidation requires the exact fresh approval challenge."
+    }
+    $fresh = Get-FreshObservation $Context.WindowId $Context.Pid ([string]$Context.Observation.frameId)
+    $Context.Observation = $fresh.Observation
+    $Context.ObservationCount += 1
+    $frameRef = Get-OpaqueRef "frame" ([string]$fresh.Observation.frameId)
+    if ($frameRef -ceq $script:ApprovalChallengeFrameRef) {
+        throw "Post-approval state revalidation reused the approval challenge frame."
+    }
+    $verification = Invoke-OperatorExchange `
+        "ui-verification" "revalidate-scoped-approval-preconditions" `
+        "Using this new exact helper frame, verify the exact candidate card is still absent, Developer Mode still equals the captured value, and the dedicated chrome://extensions window binding is unchanged. Fail on any change or uncertainty." `
+        ([ordered]@{ type = "verdict"; requiredValue = $true }) $fresh.Observation `
+        ([ordered]@{
+            expectedCandidatePresent = [bool]$InitialCandidateCard.present
+            expectedDeveloperMode = [string]$InitialDeveloperMode.value
+            expectedDedicatedTargetRef = $script:DedicatedTargetRef
+            approvalChallengeFrameRef = $script:ApprovalChallengeFrameRef
+        })
+    Assert-ExactKeys $verification.Decision @("passed") `
+        "post-approval state revalidation decision"
+    if ($verification.Decision.passed -ne $true) {
+        throw "Candidate absence, Developer Mode, or dedicated-window state changed after approval."
+    }
+    $script:ApprovalPreDispatchFrameRef = $frameRef
+    $script:ApprovalPreDispatchDecisionRef = [string]$verification.DecisionRef
+    $script:ApprovalPreDispatchVerifiedAtUtc = [string]$verification.RespondedAtUtc
 }
 
 function Invoke-RecordedAction {
@@ -760,8 +1589,8 @@ function Invoke-RecordedAction {
         $Name -cne $script:ActionNames[$script:Actions.Count]) {
         throw "The helper action is out of canonical order."
     }
-    if ($ConsentRef -cne "none") {
-        Read-ExactReceipt "Confirm the action-time $ConsentRef checkpoint for $Name." "CONSENT:${ConsentRef}:$Name"
+    if ($ConsentRef -cne "none" -and [String]::IsNullOrWhiteSpace([string]$script:ApprovalId)) {
+        throw "A covered action was reached without the scoped candidate-bound action-time approval."
     }
     $pre = Get-FreshObservation $Context.WindowId $Context.Pid ([string]$Context.Observation.frameId)
     $Context.Observation = $pre.Observation
@@ -772,7 +1601,10 @@ function Invoke-RecordedAction {
     $parameterDigests = New-Object Collections.Generic.List[string]
     $responseDigests = New-Object Collections.Generic.List[string]
     $responseDigests.Add($pre.Response.Digest)
+    $dispatchedAt = $null
+    $script:LastOperatorDecisionRef = $null
     if ($Steps.Count -eq 0) {
+        $dispatchedAt = Format-CanonicalUtc ([DateTimeOffset]::UtcNow)
         $middle = Get-FreshObservation $Context.WindowId $Context.Pid ([string]$Context.Observation.frameId)
         $Context.Observation = $middle.Observation
         $Context.ObservationCount += 1
@@ -796,6 +1628,42 @@ function Invoke-RecordedAction {
             default { throw "The helper action plan contains an unsupported native step." }
         }
         $parameterDigests.Add((Get-TextSha256 ($params | ConvertTo-Json -Depth 8 -Compress)))
+        if ([String]::IsNullOrWhiteSpace([string]$dispatchedAt)) {
+            $dispatchedAt = Format-CanonicalUtc ([DateTimeOffset]::UtcNow)
+        }
+        if ($ConsentRef -cne "none" -and $script:FirstCoveredActionSequence -eq 0) {
+            if ([String]::IsNullOrWhiteSpace([string]$script:ApprovalPreDispatchFrameRef) -or
+                [String]::IsNullOrWhiteSpace([string]$script:ApprovalPreDispatchDecisionRef) -or
+                [String]::IsNullOrWhiteSpace([string]$script:ApprovalPreDispatchVerifiedAtUtc) -or
+                $script:ApprovalPreDispatchFrameRef -ceq $script:ApprovalChallengeFrameRef) {
+                throw "The first covered action lacks a distinct fresh post-approval state revalidation."
+            }
+            $preDispatchVerifiedAt = [DateTimeOffset]::ParseExact(
+                $script:ApprovalPreDispatchVerifiedAtUtc, "o",
+                [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::RoundtripKind
+            )
+            $dispatchInstant = Assert-FreshCanonicalResponseTimestamp $dispatchedAt `
+                ([DateTimeOffset]::ParseExact(
+                    $script:ApprovalConfirmedAtUtc, "o", [Globalization.CultureInfo]::InvariantCulture,
+                    [Globalization.DateTimeStyles]::RoundtripKind
+                )) `
+                ([DateTimeOffset]::ParseExact(
+                    $script:ApprovalExpiresAtUtc, "o", [Globalization.CultureInfo]::InvariantCulture,
+                    [Globalization.DateTimeStyles]::RoundtripKind
+                )) "The first covered action dispatch timestamp"
+            if ($preDispatchVerifiedAt -le [DateTimeOffset]::ParseExact(
+                    $script:ApprovalConfirmedAtUtc, "o",
+                    [Globalization.CultureInfo]::InvariantCulture,
+                    [Globalization.DateTimeStyles]::RoundtripKind
+                ) -or $preDispatchVerifiedAt -gt $dispatchInstant) {
+                throw "The fresh post-approval state was not revalidated before the first covered action."
+            }
+            $script:FirstCoveredActionSequence = $script:Actions.Count + 1
+            $script:FirstCoveredActionDispatchedAtUtc = $dispatchedAt
+            $script:ApprovalConsumedBeforeExpiry = $true
+            $dispatchInstant = $null
+        }
         $result = Invoke-ComputerCommand $method $params
         $methods.Add($method)
         $responseDigests.Add($result.Digest)
@@ -835,15 +1703,36 @@ function Invoke-RecordedAction {
         $Context.LastFrameRef = $postFrameRef
     }
     if ($preFrameRef -ceq $postFrameRef) { throw "The helper action did not obtain a fresh post-action frame." }
-    Read-ExactReceipt $VerificationInstruction "VERIFIED:$Name"
+    $verificationObservation = if ($ExpectTargetClosed) { $null } else { $Context.Observation }
+    $verificationContext = if ($ExpectTargetClosed) {
+        [ordered]@{
+            targetClosed = $true
+            machineStatusBound = $true
+            statusResponseSha256 = $status.Digest
+        }
+    }
+    else {
+        [ordered]@{ targetClosed = $false; machineStatusBound = $false }
+    }
+    $verification = Invoke-OperatorExchange "ui-verification" $Name $VerificationInstruction `
+        ([ordered]@{ type = "verdict"; requiredValue = $true }) $verificationObservation `
+        $verificationContext
+    Assert-ExactKeys $verification.Decision @("passed") "$Name verification decision"
+    if ($verification.Decision.passed -ne $true) {
+        throw "The independent operator did not verify the required postcondition for $Name."
+    }
     $script:Actions += [ordered]@{
         sequence = $script:Actions.Count + 1; name = $Name
-        atUtc = [DateTimeOffset]::UtcNow.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
+        atUtc = Format-CanonicalUtc ([DateTimeOffset]::UtcNow)
+        dispatchedAtUtc = $dispatchedAt
         source = $script:Source; epochRef = $Context.EpochRef; methods = @($methods)
         preFrameRef = $preFrameRef; postFrameRef = $postFrameRef
         normalizedParamsSha256 = Get-TextSha256 (@($parameterDigests) -join "`n")
         responseSha256 = Get-TextSha256 (@($responseDigests) -join "`n")
-        httpStatus = 200; resultVerified = $true; postconditionVerified = $true; consentRef = $ConsentRef
+        httpStatus = 200; resultVerified = $true; postconditionVerified = $true
+        riskRef = $ConsentRef
+        approvalRef = $(if ($ConsentRef -ceq "none") { "none" } else { $script:ApprovalId })
+        operatorDecisionRef = $verification.DecisionRef
     }
     $parameterDigests.Clear(); $responseDigests.Clear(); $methods.Clear()
 }
@@ -859,9 +1748,8 @@ function Save-RecordedScreenshot {
     $rawName = $script:Screenshots[$Purpose]
     $rawPath = [IO.Path]::Combine($script:RawDirectory, $rawName)
     if ([IO.File]::Exists($rawPath) -or [IO.Directory]::Exists($rawPath)) { throw "A raw screenshot already exists." }
-    Invoke-WebRequest -UseBasicParsing -Uri ("http://127.0.0.1:$Port" + $relative) -Method Get `
-        -Headers @{ Authorization = "Bearer $($script:Token)" } -OutFile $rawPath -TimeoutSec 25 | Out-Null
-    $facts = Get-PngDimensions $rawPath
+    Save-LoopbackBinaryCreateOnce $relative $rawPath
+    $facts = Read-StablePngWithDigest $rawPath "raw helper screenshot"
     $frameRef = Get-OpaqueRef "frame" ([string]$streamed.frameId)
     $Context.LastFrameRef = $frameRef
     $script:ScreenshotRecords += [ordered]@{
@@ -869,7 +1757,7 @@ function Save-RecordedScreenshot {
         epochRef = $Context.EpochRef; shareRef = $Context.ShareRef
         frameRef = $frameRef
         rawImage = $rawName; endpoint = "/api/computer/screenshot"
-        bytes = ([IO.FileInfo]::new($rawPath)).Length; sha256 = Get-Sha256 $rawPath
+        bytes = $facts.Bytes; sha256 = $facts.Sha256
         width = $facts.Width; height = $facts.Height; exactWindowFrame = $true
         shareFrameFresh = $true; rawImageRetained = $false
     }
@@ -1061,7 +1949,7 @@ function Show-DeterministicGreeting {
     }
     $record = [ordered]@{
         source = "local-browser-bridge-api"
-        apiMatrixRecordSha256 = Get-Sha256 $script:MatrixOutputPath
+        apiMatrixRecordSha256 = $script:MatrixRecordSha256
         targetBindingSha256 = Get-OpaqueRef "browser-target" "$tabId|$groupId"
         methodSequence = @($methods)
         requestResponseSha256 = Get-TextSha256 (@($digests) -join [Environment]::NewLine)
@@ -1079,7 +1967,7 @@ function Add-LifecycleEvent {
     param([string]$Name, [string]$ConnectionState, [string]$ProcessRef, [string]$ExecutableSha256, [int]$ExitCode)
     $script:Lifecycle += [ordered]@{
         sequence = $script:Lifecycle.Count + 1; name = $Name
-        atUtc = [DateTimeOffset]::UtcNow.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
+        atUtc = Format-CanonicalUtc ([DateTimeOffset]::UtcNow)
         source = $script:Source; connectionState = $ConnectionState; processRef = $ProcessRef
         executableSha256 = $ExecutableSha256; exitCode = $ExitCode; resultVerified = $true
     }
@@ -1240,7 +2128,12 @@ function Set-MutationDisposition {
         "not_attempted" { @("outcome_unknown") }
         "outcome_unknown" { @("verified_applied", "restored") }
         "verified_applied" { @("outcome_unknown", "restored") }
-        "restored" { @() }
+        "restored" {
+            if ($Name -in @("NativePicker", "ClearTokenDialog", "RemoveExtensionDialog")) {
+                @("outcome_unknown")
+            }
+            else { @() }
+        }
         default { throw "The current mutation disposition is invalid." }
     }
     if ($allowed -cnotcontains $Disposition) {
@@ -1263,13 +2156,14 @@ function Invoke-UnrecordedNativeSteps {
     param(
         [string]$WindowInstruction,
         [object[]]$Steps,
-        [string]$Receipt,
+        [string]$RiskRef,
         [string]$ExpectedWindowId,
         [int64]$ExpectedPid = 0,
         [switch]$ExpectTargetClosed
     )
-    if (-not [String]::IsNullOrWhiteSpace($Receipt)) {
-        Read-ExactReceipt "Authorize and verify this ownership-bounded rollback action." $Receipt
+    if (-not [String]::IsNullOrWhiteSpace($RiskRef) -and
+        [String]::IsNullOrWhiteSpace([string]$script:ApprovalId)) {
+        throw "Rollback reached a covered action without the scoped approval."
     }
     if ([String]::IsNullOrWhiteSpace($ExpectedWindowId)) {
         $selected = Select-ExactWindow $WindowInstruction
@@ -1318,39 +2212,151 @@ function Read-RollbackToggleState {
     param([string]$WindowId, [int64]$ExpectedPid, [string]$Label)
     [void](Get-ExactChromeWindow $WindowId $ExpectedPid)
     $fresh = Get-FreshObservation $WindowId $ExpectedPid $null
-    $value = (Read-Host "$Label in this fresh exact-owned helper frame (enabled/disabled)").Trim().ToLowerInvariant()
+    $exchange = Invoke-OperatorExchange "ui-state" "rollback-$Label" `
+        "Interpret the current rollback toggle state from this exact fresh owned frame." `
+        ([ordered]@{ type = "enum"; values = @("enabled", "disabled") }) $fresh.Observation $null
+    Assert-ExactKeys $exchange.Decision @("value") "$Label rollback-state decision"
+    $value = ([string]$exchange.Decision.value).Trim().ToLowerInvariant()
     if ($value -notin @("enabled", "disabled")) {
         throw "$Label rollback state was not reduced to enabled or disabled."
     }
-    Read-ExactReceipt "Confirm the current $Label state was read from this fresh exact-owned frame." `
-        "VERIFIED:rollback-live-$Label-$value"
     return $value
 }
 
 function Read-RollbackSavedTokenState {
     param([string]$WindowId, [int64]$ExpectedPid)
     [void](Get-ExactChromeWindow $WindowId $ExpectedPid)
-    [void](Get-FreshObservation $WindowId $ExpectedPid $null)
-    $value = (Read-Host "Saved-token state in this fresh exact-owned popup frame (configured/unconfigured)").Trim().ToLowerInvariant()
+    $fresh = Get-FreshObservation $WindowId $ExpectedPid $null
+    $exchange = Invoke-OperatorExchange "ui-state" "rollback-saved-token" `
+        "Interpret the current saved-token state from this exact fresh owned popup frame." `
+        ([ordered]@{ type = "enum"; values = @("configured", "unconfigured") }) $fresh.Observation $null
+    Assert-ExactKeys $exchange.Decision @("value") "saved-token rollback-state decision"
+    $value = ([string]$exchange.Decision.value).Trim().ToLowerInvariant()
     if ($value -notin @("configured", "unconfigured")) {
         throw "Saved-token rollback state was not reduced to configured or unconfigured."
     }
-    Read-ExactReceipt "Confirm the current saved-token state was read from this fresh exact-owned popup frame." `
-        "VERIFIED:rollback-live-saved-token-$value"
     return $value
 }
 
 function Read-RollbackCandidateCardState {
     param([string]$WindowId, [int64]$ExpectedPid)
     [void](Get-ExactChromeWindow $WindowId $ExpectedPid)
-    [void](Get-FreshObservation $WindowId $ExpectedPid $null)
-    $value = (Read-Host "Exact v0.12.14 test-owned candidate card in this fresh chrome://extensions frame (present/absent)").Trim().ToLowerInvariant()
+    $fresh = Get-FreshObservation $WindowId $ExpectedPid $null
+    $exchange = Invoke-OperatorExchange "ui-state" "rollback-candidate-card" `
+        "Interpret exact v0.12.15 test-owned candidate-card presence from this fresh owned frame." `
+        ([ordered]@{ type = "enum"; values = @("present", "absent") }) $fresh.Observation $null
+    Assert-ExactKeys $exchange.Decision @("value") "candidate-card rollback-state decision"
+    $value = ([string]$exchange.Decision.value).Trim().ToLowerInvariant()
     if ($value -notin @("present", "absent")) {
         throw "Candidate-card rollback state was not reduced to present or absent."
     }
-    Read-ExactReceipt "Confirm candidate-card presence was read from this fresh exact-owned Chrome frame." `
-        "VERIFIED:rollback-live-candidate-card-$value"
     return $value
+}
+
+function Read-RollbackModalState {
+    param([string]$WindowId, [int64]$ExpectedPid, [string]$Label)
+    [void](Get-ExactChromeWindow $WindowId $ExpectedPid)
+    $fresh = Get-FreshObservation $WindowId $ExpectedPid $null
+    $exchange = Invoke-OperatorExchange "ui-state" "rollback-$Label-modal" `
+        "Interpret only whether the exact owned $Label modal is open or closed in this fresh frame." `
+        ([ordered]@{ type = "enum"; values = @("open", "closed") }) $fresh.Observation $null
+    Assert-ExactKeys $exchange.Decision @("value") "$Label rollback-modal decision"
+    $value = ([string]$exchange.Decision.value).Trim().ToLowerInvariant()
+    if ($value -notin @("open", "closed")) {
+        throw "$Label rollback modal state was not reduced to open or closed."
+    }
+    return $value
+}
+
+function Resolve-NativePickerRollbackTarget {
+    if (-not [String]::IsNullOrWhiteSpace([string]$script:NativePickerWindowId)) {
+        $status = Invoke-ComputerCommand "computer.status" @{}
+        $matches = @($status.Body.result.windows | Where-Object {
+            [string]$_.id -ceq $script:NativePickerWindowId -and
+            [int64]$_.pid -eq $script:NativePickerWindowPid
+        })
+        if ($matches.Count -gt 1) { throw "The bound native picker identity is ambiguous." }
+        if ($matches.Count -eq 0) { return $null }
+        return [pscustomobject]@{
+            WindowId = $script:NativePickerWindowId
+            Pid = $script:NativePickerWindowPid
+        }
+    }
+    $state = Invoke-ComputerCommand "computer.status" @{}
+    $candidates = @($state.Body.result.windows | Where-Object {
+        $targetRef = Get-OpaqueRef "target" "$([string]$_.id)|$([int64]$_.pid)"
+        [int64]$_.pid -eq $script:DedicatedWindowPid -and
+        $targetRef -cne $script:DedicatedTargetRef -and
+        $script:BaselineChrome.TargetRefs -cnotcontains $targetRef
+    })
+    if ($candidates.Count -eq 0) { return $null }
+    if ($candidates.Count -ne 1) {
+        throw "The unbound native picker could not be resolved as one sole-new process-linked window."
+    }
+    $script:NativePickerWindowId = [string]$candidates[0].id
+    $script:NativePickerWindowPid = [int64]$candidates[0].pid
+    return [pscustomobject]@{
+        WindowId = $script:NativePickerWindowId
+        Pid = $script:NativePickerWindowPid
+    }
+}
+
+function Resolve-SoleNewDedicatedRollbackBinding {
+    param([string[]]$BaselineTargetRefs, [object[]]$CurrentBindings)
+    $newBindings = @($CurrentBindings | Where-Object {
+        $BaselineTargetRefs -cnotcontains [string]$_.TargetRef
+    })
+    $missingBaseline = @($BaselineTargetRefs | Where-Object {
+        $CurrentBindings.TargetRef -cnotcontains $_
+    })
+    if ($missingBaseline.Count -ne 0) {
+        throw "The trusted baseline Chrome set changed before dedicated-window rollback binding."
+    }
+    if ($newBindings.Count -eq 0 -and $CurrentBindings.Count -eq $BaselineTargetRefs.Count) {
+        return $null
+    }
+    if ($newBindings.Count -ne 1 -or
+        $CurrentBindings.Count -ne ($BaselineTargetRefs.Count + 1)) {
+        throw "Dedicated-window rollback did not observe exactly zero or one sole-new Chrome window."
+    }
+    return $newBindings[0]
+}
+
+function Resolve-DedicatedWindowRollbackTarget {
+    if (-not [String]::IsNullOrWhiteSpace([string]$script:DedicatedWindowId)) {
+        return [pscustomobject]@{
+            WindowId = $script:DedicatedWindowId; Pid = $script:DedicatedWindowPid
+        }
+    }
+    if ($null -eq $script:BaselineChrome) {
+        throw "The trusted baseline Chrome set is unavailable for dedicated-window rollback."
+    }
+    $status = Invoke-ComputerCommand "computer.status" @{}
+    $bindings = New-Object Collections.Generic.List[object]
+    foreach ($window in @($status.Body.result.windows)) {
+        try {
+            if ((Get-NormalizedApplication $window) -ceq "google-chrome") {
+                $bindings.Add([pscustomobject]@{
+                    Window = $window
+                    TargetRef = Get-OpaqueRef "target" "$([string]$window.id)|$([int64]$window.pid)"
+                })
+            }
+        }
+        catch { }
+    }
+    $resolved = Resolve-SoleNewDedicatedRollbackBinding `
+        @($script:BaselineChrome.TargetRefs) @($bindings)
+    if ($null -eq $resolved) { return $null }
+    $script:DedicatedWindowId = [string]$resolved.Window.id
+    $script:DedicatedWindowPid = [int64]$resolved.Window.pid
+    $script:DedicatedTargetRef = [string]$resolved.TargetRef
+    $script:DedicatedProcessRef = Get-OpaqueRef "process" ([string]$script:DedicatedWindowPid)
+    $script:DedicatedAbsentBeforeCreation = $true
+    $script:DedicatedCreatedAsOnlyNewChromeWindow = $true
+    $bindings.Clear()
+    return [pscustomobject]@{
+        WindowId = $script:DedicatedWindowId; Pid = $script:DedicatedWindowPid
+    }
 }
 
 function Invoke-BestEffortUiRollback {
@@ -1370,9 +2376,70 @@ function Invoke-BestEffortUiRollback {
     }
     catch { $errors.Add("share: $($_.Exception.Message)") }
 
+    if (Test-UnresolvedMutation $State "NativePicker") {
+        try {
+            $picker = Resolve-NativePickerRollbackTarget
+            if ($null -ne $picker) {
+                Invoke-UnrecordedNativeSteps `
+                    "Dismiss only the exact sole-new process-linked native Load unpacked picker." `
+                    @([ordered]@{ kind="key"; value="Escape" }) "failureRollback" `
+                    $picker.WindowId $picker.Pid -ExpectTargetClosed
+            }
+            Set-MutationDisposition $State "NativePicker" "restored"
+        }
+        catch { $errors.Add("native-picker-modal: $($_.Exception.Message)") }
+    }
+
+    if (Test-UnresolvedMutation $State "ClearTokenDialog") {
+        try {
+            if ([String]::IsNullOrWhiteSpace($script:LastOwnedPopupWindowId) -or
+                $script:LastOwnedPopupWindowPid -le 0) {
+                throw "No exact candidate-popup identity was bound for clear-token modal rollback."
+            }
+            $modalState = Read-RollbackModalState `
+                $script:LastOwnedPopupWindowId $script:LastOwnedPopupWindowPid "clear-token"
+            if ($modalState -ceq "open") {
+                Invoke-UnrecordedNativeSteps `
+                    "Dismiss only the exact clear-token confirmation in the bound candidate popup." `
+                    @([ordered]@{ kind="key"; value="Escape" }) "failureRollback" `
+                    $script:LastOwnedPopupWindowId $script:LastOwnedPopupWindowPid
+                $modalState = Read-RollbackModalState `
+                    $script:LastOwnedPopupWindowId $script:LastOwnedPopupWindowPid "clear-token"
+            }
+            if ($modalState -cne "closed") { throw "Clear-token modal rollback was not verified." }
+            Set-MutationDisposition $State "ClearTokenDialog" "restored"
+        }
+        catch { $errors.Add("clear-token-modal: $($_.Exception.Message)") }
+    }
+
+    if (Test-UnresolvedMutation $State "RemoveExtensionDialog") {
+        try {
+            if ([String]::IsNullOrWhiteSpace($script:DedicatedWindowId) -or
+                $script:DedicatedWindowPid -le 0) {
+                throw "No exact dedicated-window identity was bound for removal-modal rollback."
+            }
+            $modalState = Read-RollbackModalState `
+                $script:DedicatedWindowId $script:DedicatedWindowPid "remove-extension"
+            if ($modalState -ceq "open") {
+                Invoke-UnrecordedNativeSteps `
+                    "Dismiss only the exact removal confirmation in the dedicated extensions window." `
+                    @([ordered]@{ kind="key"; value="Escape" }) "failureRollback" `
+                    $script:DedicatedWindowId $script:DedicatedWindowPid
+                $modalState = Read-RollbackModalState `
+                    $script:DedicatedWindowId $script:DedicatedWindowPid "remove-extension"
+            }
+            if ($modalState -cne "closed") { throw "Removal-modal rollback was not verified." }
+            Set-MutationDisposition $State "RemoveExtensionDialog" "restored"
+        }
+        catch { $errors.Add("remove-extension-modal: $($_.Exception.Message)") }
+    }
+
     if ((Test-UnresolvedMutation $State "SavedToken") -or
         (Test-UnresolvedMutation $State "FullAccess")) {
         try {
+            if (Test-UnresolvedMutation $State "ClearTokenDialog") {
+                throw "Saved-token and Full Access rollback is blocked by an unresolved clear-token modal."
+            }
             if ([String]::IsNullOrWhiteSpace($script:LastOwnedPopupWindowId) -or
                 $script:LastOwnedPopupWindowPid -le 0) {
                 throw "No exact candidate-popup identity was bound before failure; popup state was not touched."
@@ -1384,16 +2451,19 @@ function Invoke-BestEffortUiRollback {
                 }
                 $tokenState = Read-RollbackSavedTokenState $script:LastOwnedPopupWindowId $script:LastOwnedPopupWindowPid
                 if ($tokenState -ceq "configured") {
+                    Set-MutationDisposition $State "ClearTokenDialog" "outcome_unknown"
                     Invoke-UnrecordedNativeSteps `
                         "Use only the exact bound candidate popup for rollback token clearing." `
                         @([ordered]@{ kind="click"; label="Clear saved token button" }) `
-                        "CONSENT:clearSavedTokenInitiate:rollback" `
+                        "clearSavedTokenInitiate" `
                         $script:LastOwnedPopupWindowId $script:LastOwnedPopupWindowPid
+                    Set-MutationDisposition $State "ClearTokenDialog" "verified_applied"
                     Invoke-UnrecordedNativeSteps `
                         "Use only the same exact bound candidate popup for rollback confirmation." `
                         @([ordered]@{ kind="click"; label="affirmative clear-token confirmation" }) `
-                        "CONSENT:clearSavedTokenConfirm:rollback" `
+                        "clearSavedTokenConfirm" `
                         $script:LastOwnedPopupWindowId $script:LastOwnedPopupWindowPid
+                    Set-MutationDisposition $State "ClearTokenDialog" "restored"
                     $tokenState = Read-RollbackSavedTokenState $script:LastOwnedPopupWindowId $script:LastOwnedPopupWindowPid
                 }
                 if ($tokenState -cne "unconfigured") { throw "Saved-token rollback was not verified." }
@@ -1410,7 +2480,7 @@ function Invoke-BestEffortUiRollback {
                     Invoke-UnrecordedNativeSteps `
                         "Use only the exact bound candidate popup for Full Access restoration." `
                         @([ordered]@{ kind="click"; label="Full Access toggle to the live-captured initial state" }) `
-                        "CONSENT:fullAccessUse:rollback" `
+                        "fullAccessUse" `
                         $script:LastOwnedPopupWindowId $script:LastOwnedPopupWindowPid
                     $fullAccessState = Read-RollbackToggleState `
                         $script:LastOwnedPopupWindowId $script:LastOwnedPopupWindowPid "FullAccess"
@@ -1426,6 +2496,22 @@ function Invoke-BestEffortUiRollback {
         (Test-UnresolvedMutation $State "DeveloperMode") -or
         (Test-UnresolvedMutation $State "DedicatedWindow")) {
         try {
+            if ((Test-UnresolvedMutation $State "NativePicker") -or
+                (Test-UnresolvedMutation $State "RemoveExtensionDialog")) {
+                throw "Candidate and Chrome-setting rollback is blocked by an unresolved owned modal."
+            }
+            if ((Test-UnresolvedMutation $State "DedicatedWindow") -and
+                [String]::IsNullOrWhiteSpace([string]$script:DedicatedWindowId)) {
+                $dedicatedRollbackTarget = Resolve-DedicatedWindowRollbackTarget
+                if ($null -eq $dedicatedRollbackTarget) {
+                    Set-MutationDisposition $State "DedicatedWindow" "restored"
+                }
+            }
+            if (-not (Test-UnresolvedMutation $State "CandidateExtension") -and
+                -not (Test-UnresolvedMutation $State "DeveloperMode") -and
+                -not (Test-UnresolvedMutation $State "DedicatedWindow")) {
+                return @($errors)
+            }
             if ([String]::IsNullOrWhiteSpace($script:DedicatedWindowId) -or
                 $script:DedicatedWindowPid -le 0 -or
                 -not $script:DedicatedAbsentBeforeCreation -or
@@ -1439,17 +2525,19 @@ function Invoke-BestEffortUiRollback {
                     [ordered]@{ kind="key"; value="Control+L" },
                     [ordered]@{ kind="typeText"; value="chrome://extensions" },
                     [ordered]@{ kind="key"; value="Enter" }
-                ) "VERIFIED:rollback-chrome-extensions" `
+                ) "" `
                 $script:DedicatedWindowId $script:DedicatedWindowPid
             if (Test-UnresolvedMutation $State "CandidateExtension") {
                 $cardState = Read-RollbackCandidateCardState $script:DedicatedWindowId $script:DedicatedWindowPid
                 if ($cardState -ceq "present") {
+                    Set-MutationDisposition $State "RemoveExtensionDialog" "outcome_unknown"
                     Invoke-UnrecordedNativeSteps `
                         "Use only the exact bound test-owned chrome://extensions window." @(
-                            [ordered]@{ kind="click"; label="Remove on the exact v0.12.14 test-owned candidate card" },
+                            [ordered]@{ kind="click"; label="Remove on the exact v0.12.15 test-owned candidate card" },
                             [ordered]@{ kind="click"; label="confirm removal of that exact candidate card" }
-                        ) "CONSENT:extensionDisposition:rollback" `
+                        ) "extensionDisposition" `
                         $script:DedicatedWindowId $script:DedicatedWindowPid
+                    Set-MutationDisposition $State "RemoveExtensionDialog" "restored"
                     $cardState = Read-RollbackCandidateCardState $script:DedicatedWindowId $script:DedicatedWindowPid
                 }
                 if ($cardState -cne "absent") { throw "Candidate-card rollback was not verified." }
@@ -1466,7 +2554,7 @@ function Invoke-BestEffortUiRollback {
                     Invoke-UnrecordedNativeSteps `
                         "Use only the exact bound test-owned chrome://extensions window." `
                         @([ordered]@{ kind="click"; label="Developer Mode toggle to the live-captured initial state" }) `
-                        "CONSENT:developerModeChange:rollback" `
+                        "developerModeChange" `
                         $script:DedicatedWindowId $script:DedicatedWindowPid
                     $developerState = Read-RollbackToggleState `
                         $script:DedicatedWindowId $script:DedicatedWindowPid "DeveloperMode"
@@ -1482,7 +2570,7 @@ function Invoke-BestEffortUiRollback {
                 Invoke-UnrecordedNativeSteps `
                     "Close only the exact sole-new test-owned dedicated Chrome window." `
                     @([ordered]@{ kind="key"; value="Control+Shift+W" }) `
-                    "VERIFIED:rollback-test-window-closed" `
+                    "" `
                     $script:DedicatedWindowId $script:DedicatedWindowPid -ExpectTargetClosed
                 Set-MutationDisposition $State "DedicatedWindow" "restored"
             }
@@ -1497,7 +2585,7 @@ function Invoke-Run {
         throw "The live computer-helper chain recorder runs only on Windows."
     }
     if ($Port -ne 17373) {
-        throw "The v0.12.14 acceptance recorder requires the canonical 127.0.0.1:17373 endpoint."
+        throw "The v0.12.15 acceptance recorder requires the canonical 127.0.0.1:17373 endpoint."
     }
     $preflightPath = Resolve-OrdinaryFile $PreflightRecord "PreflightRecord"
     $runnerPath = Resolve-OrdinaryFile $ApiMatrixRunner "ApiMatrixRunner"
@@ -1505,17 +2593,36 @@ function Invoke-Run {
     $helperPath = Resolve-OrdinaryFile $HelperExecutable "HelperExecutable"
     $extensionDirectoryPath = Resolve-OrdinaryDirectory $ExtensionDirectory "ExtensionDirectory"
     $script:RawDirectory = Resolve-OrdinaryDirectory $RawScreenshotDirectory "RawScreenshotDirectory"
+    $script:OperatorExchange = Resolve-OrdinaryDirectory $OperatorExchangeDirectory "OperatorExchangeDirectory"
+    Assert-PrivateOperatorExchangeDirectory $script:OperatorExchange
     if ([IO.DirectoryInfo]::new($script:RawDirectory).GetFileSystemInfos().Count -ne 0) {
         throw "RawScreenshotDirectory must begin empty."
     }
+    if ([IO.DirectoryInfo]::new($script:OperatorExchange).GetFileSystemInfos().Count -ne 0) {
+        throw "OperatorExchangeDirectory must begin empty."
+    }
+    $script:OperatorExchangeArtifacts = New-Object Collections.Generic.List[string]
+    $script:OperatorResponseReservations = New-Object Collections.Generic.List[object]
+    $script:OperatorExpectedTransientArtifacts = New-Object Collections.Generic.List[string]
+    Assert-Hex $ExecutorSessionRef 64 "ExecutorSessionRef"
+    Assert-Hex $ExpectedOrchestratorSessionRef 64 "ExpectedOrchestratorSessionRef"
+    $script:ExecutorRef = $ExecutorSessionRef
+    $script:ExpectedOrchestratorRef = $ExpectedOrchestratorSessionRef
     $script:MatrixOutputPath = Resolve-NewJson $ApiMatrixRecord
+    $script:ApprovalOutputPath = Resolve-NewJson $ScopedApprovalRecord
     $outputPath = Resolve-NewJson $OutputRecord
-    if ($script:MatrixOutputPath -ceq $outputPath) {
-        throw "ApiMatrixRecord and OutputRecord must be distinct new files."
+    if (@(@($script:MatrixOutputPath, $script:ApprovalOutputPath, $outputPath) |
+            Select-Object -Unique).Count -ne 3) {
+        throw "ApiMatrixRecord, ScopedApprovalRecord, and OutputRecord must be distinct new files."
     }
 
-    $preflight = Read-Json $preflightPath "PreflightRecord"
-    $script:Binding = Get-CandidateBinding $preflight (Get-Sha256 $preflightPath)
+    $stablePreflight = Read-StableJsonWithDigest $preflightPath "PreflightRecord"
+    $preflight = $stablePreflight.Value
+    $script:Binding = Get-CandidateBinding $preflight $stablePreflight.Sha256
+    $script:ReleaseCandidateBinding = $preflight.releaseCandidateBinding
+    $script:CandidateBindingSha256 = Get-TextSha256 (
+        $script:Binding | ConvertTo-Json -Depth 12 -Compress
+    )
     if ([IO.Path]::GetFileName($serverPath) -cne $preflight.candidate.server.name -or
         (Get-Sha256 $serverPath) -cne $preflight.candidate.server.sha256 -or
         [IO.Path]::GetFileName($helperPath) -cne $preflight.candidate.computerHelper.name -or
@@ -1535,6 +2642,28 @@ function Invoke-Run {
     $script:Actions = @()
     $script:ScreenshotRecords = @()
     $script:CommandSequence = 0
+    $script:OperatorRequestCount = 0
+    $script:StatusDecisionCount = 0
+    $script:FreshFrameDecisionCount = 0
+    $script:OperatorResponseChainSha256 = Get-TextSha256 (
+        "operator-exchange-v1`n$($script:Binding.runNonce)"
+    )
+    $script:ReviewerSessionRef = $null
+    $script:OperatorExchangeScratchDeleted = $false
+    $script:ApprovalId = $null
+    $script:ApprovalScopeSha256 = $null
+    $script:ApprovalConfirmedAtUtc = $null
+    $script:ApprovalExpiresAtUtc = $null
+    $script:ApprovalConsumedBeforeExpiry = $false
+    $script:ApprovalRequest = $null
+    $script:ApprovalResponse = $null
+    $script:ApprovalChallengeFrameRef = $null
+    $script:ApprovalPreDispatchFrameRef = $null
+    $script:ApprovalPreDispatchDecisionRef = $null
+    $script:ApprovalPreDispatchVerifiedAtUtc = $null
+    $script:FirstCoveredActionSequence = 0
+    $script:FirstCoveredActionDispatchedAtUtc = $null
+    $script:MatrixRecordSha256 = $null
     $script:ServerProcess = $null
     $script:ActiveEpoch = $null
     $script:BaselineChrome = $null
@@ -1546,6 +2675,8 @@ function Invoke-Run {
     $script:DedicatedCreatedAsOnlyNewChromeWindow = $false
     $script:LastOwnedPopupWindowId = $null
     $script:LastOwnedPopupWindowPid = 0
+    $script:NativePickerWindowId = $null
+    $script:NativePickerWindowPid = 0
     $script:BoundHelperWorkerPid = 0
     $helperProcess = $null
     $helperFamilyIds = @()
@@ -1571,6 +2702,9 @@ function Invoke-Run {
         CandidateExtension = "not_attempted"
         FullAccess = "not_attempted"
         SavedToken = "not_attempted"
+        NativePicker = "not_attempted"
+        ClearTokenDialog = "not_attempted"
+        RemoveExtensionDialog = "not_attempted"
     }
     $tokenWasPresent = Test-Path Env:LBB_TOKEN
     $portWasPresent = Test-Path Env:LBB_PORT
@@ -1632,8 +2766,11 @@ function Invoke-Run {
             [ordered]@{ kind="key"; value="Enter" }
         ) "none" "Verify chrome://extensions is visible in the dedicated window and no candidate card exists."
         $initialCandidateCard = Read-LiveCandidateCardState `
-            $epoch "absent" "Exact v0.12.14 test-owned candidate card before installation"
+            $epoch "absent" "Exact v0.12.15 test-owned candidate card before installation"
         $capturedDeveloperMode = Read-LiveToggleState $epoch "DeveloperMode"
+        Request-ScopedActionTimeApproval $epoch $preflight $capturedDeveloperMode $initialCandidateCard
+        Confirm-ApprovalPreDispatchStateUnchanged `
+            $epoch $capturedDeveloperMode $initialCandidateCard
         $developerSteps = if ($capturedDeveloperMode.value -ceq "disabled") {
             Set-MutationDisposition $mutation "DeveloperMode" "outcome_unknown"
             @([ordered]@{ kind="click"; label="Developer Mode toggle" })
@@ -1644,11 +2781,13 @@ function Invoke-Run {
             Set-MutationDisposition $mutation "DeveloperMode" "verified_applied"
         }
         [void](Get-ExactExtensionPayloadDigest $extensionDirectoryPath $payloadInventory $preflight.candidate.extension.combinedPayloadSha256)
+        Set-MutationDisposition $mutation "CandidateExtension" "outcome_unknown"
+        Set-MutationDisposition $mutation "NativePicker" "outcome_unknown"
         Invoke-RecordedAction $epoch $script:ActionNames[3] @([ordered]@{ kind="click"; label="Load unpacked button" }) "installCandidate" "Verify Chrome's native Load unpacked picker opened."
+        Set-MutationDisposition $mutation "NativePicker" "verified_applied"
         Stop-RecordedEpoch $epoch
 
         $epoch = Start-RecordedEpoch $script:EpochNames[2] $script:EpochSurfaces[2] "Select only Chrome's native Load unpacked file picker."
-        Set-MutationDisposition $mutation "CandidateExtension" "outcome_unknown"
         Invoke-RecordedAction $epoch $script:ActionNames[4] @(
             [ordered]@{ kind="key"; value="Control+L" },
             [ordered]@{ kind="typeText"; value=$extensionDirectoryPath },
@@ -1656,10 +2795,11 @@ function Invoke-Run {
             [ordered]@{ kind="click"; label="Select Folder button in Chrome's native picker" }
         ) "installCandidate" "Verify the helper explicitly invoked Select Folder for the exact new test-owned directory and the native picker closed." -ExpectTargetClosed
         Stop-RecordedEpoch $epoch -TargetClosed
+        Set-MutationDisposition $mutation "NativePicker" "restored"
         [void](Get-ExactExtensionPayloadDigest $extensionDirectoryPath $payloadInventory $preflight.candidate.extension.combinedPayloadSha256)
 
         $epoch = Start-RecordedEpoch $script:EpochNames[3] $script:EpochSurfaces[3] "Reselect the dedicated stock Chrome extensions window."
-        Invoke-RecordedAction $epoch $script:ActionNames[5] @() "none" "Verify exactly one enabled unpacked Local Browser Bridge v0.12.14 card, no duplicate, and no load error."
+        Invoke-RecordedAction $epoch $script:ActionNames[5] @() "none" "Verify exactly one enabled unpacked Local Browser Bridge v0.12.15 card, no duplicate, and no load error."
         Set-MutationDisposition $mutation "CandidateExtension" "verified_applied"
         Invoke-RecordedAction $epoch $script:ActionNames[6] @(
             [ordered]@{ kind="click"; label="Chrome Extensions menu button" },
@@ -1683,7 +2823,7 @@ function Invoke-Run {
             [ordered]@{ kind="click"; label="popup token field" },
             [ordered]@{ kind="typeText"; value=$script:Token },
             [ordered]@{ kind="click"; label="popup Connect button" }
-        ) "acceptanceTokenSave" "Verify v0.12.14 is connected and the credential field is empty."
+        ) "acceptanceTokenSave" "Verify v0.12.15 is connected and the credential field is empty."
         Set-MutationDisposition $mutation "SavedToken" "verified_applied"
         Stop-RecordedEpoch $epoch
 
@@ -1694,11 +2834,19 @@ function Invoke-Run {
         }
         try { $ownedTarget = [string]$handoffOutput[0] | ConvertFrom-Json }
         catch { throw "The browser API matrix owned-target handoff was not JSON." }
+        $stableMatrix = Read-StableJsonWithDigest $script:MatrixOutputPath "ApiMatrixRecord"
+        $matrix = $stableMatrix.Value
+        if ($matrix.version -cne $script:Version -or $matrix.passed -ne $true -or
+            $matrix.candidateBinding.runNonce -cne $script:Binding.runNonce -or
+            $matrix.candidateBinding.computerHelperSha256 -cne $script:Binding.computerHelperSha256) {
+            throw "The API matrix did not pass against the exact candidate/helper/run."
+        }
+        $script:MatrixRecordSha256 = $stableMatrix.Sha256
         [Environment]::SetEnvironmentVariable("LBB_TOKEN", $script:Token, "Process")
         $browserAction = Show-DeterministicGreeting $ownedTarget
 
         $epoch = Start-RecordedEpoch $script:EpochNames[5] $script:EpochSurfaces[5] "Select the dedicated Chrome window containing chrome://extensions and the matrix-owned demo."
-        Invoke-RecordedAction $epoch $script:ActionNames[9] @([ordered]@{ kind="click"; label="the exact chrome://extensions tab" }) "none" "Verify exactly one enabled unpacked Local Browser Bridge v0.12.14 card, no error, and Chrome's native debugger-use indicator while the exact bridge lease is active."
+        Invoke-RecordedAction $epoch $script:ActionNames[9] @([ordered]@{ kind="click"; label="the exact chrome://extensions tab" }) "none" "Verify exactly one enabled unpacked Local Browser Bridge v0.12.15 card, no error, and Chrome's native debugger-use indicator while the exact bridge lease is active."
         Save-RecordedScreenshot $epoch "extension-loaded"
         Invoke-RecordedAction $epoch $script:ActionNames[10] @([ordered]@{ kind="click"; label="the exact matrix-owned loopback demo tab" }) "none" "Verify the exact visible result is Hello, Bridge Matrix. blue selected."
         Save-RecordedScreenshot $epoch "api-action-result"
@@ -1783,8 +2931,11 @@ function Invoke-Run {
 
         $epoch = Start-RecordedEpoch $script:EpochNames[10] $script:EpochSurfaces[10] "Select only the Local Browser Bridge cleanup popup."
         Set-MutationDisposition $mutation "SavedToken" "outcome_unknown"
+        Set-MutationDisposition $mutation "ClearTokenDialog" "outcome_unknown"
         Invoke-RecordedAction $epoch $script:ActionNames[21] @([ordered]@{ kind="click"; label="Clear saved token button" }) "clearSavedTokenInitiate" "Verify the clear-token confirmation dialog appeared."
+        Set-MutationDisposition $mutation "ClearTokenDialog" "verified_applied"
         Invoke-RecordedAction $epoch $script:ActionNames[22] @([ordered]@{ kind="click"; label="affirmative clear-token confirmation button" }) "clearSavedTokenConfirm" "Verify Not configured and the disabled Clear saved token button."
+        Set-MutationDisposition $mutation "ClearTokenDialog" "restored"
         Set-MutationDisposition $mutation "SavedToken" "restored"
         $restoreFullSteps = if ($capturedFullAccess.value -ceq "disabled") {
             @([ordered]@{ kind="click"; label="Full Access toggle back to disabled" })
@@ -1800,13 +2951,15 @@ function Invoke-Run {
 
         $epoch = Start-RecordedEpoch $script:EpochNames[11] $script:EpochSurfaces[11] "Select only the dedicated test-owned stock Chrome window."
         Set-MutationDisposition $mutation "CandidateExtension" "outcome_unknown"
+        Set-MutationDisposition $mutation "RemoveExtensionDialog" "outcome_unknown"
         Invoke-RecordedAction $epoch $script:ActionNames[24] @(
             [ordered]@{ kind="click"; label="the exact existing chrome://extensions tab" },
-            [ordered]@{ kind="click"; label="Remove on the exact v0.12.14 test-owned candidate card" },
+            [ordered]@{ kind="click"; label="Remove on the exact v0.12.15 test-owned candidate card" },
             [ordered]@{ kind="click"; label="confirm removal of that exact candidate card" }
-        ) "extensionDisposition" "Verify the helper switched to the protected chrome://extensions tab before removing only the new test-owned v0.12.14 card."
+        ) "extensionDisposition" "Verify the helper switched to the protected chrome://extensions tab before removing only the new test-owned v0.12.15 card."
         $finalCandidateCard = Read-LiveCandidateCardState `
-            $epoch "absent" "Exact v0.12.14 test-owned candidate card after removal"
+            $epoch "absent" "Exact v0.12.15 test-owned candidate card after removal"
+        Set-MutationDisposition $mutation "RemoveExtensionDialog" "restored"
         Set-MutationDisposition $mutation "CandidateExtension" "restored"
         $restoreDeveloperSteps = if ($capturedDeveloperMode.value -ceq "disabled") {
             @([ordered]@{ kind="click"; label="Developer Mode toggle back to disabled" })
@@ -1860,21 +3013,74 @@ function Invoke-Run {
         }
         Add-LifecycleEvent "server-owner-forced-terminated" "disconnected" $serverProcessRef $preflight.candidate.server.sha256 $serverExitCode
 
+        Remove-OperatorExchangeScratch
+
         if ($script:Lifecycle.Count -ne 8 -or $script:Epochs.Count -ne 13 -or
             $script:Actions.Count -ne 27 -or $script:ScreenshotRecords.Count -ne 6 -or
             $null -eq $handback -or $initialCandidateCard.present -ne $false -or
             $finalCandidateCard.present -ne $false) {
             throw "The live helper chain is incomplete."
         }
-        $matrix = Read-Json $script:MatrixOutputPath "ApiMatrixRecord"
-        if ($matrix.version -cne $script:Version -or $matrix.passed -ne $true -or
-            $matrix.candidateBinding.runNonce -cne $script:Binding.runNonce -or
-            $matrix.candidateBinding.computerHelperSha256 -cne $script:Binding.computerHelperSha256) {
-            throw "The API matrix did not pass against the exact candidate/helper/run."
+        $finalStableMatrix = Read-StableJsonWithDigest $script:MatrixOutputPath "ApiMatrixRecord final binding"
+        if ($finalStableMatrix.Sha256 -cne $script:MatrixRecordSha256) {
+            throw "The API matrix record changed after its exact stable binding."
         }
         $finishedAt = [DateTimeOffset]::UtcNow
-        $record = [ordered]@{
+        if ([String]::IsNullOrWhiteSpace([string]$script:ApprovalId) -or
+            $script:FirstCoveredActionSequence -le 0 -or
+            [String]::IsNullOrWhiteSpace([string]$script:FirstCoveredActionDispatchedAtUtc) -or
+            -not $script:ApprovalConsumedBeforeExpiry -or
+            [String]::IsNullOrWhiteSpace([string]$script:ApprovalChallengeFrameRef) -or
+            [String]::IsNullOrWhiteSpace([string]$script:ApprovalPreDispatchFrameRef) -or
+            [String]::IsNullOrWhiteSpace([string]$script:ApprovalPreDispatchDecisionRef) -or
+            [String]::IsNullOrWhiteSpace([string]$script:ApprovalPreDispatchVerifiedAtUtc) -or
+            [String]::IsNullOrWhiteSpace([string]$script:ReviewerSessionRef) -or
+            -not $script:OperatorExchangeScratchDeleted) {
+            throw "The scoped approval or independent operator exchange did not complete."
+        }
+        $approvalConfirmedAt = [DateTimeOffset]::ParseExact(
+            $script:ApprovalConfirmedAtUtc, "o", [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind
+        )
+        $firstCoveredAt = [DateTimeOffset]::ParseExact(
+            $script:FirstCoveredActionDispatchedAtUtc, "o", [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind
+        )
+        if ($approvalConfirmedAt -ge $firstCoveredAt) {
+            throw "The scoped approval was not consumed before the first covered action."
+        }
+        $approvalExpiresAt = [DateTimeOffset]::ParseExact(
+            $script:ApprovalExpiresAtUtc, "o", [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind
+        )
+        if ($firstCoveredAt -gt $approvalExpiresAt) {
+            throw "The scoped approval expired before the first covered action dispatch."
+        }
+        $approvalRecord = [ordered]@{
             schemaVersion = 1
+            evidenceType = "stock-user-chrome-scoped-action-approval"
+            releaseCandidateBinding = $script:ReleaseCandidateBinding
+            candidateBinding = $script:Binding
+            approvalId = $script:ApprovalId
+            request = $script:ApprovalRequest
+            response = $script:ApprovalResponse
+            consumption = [ordered]@{
+                consumedBeforeFirstCoveredAction = $true
+                consumedBeforeExpiry = $true
+                preDispatchFrameRef = $script:ApprovalPreDispatchFrameRef
+                preDispatchDecisionRef = $script:ApprovalPreDispatchDecisionRef
+                preDispatchVerifiedAtUtc = $script:ApprovalPreDispatchVerifiedAtUtc
+                freshStateRevalidatedAfterApproval = $true
+                scopeUnchangedThroughRun = $true
+                replayed = $false
+                cleanupAuthoritySurvivesFailure = $true
+            }
+        }
+        $approvalRecordSha256 = $null
+        Write-CreateOnceJson $script:ApprovalOutputPath $approvalRecord `
+            "scoped action-time approval record" ([ref]$approvalRecordSha256)
+        $record = [ordered]@{
+            schemaVersion = 2
             evidenceType = "stock-user-chrome-computer-helper-chain"
             version = $script:Version
             releaseCandidateBinding = $script:ReleaseCandidateBinding
@@ -1888,9 +3094,9 @@ function Invoke-Run {
             run = [ordered]@{
                 runNonce = $script:Binding.runNonce
                 preflightRecordSha256 = $script:Binding.preflightRecordSha256
-                apiMatrixRecordSha256 = Get-Sha256 $script:MatrixOutputPath
-                startedAtUtc = $startedAt.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
-                finishedAtUtc = $finishedAt.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
+                apiMatrixRecordSha256 = $script:MatrixRecordSha256
+                startedAtUtc = Format-CanonicalUtc $startedAt
+                finishedAtUtc = Format-CanonicalUtc $finishedAt
             }
             server = [ordered]@{
                 executableName = $preflight.candidate.server.name
@@ -1915,6 +3121,39 @@ function Invoke-Run {
                 verifiedBeforeLoad = $true
                 verifiedAfterLoad = $true
                 verifiedAfterCleanup = $true
+            }
+            operatorExchange = [ordered]@{
+                protocolVersion = 1
+                executorSessionRef = $script:ExecutorRef
+                reviewerSessionRef = $script:ReviewerSessionRef
+                independentSessionBoundary = $true
+                requestCount = $script:OperatorRequestCount
+                statusDecisionCount = $script:StatusDecisionCount
+                freshFrameDecisionCount = $script:FreshFrameDecisionCount
+                allRequestsCreateOnce = $true
+                allResponsesCreateOnce = $true
+                everyFrameDependentDecisionBoundToFreshFrame = $true
+                everyStatusDecisionBoundToFreshStatus = $true
+                responseChainSha256 = $script:OperatorResponseChainSha256
+                scratchDeleted = $true
+            }
+            scopedActionApproval = [ordered]@{
+                recordSha256 = $approvalRecordSha256
+                approvalId = $script:ApprovalId
+                scopeSha256 = $script:ApprovalScopeSha256
+                executorSessionRef = $script:ExecutorRef
+                approvalConfirmedAtUtc = $script:ApprovalConfirmedAtUtc
+                approvalExpiresAtUtc = $script:ApprovalExpiresAtUtc
+                approvalChallengeFrameRef = $script:ApprovalChallengeFrameRef
+                preDispatchFrameRef = $script:ApprovalPreDispatchFrameRef
+                preDispatchDecisionRef = $script:ApprovalPreDispatchDecisionRef
+                preDispatchVerifiedAtUtc = $script:ApprovalPreDispatchVerifiedAtUtc
+                firstCoveredActionSequence = $script:FirstCoveredActionSequence
+                firstCoveredActionDispatchedAtUtc = $script:FirstCoveredActionDispatchedAtUtc
+                consumedBeforeFirstCoveredAction = $true
+                consumedBeforeExpiry = $true
+                freshStateRevalidatedAfterApproval = $true
+                scopeUnchangedThroughRun = $true
             }
             initialState = [ordered]@{
                 capturedFromFreshHelperFrames = $true
@@ -2043,6 +3282,8 @@ function Invoke-Run {
         }
         try { Wait-CanonicalPortReleased }
         catch { $cleanupErrors.Add("listener-rescan: $($_.Exception.Message)") }
+        try { Remove-OperatorExchangeScratch }
+        catch { $cleanupErrors.Add("operator-exchange: $($_.Exception.Message)") }
         try {
             if ($tokenWasPresent) { [Environment]::SetEnvironmentVariable("LBB_TOKEN", $previousToken, "Process") }
             else { [Environment]::SetEnvironmentVariable("LBB_TOKEN", $null, "Process") }
@@ -2070,7 +3311,7 @@ function Invoke-Run {
                     throw "raw screenshot scratch contains an unexpected or linked entry"
                 }
                 foreach ($entry in $rawEntries) { [IO.File]::Delete($entry.FullName) }
-                foreach ($path in @($script:MatrixOutputPath, $outputPath)) {
+                foreach ($path in @($script:MatrixOutputPath, $script:ApprovalOutputPath, $outputPath)) {
                     if ([IO.File]::Exists($path)) {
                         $file = [IO.FileInfo]::new($path)
                         if (($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
@@ -2145,6 +3386,8 @@ function Invoke-SelfTest {
     $mutationSelfTest = @{
         DedicatedWindow = "not_attempted"; DeveloperMode = "not_attempted"
         CandidateExtension = "not_attempted"; FullAccess = "not_attempted"; SavedToken = "not_attempted"
+        NativePicker = "not_attempted"; ClearTokenDialog = "not_attempted"
+        RemoveExtensionDialog = "not_attempted"
     }
     Set-MutationDisposition $mutationSelfTest "DedicatedWindow" "outcome_unknown"
     if (-not (Test-UnresolvedMutation $mutationSelfTest "DedicatedWindow")) {
@@ -2154,6 +3397,46 @@ function Invoke-SelfTest {
     Set-MutationDisposition $mutationSelfTest "DedicatedWindow" "restored"
     if (Test-UnresolvedMutation $mutationSelfTest "DedicatedWindow") {
         throw "Computer-helper recorder restored-mutation self-test failed."
+    }
+    foreach ($modalName in @("NativePicker", "ClearTokenDialog", "RemoveExtensionDialog")) {
+        Set-MutationDisposition $mutationSelfTest $modalName "outcome_unknown"
+        Set-MutationDisposition $mutationSelfTest $modalName "verified_applied"
+        Set-MutationDisposition $mutationSelfTest $modalName "restored"
+        Set-MutationDisposition $mutationSelfTest $modalName "outcome_unknown"
+        if (-not (Test-UnresolvedMutation $mutationSelfTest $modalName)) {
+            throw "Computer-helper recorder failed the injected modal-failure transition for $modalName."
+        }
+        Set-MutationDisposition $mutationSelfTest $modalName "restored"
+    }
+    $baselineRollbackRefs = @(
+        [String]::new([char]"1", 64), [String]::new([char]"2", 64)
+    )
+    $sameRollbackBindings = @($baselineRollbackRefs | ForEach-Object {
+        [pscustomobject]@{ TargetRef = $_; Window = [pscustomobject]@{ id = $_; pid = 1 } }
+    })
+    if ($null -ne (Resolve-SoleNewDedicatedRollbackBinding `
+        $baselineRollbackRefs $sameRollbackBindings)) {
+        throw "Computer-helper recorder no-new-window rollback delta self-test failed."
+    }
+    $soleNewRef = [String]::new([char]"3", 64)
+    $soleNewBindings = @($sameRollbackBindings) + [pscustomobject]@{
+        TargetRef = $soleNewRef; Window = [pscustomobject]@{ id = "new"; pid = 2 }
+    }
+    if ((Resolve-SoleNewDedicatedRollbackBinding `
+        $baselineRollbackRefs $soleNewBindings).TargetRef -cne $soleNewRef) {
+        throw "Computer-helper recorder sole-new-window rollback delta self-test failed."
+    }
+    $multipleNewRejected = $false
+    try {
+        [void](Resolve-SoleNewDedicatedRollbackBinding `
+            $baselineRollbackRefs ($soleNewBindings + [pscustomobject]@{
+                TargetRef = [String]::new([char]"4", 64)
+                Window = [pscustomobject]@{ id = "other"; pid = 3 }
+            }))
+    }
+    catch { $multipleNewRejected = $true }
+    if (-not $multipleNewRejected) {
+        throw "Computer-helper recorder accepted an ambiguous multi-window rollback delta."
     }
     $invalidDispositionRejected = $false
     try { Set-MutationDisposition $mutationSelfTest "DedicatedWindow" "assumed_restored" }
@@ -2166,6 +3449,290 @@ function Invoke-SelfTest {
     catch { $invalidJumpRejected = $true }
     if (-not $invalidJumpRejected) {
         throw "Computer-helper recorder invalid-mutation-transition self-test failed."
+    }
+    $allowedEnum = [pscustomobject]@{ type = "enum"; values = @("enabled", "disabled") }
+    Assert-OperatorDecision "ui-state" ([pscustomobject]@{ value = "enabled" }) $allowedEnum
+    Assert-OperatorDecision "ui-point" ([pscustomobject]@{ x = 10; y = 20 }) ([pscustomobject]@{})
+    Assert-OperatorDecision "ui-verification" ([pscustomobject]@{ passed = $true }) ([pscustomobject]@{})
+    Assert-OperatorDecision "scoped-user-approval" ([pscustomobject]@{
+        approved = $true; approvedBy = "user"; confirmationMode = "batched-action-time"
+    }) ([pscustomobject]@{})
+    foreach ($invalidDecision in @(
+        [pscustomobject]@{ Kind = "ui-state"; Decision = [pscustomobject]@{ value = "unknown" } },
+        [pscustomobject]@{ Kind = "ui-state"; Decision = [pscustomobject]@{ value = "enabled"; human = $true } },
+        [pscustomobject]@{ Kind = "ui-point"; Decision = [pscustomobject]@{ x = "10"; y = 20.0 } },
+        [pscustomobject]@{ Kind = "ui-point"; Decision = [pscustomobject]@{ x = 10.5; y = 20 } },
+        [pscustomobject]@{ Kind = "ui-verification"; Decision = [pscustomobject]@{ passed = "true" } },
+        [pscustomobject]@{ Kind = "ui-state"; Decision = [pscustomobject]@{ unable = $false } },
+        [pscustomobject]@{ Kind = "ui-state"; Decision = [pscustomobject]@{ unable = $true; value = "enabled" } },
+        [pscustomobject]@{ Kind = "scoped-user-approval"; Decision = [pscustomobject]@{
+            approved = $true; approvedBy = "agent"; confirmationMode = "batched-action-time"; receipt = "human"
+        } }
+    )) {
+        $decisionRejected = $false
+        try {
+            if (-not (Test-UnableOperatorDecision $invalidDecision.Decision)) {
+                Assert-OperatorDecision $invalidDecision.Kind $invalidDecision.Decision $allowedEnum
+            }
+        }
+        catch { $decisionRejected = $true }
+        if (-not $decisionRejected) {
+            throw "Computer-helper recorder accepted an invalid strict operator decision."
+        }
+    }
+    if (-not (Test-UnableOperatorDecision ([pscustomobject]@{ unable = $true }))) {
+        throw "Computer-helper recorder did not recognize the universal unable decision."
+    }
+    $envelopeRequestId = [String]::new([char]"1", 32)
+    $envelopeRequestSha = [String]::new([char]"2", 64)
+    $envelopeCandidateSha = [String]::new([char]"3", 64)
+    $envelopeInputSha = [String]::new([char]"4", 64)
+    $envelopeExecutorRef = [String]::new([char]"5", 64)
+    $envelopeReviewerRef = [String]::new([char]"6", 64)
+    $envelopeOrchestratorRef = [String]::new([char]"7", 64)
+    $goodEnvelope = [pscustomobject][ordered]@{
+        schemaVersion = 1
+        evidenceType = "stock-user-chrome-operator-response"
+        requestId = $envelopeRequestId
+        requestSha256 = $envelopeRequestSha
+        candidateBindingSha256 = $envelopeCandidateSha
+        inputDigestSha256 = $envelopeInputSha
+        responderKind = "independent-agent"
+        responderSessionRef = $envelopeReviewerRef
+        respondedAtUtc = "2026-08-24T00:00:01.0000000+00:00"
+        decision = [pscustomobject]@{ value = "fixture" }
+    }
+    Assert-OperatorResponseEnvelope $goodEnvelope $envelopeRequestId $envelopeRequestSha `
+        $envelopeCandidateSha $envelopeInputSha "independent-agent" `
+        $envelopeExecutorRef $null $envelopeOrchestratorRef
+    foreach ($envelopeMutation in @(
+        "request-replay", "input-swap", "same-session", "reviewer-change", "old-human-field"
+    )) {
+        $invalidEnvelope = ($goodEnvelope | ConvertTo-Json -Depth 8) | ConvertFrom-Json
+        $existingReviewer = $null
+        switch ($envelopeMutation) {
+            "request-replay" { $invalidEnvelope.requestSha256 = [String]::new([char]"8", 64) }
+            "input-swap" { $invalidEnvelope.inputDigestSha256 = [String]::new([char]"9", 64) }
+            "same-session" { $invalidEnvelope.responderSessionRef = $envelopeExecutorRef }
+            "reviewer-change" { $existingReviewer = $envelopeOrchestratorRef }
+            "old-human-field" {
+                $invalidEnvelope | Add-Member -NotePropertyName humanReviewed -NotePropertyValue $true
+            }
+        }
+        $envelopeRejected = $false
+        try {
+            Assert-OperatorResponseEnvelope $invalidEnvelope $envelopeRequestId $envelopeRequestSha `
+                $envelopeCandidateSha $envelopeInputSha "independent-agent" `
+                $envelopeExecutorRef $existingReviewer $envelopeOrchestratorRef
+        }
+        catch { $envelopeRejected = $true }
+        if (-not $envelopeRejected) {
+            throw "Computer-helper recorder accepted $envelopeMutation in an operator response."
+        }
+    }
+    $approvalEnvelope = ($goodEnvelope | ConvertTo-Json -Depth 8) | ConvertFrom-Json
+    $approvalEnvelope.responderKind = "user-via-orchestrator"
+    $approvalEnvelope.responderSessionRef = $envelopeOrchestratorRef
+    Assert-OperatorResponseEnvelope $approvalEnvelope $envelopeRequestId $envelopeRequestSha `
+        $envelopeCandidateSha $envelopeInputSha "user-via-orchestrator" `
+        $envelopeExecutorRef $envelopeReviewerRef $envelopeOrchestratorRef
+    $wrongOrchestratorRejected = $false
+    try {
+        $approvalEnvelope.responderSessionRef = [String]::new([char]"a", 64)
+        Assert-OperatorResponseEnvelope $approvalEnvelope $envelopeRequestId $envelopeRequestSha `
+            $envelopeCandidateSha $envelopeInputSha "user-via-orchestrator" `
+            $envelopeExecutorRef $envelopeReviewerRef $envelopeOrchestratorRef
+    }
+    catch { $wrongOrchestratorRejected = $true }
+    if (-not $wrongOrchestratorRejected) {
+        throw "Computer-helper recorder accepted approval from a non-attestor orchestrator session."
+    }
+    $approvalSessionCollisionRejected = $false
+    try {
+        $approvalEnvelope.responderSessionRef = $envelopeReviewerRef
+        Assert-OperatorResponseEnvelope $approvalEnvelope $envelopeRequestId $envelopeRequestSha `
+            $envelopeCandidateSha $envelopeInputSha "user-via-orchestrator" `
+            $envelopeExecutorRef $envelopeReviewerRef $envelopeOrchestratorRef
+    }
+    catch { $approvalSessionCollisionRejected = $true }
+    if (-not $approvalSessionCollisionRejected) {
+        throw "Computer-helper recorder accepted reviewer-authored user approval."
+    }
+    $timestampStart = [DateTimeOffset]::ParseExact(
+        "2026-08-24T00:00:00.0000000Z", "o", [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::RoundtripKind
+    )
+    [void](Assert-FreshCanonicalResponseTimestamp `
+        "2026-08-24T00:00:01.0000000Z" $timestampStart ($timestampStart.AddSeconds(2)) `
+        "self-test canonical response timestamp")
+    $offsetTimestampRejected = $false
+    try {
+        [void](Assert-FreshCanonicalResponseTimestamp `
+            "2026-08-24T00:00:01.0000000+00:00" $timestampStart ($timestampStart.AddSeconds(2)) `
+            "self-test offset response timestamp")
+    }
+    catch { $offsetTimestampRejected = $true }
+    if (-not $offsetTimestampRejected) {
+        throw "Computer-helper recorder accepted a noncanonical +00:00 response timestamp."
+    }
+    $savedExchange = $script:OperatorExchange
+    $savedExchangeArtifacts = $script:OperatorExchangeArtifacts
+    $savedReservations = $script:OperatorResponseReservations
+    $savedExpectedTransients = $script:OperatorExpectedTransientArtifacts
+    $publicationDirectory = [IO.Path]::Combine(
+        [IO.Path]::GetTempPath(), "lbb-operator-publication-" + [Guid]::NewGuid().ToString("N")
+    )
+    [IO.Directory]::CreateDirectory($publicationDirectory) | Out-Null
+    $script:OperatorExchange = $publicationDirectory
+    $script:OperatorExchangeArtifacts = New-Object Collections.Generic.List[string]
+    $script:OperatorResponseReservations = New-Object Collections.Generic.List[object]
+    $script:OperatorExpectedTransientArtifacts = New-Object Collections.Generic.List[string]
+    try {
+        $publicationId = [String]::new([char]"a", 32)
+        $publicationResponse = [IO.Path]::Combine(
+            $publicationDirectory, "response-$publicationId.json"
+        )
+        $publicationTemporary = "$publicationResponse.new"
+        $publicationClaimed = [IO.Path]::Combine(
+            $publicationDirectory, "response-$publicationId.claimed.json"
+        )
+        $partial = [IO.File]::Open(
+            $publicationTemporary, [IO.FileMode]::CreateNew,
+            [IO.FileAccess]::Write, [IO.FileShare]::None
+        )
+        try {
+            $partialBytes = [Text.Encoding]::ASCII.GetBytes('{"partial":')
+            $partial.Write($partialBytes, 0, $partialBytes.Length)
+            $partial.Flush($true)
+        }
+        finally { $partial.Dispose() }
+        $partialRejected = $false
+        try {
+            Claim-PublishedOperatorResponse $publicationResponse $publicationClaimed `
+                ([DateTimeOffset]::UtcNow.AddMilliseconds(250))
+        }
+        catch { $partialRejected = $true }
+        if (-not $partialRejected -or [IO.File]::Exists($publicationClaimed)) {
+            throw "Computer-helper recorder accepted a partial response publication."
+        }
+        [IO.File]::Delete($publicationTemporary)
+        $expiredId = [String]::new([char]"b", 32)
+        $expiredResponse = [IO.Path]::Combine(
+            $publicationDirectory, "response-$expiredId.json"
+        )
+        $expiredClaimed = [IO.Path]::Combine(
+            $publicationDirectory, "response-$expiredId.claimed.json"
+        )
+        [IO.File]::WriteAllText($expiredResponse, "{}`n", $script:Utf8NoBom)
+        $expiredPublicationRejected = $false
+        try {
+            Claim-PublishedOperatorResponse $expiredResponse $expiredClaimed `
+                ([DateTimeOffset]::UtcNow.AddSeconds(-1))
+        }
+        catch { $expiredPublicationRejected = $true }
+        if (-not $expiredPublicationRejected -or [IO.File]::Exists($expiredClaimed) -or
+            -not [IO.File]::Exists($expiredResponse)) {
+            throw "Computer-helper recorder accepted an already-published expired response."
+        }
+        [IO.File]::Delete($expiredResponse)
+        $publicationBytes = [Text.UTF8Encoding]::new($false).GetBytes("{}`n")
+        $published = [IO.File]::Open(
+            $publicationTemporary, [IO.FileMode]::CreateNew,
+            [IO.FileAccess]::Write, [IO.FileShare]::None
+        )
+        try {
+            $published.Write($publicationBytes, 0, $publicationBytes.Length)
+            $published.Flush($true)
+        }
+        finally {
+            $published.Dispose()
+            [Array]::Clear($publicationBytes, 0, $publicationBytes.Length)
+        }
+        [IO.File]::Move($publicationTemporary, $publicationResponse)
+        Claim-PublishedOperatorResponse $publicationResponse $publicationClaimed `
+            ([DateTimeOffset]::UtcNow.AddSeconds(2))
+        $canonicalPublication = Read-StableJsonWithDigest `
+            $publicationClaimed "self-test canonical operator response"
+        Assert-CanonicalCompactJsonResponse `
+            $canonicalPublication "self-test canonical operator response"
+        foreach ($ambiguousJson in @(
+            '{"decision":{},"decision":{}}' + "`n",
+            '{"decision":{},"Decision":{}}' + "`n",
+            '{"decision":{}} trailing' + "`n",
+            "{`n  `"decision`": {}`n}`n"
+        )) {
+            $ambiguousPath = [IO.Path]::Combine(
+                $publicationDirectory, "ambiguous-" + [Guid]::NewGuid().ToString("N") + ".json"
+            )
+            [IO.File]::WriteAllText($ambiguousPath, $ambiguousJson, $script:Utf8NoBom)
+            $ambiguousRejected = $false
+            try {
+                $ambiguousStable = Read-StableJsonWithDigest `
+                    $ambiguousPath "self-test ambiguous operator response"
+                Assert-CanonicalCompactJsonResponse `
+                    $ambiguousStable "self-test ambiguous operator response"
+            }
+            catch { $ambiguousRejected = $true }
+            finally { if ([IO.File]::Exists($ambiguousPath)) { [IO.File]::Delete($ambiguousPath) } }
+            if (-not $ambiguousRejected) {
+                throw "Computer-helper recorder accepted a duplicate, case-colliding, trailing, or noncanonical response."
+            }
+        }
+        $reservationReplayRejected = $false
+        try { [IO.File]::WriteAllText($publicationResponse, '{"replay":true}') }
+        catch { $reservationReplayRejected = $true }
+        if (-not $reservationReplayRejected) {
+            throw "Computer-helper recorder allowed a reserved response replay."
+        }
+        $inputPath = [IO.Path]::Combine($publicationDirectory, "digest-input.png")
+        $inputBytes = New-Object byte[] 25
+        [byte[]]$inputSignature = @(137, 80, 78, 71, 13, 10, 26, 10)
+        $inputSignature.CopyTo($inputBytes, 0)
+        [Text.Encoding]::ASCII.GetBytes("IHDR").CopyTo($inputBytes, 12)
+        $inputBytes[19] = 120
+        $inputBytes[23] = 32
+        [IO.File]::WriteAllBytes($inputPath, $inputBytes)
+        $inputFacts = Read-StablePngWithDigest $inputPath "self-test digest input"
+        $inputBytes[24] = 1
+        [IO.File]::WriteAllBytes($inputPath, $inputBytes)
+        $changedInputRejected = $false
+        try {
+            [void](Assert-UnchangedOperatorFrame `
+                $inputPath ([pscustomobject]@{
+                    sha256 = $inputFacts.Sha256; bytes = $inputFacts.Bytes
+                    width = $inputFacts.Width; height = $inputFacts.Height
+                }) "self-test post-response input")
+        }
+        catch { $changedInputRejected = $true }
+        [IO.File]::Delete($inputPath)
+        [Array]::Clear($inputBytes, 0, $inputBytes.Length)
+        [Array]::Clear($inputSignature, 0, $inputSignature.Length)
+        if (-not $changedInputRejected) {
+            throw "Computer-helper recorder accepted a changed post-response frame."
+        }
+        Remove-OperatorExchangeArtifact $publicationClaimed
+        $extraPath = [IO.Path]::Combine(
+            $publicationDirectory,
+            "frame-" + [String]::new([char]"b", 32) + ".png"
+        )
+        [IO.File]::WriteAllBytes($extraPath, [byte[]](1, 2, 3))
+        $extraRejected = $false
+        try { Remove-OperatorExchangeScratch } catch { $extraRejected = $true }
+        if (-not $extraRejected) {
+            throw "Computer-helper recorder accepted an unregistered extra artifact."
+        }
+    }
+    finally {
+        foreach ($held in $script:OperatorResponseReservations) {
+            try { $held.Stream.Dispose() } catch {}
+        }
+        if ([IO.Directory]::Exists($publicationDirectory)) {
+            [IO.Directory]::Delete($publicationDirectory, $true)
+        }
+        $script:OperatorExchange = $savedExchange
+        $script:OperatorExchangeArtifacts = $savedExchangeArtifacts
+        $script:OperatorResponseReservations = $savedReservations
+        $script:OperatorExpectedTransientArtifacts = $savedExpectedTransients
     }
     $goodSharedFrame = [pscustomobject]@{
         windowId = "window-1"; pid = 42; appName = "chrome.exe"; frameId = "frame-2"
@@ -2216,8 +3783,24 @@ function Invoke-SelfTest {
         -not $source.Contains("UI rollback was unavailable because the exact helper/server transport was not alive") -or
         -not $source.Contains("Remove-CanonicalRawScreenshots `$script:RawDirectory") -or
         -not $source.Contains("PassThruOwnedTarget") -or
-        -not $source.Contains("ConvertFrom-Json")) {
+        -not $source.Contains("ConvertFrom-Json") -or
+        -not $source.Contains("Assert-PrivateOperatorExchangeDirectory") -or
+        -not $source.Contains("Read-StableJsonWithDigest") -or
+        -not $source.Contains("response-`$requestId.claimed.json") -or
+        -not $source.Contains('[IO.FileMode]::CreateNew') -or
+        -not $source.Contains('The operator response reused the executor session.') -or
+        -not $source.Contains('Only the scoped approval request may use the user-via-orchestrator responder role.') -or
+        $source.Contains('-Out' + 'File') -or
+        $source.Contains('manual' + 'VisualReviewConfirmed') -or
+        $source.Contains('human' + 'VisualReview')) {
         throw "Computer-helper recorder live-execution self-test failed."
+    }
+    $clickDecisionIndex = $source.IndexOf('$click = Read-ClickParams $Context.Observation')
+    $firstCoveredIndex = $source.IndexOf('$script:FirstCoveredActionDispatchedAtUtc = $dispatchedAt')
+    $mutationDispatchIndex = $source.IndexOf('$result = Invoke-ComputerCommand $method $params')
+    if ($clickDecisionIndex -lt 0 -or $firstCoveredIndex -le $clickDecisionIndex -or
+        $mutationDispatchIndex -le $firstCoveredIndex) {
+        throw "Computer-helper recorder first-covered-action timestamp is not immediately mutation-bound."
     }
     Write-Output "Computer-helper chain recorder self-test passed."
 }

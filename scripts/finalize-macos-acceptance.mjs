@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { deflateSync, inflateSync } from "node:zlib";
 
-const PRODUCT_VERSION = "0.12.14";
+const PRODUCT_VERSION = "0.12.15";
 const RESULT_SCHEMA_VERSION = 6;
 const AGGREGATE_SCHEMA_VERSION = 1;
 const OUTPUT_FILE = "macos-acceptance.json";

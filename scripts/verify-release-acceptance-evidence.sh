@@ -6,7 +6,7 @@ export LC_ALL=C
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly API_VERSION="2026-03-10"
 readonly RECEIPT_SCHEMA_VERSION="2"
-readonly EVIDENCE_PRODUCT_VERSION="0.12.14"
+readonly EVIDENCE_PRODUCT_VERSION="0.12.15"
 readonly EVIDENCE_MAX_BLOB_BYTES=20971520
 readonly EVIDENCE_MAX_TOTAL_BYTES=209715200
 readonly EVIDENCE_MAX_PATH_BYTES=1024
@@ -117,7 +117,7 @@ import re
 import sys
 
 start, finish, maximum, label = sys.argv[1:]
-canonical = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?Z$")
+canonical = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{7}Z$")
 def parse(value):
     if not canonical.fullmatch(value):
         raise SystemExit(f"{label} timestamp is not canonical UTC")
@@ -1384,7 +1384,7 @@ verify_windows_computer() {
   assert_utc_interval "$arm_published" "$arm_received" "$arm_timeout" "Windows foreground-arm marker"
   python3 - "$summary" "$evidence_root/windows/computer/fixture/fixture-events.ndjson" \
     "$arm_published" "$arm_received" <<'PY'
-import datetime, json, sys
+import datetime, hashlib, json, sys
 summary_path, events_path, published, received = sys.argv[1:]
 def instant(value):
     if not isinstance(value, str) or not value.endswith("Z"):
@@ -1441,6 +1441,10 @@ verify_stock_chrome() {
     candidate-postflight.json
     browser-api-matrix.json
     browser-computer-helper-chain.json
+    scoped-action-approval.json
+    independent-visual-review.json
+    external-surface-preflight.json
+    external-surface-postflight.json
     operator-results.json
     browser-01-extension-loaded.json
     browser-01-extension-loaded.png
@@ -1475,7 +1479,7 @@ verify_stock_chrome() {
     --arg helper_sha256 "$(manifest_asset_sha256 "$manifest" "$helper_name")" \
     --arg extension_name "$extension_name" \
     --arg extension_sha256 "$(manifest_asset_sha256 "$manifest" "$extension_name")" '
-      .schemaVersion == 2
+      .schemaVersion == 3
       and .evidenceType == "stock-user-chrome-acceptance"
       and .passed == true
       and .candidateBinding.finalSha == $source_sha
@@ -1492,16 +1496,25 @@ verify_stock_chrome() {
       and .apiMatrix.passed == true
       and .computerHelper.passed == true
       and (.screenshots | type == "array" and length == 6)
-      and .humanVisualReview.sanitizedBeforeHumanReview == true
-      and .humanVisualReview.automationPausedForHumanReview == true
-      and .humanVisualReview.reviewedCropCount == 6
-      and .humanVisualReview.everySanitizedCropOpenedByHuman == true
-      and .humanVisualReview.requiredVisibleStateConfirmedByHuman == true
-      and .humanVisualReview.sensitivePixelsAbsentConfirmedByHuman == true
-      and .humanVisualReview.reviewFlagsSetOnlyAfterHumanConfirmation == true
-      and .humanVisualReview.postSanitizationAttestationCreated == true
-      and .humanVisualReview.pendingReviewRecordsOutsideRetainedEvidence == true
-      and .humanVisualReview.automaticPixelRedactionClaimed == false
+      and .scopedActionApproval.response.approvedBy == "user"
+      and .scopedActionApproval.response.deliveredBy == "user-via-orchestrator"
+      and .scopedActionApproval.response.confirmationMode == "batched-action-time"
+      and .scopedActionApproval.response.singleCandidateRun == true
+      and .scopedActionApproval.consumption.consumedBeforeFirstCoveredAction == true
+      and .scopedActionApproval.consumption.consumedBeforeExpiry == true
+      and .scopedActionApproval.consumption.freshStateRevalidatedAfterApproval == true
+      and .scopedActionApproval.consumption.scopeUnchangedThroughRun == true
+      and .scopedActionApproval.consumption.replayed == false
+      and .scopedActionApproval.consumption.cleanupAuthoritySurvivesFailure == true
+      and .independentVisualReview.independentSessionBoundary == true
+      and (.independentVisualReview.entries | length) == 6
+      and .independentVisualReview.aggregate.reviewedCropCount == 6
+      and .independentVisualReview.aggregate.everySanitizedCropOpenedByReviewer == true
+      and .independentVisualReview.aggregate.allImageDigestsMatched == true
+      and .independentVisualReview.aggregate.requiredVisibleStateConfirmedByReviewer == true
+      and .independentVisualReview.aggregate.noSensitivePixelsObservedByReviewer == true
+      and .independentVisualReview.aggregate.noUncertaintyReported == true
+      and .independentVisualReview.aggregate.visualJudgmentNotPixelSafetyProof == true
       and .restoration.candidateExtensionPresence.matchesInitial == true
       and .restoration.candidateExtensionPresence.finalPresent == false
       and .cleanup.controlReleased == true
@@ -1523,44 +1536,97 @@ verify_stock_chrome() {
   local postflight="$browser_root/candidate-postflight.json"
   local matrix="$browser_root/browser-api-matrix.json"
   local helper="$browser_root/browser-computer-helper-chain.json"
+  local approval="$browser_root/scoped-action-approval.json"
+  local review="$browser_root/independent-visual-review.json"
+  local external_preflight="$browser_root/external-surface-preflight.json"
+  local external_postflight="$browser_root/external-surface-postflight.json"
   local operator="$browser_root/operator-results.json"
-  for name in "$preflight" "$postflight" "$matrix" "$helper" "$operator"; do jq -e . "$name" >/dev/null; done
+  for name in "$preflight" "$postflight" "$matrix" "$helper" "$approval" "$review" \
+    "$external_preflight" "$external_postflight" "$operator"; do jq -e . "$name" >/dev/null; done
   assert_release_candidate_binding "$preflight" '.releaseCandidateBinding'
   assert_release_candidate_binding "$postflight" '.releaseCandidateBinding'
+  assert_release_candidate_binding "$matrix" '.releaseCandidateBinding'
+  assert_release_candidate_binding "$helper" '.releaseCandidateBinding'
+  assert_release_candidate_binding "$approval" '.releaseCandidateBinding'
+  assert_release_candidate_binding "$review" '.releaseCandidateBinding'
+  assert_release_candidate_binding "$external_preflight" '.releaseCandidateBinding'
+  assert_release_candidate_binding "$external_postflight" '.releaseCandidateBinding'
+  assert_release_candidate_binding "$operator" '.releaseCandidateBinding'
   test "$(sha256_file "$preflight")" = "$(jq -er '.candidate.preflightRecordSha256' "$final")" || die "stock-Chrome preflight hash mismatch"
   test "$(sha256_file "$postflight")" = "$(jq -er '.candidate.postflightRecordSha256' "$final")" || die "stock-Chrome postflight hash mismatch"
   test "$(sha256_file "$matrix")" = "$(jq -er '.apiMatrixRecordSha256' "$final")" || die "stock-Chrome API matrix hash mismatch"
   test "$(sha256_file "$helper")" = "$(jq -er '.computerHelperRecordSha256' "$final")" || die "stock-Chrome helper-chain hash mismatch"
+  test "$(sha256_file "$approval")" = "$(jq -er '.scopedApprovalRecordSha256' "$final")" || die "stock-Chrome scoped-approval hash mismatch"
+  test "$(sha256_file "$review")" = "$(jq -er '.independentReviewRecordSha256' "$final")" || die "stock-Chrome independent-review hash mismatch"
+  test "$(sha256_file "$external_preflight")" = "$(jq -er '.cleanup.externalSurfacePreflightAttestationSha256' "$operator")" || die "stock-Chrome external-surface preflight hash mismatch"
+  test "$(sha256_file "$external_postflight")" = "$(jq -er '.cleanup.externalSurfacePostflightAttestationSha256' "$operator")" || die "stock-Chrome external-surface postflight hash mismatch"
   test "$(sha256_file "$operator")" = "$(jq -er '.operatorRecordSha256' "$final")" || die "stock-Chrome operator-results hash mismatch"
   test "$(jq -cS . "$matrix")" = "$(jq -cS '.apiMatrix' "$final")" || die "embedded stock-Chrome API matrix differs from its sidecar"
   test "$(jq -cS . "$helper")" = "$(jq -cS '.computerHelper' "$final")" || die "embedded stock-Chrome helper record differs from its sidecar"
+  test "$(jq -cS . "$approval")" = "$(jq -cS '.scopedActionApproval' "$final")" || die "embedded stock-Chrome scoped approval differs from its sidecar"
+  test "$(jq -cS . "$review")" = "$(jq -cS '.independentVisualReview' "$final")" || die "embedded stock-Chrome independent review differs from its sidecar"
   jq -e --arg source_sha "$VERIFIED_SOURCE_SHA" --arg manifest_sha256 "$(jq -er '.checksumManifestSha256' "$RECEIPT_FILE")" \
     '.passed == true and .candidate.finalSha == $source_sha and .candidate.checksumManifest.sha256 == $manifest_sha256' "$preflight" >/dev/null
   jq -e '.passed == true and ([.unchanged[]] | all)' "$postflight" >/dev/null
-  python3 - "$preflight" "$helper" "$postflight" "$final" <<'PY'
-import datetime, json, sys
+  assert_utc_interval \
+    "$(jq -er '.request.createdAtUtc' "$approval")" \
+    "$(jq -er '.request.expiresAtUtc' "$approval")" 1800 \
+    "stock-Chrome scoped approval request"
+  assert_utc_interval \
+    "$(jq -er '.response.confirmedAtUtc' "$approval")" \
+    "$(jq -er '.consumption.preDispatchVerifiedAtUtc' "$approval")" 1800 \
+    "stock-Chrome approval-before-fresh-state-revalidation"
+  assert_utc_interval \
+    "$(jq -er '.consumption.preDispatchVerifiedAtUtc' "$approval")" \
+    "$(jq -er '.scopedActionApproval.firstCoveredActionDispatchedAtUtc' "$helper")" 1800 \
+    "stock-Chrome fresh-state-revalidation-before-first-covered-dispatch"
+  assert_utc_interval \
+    "$(jq -er '.scopedActionApproval.firstCoveredActionDispatchedAtUtc' "$helper")" \
+    "$(jq -er '.request.expiresAtUtc' "$approval")" 1800 \
+    "stock-Chrome approval consumption-before-expiry"
+  python3 - "$preflight" "$external_preflight" "$helper" "$approval" "$review" "$external_postflight" "$postflight" "$final" <<'PY'
+import datetime, hashlib, json, sys
 records = [json.load(open(path, encoding="utf-8")) for path in sys.argv[1:]]
 def instant(value):
-    if not isinstance(value, str) or not value.endswith("Z"):
+    if not isinstance(value, str) or not __import__("re").fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{7}Z", value
+    ):
         raise SystemExit("stock-Chrome timestamp is not canonical UTC")
     return datetime.datetime.fromisoformat(value[:-1] + "+00:00")
-preflight, helper, postflight, final = records
+preflight, external_preflight, helper, approval, review, external_postflight, postflight, final = records
 times = [
+    instant(external_preflight["attestedAtUtc"]),
     instant(preflight["recordedAtUtc"]),
     instant(helper["run"]["startedAtUtc"]),
+    instant(approval["response"]["confirmedAtUtc"]),
+    instant(approval["consumption"]["preDispatchVerifiedAtUtc"]),
+    instant(helper["scopedActionApproval"]["firstCoveredActionDispatchedAtUtc"]),
     instant(helper["run"]["finishedAtUtc"]),
+    instant(review["reviewedAtUtc"]),
+    instant(external_postflight["attestedAtUtc"]),
     instant(postflight["recordedAtUtc"]),
     instant(final["recordedAtUtc"]),
 ]
-if times != sorted(times) or (times[-1] - times[0]).total_seconds() > 8 * 60 * 60:
+approval_expires = instant(approval["request"]["expiresAtUtc"])
+if times != sorted(times) or times[3] == times[4] or times[4] == times[5] or (times[-1] - times[0]).total_seconds() > 8 * 60 * 60:
     raise SystemExit("stock-Chrome records are reordered or exceed the bounded acceptance interval")
+if times[5] > approval_expires:
+    raise SystemExit("stock-Chrome scoped approval expired before first covered dispatch")
 if (times[-1] - times[-2]).total_seconds() > 2 * 60 * 60:
     raise SystemExit("stock-Chrome finalization was not prompt after candidate postflight")
+for record in (external_preflight, external_postflight):
+    canonical = json.dumps(
+        record["releaseCandidateBinding"], separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    if hashlib.sha256(canonical).hexdigest() != record["releaseCandidateBindingSha256"]:
+        raise SystemExit("stock-Chrome external-surface candidate-binding digest mismatch")
+if external_preflight["attestorSessionRef"] != approval["response"]["orchestratorSessionRef"]:
+    raise SystemExit("stock-Chrome external-surface attestor does not match approval orchestrator")
 PY
   jq -e '
       .schemaVersion == 1
       and .evidenceType == "stock-user-chrome-api-matrix"
-      and .version == "0.12.14" and .target == "loopback-demo" and .passed == true
+      and .version == "0.12.15" and .target == "loopback-demo" and .passed == true
       and .methodCount == 25 and (.methods | length) == 25
       and ([.methods[].name] == [
         "status","browser.control.start","browser.control.status","browser.control.stop",
@@ -1595,11 +1661,11 @@ PY
     ' "$matrix" >/dev/null || die "stock-Chrome API matrix is incomplete, reordered, or lacks a required proof"
   validate_stock_chrome_matrix_identity "$matrix" \
     || die "stock-Chrome API matrix is missing or reorders one of the exact 25 methods"
-  assert_release_candidate_binding "$helper" '.releaseCandidateBinding'
-  assert_release_candidate_binding "$operator" '.releaseCandidateBinding'
   jq -e '
-      .schemaVersion == 1 and .evidenceType == "stock-user-chrome-computer-helper-chain"
-      and .version == "0.12.14" and .passed == true
+      . as $root
+      |
+      .schemaVersion == 2 and .evidenceType == "stock-user-chrome-computer-helper-chain"
+      and .version == "0.12.15" and .passed == true
       and .server.soleListener == "127.0.0.1:17373" and .server.updateCheckDisabled == true
       and .helper.connectedThroughLoopbackServer == true and .helper.serverApiOnly == true
       and .extensionPayload.fileCount == 11
@@ -1607,11 +1673,119 @@ PY
       and (.screenshots | length) == 6
       and ([.screenshots[].purpose] == ["extension-loaded","api-action-result","computer-share-action","stop-paused","cancel-paused","post-handback-resume"])
       and ([.screenshots[] | select(.exactWindowFrame != true or .shareFrameFresh != true or .rawImageRetained != false)] | length == 0)
+      and .operatorExchange.protocolVersion == 1
+      and .operatorExchange.executorSessionRef != .operatorExchange.reviewerSessionRef
+      and .operatorExchange.independentSessionBoundary == true
+      and .operatorExchange.requestCount == (.operatorExchange.statusDecisionCount + .operatorExchange.freshFrameDecisionCount + 1)
+      and .operatorExchange.allRequestsCreateOnce == true and .operatorExchange.allResponsesCreateOnce == true
+      and .operatorExchange.everyFrameDependentDecisionBoundToFreshFrame == true
+      and .operatorExchange.everyStatusDecisionBoundToFreshStatus == true
+      and .operatorExchange.scratchDeleted == true
+      and .scopedActionApproval.executorSessionRef == .operatorExchange.executorSessionRef
+      and .scopedActionApproval.consumedBeforeFirstCoveredAction == true
+      and .scopedActionApproval.consumedBeforeExpiry == true
+      and .scopedActionApproval.freshStateRevalidatedAfterApproval == true
+      and .scopedActionApproval.approvalChallengeFrameRef != .scopedActionApproval.preDispatchFrameRef
+      and .scopedActionApproval.scopeUnchangedThroughRun == true
+      and ([.actions[].operatorDecisionRef] | unique | length) == 27
+      and ([.actions[] | select(
+        (if .riskRef == "none" then .approvalRef != "none"
+         else .approvalRef != $root.scopedActionApproval.approvalId end)
+      ] | length) == 0
+      and .actions[.scopedActionApproval.firstCoveredActionSequence - 1].dispatchedAtUtc == .scopedActionApproval.firstCoveredActionDispatchedAtUtc
       and .cleanup.rawIdentifiersCleared == true and .privacy.credentialRetained == false
       and .privacy.opaqueReferenceMapDiscarded == true
     ' "$helper" >/dev/null || die "stock-Chrome computer-helper chain omits required lifecycle, action, frame, cleanup, or privacy proof"
   jq -e '
-      .schemaVersion == 2 and .evidenceType == "stock-user-chrome-operator-observations"
+      .schemaVersion == 1 and .evidenceType == "stock-user-chrome-scoped-action-approval"
+      and (.approvalId | test("^[0-9a-f]{64}$"))
+      and (.request.scopeSha256 | test("^[0-9a-f]{64}$"))
+      and (.request.challengeFrameRef | test("^[0-9a-f]{64}$"))
+      and .request.coveredActions == [
+        "conditional-developer-mode-change", "load-and-run-exact-unpacked-candidate",
+        "conditional-full-access-change", "save-ephemeral-loopback-credential",
+        "clear-ephemeral-loopback-credential", "remove-exact-test-owned-extension",
+        "restore-captured-browser-settings", "failure-rollback"
+      ]
+      and .request.loopbackOnly == true and .request.dedicatedWindowOnly == true
+      and .request.restoreCapturedState == true and .request.noUnrelatedExtensionMutation == true
+      and .response.approvedBy == "user" and .response.deliveredBy == "user-via-orchestrator"
+      and .response.confirmationMode == "batched-action-time" and .response.singleCandidateRun == true
+      and .consumption.consumedBeforeFirstCoveredAction == true
+      and .consumption.consumedBeforeExpiry == true
+      and (.consumption.preDispatchFrameRef | test("^[0-9a-f]{64}$"))
+      and (.consumption.preDispatchDecisionRef | test("^[0-9a-f]{64}$"))
+      and .consumption.freshStateRevalidatedAfterApproval == true
+      and .request.challengeFrameRef != .consumption.preDispatchFrameRef
+      and .consumption.scopeUnchangedThroughRun == true and .consumption.replayed == false
+      and .consumption.cleanupAuthoritySurvivesFailure == true
+    ' "$approval" >/dev/null || die "stock-Chrome scoped action approval is incomplete, replayed, or not user-delivered"
+  local approval_sha review_sha
+  approval_sha="$(sha256_file "$approval")"
+  review_sha="$(sha256_file "$review")"
+  jq -e --arg approval_sha "$approval_sha" --slurpfile approval "$approval" '
+      .scopedActionApproval.recordSha256 == $approval_sha
+      and .scopedActionApproval.approvalId == $approval[0].approvalId
+      and .scopedActionApproval.scopeSha256 == $approval[0].request.scopeSha256
+      and .scopedActionApproval.approvalConfirmedAtUtc == $approval[0].response.confirmedAtUtc
+      and .scopedActionApproval.approvalExpiresAtUtc == $approval[0].request.expiresAtUtc
+      and .scopedActionApproval.approvalChallengeFrameRef == $approval[0].request.challengeFrameRef
+      and .scopedActionApproval.preDispatchFrameRef == $approval[0].consumption.preDispatchFrameRef
+      and .scopedActionApproval.preDispatchDecisionRef == $approval[0].consumption.preDispatchDecisionRef
+      and .scopedActionApproval.preDispatchVerifiedAtUtc == $approval[0].consumption.preDispatchVerifiedAtUtc
+      and .scopedActionApproval.consumedBeforeExpiry == $approval[0].consumption.consumedBeforeExpiry
+      and $approval[0].response.orchestratorSessionRef != .operatorExchange.executorSessionRef
+      and $approval[0].response.orchestratorSessionRef != .operatorExchange.reviewerSessionRef
+    ' "$helper" >/dev/null || die "stock-Chrome scoped approval does not bind the helper or uses an executor/reviewer session"
+  jq -e --slurpfile helper "$helper" '
+      .schemaVersion == 1 and .evidenceType == "stock-user-chrome-independent-visual-review"
+      and .executorSessionRef == $helper[0].operatorExchange.executorSessionRef
+      and .reviewerSessionRef == $helper[0].operatorExchange.reviewerSessionRef
+      and .executorSessionRef != .reviewerSessionRef and .independentSessionBoundary == true
+      and ([.entries[].sequence] == [1,2,3,4,5,6])
+      and ([.entries[].purpose] == ["extension-loaded","api-action-result","computer-share-action","stop-paused","cancel-paused","post-handback-resume"])
+      and ([.entries[].image] == ["browser-01-extension-loaded.png","browser-02-api-action-result.png","browser-03-computer-share-action.png","browser-04-stop-paused.png","browser-05-cancel-paused.png","browser-06-post-handback-resume.png"])
+      and ([.entries[] | select(.digestMatched != true or .requiredStateVerdict != "pass" or .sensitivePixelsObserved != false or .uncertain != false)] | length == 0)
+      and .aggregate.reviewedCropCount == 6
+      and .aggregate.everySanitizedCropOpenedByReviewer == true
+      and .aggregate.allImageDigestsMatched == true
+      and .aggregate.requiredVisibleStateConfirmedByReviewer == true
+      and .aggregate.noSensitivePixelsObservedByReviewer == true
+      and .aggregate.noUncertaintyReported == true
+      and .aggregate.visualJudgmentNotPixelSafetyProof == true
+    ' "$review" >/dev/null || die "stock-Chrome independent visual review is same-session, reordered, uncertain, sensitive, or incomplete"
+  jq -e '
+      (keys_unsorted == ["schemaVersion","evidenceType","phase","releaseCandidateBinding","releaseCandidateBindingSha256","orchestrationSurface","chromeMcpState","computerUseState","reviewerInputState","attestorKind","attestorSessionRef","attestedAtUtc"])
+      and .schemaVersion == 1
+      and .evidenceType == "stock-user-chrome-external-surface-attestation"
+      and .phase == "preflight"
+      and .orchestrationSurface == "user-orchestrator-secured-ssh-exported-file-review"
+      and .chromeMcpState == "not-used-before-candidate-execution"
+      and .computerUseState == "released-before-candidate-execution"
+      and .reviewerInputState == "review-not-started"
+      and .attestorKind == "orchestrator-agent"
+      and (.releaseCandidateBindingSha256 | test("^[0-9a-f]{64}$"))
+      and (.attestorSessionRef | test("^[0-9a-f]{64}$"))
+    ' "$external_preflight" >/dev/null || die "stock-Chrome external-surface preflight is not exact and phase-scoped"
+  jq -e --slurpfile pre "$external_preflight" --slurpfile approval "$approval" --slurpfile helper "$helper" '
+      (keys_unsorted == ["schemaVersion","evidenceType","phase","releaseCandidateBinding","releaseCandidateBindingSha256","orchestrationSurface","chromeMcpState","computerUseState","reviewerInputState","attestorKind","attestorSessionRef","attestedAtUtc"])
+      and .schemaVersion == 1
+      and .evidenceType == "stock-user-chrome-external-surface-attestation"
+      and .phase == "postflight"
+      and .orchestrationSurface == "user-orchestrator-secured-ssh-exported-file-review"
+      and .chromeMcpState == "never-used-through-independent-review"
+      and .computerUseState == "not-resumed-through-independent-review"
+      and .reviewerInputState == "exported-digest-bound-files-only"
+      and .attestorKind == "orchestrator-agent"
+      and .releaseCandidateBinding == $pre[0].releaseCandidateBinding
+      and .releaseCandidateBindingSha256 == $pre[0].releaseCandidateBindingSha256
+      and .attestorSessionRef == $pre[0].attestorSessionRef
+      and .attestorSessionRef == $approval[0].response.orchestratorSessionRef
+      and .attestorSessionRef != $helper[0].operatorExchange.executorSessionRef
+      and .attestorSessionRef != $helper[0].operatorExchange.reviewerSessionRef
+    ' "$external_postflight" >/dev/null || die "stock-Chrome external-surface postflight does not close the exact review interval"
+  jq -e '
+      .schemaVersion == 3 and .evidenceType == "stock-user-chrome-operator-observations"
       and .environment.platform == "windows-x86_64" and .environment.browserProduct == "Google Chrome"
       and (.environment.browserVersion | test("^[0-9]{1,3}\\.[0-9]{1,5}\\.[0-9]{1,5}\\.[0-9]{1,5}$"))
       and ((.environment.browserVersion | split(".")[0] | tonumber) >= 140)
@@ -1630,25 +1804,51 @@ PY
       and ([.computerHelperChain[] | select(type == "boolean")] | all(. == true))
       and .initialState.capturedBeforeRelevantMutation == true
       and .initialState.candidateExtensionPresent == false and .initialState.savedTokenConfigured == false
-      and .extension.cardCount == 1 and .extension.version == "0.12.14" and .extension.enabled == true
+      and .extension.cardCount == 1 and .extension.version == "0.12.15" and .extension.enabled == true
       and .extension.loadErrors == 0 and .extension.loadedVia == "chrome://extensions-load-unpacked"
       and .extension.loadedDirectoryByteMatchesCandidateZip == true and .extension.popupConnected == true
       and .extension.debuggerLeaseActiveAtFirstCapture == true and .extension.nativeDebuggerUseIndicatorSeen == true
       and ([.screenshotCaptures[].purpose] == ["extension-loaded","api-action-result","computer-share-action","stop-paused","cancel-paused","post-handback-resume"])
       and ([.screenshotCaptures[].image] == ["browser-01-extension-loaded.png","browser-02-api-action-result.png","browser-03-computer-share-action.png","browser-04-stop-paused.png","browser-05-cancel-paused.png","browser-06-post-handback-resume.png"])
       and ([.screenshotCaptures[].captureSurface] | all(. == "local-browser-bridge-computer-helper"))
-      and .humanVisualReview.reviewedCropCount == 6
+      and .consentCheckpoints.scopedActionTimeApproval.obtainedAtActionTime == true
+      and .consentCheckpoints.scopedActionTimeApproval.consumedBeforeFirstCoveredAction == true
+      and .consentCheckpoints.scopedActionTimeApproval.consumedBeforeExpiry == true
+      and .consentCheckpoints.scopedActionTimeApproval.freshStateRevalidatedAfterApproval == true
+      and .consentCheckpoints.scopedActionTimeApproval.scopeUnchangedThroughRun == true
+      and .consentCheckpoints.scopedActionTimeApproval.singleCandidateRun == true
+      and .independentVisualReview.reviewedCropCount == 6
+      and .independentVisualReview.independentSessionBoundary == true
+      and .independentVisualReview.allImageDigestsMatched == true
+      and .independentVisualReview.noSensitivePixelsObservedByReviewer == true
+      and .independentVisualReview.noUncertaintyReported == true
+      and .independentVisualReview.visualJudgmentNotPixelSafetyProof == true
       and .restoration.candidateExtensionPresence.finalPresent == false
       and .restoration.candidateExtensionPresence.matchesInitial == true
       and .retainedEvidence.exactAllowlistVerified == true
-      and .retainedEvidence.inputFileCount == 17 and .retainedEvidence.finalFileCount == 18
+      and .retainedEvidence.inputFileCount == 21 and .retainedEvidence.finalFileCount == 22
+      and (.cleanup.externalSurfacePreflightAttestationSha256 | test("^[0-9a-f]{64}$"))
+      and (.cleanup.externalSurfacePostflightAttestationSha256 | test("^[0-9a-f]{64}$"))
+      and .cleanup.chromeMcpDisposition == "never-used-through-independent-review"
+      and .cleanup.computerUseDisposition == "not-resumed-through-independent-review"
+      and .cleanup.reviewerInputDisposition == "exported-digest-bound-files-only"
       and .retainedEvidence.rawScreenshotsPresent == false
       and .cleanup.controlReleased == true and .cleanup.testTabsClosed == true
       and .cleanup.testWindowClosed == true and .cleanup.serverStopped == true
       and .cleanup.portReleased == true and .cleanup.computerHelperStopped == true
       and .cleanup.extractedExtensionDirectoryDeleted == true
-      and .cleanup.unrelatedTabsOrWindowsChanged == false and .cleanup.unrelatedExtensionsChanged == false
+      and .cleanup.unrelatedTargetMutationCommandsIssued == false
+      and .cleanup.unrelatedExtensionMutationCommandsIssued == false
     ' "$operator" >/dev/null || die "stock-Chrome operator record omits required stock-session, consent, debugger, helper, restoration, or cleanup invariants"
+  jq -e --arg approval_sha "$approval_sha" --arg review_sha "$review_sha" --slurpfile approval "$approval" --slurpfile review "$review" --slurpfile helper "$helper" '
+      .consentCheckpoints.scopedActionTimeApproval.recordSha256 == $approval_sha
+      and .consentCheckpoints.scopedActionTimeApproval.approvalId == $approval[0].approvalId
+      and .independentVisualReview.recordSha256 == $review_sha
+      and .independentVisualReview.executorSessionRef == $review[0].executorSessionRef
+      and .independentVisualReview.reviewerSessionRef == $review[0].reviewerSessionRef
+      and .independentVisualReview.executorSessionRef == $helper[0].operatorExchange.executorSessionRef
+      and .independentVisualReview.reviewerSessionRef == $helper[0].operatorExchange.reviewerSessionRef
+    ' "$operator" >/dev/null || die "stock-Chrome operator approval/review summaries do not bind the retained records and helper sessions"
   test "$(jq -cS '.handback' "$helper")" = "$(jq -cS '.handback' "$operator")" \
     && test "$(jq -cS '.handback' "$helper")" = "$(jq -cS '.handback' "$final")" \
     || die "stock-Chrome Stop/Cancel handback proofs differ across helper, operator, and final records"
@@ -1692,16 +1892,23 @@ PY
       || die "stock-Chrome screenshot sidecar differs from its embedded record: $name"
     jq -e '
         .automatedTextInspectionPerformed == false
-        and .manualVisualReviewRequired == true
-        and .manualVisualReviewConfirmed == true
+        and .independentVisualReviewRequired == true
+        and .independentVisualReviewCompleted == true
+        and (.reviewRecordSha256 | test("^[0-9a-f]{64}$"))
+        and (.reviewEntryRef | test("^[0-9a-f]{64}$"))
         and .automaticPixelRedactionPerformed == false
         and .unknownPixelSafetyClaimed == false
         and .forbiddenMetadataChunksPresent == false
+        and (has("manualVisualReviewRequired") | not)
+        and (has("manualVisualReviewConfirmed") | not)
+        and (has("humanVisualReview") | not)
         and (has("ocrAvailable") | not)
         and (has("ocrDenylistChecked") | not)
         and (has("ocrDenylistMatches") | not)
       ' "$sidecar" >/dev/null \
-      || die "stock-Chrome screenshot sidecar is not the exact manual-only V2 review schema: $name"
+      || die "stock-Chrome screenshot sidecar is not the exact independent digest-bound review schema: $name"
+    test "$(jq -er '.reviewRecordSha256' "$sidecar")" = "$review_sha" \
+      || die "stock-Chrome screenshot sidecar does not bind the exact independent review: $name"
   done
   jq -e '
       ([.screenshots[].purpose] == ["extension-loaded","api-action-result","computer-share-action","stop-paused","cancel-paused","post-handback-resume"])
@@ -1713,7 +1920,9 @@ PY
   mkdir "$contract_root"
   chmod 700 "$contract_root"
   for name in candidate-preflight.json candidate-postflight.json browser-api-matrix.json \
-    browser-computer-helper-chain.json operator-results.json \
+    browser-computer-helper-chain.json scoped-action-approval.json \
+    independent-visual-review.json external-surface-preflight.json \
+    external-surface-postflight.json operator-results.json \
     browser-01-extension-loaded.json browser-01-extension-loaded.png \
     browser-02-api-action-result.json browser-02-api-action-result.png \
     browser-03-computer-share-action.json browser-03-computer-share-action.png \
@@ -1729,6 +1938,10 @@ PY
       -PostflightRecord (Join-Path $env:LBB_CONTRACT_ROOT "candidate-postflight.json") `
       -ApiMatrixRecord (Join-Path $env:LBB_CONTRACT_ROOT "browser-api-matrix.json") `
       -ComputerHelperRecord (Join-Path $env:LBB_CONTRACT_ROOT "browser-computer-helper-chain.json") `
+      -ScopedApprovalRecord (Join-Path $env:LBB_CONTRACT_ROOT "scoped-action-approval.json") `
+      -IndependentReviewRecord (Join-Path $env:LBB_CONTRACT_ROOT "independent-visual-review.json") `
+      -ExternalSurfacePreflightAttestation (Join-Path $env:LBB_CONTRACT_ROOT "external-surface-preflight.json") `
+      -ExternalSurfacePostflightAttestation (Join-Path $env:LBB_CONTRACT_ROOT "external-surface-postflight.json") `
       -OperatorResults (Join-Path $env:LBB_CONTRACT_ROOT "operator-results.json") `
       -ScreenshotRecords @(
         (Join-Path $env:LBB_CONTRACT_ROOT "browser-01-extension-loaded.json"),
@@ -1790,6 +2003,8 @@ def walk_json(value, path):
     elif isinstance(value, list):
         for child in value:
             walk_json(child, path)
+    elif isinstance(value, str):
+        scan_text(path, value)
 
 def parse_unique_json(text, path):
     def unique_object(pairs):
@@ -2370,15 +2585,15 @@ self_test() {
   local sha1_b="2222222222222222222222222222222222222222"
   local sha256_a="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   local receipt="$scratch/receipt.json"
-  printf '%s' '{"schemaVersion":2,"tag":"v0.12.14","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"1","releaseCandidateArtifactId":"456","releaseCandidateArtifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","evidenceRef":"refs/heads/evidence/v0.12.14-release-run-123-attempt-1","evidenceCommitSha":"3333333333333333333333333333333333333333","macosPassed":true,"macosAcceptanceSha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","macosQuietResultSha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","macosDeliberateConcurrencyResultSha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","windowsPassed":true,"windowsResultSha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","stockChromePassed":true,"stockChrome":true,"stockChromeResultSha256":"9999999999999999999999999999999999999999999999999999999999999999"}' > "$receipt"
-  validate_receipt "$receipt" v0.12.14 "$sha1_a" "$sha1_b" 123 1 "$sha256_a" \
+  printf '%s' '{"schemaVersion":2,"tag":"v0.12.15","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"1","releaseCandidateArtifactId":"456","releaseCandidateArtifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","evidenceRef":"refs/heads/evidence/v0.12.15-release-run-123-attempt-1","evidenceCommitSha":"3333333333333333333333333333333333333333","macosPassed":true,"macosAcceptanceSha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","macosQuietResultSha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","macosDeliberateConcurrencyResultSha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","windowsPassed":true,"windowsResultSha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","stockChromePassed":true,"stockChrome":true,"stockChromeResultSha256":"9999999999999999999999999999999999999999999999999999999999999999"}' > "$receipt"
+  validate_receipt "$receipt" v0.12.15 "$sha1_a" "$sha1_b" 123 1 "$sha256_a" \
     || die "self-test rejected a valid canonical schema-2 receipt"
   jq -cS . "$receipt" > "$scratch/noncanonical.json"
-  if validate_receipt "$scratch/noncanonical.json" v0.12.14 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
+  if validate_receipt "$scratch/noncanonical.json" v0.12.15 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
     die "self-test accepted reordered receipt keys"
   fi
   jq -c '.schemaVersion = 1' "$receipt" > "$scratch/stale.json"
-  if validate_receipt "$scratch/stale.json" v0.12.14 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
+  if validate_receipt "$scratch/stale.json" v0.12.15 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
     die "self-test accepted a stale schema-1 receipt"
   fi
   mkdir "$scratch/safe"
@@ -2392,14 +2607,32 @@ self_test() {
   if scan_evidence_for_leaks "$scratch/safe" >/dev/null 2>&1; then
     die "self-test accepted duplicate JSON keys"
   fi
+  printf '%s\n' '{"passed":true,"note":"C:\\Users\\Alice\\private.txt"}' > "$scratch/safe/result.json"
+  if scan_evidence_for_leaks "$scratch/safe" >/dev/null 2>&1; then
+    die "self-test accepted a decoded Windows home path hidden by JSON escaping"
+  fi
 
   EXPECTED_RELEASE_CANDIDATE_BINDING="$scratch/expected-binding.json"
-  printf '%s' '{"productVersion":"0.12.14","repository":"flrngel/local-browser-bridge","tag":"v0.12.14","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"2","artifactId":"456","artifactName":"release-candidate","artifactZipBytes":789,"artifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","attestationInvocationUri":"https://github.com/flrngel/local-browser-bridge/actions/runs/123/attempts/2","attestedAssetCount":5,"githubHostedRunner":true,"assets":[]}' > "$EXPECTED_RELEASE_CANDIDATE_BINDING"
+  printf '%s' '{"productVersion":"0.12.15","repository":"flrngel/local-browser-bridge","tag":"v0.12.15","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"2","artifactId":"456","artifactName":"release-candidate","artifactZipBytes":789,"artifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","attestationInvocationUri":"https://github.com/flrngel/local-browser-bridge/actions/runs/123/attempts/2","attestedAssetCount":5,"githubHostedRunner":true,"assets":[]}' > "$EXPECTED_RELEASE_CANDIDATE_BINDING"
   printf '%s' "{\"releaseCandidateBinding\":$(<"$EXPECTED_RELEASE_CANDIDATE_BINDING")}" > "$scratch/current-binding.json"
   assert_release_candidate_binding "$scratch/current-binding.json" '.releaseCandidateBinding'
   jq -c '.releaseCandidateBinding.workflowRunAttempt = "1"' "$scratch/current-binding.json" > "$scratch/replayed-binding.json"
   if (assert_release_candidate_binding "$scratch/replayed-binding.json" '.releaseCandidateBinding') >/dev/null 2>&1; then
     die "self-test accepted release-candidate evidence replayed from another workflow attempt"
+  fi
+  assert_utc_interval \
+    "2026-08-24T00:00:00.0000000Z" "2026-08-24T00:00:01.0000000Z" 2 \
+    "self-test canonical timestamp" \
+    || die "self-test rejected canonical Z-suffixed timestamps"
+  if assert_utc_interval \
+      "2026-08-24T00:00:00.0000000+00:00" "2026-08-24T00:00:01.0000000Z" 2 \
+      "self-test offset timestamp" >/dev/null 2>&1; then
+    die "self-test accepted a noncanonical +00:00 timestamp"
+  fi
+  if assert_utc_interval \
+      "2026-08-24T00:00:02.0000000Z" "2026-08-24T00:00:01.0000000Z" 2 \
+      "self-test approval expired before dispatch" >/dev/null 2>&1; then
+    die "self-test accepted first covered dispatch after approval expiry"
   fi
   self_test_evidence_blob_bounds "$scratch"
 

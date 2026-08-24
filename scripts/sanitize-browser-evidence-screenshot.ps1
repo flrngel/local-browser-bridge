@@ -3,7 +3,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Sanitize", "AttestReview", "SelfTest")]
+    [ValidateSet("Sanitize", "BindReview", "SelfTest")]
     [string]$Mode,
 
     [string]$InputImage,
@@ -12,6 +12,7 @@ param(
     [string]$PreflightRecord,
     [string]$PendingRecord,
     [string]$ReviewedImage,
+    [string]$IndependentReviewRecord,
 
     [ValidateSet(
         "extensions-card", "extension-details", "popup-connected", "native-debugger-warning", "page-control-pill", "action-result",
@@ -26,7 +27,7 @@ param(
     [int]$CropWidth = -1,
     [int]$CropHeight = -1,
     [string]$DenyValuesFile,
-    [switch]$ManualVisualReviewConfirmed
+    [switch]$LegacyV0122ReviewConfirmed
 )
 
 Set-StrictMode -Version Latest
@@ -41,8 +42,8 @@ $script:MinOutputWidth = 120
 $script:MinOutputHeight = 32
 $script:ForbiddenPngChunks = @("tEXt", "zTXt", "iTXt", "eXIf", "iCCP", "tIME")
 $script:LegacyReviewStatement = "A human reviewed this tight crop; OCR is supplemental and unknown sensitive pixels are not automatically redacted."
-$script:PendingReviewStatement = "Sanitization completed; no automated text inspection or pixel redaction is claimed, and human review is required."
-$script:CompletedReviewStatement = "A human reviewed this tight crop after sanitization; no automated text inspection or pixel redaction is claimed."
+$script:PendingReviewStatement = "Sanitization completed; independent visual review is pending and no automated text inspection or pixel-redaction safety proof is claimed."
+$script:CompletedReviewStatement = "A separate agent reviewed this exact digest-bound crop; no sensitive pixels were observed, but visual judgment is not a pixel-safety proof."
 $script:ExpectedScreenshots = [ordered]@{
     "extensions-card" = "browser-01-extensions-card.png"
     "extension-details" = "browser-02-extension-details.png"
@@ -63,6 +64,14 @@ $script:ExpectedScreenshotsV2 = [ordered]@{
     "stop-paused" = "browser-04-stop-paused.png"
     "cancel-paused" = "browser-05-cancel-paused.png"
     "post-handback-resume" = "browser-06-post-handback-resume.png"
+}
+$script:RequiredVisibleStatesV2 = [ordered]@{
+    "extension-loaded" = "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.15 card with no load errors and Chrome's debugger-use indicator during the active bridge lease"
+    "api-action-result" = "the loopback demo visibly shows Hello, Bridge Matrix. blue selected. after the browser API action"
+    "computer-share-action" = "the exact shared Chrome window visibly shows the post-click demo state and synthetic session pointer from a fresh helper frame"
+    "stop-paused" = "the trusted extension popup visibly shows the human pause and Resume remote control after the in-page Stop handback"
+    "cancel-paused" = "the trusted extension popup visibly shows the human pause and Resume remote control after Chrome's browser-owned Cancel handback"
+    "post-handback-resume" = "the exact demo visibly shows the restored Chrome debugger-use indicator and page control pill after both trusted-popup recovery cycles"
 }
 
 function Assert-RequiredArgument {
@@ -140,6 +149,76 @@ function Get-Sha256 {
     }
 }
 
+function Get-TextSha256 {
+    param([string]$Value)
+    $bytes = $script:Utf8NoBom.GetBytes($Value)
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    $digest = $null
+    try {
+        $digest = $hasher.ComputeHash($bytes)
+        return ([BitConverter]::ToString($digest)).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        if ($null -ne $digest) { [Array]::Clear($digest, 0, $digest.Length) }
+        [Array]::Clear($bytes, 0, $bytes.Length)
+        $hasher.Dispose()
+    }
+}
+
+function Get-BytesSha256 {
+    param([byte[]]$Bytes)
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    $digest = $null
+    try {
+        $digest = $hasher.ComputeHash($Bytes)
+        return ([BitConverter]::ToString($digest)).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        if ($null -ne $digest) { [Array]::Clear($digest, 0, $digest.Length) }
+        $hasher.Dispose()
+    }
+}
+
+function Read-StableBytes {
+    param([string]$Path, [int64]$MaximumBytes, [string]$Label)
+    $item = [IO.FileInfo]::new([IO.Path]::GetFullPath($Path))
+    if (-not $item.Exists -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        $item.Length -le 0 -or $item.Length -gt $MaximumBytes -or $item.Length -gt [int]::MaxValue) {
+        throw "$Label is not an ordinary bounded file."
+    }
+    Assert-NoReparseAncestorChain $item.FullName $Label
+    $stream = [IO.File]::Open(
+        $item.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None
+    )
+    try {
+        if ($stream.Length -ne $item.Length) { throw "$Label changed before its stable read." }
+        $bytes = New-Object byte[] ([int]$stream.Length)
+        $offset = 0
+        while ($offset -lt $bytes.Length) {
+            $read = $stream.Read($bytes, $offset, $bytes.Length - $offset)
+            if ($read -le 0) { throw "$Label ended during its stable read." }
+            $offset += $read
+        }
+        return ,$bytes
+    }
+    finally { $stream.Dispose() }
+}
+
+function Assert-CanonicalUtcTimestamp {
+    param([object]$Value, [string]$Label)
+    if ($Value -isnot [string] -or
+        -not [regex]::IsMatch([string]$Value, '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{7}Z$')) {
+        throw "$Label must be a canonical UTC timestamp."
+    }
+    $parsed = [DateTime]::MinValue
+    if (-not [DateTime]::TryParseExact(
+        [string]$Value, "o", [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed
+    ) -or $parsed.Kind -ne [DateTimeKind]::Utc) {
+        throw "$Label is not a valid UTC timestamp."
+    }
+}
+
 function Assert-ReleaseCandidateBindingBasic {
     param([object]$Binding, [object]$Candidate)
     $fields = @(
@@ -183,12 +262,13 @@ function Get-CandidateBindingFromPreflight {
     if ($item.Length -le 0 -or $item.Length -gt 1MB) {
         throw "PreflightRecord has an invalid size."
     }
-    $bytes = [IO.File]::ReadAllBytes($resolved)
+    $bytes = Read-StableBytes $resolved 1MB "PreflightRecord"
+    $preflightSha256 = Get-BytesSha256 $bytes
     try {
         $record = $script:Utf8NoBom.GetString($bytes) | ConvertFrom-Json
         $actual = @($record.PSObject.Properties.Name)
         $expected = @("schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed", "runNonce", "candidate")
-        if ([string]$record.candidate.version -ceq "0.12.14") {
+        if ([string]$record.candidate.version -ceq "0.12.15") {
             $expected = @(
                 "schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed",
                 "runNonce", "releaseCandidateBinding", "candidate"
@@ -200,13 +280,13 @@ function Get-CandidateBindingFromPreflight {
             $record.phase -cne "preflight" -or $record.passed -ne $true -or
             [string]$record.runNonce -cnotmatch '^[0-9a-f]{64}$' -or
             [string]$record.candidate.finalSha -cnotmatch '^[0-9a-f]{40}$' -or
-            @("0.12.2", "0.12.14") -cnotcontains [string]$record.candidate.version) {
+            @("0.12.2", "0.12.15") -cnotcontains [string]$record.candidate.version) {
             throw "PreflightRecord identity is invalid."
         }
         foreach ($value in @(
             [string]$record.candidate.checksumManifest.sha256,
             [string]$record.candidate.server.sha256,
-            $(if ([string]$record.candidate.version -ceq "0.12.14") { [string]$record.candidate.computerHelper.sha256 } else { [string]$record.candidate.server.sha256 }),
+            $(if ([string]$record.candidate.version -ceq "0.12.15") { [string]$record.candidate.computerHelper.sha256 } else { [string]$record.candidate.server.sha256 }),
             [string]$record.candidate.extension.sha256,
             [string]$record.candidate.extension.combinedPayloadSha256
         )) {
@@ -215,19 +295,19 @@ function Get-CandidateBindingFromPreflight {
             }
         }
         $script:CandidateVersionFromPreflight = [string]$record.candidate.version
-        if ($script:CandidateVersionFromPreflight -ceq "0.12.14") {
+        if ($script:CandidateVersionFromPreflight -ceq "0.12.15") {
             Assert-ReleaseCandidateBindingBasic $record.releaseCandidateBinding $record.candidate
             $script:ReleaseCandidateBindingFromPreflight = $record.releaseCandidateBinding
         }
         else { $script:ReleaseCandidateBindingFromPreflight = $null }
         $binding = [ordered]@{
             runNonce = [string]$record.runNonce
-            preflightRecordSha256 = Get-Sha256 $resolved
+            preflightRecordSha256 = $preflightSha256
             finalSha = [string]$record.candidate.finalSha
             checksumManifestSha256 = [string]$record.candidate.checksumManifest.sha256
             serverSha256 = [string]$record.candidate.server.sha256
         }
-        if ($script:CandidateVersionFromPreflight -ceq "0.12.14") {
+        if ($script:CandidateVersionFromPreflight -ceq "0.12.15") {
             $binding.computerHelperSha256 = [string]$record.candidate.computerHelper.sha256
         }
         $binding.extensionZipSha256 = [string]$record.candidate.extension.sha256
@@ -302,40 +382,39 @@ function Test-ForbiddenText {
     return $false
 }
 
-function Get-PngChunkTypes {
-    param([string]$Path)
-    $bytes = [IO.File]::ReadAllBytes($Path)
+function Get-PngChunkTypesFromBytes {
+    param([byte[]]$Bytes)
     $signature = [byte[]](137, 80, 78, 71, 13, 10, 26, 10)
-    if ($bytes.Length -lt 33) {
+    if ($Bytes.Length -lt 33) {
         throw "PNG is too small."
     }
     for ($index = 0; $index -lt $signature.Length; $index += 1) {
-        if ($bytes[$index] -ne $signature[$index]) {
+        if ($Bytes[$index] -ne $signature[$index]) {
             throw "Screenshot must be a PNG."
         }
     }
     $types = @()
     $offset = 8
     $sawEnd = $false
-    while ($offset -lt $bytes.Length) {
-        if ($bytes.Length - $offset -lt 12) {
+    while ($offset -lt $Bytes.Length) {
+        if ($Bytes.Length - $offset -lt 12) {
             throw "PNG chunk framing is invalid."
         }
-        $length = ([uint32]$bytes[$offset] -shl 24) -bor
-            ([uint32]$bytes[$offset + 1] -shl 16) -bor
-            ([uint32]$bytes[$offset + 2] -shl 8) -bor
-            [uint32]$bytes[$offset + 3]
-        if ($length -gt $script:MaxInputBytes -or ([uint64]$offset + 12 + $length) -gt $bytes.Length) {
+        $length = ([uint32]$Bytes[$offset] -shl 24) -bor
+            ([uint32]$Bytes[$offset + 1] -shl 16) -bor
+            ([uint32]$Bytes[$offset + 2] -shl 8) -bor
+            [uint32]$Bytes[$offset + 3]
+        if ($length -gt $script:MaxInputBytes -or ([uint64]$offset + 12 + $length) -gt $Bytes.Length) {
             throw "PNG chunk length is invalid."
         }
-        $type = [Text.Encoding]::ASCII.GetString($bytes, $offset + 4, 4)
+        $type = [Text.Encoding]::ASCII.GetString($Bytes, $offset + 4, 4)
         if (-not [regex]::IsMatch($type, '^[A-Za-z]{4}$')) {
             throw "PNG chunk type is invalid."
         }
         $types += $type
         $offset += 12 + [int]$length
         if ($type -ceq "IEND") {
-            if ($length -ne 0 -or $offset -ne $bytes.Length) {
+            if ($length -ne 0 -or $offset -ne $Bytes.Length) {
                 throw "PNG has trailing data after IEND."
             }
             $sawEnd = $true
@@ -381,6 +460,10 @@ function Assert-ExactKeys {
     }
 }
 
+function Test-ExactJsonInteger([object]$Value) {
+    return $Value -is [int] -or $Value -is [long]
+}
+
 function Assert-CandidateBindingEqual {
     param([object]$Actual, [object]$Expected)
     $fields = @(
@@ -406,13 +489,14 @@ function Assert-CandidateBindingEqual {
     }
 }
 
-function Read-StrictJson {
+function Read-StrictJsonWithDigest {
     param([string]$Path, [string]$Label)
-    $bytes = [IO.File]::ReadAllBytes($Path)
-    if ($bytes.Length -le 0 -or $bytes.Length -gt 2MB) {
-        throw "$Label has an invalid size."
+    $bytes = Read-StableBytes $Path 2MB $Label
+    try {
+        try { $value = $script:Utf8NoBom.GetString($bytes) | ConvertFrom-Json }
+        catch { throw "$Label is not strict UTF-8 JSON." }
+        return [pscustomobject]@{ Value = $value; Sha256 = Get-BytesSha256 $bytes }
     }
-    try { return $script:Utf8NoBom.GetString($bytes) | ConvertFrom-Json }
     catch { throw "$Label is not strict UTF-8 JSON." }
     finally { [Array]::Clear($bytes, 0, $bytes.Length) }
 }
@@ -445,11 +529,11 @@ function Invoke-Sanitize {
     if (-not $expectedScreenshots.Contains($Purpose)) {
         throw "Purpose is not one of the canonical screenshot purposes."
     }
-    if ($legacyOnePhase -and -not $ManualVisualReviewConfirmed) {
-        throw "ManualVisualReviewConfirmed is mandatory for v0.12.2 compatibility."
+    if ($legacyOnePhase -and -not $LegacyV0122ReviewConfirmed) {
+        throw "LegacyV0122ReviewConfirmed is mandatory for v0.12.2 compatibility."
     }
-    if (-not $legacyOnePhase -and $ManualVisualReviewConfirmed) {
-        throw "ManualVisualReviewConfirmed is valid only for AttestReview after a human has inspected the sanitized PNG."
+    if (-not $legacyOnePhase -and $LegacyV0122ReviewConfirmed) {
+        throw "LegacyV0122ReviewConfirmed is forbidden for the v0.12.15 independent-review protocol."
     }
     $cropValues = @($CropX, $CropY, $CropWidth, $CropHeight)
     $hasCrop = @($cropValues | Where-Object { $_ -ne -1 }).Count -gt 0
@@ -466,8 +550,12 @@ function Invoke-Sanitize {
     if ([IO.File]::Exists($temporaryImage) -or [IO.File]::Exists($temporaryRecord)) {
         throw "A stale temporary evidence file exists."
     }
+    $inputBytes = $null
+    $sanitizedBytes = $null
     try {
-        $inputStream = [IO.File]::Open($inputPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        $inputBytes = Read-StableBytes $inputPath $script:MaxInputBytes "InputImage"
+        $inputSha256 = Get-BytesSha256 $inputBytes
+        $inputStream = [IO.MemoryStream]::new($inputBytes, $false)
         try {
             $source = [Drawing.Image]::FromStream($inputStream, $true, $true)
             try {
@@ -482,13 +570,13 @@ function Invoke-Sanitize {
                         $expectedScreenshots[$Purpose]
                     ) + ".raw.png"
                     if ([IO.Path]::GetFileName($inputPath) -cne $expectedRawName) {
-                        throw "v0.12.14 InputImage must use the canonical raw helper-capture filename."
+                        throw "v0.12.15 InputImage must use the canonical raw helper-capture filename."
                     }
                     $sourceCapture = [ordered]@{
                         name = $expectedRawName
                         endpoint = "/api/computer/screenshot"
-                        bytes = $inputInfo.Length
-                        sha256 = Get-Sha256 $inputPath
+                        bytes = $inputBytes.Length
+                        sha256 = $inputSha256
                         width = [int64]$source.Width
                         height = [int64]$source.Height
                     }
@@ -531,11 +619,9 @@ function Invoke-Sanitize {
         }
         finally { $inputStream.Dispose() }
 
-        $temporaryInfo = [IO.FileInfo]::new($temporaryImage)
-        if ($temporaryInfo.Length -le 0 -or $temporaryInfo.Length -gt $script:MaxInputBytes) {
-            throw "Sanitized PNG has an invalid size."
-        }
-        $chunkTypes = @(Get-PngChunkTypes $temporaryImage)
+        $sanitizedBytes = Read-StableBytes $temporaryImage $script:MaxInputBytes "sanitized PNG"
+        $sanitizedSha256 = Get-BytesSha256 $sanitizedBytes
+        $chunkTypes = @(Get-PngChunkTypesFromBytes $sanitizedBytes)
         foreach ($forbidden in $script:ForbiddenPngChunks) {
             if ($chunkTypes -ccontains $forbidden) {
                 throw "Sanitized PNG retained a forbidden metadata chunk."
@@ -549,8 +635,8 @@ function Invoke-Sanitize {
                 purpose = $Purpose
                 candidateBinding = $candidateBinding
                 image = [ordered]@{
-                    name = [IO.Path]::GetFileName($outputPath); bytes = ([IO.FileInfo]::new($temporaryImage)).Length
-                    sha256 = Get-Sha256 $temporaryImage; width = $width; height = $height
+                    name = [IO.Path]::GetFileName($outputPath); bytes = $sanitizedBytes.Length
+                    sha256 = $sanitizedSha256; width = $width; height = $height
                 }
                 cropApplied = $hasCrop
                 metadataStrippedByDecodeAndReencode = $true
@@ -573,15 +659,15 @@ function Invoke-Sanitize {
                 candidateBinding = $candidateBinding
                 sourceCapture = $sourceCapture
                 image = [ordered]@{
-                    name = [IO.Path]::GetFileName($outputPath); bytes = ([IO.FileInfo]::new($temporaryImage)).Length
-                    sha256 = Get-Sha256 $temporaryImage; width = $width; height = $height
+                    name = [IO.Path]::GetFileName($outputPath); bytes = $sanitizedBytes.Length
+                    sha256 = $sanitizedSha256; width = $width; height = $height
                 }
                 cropApplied = $hasCrop
                 metadataStrippedByDecodeAndReencode = $true
                 forbiddenMetadataChunksPresent = $false
                 automatedTextInspectionPerformed = $false
-                manualVisualReviewRequired = $true
-                manualVisualReviewConfirmed = $false
+                independentVisualReviewRequired = $true
+                independentVisualReviewCompleted = $false
                 automaticPixelRedactionPerformed = $false
                 unknownPixelSafetyClaimed = $false
                 reviewStatement = $script:PendingReviewStatement
@@ -604,10 +690,12 @@ function Invoke-Sanitize {
             Write-Output "Legacy v0.12.2 screenshot was sanitized with its required review confirmation."
         }
         else {
-            Write-Output "Screenshot was sanitized with review pending; pause and obtain human review before AttestReview."
+            Write-Output "Screenshot was sanitized with an exact digest-bound independent review pending."
         }
     }
     finally {
+        if ($null -ne $inputBytes) { [Array]::Clear($inputBytes, 0, $inputBytes.Length) }
+        if ($null -ne $sanitizedBytes) { [Array]::Clear($sanitizedBytes, 0, $sanitizedBytes.Length) }
         foreach ($temporary in @($temporaryImage, $temporaryRecord)) {
             if ([IO.File]::Exists($temporary)) {
                 [IO.File]::Delete($temporary)
@@ -616,18 +704,17 @@ function Invoke-Sanitize {
     }
 }
 
-function Invoke-AttestReview {
+function Invoke-BindReview {
     foreach ($item in @(
         @($PendingRecord, "PendingRecord"), @($ReviewedImage, "ReviewedImage"),
-        @($OutputRecord, "OutputRecord"), @($PreflightRecord, "PreflightRecord")
+        @($OutputRecord, "OutputRecord"), @($PreflightRecord, "PreflightRecord"),
+        @($IndependentReviewRecord, "IndependentReviewRecord")
     )) {
         Assert-RequiredArgument $item[0] $item[1]
     }
-    if (-not $ManualVisualReviewConfirmed) {
-        throw "AttestReview requires action-time confirmation after a human inspected the sanitized PNG."
-    }
     $pendingPath = Resolve-RequiredFile $PendingRecord "PendingRecord"
     $imagePath = Resolve-RequiredFile $ReviewedImage "ReviewedImage"
+    $reviewPath = Resolve-RequiredFile $IndependentReviewRecord "IndependentReviewRecord"
     $recordPath = Resolve-NewOutputFile $OutputRecord "OutputRecord" ".json"
     if ($pendingPath -ceq $recordPath -or $imagePath -ceq $recordPath -or
         -not [String]::Equals(
@@ -638,14 +725,15 @@ function Invoke-AttestReview {
     }
     $denyValues = @(Read-DenyValues $DenyValuesFile)
     $candidateBinding = Get-CandidateBindingFromPreflight $PreflightRecord
-    if ($script:CandidateVersionFromPreflight -cne "0.12.14") {
-        throw "AttestReview is available only for the v0.12.14 two-phase screenshot protocol."
+    if ($script:CandidateVersionFromPreflight -cne "0.12.15") {
+        throw "BindReview is available only for the v0.12.15 independent-review protocol."
     }
-    $pending = Read-StrictJson $pendingPath "PendingRecord"
+    $pendingStable = Read-StrictJsonWithDigest $pendingPath "PendingRecord"
+    $pending = $pendingStable.Value
     $fields = @(
         "schemaVersion", "evidenceType", "purpose", "releaseCandidateBinding", "candidateBinding", "sourceCapture", "image", "cropApplied",
         "metadataStrippedByDecodeAndReencode", "forbiddenMetadataChunksPresent",
-        "automatedTextInspectionPerformed", "manualVisualReviewRequired", "manualVisualReviewConfirmed",
+        "automatedTextInspectionPerformed", "independentVisualReviewRequired", "independentVisualReviewCompleted",
         "automaticPixelRedactionPerformed", "unknownPixelSafetyClaimed", "reviewStatement"
     )
     Assert-ExactKeys $pending $fields "pending screenshot record"
@@ -705,41 +793,131 @@ function Invoke-AttestReview {
         }
     }
     foreach ($name in @(
-        "forbiddenMetadataChunksPresent", "automatedTextInspectionPerformed", "manualVisualReviewConfirmed",
+        "forbiddenMetadataChunksPresent", "automatedTextInspectionPerformed", "independentVisualReviewCompleted",
         "automaticPixelRedactionPerformed", "unknownPixelSafetyClaimed"
     )) {
         if ($pending.$name -isnot [bool] -or $pending.$name -ne $false) {
             throw "PendingRecord $name must be false."
         }
     }
-    if ($pending.manualVisualReviewRequired -ne $true -or
+    if ($pending.independentVisualReviewRequired -ne $true -or
         $pending.reviewStatement -cne $script:PendingReviewStatement) {
         throw "PendingRecord sanitization or pending-review state is invalid."
     }
-    $imageInfo = [IO.FileInfo]::new($imagePath)
-    if ($imageInfo.Length -ne [int64]$pending.image.bytes -or
-        (Get-Sha256 $imagePath) -cne $pending.image.sha256) {
-        throw "The sanitized PNG changed after its pending review record was created."
-    }
-    $chunkTypes = @(Get-PngChunkTypes $imagePath)
-    foreach ($forbidden in $script:ForbiddenPngChunks) {
-        if ($chunkTypes -ccontains $forbidden) {
-            throw "The reviewed sanitized PNG contains forbidden metadata."
-        }
-    }
-    Add-Type -AssemblyName System.Drawing -ErrorAction Stop
-    $imageStream = [IO.File]::Open($imagePath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    $reviewedImageBytes = Read-StableBytes $imagePath $script:MaxInputBytes "ReviewedImage"
     try {
-        $decoded = [Drawing.Image]::FromStream($imageStream, $true, $true)
-        try {
-            if ($decoded.RawFormat.Guid -ne [Drawing.Imaging.ImageFormat]::Png.Guid -or
-                $decoded.Width -ne [int]$pending.image.width -or $decoded.Height -ne [int]$pending.image.height) {
-                throw "The reviewed sanitized PNG dimensions do not match its pending record."
+        if ($reviewedImageBytes.Length -ne [int64]$pending.image.bytes -or
+            (Get-BytesSha256 $reviewedImageBytes) -cne $pending.image.sha256) {
+            throw "The sanitized PNG changed after its pending review record was created."
+        }
+        $chunkTypes = @(Get-PngChunkTypesFromBytes $reviewedImageBytes)
+        foreach ($forbidden in $script:ForbiddenPngChunks) {
+            if ($chunkTypes -ccontains $forbidden) {
+                throw "The reviewed sanitized PNG contains forbidden metadata."
             }
         }
-        finally { $decoded.Dispose() }
+        Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+        $imageStream = [IO.MemoryStream]::new($reviewedImageBytes, $false)
+        try {
+            $decoded = [Drawing.Image]::FromStream($imageStream, $true, $true)
+            try {
+                if ($decoded.RawFormat.Guid -ne [Drawing.Imaging.ImageFormat]::Png.Guid -or
+                    $decoded.Width -ne [int]$pending.image.width -or $decoded.Height -ne [int]$pending.image.height) {
+                    throw "The reviewed sanitized PNG dimensions do not match its pending record."
+                }
+            }
+            finally { $decoded.Dispose() }
+        }
+        finally { $imageStream.Dispose() }
     }
-    finally { $imageStream.Dispose() }
+    finally {
+        [Array]::Clear($reviewedImageBytes, 0, $reviewedImageBytes.Length)
+    }
+
+    $reviewStable = Read-StrictJsonWithDigest $reviewPath "IndependentReviewRecord"
+    $review = $reviewStable.Value
+    Assert-ExactKeys $review @(
+        "schemaVersion", "evidenceType", "releaseCandidateBinding", "candidateBinding",
+        "executorSessionRef", "reviewerSessionRef", "independentSessionBoundary",
+        "requestSha256", "reviewedAtUtc", "entries", "aggregate"
+    ) "independent visual review"
+    if ($review.schemaVersion -ne 1 -or
+        $review.evidenceType -cne "stock-user-chrome-independent-visual-review" -or
+        $review.independentSessionBoundary -isnot [bool] -or
+        $review.independentSessionBoundary -ne $true) {
+        throw "IndependentReviewRecord identity or session-boundary proof is invalid."
+    }
+    foreach ($name in @("executorSessionRef", "reviewerSessionRef", "requestSha256")) {
+        if ($review.$name -isnot [string] -or
+            -not [regex]::IsMatch([string]$review.$name, '^[0-9a-f]{64}$')) {
+            throw "IndependentReviewRecord $name is invalid."
+        }
+    }
+    if ($review.executorSessionRef -ceq $review.reviewerSessionRef) {
+        throw "IndependentReviewRecord reused the executor as the reviewer."
+    }
+    Assert-CanonicalUtcTimestamp $review.reviewedAtUtc "IndependentReviewRecord reviewedAtUtc"
+    if (($review.releaseCandidateBinding | ConvertTo-Json -Depth 12 -Compress) -cne
+        ($script:ReleaseCandidateBindingFromPreflight | ConvertTo-Json -Depth 12 -Compress)) {
+        throw "IndependentReviewRecord does not bind the exact release candidate attempt."
+    }
+    Assert-CandidateBindingEqual $review.candidateBinding $candidateBinding
+    Assert-ExactKeys $review.aggregate @(
+        "reviewedCropCount", "everySanitizedCropOpenedByReviewer", "allImageDigestsMatched",
+        "requiredVisibleStateConfirmedByReviewer", "noSensitivePixelsObservedByReviewer",
+        "noUncertaintyReported", "visualJudgmentNotPixelSafetyProof"
+    ) "independent visual review aggregate"
+    if (-not (Test-ExactJsonInteger $review.aggregate.reviewedCropCount) -or
+        [int64]$review.aggregate.reviewedCropCount -ne 6) {
+        throw "IndependentReviewRecord must contain six reviewed crops."
+    }
+    foreach ($name in @(
+        "everySanitizedCropOpenedByReviewer", "allImageDigestsMatched",
+        "requiredVisibleStateConfirmedByReviewer", "noSensitivePixelsObservedByReviewer",
+        "noUncertaintyReported", "visualJudgmentNotPixelSafetyProof"
+    )) {
+        if ($review.aggregate.$name -isnot [bool] -or $review.aggregate.$name -ne $true) {
+            throw "IndependentReviewRecord aggregate $name must be true."
+        }
+    }
+    if ($review.entries.Count -ne 6) {
+        throw "IndependentReviewRecord entry count is invalid."
+    }
+    $reviewEntry = $null
+    for ($index = 0; $index -lt 6; $index += 1) {
+        $entry = $review.entries[$index]
+        Assert-ExactKeys $entry @(
+            "sequence", "purpose", "image", "sha256", "width", "height",
+            "requiredVisibleStateSha256", "digestMatched", "requiredStateVerdict",
+            "sensitivePixelsObserved", "uncertain"
+        ) "independent visual review entry"
+        $expectedPurpose = @($script:ExpectedScreenshotsV2.Keys)[$index]
+        $expectedImage = $script:ExpectedScreenshotsV2[$expectedPurpose]
+        $expectedCriterionSha = Get-TextSha256 $script:RequiredVisibleStatesV2[$expectedPurpose]
+        if (-not (Test-ExactJsonInteger $entry.sequence) -or
+            -not (Test-ExactJsonInteger $entry.width) -or
+            -not (Test-ExactJsonInteger $entry.height) -or
+            [int64]$entry.sequence -ne ($index + 1) -or $entry.purpose -cne $expectedPurpose -or
+            $entry.image -cne $expectedImage -or $entry.requiredVisibleStateSha256 -cne $expectedCriterionSha -or
+            $entry.sha256 -isnot [string] -or -not [regex]::IsMatch($entry.sha256, '^[0-9a-f]{64}$') -or
+            $entry.digestMatched -isnot [bool] -or
+            $entry.sensitivePixelsObserved -isnot [bool] -or $entry.uncertain -isnot [bool] -or
+            $entry.digestMatched -ne $true -or $entry.requiredStateVerdict -cne "pass" -or
+            $entry.sensitivePixelsObserved -ne $false -or $entry.uncertain -ne $false) {
+            throw "IndependentReviewRecord contains a mismatched, failed, sensitive, uncertain, or reordered entry."
+        }
+        if ($entry.purpose -ceq $pending.purpose) { $reviewEntry = $entry }
+    }
+    if ($null -eq $reviewEntry -or $reviewEntry.image -cne $pending.image.name -or
+        $reviewEntry.sha256 -cne $pending.image.sha256 -or
+        [int64]$reviewEntry.width -ne [int64]$pending.image.width -or
+        [int64]$reviewEntry.height -ne [int64]$pending.image.height) {
+        throw "IndependentReviewRecord does not bind this exact sanitized PNG."
+    }
+    $reviewRecordSha256 = $reviewStable.Sha256
+    $reviewEntryRef = Get-TextSha256 (
+        "$reviewRecordSha256`n$($reviewEntry.sequence)`n$($reviewEntry.purpose)`n$($reviewEntry.sha256)"
+    )
 
     $record = [ordered]@{
         schemaVersion = 1
@@ -766,8 +944,10 @@ function Invoke-AttestReview {
         metadataStrippedByDecodeAndReencode = $true
         forbiddenMetadataChunksPresent = $false
         automatedTextInspectionPerformed = $false
-        manualVisualReviewRequired = $true
-        manualVisualReviewConfirmed = $true
+        independentVisualReviewRequired = $true
+        independentVisualReviewCompleted = $true
+        reviewRecordSha256 = $reviewRecordSha256
+        reviewEntryRef = $reviewEntryRef
         automaticPixelRedactionPerformed = $false
         unknownPixelSafetyClaimed = $false
         reviewStatement = $script:CompletedReviewStatement
@@ -785,7 +965,7 @@ function Invoke-AttestReview {
     finally {
         if ([IO.File]::Exists($temporaryRecord)) { [IO.File]::Delete($temporaryRecord) }
     }
-    Write-Output "Human review was attested after sanitization; the reviewed PNG hash is unchanged."
+    Write-Output "Independent digest-bound review was bound; the reviewed PNG hash is unchanged."
 }
 
 function Invoke-SelfTest {
@@ -836,7 +1016,7 @@ function Invoke-SelfTest {
             passed = $true
             runNonce = $bindingHash
             releaseCandidateBinding = [ordered]@{
-                productVersion = "0.12.14"; repository = "flrngel/local-browser-bridge"; tag = "v0.12.14"
+                productVersion = "0.12.15"; repository = "flrngel/local-browser-bridge"; tag = "v0.12.15"
                 sourceSha = [String]::new([char]"0", 40); tagObjectSha = [String]::new([char]"1", 40)
                 workflowRunId = "1"; workflowRunAttempt = "1"; artifactId = "1"; artifactName = "release-candidate"
                 artifactZipBytes = 1; artifactZipSha256 = $bindingHash; checksumManifestSha256 = $bindingHash
@@ -847,7 +1027,7 @@ function Invoke-SelfTest {
                 })
             }
             candidate = [ordered]@{
-                version = "0.12.14"
+                version = "0.12.15"
                 finalSha = [String]::new([char]"0", 40)
                 checksumManifest = [ordered]@{ sha256 = $bindingHash }
                 server = [ordered]@{ sha256 = $bindingHash }
@@ -860,7 +1040,7 @@ function Invoke-SelfTest {
         try {
             & $PSCommandPath -Mode Sanitize -InputImage $inputPath -OutputImage $outputPath `
                 -OutputRecord $pendingPath -PreflightRecord $preflightPath -Purpose api-action-result `
-                -CropX 4 -CropY 4 -CropWidth 240 -CropHeight 120 -ManualVisualReviewConfirmed | Out-Null
+                -CropX 4 -CropY 4 -CropWidth 240 -CropHeight 120 -LegacyV0122ReviewConfirmed | Out-Null
         }
         catch { $preAttestationRejected = $true }
         if (-not $preAttestationRejected -or [IO.File]::Exists($outputPath) -or [IO.File]::Exists($pendingPath)) {
@@ -875,30 +1055,124 @@ function Invoke-SelfTest {
         }
         $pending = [IO.File]::ReadAllText($pendingPath, $script:Utf8NoBom) | ConvertFrom-Json
         if ($pending.evidenceType -cne "stock-user-chrome-screenshot-review-pending" -or
-            $pending.manualVisualReviewConfirmed -ne $false -or
+            $pending.independentVisualReviewRequired -ne $true -or
+            $pending.independentVisualReviewCompleted -ne $false -or
+            $null -ne $pending.PSObject.Properties["manualVisualReviewConfirmed"] -or
             $pending.reviewStatement -cne $script:PendingReviewStatement) {
             throw "Screenshot sanitizer pre-review record is invalid."
         }
-        $missingHumanReviewRejected = $false
+        $missingIndependentReviewRejected = $false
         try {
-            & $PSCommandPath -Mode AttestReview -PendingRecord $pendingPath -ReviewedImage $outputPath `
+            & $PSCommandPath -Mode BindReview -PendingRecord $pendingPath -ReviewedImage $outputPath `
                 -OutputRecord $recordPath -PreflightRecord $preflightPath | Out-Null
         }
-        catch { $missingHumanReviewRejected = $true }
-        if (-not $missingHumanReviewRejected -or [IO.File]::Exists($recordPath)) {
-            throw "Screenshot review attestation succeeded without later human confirmation."
+        catch { $missingIndependentReviewRejected = $true }
+        if (-not $missingIndependentReviewRejected -or [IO.File]::Exists($recordPath)) {
+            throw "Screenshot review binding succeeded without an independent review record."
         }
-        & $PSCommandPath -Mode AttestReview -PendingRecord $pendingPath -ReviewedImage $outputPath `
-            -OutputRecord $recordPath -PreflightRecord $preflightPath -ManualVisualReviewConfirmed | Out-Null
+
+        $executorRef = [String]::new([char]"1", 64)
+        $reviewerRef = [String]::new([char]"2", 64)
+        $reviewEntries = @()
+        $sequence = 0
+        foreach ($reviewPurpose in @($script:ExpectedScreenshotsV2.Keys)) {
+            $sequence += 1
+            $reviewImage = $script:ExpectedScreenshotsV2[$reviewPurpose]
+            $entrySha = if ($reviewPurpose -ceq "api-action-result") {
+                [string]$pending.image.sha256
+            }
+            else { [String]::new([char](48 + $sequence), 64) }
+            $entryWidth = if ($reviewPurpose -ceq "api-action-result") { [int64]$pending.image.width } else { 240 }
+            $entryHeight = if ($reviewPurpose -ceq "api-action-result") { [int64]$pending.image.height } else { 120 }
+            $reviewEntries += [ordered]@{
+                sequence = $sequence
+                purpose = $reviewPurpose
+                image = $reviewImage
+                sha256 = $entrySha
+                width = $entryWidth
+                height = $entryHeight
+                requiredVisibleStateSha256 = Get-TextSha256 $script:RequiredVisibleStatesV2[$reviewPurpose]
+                digestMatched = $true
+                requiredStateVerdict = "pass"
+                sensitivePixelsObserved = $false
+                uncertain = $false
+            }
+        }
+        $review = [ordered]@{
+            schemaVersion = 1
+            evidenceType = "stock-user-chrome-independent-visual-review"
+            releaseCandidateBinding = $pending.releaseCandidateBinding
+            candidateBinding = $pending.candidateBinding
+            executorSessionRef = $executorRef
+            reviewerSessionRef = $reviewerRef
+            independentSessionBoundary = $true
+            requestSha256 = [String]::new([char]"3", 64)
+            reviewedAtUtc = [DateTime]::UtcNow.ToString("o")
+            entries = $reviewEntries
+            aggregate = [ordered]@{
+                reviewedCropCount = 6
+                everySanitizedCropOpenedByReviewer = $true
+                allImageDigestsMatched = $true
+                requiredVisibleStateConfirmedByReviewer = $true
+                noSensitivePixelsObservedByReviewer = $true
+                noUncertaintyReported = $true
+                visualJudgmentNotPixelSafetyProof = $true
+            }
+        }
+        $reviewPath = [IO.Path]::Combine($root, "independent-visual-review.json")
+        foreach ($negative in @(
+            "same-session", "reordered", "uncertain", "sensitive", "digest",
+            "string-session-boundary", "string-sequence", "string-entry-bool",
+            "string-aggregate-count", "string-aggregate-bool", "legacy-human-field"
+        )) {
+            $invalidReview = ($review | ConvertTo-Json -Depth 12) | ConvertFrom-Json
+            switch ($negative) {
+                "same-session" { $invalidReview.reviewerSessionRef = $invalidReview.executorSessionRef }
+                "reordered" { $invalidReview.entries[0].sequence = 2 }
+                "uncertain" { $invalidReview.entries[1].uncertain = $true }
+                "sensitive" { $invalidReview.entries[1].sensitivePixelsObserved = $true }
+                "digest" { $invalidReview.entries[1].sha256 = [String]::new([char]"f", 64) }
+                "string-session-boundary" { $invalidReview.independentSessionBoundary = "True" }
+                "string-sequence" { $invalidReview.entries[0].sequence = "1" }
+                "string-entry-bool" { $invalidReview.entries[0].digestMatched = "True" }
+                "string-aggregate-count" { $invalidReview.aggregate.reviewedCropCount = "6" }
+                "string-aggregate-bool" {
+                    $invalidReview.aggregate.noUncertaintyReported = "True"
+                }
+                "legacy-human-field" {
+                    $invalidReview | Add-Member -NotePropertyName humanVisualReview -NotePropertyValue $true
+                }
+            }
+            $invalidReviewPath = [IO.Path]::Combine($root, "invalid-review-$negative.json")
+            [IO.File]::WriteAllText(
+                $invalidReviewPath, (($invalidReview | ConvertTo-Json -Depth 12) + "`n"), $script:Utf8NoBom
+            )
+            $invalidRejected = $false
+            try {
+                & $PSCommandPath -Mode BindReview -PendingRecord $pendingPath -ReviewedImage $outputPath `
+                    -IndependentReviewRecord $invalidReviewPath -OutputRecord $recordPath `
+                    -PreflightRecord $preflightPath | Out-Null
+            }
+            catch { $invalidRejected = $true }
+            if (-not $invalidRejected -or [IO.File]::Exists($recordPath)) {
+                throw "Screenshot review binding accepted the $negative negative fixture."
+            }
+        }
+        [IO.File]::WriteAllText($reviewPath, (($review | ConvertTo-Json -Depth 12) + "`n"), $script:Utf8NoBom)
+        & $PSCommandPath -Mode BindReview -PendingRecord $pendingPath -ReviewedImage $outputPath `
+            -IndependentReviewRecord $reviewPath -OutputRecord $recordPath -PreflightRecord $preflightPath | Out-Null
         if (-not [IO.File]::Exists($recordPath)) {
-            throw "Screenshot post-sanitization review attestation was not created."
+            throw "Screenshot independent review binding was not created."
         }
         $record = [IO.File]::ReadAllText($recordPath, $script:Utf8NoBom) | ConvertFrom-Json
         if ($record.image.width -ne 240 -or $record.image.height -ne 120 -or
             $record.sourceCapture.name -cne "browser-02-api-action-result.raw.png" -or
             $record.sourceCapture.endpoint -cne "/api/computer/screenshot" -or
             $record.sourceCapture.sha256 -cne (Get-Sha256 $inputPath) -or
-            $record.manualVisualReviewConfirmed -ne $true -or
+            $record.independentVisualReviewRequired -ne $true -or
+            $record.independentVisualReviewCompleted -ne $true -or
+            $record.reviewRecordSha256 -cne (Get-Sha256 $reviewPath) -or
+            $null -ne $record.PSObject.Properties["manualVisualReviewConfirmed"] -or
             $record.automaticPixelRedactionPerformed -ne $false -or
             $record.reviewStatement -cne $script:CompletedReviewStatement -or
             $record.image.sha256 -cne $pending.image.sha256 -or
@@ -931,7 +1205,7 @@ function Invoke-SelfTest {
         }
         & $PSCommandPath -Mode Sanitize -InputImage $inputPath -OutputImage $legacyOutputPath `
             -OutputRecord $legacyRecordPath -PreflightRecord $legacyPreflightPath -Purpose action-result `
-            -CropX 4 -CropY 4 -CropWidth 240 -CropHeight 120 -ManualVisualReviewConfirmed | Out-Null
+            -CropX 4 -CropY 4 -CropWidth 240 -CropHeight 120 -LegacyV0122ReviewConfirmed | Out-Null
         $legacyRecord = [IO.File]::ReadAllText($legacyRecordPath, $script:Utf8NoBom) | ConvertFrom-Json
         if ($legacyRecord.evidenceType -cne "stock-user-chrome-screenshot" -or
             $legacyRecord.manualVisualReviewConfirmed -ne $true -or
@@ -962,6 +1236,6 @@ function Invoke-SelfTest {
 
 switch ($Mode) {
     "Sanitize" { Invoke-Sanitize }
-    "AttestReview" { Invoke-AttestReview }
+    "BindReview" { Invoke-BindReview }
     "SelfTest" { Invoke-SelfTest }
 }

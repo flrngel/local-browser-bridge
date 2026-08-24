@@ -14,6 +14,9 @@ param(
   [string]$PrivateParent,
   [string]$TrustedGit,
   [string]$TrustedGh,
+  [string]$ExternalSurfacePreflightAttestation,
+  [string]$ExternalSurfacePostflightAttestation,
+  [string]$GitHubTokenPipeName,
   [string]$CleanCoordinatorNonce
 )
 
@@ -29,9 +32,18 @@ function Invoke-CoordinatorSelfTest {
     'browser-04-stop-paused',
     'browser-05-cancel-paused',
     'browser-06-post-handback-resume',
-    'FinalEntries.Count -ne 18',
+    'FinalEntries.Count -ne 22',
     'Invoke-ExactPs51SelfTest',
     'Invoke-BoundedExactExtensionZipExtraction',
+    'Invoke-IndependentReviewerExchange',
+    'Assert-ReviewerCropDecision',
+    'Assert-ReviewerSixCropDecision',
+    'scripts/write-stock-chrome-operator-response.ps1',
+    'ExternalSurfacePreflightAttestation',
+    'ExternalSurfacePostflightAttestation',
+    'EXTERNAL_SURFACE_POSTFLIGHT_REQUIRED',
+    '-ScopedApprovalRecord',
+    'independent-visual-review.json',
     'Extension ZIP central directory is not the exact canonical eleven-file layout.',
     'Extension ZIP entry CRC-32 does not match its central-directory declaration.'
   )) {
@@ -47,11 +59,19 @@ function Invoke-CoordinatorSelfTest {
     ('$env:' + 'HOME'), ('$env:' + 'USERPROFILE'), ('$env:' + 'CODEX_HOME'),
     ('SetEnvironmentVariable("' + 'HOME'), ('SetEnvironmentVariable("' + 'USERPROFILE'),
     ('SetEnvironmentVariable("' + 'CODEX_HOME'),
-    ('[IO.Compression.ZipFile]::' + 'ExtractToDirectory')
+    ('[IO.Compression.ZipFile]::' + 'ExtractToDirectory'),
+    ('Manual' + 'VisualReviewConfirmed'), ('Attest' + 'Review'),
+    ('OPERATOR-' + 'RECORD-SAVED'), ('Read-' + 'CropInteger'),
+    ('confirmationAcceptedBy' + 'Human'), ('human' + 'VisualReview')
   )) {
     if ($Source.Contains($Forbidden)) {
       throw "Stock-Chrome coordinator self-test found a forbidden primitive or system-home mutation."
     }
+  }
+  $ReadHostToken = 'Read' + '-Host'
+  if ([regex]::Matches($Source, [regex]::Escape($ReadHostToken)).Count -ne 1 -or
+      -not $Source.Contains('Independent least-privilege GitHub acceptance token')) {
+    throw "Stock-Chrome coordinator self-test permits only the secure GitHub token prompt."
   }
   if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) {
     throw "Stock-Chrome coordinator self-test must execute under Windows PowerShell 5.1."
@@ -160,6 +180,392 @@ function Invoke-CoordinatorSelfTest {
     $DuplicateArchive = [IO.Path]::Combine($SelfTestRoot, "duplicate.zip")
     New-SelfTestZip $DuplicateArchive $DuplicateNames
     Assert-SelfTestExtractionRejected $DuplicateArchive "a duplicate entry"
+
+    $CreateOncePath = [IO.Path]::Combine($SelfTestRoot, "create-once.json")
+    $CreateOnceDigest = $null
+    Write-CreateOncePrivateJson $CreateOncePath ([ordered]@{ value = "bound" }) `
+      "self-test record" ([ref]$CreateOnceDigest)
+    $StableCreateOnce = Read-StablePrivateJson $CreateOncePath "self-test record"
+    if ($StableCreateOnce.Value.value -cne "bound" -or
+        $StableCreateOnce.Sha256 -cne $CreateOnceDigest) {
+      throw "Stock-Chrome stable create-once JSON self-test failed."
+    }
+    $ReplayRejected = $false
+    try { Write-CreateOncePrivateJson $CreateOncePath ([ordered]@{ value = "replay" }) "self-test replay" }
+    catch { $ReplayRejected = $true }
+    if (-not $ReplayRejected) { throw "Stock-Chrome create-once replay self-test failed." }
+
+    $LedgerDirectory = New-SelfTestExtractionDirectory "durable-ledger"
+    $LedgerBinding = [ordered]@{
+      sourceSha = [String]::new([char]"1", 40)
+      tagObjectSha = [String]::new([char]"2", 40)
+      workflowRunId = "123"
+      workflowRunAttempt = "1"
+      artifactId = "456"
+      artifactZipSha256 = [String]::new([char]"3", 64)
+    }
+    $LedgerClaim = New-DurableCandidateExecutionClaim $LedgerDirectory $LedgerBinding
+    $DuplicateClaimRejected = $false
+    try { [void](New-DurableCandidateExecutionClaim $LedgerDirectory $LedgerBinding) }
+    catch { $DuplicateClaimRejected = $true }
+    if (-not $DuplicateClaimRejected) {
+      throw "Stock-Chrome durable ledger accepted a duplicate frozen-candidate claim."
+    }
+    Write-DurableCandidateExecutionOutcome $LedgerClaim $false $false "self-test"
+    if (@([IO.DirectoryInfo]::new($LedgerDirectory).GetFileSystemInfos()).Count -ne 2) {
+      throw "Stock-Chrome durable ledger did not retain the exact claim and outcome pair."
+    }
+
+    $EnvelopeRequestId = [String]::new([char]"1", 32)
+    $EnvelopeRequestSha = [String]::new([char]"2", 64)
+    $EnvelopeCandidateSha = [String]::new([char]"3", 64)
+    $EnvelopeInputSha = [String]::new([char]"4", 64)
+    $EnvelopeExecutorRef = [String]::new([char]"5", 64)
+    $EnvelopeReviewerRef = [String]::new([char]"6", 64)
+    $GoodEnvelope = [pscustomobject][ordered]@{
+      schemaVersion = 1
+      evidenceType = "stock-user-chrome-reviewer-response"
+      requestId = $EnvelopeRequestId
+      requestSha256 = $EnvelopeRequestSha
+      candidateBindingSha256 = $EnvelopeCandidateSha
+      inputDigestSha256 = $EnvelopeInputSha
+      responderKind = "independent-agent"
+      responderSessionRef = $EnvelopeReviewerRef
+      respondedAtUtc = "2026-08-24T00:00:01.0000000+00:00"
+      decision = [pscustomobject]@{ value = "fixture" }
+    }
+    Assert-IndependentReviewerResponseEnvelope $GoodEnvelope $EnvelopeRequestId `
+      $EnvelopeRequestSha $EnvelopeCandidateSha $EnvelopeInputSha `
+      $EnvelopeExecutorRef $EnvelopeReviewerRef
+    foreach ($EnvelopeMutation in @("request-replay", "input-swap", "same-session", "old-human-field")) {
+      $InvalidEnvelope = ($GoodEnvelope | ConvertTo-Json -Depth 8) | ConvertFrom-Json
+      switch ($EnvelopeMutation) {
+        "request-replay" { $InvalidEnvelope.requestSha256 = [String]::new([char]"7", 64) }
+        "input-swap" { $InvalidEnvelope.inputDigestSha256 = [String]::new([char]"8", 64) }
+        "same-session" { $InvalidEnvelope.responderSessionRef = $EnvelopeExecutorRef }
+        "old-human-field" {
+          $InvalidEnvelope | Add-Member -NotePropertyName humanReviewed -NotePropertyValue $true
+        }
+      }
+      $EnvelopeRejected = $false
+      try {
+        Assert-IndependentReviewerResponseEnvelope $InvalidEnvelope $EnvelopeRequestId `
+          $EnvelopeRequestSha $EnvelopeCandidateSha $EnvelopeInputSha `
+          $EnvelopeExecutorRef $EnvelopeReviewerRef
+      }
+      catch { $EnvelopeRejected = $true }
+      if (-not $EnvelopeRejected) {
+        throw "Stock-Chrome reviewer envelope accepted $EnvelopeMutation."
+      }
+    }
+    $TimestampStart = [DateTimeOffset]::ParseExact(
+      "2026-08-24T00:00:00.0000000Z", "o", [Globalization.CultureInfo]::InvariantCulture,
+      [Globalization.DateTimeStyles]::RoundtripKind
+    )
+    [void](Assert-FreshCanonicalResponseTimestamp `
+      "2026-08-24T00:00:01.0000000Z" $TimestampStart ($TimestampStart.AddSeconds(2)) `
+      "self-test canonical reviewer timestamp")
+    $OffsetTimestampRejected = $false
+    try {
+      [void](Assert-FreshCanonicalResponseTimestamp `
+        "2026-08-24T00:00:01.0000000+00:00" $TimestampStart ($TimestampStart.AddSeconds(2)) `
+        "self-test offset reviewer timestamp")
+    }
+    catch { $OffsetTimestampRejected = $true }
+    if (-not $OffsetTimestampRejected) {
+      throw "Stock-Chrome reviewer exchange accepted a noncanonical +00:00 timestamp."
+    }
+
+    $SavedReviewDirectory = $script:ReviewExchangeDirectory
+    $SavedReviewArtifacts = $script:ReviewExchangeArtifacts
+    $SavedReviewReservations = $script:ReviewResponseReservations
+    $SavedReviewExpectedTransients = $script:ReviewExpectedTransientArtifacts
+    $PublicationDirectory = New-SelfTestExtractionDirectory "review-publication"
+    $script:ReviewExchangeDirectory = $PublicationDirectory
+    $script:ReviewExchangeArtifacts = New-Object Collections.Generic.List[string]
+    $script:ReviewResponseReservations = New-Object Collections.Generic.List[object]
+    $script:ReviewExpectedTransientArtifacts = New-Object Collections.Generic.List[string]
+    try {
+      $PublicationId = [String]::new([char]"a", 32)
+      $PublicationResponse = Join-Path $PublicationDirectory "response-$PublicationId.json"
+      $PublicationTemporary = "$PublicationResponse.new"
+      $PublicationClaimed = Join-Path $PublicationDirectory "response-$PublicationId.claimed.json"
+      $Partial = [IO.File]::Open(
+        $PublicationTemporary, [IO.FileMode]::CreateNew,
+        [IO.FileAccess]::Write, [IO.FileShare]::None
+      )
+      try {
+        $PartialBytes = [Text.Encoding]::ASCII.GetBytes('{"partial":')
+        $Partial.Write($PartialBytes, 0, $PartialBytes.Length)
+        $Partial.Flush($true)
+      }
+      finally { $Partial.Dispose() }
+      $PartialRejected = $false
+      try {
+        Claim-PublishedReviewerResponse `
+          $PublicationResponse $PublicationClaimed ([DateTimeOffset]::UtcNow.AddMilliseconds(250))
+      }
+      catch { $PartialRejected = $true }
+      if (-not $PartialRejected -or [IO.File]::Exists($PublicationClaimed)) {
+        throw "Stock-Chrome reviewer exchange accepted a partial publication."
+      }
+      [IO.File]::Delete($PublicationTemporary)
+      $ExpiredId = [String]::new([char]"b", 32)
+      $ExpiredResponse = Join-Path $PublicationDirectory "response-$ExpiredId.json"
+      $ExpiredClaimed = Join-Path $PublicationDirectory "response-$ExpiredId.claimed.json"
+      [IO.File]::WriteAllText(
+        $ExpiredResponse, "{}`n", [Text.UTF8Encoding]::new($false, $true)
+      )
+      $ExpiredPublicationRejected = $false
+      try {
+        Claim-PublishedReviewerResponse $ExpiredResponse $ExpiredClaimed `
+          ([DateTimeOffset]::UtcNow.AddSeconds(-1))
+      }
+      catch { $ExpiredPublicationRejected = $true }
+      if (-not $ExpiredPublicationRejected -or [IO.File]::Exists($ExpiredClaimed) -or
+          -not [IO.File]::Exists($ExpiredResponse)) {
+        throw "Stock-Chrome reviewer exchange accepted an already-published expired response."
+      }
+      [IO.File]::Delete($ExpiredResponse)
+      $PublicationBytes = [Text.UTF8Encoding]::new($false).GetBytes("{}`n")
+      $Published = [IO.File]::Open(
+        $PublicationTemporary, [IO.FileMode]::CreateNew,
+        [IO.FileAccess]::Write, [IO.FileShare]::None
+      )
+      try {
+        $Published.Write($PublicationBytes, 0, $PublicationBytes.Length)
+        $Published.Flush($true)
+      }
+      finally { $Published.Dispose(); [Array]::Clear($PublicationBytes, 0, $PublicationBytes.Length) }
+      [IO.File]::Move($PublicationTemporary, $PublicationResponse)
+      Claim-PublishedReviewerResponse `
+        $PublicationResponse $PublicationClaimed ([DateTimeOffset]::UtcNow.AddSeconds(2))
+      if (-not [IO.File]::Exists($PublicationClaimed)) {
+        throw "Stock-Chrome reviewer exchange did not claim an atomic publication."
+      }
+      $CanonicalPublication = Read-StablePrivateJson `
+        $PublicationClaimed "self-test canonical reviewer response"
+      Assert-CanonicalCompactJsonResponse `
+        $CanonicalPublication "self-test canonical reviewer response"
+      foreach ($AmbiguousJson in @(
+        '{"decision":{},"decision":{}}' + "`n",
+        '{"decision":{},"Decision":{}}' + "`n",
+        '{"decision":{}} trailing' + "`n",
+        "{`n  `"decision`": {}`n}`n"
+      )) {
+        $AmbiguousPath = Join-Path $PublicationDirectory `
+          ("ambiguous-" + [Guid]::NewGuid().ToString("N") + ".json")
+        [IO.File]::WriteAllText(
+          $AmbiguousPath, $AmbiguousJson, [Text.UTF8Encoding]::new($false, $true)
+        )
+        $AmbiguousRejected = $false
+        try {
+          $AmbiguousStable = Read-StablePrivateJson `
+            $AmbiguousPath "self-test ambiguous reviewer response"
+          Assert-CanonicalCompactJsonResponse `
+            $AmbiguousStable "self-test ambiguous reviewer response"
+        }
+        catch { $AmbiguousRejected = $true }
+        finally { if ([IO.File]::Exists($AmbiguousPath)) { [IO.File]::Delete($AmbiguousPath) } }
+        if (-not $AmbiguousRejected) {
+          throw "Stock-Chrome reviewer exchange accepted a duplicate, case-colliding, trailing, or noncanonical response."
+        }
+      }
+      $ReservationReplayRejected = $false
+      try { [IO.File]::WriteAllText($PublicationResponse, '{"replay":true}') }
+      catch { $ReservationReplayRejected = $true }
+      if (-not $ReservationReplayRejected) {
+        throw "Stock-Chrome reviewer exchange allowed a reserved response replay."
+      }
+      $InputPath = Join-Path $PublicationDirectory "digest-input.png"
+      $InputBytes = New-Object byte[] 25
+      [byte[]]$InputSignature = @(137, 80, 78, 71, 13, 10, 26, 10)
+      $InputSignature.CopyTo($InputBytes, 0)
+      [Text.Encoding]::ASCII.GetBytes("IHDR").CopyTo($InputBytes, 12)
+      $InputBytes[19] = 120
+      $InputBytes[23] = 32
+      [IO.File]::WriteAllBytes($InputPath, $InputBytes)
+      $InputFacts = Read-StablePrivatePng $InputPath "self-test reviewer digest input"
+      $InputBytes[24] = 1
+      [IO.File]::WriteAllBytes($InputPath, $InputBytes)
+      $ChangedInputRejected = $false
+      try {
+        [void](Assert-UnchangedPrivatePng `
+          $InputPath $InputFacts "self-test post-response reviewer input" -RequireBytes)
+      }
+      catch { $ChangedInputRejected = $true }
+      [IO.File]::Delete($InputPath)
+      [Array]::Clear($InputBytes, 0, $InputBytes.Length)
+      [Array]::Clear($InputSignature, 0, $InputSignature.Length)
+      if (-not $ChangedInputRejected) {
+        throw "Stock-Chrome reviewer exchange accepted a changed post-response input."
+      }
+      Remove-RegisteredReviewExchangeArtifact $PublicationClaimed
+      $ExtraPath = Join-Path $PublicationDirectory `
+        ("request-" + [String]::new([char]"b", 32) + ".json")
+      [IO.File]::WriteAllText($ExtraPath, "{}`n", [Text.UTF8Encoding]::new($false))
+      $ExtraRejected = $false
+      try { Remove-ExactReviewExchangeDirectory } catch { $ExtraRejected = $true }
+      if (-not $ExtraRejected) {
+        throw "Stock-Chrome reviewer exchange accepted an unregistered extra artifact."
+      }
+      $BestEffortReportedRemainder = $false
+      try { Remove-KnownReviewExchangeArtifactsAfterFailure }
+      catch { $BestEffortReportedRemainder = $true }
+      if (-not $BestEffortReportedRemainder -or
+          [IO.File]::Exists($PublicationResponse) -or
+          [IO.File]::Exists($PublicationTemporary) -or
+          -not [IO.File]::Exists($ExtraPath)) {
+        throw "Stock-Chrome reviewer failure cleanup did not delete only its known ordinary scratch."
+      }
+      [IO.File]::Delete($ExtraPath)
+      [IO.Directory]::Delete($PublicationDirectory, $false)
+    }
+    finally {
+      foreach ($Held in $script:ReviewResponseReservations) {
+        try { $Held.Stream.Dispose() } catch {}
+      }
+      $script:ReviewExchangeDirectory = $SavedReviewDirectory
+      $script:ReviewExchangeArtifacts = $SavedReviewArtifacts
+      $script:ReviewResponseReservations = $SavedReviewReservations
+      $script:ReviewExpectedTransientArtifacts = $SavedReviewExpectedTransients
+    }
+
+    $GoodCrop = [pscustomobject]@{
+      cropX = 0; cropY = 0; cropWidth = 240; cropHeight = 120
+      requiredStateVisible = $true; sensitivePixelsInsideCrop = $false; uncertain = $false
+    }
+    $RawFacts = [pscustomobject]@{ width = 320; height = 180 }
+    Assert-ReviewerCropDecision $GoodCrop $RawFacts
+    if (-not (Test-UnableReviewerDecision ([pscustomobject]@{ unable = $true }))) {
+      throw "Stock-Chrome coordinator did not recognize the universal unable decision."
+    }
+    foreach ($BadUnable in @(
+      [pscustomobject]@{ unable = $false },
+      [pscustomobject]@{ unable = $true; cropX = 0 }
+    )) {
+      $UnableRejected = $false
+      try { [void](Test-UnableReviewerDecision $BadUnable) } catch { $UnableRejected = $true }
+      if (-not $UnableRejected) {
+        throw "Stock-Chrome coordinator accepted a malformed unable decision."
+      }
+    }
+    foreach ($CropMutation in @(
+      "extra-human", "uncertain", "sensitive", "bounds", "fractional", "string-bool"
+    )) {
+      $InvalidCrop = ($GoodCrop | ConvertTo-Json) | ConvertFrom-Json
+      switch ($CropMutation) {
+        "extra-human" {
+          $InvalidCrop | Add-Member -NotePropertyName humanReviewed -NotePropertyValue $true
+        }
+        "uncertain" { $InvalidCrop.uncertain = $true }
+        "sensitive" { $InvalidCrop.sensitivePixelsInsideCrop = $true }
+        "bounds" { $InvalidCrop.cropWidth = 321 }
+        "fractional" { $InvalidCrop.cropX = 0.5 }
+        "string-bool" { $InvalidCrop.requiredStateVisible = "True" }
+      }
+      $Rejected = $false
+      try { Assert-ReviewerCropDecision $InvalidCrop $RawFacts } catch { $Rejected = $true }
+      if (-not $Rejected) { throw "Stock-Chrome crop review accepted $CropMutation." }
+    }
+
+    $ExpectedReviewEntries = @()
+    $ActualReviewEntries = @()
+    for ($Index = 0; $Index -lt 6; $Index += 1) {
+      $Sequence = $Index + 1
+      $Digest = [String]::new([char](49 + $Index), 64)
+      $ExpectedReviewEntries += [pscustomobject]@{
+        purpose = "purpose-$Sequence"; image = "browser-0$Sequence.png"; sha256 = $Digest
+        width = 240; height = 120; requiredVisibleStateSha256 = [String]::new([char]"a", 64)
+      }
+      $ActualReviewEntries += [pscustomobject]@{
+        sequence = $Sequence; purpose = "purpose-$Sequence"; image = "browser-0$Sequence.png"
+        sha256 = $Digest; width = 240; height = 120
+        requiredVisibleStateSha256 = [String]::new([char]"a", 64)
+        digestMatched = $true; requiredStateVerdict = "pass"
+        sensitivePixelsObserved = $false; uncertain = $false
+      }
+    }
+    $GoodReview = [pscustomobject]@{
+      entries = $ActualReviewEntries
+      aggregate = [pscustomobject]@{
+        reviewedCropCount = 6; everySanitizedCropOpenedByReviewer = $true
+        allImageDigestsMatched = $true; requiredVisibleStateConfirmedByReviewer = $true
+        noSensitivePixelsObservedByReviewer = $true; noUncertaintyReported = $true
+        visualJudgmentNotPixelSafetyProof = $true
+      }
+    }
+    if (@(Assert-ReviewerSixCropDecision $GoodReview $ExpectedReviewEntries).Count -ne 6) {
+      throw "Stock-Chrome independent six-crop review valid fixture failed."
+    }
+    foreach ($ReviewMutation in @(
+      "reordered", "digest", "uncertain", "sensitive", "aggregate",
+      "string-number", "string-bool", "aggregate-count"
+    )) {
+      $InvalidReview = ($GoodReview | ConvertTo-Json -Depth 8) | ConvertFrom-Json
+      switch ($ReviewMutation) {
+        "reordered" { $InvalidReview.entries[0].sequence = 2 }
+        "digest" { $InvalidReview.entries[0].sha256 = [String]::new([char]"f", 64) }
+        "uncertain" { $InvalidReview.entries[0].uncertain = $true }
+        "sensitive" { $InvalidReview.entries[0].sensitivePixelsObserved = $true }
+        "aggregate" { $InvalidReview.aggregate.noUncertaintyReported = $false }
+        "string-number" { $InvalidReview.entries[0].sequence = "1" }
+        "string-bool" { $InvalidReview.entries[0].digestMatched = "True" }
+        "aggregate-count" { $InvalidReview.aggregate.reviewedCropCount = "6" }
+      }
+      $Rejected = $false
+      try { [void](Assert-ReviewerSixCropDecision $InvalidReview $ExpectedReviewEntries) }
+      catch { $Rejected = $true }
+      if (-not $Rejected) { throw "Stock-Chrome six-crop review accepted $ReviewMutation." }
+    }
+    $CleanupDisclosureRoot = Join-Path $SelfTestRoot "cleanup-disclosure"
+    [IO.Directory]::CreateDirectory($CleanupDisclosureRoot) | Out-Null
+    $UnknownDisclosure = New-FailureCleanupDisclosure `
+      -PartialEvidenceDirectory $CleanupDisclosureRoot `
+      -RawDirectory $CleanupDisclosureRoot `
+      -ReviewDirectory $null `
+      -OperatorDirectory $null `
+      -CleanupIssueObserved $true
+    if ($UnknownDisclosure.partialEvidenceDirectoryDeleted -ne $false -or
+        $UnknownDisclosure.rawScreenshotScratchDeleted -ne $false -or
+        $UnknownDisclosure.sensitiveScratchDisposition -cne "unknown" -or
+        $UnknownDisclosure.wrongTargetMutationDisposition -cne "unknown" -or
+        $UnknownDisclosure.tokenOrCredentialValuesWrittenToAttemptJson -ne $false) {
+      throw "Stock-Chrome cleanup-failure disclosure self-test hid uncertain scratch or target state."
+    }
+    [IO.Directory]::Delete($CleanupDisclosureRoot, $false)
+    $DeletedDisclosure = New-FailureCleanupDisclosure `
+      -PartialEvidenceDirectory $null -RawDirectory $null -ReviewDirectory $null `
+      -OperatorDirectory $null -CleanupIssueObserved $false
+    if ($DeletedDisclosure.sensitiveScratchDisposition -cne "deleted") {
+      throw "Stock-Chrome cleanup disclosure did not recognize measured scratch deletion."
+    }
+    $SensitiveReviewEvidenceRoot = Join-Path $SelfTestRoot "sensitive-review-partial-evidence"
+    [IO.Directory]::CreateDirectory($SensitiveReviewEvidenceRoot) | Out-Null
+    [void]$OwnedDirectories.Add([IO.Path]::GetFullPath($SensitiveReviewEvidenceRoot))
+    foreach ($CaptureName in @(
+      "browser-01-extension-loaded", "browser-02-api-action-result",
+      "browser-03-computer-share-action", "browser-04-stop-paused",
+      "browser-05-cancel-paused", "browser-06-post-handback-resume"
+    )) {
+      [IO.File]::WriteAllBytes(
+        (Join-Path $SensitiveReviewEvidenceRoot ($CaptureName + ".png")), [byte[]](1)
+      )
+      [IO.File]::WriteAllText(
+        (Join-Path $SensitiveReviewEvidenceRoot ($CaptureName + ".json")), "{}`n",
+        [Text.UTF8Encoding]::new($false, $true)
+      )
+    }
+    Remove-TestOwnedTree $SensitiveReviewEvidenceRoot
+    $SensitiveReviewDisclosure = New-FailureCleanupDisclosure `
+      -PartialEvidenceDirectory $SensitiveReviewEvidenceRoot `
+      -RawDirectory $null -ReviewDirectory $null -OperatorDirectory $null `
+      -CleanupIssueObserved $false
+    if (-not $SensitiveReviewDisclosure.partialEvidenceDirectoryDeleted -or
+        $SensitiveReviewDisclosure.sensitiveScratchDisposition -cne "deleted" -or
+        [IO.Directory]::Exists($SensitiveReviewEvidenceRoot)) {
+      throw "Stock-Chrome sensitive-review failure cleanup retained a PNG or sidecar."
+    }
   }
   finally {
     try {
@@ -206,7 +612,8 @@ if ([String]::IsNullOrWhiteSpace($CleanCoordinatorNonce)) {
       $FinalSha, $TagObjectSha, $WorkflowRunId, $WorkflowRunAttempt,
       $ReleaseCandidateArtifactId, $ReleaseCandidateArtifactZipSha256,
       $ManifestSha, $Candidate, $CandidateBinding, $PrivateParent,
-      $TrustedGit, $TrustedGh
+      $TrustedGit, $TrustedGh, $ExternalSurfacePreflightAttestation,
+      $ExternalSurfacePostflightAttestation
     )) {
       if ([String]::IsNullOrWhiteSpace($RequiredInput)) {
         throw "Every exact-candidate coordinator parameter is required."
@@ -249,6 +656,13 @@ if ([String]::IsNullOrWhiteSpace($CleanCoordinatorNonce)) {
     $Info.EnvironmentVariables["LBB_COORDINATOR_PRIVATE_PARENT"] = $PrivateParent
     $Info.EnvironmentVariables["LBB_COORDINATOR_TRUSTED_GIT"] = $TrustedGit
     $Info.EnvironmentVariables["LBB_COORDINATOR_TRUSTED_GH"] = $TrustedGh
+    $Info.EnvironmentVariables["LBB_COORDINATOR_EXTERNAL_SURFACE_PREFLIGHT"] = `
+      $ExternalSurfacePreflightAttestation
+    $Info.EnvironmentVariables["LBB_COORDINATOR_EXTERNAL_SURFACE_POSTFLIGHT"] = `
+      $ExternalSurfacePostflightAttestation
+    if (-not [String]::IsNullOrWhiteSpace($GitHubTokenPipeName)) {
+      $Info.EnvironmentVariables["LBB_COORDINATOR_GH_TOKEN_PIPE"] = $GitHubTokenPipeName
+    }
   }
   $Child = [Diagnostics.Process]::new()
   $Child.StartInfo = $Info
@@ -285,6 +699,15 @@ $CandidateBinding = [Environment]::GetEnvironmentVariable("LBB_COORDINATOR_CANDI
 $PrivateParent = [Environment]::GetEnvironmentVariable("LBB_COORDINATOR_PRIVATE_PARENT", "Process")
 $TrustedGit = [Environment]::GetEnvironmentVariable("LBB_COORDINATOR_TRUSTED_GIT", "Process")
 $TrustedGh = [Environment]::GetEnvironmentVariable("LBB_COORDINATOR_TRUSTED_GH", "Process")
+$ExternalSurfacePreflightAttestation = [Environment]::GetEnvironmentVariable(
+  "LBB_COORDINATOR_EXTERNAL_SURFACE_PREFLIGHT", "Process"
+)
+$ExternalSurfacePostflightAttestation = [Environment]::GetEnvironmentVariable(
+  "LBB_COORDINATOR_EXTERNAL_SURFACE_POSTFLIGHT", "Process"
+)
+$GitHubTokenPipeName = [Environment]::GetEnvironmentVariable(
+  "LBB_COORDINATOR_GH_TOKEN_PIPE", "Process"
+)
 foreach ($HandoffName in @(
   "LBB_COORDINATOR_SELF_TEST",
   "LBB_COORDINATOR_FINAL_SHA", "LBB_COORDINATOR_TAG_OBJECT_SHA",
@@ -292,7 +715,9 @@ foreach ($HandoffName in @(
   "LBB_COORDINATOR_ARTIFACT_ID", "LBB_COORDINATOR_ARTIFACT_ZIP_SHA256",
   "LBB_COORDINATOR_MANIFEST_SHA256", "LBB_COORDINATOR_CANDIDATE",
   "LBB_COORDINATOR_CANDIDATE_BINDING", "LBB_COORDINATOR_PRIVATE_PARENT",
-  "LBB_COORDINATOR_TRUSTED_GIT", "LBB_COORDINATOR_TRUSTED_GH"
+  "LBB_COORDINATOR_TRUSTED_GIT", "LBB_COORDINATOR_TRUSTED_GH",
+  "LBB_COORDINATOR_GH_TOKEN_PIPE", "LBB_COORDINATOR_EXTERNAL_SURFACE_PREFLIGHT",
+  "LBB_COORDINATOR_EXTERNAL_SURFACE_POSTFLIGHT"
 )) {
   [Environment]::SetEnvironmentVariable($HandoffName, $null, "Process")
 }
@@ -306,7 +731,11 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$Version = "0.12.14"
+$Version = "0.12.15"
+$script:ReviewExchangeDirectory = $null
+$script:ReviewExchangeArtifacts = New-Object Collections.Generic.List[string]
+$script:ReviewResponseReservations = New-Object Collections.Generic.List[object]
+$script:ReviewExpectedTransientArtifacts = New-Object Collections.Generic.List[string]
 $CanonicalExtensionEntries = @(
   "background.js", "content.js", "dom-core.js", "frame-agent.js", "lib.js",
   "manifest.json", "popup.css", "popup.html", "popup.js", "stop-guard.js", "LICENSE"
@@ -319,7 +748,7 @@ $Origin = "https://github.com/flrngel/local-browser-bridge.git"
 $ExpectedInvocationUri = "https://github.com/flrngel/local-browser-bridge/actions/runs/$WorkflowRunId/attempts/$WorkflowRunAttempt"
 
 if (-not $SelfTestRequested) {
-  if ($Version -cne "0.12.14" -or $FinalSha -cnotmatch '^[0-9a-f]{40}$' -or
+  if ($Version -cne "0.12.15" -or $FinalSha -cnotmatch '^[0-9a-f]{40}$' -or
       $TagObjectSha -cnotmatch '^[0-9a-f]{40}$' -or
       $WorkflowRunId -cnotmatch '^[1-9][0-9]*$' -or
       $WorkflowRunAttempt -cnotmatch '^[1-9][0-9]*$' -or
@@ -333,6 +762,10 @@ if (-not $SelfTestRequested) {
         ([IO.FileInfo]::new($Tool).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
       throw "Trusted Git and gh must be absolute ordinary executables."
     }
+  }
+  if (-not [String]::IsNullOrWhiteSpace($GitHubTokenPipeName) -and
+      $GitHubTokenPipeName -cnotmatch '^lbb-gh-[0-9a-f]{32}$') {
+    throw "GitHubTokenPipeName must be a fresh canonical non-secret pipe name."
   }
   if (-not [IO.Directory]::Exists($Candidate) -or
       ([IO.DirectoryInfo]::new($Candidate).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
@@ -791,6 +1224,926 @@ function Set-OwnerPrivateDirectoryAcl([string]$Path) {
   Assert-OwnerPrivateDirectoryAcl $Path "Fresh acceptance directory"
 }
 
+function New-OpaqueSessionRef {
+  $Bytes = New-Object byte[] 32
+  $Rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+  try {
+    $Rng.GetBytes($Bytes)
+    $Hasher = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($Hasher.ComputeHash($Bytes))).Replace("-", "").ToLowerInvariant() }
+    finally { $Hasher.Dispose() }
+  }
+  finally {
+    [Array]::Clear($Bytes, 0, $Bytes.Length)
+    $Rng.Dispose()
+  }
+}
+
+function Get-BytesSha256([byte[]]$Bytes) {
+  $Hasher = [Security.Cryptography.SHA256]::Create()
+  $Digest = $null
+  try {
+    $Digest = $Hasher.ComputeHash($Bytes)
+    return ([BitConverter]::ToString($Digest)).Replace("-", "").ToLowerInvariant()
+  }
+  finally {
+    if ($null -ne $Digest) { [Array]::Clear($Digest, 0, $Digest.Length) }
+    $Hasher.Dispose()
+  }
+}
+
+function Get-CanonicalObjectSha256([object]$Value) {
+  $Bytes = [Text.UTF8Encoding]::new($false, $true).GetBytes(
+    ($Value | ConvertTo-Json -Depth 30 -Compress)
+  )
+  try { return Get-BytesSha256 $Bytes }
+  finally { [Array]::Clear($Bytes, 0, $Bytes.Length) }
+}
+
+function Format-CanonicalUtc([DateTimeOffset]$Value) {
+  return $Value.UtcDateTime.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Assert-FreshCanonicalResponseTimestamp(
+  [object]$Value,
+  [DateTimeOffset]$CreatedAt,
+  [DateTimeOffset]$ExpiresAt,
+  [string]$Label
+) {
+  $Parsed = [DateTimeOffset]::MinValue
+  if ($Value -isnot [string] -or
+      [string]$Value -cnotmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{7}Z$' -or
+      -not [DateTimeOffset]::TryParseExact(
+        [string]$Value, "o", [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::RoundtripKind, [ref]$Parsed
+      ) -or $Parsed -lt $CreatedAt -or $Parsed -gt $ExpiresAt) {
+    throw "$Label is stale, premature, noncanonical, or not Z-suffixed UTC."
+  }
+  return $Parsed
+}
+
+function Write-CreateOncePrivateJson(
+  [string]$Path,
+  [object]$Value,
+  [string]$Label,
+  [ref]$Sha256Out
+) {
+  if ([IO.File]::Exists($Path) -or [IO.Directory]::Exists($Path)) {
+    throw "$Label must be create-once."
+  }
+  $Temporary = "$Path.new"
+  if ([IO.File]::Exists($Temporary) -or [IO.Directory]::Exists($Temporary)) {
+    throw "$Label has a stale temporary file."
+  }
+  $Bytes = [Text.UTF8Encoding]::new($false, $true).GetBytes(
+    (($Value | ConvertTo-Json -Depth 30) + [Environment]::NewLine)
+  )
+  try {
+    $Stream = [IO.File]::Open(
+      $Temporary, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None
+    )
+    try { $Stream.Write($Bytes, 0, $Bytes.Length); $Stream.Flush($true) }
+    finally { $Stream.Dispose() }
+    [IO.File]::Move($Temporary, $Path)
+    if ($null -ne $Sha256Out) { $Sha256Out.Value = Get-BytesSha256 $Bytes }
+  }
+  finally {
+    [Array]::Clear($Bytes, 0, $Bytes.Length)
+    if ([IO.File]::Exists($Temporary)) { [IO.File]::Delete($Temporary) }
+  }
+}
+
+function Read-StablePrivateJson([string]$Path, [string]$Label) {
+  $Item = [IO.FileInfo]::new([IO.Path]::GetFullPath($Path))
+  if (-not $Item.Exists -or ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+      $Item.Length -le 0 -or $Item.Length -gt 4MB) {
+    throw "$Label is not an ordinary bounded file."
+  }
+  Assert-NoReparseAncestorChain $Item.FullName $Label
+  $Stream = [IO.File]::Open($Item.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
+  $Bytes = $null
+  try {
+    if ($Stream.Length -ne $Item.Length -or $Stream.Length -gt [int]::MaxValue) {
+      throw "$Label changed before its stable read."
+    }
+    $Bytes = New-Object byte[] ([int]$Stream.Length)
+    $Offset = 0
+    while ($Offset -lt $Bytes.Length) {
+      $Read = $Stream.Read($Bytes, $Offset, $Bytes.Length - $Offset)
+      if ($Read -le 0) { throw "$Label ended during its stable read." }
+      $Offset += $Read
+    }
+    try { $Value = [Text.UTF8Encoding]::new($false, $true).GetString($Bytes) | ConvertFrom-Json }
+    catch { throw "$Label is not strict UTF-8 JSON." }
+    $Hasher = [Security.Cryptography.SHA256]::Create()
+    try { $Digest = ([BitConverter]::ToString($Hasher.ComputeHash($Bytes))).Replace("-", "").ToLowerInvariant() }
+    finally { $Hasher.Dispose() }
+    return [pscustomobject]@{ Value = $Value; Sha256 = $Digest; Bytes = $Bytes.Length }
+  }
+  finally {
+    $Stream.Dispose()
+    if ($null -ne $Bytes) { [Array]::Clear($Bytes, 0, $Bytes.Length) }
+  }
+}
+
+function Assert-CanonicalCompactJsonResponse([object]$Stable, [string]$Label) {
+  $Bytes = [Text.UTF8Encoding]::new($false, $true).GetBytes(
+    (($Stable.Value | ConvertTo-Json -Depth 30 -Compress) + "`n")
+  )
+  try {
+    if ($Bytes.Length -ne [int64]$Stable.Bytes -or
+        (Get-BytesSha256 $Bytes) -cne [string]$Stable.Sha256) {
+      throw "$Label must be canonical compact UTF-8 JSON followed by one LF; duplicate, case-colliding, reordered, or trailing data is forbidden."
+    }
+  }
+  finally { [Array]::Clear($Bytes, 0, $Bytes.Length) }
+}
+
+function Test-UnableReviewerDecision([object]$Decision) {
+  if ($null -eq $Decision.PSObject.Properties["unable"]) { return $false }
+  if ((@($Decision.PSObject.Properties.Name) -join "`n") -cne "unable" -or
+      $Decision.unable -isnot [bool] -or $Decision.unable -ne $true) {
+    throw 'Unable reviewer decision must be exactly {"unable":true}.'
+  }
+  return $true
+}
+
+function Assert-ExternalSurfaceAttestationInput(
+  [object]$Record,
+  [object]$ReleaseBinding,
+  [string]$ExpectedPhase,
+  [DateTimeOffset]$Now
+) {
+  $ExpectedFields = @(
+    "schemaVersion", "evidenceType", "phase", "releaseCandidateBinding",
+    "releaseCandidateBindingSha256", "orchestrationSurface", "chromeMcpState",
+    "computerUseState", "reviewerInputState", "attestorKind",
+    "attestorSessionRef", "attestedAtUtc"
+  )
+  if ($ExpectedPhase -ceq "preflight") {
+    $ExpectedChromeMcp = "not-used-before-candidate-execution"
+    $ExpectedComputerUse = "released-before-candidate-execution"
+    $ExpectedReviewerInput = "review-not-started"
+  }
+  elseif ($ExpectedPhase -ceq "postflight") {
+    $ExpectedChromeMcp = "never-used-through-independent-review"
+    $ExpectedComputerUse = "not-resumed-through-independent-review"
+    $ExpectedReviewerInput = "exported-digest-bound-files-only"
+  }
+  else { throw "External-surface attestation phase is unsupported." }
+  if ((@($Record.PSObject.Properties.Name) -join "`n") -cne ($ExpectedFields -join "`n") -or
+      $Record.schemaVersion -ne 1 -or
+      $Record.evidenceType -cne "stock-user-chrome-external-surface-attestation" -or
+      $Record.phase -cne $ExpectedPhase -or
+      $Record.orchestrationSurface -cne `
+        "user-orchestrator-secured-ssh-exported-file-review" -or
+      $Record.chromeMcpState -cne $ExpectedChromeMcp -or
+      $Record.computerUseState -cne $ExpectedComputerUse -or
+      $Record.reviewerInputState -cne $ExpectedReviewerInput -or
+      $Record.attestorKind -cne "orchestrator-agent" -or
+      [string]$Record.releaseCandidateBindingSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+      [string]$Record.attestorSessionRef -cnotmatch '^[0-9a-f]{64}$' -or
+      $Record.releaseCandidateBindingSha256 -cne (Get-CanonicalObjectSha256 $ReleaseBinding) -or
+      ($Record.releaseCandidateBinding | ConvertTo-Json -Depth 30 -Compress) -cne
+        ($ReleaseBinding | ConvertTo-Json -Depth 30 -Compress)) {
+    throw "External-surface attestation is not exact, phase-scoped, candidate-bound, and role-bound."
+  }
+  $AttestedAt = [DateTimeOffset]::MinValue
+  if ([string]$Record.attestedAtUtc -cnotmatch `
+      '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{7}Z$' -or
+      -not [DateTimeOffset]::TryParseExact(
+        [string]$Record.attestedAtUtc, "o", [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::RoundtripKind, [ref]$AttestedAt
+      ) -or $AttestedAt -gt $Now -or $AttestedAt -lt $Now.AddMinutes(-30)) {
+    throw "External-surface attestation is not fresh and canonically timestamped."
+  }
+  return [pscustomobject]@{
+    Phase = $ExpectedPhase
+    AttestorSessionRef = [string]$Record.attestorSessionRef
+    AttestedAt = $AttestedAt
+  }
+}
+
+function Resolve-ExternalSurfaceAttestationPath(
+  [string]$Path,
+  [string]$ExpectedPhase,
+  [bool]$MustExist
+) {
+  $Full = [IO.Path]::GetFullPath($Path)
+  $PrivateRoot = [IO.Path]::GetFullPath($PrivateParent).TrimEnd('\')
+  if ([IO.Path]::GetFileName($Full) -cne "external-surface-$ExpectedPhase.json" -or
+      -not [String]::Equals(
+        [IO.Path]::GetDirectoryName($Full), $PrivateRoot,
+        [StringComparison]::OrdinalIgnoreCase
+      )) {
+    throw "External-surface $ExpectedPhase attestation must use its exact leaf directly under PrivateParent."
+  }
+  Assert-NoReparseAncestorChain $Full "external-surface $ExpectedPhase attestation"
+  Assert-OwnerPrivateDirectoryAcl $PrivateRoot "External-surface attestation parent"
+  if ($MustExist) {
+    $Item = [IO.FileInfo]::new($Full)
+    if (-not $Item.Exists -or ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+        $Item.Length -le 0 -or $Item.Length -gt 1MB) {
+      throw "External-surface $ExpectedPhase attestation is not one bounded ordinary file."
+    }
+  }
+  elseif ([IO.File]::Exists($Full) -or [IO.Directory]::Exists($Full) -or
+      [IO.File]::Exists("$Full.new") -or [IO.Directory]::Exists("$Full.new")) {
+    throw "External-surface $ExpectedPhase attestation publication paths must be new."
+  }
+  return $Full
+}
+
+function Wait-ExternalSurfacePostflight(
+  [string]$Path,
+  [object]$ReleaseBinding,
+  [string]$ExpectedAttestorSessionRef,
+  [DateTimeOffset]$NotBefore
+) {
+  $Deadline = [DateTimeOffset]::UtcNow.AddMinutes(15)
+  Write-Output "EXTERNAL_SURFACE_POSTFLIGHT_REQUIRED $Path"
+  while ([DateTimeOffset]::UtcNow -lt $Deadline) {
+    if ([IO.File]::Exists($Path)) {
+      $Stable = Read-StablePrivateJson $Path "external-surface postflight attestation"
+      Assert-CanonicalCompactJsonResponse $Stable "external-surface postflight attestation"
+      $Facts = Assert-ExternalSurfaceAttestationInput `
+        $Stable.Value $ReleaseBinding "postflight" ([DateTimeOffset]::UtcNow)
+      if ($Facts.AttestorSessionRef -cne $ExpectedAttestorSessionRef -or
+          $Facts.AttestedAt -lt $NotBefore) {
+        throw "External-surface postflight is reordered or from a different orchestrator session."
+      }
+      return [pscustomobject]@{ Stable = $Stable; Facts = $Facts }
+    }
+    Start-Sleep -Milliseconds 100
+  }
+  throw "Timed out waiting for the create-once external-surface postflight attestation."
+}
+
+function Get-DurableAcceptanceLedgerDirectory {
+  $LocalAppData = [Environment]::GetFolderPath(
+    [Environment+SpecialFolder]::LocalApplicationData
+  )
+  if ([String]::IsNullOrWhiteSpace($LocalAppData) -or
+      -not [IO.Path]::IsPathRooted($LocalAppData) -or
+      -not [IO.Directory]::Exists($LocalAppData)) {
+    throw "The fixed per-user LocalAppData root is unavailable for the acceptance ledger."
+  }
+  Assert-NoReparseAncestorChain $LocalAppData "acceptance-ledger parent"
+  $Ledger = [IO.Path]::Combine(
+    [IO.Path]::GetFullPath($LocalAppData), "LBB-Stock-Chrome-Acceptance-Ledger-v1"
+  )
+  if ([IO.File]::Exists($Ledger)) {
+    throw "The fixed acceptance-ledger path is a file."
+  }
+  if (-not [IO.Directory]::Exists($Ledger)) {
+    [IO.Directory]::CreateDirectory($Ledger) | Out-Null
+    Set-OwnerPrivateDirectoryAcl $Ledger
+  }
+  Assert-NoReparseAncestorChain $Ledger "acceptance ledger"
+  Assert-OwnerPrivateDirectoryAcl $Ledger "Acceptance ledger"
+  foreach ($Entry in @([IO.DirectoryInfo]::new($Ledger).GetFileSystemInfos())) {
+    if ($Entry -isnot [IO.FileInfo] -or
+        ($Entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+        $Entry.Name -notmatch '^candidate-[0-9a-f]{64}\.(?:claim|outcome)\.json$') {
+      throw "The durable acceptance ledger contains an unexpected or linked entry."
+    }
+  }
+  return $Ledger
+}
+
+function New-DurableCandidateExecutionClaim(
+  [string]$LedgerDirectory,
+  [object]$ReleaseBinding
+) {
+  Assert-OwnerPrivateDirectoryAcl $LedgerDirectory "Acceptance ledger"
+  $CandidateKey = Get-CanonicalObjectSha256 $ReleaseBinding
+  $ClaimPath = Join-Path $LedgerDirectory "candidate-$CandidateKey.claim.json"
+  $OutcomePath = Join-Path $LedgerDirectory "candidate-$CandidateKey.outcome.json"
+  if ([IO.File]::Exists($ClaimPath) -or [IO.Directory]::Exists($ClaimPath) -or
+      [IO.File]::Exists($OutcomePath) -or [IO.Directory]::Exists($OutcomePath)) {
+    throw "This exact frozen release candidate already has a durable acceptance-attempt claim."
+  }
+  Write-CreateOncePrivateJson $ClaimPath ([ordered]@{
+    schemaVersion = 1
+    evidenceType = "stock-user-chrome-candidate-execution-claim"
+    version = $Version
+    candidateBindingSha256 = $CandidateKey
+    sourceSha = [string]$ReleaseBinding.sourceSha
+    tagObjectSha = [string]$ReleaseBinding.tagObjectSha
+    workflowRunId = [string]$ReleaseBinding.workflowRunId
+    workflowRunAttempt = [string]$ReleaseBinding.workflowRunAttempt
+    artifactId = [string]$ReleaseBinding.artifactId
+    artifactZipSha256 = [string]$ReleaseBinding.artifactZipSha256
+    claimedAtUtc = Format-CanonicalUtc ([DateTimeOffset]::UtcNow)
+    coordinatorSha256 = Get-TrustedSha256 $PSCommandPath
+  }) "durable candidate execution claim"
+  return [pscustomobject]@{
+    CandidateBindingSha256 = $CandidateKey
+    ClaimPath = $ClaimPath
+    OutcomePath = $OutcomePath
+  }
+}
+
+function Write-DurableCandidateExecutionOutcome(
+  [object]$Claim,
+  [bool]$CandidateExecutionPassed,
+  [bool]$CleanupIssuesObserved,
+  [string]$FinalStage
+) {
+  Write-CreateOncePrivateJson $Claim.OutcomePath ([ordered]@{
+    schemaVersion = 1
+    evidenceType = "stock-user-chrome-candidate-execution-outcome"
+    version = $Version
+    candidateBindingSha256 = [string]$Claim.CandidateBindingSha256
+    candidateExecutionPassed = $CandidateExecutionPassed
+    cleanupIssuesObservedBeforeOutcome = $CleanupIssuesObserved
+    finalStage = $FinalStage
+    finishedAtUtc = Format-CanonicalUtc ([DateTimeOffset]::UtcNow)
+  }) "durable candidate execution outcome"
+}
+
+function Copy-StablePrivateFileCreateOnce([string]$Source, [string]$Destination, [string]$Label) {
+  if ([IO.File]::Exists($Destination) -or [IO.Directory]::Exists($Destination)) {
+    throw "$Label destination is not new."
+  }
+  $SourceItem = [IO.FileInfo]::new([IO.Path]::GetFullPath($Source))
+  if (-not $SourceItem.Exists -or ($SourceItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+      $SourceItem.Length -le 0 -or $SourceItem.Length -gt 20MB) {
+    throw "$Label source is not an ordinary bounded file."
+  }
+  Assert-NoReparseAncestorChain $SourceItem.FullName "$Label source"
+  $Input = [IO.File]::Open($SourceItem.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
+  $Output = $null
+  $Hasher = [Security.Cryptography.SHA256]::Create()
+  $Buffer = New-Object byte[] 65536
+  try {
+    $Output = [IO.File]::Open($Destination, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    $Total = 0L
+    while (($Read = $Input.Read($Buffer, 0, $Buffer.Length)) -gt 0) {
+      $Total += $Read
+      if ($Total -gt 20MB) { throw "$Label exceeded its copy limit." }
+      $Output.Write($Buffer, 0, $Read)
+      [void]$Hasher.TransformBlock($Buffer, 0, $Read, $Buffer, 0)
+    }
+    [void]$Hasher.TransformFinalBlock((New-Object byte[] 0), 0, 0)
+    if ($Total -ne $SourceItem.Length) { throw "$Label changed during its stable copy." }
+    $Output.Flush($true)
+    return [pscustomobject]@{
+      name = [IO.Path]::GetFileName($Destination)
+      bytes = $Total
+      sha256 = ([BitConverter]::ToString($Hasher.Hash)).Replace("-", "").ToLowerInvariant()
+    }
+  }
+  catch {
+    if ($null -ne $Output) { $Output.Dispose(); $Output = $null }
+    if ([IO.File]::Exists($Destination)) { [IO.File]::Delete($Destination) }
+    throw
+  }
+  finally {
+    if ($null -ne $Output) { $Output.Dispose() }
+    $Input.Dispose(); $Hasher.Dispose(); [Array]::Clear($Buffer, 0, $Buffer.Length)
+  }
+}
+
+function Read-StablePrivatePng([string]$Path, [string]$Label) {
+  $Item = [IO.FileInfo]::new([IO.Path]::GetFullPath($Path))
+  if (-not $Item.Exists -or ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+      $Item.Length -lt 24 -or $Item.Length -gt 20MB) {
+    throw "$Label is not an ordinary bounded PNG file."
+  }
+  Assert-NoReparseAncestorChain $Item.FullName $Label
+  $Stream = [IO.File]::Open(
+    $Item.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None
+  )
+  $Bytes = $null
+  try {
+    if ($Stream.Length -ne $Item.Length -or $Stream.Length -gt [int]::MaxValue) {
+      throw "$Label changed before its stable read."
+    }
+    $Bytes = New-Object byte[] ([int]$Stream.Length)
+    $Offset = 0
+    while ($Offset -lt $Bytes.Length) {
+      $Read = $Stream.Read($Bytes, $Offset, $Bytes.Length - $Offset)
+      if ($Read -le 0) { throw "$Label ended during its stable read." }
+      $Offset += $Read
+    }
+    if ($Stream.Position -ne $Stream.Length -or
+        ([BitConverter]::ToString($Bytes, 0, 8)) -cne "89-50-4E-47-0D-0A-1A-0A" -or
+        [Text.Encoding]::ASCII.GetString($Bytes, 12, 4) -cne "IHDR") {
+      throw "$Label is not a canonical PNG."
+    }
+    $Width = ([uint32]$Bytes[16] -shl 24) -bor ([uint32]$Bytes[17] -shl 16) -bor
+      ([uint32]$Bytes[18] -shl 8) -bor [uint32]$Bytes[19]
+    $Height = ([uint32]$Bytes[20] -shl 24) -bor ([uint32]$Bytes[21] -shl 16) -bor
+      ([uint32]$Bytes[22] -shl 8) -bor [uint32]$Bytes[23]
+    if ($Width -lt 120 -or $Height -lt 32 -or $Width -gt 8192 -or $Height -gt 8192 -or
+        ([uint64]$Width * [uint64]$Height) -gt 50MB) {
+      throw "Reviewer exchange image dimensions are invalid."
+    }
+    return [pscustomobject]@{
+      name = $Item.Name
+      bytes = $Bytes.Length
+      sha256 = Get-BytesSha256 $Bytes
+      width = [int64]$Width
+      height = [int64]$Height
+    }
+  }
+  finally {
+    $Stream.Dispose()
+    if ($null -ne $Bytes) { [Array]::Clear($Bytes, 0, $Bytes.Length) }
+  }
+}
+
+function Assert-UnchangedPrivatePng(
+  [string]$Path,
+  [object]$Expected,
+  [string]$Label,
+  [switch]$RequireBytes
+) {
+  $Observed = Read-StablePrivatePng $Path $Label
+  if ($Observed.sha256 -cne [string]$Expected.sha256 -or
+      $Observed.width -ne [int64]$Expected.width -or
+      $Observed.height -ne [int64]$Expected.height -or
+      ($RequireBytes -and $Observed.bytes -ne [int64]$Expected.bytes)) {
+    throw "$Label changed before its digest-bound response was accepted."
+  }
+  return $Observed
+}
+
+function Register-ReviewExchangeArtifact([string]$Path) {
+  $Full = [IO.Path]::GetFullPath($Path)
+  $Prefix = [IO.Path]::GetFullPath($script:ReviewExchangeDirectory).TrimEnd('\') + '\'
+  if (-not $Full.StartsWith($Prefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Reviewer exchange artifact registration escaped the exact private directory."
+  }
+  $Name = [IO.Path]::GetFileName($Full)
+  if ($script:ReviewExchangeArtifacts.Contains($Name)) {
+    throw "Reviewer exchange artifact registration was duplicated."
+  }
+  $script:ReviewExchangeArtifacts.Add($Name)
+}
+
+function Register-ExpectedReviewTransientArtifact([string]$Path) {
+  $Full = [IO.Path]::GetFullPath($Path)
+  $Prefix = [IO.Path]::GetFullPath($script:ReviewExchangeDirectory).TrimEnd('\') + '\'
+  $Name = [IO.Path]::GetFileName($Full)
+  if (-not $Full.StartsWith($Prefix, [StringComparison]::OrdinalIgnoreCase) -or
+      $Name -notmatch '^response-[0-9a-f]{32}(?:\.claimed)?\.json(?:\.new)?$' -or
+      $script:ReviewExchangeArtifacts.Contains($Name) -or
+      $script:ReviewExpectedTransientArtifacts.Contains($Name)) {
+    throw "Expected reviewer transient registration is invalid or duplicated."
+  }
+  $script:ReviewExpectedTransientArtifacts.Add($Name)
+}
+
+function Complete-ExpectedReviewTransientArtifacts([string[]]$Paths) {
+  foreach ($Path in $Paths) {
+    if (-not $script:ReviewExpectedTransientArtifacts.Remove(
+      [IO.Path]::GetFileName([IO.Path]::GetFullPath($Path))
+    )) {
+      throw "An expected reviewer transient artifact was not registered."
+    }
+  }
+}
+
+function Remove-RegisteredReviewExchangeArtifact([string]$Path) {
+  $Full = [IO.Path]::GetFullPath($Path)
+  $Prefix = [IO.Path]::GetFullPath($script:ReviewExchangeDirectory).TrimEnd('\') + '\'
+  if (-not $Full.StartsWith($Prefix, [StringComparison]::OrdinalIgnoreCase) -or
+      -not [IO.File]::Exists($Full) -or
+      ([IO.FileInfo]::new($Full).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    throw "Reviewer exchange cleanup refused an unowned, missing, or linked artifact."
+  }
+  [IO.File]::Delete($Full)
+  if (-not $script:ReviewExchangeArtifacts.Remove([IO.Path]::GetFileName($Full))) {
+    throw "Reviewer exchange cleanup encountered an unregistered artifact."
+  }
+}
+
+function Remove-ExactReviewExchangeDirectory {
+  if ([String]::IsNullOrWhiteSpace([string]$script:ReviewExchangeDirectory) -or
+      -not [IO.Directory]::Exists($script:ReviewExchangeDirectory)) { return }
+  $Directory = [IO.DirectoryInfo]::new($script:ReviewExchangeDirectory)
+  if ($Directory.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+    throw "Reviewer exchange cleanup refused a reparse-point directory."
+  }
+  $Entries = @($Directory.GetFileSystemInfos())
+  $ActualNames = @($Entries | ForEach-Object { $_.Name } | Sort-Object)
+  $RegisteredNames = @($script:ReviewExchangeArtifacts | Sort-Object)
+  $TransientNames = @($script:ReviewExpectedTransientArtifacts | Sort-Object)
+  $AllowedNames = @($RegisteredNames + $TransientNames | Sort-Object -Unique)
+  $InventoryMatches = @($ActualNames | Where-Object { $AllowedNames -cnotcontains $_ }).Count -eq 0 -and
+    @($RegisteredNames | Where-Object { $ActualNames -cnotcontains $_ }).Count -eq 0
+  $ReservationsValid = $true
+  try {
+    foreach ($Held in $script:ReviewResponseReservations) {
+      $Entry = $Entries | Where-Object { $_.Name -ceq $Held.Name } | Select-Object -First 1
+      if ($Entry -isnot [IO.FileInfo] -or
+          ($Entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+          $Entry.Length -ne 0 -or $Held.Stream.Length -ne 0) {
+        $ReservationsValid = $false
+      }
+    }
+  }
+  finally {
+    foreach ($Held in $script:ReviewResponseReservations) {
+      try { $Held.Stream.Dispose() } catch { $ReservationsValid = $false }
+    }
+    $script:ReviewResponseReservations.Clear()
+  }
+  if (-not $InventoryMatches -or -not $ReservationsValid) {
+    throw "Reviewer exchange cleanup found an unregistered, missing, extra, or replaced reservation artifact."
+  }
+  foreach ($Entry in $Entries) {
+    if ($Entry -isnot [IO.FileInfo] -or
+        ($Entry.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+      throw "Reviewer exchange cleanup found a non-file or linked artifact."
+    }
+    $Deadline = [DateTimeOffset]::UtcNow.AddSeconds(2)
+    do {
+      try { [IO.File]::Delete($Entry.FullName); break }
+      catch [IO.IOException] {
+        if ([DateTimeOffset]::UtcNow -ge $Deadline) { throw }
+        Start-Sleep -Milliseconds 50
+      }
+    } while ($true)
+  }
+  if (@($Directory.GetFileSystemInfos()).Count -ne 0) {
+    throw "Reviewer exchange cleanup did not reach an exact empty directory."
+  }
+  [IO.Directory]::Delete($Directory.FullName, $false)
+  $script:ReviewExchangeArtifacts.Clear()
+  $script:ReviewExpectedTransientArtifacts.Clear()
+}
+
+function Remove-KnownReviewExchangeArtifactsAfterFailure {
+  if ([String]::IsNullOrWhiteSpace([string]$script:ReviewExchangeDirectory) -or
+      -not [IO.Directory]::Exists($script:ReviewExchangeDirectory)) { return }
+  $Directory = [IO.DirectoryInfo]::new($script:ReviewExchangeDirectory)
+  if ($Directory.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+    throw "Failure cleanup refused a reparse-point reviewer exchange directory."
+  }
+  $Errors = New-Object Collections.Generic.List[string]
+  foreach ($Held in $script:ReviewResponseReservations) {
+    try { $Held.Stream.Dispose() }
+    catch { $Errors.Add("reservation-close") }
+  }
+  $script:ReviewResponseReservations.Clear()
+  $KnownNames = @(
+    @($script:ReviewExchangeArtifacts) + @($script:ReviewExpectedTransientArtifacts) |
+      Sort-Object -Unique
+  )
+  $Prefix = [IO.Path]::GetFullPath($Directory.FullName).TrimEnd('\') + '\'
+  foreach ($Name in $KnownNames) {
+    if ($Name -notmatch '^(?:request-[0-9a-f]{32}\.json|response-[0-9a-f]{32}(?:\.claimed)?\.json(?:\.new)?|browser-0[1-6]-[a-z0-9-]+(?:\.raw)?\.png)$' -or
+        [IO.Path]::GetFileName([string]$Name) -cne [string]$Name) {
+      $Errors.Add("noncanonical-registered-name")
+      continue
+    }
+    $Path = [IO.Path]::GetFullPath((Join-Path $Directory.FullName $Name))
+    if (-not $Path.StartsWith($Prefix, [StringComparison]::OrdinalIgnoreCase)) {
+      $Errors.Add("registered-name-escaped")
+      continue
+    }
+    if ([IO.Directory]::Exists($Path)) {
+      $Errors.Add("registered-name-became-directory")
+      continue
+    }
+    if (-not [IO.File]::Exists($Path)) { continue }
+    $Item = [IO.FileInfo]::new($Path)
+    if ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+      $Errors.Add("registered-name-became-link")
+      continue
+    }
+    $Deadline = [DateTimeOffset]::UtcNow.AddSeconds(2)
+    do {
+      try { [IO.File]::Delete($Path); break }
+      catch [IO.IOException] {
+        if ([DateTimeOffset]::UtcNow -ge $Deadline) {
+          $Errors.Add("registered-file-delete")
+          break
+        }
+        Start-Sleep -Milliseconds 50
+      }
+    } while ($true)
+  }
+  $Remaining = @($Directory.GetFileSystemInfos())
+  if ($Remaining.Count -eq 0 -and $Errors.Count -eq 0) {
+    [IO.Directory]::Delete($Directory.FullName, $false)
+    $script:ReviewExchangeArtifacts.Clear()
+    $script:ReviewExpectedTransientArtifacts.Clear()
+    return
+  }
+  throw "Failure cleanup deleted every reachable known ordinary reviewer artifact but retained an unknown or unsafe remainder."
+}
+
+function Claim-PublishedReviewerResponse(
+  [string]$ResponsePath,
+  [string]$ClaimedPath,
+  [DateTimeOffset]$ExpiresAt
+) {
+  $TemporaryPath = "$ResponsePath.new"
+  if ([IO.File]::Exists($ClaimedPath) -or [IO.Directory]::Exists($ClaimedPath)) {
+    throw "Independent reviewer response claim path was not new."
+  }
+  while ([DateTimeOffset]::UtcNow -le $ExpiresAt) {
+    if ([IO.Directory]::Exists($TemporaryPath) -or
+        [IO.Directory]::Exists($ResponsePath) -or
+        [IO.Directory]::Exists($ClaimedPath)) {
+      throw "An independent reviewer response publication path became a directory."
+    }
+    if ([IO.File]::Exists($TemporaryPath)) {
+      if ([IO.FileInfo]::new($TemporaryPath).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw "Independent reviewer response temporary file is a reparse point."
+      }
+    }
+    elseif ([IO.File]::Exists($ResponsePath)) {
+      if ([IO.FileInfo]::new($ResponsePath).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw "Independent reviewer response is a reparse point."
+      }
+      try {
+        [IO.File]::Move($ResponsePath, $ClaimedPath)
+        foreach ($ReservationPath in @($ResponsePath, $TemporaryPath)) {
+          $Reservation = [IO.File]::Open(
+            $ReservationPath, [IO.FileMode]::CreateNew,
+            [IO.FileAccess]::ReadWrite, [IO.FileShare]::None
+          )
+          $Reservation.Flush($true)
+          Register-ReviewExchangeArtifact $ReservationPath
+          $script:ReviewResponseReservations.Add([pscustomobject]@{
+            Name = [IO.Path]::GetFileName($ReservationPath)
+            Stream = $Reservation
+          })
+        }
+        Register-ReviewExchangeArtifact $ClaimedPath
+        if ([DateTimeOffset]::UtcNow -gt $ExpiresAt) {
+          throw "The independent reviewer response was claimed after request expiry."
+        }
+        return
+      }
+      catch [IO.IOException] {
+        if ([IO.File]::Exists($ClaimedPath)) { throw }
+      }
+    }
+    Start-Sleep -Milliseconds 100
+  }
+  throw "Timed out waiting for the atomically published create-once independent reviewer response."
+}
+
+function Get-InstalledStockChromeVersion {
+  $Probes = @(
+    [pscustomobject]@{ Hive = [Microsoft.Win32.RegistryHive]::CurrentUser; View = $RegistryView },
+    [pscustomobject]@{ Hive = [Microsoft.Win32.RegistryHive]::LocalMachine; View = $RegistryView },
+    [pscustomobject]@{ Hive = [Microsoft.Win32.RegistryHive]::LocalMachine; View = [Microsoft.Win32.RegistryView]::Registry32 }
+  )
+  foreach ($Probe in $Probes) {
+    $Base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($Probe.Hive, $Probe.View)
+    $Key = $null
+    try {
+      $Key = $Base.OpenSubKey("SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe", $false)
+      if ($null -eq $Key) { continue }
+      $RawPath = [string]$Key.GetValue(
+        "", $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+      )
+      if ([String]::IsNullOrWhiteSpace($RawPath)) { continue }
+      $ChromePath = [IO.Path]::GetFullPath($RawPath.Trim().Trim('"'))
+      if (-not [IO.File]::Exists($ChromePath) -or
+          ([IO.FileInfo]::new($ChromePath).Attributes -band [IO.FileAttributes]::ReparsePoint)) { continue }
+      Assert-NoReparseAncestorChain $ChromePath "registered stock Chrome executable"
+      $VersionInfo = [Diagnostics.FileVersionInfo]::GetVersionInfo($ChromePath)
+      $ObservedVersion = ([string]$VersionInfo.ProductVersion).Split(' ')[0]
+      if ($VersionInfo.ProductName -cne "Google Chrome" -or
+          $ObservedVersion -cnotmatch '^(1(?:4[0-9]|[5-9][0-9])|[2-9][0-9]{2})\.[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}$') {
+        continue
+      }
+      return $ObservedVersion
+    }
+    finally {
+      if ($null -ne $Key) { $Key.Dispose() }
+      $Base.Dispose()
+    }
+  }
+  throw "A registered ordinary Google Chrome executable with a canonical supported version was not found."
+}
+
+function Assert-IndependentReviewerResponseEnvelope(
+  [object]$Response,
+  [string]$RequestId,
+  [string]$RequestSha256,
+  [string]$CandidateBindingSha256,
+  [string]$InputDigestSha256,
+  [string]$ExecutorSessionRef,
+  [string]$ReviewerSessionRef
+) {
+  $ExpectedFields = @(
+    "schemaVersion", "evidenceType", "requestId", "requestSha256", "candidateBindingSha256",
+    "inputDigestSha256", "responderKind", "responderSessionRef", "respondedAtUtc", "decision"
+  )
+  if ((@($Response.PSObject.Properties.Name) -join "`n") -cne ($ExpectedFields -join "`n") -or
+      $Response.schemaVersion -ne 1 -or
+      $Response.evidenceType -cne "stock-user-chrome-reviewer-response" -or
+      $Response.requestId -cne $RequestId -or $Response.requestSha256 -cne $RequestSha256 -or
+      $Response.candidateBindingSha256 -cne $CandidateBindingSha256 -or
+      $Response.inputDigestSha256 -cne $InputDigestSha256 -or
+      $Response.responderKind -cne "independent-agent" -or
+      [string]$Response.responderSessionRef -cne $ReviewerSessionRef -or
+      $Response.responderSessionRef -ceq $ExecutorSessionRef) {
+    throw "Independent reviewer response is not bound to the exact request, input, candidate, and separate session."
+  }
+}
+
+function Invoke-IndependentReviewerExchange(
+  [string]$Kind,
+  [string]$ActionName,
+  [object]$Context,
+  [object]$AllowedResponse,
+  [string]$Instruction
+) {
+  if ($Kind -notin @("screenshot-crop", "six-crop-review")) {
+    throw "Reviewer exchange kind is invalid."
+  }
+  Assert-OwnerPrivateDirectoryAcl $script:ReviewExchangeDirectory "Reviewer exchange"
+  $RequestId = [Guid]::NewGuid().ToString("N")
+  $CreatedAt = [DateTimeOffset]::UtcNow
+  $ExpiresAt = $CreatedAt.AddMinutes(15)
+  $InputDigestSha256 = if ($Kind -ceq "screenshot-crop") {
+    [string]$Context.source.sha256
+  }
+  else {
+    Get-CanonicalObjectSha256 $Context
+  }
+  if ($InputDigestSha256 -cnotmatch '^[0-9a-f]{64}$') {
+    throw "Reviewer request input digest is invalid."
+  }
+  $Request = [ordered]@{
+    schemaVersion = 1
+    evidenceType = "stock-user-chrome-reviewer-request"
+    productVersion = $Version
+    releaseCandidateBinding = $script:ReviewReleaseCandidateBinding
+    candidateBinding = $script:ReviewCandidateBinding
+    candidateBindingSha256 = $script:ReviewCandidateBindingSha256
+    requestId = $RequestId
+    sequence = $script:ReviewRequestCount + 1
+    kind = $Kind
+    actionName = $ActionName
+    createdAtUtc = Format-CanonicalUtc $CreatedAt
+    expiresAtUtc = Format-CanonicalUtc $ExpiresAt
+    executorSessionRef = $script:ReviewExecutorSessionRef
+    reviewerSessionRef = $script:ReviewReviewerSessionRef
+    inputDigestSha256 = $InputDigestSha256
+    context = $Context
+    allowedResponse = $AllowedResponse
+    instruction = $Instruction
+  }
+  $RequestPath = Join-Path $script:ReviewExchangeDirectory "request-$RequestId.json"
+  $ResponsePath = Join-Path $script:ReviewExchangeDirectory "response-$RequestId.json"
+  $TemporaryResponsePath = "$ResponsePath.new"
+  $ClaimedPath = Join-Path $script:ReviewExchangeDirectory "response-$RequestId.claimed.json"
+  foreach ($NewResponseArtifact in @($ResponsePath, $TemporaryResponsePath, $ClaimedPath)) {
+    if ([IO.File]::Exists($NewResponseArtifact) -or [IO.Directory]::Exists($NewResponseArtifact)) {
+      throw "Independent reviewer response publication paths were not all new."
+    }
+    Register-ExpectedReviewTransientArtifact $NewResponseArtifact
+  }
+  $RequestSha = $null
+  Write-CreateOncePrivateJson $RequestPath $Request "reviewer request" ([ref]$RequestSha)
+  Register-ReviewExchangeArtifact $RequestPath
+  $script:ReviewRequestCount += 1
+  Write-Host "REVIEWER_REQUEST $RequestPath"
+  Claim-PublishedReviewerResponse $ResponsePath $ClaimedPath $ExpiresAt
+  Complete-ExpectedReviewTransientArtifacts @(
+    $ResponsePath, $TemporaryResponsePath, $ClaimedPath
+  )
+  $Stable = Read-StablePrivateJson $ClaimedPath "independent reviewer response"
+  Assert-CanonicalCompactJsonResponse $Stable "independent reviewer response"
+  $Response = $Stable.Value
+  Assert-IndependentReviewerResponseEnvelope $Response $RequestId $RequestSha `
+    $script:ReviewCandidateBindingSha256 $InputDigestSha256 `
+    $script:ReviewExecutorSessionRef $script:ReviewReviewerSessionRef
+  [void](Assert-FreshCanonicalResponseTimestamp $Response.respondedAtUtc `
+    $CreatedAt $ExpiresAt "Independent reviewer response timestamp")
+  $UnableDecision = Test-UnableReviewerDecision $Response.decision
+  if ($UnableDecision) {
+    # Re-hash the exact request and every selected image below before rejecting.
+  }
+  elseif ($Kind -ceq "screenshot-crop") {
+    Assert-ReviewerCropDecision $Response.decision $Context.source
+  }
+  else {
+    [void](Assert-ReviewerSixCropDecision $Response.decision @($Context.entries))
+  }
+  $StableRequest = Read-StablePrivateJson $RequestPath "reviewer request after response"
+  if ($StableRequest.Sha256 -cne $RequestSha) {
+    throw "The exact reviewer request changed before its response was accepted."
+  }
+  if ($Kind -ceq "screenshot-crop") {
+    $InputPath = Join-Path $script:ReviewExchangeDirectory ([string]$Context.source.name)
+    [void](Assert-UnchangedPrivatePng `
+      $InputPath $Context.source "reviewer crop input after response" -RequireBytes)
+  }
+  else {
+    if ((Get-CanonicalObjectSha256 $Context) -cne $InputDigestSha256) {
+      throw "The ordered reviewer input manifest changed before its response was accepted."
+    }
+    foreach ($ExpectedEntry in @($Context.entries)) {
+      $InputPath = Join-Path $script:ReviewExchangeDirectory ([string]$ExpectedEntry.image)
+      [void](Assert-UnchangedPrivatePng `
+        $InputPath $ExpectedEntry "six-crop reviewer input after response")
+    }
+  }
+  if ($UnableDecision) {
+    throw "The independent reviewer reported that the exact digest-bound input could not be interpreted safely."
+  }
+  Remove-RegisteredReviewExchangeArtifact $RequestPath
+  Remove-RegisteredReviewExchangeArtifact $ClaimedPath
+  return [pscustomobject]@{
+    Decision = $Response.decision
+    RequestSha256 = $RequestSha
+    ResponseSha256 = $Stable.Sha256
+    RespondedAtUtc = [string]$Response.respondedAtUtc
+  }
+}
+
+function Test-ExactReviewerInteger([object]$Value) {
+  return $Value -is [int] -or $Value -is [long]
+}
+
+function Assert-ReviewerCropDecision([object]$Decision, [object]$RawFacts) {
+  $Fields = @(
+    "cropX", "cropY", "cropWidth", "cropHeight",
+    "requiredStateVisible", "sensitivePixelsInsideCrop", "uncertain"
+  )
+  if ((@($Decision.PSObject.Properties.Name) -join "`n") -cne ($Fields -join "`n") -or
+      -not (Test-ExactReviewerInteger $Decision.cropX) -or
+      -not (Test-ExactReviewerInteger $Decision.cropY) -or
+      -not (Test-ExactReviewerInteger $Decision.cropWidth) -or
+      -not (Test-ExactReviewerInteger $Decision.cropHeight) -or
+      [int64]$Decision.cropX -lt 0 -or [int64]$Decision.cropY -lt 0 -or
+      [int64]$Decision.cropWidth -lt 120 -or [int64]$Decision.cropHeight -lt 32 -or
+      ([int64]$Decision.cropX + [int64]$Decision.cropWidth) -gt [int64]$RawFacts.width -or
+      ([int64]$Decision.cropY + [int64]$Decision.cropHeight) -gt [int64]$RawFacts.height -or
+      $Decision.requiredStateVisible -isnot [bool] -or
+      $Decision.sensitivePixelsInsideCrop -isnot [bool] -or
+      $Decision.uncertain -isnot [bool] -or
+      $Decision.requiredStateVisible -ne $true -or
+      $Decision.sensitivePixelsInsideCrop -ne $false -or $Decision.uncertain -ne $false) {
+    throw "Independent reviewer returned an invalid, sensitive, uncertain, or out-of-bounds crop."
+  }
+}
+
+function Assert-ReviewerSixCropDecision([object]$Decision, [object[]]$ExpectedEntries) {
+  if ((@($Decision.PSObject.Properties.Name) -join "`n") -cne "entries`naggregate" -or
+      @($Decision.entries).Count -ne 6 -or $ExpectedEntries.Count -ne 6) {
+    throw "Independent six-crop review response shape is invalid."
+  }
+  $Bound = @()
+  for ($Index = 0; $Index -lt 6; $Index += 1) {
+    $Expected = $ExpectedEntries[$Index]
+    $Actual = $Decision.entries[$Index]
+    $EntryFields = @(
+      "sequence", "purpose", "image", "sha256", "width", "height",
+      "requiredVisibleStateSha256", "digestMatched", "requiredStateVerdict",
+      "sensitivePixelsObserved", "uncertain"
+    )
+    if ((@($Actual.PSObject.Properties.Name) -join "`n") -cne ($EntryFields -join "`n") -or
+        -not (Test-ExactReviewerInteger $Actual.sequence) -or
+        -not (Test-ExactReviewerInteger $Actual.width) -or
+        -not (Test-ExactReviewerInteger $Actual.height) -or
+        [int64]$Actual.sequence -ne ($Index + 1) -or $Actual.purpose -cne $Expected.purpose -or
+        $Actual.image -cne $Expected.image -or $Actual.sha256 -cne $Expected.sha256 -or
+        [int64]$Actual.width -ne [int64]$Expected.width -or
+        [int64]$Actual.height -ne [int64]$Expected.height -or
+        $Actual.requiredVisibleStateSha256 -cne $Expected.requiredVisibleStateSha256 -or
+        $Actual.digestMatched -isnot [bool] -or
+        $Actual.sensitivePixelsObserved -isnot [bool] -or $Actual.uncertain -isnot [bool] -or
+        $Actual.digestMatched -ne $true -or $Actual.requiredStateVerdict -cne "pass" -or
+        $Actual.sensitivePixelsObserved -ne $false -or $Actual.uncertain -ne $false) {
+      throw "Independent review contains a mismatched, reordered, failed, sensitive, or uncertain entry."
+    }
+    $Bound += [ordered]@{
+      sequence = [int]$Actual.sequence; purpose = [string]$Actual.purpose; image = [string]$Actual.image
+      sha256 = [string]$Actual.sha256; width = [int64]$Actual.width; height = [int64]$Actual.height
+      requiredVisibleStateSha256 = [string]$Actual.requiredVisibleStateSha256
+      digestMatched = $true; requiredStateVerdict = "pass"
+      sensitivePixelsObserved = $false; uncertain = $false
+    }
+  }
+  $AggregateFields = @(
+    "reviewedCropCount", "everySanitizedCropOpenedByReviewer", "allImageDigestsMatched",
+    "requiredVisibleStateConfirmedByReviewer", "noSensitivePixelsObservedByReviewer",
+    "noUncertaintyReported", "visualJudgmentNotPixelSafetyProof"
+  )
+  if ((@($Decision.aggregate.PSObject.Properties.Name) -join "`n") -cne ($AggregateFields -join "`n") -or
+      -not (Test-ExactReviewerInteger $Decision.aggregate.reviewedCropCount) -or
+      [int64]$Decision.aggregate.reviewedCropCount -ne 6 -or
+      @($AggregateFields[1..6] | Where-Object {
+        $Decision.aggregate.$_ -isnot [bool] -or $Decision.aggregate.$_ -ne $true
+      }).Count -ne 0) {
+    throw "Independent review aggregate did not fail closed."
+  }
+  return $Bound
+}
+
 function Remove-TestOwnedTree([string]$Path) {
   if ([String]::IsNullOrWhiteSpace($Path) -or -not [IO.Directory]::Exists($Path)) { return }
   $Full = [IO.Path]::GetFullPath($Path)
@@ -859,6 +2212,36 @@ function Write-CreateOnceAttemptRecord([string]$Directory, [string]$Name, [objec
   finally { $Stream.Dispose(); [Array]::Clear($Bytes, 0, $Bytes.Length) }
 }
 
+function New-FailureCleanupDisclosure(
+  [string]$PartialEvidenceDirectory,
+  [string]$RawDirectory,
+  [string]$ReviewDirectory,
+  [string]$OperatorDirectory,
+  [bool]$CleanupIssueObserved
+) {
+  $PartialEvidenceDeleted = [String]::IsNullOrWhiteSpace($PartialEvidenceDirectory) -or
+    -not [IO.Directory]::Exists($PartialEvidenceDirectory)
+  $RawDeleted = [String]::IsNullOrWhiteSpace($RawDirectory) -or
+    -not [IO.Directory]::Exists($RawDirectory)
+  $ReviewDeleted = [String]::IsNullOrWhiteSpace($ReviewDirectory) -or
+    -not [IO.Directory]::Exists($ReviewDirectory)
+  $OperatorDeleted = [String]::IsNullOrWhiteSpace($OperatorDirectory) -or
+    -not [IO.Directory]::Exists($OperatorDirectory)
+  $SensitiveDisposition = if ($PartialEvidenceDeleted -and $RawDeleted -and
+      $ReviewDeleted -and $OperatorDeleted -and -not $CleanupIssueObserved) {
+    "deleted"
+  } else { "unknown" }
+  return [ordered]@{
+    tokenOrCredentialValuesWrittenToAttemptJson = $false
+    partialEvidenceDirectoryDeleted = $PartialEvidenceDeleted
+    rawScreenshotScratchDeleted = $RawDeleted
+    reviewExchangeDeleted = $ReviewDeleted
+    operatorExchangeDeleted = $OperatorDeleted
+    sensitiveScratchDisposition = $SensitiveDisposition
+    wrongTargetMutationDisposition = "unknown"
+  }
+}
+
 if ($SelfTestRequested) {
   Invoke-CoordinatorSelfTest
   return
@@ -905,21 +2288,86 @@ function Restore-CoordinatorEnvironment {
   })) { [Environment]::SetEnvironmentVariable([string]$Name, $null, "Process") }
 }
 
+function Read-GitHubAcceptanceToken([string]$PipeName) {
+  if ([String]::IsNullOrWhiteSpace($PipeName)) {
+    return Read-Host "Independent least-privilege GitHub acceptance token" -AsSecureString
+  }
+  if ($PipeName -cnotmatch '^lbb-gh-[0-9a-f]{32}$') {
+    throw "The GitHub credential pipe name is not canonical."
+  }
+  $Pipe = [IO.Pipes.NamedPipeClientStream]::new(
+    ".", $PipeName, [IO.Pipes.PipeDirection]::In, [IO.Pipes.PipeOptions]::Asynchronous
+  )
+  $Secure = [Security.SecureString]::new()
+  $Completed = $false
+  $OneByte = New-Object byte[] 1
+  $Deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+  try {
+    $Pipe.Connect(30000)
+    for ($Count = 0; $Count -le 4096; $Count += 1) {
+      $Remaining = $Deadline - [DateTimeOffset]::UtcNow
+      if ($Remaining.TotalMilliseconds -le 0) {
+        throw "The GitHub credential pipe exceeded its absolute thirty-second deadline."
+      }
+      $ReadResult = $Pipe.BeginRead($OneByte, 0, 1, $null, $null)
+      try {
+        if (-not $ReadResult.AsyncWaitHandle.WaitOne(
+            [Math]::Max(1, [Math]::Min(30000, [int]$Remaining.TotalMilliseconds)))) {
+          throw "The GitHub credential pipe stalled before its line terminator."
+        }
+        $ReadCount = $Pipe.EndRead($ReadResult)
+      }
+      finally { $ReadResult.AsyncWaitHandle.Dispose() }
+      if ($ReadCount -ne 1) {
+        throw "The GitHub credential pipe ended before its line terminator."
+      }
+      $Byte = [int]$OneByte[0]
+      if ($Byte -eq 10) {
+        if ($Count -lt 16) { throw "The GitHub credential supplied through the pipe is too short." }
+        $Completed = $true
+        break
+      }
+      if ($Byte -lt 33 -or $Byte -gt 126) {
+        throw "The GitHub credential pipe must contain one bounded printable-ASCII line."
+      }
+      $Secure.AppendChar([char]$Byte)
+    }
+    if (-not $Completed) {
+      throw "The GitHub credential pipe ended or exceeded its bound before the line terminator."
+    }
+    $Secure.MakeReadOnly()
+    return $Secure
+  }
+  catch {
+    $Secure.Dispose()
+    throw
+  }
+  finally { [Array]::Clear($OneByte, 0, $OneByte.Length); $Pipe.Dispose() }
+}
+
 $PrimaryFailure = $null
 $CleanupErrors = New-Object Collections.Generic.List[string]
 $EvidenceDirectory = $null
 $RawScreenshotDirectory = $null
 $ExtensionDirectory = $null
+$OperatorExchangeDirectory = $null
+$ReviewExchangeDirectory = $null
 $AttemptDirectory = $null
 $SecureGhToken = $null
 $StableCandidateBinding = $null
+$StableExternalSurfacePreflightAttestation = $null
+$StableExternalSurfacePostflightAttestation = $null
+$ExternalSurfaceAttestorSessionRef = $null
 $ExactReleaseCandidateBinding = $null
+$DurableCandidateClaim = $null
 $Stage = "initialize"
 try {
 $Repository = New-ShortSourceDirectory
 $EvidenceDirectory = New-PrivateEmptyDirectory "lbb-evidence-"
 $RawScreenshotDirectory = New-PrivateEmptyDirectory "lbb-raw-"
 $ExtensionDirectory = New-PrivateEmptyDirectory "lbb-extension-"
+$OperatorExchangeDirectory = New-PrivateEmptyDirectory "lbb-operator-exchange-"
+$ReviewExchangeDirectory = New-PrivateEmptyDirectory "lbb-review-exchange-"
 $AttemptDirectory = New-PrivateEmptyDirectory "lbb-attempt-"
 $EmptyTemplates = New-PrivateEmptyDirectory "lbb-templates-"
 $EmptyHooks = New-PrivateEmptyDirectory "lbb-hooks-"
@@ -1038,6 +2486,28 @@ $ExactReleaseCandidateBinding = [ordered]@{
   githubHostedRunner = [bool]$StableBinding.githubHostedRunner
   assets = $ExactReleaseAssets
 }
+$ExternalSurfacePreflightPath = Resolve-ExternalSurfaceAttestationPath `
+  $ExternalSurfacePreflightAttestation "preflight" $true
+$ExternalSurfacePostflightPath = Resolve-ExternalSurfaceAttestationPath `
+  $ExternalSurfacePostflightAttestation "postflight" $false
+$ExternalSurfacePreflightRead = Read-StablePrivateJson `
+  $ExternalSurfacePreflightPath "external-surface preflight attestation"
+Assert-CanonicalCompactJsonResponse `
+  $ExternalSurfacePreflightRead "external-surface preflight attestation"
+$ExternalSurfacePreflightFacts = Assert-ExternalSurfaceAttestationInput `
+  $ExternalSurfacePreflightRead.Value $ExactReleaseCandidateBinding `
+  "preflight" ([DateTimeOffset]::UtcNow)
+$ExternalSurfaceAttestorSessionRef = $ExternalSurfacePreflightFacts.AttestorSessionRef
+$StableExternalSurfacePreflightAttestation = Join-Path `
+  $EvidenceDirectory "external-surface-preflight.json"
+$StableExternalSurfacePreflightCopy = Copy-StablePrivateFileCreateOnce `
+  $ExternalSurfacePreflightPath $StableExternalSurfacePreflightAttestation `
+  "external-surface preflight evidence copy"
+if ($StableExternalSurfacePreflightCopy.sha256 -cne $ExternalSurfacePreflightRead.Sha256) {
+  throw "Retained external-surface preflight differs from its exact stable input."
+}
+$ExternalSurfacePreflightRead = $null
+$ExternalSurfacePreflightFacts = $null
 $Stage = "candidate-bound"
 Write-CreateOnceAttemptRecord $AttemptDirectory "attempt-start.json" ([ordered]@{
   schemaVersion = 1
@@ -1066,7 +2536,7 @@ $env:GIT_ALLOW_PROTOCOL = "https"
 $env:GIT_TERMINAL_PROMPT = "0"
 $env:GH_CONFIG_DIR = $IsolatedGh
 $env:GH_PROMPT_DISABLED = "1"
-$SecureGhToken = Read-Host "Independent least-privilege GitHub acceptance token" -AsSecureString
+$SecureGhToken = Read-GitHubAcceptanceToken $GitHubTokenPipeName
 
 function Invoke-TrustedGhAttestation([string]$Name) {
   if ($ExpectedDownloads -cnotcontains $Name) { throw "Attestation refused an unexpected asset name." }
@@ -1192,7 +2662,13 @@ $TrustedRelativeFiles = @(
   "scripts/test-windows-browser-api.ps1",
   "scripts/record-computer-helper-chain.ps1",
   "scripts/sanitize-browser-evidence-screenshot.ps1",
-  "evidence/v0.12.14/browser/operator-results.template.json"
+  "scripts/write-stock-chrome-operator-response.ps1",
+  "evidence/v0.12.15/browser/operator-results.template.json",
+  "evidence/v0.12.15/browser/operator-results.schema.json",
+  "evidence/v0.12.15/browser/computer-helper-chain.schema.json",
+  "evidence/v0.12.15/browser/scoped-action-approval.schema.json",
+  "evidence/v0.12.15/browser/independent-visual-review.schema.json",
+  "evidence/v0.12.15/browser/external-surface-attestation.schema.json"
 )
 function Export-ExactTrustedBlob([string]$ObjectId, [string]$Relative) {
   if ($ObjectId -cnotmatch '^[0-9a-f]{40}$' -or $TrustedRelativeFiles -cnotcontains $Relative) {
@@ -1275,6 +2751,7 @@ foreach ($SelfTestSpec in @(
   [pscustomobject]@{ Relative = "scripts/test-windows-browser-api.ps1"; Arguments = @("-SelfTest") },
   [pscustomobject]@{ Relative = "scripts/record-computer-helper-chain.ps1"; Arguments = @("-Mode", "SelfTest") },
   [pscustomobject]@{ Relative = "scripts/sanitize-browser-evidence-screenshot.ps1"; Arguments = @("-Mode", "SelfTest") }
+  [pscustomobject]@{ Relative = "scripts/write-stock-chrome-operator-response.ps1"; Arguments = @("-Mode", "SelfTest") }
 )) {
   Invoke-ExactPs51SelfTest (Join-Path $TrustedRoot $SelfTestSpec.Relative) @($SelfTestSpec.Arguments)
 }
@@ -1305,11 +2782,12 @@ $Stage = "candidate-preflight"
   -ExtractedExtension $ExtensionDirectory `
   -OutputRecord (Join-Path $EvidenceDirectory "candidate-preflight.json")
 
-& "$Scripts\write-browser-evidence-record.ps1" -Mode InitializeOperator `
-  -PreflightRecord (Join-Path $EvidenceDirectory "candidate-preflight.json") `
-  -OutputRecord (Join-Path $EvidenceDirectory "operator-results.json")
-
+$Stage = "durable-candidate-execution-claim"
+$DurableLedger = Get-DurableAcceptanceLedgerDirectory
+$DurableCandidateClaim = New-DurableCandidateExecutionClaim `
+  $DurableLedger $ExactReleaseCandidateBinding
 $Stage = "computer-helper-chain"
+$ExecutorSessionRef = New-OpaqueSessionRef
 & "$Scripts\record-computer-helper-chain.ps1" -Mode Run `
   -PreflightRecord (Join-Path $EvidenceDirectory "candidate-preflight.json") `
   -ApiMatrixRunner "$Scripts\test-windows-browser-api.ps1" `
@@ -1318,7 +2796,50 @@ $Stage = "computer-helper-chain"
   -HelperExecutable (Join-Path $Candidate "local-computer-helper-v$Version-windows-x86_64.exe") `
   -ExtensionDirectory $ExtensionDirectory `
   -RawScreenshotDirectory $RawScreenshotDirectory `
+  -OperatorExchangeDirectory $OperatorExchangeDirectory `
+  -ScopedApprovalRecord (Join-Path $EvidenceDirectory "scoped-action-approval.json") `
+  -ExecutorSessionRef $ExecutorSessionRef `
+  -ExpectedOrchestratorSessionRef $ExternalSurfaceAttestorSessionRef `
   -OutputRecord (Join-Path $EvidenceDirectory "browser-computer-helper-chain.json")
+
+$HelperPath = Join-Path $EvidenceDirectory "browser-computer-helper-chain.json"
+$StableHelper = Read-StablePrivateJson $HelperPath "computer-helper chain"
+$HelperRecord = $StableHelper.Value
+if ($HelperRecord.schemaVersion -ne 2 -or $HelperRecord.passed -ne $true -or
+    $HelperRecord.operatorExchange.executorSessionRef -cne $ExecutorSessionRef -or
+    $HelperRecord.operatorExchange.reviewerSessionRef -cnotmatch '^[0-9a-f]{64}$' -or
+    $HelperRecord.operatorExchange.reviewerSessionRef -ceq $ExecutorSessionRef -or
+    $HelperRecord.operatorExchange.independentSessionBoundary -ne $true -or
+    $HelperRecord.operatorExchange.scratchDeleted -ne $true) {
+  throw "The helper record did not establish a separate, completed reviewer session."
+}
+$ScopedApprovalPath = Join-Path $EvidenceDirectory "scoped-action-approval.json"
+$StableScopedApproval = Read-StablePrivateJson $ScopedApprovalPath "scoped action approval"
+if ($StableScopedApproval.Value.response.orchestratorSessionRef -cne `
+    $ExternalSurfaceAttestorSessionRef) {
+  throw "The scoped approval was not delivered through the preflight attestor session."
+}
+$script:ReviewExchangeDirectory = $ReviewExchangeDirectory
+$script:ReviewExchangeArtifacts = New-Object Collections.Generic.List[string]
+$script:ReviewResponseReservations = New-Object Collections.Generic.List[object]
+$script:ReviewExpectedTransientArtifacts = New-Object Collections.Generic.List[string]
+$script:ReviewReleaseCandidateBinding = $HelperRecord.releaseCandidateBinding
+$script:ReviewCandidateBinding = $HelperRecord.candidateBinding
+$CandidateBindingText = $script:ReviewCandidateBinding | ConvertTo-Json -Depth 12 -Compress
+$CandidateBindingBytes = [Text.UTF8Encoding]::new($false, $true).GetBytes($CandidateBindingText)
+$CandidateBindingHasher = [Security.Cryptography.SHA256]::Create()
+try {
+  $script:ReviewCandidateBindingSha256 = (
+    [BitConverter]::ToString($CandidateBindingHasher.ComputeHash($CandidateBindingBytes))
+  ).Replace("-", "").ToLowerInvariant()
+}
+finally {
+  $CandidateBindingHasher.Dispose()
+  [Array]::Clear($CandidateBindingBytes, 0, $CandidateBindingBytes.Length)
+}
+$script:ReviewExecutorSessionRef = $ExecutorSessionRef
+$script:ReviewReviewerSessionRef = [string]$HelperRecord.operatorExchange.reviewerSessionRef
+$script:ReviewRequestCount = 0
 
 $Captures = [ordered]@{
   "extension-loaded" = "browser-01-extension-loaded"
@@ -1328,44 +2849,141 @@ $Captures = [ordered]@{
   "cancel-paused" = "browser-05-cancel-paused"
   "post-handback-resume" = "browser-06-post-handback-resume"
 }
-function Read-CropInteger([string]$Label, [int]$Minimum) {
-  $Value = 0
-  if (-not [int]::TryParse((Read-Host $Label), [ref]$Value) -or $Value -lt $Minimum) {
-    throw "$Label must be an integer greater than or equal to $Minimum."
-  }
-  return $Value
+$RequiredVisibleStates = [ordered]@{
+  "extension-loaded" = "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.15 card with no load errors and Chrome's debugger-use indicator during the active bridge lease"
+  "api-action-result" = "the loopback demo visibly shows Hello, Bridge Matrix. blue selected. after the browser API action"
+  "computer-share-action" = "the exact shared Chrome window visibly shows the post-click demo state and synthetic session pointer from a fresh helper frame"
+  "stop-paused" = "the trusted extension popup visibly shows the human pause and Resume remote control after the in-page Stop handback"
+  "cancel-paused" = "the trusted extension popup visibly shows the human pause and Resume remote control after Chrome's browser-owned Cancel handback"
+  "post-handback-resume" = "the exact demo visibly shows the restored Chrome debugger-use indicator and page control pill after both trusted-popup recovery cycles"
 }
-$Stage = "screenshot-sanitization"
+$Stage = "independent-screenshot-cropping"
 foreach ($Entry in $Captures.GetEnumerator()) {
   $RawPath = Join-Path $RawScreenshotDirectory ($Entry.Value + ".raw.png")
-  Write-Host "Privately inspect $RawPath and enter a tight crop containing only the required visible proof."
-  $CropX = Read-CropInteger "$($Entry.Key) CropX" 0
-  $CropY = Read-CropInteger "$($Entry.Key) CropY" 0
-  $CropWidth = Read-CropInteger "$($Entry.Key) CropWidth" 120
-  $CropHeight = Read-CropInteger "$($Entry.Key) CropHeight" 32
+  $ReviewRawPath = Join-Path $ReviewExchangeDirectory ($Entry.Value + ".raw.png")
+  $RawCopy = Copy-StablePrivateFileCreateOnce $RawPath $ReviewRawPath "raw screenshot review copy"
+  Register-ReviewExchangeArtifact $ReviewRawPath
+  $RawFacts = Read-StablePrivatePng $ReviewRawPath "raw screenshot review copy"
+  if ($RawFacts.sha256 -cne $RawCopy.sha256 -or $RawFacts.bytes -ne $RawCopy.bytes) {
+    throw "Raw screenshot review copy changed after its create-once stable copy."
+  }
+  $CropExchange = Invoke-IndependentReviewerExchange `
+    "screenshot-crop" "crop-$($Entry.Key)" `
+    ([ordered]@{
+      purpose = $Entry.Key
+      source = [ordered]@{
+        name = $RawCopy.name; bytes = $RawCopy.bytes; sha256 = $RawCopy.sha256
+        width = $RawFacts.width; height = $RawFacts.height
+      }
+      requiredVisibleState = $RequiredVisibleStates[$Entry.Key]
+    }) `
+    ([ordered]@{
+      type = "tight-crop"
+      minimumWidth = 120; minimumHeight = 32
+      maximumWidth = $RawFacts.width; maximumHeight = $RawFacts.height
+      requireVisibleState = $true; sensitivePixelsInsideCrop = $false; uncertain = $false
+    }) `
+    "Open the exact digest-bound raw screenshot, choose the tightest crop proving only the required visible state, and fail closed on uncertainty or sensitive pixels inside that crop."
+  $CropDecision = $CropExchange.Decision
+  Assert-ReviewerCropDecision $CropDecision $RawFacts
+  Remove-RegisteredReviewExchangeArtifact $ReviewRawPath
   & "$Scripts\sanitize-browser-evidence-screenshot.ps1" -Mode Sanitize `
     -InputImage $RawPath `
     -OutputImage (Join-Path $EvidenceDirectory ($Entry.Value + ".png")) `
     -OutputRecord (Join-Path $RawScreenshotDirectory ($Entry.Value + ".pending.json")) `
     -PreflightRecord (Join-Path $EvidenceDirectory "candidate-preflight.json") `
-    -Purpose $Entry.Key -CropX $CropX -CropY $CropY -CropWidth $CropWidth -CropHeight $CropHeight
+    -Purpose $Entry.Key -CropX ([int]$CropDecision.cropX) -CropY ([int]$CropDecision.cropY) `
+    -CropWidth ([int]$CropDecision.cropWidth) -CropHeight ([int]$CropDecision.cropHeight)
 }
 
-$Stage = "screenshot-human-review"
+$Stage = "independent-six-crop-review"
+$ReviewRequestEntries = @()
+$Sequence = 0
+foreach ($Entry in $Captures.GetEnumerator()) {
+  $Sequence += 1
+  $ReviewedImage = Join-Path $EvidenceDirectory ($Entry.Value + ".png")
+  $ReviewCopyPath = Join-Path $ReviewExchangeDirectory ($Entry.Value + ".png")
+  $ReviewCopy = Copy-StablePrivateFileCreateOnce $ReviewedImage $ReviewCopyPath "sanitized crop review copy"
+  Register-ReviewExchangeArtifact $ReviewCopyPath
+  $ReviewFacts = Read-StablePrivatePng $ReviewCopyPath "sanitized crop review copy"
+  if ($ReviewFacts.sha256 -cne $ReviewCopy.sha256 -or $ReviewFacts.bytes -ne $ReviewCopy.bytes) {
+    throw "Sanitized crop review copy changed after its create-once stable copy."
+  }
+  $CriterionBytes = [Text.UTF8Encoding]::new($false, $true).GetBytes($RequiredVisibleStates[$Entry.Key])
+  $CriterionHasher = [Security.Cryptography.SHA256]::Create()
+  try {
+    $CriterionSha = ([BitConverter]::ToString($CriterionHasher.ComputeHash($CriterionBytes))).Replace("-", "").ToLowerInvariant()
+  }
+  finally { $CriterionHasher.Dispose(); [Array]::Clear($CriterionBytes, 0, $CriterionBytes.Length) }
+  $ReviewRequestEntries += [ordered]@{
+    sequence = $Sequence; purpose = $Entry.Key; image = $ReviewCopy.name
+    sha256 = $ReviewCopy.sha256; width = $ReviewFacts.width; height = $ReviewFacts.height
+    requiredVisibleState = $RequiredVisibleStates[$Entry.Key]
+    requiredVisibleStateSha256 = $CriterionSha
+  }
+}
+$ReviewExchange = Invoke-IndependentReviewerExchange `
+  "six-crop-review" "review-six-sanitized-crops" `
+  ([ordered]@{ entries = $ReviewRequestEntries }) `
+  ([ordered]@{
+    type = "ordered-six-crop-review"; everyDigestMustMatch = $true
+    requiredStateVerdict = "pass"; sensitivePixelsObserved = $false; uncertain = $false
+  }) `
+  "Open all six exact digest-bound sanitized crops in order. Confirm each required visible state, report any sensitive pixel or uncertainty, and do not infer pixel safety from automation."
+$ReviewDecision = $ReviewExchange.Decision
+$BoundReviewEntries = @(Assert-ReviewerSixCropDecision $ReviewDecision $ReviewRequestEntries)
+$IndependentReviewPath = Join-Path $EvidenceDirectory "independent-visual-review.json"
+Write-CreateOncePrivateJson $IndependentReviewPath ([ordered]@{
+  schemaVersion = 1
+  evidenceType = "stock-user-chrome-independent-visual-review"
+  releaseCandidateBinding = $script:ReviewReleaseCandidateBinding
+  candidateBinding = $script:ReviewCandidateBinding
+  executorSessionRef = $script:ReviewExecutorSessionRef
+  reviewerSessionRef = $script:ReviewReviewerSessionRef
+  independentSessionBoundary = $true
+  requestSha256 = $ReviewExchange.RequestSha256
+  reviewedAtUtc = $ReviewExchange.RespondedAtUtc
+  entries = $BoundReviewEntries
+  aggregate = [ordered]@{
+    reviewedCropCount = 6; everySanitizedCropOpenedByReviewer = $true
+    allImageDigestsMatched = $true; requiredVisibleStateConfirmedByReviewer = $true
+    noSensitivePixelsObservedByReviewer = $true; noUncertaintyReported = $true
+    visualJudgmentNotPixelSafetyProof = $true
+  }
+}) "independent visual review record"
+Remove-ExactReviewExchangeDirectory
+
+$Stage = "external-surface-postflight"
+$ReviewCompletedAt = [DateTimeOffset]::MinValue
+if (-not [DateTimeOffset]::TryParseExact(
+    [string]$ReviewExchange.RespondedAtUtc, "o", [Globalization.CultureInfo]::InvariantCulture,
+    [Globalization.DateTimeStyles]::RoundtripKind, [ref]$ReviewCompletedAt
+  )) {
+  throw "Independent-review completion time is invalid before external postflight."
+}
+$ExternalSurfacePostflight = Wait-ExternalSurfacePostflight `
+  $ExternalSurfacePostflightPath $ExactReleaseCandidateBinding `
+  $ExternalSurfaceAttestorSessionRef $ReviewCompletedAt
+$StableExternalSurfacePostflightAttestation = Join-Path `
+  $EvidenceDirectory "external-surface-postflight.json"
+$StableExternalSurfacePostflightCopy = Copy-StablePrivateFileCreateOnce `
+  $ExternalSurfacePostflightPath $StableExternalSurfacePostflightAttestation `
+  "external-surface postflight evidence copy"
+if ($StableExternalSurfacePostflightCopy.sha256 -cne `
+    $ExternalSurfacePostflight.Stable.Sha256) {
+  throw "Retained external-surface postflight differs from its exact stable input."
+}
+$ExternalSurfacePostflight = $null
+
+$Stage = "bind-independent-review"
 foreach ($Entry in $Captures.GetEnumerator()) {
   $ReviewedImage = Join-Path $EvidenceDirectory ($Entry.Value + ".png")
-  $ReviewSha = Get-TrustedSha256 $ReviewedImage
-  $ExpectedReviewReceipt = "REVIEWED:$($Entry.Key):$ReviewSha"
-  Write-Host "Open $ReviewedImage, verify the required visible state and absence of sensitive pixels, then type $ExpectedReviewReceipt"
-  if ((Read-Host "Exact purpose-and-image-digest-bound human review receipt") -cne $ExpectedReviewReceipt) {
-    throw "AttestReview refused a missing or mismatched per-image human receipt."
-  }
-  & "$Scripts\sanitize-browser-evidence-screenshot.ps1" -Mode AttestReview `
+  & "$Scripts\sanitize-browser-evidence-screenshot.ps1" -Mode BindReview `
     -PendingRecord (Join-Path $RawScreenshotDirectory ($Entry.Value + ".pending.json")) `
     -ReviewedImage $ReviewedImage `
     -OutputRecord (Join-Path $EvidenceDirectory ($Entry.Value + ".json")) `
     -PreflightRecord (Join-Path $EvidenceDirectory "candidate-preflight.json") `
-    -ManualVisualReviewConfirmed
+    -IndependentReviewRecord $IndependentReviewPath
 }
 
 $Stage = "candidate-postflight"
@@ -1390,11 +3008,17 @@ Remove-ExactFlatOwnedDirectory $RawScreenshotDirectory $ExpectedRawNames
 Remove-ExactFlatOwnedDirectory $ExtensionDirectory $ExpectedExtensionNames
 
 $OperatorPath = Join-Path $EvidenceDirectory "operator-results.json"
-$Stage = "operator-record"
-Write-Host "Edit and save only $OperatorPath, using the helper record and human receipts."
-if ((Read-Host "Type OPERATOR-RECORD-SAVED after the exact record is saved") -cne "OPERATOR-RECORD-SAVED") {
-  throw "The operator record was not explicitly saved."
-}
+$BrowserVersion = Get-InstalledStockChromeVersion
+$Stage = "build-operator-record"
+& "$Scripts\write-browser-evidence-record.ps1" -Mode BuildOperator `
+  -PreflightRecord (Join-Path $EvidenceDirectory "candidate-preflight.json") `
+  -ComputerHelperRecord (Join-Path $EvidenceDirectory "browser-computer-helper-chain.json") `
+  -ScopedApprovalRecord (Join-Path $EvidenceDirectory "scoped-action-approval.json") `
+  -IndependentReviewRecord $IndependentReviewPath `
+  -ExternalSurfacePreflightAttestation $StableExternalSurfacePreflightAttestation `
+  -ExternalSurfacePostflightAttestation $StableExternalSurfacePostflightAttestation `
+  -BrowserVersion $BrowserVersion `
+  -OutputRecord $OperatorPath
 
 $Sidecars = @($Captures.Values | ForEach-Object {
   Join-Path $EvidenceDirectory ($_ + ".json")
@@ -1405,16 +3029,20 @@ $Stage = "finalize"
   -PostflightRecord (Join-Path $EvidenceDirectory "candidate-postflight.json") `
   -ApiMatrixRecord (Join-Path $EvidenceDirectory "browser-api-matrix.json") `
   -ComputerHelperRecord (Join-Path $EvidenceDirectory "browser-computer-helper-chain.json") `
+  -ScopedApprovalRecord (Join-Path $EvidenceDirectory "scoped-action-approval.json") `
+  -IndependentReviewRecord $IndependentReviewPath `
+  -ExternalSurfacePreflightAttestation $StableExternalSurfacePreflightAttestation `
+  -ExternalSurfacePostflightAttestation $StableExternalSurfacePostflightAttestation `
   -OperatorResults (Join-Path $EvidenceDirectory "operator-results.json") `
   -ScreenshotRecords $Sidecars `
   -OutputRecord (Join-Path $EvidenceDirectory "browser-acceptance.json")
 
 $FinalEntries = @([IO.DirectoryInfo]::new($EvidenceDirectory).GetFileSystemInfos())
-if ($FinalEntries.Count -ne 18 -or
+if ($FinalEntries.Count -ne 22 -or
     @($FinalEntries | Where-Object {
       $_ -isnot [IO.FileInfo] -or ($_.Attributes -band [IO.FileAttributes]::ReparsePoint)
     }).Count -ne 0) {
-  throw "The finalized evidence directory is not the exact eighteen-file ordinary inventory."
+  throw "The finalized evidence directory is not the exact twenty-two-file ordinary inventory."
 }
 $Stage = "completed"
 }
@@ -1431,7 +3059,17 @@ finally {
   $SecureGhToken = $null
   foreach ($Owned in @($OwnedDirectories | Sort-Object { $_.Length } -Descending)) {
     if ($Owned -ceq $EvidenceDirectory -or $Owned -ceq $AttemptDirectory) { continue }
-    try { Remove-TestOwnedTree $Owned }
+    try {
+      if ($Owned -ceq $ReviewExchangeDirectory -and
+          [IO.Directory]::Exists($ReviewExchangeDirectory)) {
+        try { Remove-ExactReviewExchangeDirectory }
+        catch {
+          $CleanupErrors.Add("review-exchange-strict: $($_.Exception.Message)")
+          Remove-KnownReviewExchangeArtifactsAfterFailure
+        }
+      }
+      else { Remove-TestOwnedTree $Owned }
+    }
     catch { $CleanupErrors.Add("owned-directory ${Owned}: $($_.Exception.Message)") }
   }
   if (($null -ne $PrimaryFailure -or $CleanupErrors.Count -ne 0) -and
@@ -1448,10 +3086,31 @@ finally {
     }
     catch { $CleanupErrors.Add("passing-output invalidation: $($_.Exception.Message)") }
   }
+  if ($null -ne $DurableCandidateClaim) {
+    try {
+      Write-DurableCandidateExecutionOutcome `
+        $DurableCandidateClaim `
+        ($null -eq $PrimaryFailure -and $Stage -ceq "completed") `
+        ($CleanupErrors.Count -ne 0) `
+        $Stage
+    }
+    catch { $CleanupErrors.Add("durable-candidate-outcome: $($_.Exception.Message)") }
+  }
   $FailedAttempt = $null -ne $PrimaryFailure -or $CleanupErrors.Count -ne 0
+  if ($FailedAttempt -and -not [String]::IsNullOrWhiteSpace($EvidenceDirectory) -and
+      [IO.Directory]::Exists($EvidenceDirectory)) {
+    try { Remove-TestOwnedTree $EvidenceDirectory }
+    catch { $CleanupErrors.Add("partial-evidence invalidation: $($_.Exception.Message)") }
+  }
   if ($FailedAttempt -and -not [String]::IsNullOrWhiteSpace($AttemptDirectory) -and
       [IO.Directory]::Exists($AttemptDirectory)) {
     try {
+      $CleanupDisclosure = New-FailureCleanupDisclosure `
+        -PartialEvidenceDirectory $EvidenceDirectory `
+        -RawDirectory $RawScreenshotDirectory `
+        -ReviewDirectory $ReviewExchangeDirectory `
+        -OperatorDirectory $OperatorExchangeDirectory `
+        -CleanupIssueObserved ($CleanupErrors.Count -ne 0)
       Write-CreateOnceAttemptRecord $AttemptDirectory "failure.json" ([ordered]@{
         schemaVersion = 1
         evidenceType = "stock-user-chrome-failure"
@@ -1467,7 +3126,15 @@ finally {
         passingOutputPresent = $(if ([String]::IsNullOrWhiteSpace($EvidenceDirectory)) {
           $false
         } else { [IO.File]::Exists((Join-Path $EvidenceDirectory "browser-acceptance.json")) })
-        secretValuesRetained = $false
+        tokenOrCredentialValuesWrittenToAttemptJson = `
+          $CleanupDisclosure.tokenOrCredentialValuesWrittenToAttemptJson
+        partialEvidenceDirectoryDeleted = `
+          $CleanupDisclosure.partialEvidenceDirectoryDeleted
+        rawScreenshotScratchDeleted = $CleanupDisclosure.rawScreenshotScratchDeleted
+        reviewExchangeDeleted = $CleanupDisclosure.reviewExchangeDeleted
+        operatorExchangeDeleted = $CleanupDisclosure.operatorExchangeDeleted
+        sensitiveScratchDisposition = $CleanupDisclosure.sensitiveScratchDisposition
+        wrongTargetMutationDisposition = $CleanupDisclosure.wrongTargetMutationDisposition
         rawFailureMessageRetained = $false
         cleanupIssuesPresent = $CleanupErrors.Count -ne 0
       })
@@ -1483,7 +3150,8 @@ finally {
 if ($null -ne $PrimaryFailure) {
   $Suffix = if ($CleanupErrors.Count -eq 0) { "Outer rollback completed." }
     else { "Outer rollback incomplete: " + ($CleanupErrors -join "; ") }
-  if (-not [String]::IsNullOrWhiteSpace($EvidenceDirectory)) {
+  if (-not [String]::IsNullOrWhiteSpace($EvidenceDirectory) -and
+      [IO.Directory]::Exists($EvidenceDirectory)) {
     Write-Output "Failed evidence directory: $EvidenceDirectory"
   }
   if (-not [String]::IsNullOrWhiteSpace($AttemptDirectory) -and [IO.Directory]::Exists($AttemptDirectory)) {

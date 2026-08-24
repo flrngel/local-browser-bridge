@@ -13,8 +13,8 @@ node --check scripts/wait-macos-pointer-concurrency-handoff.mjs
 node scripts/wait-macos-pointer-concurrency-handoff.mjs --mode self-test
 node --check scripts/finalize-macos-acceptance.mjs
 node scripts/finalize-macos-acceptance.mjs --self-test
-node --check evidence/v0.12.14/computer/helper-evidence-rig.mjs
-node evidence/v0.12.14/computer/helper-evidence-rig.mjs --self-test
+node --check evidence/v0.12.15/computer/helper-evidence-rig.mjs
+node evidence/v0.12.15/computer/helper-evidence-rig.mjs --self-test
 bash -n scripts/fetch-verify-release-candidate.sh
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
@@ -87,11 +87,11 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 bash scripts/verify-macos-build-host.sh
-xcrun swiftc -typecheck evidence/v0.12.14/computer/HelperEvidenceFixture.swift
-xcrun swiftc -typecheck evidence/v0.12.14/computer/SystemProbe.swift
-xcrun swiftc -typecheck evidence/v0.12.14/computer/PointerHandoff.swift
+xcrun swiftc -typecheck evidence/v0.12.15/computer/HelperEvidenceFixture.swift
+xcrun swiftc -typecheck evidence/v0.12.15/computer/SystemProbe.swift
+xcrun swiftc -typecheck evidence/v0.12.15/computer/PointerHandoff.swift
 pointer_handoff_self_test="$validation_stage/lbb-pointer-handoff-self-test"
-xcrun swiftc evidence/v0.12.14/computer/PointerHandoff.swift -o "$pointer_handoff_self_test"
+xcrun swiftc evidence/v0.12.15/computer/PointerHandoff.swift -o "$pointer_handoff_self_test"
 "$pointer_handoff_self_test" --self-test
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 cargo build --locked --release --bins --target aarch64-apple-darwin

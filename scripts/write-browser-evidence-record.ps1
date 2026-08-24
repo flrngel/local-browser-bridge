@@ -3,13 +3,18 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("InitializeOperator", "Finalize", "SelfTest")]
+    [ValidateSet("InitializeOperator", "BuildOperator", "Finalize", "SelfTest")]
     [string]$Mode,
     [string]$PreflightRecord,
     [string]$PostflightRecord,
     [string]$ApiMatrixRecord,
     [string]$ComputerHelperRecord,
+    [string]$ScopedApprovalRecord,
+    [string]$IndependentReviewRecord,
+    [string]$ExternalSurfacePreflightAttestation,
+    [string]$ExternalSurfacePostflightAttestation,
     [string]$OperatorResults,
+    [string]$BrowserVersion,
     [string[]]$ScreenshotRecords,
     [string]$DenyValuesFile,
     [string]$OutputRecord
@@ -137,8 +142,8 @@ $script:ExpectedScreenshotsV2 = [ordered]@{
     "post-handback-resume" = "browser-06-post-handback-resume.png"
 }
 $script:ReviewStatement = "A human reviewed this tight crop; OCR is supplemental and unknown sensitive pixels are not automatically redacted."
-$script:ReviewStatementV2 = "A human reviewed this tight crop after sanitization; no automated text inspection or pixel redaction is claimed."
-$script:OperatorV2Version = "0.12.14"
+$script:ReviewStatementV2 = "A separate agent reviewed this exact digest-bound crop; no sensitive pixels were observed, but visual judgment is not a pixel-safety proof."
+$script:OperatorV2Version = "0.12.15"
 $script:ReleaseCandidateBindingFields = @(
     "productVersion", "repository", "tag", "sourceSha", "tagObjectSha",
     "workflowRunId", "workflowRunAttempt", "artifactId", "artifactName",
@@ -148,7 +153,9 @@ $script:ReleaseCandidateBindingFields = @(
 $script:BrowserChromeSurfaces = @(
     "local-browser-bridge-computer-helper"
 )
-$script:ExternalOrchestrationSurfaces = @("windows-computer-use-app-share", "human-on-stock-chrome")
+$script:ExternalOrchestrationSurfaces = @(
+    "user-orchestrator-secured-ssh-exported-file-review"
+)
 $script:ComputerHelperActionSource = "local-browser-bridge-computer-helper-via-loopback-api"
 $script:ComputerHelperLifecycleEvents = @(
     "server-ready", "computer-disconnected-before-helper-start", "helper-started",
@@ -189,12 +196,22 @@ $script:ComputerHelperActionMutators = @(
     "computer.click", "computer.click", "computer.click", "conditional-full-access", "computer.click",
     "conditional-developer-mode", "computer.key"
 )
-$script:ComputerHelperActionConsentRefs = @(
+$script:ComputerHelperActionRiskRefs = @(
     "none", "none", "conditional-developer-mode", "installCandidate", "installCandidate", "none",
     "none", "fullAccessUse", "acceptanceTokenSave", "none", "none", "none", "none", "none",
     "none", "none", "none", "none", "none", "none", "none",
     "clearSavedTokenInitiate", "clearSavedTokenConfirm", "fullAccessUse", "extensionDisposition",
     "conditional-developer-mode", "none"
+)
+$script:CoveredApprovalActions = @(
+    "conditional-developer-mode-change",
+    "load-and-run-exact-unpacked-candidate",
+    "conditional-full-access-change",
+    "save-ephemeral-loopback-credential",
+    "clear-ephemeral-loopback-credential",
+    "remove-exact-test-owned-extension",
+    "restore-captured-browser-settings",
+    "failure-rollback"
 )
 $script:ComputerHelperBrowserMethods = @(
     "browser.control.start", "page.observe", "page.fill", "page.observe",
@@ -202,7 +219,7 @@ $script:ComputerHelperBrowserMethods = @(
 )
 $script:ComputerHelperScreenshotEpochIndexes = @(5, 5, 5, 6, 8, 9)
 $script:RequiredVisibleStatesV2 = [ordered]@{
-    "extension-loaded" = "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.14 card with no load errors and Chrome's debugger-use indicator during the active bridge lease"
+    "extension-loaded" = "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.15 card with no load errors and Chrome's debugger-use indicator during the active bridge lease"
     "api-action-result" = "the loopback demo visibly shows Hello, Bridge Matrix. blue selected. after the browser API action"
     "computer-share-action" = "the exact shared Chrome window visibly shows the post-click demo state and synthetic session pointer from a fresh helper frame"
     "stop-paused" = "the trusted extension popup visibly shows the human pause and Resume remote control after the in-page Stop handback"
@@ -277,15 +294,58 @@ function Resolve-NewOutputFile {
 
 function Read-Json {
     param([string]$Path, [string]$Label)
-    $bytes = [IO.File]::ReadAllBytes($Path)
-    if ($bytes.Length -le 0 -or $bytes.Length -gt 2MB) {
+    return (Read-JsonWithSha256 $Path $Label).Value
+}
+
+function Read-JsonWithSha256 {
+    param([string]$Path, [string]$Label)
+    $resolved = [IO.Path]::GetFullPath($Path)
+    if (-not [IO.File]::Exists($resolved)) { throw "$Label does not exist." }
+    $before = [IO.FileInfo]::new($resolved)
+    if (($before.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "$Label must be an ordinary file, not a reparse point."
+    }
+    Assert-NoReparseAncestorChain $resolved $Label
+    if ($before.Length -le 0 -or $before.Length -gt 2MB) {
         throw "$Label has an invalid size."
     }
+    $stream = [IO.File]::Open(
+        $resolved, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None
+    )
+    $bytes = $null
+    $offset = 0
     try {
-        return $script:Utf8NoBom.GetString($bytes) | ConvertFrom-Json
+        if ($stream.Length -ne $before.Length -or $stream.Length -le 0 -or
+            $stream.Length -gt 2MB -or $stream.Length -gt [int]::MaxValue) {
+            throw "$Label changed size before its exclusive read."
+        }
+        $bytes = [byte[]]::new([int]$stream.Length)
+        while ($offset -lt $bytes.Length) {
+            $read = $stream.Read($bytes, $offset, $bytes.Length - $offset)
+            if ($read -le 0) { throw "$Label ended before its declared length." }
+            $offset += $read
+        }
+        if ($stream.ReadByte() -ne -1) { throw "$Label grew during its exclusive read." }
     }
-    catch {
-        throw "$Label is not strict UTF-8 JSON."
+    finally { $stream.Dispose() }
+    $hasher = $null
+    $digestBytes = $null
+    try {
+        $hasher = [Security.Cryptography.SHA256]::Create()
+        $digestBytes = $hasher.ComputeHash($bytes)
+        $sha256 = ([BitConverter]::ToString($digestBytes)).Replace("-", "").ToLowerInvariant()
+        try { $value = $script:Utf8NoBom.GetString($bytes) | ConvertFrom-Json }
+        catch { throw "$Label is not strict UTF-8 JSON." }
+        return [pscustomobject]@{
+            Value = $value
+            Sha256 = $sha256
+            Bytes = [int64]$bytes.Length
+        }
+    }
+    finally {
+        if ($null -ne $digestBytes) { [Array]::Clear($digestBytes, 0, $digestBytes.Length) }
+        if ($null -ne $hasher) { $hasher.Dispose() }
+        [Array]::Clear($bytes, 0, $bytes.Length)
     }
 }
 
@@ -305,6 +365,23 @@ function Get-Sha256 {
         if ($null -ne $digest) { [Array]::Clear($digest, 0, $digest.Length) }
         if ($null -ne $hasher) { $hasher.Dispose() }
         $stream.Dispose()
+    }
+}
+
+function Get-TextSha256 {
+    param([string]$Value)
+    $bytes = $script:Utf8NoBom.GetBytes($Value)
+    $hasher = $null
+    $digest = $null
+    try {
+        $hasher = [Security.Cryptography.SHA256]::Create()
+        $digest = $hasher.ComputeHash($bytes)
+        return ([BitConverter]::ToString($digest)).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        if ($null -ne $digest) { [Array]::Clear($digest, 0, $digest.Length) }
+        if ($null -ne $hasher) { $hasher.Dispose() }
+        [Array]::Clear($bytes, 0, $bytes.Length)
     }
 }
 
@@ -371,23 +448,123 @@ function Assert-ExactBoolean {
 function Assert-UtcTimestamp {
     param([object]$Actual, [string]$Label)
     $parsed = [DateTimeOffset]::MinValue
-    if ($Actual -is [DateTimeOffset]) {
-        $parsed = [DateTimeOffset]$Actual
-    }
-    elseif ($Actual -is [DateTime]) {
-        $dateTime = [DateTime]$Actual
-        $parsed = [DateTimeOffset]::new($dateTime.ToUniversalTime())
-    }
-    elseif ($Actual -isnot [string] -or -not [DateTimeOffset]::TryParseExact(
+    if ($Actual -isnot [string] -or
+        [string]$Actual -cnotmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{7}Z$' -or
+        -not [DateTimeOffset]::TryParseExact(
             $Actual, "o", [Globalization.CultureInfo]::InvariantCulture,
             [Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed
         )) {
-        throw "$Label must be a UTC timestamp."
+        throw "$Label must be a canonical Z-suffixed UTC round-trip timestamp."
     }
     if ($parsed.Offset -ne [TimeSpan]::Zero) {
-        throw "$Label must be a canonical UTC round-trip timestamp."
+        throw "$Label must be a canonical Z-suffixed UTC round-trip timestamp."
     }
     return $parsed
+}
+
+function Assert-ExternalSurfaceAttestationV3 {
+    param(
+        [object]$Record,
+        [string]$RecordSha256,
+        [object]$ReleaseBinding,
+        [string]$ExpectedPhase
+    )
+    Assert-ExactKeys $Record @(
+        "schemaVersion", "evidenceType", "phase", "releaseCandidateBinding",
+        "releaseCandidateBindingSha256", "orchestrationSurface", "chromeMcpState",
+        "computerUseState", "reviewerInputState", "attestorKind",
+        "attestorSessionRef", "attestedAtUtc"
+    ) "external-surface attestation"
+    if ($ExpectedPhase -ceq "preflight") {
+        $ExpectedChromeMcp = "not-used-before-candidate-execution"
+        $ExpectedComputerUse = "released-before-candidate-execution"
+        $ExpectedReviewerInput = "review-not-started"
+    }
+    elseif ($ExpectedPhase -ceq "postflight") {
+        $ExpectedChromeMcp = "never-used-through-independent-review"
+        $ExpectedComputerUse = "not-resumed-through-independent-review"
+        $ExpectedReviewerInput = "exported-digest-bound-files-only"
+    }
+    else { throw "External-surface attestation phase is unsupported." }
+    if ($Record.schemaVersion -ne 1 -or
+        $Record.evidenceType -cne "stock-user-chrome-external-surface-attestation" -or
+        $Record.phase -cne $ExpectedPhase -or
+        $Record.orchestrationSurface -cne `
+            "user-orchestrator-secured-ssh-exported-file-review" -or
+        $Record.chromeMcpState -cne $ExpectedChromeMcp -or
+        $Record.computerUseState -cne $ExpectedComputerUse -or
+        $Record.reviewerInputState -cne $ExpectedReviewerInput -or
+        $Record.attestorKind -cne "orchestrator-agent" -or
+        [string]$Record.releaseCandidateBindingSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        [string]$Record.attestorSessionRef -cnotmatch '^[0-9a-f]{64}$' -or
+        [string]$RecordSha256 -cnotmatch '^[0-9a-f]{64}$') {
+        throw "External-surface attestation identity, phase, or exact states are invalid."
+    }
+    $ExpectedReleaseDigest = Get-TextSha256 (
+        $ReleaseBinding | ConvertTo-Json -Depth 20 -Compress
+    )
+    if ($Record.releaseCandidateBindingSha256 -cne $ExpectedReleaseDigest -or
+        ($Record.releaseCandidateBinding | ConvertTo-Json -Depth 20 -Compress) -cne
+            ($ReleaseBinding | ConvertTo-Json -Depth 20 -Compress)) {
+        throw "External-surface attestation is not bound to the exact release candidate."
+    }
+    $AttestedAt = Assert-UtcTimestamp $Record.attestedAtUtc "external-surface attestation time"
+    return [pscustomobject]@{
+        Phase = $ExpectedPhase
+        Sha256 = $RecordSha256
+        ChromeMcpState = [string]$Record.chromeMcpState
+        ComputerUseState = [string]$Record.computerUseState
+        ReviewerInputState = [string]$Record.reviewerInputState
+        AttestorSessionRef = [string]$Record.attestorSessionRef
+        AttestedAt = $AttestedAt
+        AttestedAtUtc = [string]$Record.attestedAtUtc
+    }
+}
+
+function Assert-ExternalSurfaceAttestationPairV3 {
+    param(
+        [object]$Preflight,
+        [object]$Postflight,
+        [object]$Helper,
+        [object]$Approval,
+        [object]$Review
+    )
+    if ($Preflight.AttestorSessionRef -cne $Postflight.AttestorSessionRef -or
+        $Preflight.AttestorSessionRef -ceq $Helper.operatorExchange.executorSessionRef -or
+        $Preflight.AttestorSessionRef -ceq $Helper.operatorExchange.reviewerSessionRef -or
+        $Preflight.AttestorSessionRef -cne $Approval.response.orchestratorSessionRef) {
+        throw "External-surface attestations do not use the same distinct approval orchestrator session."
+    }
+    $StartedAt = Assert-UtcTimestamp $Helper.run.startedAtUtc "helper run start time"
+    $FinishedAt = Assert-UtcTimestamp $Helper.run.finishedAtUtc "helper run finish time"
+    $ReviewedAt = Assert-UtcTimestamp $Review.reviewedAtUtc "independent review time"
+    $Now = [DateTimeOffset]::UtcNow
+    if ($Preflight.AttestedAt -gt $StartedAt -or
+        $Preflight.AttestedAt -lt $StartedAt.AddMinutes(-30)) {
+        throw "External-surface preflight was not fresh and ordered before candidate execution."
+    }
+    if ($Postflight.AttestedAt -lt $FinishedAt -or
+        $Postflight.AttestedAt -lt $ReviewedAt -or
+        $Postflight.AttestedAt -le $Preflight.AttestedAt -or
+        $Postflight.AttestedAt -gt $Now -or
+        $Postflight.AttestedAt -gt $ReviewedAt.AddMinutes(30)) {
+        throw "External-surface postflight does not close the helper and independent-review interval."
+    }
+    return [pscustomobject]@{
+        PreflightSha256 = [string]$Preflight.Sha256
+        PostflightSha256 = [string]$Postflight.Sha256
+        ChromeMcpDisposition = [string]$Postflight.ChromeMcpState
+        ComputerUseDisposition = [string]$Postflight.ComputerUseState
+        ReviewerInputDisposition = [string]$Postflight.ReviewerInputState
+        AttestorSessionRef = [string]$Preflight.AttestorSessionRef
+        PreflightAttestedAtUtc = [string]$Preflight.AttestedAtUtc
+        PostflightAttestedAtUtc = [string]$Postflight.AttestedAtUtc
+    }
+}
+
+function Format-CanonicalUtc {
+    param([DateTimeOffset]$Value)
+    return $Value.UtcDateTime.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
 }
 
 function Assert-IntegerRange {
@@ -929,12 +1106,14 @@ function Assert-HandbackCaseV2 {
     Assert-ResumeV2 $Case.resume "$Name Resume"
 }
 
-function Assert-ActionConsentV2 {
-    param([object]$Consent, [string]$Label, [bool]$ExpectedPerformed)
-    Assert-ExactKeys $Consent @("performed", "actionTimeHumanConfirmed") $Label
-    Assert-ExactPropertyOrder $Consent @("performed", "actionTimeHumanConfirmed") $Label
-    Assert-ExactBoolean $Consent.performed $ExpectedPerformed "$Label performed"
-    Assert-ExactBoolean $Consent.actionTimeHumanConfirmed $ExpectedPerformed "$Label action-time human confirmation"
+function Assert-ApprovedCheckpointV3 {
+    param([object]$Checkpoint, [string]$ApprovalId, [string]$Label, [bool]$ExpectedPerformed)
+    Assert-ExactKeys $Checkpoint @("performed", "approvalRef") $Label
+    Assert-ExactPropertyOrder $Checkpoint @("performed", "approvalRef") $Label
+    Assert-ExactBoolean $Checkpoint.performed $ExpectedPerformed "$Label performed"
+    if ($Checkpoint.approvalRef -cne $ApprovalId) {
+        throw "$Label is not bound to the single scoped action-time approval."
+    }
 }
 
 function Assert-OperatorResultsV2 {
@@ -942,21 +1121,21 @@ function Assert-OperatorResultsV2 {
     $operatorFields = @(
         "schemaVersion", "evidenceType", "releaseCandidateBinding", "candidateBinding", "environment", "actionSurfaces",
         "computerHelperChain", "consentCheckpoints", "initialState", "extension",
-        "handback", "screenshotCaptures", "humanVisualReview", "restoration", "cleanup", "retainedEvidence"
+        "handback", "screenshotCaptures", "independentVisualReview", "restoration", "cleanup", "retainedEvidence"
     )
-    Assert-ExactKeys $Operator $operatorFields "v0.12.14 operator results"
-    Assert-ExactPropertyOrder $Operator $operatorFields "v0.12.14 operator results"
-    Assert-IntegerRange $Operator.schemaVersion 2 2 "v0.12.14 operator schemaVersion"
+    Assert-ExactKeys $Operator $operatorFields "v0.12.15 operator results"
+    Assert-ExactPropertyOrder $Operator $operatorFields "v0.12.15 operator results"
+    Assert-IntegerRange $Operator.schemaVersion 3 3 "v0.12.15 operator schemaVersion"
     if ($ExpectedVersion -cne $script:OperatorV2Version -or
         $Operator.evidenceType -cne "stock-user-chrome-operator-observations") {
-        throw "The v0.12.14 operator schema is bound only to a v0.12.14 candidate."
+        throw "The v0.12.15 operator schema is bound only to a v0.12.15 candidate."
     }
-    [void](Assert-ReleaseCandidateBinding $Operator.releaseCandidateBinding $Candidate "v0.12.14 operator releaseCandidateBinding")
+    [void](Assert-ReleaseCandidateBinding $Operator.releaseCandidateBinding $Candidate "v0.12.15 operator releaseCandidateBinding")
     if (($Operator.releaseCandidateBinding | ConvertTo-Json -Depth 10 -Compress) -cne
         ($ExpectedReleaseBinding | ConvertTo-Json -Depth 10 -Compress)) {
         throw "The operator record is not bound to the exact release candidate attempt."
     }
-    Assert-CandidateBindingDomain $Operator.candidateBinding $ExpectedBinding "v0.12.14 operator candidateBinding"
+    Assert-CandidateBindingDomain $Operator.candidateBinding $ExpectedBinding "v0.12.15 operator candidateBinding"
 
     $environment = $Operator.environment
     $environmentFields = @(
@@ -964,18 +1143,18 @@ function Assert-OperatorResultsV2 {
         "dedicatedTemporaryWindow", "browserLaunchFlagsUsed", "directCdpUsed",
         "automationTestProfileUsed", "localDemoOnly"
     )
-    Assert-ExactKeys $environment $environmentFields "v0.12.14 operator environment"
-    Assert-ExactPropertyOrder $environment $environmentFields "v0.12.14 operator environment"
+    Assert-ExactKeys $environment $environmentFields "v0.12.15 operator environment"
+    Assert-ExactPropertyOrder $environment $environmentFields "v0.12.15 operator environment"
     if ($environment.platform -cne "windows-x86_64" -or $environment.browserProduct -cne "Google Chrome" -or
         -not [regex]::IsMatch([string]$environment.browserVersion, '^[0-9]{1,3}\.[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}$') -or
         [int]([string]$environment.browserVersion).Split('.')[0] -lt 140) {
-        throw "The v0.12.14 operator browser identity is invalid."
+        throw "The v0.12.15 operator browser identity is invalid."
     }
     foreach ($name in @("stockUserChrome", "existingUserSession", "dedicatedTemporaryWindow", "localDemoOnly")) {
-        Assert-ExactBoolean $environment.$name $true "v0.12.14 operator environment $name"
+        Assert-ExactBoolean $environment.$name $true "v0.12.15 operator environment $name"
     }
     foreach ($name in @("browserLaunchFlagsUsed", "directCdpUsed", "automationTestProfileUsed")) {
-        Assert-ExactBoolean $environment.$name $false "v0.12.14 operator environment $name"
+        Assert-ExactBoolean $environment.$name $false "v0.12.15 operator environment $name"
     }
 
     $surfaces = $Operator.actionSurfaces
@@ -986,22 +1165,23 @@ function Assert-OperatorResultsV2 {
         "debuggerOwnerDuringBridgeLease", "competingDebuggerAttachmentAllowed",
         "chromeMcpUsedDuringBridgeLease", "chromeMcpReleaseEvidenceClaimed"
     )
-    Assert-ExactKeys $surfaces $surfaceFields "v0.12.14 action surfaces"
-    Assert-ExactPropertyOrder $surfaces $surfaceFields "v0.12.14 action surfaces"
+    Assert-ExactKeys $surfaces $surfaceFields "v0.12.15 action surfaces"
+    Assert-ExactPropertyOrder $surfaces $surfaceFields "v0.12.15 action surfaces"
     if ($surfaces.bridgeApiMatrix -cne "local-browser-bridge-api" -or
         $surfaces.computerHelperApi -cne "local-browser-bridge-computer-api" -or
         $surfaces.debuggerOwnerDuringBridgeLease -cne "local-browser-bridge-extension") {
         throw "The Local Browser Bridge extension must be the exclusive debugger owner during its lease."
     }
-    if ($script:ExternalOrchestrationSurfaces -cnotcontains $surfaces.orchestrationAndConsent) {
-        throw "v0.12.14 requires an explicit external human-consent orchestration surface."
+    if ($surfaces.orchestrationAndConsent -cne `
+        "user-orchestrator-secured-ssh-exported-file-review") {
+        throw "v0.12.15 requires the independent Windows app-share orchestration surface."
     }
     foreach ($name in @(
         "dedicatedWindowCreation", "chromeExtensionsPage", "nativeLoadUnpackedPicker",
         "extensionPopup", "chromeDebuggerNotice", "browserApiResult",
         "computerShareAction", "acceptanceScreenshots"
     )) {
-        Assert-BrowserChromeSurfaceV2 $surfaces.$name "v0.12.14 action surface $name"
+        Assert-BrowserChromeSurfaceV2 $surfaces.$name "v0.12.15 action surface $name"
     }
     Assert-ExactBoolean $surfaces.competingDebuggerAttachmentAllowed $false "competing debugger attachment"
     Assert-ExactBoolean $surfaces.chromeMcpUsedDuringBridgeLease $false "Chrome MCP use during the bridge lease"
@@ -1015,8 +1195,8 @@ function Assert-OperatorResultsV2 {
         "rawScreenshotCount", "topologyProtocolBound", "ownerForcedSupervisorTermination", "helperDisconnectedAfterTermination",
         "noHelperChildrenOrListenersRemain", "helperStopped"
     )
-    Assert-ExactKeys $helper $helperFields "v0.12.14 computer helper chain"
-    Assert-ExactPropertyOrder $helper $helperFields "v0.12.14 computer helper chain"
+    Assert-ExactKeys $helper $helperFields "v0.12.15 computer helper chain"
+    Assert-ExactPropertyOrder $helper $helperFields "v0.12.15 computer helper chain"
     foreach ($name in @(
         "candidateBoundExecutableStarted", "connectedThroughLoopbackServer", "serverApiOnly",
         "exactChromeWindowSelected", "chromeExtensionsLoadCompleted", "browserApiActionCompleted",
@@ -1024,18 +1204,18 @@ function Assert-OperatorResultsV2 {
         "topologyProtocolBound", "ownerForcedSupervisorTermination", "helperDisconnectedAfterTermination",
         "noHelperChildrenOrListenersRemain", "helperStopped"
     )) {
-        Assert-ExactBoolean $helper.$name $true "v0.12.14 computer helper chain $name"
+        Assert-ExactBoolean $helper.$name $true "v0.12.15 computer helper chain $name"
     }
     if ($helper.screenshotEndpoint -cne "/api/computer/screenshot") {
-        throw "v0.12.14 computer helper screenshots must use /api/computer/screenshot."
+        throw "v0.12.15 computer helper screenshots must use /api/computer/screenshot."
     }
-    Assert-IntegerRange $helper.rawScreenshotCount 6 6 "v0.12.14 computer helper raw screenshot count"
+    Assert-IntegerRange $helper.rawScreenshotCount 6 6 "v0.12.15 computer helper raw screenshot count"
 
     $initial = $Operator.initialState
     Assert-ExactKeys $initial @(
         "capturedBeforeRelevantMutation", "candidateExtensionPresent", "developerMode",
         "fullAccess", "savedTokenConfigured"
-    ) "v0.12.14 initial state"
+    ) "v0.12.15 initial state"
     Assert-ExactBoolean $initial.capturedBeforeRelevantMutation $true "initial-state capture"
     Assert-ExactBoolean $initial.candidateExtensionPresent $false "initial candidate extension presence"
     Assert-ExactBoolean $initial.savedTokenConfigured $false "initial saved token configured"
@@ -1049,111 +1229,111 @@ function Assert-OperatorResultsV2 {
 
     $consent = $Operator.consentCheckpoints
     Assert-ExactKeys $consent @(
-        "installCandidate", "developerModeChange", "fullAccessUse", "acceptanceTokenSave",
-        "clearSavedToken", "extensionDisposition"
-    ) "v0.12.14 consent checkpoints"
-    Assert-ExactKeys $consent.installCandidate @(
-        "performed", "actionTimeHumanConfirmed", "ownershipConfirmed"
-    ) "candidate-install consent"
-    foreach ($name in @("performed", "actionTimeHumanConfirmed", "ownershipConfirmed")) {
-        Assert-ExactBoolean $consent.installCandidate.$name $true "candidate-install consent $name"
-    }
-    Assert-ActionConsentV2 $consent.developerModeChange "Developer Mode change consent" $initial.developerMode.changedByRun
-    Assert-ExactKeys $consent.fullAccessUse @(
-        "performed", "actionTimeHumanConfirmed", "localDemoScopeAcknowledged"
-    ) "Full Access consent"
-    foreach ($name in @("performed", "actionTimeHumanConfirmed", "localDemoScopeAcknowledged")) {
-        Assert-ExactBoolean $consent.fullAccessUse.$name $true "Full Access consent $name"
-    }
-    Assert-ExactKeys $consent.acceptanceTokenSave @(
-        "performed", "actionTimeHumanConfirmed", "ephemeralAcceptanceCredentialAcknowledged"
-    ) "acceptance-token-save consent"
-    foreach ($name in @("performed", "actionTimeHumanConfirmed", "ephemeralAcceptanceCredentialAcknowledged")) {
-        Assert-ExactBoolean $consent.acceptanceTokenSave.$name $true "acceptance-token-save consent $name"
-    }
-    Assert-ExactKeys $consent.clearSavedToken @(
-        "performed", "actionTimeHumanConfirmed", "confirmationDialogSeen",
-        "confirmationActionTimeHumanConfirmed"
-    ) "clear-saved-token consent"
+        "scopedActionTimeApproval", "installCandidate", "developerModeChange", "fullAccessUse",
+        "acceptanceTokenSave", "clearSavedToken", "removeTestOwnedExtension",
+        "restoreCapturedBrowserSettings", "failureRollback"
+    ) "v0.12.15 consent checkpoints"
+    Assert-ExactPropertyOrder $consent @(
+        "scopedActionTimeApproval", "installCandidate", "developerModeChange", "fullAccessUse",
+        "acceptanceTokenSave", "clearSavedToken", "removeTestOwnedExtension",
+        "restoreCapturedBrowserSettings", "failureRollback"
+    ) "v0.12.15 consent checkpoints"
+    $approvalSummary = $consent.scopedActionTimeApproval
+    Assert-ExactKeys $approvalSummary @(
+        "recordSha256", "approvalId", "obtainedAtActionTime", "consumedBeforeFirstCoveredAction",
+        "consumedBeforeExpiry", "freshStateRevalidatedAfterApproval",
+        "scopeUnchangedThroughRun", "singleCandidateRun"
+    ) "scoped action-time approval summary"
+    Assert-Hex $approvalSummary.recordSha256 64 "scoped approval record SHA-256"
+    Assert-Hex $approvalSummary.approvalId 64 "scoped approval id"
     foreach ($name in @(
-        "performed", "actionTimeHumanConfirmed", "confirmationDialogSeen",
-        "confirmationActionTimeHumanConfirmed"
+        "obtainedAtActionTime", "consumedBeforeFirstCoveredAction", "consumedBeforeExpiry",
+        "freshStateRevalidatedAfterApproval", "scopeUnchangedThroughRun", "singleCandidateRun"
     )) {
-        Assert-ExactBoolean $consent.clearSavedToken.$name $true "clear-saved-token consent $name"
+        Assert-ExactBoolean $approvalSummary.$name $true "scoped action-time approval $name"
     }
-    Assert-ExactKeys $consent.extensionDisposition @(
-        "performed", "actionTimeHumanConfirmed", "testOwnedRemovalConfirmed"
-    ) "extension-disposition consent"
-    foreach ($name in @("performed", "actionTimeHumanConfirmed", "testOwnedRemovalConfirmed")) {
-        Assert-ExactBoolean $consent.extensionDisposition.$name $true "extension-disposition consent $name"
+    Assert-ApprovedCheckpointV3 $consent.installCandidate $approvalSummary.approvalId "candidate installation" $true
+    Assert-ApprovedCheckpointV3 $consent.developerModeChange $approvalSummary.approvalId `
+        "Developer Mode change" $initial.developerMode.changedByRun
+    Assert-ApprovedCheckpointV3 $consent.fullAccessUse $approvalSummary.approvalId `
+        "Full Access use" $true
+    foreach ($name in @("acceptanceTokenSave", "clearSavedToken", "restoreCapturedBrowserSettings")) {
+        Assert-ApprovedCheckpointV3 $consent.$name $approvalSummary.approvalId "$name checkpoint" $true
     }
+    Assert-ApprovedCheckpointV3 $consent.removeTestOwnedExtension $approvalSummary.approvalId `
+        "extension-disposition consent" $true
+    Assert-ApprovedCheckpointV3 $consent.failureRollback $approvalSummary.approvalId "failure rollback" $false
 
     $extension = $Operator.extension
     Assert-ExactKeys $extension @(
         "cardCount", "version", "enabled", "loadErrors", "loadedVia",
         "loadedDirectoryByteMatchesCandidateZip", "popupConnected",
         "debuggerLeaseActiveAtFirstCapture", "nativeDebuggerUseIndicatorSeen"
-    ) "v0.12.14 extension proof"
-    Assert-IntegerRange $extension.cardCount 1 1 "v0.12.14 extension cardCount"
-    Assert-IntegerRange $extension.loadErrors 0 0 "v0.12.14 extension loadErrors"
+    ) "v0.12.15 extension proof"
+    Assert-IntegerRange $extension.cardCount 1 1 "v0.12.15 extension cardCount"
+    Assert-IntegerRange $extension.loadErrors 0 0 "v0.12.15 extension loadErrors"
     if ($extension.version -cne $ExpectedVersion -or
         $extension.loadedVia -cne "chrome://extensions-load-unpacked") {
-        throw "The v0.12.14 extension card identity is invalid."
+        throw "The v0.12.15 extension card identity is invalid."
     }
     foreach ($name in @(
         "enabled", "loadedDirectoryByteMatchesCandidateZip", "popupConnected",
         "debuggerLeaseActiveAtFirstCapture", "nativeDebuggerUseIndicatorSeen"
     )) {
-        Assert-ExactBoolean $extension.$name $true "v0.12.14 extension $name"
+        Assert-ExactBoolean $extension.$name $true "v0.12.15 extension $name"
     }
 
-    Assert-ExactKeys $Operator.handback @("stop", "cancel") "v0.12.14 handback matrix"
-    Assert-ExactPropertyOrder $Operator.handback @("stop", "cancel") "v0.12.14 handback matrix"
+    Assert-ExactKeys $Operator.handback @("stop", "cancel") "v0.12.15 handback matrix"
+    Assert-ExactPropertyOrder $Operator.handback @("stop", "cancel") "v0.12.15 handback matrix"
     Assert-HandbackCaseV2 $Operator.handback.stop "Stop" "in-page-stop" "released_by_user" $true
     Assert-HandbackCaseV2 $Operator.handback.cancel "Cancel" "chrome-native-cancel" "canceled_by_user" $true
 
     if ($Operator.screenshotCaptures.Count -ne $script:ExpectedScreenshotsV2.Count) {
-        throw "v0.12.14 must bind exactly six machine-helper screenshot capture surfaces."
+        throw "v0.12.15 must bind exactly six machine-helper screenshot capture surfaces."
     }
     for ($index = 0; $index -lt $script:ExpectedScreenshotsV2.Count; $index += 1) {
         $purpose = @($script:ExpectedScreenshotsV2.Keys)[$index]
         $capture = $Operator.screenshotCaptures[$index]
         Assert-ExactKeys $capture @(
             "purpose", "image", "captureSurface", "requiredVisibleState"
-        ) "v0.12.14 screenshot capture"
+        ) "v0.12.15 screenshot capture"
         if ($capture.purpose -cne $purpose -or
             $capture.image -cne $script:ExpectedScreenshotsV2[$purpose] -or
             $capture.captureSurface -cne "local-browser-bridge-computer-helper" -or
             $capture.captureSurface -cne $surfaces.acceptanceScreenshots -or
             $capture.requiredVisibleState -cne $script:RequiredVisibleStatesV2[$purpose]) {
-            throw "v0.12.14 screenshot identity, helper surface, or visible-state criterion is invalid."
+            throw "v0.12.15 screenshot identity, helper surface, or visible-state criterion is invalid."
         }
     }
 
-    $review = $Operator.humanVisualReview
+    $review = $Operator.independentVisualReview
     $reviewFields = @(
-        "sanitizedBeforeHumanReview", "automationPausedForHumanReview", "reviewedCropCount",
-        "everySanitizedCropOpenedByHuman", "requiredVisibleStateConfirmedByHuman",
-        "sensitivePixelsAbsentConfirmedByHuman", "reviewFlagsSetOnlyAfterHumanConfirmation",
-        "postSanitizationAttestationCreated", "pendingReviewRecordsOutsideRetainedEvidence",
-        "automaticPixelRedactionClaimed"
+        "recordSha256", "executorSessionRef", "reviewerSessionRef", "independentSessionBoundary",
+        "reviewedCropCount", "everySanitizedCropOpenedByReviewer", "allImageDigestsMatched",
+        "requiredVisibleStateConfirmedByReviewer", "noSensitivePixelsObservedByReviewer",
+        "noUncertaintyReported", "visualJudgmentNotPixelSafetyProof"
     )
-    Assert-ExactKeys $review $reviewFields "v0.12.14 human visual review"
-    foreach ($name in @(
-        "sanitizedBeforeHumanReview", "automationPausedForHumanReview",
-        "everySanitizedCropOpenedByHuman", "requiredVisibleStateConfirmedByHuman",
-        "sensitivePixelsAbsentConfirmedByHuman", "reviewFlagsSetOnlyAfterHumanConfirmation",
-        "postSanitizationAttestationCreated", "pendingReviewRecordsOutsideRetainedEvidence"
-    )) {
-        Assert-ExactBoolean $review.$name $true "v0.12.14 human visual review $name"
+    Assert-ExactKeys $review $reviewFields "v0.12.15 independent visual review"
+    Assert-ExactPropertyOrder $review $reviewFields "v0.12.15 independent visual review"
+    foreach ($name in @("recordSha256", "executorSessionRef", "reviewerSessionRef")) {
+        Assert-Hex $review.$name 64 "v0.12.15 independent visual review $name"
     }
-    Assert-IntegerRange $review.reviewedCropCount 6 6 "v0.12.14 human-reviewed crop count"
-    Assert-ExactBoolean $review.automaticPixelRedactionClaimed $false "automatic pixel-redaction claim"
+    if ($review.executorSessionRef -ceq $review.reviewerSessionRef) {
+        throw "The independent visual reviewer must not reuse the executor session."
+    }
+    foreach ($name in @(
+        "independentSessionBoundary", "everySanitizedCropOpenedByReviewer", "allImageDigestsMatched",
+        "requiredVisibleStateConfirmedByReviewer", "noSensitivePixelsObservedByReviewer",
+        "noUncertaintyReported", "visualJudgmentNotPixelSafetyProof"
+    )) {
+        Assert-ExactBoolean $review.$name $true "v0.12.15 independent visual review $name"
+    }
+    Assert-IntegerRange $review.reviewedCropCount 6 6 "v0.12.15 independently reviewed crop count"
 
     $restoration = $Operator.restoration
     Assert-ExactKeys $restoration @(
         "candidateExtensionPresence", "developerMode", "fullAccess", "savedToken"
-    ) "v0.12.14 restoration"
+    ) "v0.12.15 restoration"
     Assert-ExactKeys $restoration.candidateExtensionPresence @(
         "finalPresent", "matchesInitial", "verifiedFromLiveUi"
     ) "candidate-extension restoration"
@@ -1182,37 +1362,52 @@ function Assert-OperatorResultsV2 {
     $cleanupFields = @(
         "controlReleased", "testTabsClosed", "testWindowClosed", "popupDisconnected", "serverStopped",
         "portReleased", "acceptanceCredentialClearedFromShell", "savedTokenClear",
-        "chromeMcpReleasedOrNotUsed", "computerUseReleasedOrNotUsed", "computerHelperStopped",
+        "externalSurfacePreflightAttestationSha256", "externalSurfacePostflightAttestationSha256",
+        "chromeMcpDisposition", "computerUseDisposition", "reviewerInputDisposition",
+        "computerHelperStopped",
         "rawScreenshotScratchDeleted", "pendingReviewRecordsDeleted",
         "extractedExtensionInventoryVerifiedBeforeDeletion", "extractedExtensionDirectoryDeleted",
-        "extensionDisposition", "unrelatedTabsOrWindowsChanged", "unrelatedExtensionsChanged"
+        "extensionDisposition", "unrelatedTargetMutationCommandsIssued",
+        "unrelatedExtensionMutationCommandsIssued"
     )
-    Assert-ExactKeys $cleanup $cleanupFields "v0.12.14 cleanup"
+    Assert-ExactKeys $cleanup $cleanupFields "v0.12.15 cleanup"
     foreach ($name in @(
         "controlReleased", "testTabsClosed", "testWindowClosed", "popupDisconnected", "serverStopped",
-        "portReleased", "acceptanceCredentialClearedFromShell", "chromeMcpReleasedOrNotUsed",
-        "computerUseReleasedOrNotUsed", "computerHelperStopped", "rawScreenshotScratchDeleted",
+        "portReleased", "acceptanceCredentialClearedFromShell", "computerHelperStopped",
+        "rawScreenshotScratchDeleted",
         "pendingReviewRecordsDeleted", "extractedExtensionInventoryVerifiedBeforeDeletion",
         "extractedExtensionDirectoryDeleted"
     )) {
-        Assert-ExactBoolean $cleanup.$name $true "v0.12.14 cleanup $name"
+        Assert-ExactBoolean $cleanup.$name $true "v0.12.15 cleanup $name"
+    }
+    if ([string]$cleanup.externalSurfacePreflightAttestationSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        [string]$cleanup.externalSurfacePostflightAttestationSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        $cleanup.chromeMcpDisposition -cne "never-used-through-independent-review" -or
+        $cleanup.computerUseDisposition -cne "not-resumed-through-independent-review" -or
+        $cleanup.reviewerInputDisposition -cne "exported-digest-bound-files-only") {
+        throw "External orchestration surfaces are not closed by the exact preflight/postflight attestation pair."
     }
     Assert-ExactKeys $cleanup.savedTokenClear @(
-        "trustedPopupClick", "confirmationDialogShown", "confirmationAcceptedByHuman",
+        "trustedPopupClick", "confirmationDialogShown", "confirmationAcceptedByExecutor", "approvalRef",
         "popupStateVerifiedAfterClear", "tokenConfigured", "clearButtonDisabled"
     ) "saved token cleanup"
     foreach ($name in @(
-        "trustedPopupClick", "confirmationDialogShown", "confirmationAcceptedByHuman",
+        "trustedPopupClick", "confirmationDialogShown", "confirmationAcceptedByExecutor",
         "popupStateVerifiedAfterClear", "clearButtonDisabled"
     )) {
         Assert-ExactBoolean $cleanup.savedTokenClear.$name $true "saved token cleanup $name"
     }
     Assert-ExactBoolean $cleanup.savedTokenClear.tokenConfigured $false "saved token cleanup tokenConfigured"
+    if ($cleanup.savedTokenClear.approvalRef -cne $approvalSummary.approvalId) {
+        throw "Saved-token cleanup is not bound to the scoped action-time approval."
+    }
     if ($cleanup.extensionDisposition -cne "removed") {
         throw "The new-install-only candidate identity must be removed."
     }
-    Assert-ExactBoolean $cleanup.unrelatedTabsOrWindowsChanged $false "unrelated tab/window mutation"
-    Assert-ExactBoolean $cleanup.unrelatedExtensionsChanged $false "unrelated extension mutation"
+    Assert-ExactBoolean $cleanup.unrelatedTargetMutationCommandsIssued $false `
+        "unrelated target mutation command"
+    Assert-ExactBoolean $cleanup.unrelatedExtensionMutationCommandsIssued $false `
+        "unrelated extension mutation command"
 
     $retained = $Operator.retainedEvidence
     Assert-ExactKeys $retained @(
@@ -1220,20 +1415,20 @@ function Assert-OperatorResultsV2 {
         "rawScreenshotsPresent", "pendingReviewRecordsPresent", "chromeMcpTranscriptPresent",
         "computerUseTranscriptPresent", "secretCredentialPresent",
         "filesystemLocationsOrBrowserIdsPresent", "externalToolAndPlatformLogsScope"
-    ) "v0.12.14 retained evidence"
+    ) "v0.12.15 retained evidence"
     if ($retained.scope -cne "acceptance-evidence-directory-only" -or
         $retained.externalToolAndPlatformLogsScope -cne "not-asserted") {
-        throw "The v0.12.14 retained-evidence scope is invalid."
+        throw "The v0.12.15 retained-evidence scope is invalid."
     }
     Assert-ExactBoolean $retained.exactAllowlistVerified $true "retained-evidence allowlist verification"
-    Assert-IntegerRange $retained.inputFileCount 17 17 "retained-evidence input count"
-    Assert-IntegerRange $retained.finalFileCount 18 18 "retained-evidence final count"
+    Assert-IntegerRange $retained.inputFileCount 21 21 "retained-evidence input count"
+    Assert-IntegerRange $retained.finalFileCount 22 22 "retained-evidence final count"
     foreach ($name in @(
         "rawScreenshotsPresent", "pendingReviewRecordsPresent", "chromeMcpTranscriptPresent",
         "computerUseTranscriptPresent", "secretCredentialPresent",
         "filesystemLocationsOrBrowserIdsPresent"
     )) {
-        Assert-ExactBoolean $retained.$name $false "v0.12.14 retained evidence $name"
+        Assert-ExactBoolean $retained.$name $false "v0.12.15 retained evidence $name"
     }
 }
 function Assert-OperatorResults {
@@ -1251,7 +1446,30 @@ function Assert-OperatorResults {
 
 function Get-PngFacts {
     param([string]$Path)
-    $bytes = [IO.File]::ReadAllBytes($Path)
+    $resolved = [IO.Path]::GetFullPath($Path)
+    $item = [IO.FileInfo]::new($resolved)
+    if (-not $item.Exists -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Retained screenshot must be an ordinary file."
+    }
+    Assert-NoReparseAncestorChain $resolved "retained screenshot"
+    $stream = [IO.File]::Open(
+        $resolved, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None
+    )
+    if ($stream.Length -lt 33 -or $stream.Length -gt 20MB) {
+        $stream.Dispose()
+        throw "Retained screenshot has an invalid PNG size."
+    }
+    $bytes = [byte[]]::new([int]$stream.Length)
+    $readOffset = 0
+    try {
+        while ($readOffset -lt $bytes.Length) {
+            $read = $stream.Read($bytes, $readOffset, $bytes.Length - $readOffset)
+            if ($read -le 0) { throw "Retained screenshot ended before its declared length." }
+            $readOffset += $read
+        }
+        if ($stream.ReadByte() -ne -1) { throw "Retained screenshot grew during its exclusive read." }
+    }
+    finally { $stream.Dispose() }
     if ($bytes.Length -lt 33 -or $bytes.Length -gt 20MB) {
         throw "Retained screenshot has an invalid PNG size."
     }
@@ -1315,7 +1533,23 @@ function Get-PngFacts {
     if (-not $sawImageData -or -not $sawEnd -or $width -le 0 -or $height -le 0) {
         throw "Retained screenshot is missing required PNG image data."
     }
-    return [pscustomobject]@{ Width = [long]$width; Height = [long]$height }
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    try {
+        $digest = $hasher.ComputeHash($bytes)
+        try {
+            $sha256 = ([BitConverter]::ToString($digest)).Replace("-", "").ToLowerInvariant()
+        }
+        finally { [Array]::Clear($digest, 0, $digest.Length) }
+    }
+    finally { $hasher.Dispose() }
+    $result = [pscustomobject]@{
+        Width = [long]$width
+        Height = [long]$height
+        Bytes = [int64]$bytes.Length
+        Sha256 = $sha256
+    }
+    [Array]::Clear($bytes, 0, $bytes.Length)
+    return $result
 }
 
 function Assert-ScreenshotRecords {
@@ -1326,7 +1560,7 @@ function Assert-ScreenshotRecords {
     else { $script:ExpectedScreenshots }
     if ($Paths.Count -ne $expectedScreenshots.Count) {
         if ($ExpectedVersion -ceq $script:OperatorV2Version) {
-            throw "Exactly six v0.12.14 screenshot sidecars are required."
+            throw "Exactly six v0.12.15 screenshot sidecars are required."
         }
         throw "Exactly eleven screenshot sidecars are required."
     }
@@ -1344,7 +1578,8 @@ function Assert-ScreenshotRecords {
             $screenshotFields = @(
                 "schemaVersion", "evidenceType", "purpose", "releaseCandidateBinding", "candidateBinding", "sourceCapture", "image", "cropApplied",
                 "metadataStrippedByDecodeAndReencode", "forbiddenMetadataChunksPresent",
-                "automatedTextInspectionPerformed", "manualVisualReviewRequired", "manualVisualReviewConfirmed",
+                "automatedTextInspectionPerformed", "independentVisualReviewRequired", "independentVisualReviewCompleted",
+                "reviewRecordSha256", "reviewEntryRef",
                 "automaticPixelRedactionPerformed", "unknownPixelSafetyClaimed", "reviewStatement"
             )
         }
@@ -1394,7 +1629,12 @@ function Assert-ScreenshotRecords {
             throw "Screenshot image dimensions exceed the pixel limit."
         }
         Assert-Hex $record.image.sha256 64 "screenshot SHA-256"
-        foreach ($name in @("cropApplied", "metadataStrippedByDecodeAndReencode", "manualVisualReviewConfirmed")) {
+        $requiredTrueFields = @("cropApplied", "metadataStrippedByDecodeAndReencode")
+        if ($ExpectedVersion -ceq $script:OperatorV2Version) {
+            $requiredTrueFields += @("independentVisualReviewRequired", "independentVisualReviewCompleted")
+        }
+        else { $requiredTrueFields += "manualVisualReviewConfirmed" }
+        foreach ($name in $requiredTrueFields) {
             Assert-ExactBoolean $record.$name $true "screenshot $name"
         }
         foreach ($name in @("forbiddenMetadataChunksPresent", "automaticPixelRedactionPerformed", "unknownPixelSafetyClaimed")) {
@@ -1402,7 +1642,8 @@ function Assert-ScreenshotRecords {
         }
         if ($ExpectedVersion -ceq $script:OperatorV2Version) {
             Assert-ExactBoolean $record.automatedTextInspectionPerformed $false "screenshot automated text inspection"
-            Assert-ExactBoolean $record.manualVisualReviewRequired $true "screenshot manual visual review requirement"
+            Assert-Hex $record.reviewRecordSha256 64 "screenshot independent review record SHA-256"
+            Assert-Hex $record.reviewEntryRef 64 "screenshot independent review entry reference"
         }
         else {
             Assert-IntegerRange $record.ocrDenylistMatches 0 0 "screenshot OCR denylist matches"
@@ -1423,7 +1664,8 @@ function Assert-ScreenshotRecords {
         if ($pngFacts.Width -ne [long]$record.image.width -or $pngFacts.Height -ne [long]$record.image.height) {
             throw "Sanitized screenshot dimensions do not match their sidecar."
         }
-        if (([IO.FileInfo]::new($imagePath)).Length -ne [int64]$record.image.bytes -or (Get-Sha256 $imagePath) -cne $record.image.sha256) {
+        if ($pngFacts.Bytes -ne [int64]$record.image.bytes -or
+            $pngFacts.Sha256 -cne $record.image.sha256) {
             throw "Sanitized screenshot bytes do not match their sidecar."
         }
         $safe[$record.purpose] = $record
@@ -1459,6 +1701,44 @@ function Assert-SafeSerializedRecord {
     foreach ($value in $DenyValues) {
         if ($Json.IndexOf($value, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
             throw "Final evidence contains an exact denylisted value."
+        }
+    }
+    try { $decoded = $Json | ConvertFrom-Json }
+    catch { throw "Final evidence is not valid JSON for decoded-string leak scanning." }
+    $pending = New-Object Collections.Generic.Stack[object]
+    $pending.Push($decoded)
+    while ($pending.Count -gt 0) {
+        $value = $pending.Pop()
+        if ($null -eq $value) { continue }
+        if ($value -is [string]) {
+            foreach ($denyValue in $DenyValues) {
+                if ($value.IndexOf($denyValue, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                    throw "Final evidence contains an exact decoded denylisted value."
+                }
+            }
+            foreach ($decodedPattern in @(
+                '(?i)(?:[a-z]:\\users\\|/users/|/home/)',
+                '(?i)\b(?:authorization|bearer)\b',
+                '(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b'
+            )) {
+                if ([regex]::IsMatch(
+                    $value, $decodedPattern,
+                    [Text.RegularExpressions.RegexOptions]::CultureInvariant
+                )) {
+                    throw "Final evidence contains a forbidden decoded string value."
+                }
+            }
+        }
+        elseif ($value -is [Collections.IDictionary]) {
+            foreach ($child in $value.Values) { $pending.Push($child) }
+        }
+        elseif ($value -is [Collections.IEnumerable]) {
+            foreach ($child in $value) { $pending.Push($child) }
+        }
+        elseif ($value -is [pscustomobject]) {
+            foreach ($property in $value.PSObject.Properties) {
+                $pending.Push($property.Value)
+            }
         }
     }
     # Candidate bindings are exact, structurally validated lowercase commit or
@@ -1510,6 +1790,187 @@ function Write-NewJson {
         throw
     }
 }
+
+function Assert-ScopedApprovalRecordV3 {
+    param(
+        [object]$Record,
+        [object]$ExpectedBinding,
+        [object]$ExpectedReleaseBinding,
+        [object]$Candidate
+    )
+    $fields = @(
+        "schemaVersion", "evidenceType", "releaseCandidateBinding", "candidateBinding",
+        "approvalId", "request", "response", "consumption"
+    )
+    Assert-ExactKeys $Record $fields "scoped action-time approval record"
+    Assert-ExactPropertyOrder $Record $fields "scoped action-time approval record"
+    Assert-IntegerRange $Record.schemaVersion 1 1 "scoped action-time approval schemaVersion"
+    if ($Record.evidenceType -cne "stock-user-chrome-scoped-action-approval") {
+        throw "Scoped action-time approval identity is invalid."
+    }
+    [void](Assert-ReleaseCandidateBinding $Record.releaseCandidateBinding $Candidate `
+        "scoped approval releaseCandidateBinding")
+    if (($Record.releaseCandidateBinding | ConvertTo-Json -Depth 12 -Compress) -cne
+        ($ExpectedReleaseBinding | ConvertTo-Json -Depth 12 -Compress)) {
+        throw "Scoped approval is not bound to the exact release candidate attempt."
+    }
+    Assert-CandidateBindingDomain $Record.candidateBinding $ExpectedBinding `
+        "scoped approval candidateBinding"
+    Assert-Hex $Record.approvalId 64 "scoped approval id"
+
+    $requestFields = @(
+        "createdAtUtc", "expiresAtUtc", "challengeFrameRef", "scopeSha256", "coveredActions", "loopbackOnly",
+        "dedicatedWindowOnly", "restoreCapturedState", "noUnrelatedExtensionMutation"
+    )
+    Assert-ExactKeys $Record.request $requestFields "scoped approval request"
+    Assert-ExactPropertyOrder $Record.request $requestFields "scoped approval request"
+    $createdAt = Assert-UtcTimestamp $Record.request.createdAtUtc "scoped approval request creation"
+    $expiresAt = Assert-UtcTimestamp $Record.request.expiresAtUtc "scoped approval request expiry"
+    if ($expiresAt -le $createdAt -or ($expiresAt - $createdAt).TotalMinutes -gt 30) {
+        throw "Scoped approval request validity interval is invalid."
+    }
+    Assert-Hex $Record.request.challengeFrameRef 64 "scoped approval challenge frame reference"
+    Assert-Hex $Record.request.scopeSha256 64 "scoped approval scope SHA-256"
+    Assert-ExactArray @($Record.request.coveredActions) $script:CoveredApprovalActions `
+        "scoped approval covered actions"
+    foreach ($name in @(
+        "loopbackOnly", "dedicatedWindowOnly", "restoreCapturedState", "noUnrelatedExtensionMutation"
+    )) {
+        Assert-ExactBoolean $Record.request.$name $true "scoped approval request $name"
+    }
+
+    $responseFields = @(
+        "approvedBy", "deliveredBy", "orchestratorSessionRef", "confirmationMode",
+        "confirmedAtUtc", "requestSha256", "singleCandidateRun"
+    )
+    Assert-ExactKeys $Record.response $responseFields "scoped approval response"
+    Assert-ExactPropertyOrder $Record.response $responseFields "scoped approval response"
+    if ($Record.response.approvedBy -cne "user" -or
+        $Record.response.deliveredBy -cne "user-via-orchestrator" -or
+        $Record.response.confirmationMode -cne "batched-action-time") {
+        throw "Scoped approval was not granted by the user through the batched action-time checkpoint."
+    }
+    Assert-Hex $Record.response.orchestratorSessionRef 64 "scoped approval orchestrator session reference"
+    $confirmedAt = Assert-UtcTimestamp $Record.response.confirmedAtUtc "scoped approval confirmation"
+    if ($confirmedAt -lt $createdAt -or $confirmedAt -gt $expiresAt) {
+        throw "Scoped approval confirmation is outside its exact request interval."
+    }
+    Assert-Hex $Record.response.requestSha256 64 "scoped approval request SHA-256"
+    Assert-ExactBoolean $Record.response.singleCandidateRun $true "scoped approval single-candidate-run scope"
+
+    $consumptionFields = @(
+        "consumedBeforeFirstCoveredAction", "consumedBeforeExpiry", "preDispatchFrameRef",
+        "preDispatchDecisionRef", "preDispatchVerifiedAtUtc", "freshStateRevalidatedAfterApproval",
+        "scopeUnchangedThroughRun", "replayed",
+        "cleanupAuthoritySurvivesFailure"
+    )
+    Assert-ExactKeys $Record.consumption $consumptionFields "scoped approval consumption"
+    Assert-ExactPropertyOrder $Record.consumption $consumptionFields "scoped approval consumption"
+    foreach ($name in @(
+        "consumedBeforeFirstCoveredAction", "consumedBeforeExpiry",
+        "freshStateRevalidatedAfterApproval", "scopeUnchangedThroughRun",
+        "cleanupAuthoritySurvivesFailure"
+    )) {
+        Assert-ExactBoolean $Record.consumption.$name $true "scoped approval consumption $name"
+    }
+    foreach ($name in @("preDispatchFrameRef", "preDispatchDecisionRef")) {
+        Assert-Hex $Record.consumption.$name 64 "scoped approval consumption $name"
+    }
+    $preDispatchVerifiedAt = Assert-UtcTimestamp `
+        $Record.consumption.preDispatchVerifiedAtUtc "scoped approval pre-dispatch revalidation"
+    if ($Record.request.challengeFrameRef -ceq $Record.consumption.preDispatchFrameRef -or
+        $preDispatchVerifiedAt -le $confirmedAt -or $preDispatchVerifiedAt -gt $expiresAt) {
+        throw "Scoped approval did not use a distinct fresh post-approval state revalidation."
+    }
+    Assert-ExactBoolean $Record.consumption.replayed $false "scoped approval replay state"
+    return $Record
+}
+
+function Assert-IndependentReviewRecordV3 {
+    param(
+        [object]$Record,
+        [object]$ExpectedBinding,
+        [object]$ExpectedReleaseBinding,
+        [object]$Candidate
+    )
+    $fields = @(
+        "schemaVersion", "evidenceType", "releaseCandidateBinding", "candidateBinding",
+        "executorSessionRef", "reviewerSessionRef", "independentSessionBoundary",
+        "requestSha256", "reviewedAtUtc", "entries", "aggregate"
+    )
+    Assert-ExactKeys $Record $fields "independent visual review record"
+    Assert-ExactPropertyOrder $Record $fields "independent visual review record"
+    Assert-IntegerRange $Record.schemaVersion 1 1 "independent visual review schemaVersion"
+    if ($Record.evidenceType -cne "stock-user-chrome-independent-visual-review") {
+        throw "Independent visual review identity is invalid."
+    }
+    [void](Assert-ReleaseCandidateBinding $Record.releaseCandidateBinding $Candidate `
+        "independent review releaseCandidateBinding")
+    if (($Record.releaseCandidateBinding | ConvertTo-Json -Depth 12 -Compress) -cne
+        ($ExpectedReleaseBinding | ConvertTo-Json -Depth 12 -Compress)) {
+        throw "Independent visual review is not bound to the exact release candidate attempt."
+    }
+    Assert-CandidateBindingDomain $Record.candidateBinding $ExpectedBinding `
+        "independent review candidateBinding"
+    foreach ($name in @("executorSessionRef", "reviewerSessionRef", "requestSha256")) {
+        Assert-Hex $Record.$name 64 "independent visual review $name"
+    }
+    if ($Record.executorSessionRef -ceq $Record.reviewerSessionRef) {
+        throw "Independent visual review reused the executor session."
+    }
+    Assert-ExactBoolean $Record.independentSessionBoundary $true `
+        "independent visual review session boundary"
+    [void](Assert-UtcTimestamp $Record.reviewedAtUtc "independent visual review timestamp")
+
+    if ($Record.entries.Count -ne $script:ExpectedScreenshotsV2.Count) {
+        throw "Independent visual review must contain exactly six ordered entries."
+    }
+    for ($index = 0; $index -lt $Record.entries.Count; $index += 1) {
+        $entry = $Record.entries[$index]
+        $entryFields = @(
+            "sequence", "purpose", "image", "sha256", "width", "height",
+            "requiredVisibleStateSha256", "digestMatched", "requiredStateVerdict",
+            "sensitivePixelsObserved", "uncertain"
+        )
+        Assert-ExactKeys $entry $entryFields "independent visual review entry"
+        Assert-ExactPropertyOrder $entry $entryFields "independent visual review entry"
+        $purpose = @($script:ExpectedScreenshotsV2.Keys)[$index]
+        if ($entry.sequence -ne ($index + 1) -or $entry.purpose -cne $purpose -or
+            $entry.image -cne $script:ExpectedScreenshotsV2[$purpose] -or
+            $entry.requiredVisibleStateSha256 -cne (Get-TextSha256 $script:RequiredVisibleStatesV2[$purpose])) {
+            throw "Independent visual review entries are missing, reordered, or bound to another criterion."
+        }
+        Assert-Hex $entry.sha256 64 "independent visual review image SHA-256"
+        Assert-Hex $entry.requiredVisibleStateSha256 64 `
+            "independent visual review visible-state SHA-256"
+        Assert-IntegerRange $entry.width 120 8192 "independent visual review width"
+        Assert-IntegerRange $entry.height 32 8192 "independent visual review height"
+        if ([int64]$entry.width * [int64]$entry.height -gt 50MB) {
+            throw "Independent visual review dimensions exceed the retained-image pixel limit."
+        }
+        Assert-ExactBoolean $entry.digestMatched $true "independent visual review digest match"
+        if ($entry.requiredStateVerdict -cne "pass") {
+            throw "Independent visual review did not confirm the required visible state."
+        }
+        Assert-ExactBoolean $entry.sensitivePixelsObserved $false `
+            "independent visual review sensitive-pixel observation"
+        Assert-ExactBoolean $entry.uncertain $false "independent visual review uncertainty"
+    }
+
+    $aggregateFields = @(
+        "reviewedCropCount", "everySanitizedCropOpenedByReviewer", "allImageDigestsMatched",
+        "requiredVisibleStateConfirmedByReviewer", "noSensitivePixelsObservedByReviewer",
+        "noUncertaintyReported", "visualJudgmentNotPixelSafetyProof"
+    )
+    Assert-ExactKeys $Record.aggregate $aggregateFields "independent visual review aggregate"
+    Assert-ExactPropertyOrder $Record.aggregate $aggregateFields "independent visual review aggregate"
+    Assert-IntegerRange $Record.aggregate.reviewedCropCount 6 6 `
+        "independent visual review crop count"
+    foreach ($name in @($aggregateFields | Select-Object -Skip 1)) {
+        Assert-ExactBoolean $Record.aggregate.$name $true "independent visual review aggregate $name"
+    }
+    return $Record
+}
 function Assert-ComputerHelperRecordV2 {
     param(
         [object]$Record,
@@ -1521,10 +1982,11 @@ function Assert-ComputerHelperRecordV2 {
     )
     Assert-ExactKeys $Record @(
         "schemaVersion", "evidenceType", "version", "releaseCandidateBinding", "candidateBinding", "passed", "recordedBy",
-        "run", "server", "helper", "extensionPayload", "initialState", "windowBinding", "lifecycle", "windowEpochs",
+        "run", "operatorExchange", "scopedActionApproval", "server", "helper", "extensionPayload",
+        "initialState", "windowBinding", "lifecycle", "windowEpochs",
         "actions", "browserAction", "handback", "screenshots", "cleanup", "privacy"
-    ) "v0.12.14 computer-helper record"
-    Assert-IntegerRange $Record.schemaVersion 1 1 "computer-helper record schemaVersion"
+    ) "v0.12.15 computer-helper record"
+    Assert-IntegerRange $Record.schemaVersion 2 2 "computer-helper record schemaVersion"
     if ($Record.evidenceType -cne "stock-user-chrome-computer-helper-chain" -or
         $Record.version -cne $script:OperatorV2Version) {
         throw "The computer-helper record identity is invalid."
@@ -1563,6 +2025,80 @@ function Assert-ComputerHelperRecordV2 {
     $finishedAt = Assert-UtcTimestamp $Record.run.finishedAtUtc "computer-helper run finish"
     if ($finishedAt -lt $startedAt -or ($finishedAt - $startedAt).TotalHours -gt 2) {
         throw "The computer-helper run interval is invalid."
+    }
+
+    $exchange = $Record.operatorExchange
+    Assert-ExactKeys $exchange @(
+        "protocolVersion", "executorSessionRef", "reviewerSessionRef", "independentSessionBoundary",
+        "requestCount", "statusDecisionCount", "freshFrameDecisionCount", "allRequestsCreateOnce",
+        "allResponsesCreateOnce", "everyFrameDependentDecisionBoundToFreshFrame",
+        "everyStatusDecisionBoundToFreshStatus", "responseChainSha256", "scratchDeleted"
+    ) "computer-helper operator exchange"
+    Assert-IntegerRange $exchange.protocolVersion 1 1 "operator exchange protocolVersion"
+    foreach ($name in @("executorSessionRef", "reviewerSessionRef", "responseChainSha256")) {
+        Assert-Hex $exchange.$name 64 "operator exchange $name"
+    }
+    if ($exchange.executorSessionRef -ceq $exchange.reviewerSessionRef) {
+        throw "The operator exchange reused the executor session as its reviewer."
+    }
+    Assert-IntegerRange $exchange.requestCount 1 100000 "operator exchange request count"
+    Assert-IntegerRange $exchange.statusDecisionCount 1 $exchange.requestCount `
+        "operator exchange status-decision count"
+    Assert-IntegerRange $exchange.freshFrameDecisionCount 1 $exchange.requestCount `
+        "operator exchange fresh-frame-decision count"
+    if ($exchange.requestCount -ne
+        ($exchange.statusDecisionCount + $exchange.freshFrameDecisionCount + 1)) {
+        throw "Operator exchange request count must equal status decisions, fresh-frame decisions, and the one scoped approval."
+    }
+    foreach ($name in @(
+        "independentSessionBoundary", "allRequestsCreateOnce", "allResponsesCreateOnce",
+        "everyFrameDependentDecisionBoundToFreshFrame", "everyStatusDecisionBoundToFreshStatus",
+        "scratchDeleted"
+    )) {
+        Assert-ExactBoolean $exchange.$name $true "operator exchange $name"
+    }
+
+    $approval = $Record.scopedActionApproval
+    Assert-ExactKeys $approval @(
+        "recordSha256", "approvalId", "scopeSha256", "executorSessionRef",
+        "approvalConfirmedAtUtc", "approvalExpiresAtUtc", "approvalChallengeFrameRef",
+        "preDispatchFrameRef", "preDispatchDecisionRef", "preDispatchVerifiedAtUtc",
+        "firstCoveredActionSequence",
+        "firstCoveredActionDispatchedAtUtc", "consumedBeforeFirstCoveredAction",
+        "consumedBeforeExpiry", "freshStateRevalidatedAfterApproval", "scopeUnchangedThroughRun"
+    ) "computer-helper scoped action approval"
+    foreach ($name in @(
+        "recordSha256", "approvalId", "scopeSha256", "executorSessionRef",
+        "approvalChallengeFrameRef", "preDispatchFrameRef", "preDispatchDecisionRef"
+    )) {
+        Assert-Hex $approval.$name 64 "computer-helper scoped approval $name"
+    }
+    if ($approval.executorSessionRef -cne $exchange.executorSessionRef) {
+        throw "The scoped approval was obtained in a different executor session."
+    }
+    $approvalConfirmedAt = Assert-UtcTimestamp $approval.approvalConfirmedAtUtc `
+        "computer-helper scoped approval confirmation"
+    $approvalExpiresAt = Assert-UtcTimestamp $approval.approvalExpiresAtUtc `
+        "computer-helper scoped approval expiry"
+    $firstCoveredAt = Assert-UtcTimestamp $approval.firstCoveredActionDispatchedAtUtc `
+        "computer-helper first covered action dispatch"
+    $preDispatchVerifiedAt = Assert-UtcTimestamp $approval.preDispatchVerifiedAtUtc `
+        "computer-helper pre-dispatch state revalidation"
+    Assert-IntegerRange $approval.firstCoveredActionSequence 1 $script:ComputerHelperActionNames.Count `
+        "computer-helper first covered action sequence"
+    if ($approvalConfirmedAt -lt $startedAt -or $approvalExpiresAt -le $approvalConfirmedAt -or
+        $preDispatchVerifiedAt -le $approvalConfirmedAt -or
+        $preDispatchVerifiedAt -gt $firstCoveredAt -or
+        $approval.approvalChallengeFrameRef -ceq $approval.preDispatchFrameRef -or
+        $firstCoveredAt -le $approvalConfirmedAt -or $firstCoveredAt -gt $approvalExpiresAt -or
+        $firstCoveredAt -gt $finishedAt) {
+        throw "The scoped approval was not confirmed and unexpired at the first covered action."
+    }
+    foreach ($name in @(
+        "consumedBeforeFirstCoveredAction", "consumedBeforeExpiry",
+        "freshStateRevalidatedAfterApproval", "scopeUnchangedThroughRun"
+    )) {
+        Assert-ExactBoolean $approval.$name $true "computer-helper scoped approval $name"
     }
 
     Assert-ExactKeys $Record.server @(
@@ -1776,7 +2312,7 @@ function Assert-ComputerHelperRecordV2 {
         $name = [string]$entry[0]
         $epochIndex = [int]$entry[1]
         $state = $Record.initialState.$name
-        Assert-ExactKeys $state @("value", "epochRef", "frameRef", "capturedBeforeMutation") `
+        Assert-ExactKeys $state @("value", "epochRef", "frameRef", "operatorDecisionRef", "capturedBeforeMutation") `
             "computer-helper live $name state"
         Assert-ToggleValueV2 $state.value "computer-helper live $name value"
         if ($state.value -cne [string]$entry[2] -or
@@ -1784,10 +2320,11 @@ function Assert-ComputerHelperRecordV2 {
             throw "The operator and live helper initial $name state do not match the exact fresh-frame epoch."
         }
         Assert-Hex $state.frameRef 64 "computer-helper live $name frame"
+        Assert-Hex $state.operatorDecisionRef 64 "computer-helper live $name operator decision"
         Assert-ExactBoolean $state.capturedBeforeMutation $true "computer-helper live $name timing"
     }
     Assert-ExactKeys $Record.initialState.savedToken @(
-        "configured", "epochRef", "frameRef", "capturedBeforeMutation"
+        "configured", "epochRef", "frameRef", "operatorDecisionRef", "capturedBeforeMutation"
     ) "computer-helper live saved-token state"
     Assert-ExactBoolean $Record.initialState.savedToken.configured $false `
         "computer-helper live saved-token configured state"
@@ -1796,13 +2333,15 @@ function Assert-ComputerHelperRecordV2 {
         throw "The operator and live helper initial saved-token state do not match the popup frame."
     }
     Assert-Hex $Record.initialState.savedToken.frameRef 64 "computer-helper live saved-token frame"
+    Assert-Hex $Record.initialState.savedToken.operatorDecisionRef 64 `
+        "computer-helper live saved-token operator decision"
     Assert-ExactBoolean $Record.initialState.savedToken.capturedBeforeMutation $true `
         "computer-helper live saved-token timing"
     if ($Record.initialState.fullAccess.frameRef -ceq $Record.initialState.savedToken.frameRef) {
         throw "Full Access and saved-token initial-state receipts must use independently fresh popup frames."
     }
     Assert-ExactKeys $Record.initialState.candidateCard @(
-        "present", "epochRef", "frameRef", "verifiedFromFreshLiveUi"
+        "present", "epochRef", "frameRef", "operatorDecisionRef", "verifiedFromFreshLiveUi"
     ) "computer-helper initial candidate card"
     Assert-ExactBoolean $Record.initialState.candidateCard.present $false `
         "computer-helper initial candidate-card absence"
@@ -1810,6 +2349,8 @@ function Assert-ComputerHelperRecordV2 {
         "computer-helper initial candidate-card fresh live-UI verification"
     Assert-Hex $Record.initialState.candidateCard.frameRef 64 `
         "computer-helper initial candidate-card frame"
+    Assert-Hex $Record.initialState.candidateCard.operatorDecisionRef 64 `
+        "computer-helper initial candidate-card operator decision"
     if ($Record.initialState.candidateCard.epochRef -cne $Record.windowEpochs[1].epochRef -or
         $Operator.initialState.candidateExtensionPresent -ne $Record.initialState.candidateCard.present) {
         throw "The operator and live helper initial candidate-card state do not match the exact fresh-frame epoch."
@@ -1820,12 +2361,16 @@ function Assert-ComputerHelperRecordV2 {
         throw "The computer-helper record must contain the exact action sequence."
     }
     $lastActionTime = $startedAt
+    $lastDispatchTime = $startedAt
+    $decisionRefs = @{}
+    $observedFirstCoveredSequence = 0
     for ($index = 0; $index -lt $Record.actions.Count; $index += 1) {
         $action = $Record.actions[$index]
         Assert-ExactKeys $action @(
             "sequence", "name", "atUtc", "source", "epochRef", "methods", "preFrameRef",
             "postFrameRef", "normalizedParamsSha256", "responseSha256", "httpStatus",
-            "resultVerified", "postconditionVerified", "consentRef"
+            "resultVerified", "postconditionVerified", "dispatchedAtUtc", "operatorDecisionRef",
+            "riskRef", "approvalRef"
         ) "computer-helper action"
         Assert-IntegerRange $action.sequence ($index + 1) ($index + 1) "computer-helper action sequence"
         $expectedEpoch = $Record.windowEpochs[$script:ComputerHelperActionEpochIndexes[$index]]
@@ -1877,9 +2422,15 @@ function Assert-ComputerHelperRecordV2 {
             @($actualMutators | Where-Object { $_ -ceq "computer.click" }).Count -lt 3) {
             throw "Cleanup must switch to chrome://extensions before the exact card removal and confirmation."
         }
-        foreach ($name in @("preFrameRef", "postFrameRef", "normalizedParamsSha256", "responseSha256")) {
+        foreach ($name in @(
+            "preFrameRef", "postFrameRef", "normalizedParamsSha256", "responseSha256", "operatorDecisionRef"
+        )) {
             Assert-Hex $action.$name 64 "computer-helper action $name"
         }
+        if ($decisionRefs.ContainsKey($action.operatorDecisionRef)) {
+            throw "A computer-helper action replayed an earlier operator decision."
+        }
+        $decisionRefs[$action.operatorDecisionRef] = $true
         if ($action.preFrameRef -ceq $action.postFrameRef) {
             throw "A computer-helper action reused a stale pre-action frame."
         }
@@ -1888,19 +2439,45 @@ function Assert-ComputerHelperRecordV2 {
             throw "Computer-helper action timestamps are not ordered within the run."
         }
         $lastActionTime = $actionTime
+        $dispatchTime = Assert-UtcTimestamp $action.dispatchedAtUtc "computer-helper action dispatch time"
+        if ($dispatchTime -lt $lastDispatchTime -or $dispatchTime -lt $startedAt -or
+            $dispatchTime -gt $actionTime) {
+            throw "Computer-helper action dispatch timestamps are reordered or outside the action interval."
+        }
+        $lastDispatchTime = $dispatchTime
         Assert-IntegerRange $action.httpStatus 200 200 "computer-helper action HTTP status"
         Assert-ExactBoolean $action.resultVerified $true "computer-helper action result"
         Assert-ExactBoolean $action.postconditionVerified $true "computer-helper action postcondition"
-        $expectedConsent = $script:ComputerHelperActionConsentRefs[$index]
-        if ($expectedConsent -ceq "conditional-developer-mode") {
-            $expectedConsent = if ($Operator.initialState.developerMode.changedByRun) {
+        $expectedRisk = $script:ComputerHelperActionRiskRefs[$index]
+        if ($expectedRisk -ceq "conditional-developer-mode") {
+            $expectedRisk = if ($Operator.initialState.developerMode.changedByRun) {
                 "developerModeChange"
             }
             else { "none" }
         }
-        if ($action.consentRef -cne $expectedConsent) {
-            throw "The computer-helper action does not reference the required human consent checkpoint."
+        if ($action.riskRef -cne $expectedRisk) {
+            throw "The computer-helper action does not reference its exact risk checkpoint."
         }
+        if ($expectedRisk -ceq "none") {
+            if ($action.approvalRef -cne "none") {
+                throw "A non-covered action must not claim scoped approval consumption."
+            }
+        }
+        else {
+            if ($action.approvalRef -cne $approval.approvalId -or $dispatchTime -le $approvalConfirmedAt) {
+                throw "A covered action is missing the exact pre-dispatch scoped approval."
+            }
+            if ($observedFirstCoveredSequence -eq 0) {
+                $observedFirstCoveredSequence = $index + 1
+                if ($approval.firstCoveredActionSequence -ne ($index + 1) -or
+                    $approval.firstCoveredActionDispatchedAtUtc -cne $action.dispatchedAtUtc) {
+                    throw "The first covered action summary does not match the canonical action chain."
+                }
+            }
+        }
+    }
+    if ($observedFirstCoveredSequence -eq 0) {
+        throw "The helper action chain never consumed the scoped action-time approval."
     }
 
     Assert-ExactKeys $Record.browserAction @(
@@ -2053,25 +2630,134 @@ function Assert-HelperScreenshotsMatchSidecarsV2 {
     }
 }
 
+function Assert-ApprovalMatchesHelperV3 {
+    param(
+        [object]$ApprovalRecord,
+        [string]$ApprovalRecordSha256,
+        [object]$HelperRecord,
+        [object]$Operator
+    )
+    $helperApproval = $HelperRecord.scopedActionApproval
+    if ($helperApproval.recordSha256 -cne $ApprovalRecordSha256 -or
+        $helperApproval.approvalId -cne $ApprovalRecord.approvalId -or
+        $helperApproval.scopeSha256 -cne $ApprovalRecord.request.scopeSha256 -or
+        $helperApproval.executorSessionRef -cne $HelperRecord.operatorExchange.executorSessionRef -or
+        $helperApproval.approvalConfirmedAtUtc -cne $ApprovalRecord.response.confirmedAtUtc -or
+        $helperApproval.approvalExpiresAtUtc -cne $ApprovalRecord.request.expiresAtUtc -or
+        $helperApproval.approvalChallengeFrameRef -cne $ApprovalRecord.request.challengeFrameRef -or
+        $helperApproval.preDispatchFrameRef -cne $ApprovalRecord.consumption.preDispatchFrameRef -or
+        $helperApproval.preDispatchDecisionRef -cne $ApprovalRecord.consumption.preDispatchDecisionRef -or
+        $helperApproval.preDispatchVerifiedAtUtc -cne $ApprovalRecord.consumption.preDispatchVerifiedAtUtc -or
+        $helperApproval.consumedBeforeFirstCoveredAction -ne $ApprovalRecord.consumption.consumedBeforeFirstCoveredAction -or
+        $helperApproval.consumedBeforeExpiry -ne $ApprovalRecord.consumption.consumedBeforeExpiry -or
+        $helperApproval.freshStateRevalidatedAfterApproval -ne
+            $ApprovalRecord.consumption.freshStateRevalidatedAfterApproval -or
+        $helperApproval.scopeUnchangedThroughRun -ne $ApprovalRecord.consumption.scopeUnchangedThroughRun) {
+        throw "Computer-helper approval facts do not match the exact retained scoped approval record."
+    }
+    if ($ApprovalRecord.response.orchestratorSessionRef -ceq
+            $HelperRecord.operatorExchange.executorSessionRef -or
+        $ApprovalRecord.response.orchestratorSessionRef -ceq
+            $HelperRecord.operatorExchange.reviewerSessionRef) {
+        throw "Scoped approval must use a user-facing orchestrator session distinct from both executor and reviewer."
+    }
+    if ($Operator.consentCheckpoints.scopedActionTimeApproval.recordSha256 -cne $ApprovalRecordSha256 -or
+        $Operator.consentCheckpoints.scopedActionTimeApproval.approvalId -cne $ApprovalRecord.approvalId -or
+        $Operator.consentCheckpoints.scopedActionTimeApproval.consumedBeforeExpiry -ne
+            $ApprovalRecord.consumption.consumedBeforeExpiry -or
+        $Operator.consentCheckpoints.scopedActionTimeApproval.freshStateRevalidatedAfterApproval -ne
+            $ApprovalRecord.consumption.freshStateRevalidatedAfterApproval -or
+        $Operator.consentCheckpoints.scopedActionTimeApproval.singleCandidateRun -ne
+            $ApprovalRecord.response.singleCandidateRun) {
+        throw "Operator approval summary does not match the exact retained scoped approval record."
+    }
+}
+
+function Assert-ReviewMatchesHelperAndSidecarsV3 {
+    param(
+        [object]$ReviewRecord,
+        [string]$ReviewRecordSha256,
+        [object]$HelperRecord,
+        [object]$Operator,
+        [object[]]$Sidecars
+    )
+    if ($ReviewRecord.executorSessionRef -cne $HelperRecord.operatorExchange.executorSessionRef -or
+        $ReviewRecord.reviewerSessionRef -cne $HelperRecord.operatorExchange.reviewerSessionRef -or
+        $ReviewRecord.independentSessionBoundary -ne $HelperRecord.operatorExchange.independentSessionBoundary) {
+        throw "Independent review sessions do not match the exact helper operator exchange."
+    }
+    $helperFinishedAt = Assert-UtcTimestamp $HelperRecord.run.finishedAtUtc "computer-helper finish time"
+    $reviewedAt = Assert-UtcTimestamp $ReviewRecord.reviewedAtUtc "independent review time"
+    if ($reviewedAt -lt $helperFinishedAt) {
+        throw "Independent review predates completion of the exact helper capture chain."
+    }
+    if ($Operator.independentVisualReview.recordSha256 -cne $ReviewRecordSha256 -or
+        $Operator.independentVisualReview.executorSessionRef -cne $ReviewRecord.executorSessionRef -or
+        $Operator.independentVisualReview.reviewerSessionRef -cne $ReviewRecord.reviewerSessionRef -or
+        $Operator.independentVisualReview.independentSessionBoundary -ne $ReviewRecord.independentSessionBoundary -or
+        ($Operator.independentVisualReview | ConvertTo-Json -Depth 8 -Compress) -cne
+            (([ordered]@{
+                recordSha256 = $ReviewRecordSha256
+                executorSessionRef = $ReviewRecord.executorSessionRef
+                reviewerSessionRef = $ReviewRecord.reviewerSessionRef
+                independentSessionBoundary = $ReviewRecord.independentSessionBoundary
+                reviewedCropCount = $ReviewRecord.aggregate.reviewedCropCount
+                everySanitizedCropOpenedByReviewer = $ReviewRecord.aggregate.everySanitizedCropOpenedByReviewer
+                allImageDigestsMatched = $ReviewRecord.aggregate.allImageDigestsMatched
+                requiredVisibleStateConfirmedByReviewer = $ReviewRecord.aggregate.requiredVisibleStateConfirmedByReviewer
+                noSensitivePixelsObservedByReviewer = $ReviewRecord.aggregate.noSensitivePixelsObservedByReviewer
+                noUncertaintyReported = $ReviewRecord.aggregate.noUncertaintyReported
+                visualJudgmentNotPixelSafetyProof = $ReviewRecord.aggregate.visualJudgmentNotPixelSafetyProof
+            }) | ConvertTo-Json -Depth 8 -Compress)) {
+        throw "Operator independent-review summary does not match the exact retained review record."
+    }
+    if ($Sidecars.Count -ne $ReviewRecord.entries.Count) {
+        throw "Independent review entries do not match the screenshot sidecar count."
+    }
+    for ($index = 0; $index -lt $Sidecars.Count; $index += 1) {
+        $entry = $ReviewRecord.entries[$index]
+        $sidecar = $Sidecars[$index]
+        $expectedEntryRef = Get-TextSha256 (
+            "$ReviewRecordSha256`n$($entry.sequence)`n$($entry.purpose)`n$($entry.sha256)"
+        )
+        if ($sidecar.reviewRecordSha256 -cne $ReviewRecordSha256 -or
+            $sidecar.reviewEntryRef -cne $expectedEntryRef -or
+            $sidecar.purpose -cne $entry.purpose -or $sidecar.image.name -cne $entry.image -or
+            $sidecar.image.sha256 -cne $entry.sha256 -or
+            [int64]$sidecar.image.width -ne [int64]$entry.width -or
+            [int64]$sidecar.image.height -ne [int64]$entry.height) {
+            throw "A screenshot sidecar is not bound to its exact independent review entry."
+        }
+    }
+}
+
 function Assert-RetainedEvidenceDirectoryV2 {
     param(
         [string]$PreflightPath,
         [string]$PostflightPath,
         [string]$MatrixPath,
         [string]$HelperPath,
+        [string]$ApprovalPath,
+        [string]$ReviewPath,
+        [string]$ExternalPreflightPath,
+        [string]$ExternalPostflightPath,
         [string]$OperatorPath,
         [string[]]$SidecarPaths,
         [string]$OutputPath
     )
     $directory = [IO.Path]::GetDirectoryName($OutputPath)
     if ([IO.Path]::GetFileName($OutputPath) -cne "browser-acceptance.json") {
-        throw "v0.12.14 final evidence must use the canonical browser-acceptance.json filename."
+        throw "v0.12.15 final evidence must use the canonical browser-acceptance.json filename."
     }
     $fixedInputs = [ordered]@{
         "candidate-preflight.json" = $PreflightPath
         "candidate-postflight.json" = $PostflightPath
         "browser-api-matrix.json" = $MatrixPath
         "browser-computer-helper-chain.json" = $HelperPath
+        "scoped-action-approval.json" = $ApprovalPath
+        "independent-visual-review.json" = $ReviewPath
+        "external-surface-preflight.json" = $ExternalPreflightPath
+        "external-surface-postflight.json" = $ExternalPostflightPath
         "operator-results.json" = $OperatorPath
     }
     $expectedNames = @($fixedInputs.Keys)
@@ -2081,7 +2767,7 @@ function Assert-RetainedEvidenceDirectoryV2 {
                 [IO.Path]::GetDirectoryName($entry.Value), $directory,
                 [StringComparison]::OrdinalIgnoreCase
             )) {
-            throw "v0.12.14 retained evidence inputs must use canonical names in one directory."
+            throw "v0.12.15 retained evidence inputs must use canonical names in one directory."
         }
     }
     foreach ($sidecarPath in $SidecarPaths) {
@@ -2089,37 +2775,354 @@ function Assert-RetainedEvidenceDirectoryV2 {
             [IO.Path]::GetDirectoryName($sidecarPath), $directory,
             [StringComparison]::OrdinalIgnoreCase
         )) {
-            throw "v0.12.14 screenshot sidecars must be in the retained evidence directory."
+            throw "v0.12.15 screenshot sidecars must be in the retained evidence directory."
         }
         $sidecarName = [IO.Path]::GetFileName($sidecarPath)
         $imageName = [IO.Path]::GetFileNameWithoutExtension($sidecarName) + ".png"
         $imagePath = [IO.Path]::Combine($directory, $imageName)
         if (-not [IO.File]::Exists($imagePath)) {
-            throw "v0.12.14 retained screenshot image is missing."
+            throw "v0.12.15 retained screenshot image is missing."
         }
         $image = [IO.FileInfo]::new($imagePath)
         if (($image.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "v0.12.14 retained screenshot image must not be a reparse point."
+            throw "v0.12.15 retained screenshot image must not be a reparse point."
         }
         $expectedNames += $sidecarName
         $expectedNames += $imageName
     }
-    if ($expectedNames.Count -ne 17 -or ($expectedNames | Select-Object -Unique).Count -ne 17) {
-        throw "v0.12.14 retained evidence allowlist must contain exactly 17 unique inputs."
+    if ($expectedNames.Count -ne 21 -or ($expectedNames | Select-Object -Unique).Count -ne 21) {
+        throw "v0.12.15 retained evidence allowlist must contain exactly 21 unique inputs."
     }
     $actualNames = @()
     foreach ($item in [IO.DirectoryInfo]::new($directory).GetFileSystemInfos()) {
         if ($item -isnot [IO.FileInfo] -or
             ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "v0.12.14 retained evidence directory contains a directory, link, or unsupported entry."
+            throw "v0.12.15 retained evidence directory contains a directory, link, or unsupported entry."
         }
         $actualNames += $item.Name
     }
     $expectedSorted = @($expectedNames | Sort-Object)
     $actualSorted = @($actualNames | Sort-Object)
     if (($expectedSorted -join "`n") -cne ($actualSorted -join "`n")) {
-        throw "v0.12.14 retained evidence directory contains a missing or unexpected input."
+        throw "v0.12.15 retained evidence directory contains a missing or unexpected input."
     }
+}
+
+function New-OperatorResultsV3 {
+    param(
+        [object]$Candidate,
+        [object]$CandidateBinding,
+        [object]$ReleaseBinding,
+        [object]$Helper,
+        [object]$Approval,
+        [string]$ApprovalSha256,
+        [object]$Review,
+        [string]$ReviewSha256,
+        [object]$ExternalSurfaces,
+        [string]$ObservedBrowserVersion
+    )
+    if (-not [regex]::IsMatch(
+            $ObservedBrowserVersion,
+            '^(1(?:4[0-9]|[5-9][0-9])|[2-9][0-9]{2})\.[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}$'
+        )) {
+        throw "BrowserVersion must be a supported canonical four-part Google Chrome version."
+    }
+    $approvalId = [string]$Approval.approvalId
+    $developerChanged = [string]$Helper.initialState.developerMode.value -ceq "disabled"
+    $fullAccessChanged = [string]$Helper.initialState.fullAccess.value -ceq "disabled"
+    $riskRefs = @($Helper.actions | ForEach-Object { [string]$_.riskRef })
+    foreach ($requiredRisk in @(
+        "installCandidate", "fullAccessUse", "acceptanceTokenSave",
+        "clearSavedTokenInitiate", "clearSavedTokenConfirm", "extensionDisposition"
+    )) {
+        if ($riskRefs -cnotcontains $requiredRisk) {
+            throw "The helper action chain is missing the required $requiredRisk approval consumption."
+        }
+    }
+    if ($developerChanged -and $riskRefs -cnotcontains "developerModeChange") {
+        throw "The helper changed Developer Mode without the required scoped approval reference."
+    }
+    $ExactAllowlistedActionChain = @($Helper.actions).Count -eq `
+        $script:ComputerHelperActionNames.Count
+    if ($ExactAllowlistedActionChain) {
+        for ($ActionIndex = 0; $ActionIndex -lt $script:ComputerHelperActionNames.Count; $ActionIndex += 1) {
+            $Action = $Helper.actions[$ActionIndex]
+            $Epoch = $Helper.windowEpochs[$script:ComputerHelperActionEpochIndexes[$ActionIndex]]
+            if ($Action.name -cne $script:ComputerHelperActionNames[$ActionIndex] -or
+                $Action.source -cne $script:ComputerHelperActionSource -or
+                $Action.epochRef -cne $Epoch.epochRef -or $Epoch.selectedExactly -ne $true) {
+                $ExactAllowlistedActionChain = $false
+                break
+            }
+        }
+    }
+    $ExactCandidateExtensionLifecycle = (
+        -not [bool]$Helper.initialState.candidateCard.present -and
+        [bool]$Helper.cleanup.candidateExtensionRemoved -and
+        [bool]$Helper.cleanup.candidateCardAbsentAfterRemoval -and
+        [bool]$Helper.cleanup.candidateCardAbsenceVerifiedFromFreshLiveUi
+    )
+
+    $captures = @()
+    foreach ($purpose in $script:ExpectedScreenshotsV2.Keys) {
+        $captures += [ordered]@{
+            purpose = $purpose
+            image = $script:ExpectedScreenshotsV2[$purpose]
+            captureSurface = "local-browser-bridge-computer-helper"
+            requiredVisibleState = $script:RequiredVisibleStatesV2[$purpose]
+        }
+    }
+    $approvalCheckpoint = { param([bool]$Performed) [ordered]@{
+        performed = $Performed
+        approvalRef = $approvalId
+    }}
+
+    return [ordered]@{
+        schemaVersion = 3
+        evidenceType = "stock-user-chrome-operator-observations"
+        releaseCandidateBinding = Copy-JsonObject $ReleaseBinding
+        candidateBinding = [pscustomobject]$CandidateBinding
+        environment = [ordered]@{
+            platform = "windows-x86_64"
+            browserProduct = "Google Chrome"
+            browserVersion = $ObservedBrowserVersion
+            stockUserChrome = $true
+            existingUserSession = $true
+            dedicatedTemporaryWindow = $true
+            browserLaunchFlagsUsed = $false
+            directCdpUsed = $false
+            automationTestProfileUsed = $false
+            localDemoOnly = $true
+        }
+        actionSurfaces = [ordered]@{
+            bridgeApiMatrix = "local-browser-bridge-api"
+            computerHelperApi = "local-browser-bridge-computer-api"
+            orchestrationAndConsent = `
+                "user-orchestrator-secured-ssh-exported-file-review"
+            dedicatedWindowCreation = "local-browser-bridge-computer-helper"
+            chromeExtensionsPage = "local-browser-bridge-computer-helper"
+            nativeLoadUnpackedPicker = "local-browser-bridge-computer-helper"
+            extensionPopup = "local-browser-bridge-computer-helper"
+            chromeDebuggerNotice = "local-browser-bridge-computer-helper"
+            browserApiResult = "local-browser-bridge-computer-helper"
+            computerShareAction = "local-browser-bridge-computer-helper"
+            acceptanceScreenshots = "local-browser-bridge-computer-helper"
+            debuggerOwnerDuringBridgeLease = "local-browser-bridge-extension"
+            competingDebuggerAttachmentAllowed = $false
+            chromeMcpUsedDuringBridgeLease = $false
+            chromeMcpReleaseEvidenceClaimed = $false
+        }
+        computerHelperChain = [ordered]@{
+            candidateBoundExecutableStarted = $true
+            connectedThroughLoopbackServer = [bool]$Helper.helper.connectedThroughLoopbackServer
+            serverApiOnly = [bool]$Helper.helper.serverApiOnly
+            exactChromeWindowSelected = [bool]$Helper.windowBinding.sameDedicatedTargetAcrossEpochs
+            chromeExtensionsLoadCompleted = [bool]$Helper.actions[5].postconditionVerified
+            browserApiActionCompleted = [bool]$Helper.browserAction.resultVerified
+            exactWindowShareActionCompleted = [bool]$Helper.actions[11].postconditionVerified
+            freshFramesBoundToComputerAction = $Helper.actions[11].preFrameRef -cne $Helper.actions[11].postFrameRef
+            screenshotEndpoint = "/api/computer/screenshot"
+            rawScreenshotCount = @($Helper.screenshots).Count
+            topologyProtocolBound = [bool]$Helper.helper.topology.protocolRoundTrip
+            ownerForcedSupervisorTermination = $Helper.cleanup.helperTerminationDisposition -ceq "owner-forced-exact-supervisor"
+            helperDisconnectedAfterTermination = [bool]$Helper.cleanup.helperDisconnectedAfterTermination
+            noHelperChildrenOrListenersRemain = (
+                $Helper.cleanup.helperChildrenRemaining + $Helper.cleanup.helperListenersRemaining +
+                $Helper.cleanup.exactHelperImageProcessesRemaining + $Helper.cleanup.canonicalPortListenersRemaining
+            ) -eq 0
+            helperStopped = [bool]$Helper.cleanup.helperDisconnectedAfterTermination
+        }
+        consentCheckpoints = [ordered]@{
+            scopedActionTimeApproval = [ordered]@{
+                recordSha256 = $ApprovalSha256
+                approvalId = $approvalId
+                obtainedAtActionTime = $true
+                consumedBeforeFirstCoveredAction = [bool]$Approval.consumption.consumedBeforeFirstCoveredAction
+                consumedBeforeExpiry = [bool]$Approval.consumption.consumedBeforeExpiry
+                freshStateRevalidatedAfterApproval = `
+                    [bool]$Approval.consumption.freshStateRevalidatedAfterApproval
+                scopeUnchangedThroughRun = [bool]$Approval.consumption.scopeUnchangedThroughRun
+                singleCandidateRun = [bool]$Approval.response.singleCandidateRun
+            }
+            installCandidate = & $approvalCheckpoint $true
+            developerModeChange = & $approvalCheckpoint $developerChanged
+            fullAccessUse = & $approvalCheckpoint $true
+            acceptanceTokenSave = & $approvalCheckpoint $true
+            clearSavedToken = & $approvalCheckpoint $true
+            removeTestOwnedExtension = & $approvalCheckpoint $true
+            restoreCapturedBrowserSettings = & $approvalCheckpoint $true
+            failureRollback = & $approvalCheckpoint $false
+        }
+        initialState = [ordered]@{
+            capturedBeforeRelevantMutation = [bool]$Helper.initialState.capturedFromFreshHelperFrames
+            candidateExtensionPresent = [bool]$Helper.initialState.candidateCard.present
+            developerMode = [ordered]@{
+                value = [string]$Helper.initialState.developerMode.value
+                changedByRun = $developerChanged
+            }
+            fullAccess = [ordered]@{
+                value = [string]$Helper.initialState.fullAccess.value
+                changedByRun = $fullAccessChanged
+            }
+            savedTokenConfigured = [bool]$Helper.initialState.savedToken.configured
+        }
+        extension = [ordered]@{
+            cardCount = 1
+            version = [string]$Candidate.version
+            enabled = $true
+            loadErrors = 0
+            loadedVia = "chrome://extensions-load-unpacked"
+            loadedDirectoryByteMatchesCandidateZip = [bool]$Helper.extensionPayload.verifiedAfterLoad
+            popupConnected = [bool]$Helper.actions[8].postconditionVerified
+            debuggerLeaseActiveAtFirstCapture = [bool]$Helper.screenshots[0].shareFrameFresh
+            nativeDebuggerUseIndicatorSeen = [bool]$Helper.actions[5].postconditionVerified
+        }
+        handback = Copy-JsonObject $Helper.handback
+        screenshotCaptures = $captures
+        independentVisualReview = [ordered]@{
+            recordSha256 = $ReviewSha256
+            executorSessionRef = [string]$Review.executorSessionRef
+            reviewerSessionRef = [string]$Review.reviewerSessionRef
+            independentSessionBoundary = [bool]$Review.independentSessionBoundary
+            reviewedCropCount = [int]$Review.aggregate.reviewedCropCount
+            everySanitizedCropOpenedByReviewer = [bool]$Review.aggregate.everySanitizedCropOpenedByReviewer
+            allImageDigestsMatched = [bool]$Review.aggregate.allImageDigestsMatched
+            requiredVisibleStateConfirmedByReviewer = [bool]$Review.aggregate.requiredVisibleStateConfirmedByReviewer
+            noSensitivePixelsObservedByReviewer = [bool]$Review.aggregate.noSensitivePixelsObservedByReviewer
+            noUncertaintyReported = [bool]$Review.aggregate.noUncertaintyReported
+            visualJudgmentNotPixelSafetyProof = [bool]$Review.aggregate.visualJudgmentNotPixelSafetyProof
+        }
+        restoration = [ordered]@{
+            candidateExtensionPresence = [ordered]@{
+                finalPresent = -not [bool]$Helper.cleanup.candidateCardAbsentAfterRemoval
+                matchesInitial = (
+                    (-not [bool]$Helper.cleanup.candidateCardAbsentAfterRemoval) -eq
+                    [bool]$Helper.initialState.candidateCard.present
+                )
+                verifiedFromLiveUi = [bool]$Helper.cleanup.candidateCardAbsenceVerifiedFromFreshLiveUi
+            }
+            developerMode = [ordered]@{
+                finalValue = [string]$Helper.initialState.developerMode.value
+                matchesInitial = [bool]$Helper.cleanup.developerModeRestored
+                verifiedFromLiveUi = [bool]$Helper.cleanup.developerModeRestored
+            }
+            fullAccess = [ordered]@{
+                finalValue = [string]$Helper.initialState.fullAccess.value
+                matchesInitial = [bool]$Helper.cleanup.fullAccessRestored
+                verifiedFromLiveUi = [bool]$Helper.cleanup.fullAccessRestored
+            }
+            savedToken = [ordered]@{
+                finalConfigured = -not [bool]$Helper.cleanup.savedTokenCleared
+                matchesInitial = ((-not [bool]$Helper.cleanup.savedTokenCleared) -eq [bool]$Helper.initialState.savedToken.configured)
+                verifiedFromLiveUi = [bool]$Helper.cleanup.savedTokenCleared
+            }
+        }
+        cleanup = [ordered]@{
+            controlReleased = [bool]$Helper.cleanup.allSharesStopped
+            testTabsClosed = $true
+            testWindowClosed = [bool]$Helper.cleanup.testWindowClosed
+            popupDisconnected = [bool]$Helper.cleanup.savedTokenCleared
+            serverStopped = $Helper.cleanup.serverListenersRemaining -eq 0
+            portReleased = $Helper.cleanup.canonicalPortListenersRemaining -eq 0
+            acceptanceCredentialClearedFromShell = [bool]$Helper.privacy.credentialRetained -eq $false
+            savedTokenClear = [ordered]@{
+                trustedPopupClick = [bool]$Helper.actions[21].resultVerified
+                confirmationDialogShown = [bool]$Helper.actions[21].postconditionVerified
+                confirmationAcceptedByExecutor = [bool]$Helper.actions[22].resultVerified
+                approvalRef = $approvalId
+                popupStateVerifiedAfterClear = [bool]$Helper.cleanup.savedTokenCleared
+                tokenConfigured = -not [bool]$Helper.cleanup.savedTokenCleared
+                clearButtonDisabled = [bool]$Helper.cleanup.savedTokenCleared
+            }
+            externalSurfacePreflightAttestationSha256 = [string]$ExternalSurfaces.PreflightSha256
+            externalSurfacePostflightAttestationSha256 = [string]$ExternalSurfaces.PostflightSha256
+            chromeMcpDisposition = [string]$ExternalSurfaces.ChromeMcpDisposition
+            computerUseDisposition = [string]$ExternalSurfaces.ComputerUseDisposition
+            reviewerInputDisposition = [string]$ExternalSurfaces.ReviewerInputDisposition
+            computerHelperStopped = [bool]$Helper.cleanup.helperDisconnectedAfterTermination
+            rawScreenshotScratchDeleted = @($Helper.screenshots | Where-Object { $_.rawImageRetained -ne $false }).Count -eq 0
+            pendingReviewRecordsDeleted = $true
+            extractedExtensionInventoryVerifiedBeforeDeletion = [bool]$Helper.extensionPayload.verifiedAfterCleanup
+            extractedExtensionDirectoryDeleted = $true
+            extensionDisposition = "removed"
+            unrelatedTargetMutationCommandsIssued = -not $ExactAllowlistedActionChain
+            unrelatedExtensionMutationCommandsIssued = `
+                -not ($ExactAllowlistedActionChain -and $ExactCandidateExtensionLifecycle)
+        }
+        retainedEvidence = [ordered]@{
+            scope = "acceptance-evidence-directory-only"
+            exactAllowlistVerified = $true
+            inputFileCount = 21
+            finalFileCount = 22
+            rawScreenshotsPresent = $false
+            pendingReviewRecordsPresent = $false
+            chromeMcpTranscriptPresent = $false
+            computerUseTranscriptPresent = $false
+            secretCredentialPresent = $false
+            filesystemLocationsOrBrowserIdsPresent = $false
+            externalToolAndPlatformLogsScope = "not-asserted"
+        }
+    }
+}
+
+function Invoke-BuildOperator {
+    foreach ($item in @(
+        @($PreflightRecord, "PreflightRecord"), @($ComputerHelperRecord, "ComputerHelperRecord"),
+        @($ScopedApprovalRecord, "ScopedApprovalRecord"), @($IndependentReviewRecord, "IndependentReviewRecord"),
+        @($ExternalSurfacePreflightAttestation, "ExternalSurfacePreflightAttestation"),
+        @($ExternalSurfacePostflightAttestation, "ExternalSurfacePostflightAttestation"),
+        @($BrowserVersion, "BrowserVersion"), @($OutputRecord, "OutputRecord")
+    )) { Assert-RequiredArgument $item[0] $item[1] }
+    $preflightPath = Resolve-RequiredFile $PreflightRecord "PreflightRecord"
+    $helperPath = Resolve-RequiredFile $ComputerHelperRecord "ComputerHelperRecord"
+    $approvalPath = Resolve-RequiredFile $ScopedApprovalRecord "ScopedApprovalRecord"
+    $reviewPath = Resolve-RequiredFile $IndependentReviewRecord "IndependentReviewRecord"
+    $externalSurfacePreflightPath = Resolve-RequiredFile `
+        $ExternalSurfacePreflightAttestation "ExternalSurfacePreflightAttestation"
+    $externalSurfacePostflightPath = Resolve-RequiredFile `
+        $ExternalSurfacePostflightAttestation "ExternalSurfacePostflightAttestation"
+    $outputPath = Resolve-NewOutputFile $OutputRecord
+    $preflightRead = Read-JsonWithSha256 $preflightPath "PreflightRecord"
+    $preflight = $preflightRead.Value
+    $candidate = Assert-CandidatePreflight $preflight
+    if ($candidate.version -cne $script:OperatorV2Version) {
+        throw "BuildOperator is registered only for the v0.12.15 autonomous evidence protocol."
+    }
+    $binding = Get-CandidateBindingDomain $preflight $preflightRead.Sha256
+    $release = Assert-ReleaseCandidateBinding $preflight.releaseCandidateBinding $candidate `
+        "preflight releaseCandidateBinding"
+    $approvalRead = Read-JsonWithSha256 $approvalPath "ScopedApprovalRecord"
+    $approval = Assert-ScopedApprovalRecordV3 $approvalRead.Value `
+        $binding $release $candidate
+    $reviewRead = Read-JsonWithSha256 $reviewPath "IndependentReviewRecord"
+    $review = Assert-IndependentReviewRecordV3 $reviewRead.Value `
+        $binding $release $candidate
+    $helperRead = Read-JsonWithSha256 $helperPath "ComputerHelperRecord"
+    $helper = $helperRead.Value
+    $externalSurfacePreflightRead = Read-JsonWithSha256 `
+        $externalSurfacePreflightPath "ExternalSurfacePreflightAttestation"
+    $externalSurfacePostflightRead = Read-JsonWithSha256 `
+        $externalSurfacePostflightPath "ExternalSurfacePostflightAttestation"
+    $externalSurfacePreflight = Assert-ExternalSurfaceAttestationV3 `
+        $externalSurfacePreflightRead.Value $externalSurfacePreflightRead.Sha256 $release "preflight"
+    $externalSurfacePostflight = Assert-ExternalSurfaceAttestationV3 `
+        $externalSurfacePostflightRead.Value $externalSurfacePostflightRead.Sha256 $release "postflight"
+    $externalSurfaces = Assert-ExternalSurfaceAttestationPairV3 `
+        $externalSurfacePreflight $externalSurfacePostflight $helper $approval $review
+    $operator = New-OperatorResultsV3 $candidate $binding $release $helper $approval `
+        $approvalRead.Sha256 $review $reviewRead.Sha256 $externalSurfaces $BrowserVersion
+    Assert-OperatorResultsV2 $operator $candidate.version $binding $release $candidate
+    Assert-ComputerHelperRecordV2 $helper $binding $release $candidate $operator `
+        ([string]$helper.run.apiMatrixRecordSha256)
+    Assert-ApprovalMatchesHelperV3 $approval $approvalRead.Sha256 $helper $operator
+    if ($review.executorSessionRef -cne $helper.operatorExchange.executorSessionRef -or
+        $review.reviewerSessionRef -cne $helper.operatorExchange.reviewerSessionRef) {
+        throw "Independent review sessions do not match the helper operator exchange."
+    }
+    $serialized = $operator | ConvertTo-Json -Depth 30 -Compress
+    Assert-SafeSerializedRecord $serialized @(Read-DenyValues $DenyValuesFile)
+    Write-NewJson $outputPath $operator
+    Write-Output "Candidate-bound operator results were mechanically derived from validated evidence."
 }
 
 function Invoke-Finalize {
@@ -2134,11 +3137,13 @@ function Invoke-Finalize {
     $matrixPath = Resolve-RequiredFile $ApiMatrixRecord "ApiMatrixRecord"
     $operatorPath = Resolve-RequiredFile $OperatorResults "OperatorResults"
     $outputPath = Resolve-NewOutputFile $OutputRecord
-    $preflight = Read-Json $preflightPath "PreflightRecord"
+    $preflightRead = Read-JsonWithSha256 $preflightPath "PreflightRecord"
+    $preflight = $preflightRead.Value
     $preflightCandidate = Assert-CandidatePreflight $preflight
-    $preflightSha256 = Get-Sha256 $preflightPath
+    $preflightSha256 = $preflightRead.Sha256
     $candidateBinding = Get-CandidateBindingDomain $preflight $preflightSha256
-    $postflight = Read-Json $postflightPath "PostflightRecord"
+    $postflightRead = Read-JsonWithSha256 $postflightPath "PostflightRecord"
+    $postflight = $postflightRead.Value
     $candidate = Assert-CandidatePostflight $postflight
     if ($preflightSha256 -cne $postflight.preflightRecordSha256 -or
         $preflight.runNonce -cne $postflight.runNonce) {
@@ -2158,30 +3163,75 @@ function Invoke-Finalize {
         }
     }
     Assert-CandidateBindingDomain $postflight.candidateBinding $candidateBinding "candidate postflight candidateBinding"
-    $matrix = Read-Json $matrixPath "ApiMatrixRecord"
+    $matrixRead = Read-JsonWithSha256 $matrixPath "ApiMatrixRecord"
+    $matrix = $matrixRead.Value
     Assert-ApiMatrixRecord $matrix $candidate.version $candidateBinding
-    $operator = Read-Json $operatorPath "OperatorResults"
+    $operatorRead = Read-JsonWithSha256 $operatorPath "OperatorResults"
+    $operator = $operatorRead.Value
     Assert-OperatorResults $operator $candidate.version $candidateBinding $releaseCandidateBinding $candidate
     $helperPath = $null
     $helperRecord = $null
     if ($candidate.version -ceq $script:OperatorV2Version) {
         Assert-RequiredArgument $ComputerHelperRecord "ComputerHelperRecord"
+        Assert-RequiredArgument $ScopedApprovalRecord "ScopedApprovalRecord"
+        Assert-RequiredArgument $IndependentReviewRecord "IndependentReviewRecord"
+        Assert-RequiredArgument $ExternalSurfacePreflightAttestation `
+            "ExternalSurfacePreflightAttestation"
+        Assert-RequiredArgument $ExternalSurfacePostflightAttestation `
+            "ExternalSurfacePostflightAttestation"
         $helperPath = Resolve-RequiredFile $ComputerHelperRecord "ComputerHelperRecord"
-        $helperRecord = Read-Json $helperPath "ComputerHelperRecord"
+        $approvalPath = Resolve-RequiredFile $ScopedApprovalRecord "ScopedApprovalRecord"
+        $reviewPath = Resolve-RequiredFile $IndependentReviewRecord "IndependentReviewRecord"
+        $externalSurfacePreflightPath = Resolve-RequiredFile `
+            $ExternalSurfacePreflightAttestation "ExternalSurfacePreflightAttestation"
+        $externalSurfacePostflightPath = Resolve-RequiredFile `
+            $ExternalSurfacePostflightAttestation "ExternalSurfacePostflightAttestation"
+        $approvalRead = Read-JsonWithSha256 $approvalPath "ScopedApprovalRecord"
+        $approvalRecord = Assert-ScopedApprovalRecordV3 `
+            $approvalRead.Value $candidateBinding `
+            $releaseCandidateBinding $candidate
+        $reviewRead = Read-JsonWithSha256 $reviewPath "IndependentReviewRecord"
+        $reviewRecord = Assert-IndependentReviewRecordV3 `
+            $reviewRead.Value $candidateBinding `
+            $releaseCandidateBinding $candidate
+        $helperRead = Read-JsonWithSha256 $helperPath "ComputerHelperRecord"
+        $helperRecord = $helperRead.Value
         Assert-ComputerHelperRecordV2 `
-            $helperRecord $candidateBinding $releaseCandidateBinding $candidate $operator (Get-Sha256 $matrixPath)
+            $helperRecord $candidateBinding $releaseCandidateBinding $candidate $operator $matrixRead.Sha256
+        $externalSurfacePreflightRead = Read-JsonWithSha256 `
+            $externalSurfacePreflightPath "ExternalSurfacePreflightAttestation"
+        $externalSurfacePostflightRead = Read-JsonWithSha256 `
+            $externalSurfacePostflightPath "ExternalSurfacePostflightAttestation"
+        $externalSurfacePreflight = Assert-ExternalSurfaceAttestationV3 `
+            $externalSurfacePreflightRead.Value $externalSurfacePreflightRead.Sha256 `
+            $releaseCandidateBinding "preflight"
+        $externalSurfacePostflight = Assert-ExternalSurfaceAttestationV3 `
+            $externalSurfacePostflightRead.Value $externalSurfacePostflightRead.Sha256 `
+            $releaseCandidateBinding "postflight"
+        $externalSurfaces = Assert-ExternalSurfaceAttestationPairV3 `
+            $externalSurfacePreflight $externalSurfacePostflight `
+            $helperRecord $approvalRecord $reviewRecord
+        if ($operator.cleanup.externalSurfacePreflightAttestationSha256 -cne `
+                $externalSurfaces.PreflightSha256 -or
+            $operator.cleanup.externalSurfacePostflightAttestationSha256 -cne `
+                $externalSurfaces.PostflightSha256) {
+            throw "Operator cleanup does not bind the exact external-surface attestation pair."
+        }
     }
     $screenshots = @(
         Assert-ScreenshotRecords $ScreenshotRecords $candidateBinding $releaseCandidateBinding $candidate $candidate.version
     )
     if ($candidate.version -ceq $script:OperatorV2Version) {
         Assert-HelperScreenshotsMatchSidecarsV2 $helperRecord $screenshots
+        Assert-ApprovalMatchesHelperV3 $approvalRecord $approvalRead.Sha256 $helperRecord $operator
+        Assert-ReviewMatchesHelperAndSidecarsV3 `
+            $reviewRecord $reviewRead.Sha256 $helperRecord $operator $screenshots
     }
     $candidateSummary = [ordered]@{
         version = $candidate.version
         finalSha = $candidate.finalSha
         preflightRecordSha256 = $preflightSha256
-        postflightRecordSha256 = Get-Sha256 $postflightPath
+        postflightRecordSha256 = $postflightRead.Sha256
         checksumManifestSha256 = $candidate.checksumManifest.sha256
         serverName = $candidate.server.name
         serverSha256 = $candidate.server.sha256
@@ -2202,9 +3252,11 @@ function Invoke-Finalize {
             $resolvedSidecars += Resolve-RequiredFile $path "ScreenshotRecords entry"
         }
         Assert-RetainedEvidenceDirectoryV2 `
-            $preflightPath $postflightPath $matrixPath $helperPath $operatorPath $resolvedSidecars $outputPath
+            $preflightPath $postflightPath $matrixPath $helperPath $approvalPath $reviewPath `
+            $externalSurfacePreflightPath $externalSurfacePostflightPath `
+            $operatorPath $resolvedSidecars $outputPath
         $record = [ordered]@{
-            schemaVersion = 2
+            schemaVersion = 3
             evidenceType = "stock-user-chrome-acceptance"
             recordedAtUtc = [DateTime]::UtcNow.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
             passed = $true
@@ -2218,14 +3270,17 @@ function Invoke-Finalize {
             initialState = $operator.initialState
             extension = $operator.extension
             handback = $helperRecord.handback
-            apiMatrixRecordSha256 = Get-Sha256 $matrixPath
+            apiMatrixRecordSha256 = $matrixRead.Sha256
             apiMatrix = $matrix
-            computerHelperRecordSha256 = Get-Sha256 $helperPath
+            computerHelperRecordSha256 = $helperRead.Sha256
             computerHelper = $helperRecord
-            operatorRecordSha256 = Get-Sha256 $operatorPath
+            scopedApprovalRecordSha256 = $approvalRead.Sha256
+            scopedActionApproval = $approvalRecord
+            independentReviewRecordSha256 = $reviewRead.Sha256
+            independentVisualReview = $reviewRecord
+            operatorRecordSha256 = $operatorRead.Sha256
             screenshotCaptures = $operator.screenshotCaptures
             screenshots = $screenshots
-            humanVisualReview = $operator.humanVisualReview
             restoration = $operator.restoration
             cleanup = $operator.cleanup
             retainedEvidence = $operator.retainedEvidence
@@ -2239,7 +3294,7 @@ function Invoke-Finalize {
                 browserAccountDetailsPresentInRetainedEvidence = $false
                 externalToolAndPlatformLogsScope = "not-asserted"
                 automaticPixelRedactionClaimed = $false
-                manualScreenshotReviewRequired = $true
+                independentAgentScreenshotReviewRequired = $true
             }
         }
     }
@@ -2253,7 +3308,7 @@ function Invoke-Finalize {
             candidate = $candidateSummary
             environment = $operator.environment
             extension = $operator.extension
-            apiMatrixRecordSha256 = Get-Sha256 $matrixPath
+            apiMatrixRecordSha256 = $matrixRead.Sha256
             apiMatrix = $matrix
             handback = $operator.handback
             screenshots = $screenshots
@@ -2284,6 +3339,9 @@ function Invoke-InitializeOperator {
     [void](Assert-CandidatePreflight $preflight)
     $binding = Get-CandidateBindingDomain $preflight (Get-Sha256 $preflightPath)
     $templateVersion = [string]$preflight.candidate.version
+    if ($templateVersion -ceq $script:OperatorV2Version) {
+        throw "v0.12.15 operator results must be created with BuildOperator; editable checklists are not accepted."
+    }
     if (@("0.12.2", $script:OperatorV2Version) -cnotcontains $templateVersion) {
         throw "No stock-user-Chrome operator template is registered for candidate version $templateVersion."
     }
@@ -2291,23 +3349,10 @@ function Invoke-InitializeOperator {
         $PSScriptRoot, "..", "evidence", "v$templateVersion", "browser", "operator-results.template.json"
     ))
     $operator = Read-Json $templatePath "operator template"
-    if ($templateVersion -ceq $script:OperatorV2Version) {
-        Assert-ExactKeys $operator @(
-            "schemaVersion", "evidenceType", "releaseCandidateBinding", "candidateBinding", "environment", "actionSurfaces",
-            "computerHelperChain", "consentCheckpoints", "initialState", "extension", "screenshotCaptures",
-            "handback", "humanVisualReview", "restoration", "cleanup", "retainedEvidence"
-        ) "v0.12.14 operator template"
-        Assert-IntegerRange $operator.schemaVersion 2 2 "v0.12.14 operator template schemaVersion"
-    }
-    else {
-        Assert-ExactKeys $operator @(
-            "schemaVersion", "evidenceType", "candidateBinding", "environment", "extension", "handback", "cleanup"
-        ) "operator template"
-        Assert-IntegerRange $operator.schemaVersion 1 1 "operator template schemaVersion"
-    }
-    if ($templateVersion -ceq $script:OperatorV2Version) {
-        $operator.releaseCandidateBinding = $preflight.releaseCandidateBinding
-    }
+    Assert-ExactKeys $operator @(
+        "schemaVersion", "evidenceType", "candidateBinding", "environment", "extension", "handback", "cleanup"
+    ) "operator template"
+    Assert-IntegerRange $operator.schemaVersion 1 1 "operator template schemaVersion"
     $operator.candidateBinding = [pscustomobject]$binding
     Write-NewJson $outputPath $operator
     Write-Output "Candidate-bound operator checklist was initialized."
@@ -2352,9 +3397,9 @@ function New-PassingHandbackCaseV2SelfTest {
 function New-PassingOperatorV2SelfTest {
     param([object]$Binding, [object]$ReleaseBinding)
     $templatePath = [IO.Path]::GetFullPath([IO.Path]::Combine(
-        $PSScriptRoot, "..", "evidence", "v0.12.14", "browser", "operator-results.template.json"
+        $PSScriptRoot, "..", "evidence", "v0.12.15", "browser", "operator-results.template.json"
     ))
-    $operator = Read-Json $templatePath "v0.12.14 operator self-test template"
+    $operator = Read-Json $templatePath "v0.12.15 operator self-test template"
     $operator.releaseCandidateBinding = Copy-JsonObject $ReleaseBinding
     $operator.candidateBinding = [pscustomobject]$Binding
     $operator.environment.browserVersion = "151.0.7390.0"
@@ -2373,7 +3418,8 @@ function New-PassingOperatorV2SelfTest {
     )) {
         $operator.actionSurfaces.$name = "local-browser-bridge-computer-helper"
     }
-    $operator.actionSurfaces.orchestrationAndConsent = "human-on-stock-chrome"
+    $operator.actionSurfaces.orchestrationAndConsent = `
+        "user-orchestrator-secured-ssh-exported-file-review"
     $operator.actionSurfaces.competingDebuggerAttachmentAllowed = $false
     $operator.actionSurfaces.chromeMcpUsedDuringBridgeLease = $false
     $operator.actionSurfaces.chromeMcpReleaseEvidenceClaimed = $false
@@ -2392,30 +3438,22 @@ function New-PassingOperatorV2SelfTest {
     $operator.handback.stop = New-PassingHandbackCaseV2SelfTest "in-page-stop" "released_by_user"
     $operator.handback.cancel = New-PassingHandbackCaseV2SelfTest "chrome-native-cancel" "canceled_by_user"
 
-    foreach ($name in @("performed", "actionTimeHumanConfirmed", "ownershipConfirmed")) {
-        $operator.consentCheckpoints.installCandidate.$name = $true
-    }
-    $operator.consentCheckpoints.developerModeChange.performed = $true
-    $operator.consentCheckpoints.developerModeChange.actionTimeHumanConfirmed = $true
-    foreach ($name in @("performed", "actionTimeHumanConfirmed", "localDemoScopeAcknowledged")) {
-        $operator.consentCheckpoints.fullAccessUse.$name = $true
-    }
+    $approvalId = [String]::new([char]"a", 64)
+    $operator.consentCheckpoints.scopedActionTimeApproval.recordSha256 = [String]::new([char]"b", 64)
+    $operator.consentCheckpoints.scopedActionTimeApproval.approvalId = $approvalId
     foreach ($name in @(
-        "performed", "actionTimeHumanConfirmed", "ephemeralAcceptanceCredentialAcknowledged"
-    )) {
-        $operator.consentCheckpoints.acceptanceTokenSave.$name = $true
-    }
+        "obtainedAtActionTime", "consumedBeforeFirstCoveredAction", "consumedBeforeExpiry",
+        "freshStateRevalidatedAfterApproval", "scopeUnchangedThroughRun", "singleCandidateRun"
+    )) { $operator.consentCheckpoints.scopedActionTimeApproval.$name = $true }
     foreach ($name in @(
-        "performed", "actionTimeHumanConfirmed", "confirmationDialogSeen",
-        "confirmationActionTimeHumanConfirmed"
+        "installCandidate", "developerModeChange", "fullAccessUse", "acceptanceTokenSave",
+        "clearSavedToken", "removeTestOwnedExtension", "restoreCapturedBrowserSettings"
     )) {
-        $operator.consentCheckpoints.clearSavedToken.$name = $true
+        $operator.consentCheckpoints.$name.performed = $true
+        $operator.consentCheckpoints.$name.approvalRef = $approvalId
     }
-    foreach ($name in @(
-        "performed", "actionTimeHumanConfirmed", "testOwnedRemovalConfirmed"
-    )) {
-        $operator.consentCheckpoints.extensionDisposition.$name = $true
-    }
+    $operator.consentCheckpoints.failureRollback.performed = $false
+    $operator.consentCheckpoints.failureRollback.approvalRef = $approvalId
 
     $operator.initialState.capturedBeforeRelevantMutation = $true
     $operator.initialState.candidateExtensionPresent = $false
@@ -2438,16 +3476,15 @@ function New-PassingOperatorV2SelfTest {
         $capture.captureSurface = "local-browser-bridge-computer-helper"
     }
 
+    $operator.independentVisualReview.recordSha256 = [String]::new([char]"c", 64)
+    $operator.independentVisualReview.executorSessionRef = [String]::new([char]"d", 64)
+    $operator.independentVisualReview.reviewerSessionRef = [String]::new([char]"e", 64)
     foreach ($name in @(
-        "sanitizedBeforeHumanReview", "automationPausedForHumanReview",
-        "everySanitizedCropOpenedByHuman", "requiredVisibleStateConfirmedByHuman",
-        "sensitivePixelsAbsentConfirmedByHuman", "reviewFlagsSetOnlyAfterHumanConfirmation",
-        "postSanitizationAttestationCreated", "pendingReviewRecordsOutsideRetainedEvidence"
-    )) {
-        $operator.humanVisualReview.$name = $true
-    }
-    $operator.humanVisualReview.reviewedCropCount = 6
-    $operator.humanVisualReview.automaticPixelRedactionClaimed = $false
+        "independentSessionBoundary", "everySanitizedCropOpenedByReviewer", "allImageDigestsMatched",
+        "requiredVisibleStateConfirmedByReviewer", "noSensitivePixelsObservedByReviewer",
+        "noUncertaintyReported", "visualJudgmentNotPixelSafetyProof"
+    )) { $operator.independentVisualReview.$name = $true }
+    $operator.independentVisualReview.reviewedCropCount = 6
 
     $operator.restoration.candidateExtensionPresence.finalPresent = $false
     $operator.restoration.candidateExtensionPresence.matchesInitial = $true
@@ -2465,26 +3502,31 @@ function New-PassingOperatorV2SelfTest {
     foreach ($name in @(
         "controlReleased", "testTabsClosed", "testWindowClosed", "popupDisconnected",
         "serverStopped", "portReleased", "acceptanceCredentialClearedFromShell",
-        "chromeMcpReleasedOrNotUsed", "computerUseReleasedOrNotUsed", "computerHelperStopped",
-        "rawScreenshotScratchDeleted", "pendingReviewRecordsDeleted",
+        "computerHelperStopped", "rawScreenshotScratchDeleted", "pendingReviewRecordsDeleted",
         "extractedExtensionInventoryVerifiedBeforeDeletion", "extractedExtensionDirectoryDeleted"
     )) {
         $operator.cleanup.$name = $true
     }
+    $operator.cleanup.externalSurfacePreflightAttestationSha256 = [String]::new([char]"8", 64)
+    $operator.cleanup.externalSurfacePostflightAttestationSha256 = [String]::new([char]"9", 64)
+    $operator.cleanup.chromeMcpDisposition = "never-used-through-independent-review"
+    $operator.cleanup.computerUseDisposition = "not-resumed-through-independent-review"
+    $operator.cleanup.reviewerInputDisposition = "exported-digest-bound-files-only"
     foreach ($name in @(
-        "trustedPopupClick", "confirmationDialogShown", "confirmationAcceptedByHuman",
+        "trustedPopupClick", "confirmationDialogShown", "confirmationAcceptedByExecutor",
         "popupStateVerifiedAfterClear", "clearButtonDisabled"
     )) {
         $operator.cleanup.savedTokenClear.$name = $true
     }
     $operator.cleanup.savedTokenClear.tokenConfigured = $false
+    $operator.cleanup.savedTokenClear.approvalRef = $approvalId
     $operator.cleanup.extensionDisposition = "removed"
-    $operator.cleanup.unrelatedTabsOrWindowsChanged = $false
-    $operator.cleanup.unrelatedExtensionsChanged = $false
+    $operator.cleanup.unrelatedTargetMutationCommandsIssued = $false
+    $operator.cleanup.unrelatedExtensionMutationCommandsIssued = $false
 
     $operator.retainedEvidence.exactAllowlistVerified = $true
-    $operator.retainedEvidence.inputFileCount = 17
-    $operator.retainedEvidence.finalFileCount = 18
+    $operator.retainedEvidence.inputFileCount = 21
+    $operator.retainedEvidence.finalFileCount = 22
     foreach ($name in @(
         "rawScreenshotsPresent", "pendingReviewRecordsPresent", "chromeMcpTranscriptPresent",
         "computerUseTranscriptPresent", "secretCredentialPresent",
@@ -2534,9 +3576,117 @@ function New-PassingReleaseCandidateBindingV2SelfTest {
     }
 }
 
+function New-PassingScopedApprovalV3SelfTest {
+    param(
+        [object]$Binding,
+        [object]$ReleaseBinding,
+        [DateTimeOffset]$ConfirmedAt,
+        [string]$OrchestratorSessionRef
+    )
+    return [ordered]@{
+        schemaVersion = 1
+        evidenceType = "stock-user-chrome-scoped-action-approval"
+        releaseCandidateBinding = Copy-JsonObject $ReleaseBinding
+        candidateBinding = [pscustomobject]$Binding
+        approvalId = [String]::new([char]"a", 64)
+        request = [ordered]@{
+            createdAtUtc = Format-CanonicalUtc ($ConfirmedAt.AddSeconds(-1))
+            expiresAtUtc = Format-CanonicalUtc ($ConfirmedAt.AddMinutes(10))
+            challengeFrameRef = [String]::new([char]"1", 64)
+            scopeSha256 = [String]::new([char]"b", 64)
+            coveredActions = @($script:CoveredApprovalActions)
+            loopbackOnly = $true
+            dedicatedWindowOnly = $true
+            restoreCapturedState = $true
+            noUnrelatedExtensionMutation = $true
+        }
+        response = [ordered]@{
+            approvedBy = "user"
+            deliveredBy = "user-via-orchestrator"
+            orchestratorSessionRef = $OrchestratorSessionRef
+            confirmationMode = "batched-action-time"
+            confirmedAtUtc = Format-CanonicalUtc $ConfirmedAt
+            requestSha256 = [String]::new([char]"c", 64)
+            singleCandidateRun = $true
+        }
+        consumption = [ordered]@{
+            consumedBeforeFirstCoveredAction = $true
+            consumedBeforeExpiry = $true
+            preDispatchFrameRef = [String]::new([char]"2", 64)
+            preDispatchDecisionRef = [String]::new([char]"3", 64)
+            preDispatchVerifiedAtUtc = Format-CanonicalUtc ($ConfirmedAt.AddSeconds(1))
+            freshStateRevalidatedAfterApproval = $true
+            scopeUnchangedThroughRun = $true
+            replayed = $false
+            cleanupAuthoritySurvivesFailure = $true
+        }
+    }
+}
+
+function New-PassingIndependentReviewV3SelfTest {
+    param(
+        [object]$Binding,
+        [object]$ReleaseBinding,
+        [string]$ExecutorSessionRef,
+        [string]$ReviewerSessionRef,
+        [string]$ImageSha256,
+        [DateTimeOffset]$ReviewedAt
+    )
+    $entries = @()
+    $index = 0
+    foreach ($purpose in $script:ExpectedScreenshotsV2.Keys) {
+        $entries += [ordered]@{
+            sequence = $index + 1
+            purpose = $purpose
+            image = $script:ExpectedScreenshotsV2[$purpose]
+            sha256 = $ImageSha256
+            width = 120
+            height = 32
+            requiredVisibleStateSha256 = Get-TextSha256 $script:RequiredVisibleStatesV2[$purpose]
+            digestMatched = $true
+            requiredStateVerdict = "pass"
+            sensitivePixelsObserved = $false
+            uncertain = $false
+        }
+        $index += 1
+    }
+    return [ordered]@{
+        schemaVersion = 1
+        evidenceType = "stock-user-chrome-independent-visual-review"
+        releaseCandidateBinding = Copy-JsonObject $ReleaseBinding
+        candidateBinding = [pscustomobject]$Binding
+        executorSessionRef = $ExecutorSessionRef
+        reviewerSessionRef = $ReviewerSessionRef
+        independentSessionBoundary = $true
+        requestSha256 = [String]::new([char]"f", 64)
+        reviewedAtUtc = Format-CanonicalUtc $ReviewedAt
+        entries = $entries
+        aggregate = [ordered]@{
+            reviewedCropCount = 6
+            everySanitizedCropOpenedByReviewer = $true
+            allImageDigestsMatched = $true
+            requiredVisibleStateConfirmedByReviewer = $true
+            noSensitivePixelsObservedByReviewer = $true
+            noUncertaintyReported = $true
+            visualJudgmentNotPixelSafetyProof = $true
+        }
+    }
+}
+
 function New-PassingComputerHelperRecordV2SelfTest {
-    param([object]$Binding, [object]$ReleaseBinding, [object]$Candidate, [string]$ApiMatrixSha256)
-    $start = [DateTimeOffset]::UtcNow
+    param(
+        [object]$Binding,
+        [object]$ReleaseBinding,
+        [object]$Candidate,
+        [string]$ApiMatrixSha256,
+        [object]$ApprovalRecord,
+        [string]$ApprovalRecordSha256,
+        [string]$ExecutorSessionRef,
+        [string]$ReviewerSessionRef
+    )
+    $approvalTime = Assert-UtcTimestamp $ApprovalRecord.response.confirmedAtUtc `
+        "self-test approval confirmation"
+    $start = $approvalTime.AddSeconds(-2)
     $helperProcessRef = [String]::new([char]"e", 64)
     $serverProcessRef = [String]::new([char]"f", 64)
     $lifecycle = @()
@@ -2550,7 +3700,7 @@ function New-PassingComputerHelperRecordV2SelfTest {
         $lifecycle += [ordered]@{
             sequence = $index + 1
             name = $script:ComputerHelperLifecycleEvents[$index]
-            atUtc = $start.AddSeconds($index + 1).ToString("o", [Globalization.CultureInfo]::InvariantCulture)
+            atUtc = Format-CanonicalUtc ($start.AddSeconds($index + 1))
             source = $script:ComputerHelperActionSource
             connectionState = $connections[$index]
             processRef = if ($isServer) { $serverProcessRef } elseif ($isHelper) { $helperProcessRef } else { "not-applicable" }
@@ -2615,16 +3765,16 @@ function New-PassingComputerHelperRecordV2SelfTest {
         elseif ($index -eq ($script:ComputerHelperActionNames.Count - 1)) {
             $methods = @("computer.observe", "computer.key", "computer.status")
         }
-        $consentRef = $script:ComputerHelperActionConsentRefs[$index]
-        if ($consentRef -ceq "conditional-developer-mode") {
-            $consentRef = "developerModeChange"
+        $riskRef = $script:ComputerHelperActionRiskRefs[$index]
+        if ($riskRef -ceq "conditional-developer-mode") {
+            $riskRef = "developerModeChange"
         }
         $preDigit = [char](97 + ($index % 6))
         $postDigit = [char](49 + ($index % 6))
         $actions += [ordered]@{
             sequence = $index + 1
             name = $script:ComputerHelperActionNames[$index]
-            atUtc = $start.AddSeconds(20 + $index).ToString("o", [Globalization.CultureInfo]::InvariantCulture)
+            atUtc = Format-CanonicalUtc ($start.AddSeconds(20 + $index))
             source = $script:ComputerHelperActionSource
             epochRef = $epochs[$script:ComputerHelperActionEpochIndexes[$index]].epochRef
             methods = $methods
@@ -2635,7 +3785,10 @@ function New-PassingComputerHelperRecordV2SelfTest {
             httpStatus = 200
             resultVerified = $true
             postconditionVerified = $true
-            consentRef = $consentRef
+            dispatchedAtUtc = Format-CanonicalUtc ($start.AddSeconds(19 + $index))
+            operatorDecisionRef = [String]::new([char]"0", 60) + ('{0:x4}' -f (700 + $index))
+            riskRef = $riskRef
+            approvalRef = if ($riskRef -ceq "none") { "none" } else { $ApprovalRecord.approvalId }
         }
     }
 
@@ -2668,7 +3821,7 @@ function New-PassingComputerHelperRecordV2SelfTest {
 
     $recorderPath = [IO.Path]::Combine($PSScriptRoot, "record-computer-helper-chain.ps1")
     return [ordered]@{
-        schemaVersion = 1
+        schemaVersion = 2
         evidenceType = "stock-user-chrome-computer-helper-chain"
         version = $script:OperatorV2Version
         releaseCandidateBinding = Copy-JsonObject $ReleaseBinding
@@ -2683,8 +3836,41 @@ function New-PassingComputerHelperRecordV2SelfTest {
             runNonce = $Binding.runNonce
             preflightRecordSha256 = $Binding.preflightRecordSha256
             apiMatrixRecordSha256 = $ApiMatrixSha256
-            startedAtUtc = $start.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
-            finishedAtUtc = $start.AddSeconds(60).ToString("o", [Globalization.CultureInfo]::InvariantCulture)
+            startedAtUtc = Format-CanonicalUtc $start
+            finishedAtUtc = Format-CanonicalUtc ($start.AddSeconds(60))
+        }
+        operatorExchange = [ordered]@{
+            protocolVersion = 1
+            executorSessionRef = $ExecutorSessionRef
+            reviewerSessionRef = $ReviewerSessionRef
+            independentSessionBoundary = $true
+            requestCount = 101
+            statusDecisionCount = 1
+            freshFrameDecisionCount = 99
+            allRequestsCreateOnce = $true
+            allResponsesCreateOnce = $true
+            everyFrameDependentDecisionBoundToFreshFrame = $true
+            everyStatusDecisionBoundToFreshStatus = $true
+            responseChainSha256 = [String]::new([char]"7", 64)
+            scratchDeleted = $true
+        }
+        scopedActionApproval = [ordered]@{
+            recordSha256 = $ApprovalRecordSha256
+            approvalId = $ApprovalRecord.approvalId
+            scopeSha256 = $ApprovalRecord.request.scopeSha256
+            executorSessionRef = $ExecutorSessionRef
+            approvalConfirmedAtUtc = $ApprovalRecord.response.confirmedAtUtc
+            approvalExpiresAtUtc = $ApprovalRecord.request.expiresAtUtc
+            approvalChallengeFrameRef = $ApprovalRecord.request.challengeFrameRef
+            preDispatchFrameRef = $ApprovalRecord.consumption.preDispatchFrameRef
+            preDispatchDecisionRef = $ApprovalRecord.consumption.preDispatchDecisionRef
+            preDispatchVerifiedAtUtc = $ApprovalRecord.consumption.preDispatchVerifiedAtUtc
+            firstCoveredActionSequence = 3
+            firstCoveredActionDispatchedAtUtc = $actions[2].dispatchedAtUtc
+            consumedBeforeFirstCoveredAction = $true
+            consumedBeforeExpiry = $true
+            freshStateRevalidatedAfterApproval = $true
+            scopeUnchangedThroughRun = $true
         }
         server = [ordered]@{
             executableName = $Candidate.server.name
@@ -2727,24 +3913,28 @@ function New-PassingComputerHelperRecordV2SelfTest {
                 value = "disabled"
                 epochRef = $epochs[1].epochRef
                 frameRef = [String]::new([char]"1", 64)
+                operatorDecisionRef = [String]::new([char]"a", 64)
                 capturedBeforeMutation = $true
             }
             fullAccess = [ordered]@{
                 value = "enabled"
                 epochRef = $epochs[4].epochRef
                 frameRef = [String]::new([char]"2", 64)
+                operatorDecisionRef = [String]::new([char]"b", 64)
                 capturedBeforeMutation = $true
             }
             savedToken = [ordered]@{
                 configured = $false
                 epochRef = $epochs[4].epochRef
                 frameRef = [String]::new([char]"3", 64)
+                operatorDecisionRef = [String]::new([char]"c", 64)
                 capturedBeforeMutation = $true
             }
             candidateCard = [ordered]@{
                 present = $false
                 epochRef = $epochs[1].epochRef
                 frameRef = [String]::new([char]"5", 64)
+                operatorDecisionRef = [String]::new([char]"d", 64)
                 verifiedFromFreshLiveUi = $true
             }
         }
@@ -2856,6 +4046,30 @@ function Invoke-SelfTest {
         if (-not $undersizedScreenshotRejected) {
             throw "Evidence finalizer accepted an undersized screenshot."
         }
+        $canonicalTimestamp = "2026-08-24T00:00:00.0000000Z"
+        $parsedCanonicalTimestamp = Assert-UtcTimestamp $canonicalTimestamp "self-test timestamp"
+        if ($parsedCanonicalTimestamp.Offset -ne [TimeSpan]::Zero -or
+            (Format-CanonicalUtc $parsedCanonicalTimestamp) -cne $canonicalTimestamp) {
+            throw "Evidence finalizer rejected a canonical Z-suffixed timestamp."
+        }
+        $offsetTimestampRejected = $false
+        try {
+            [void](Assert-UtcTimestamp "2026-08-24T00:00:00.0000000+00:00" `
+                "self-test offset timestamp")
+        }
+        catch { $offsetTimestampRejected = $true }
+        if (-not $offsetTimestampRejected) {
+            throw "Evidence finalizer accepted a noncanonical +00:00 timestamp."
+        }
+        $decodedPathRejected = $false
+        try {
+            Assert-SafeSerializedRecord `
+                '{"note":"C:\\Users\\Alice\\private.txt"}' @()
+        }
+        catch { $decodedPathRejected = $true }
+        if (-not $decodedPathRejected) {
+            throw "Evidence finalizer accepted a decoded Windows home path hidden by JSON escaping."
+        }
         $version = "0.12.2"
         $hash = [String]::new([char]"a", 64)
         $runNonce = [String]::new([char]"d", 64)
@@ -2937,10 +4151,14 @@ function Invoke-SelfTest {
         [IO.File]::WriteAllText($preflightV2Path, (($preflightV2 | ConvertTo-Json -Depth 30) + "`n"), $script:Utf8NoBom)
         $preflightV2Binding = Get-CandidateBindingDomain $preflightV2 (Get-Sha256 $preflightV2Path)
         $initializedV2Path = [IO.Path]::Combine($root, "operator-v2-initialized.json")
-        & $PSCommandPath -Mode InitializeOperator -PreflightRecord $preflightV2Path -OutputRecord $initializedV2Path | Out-Null
-        $initializedV2 = Read-Json $initializedV2Path "initialized v0.12.14 operator checklist"
-        if ($initializedV2.schemaVersion -ne 2 -or $initializedV2.extension.version -cne $script:OperatorV2Version) {
-            throw "Evidence initializer did not select the v0.12.14 operator schema."
+        $editableCurrentRejected = $false
+        try {
+            & $PSCommandPath -Mode InitializeOperator -PreflightRecord $preflightV2Path `
+                -OutputRecord $initializedV2Path | Out-Null
+        }
+        catch { $editableCurrentRejected = $true }
+        if (-not $editableCurrentRejected -or [IO.File]::Exists($initializedV2Path)) {
+            throw "Evidence finalizer allowed an editable current-schema operator checklist."
         }
 
         $operatorV2 = New-PassingOperatorV2SelfTest $preflightV2Binding $releaseCandidateV2
@@ -2953,25 +4171,41 @@ function Invoke-SelfTest {
             "Evidence finalizer accepted an operator record bound to another workflow attempt."
 
         $badV2 = Copy-JsonObject $operatorV2
-        $badV2.initialState.developerMode.changedByRun = $false
-        $badV2.consentCheckpoints.developerModeChange.performed = $false
-        $badV2.consentCheckpoints.developerModeChange.actionTimeHumanConfirmed = $false
+        Add-Member -InputObject $badV2.consentCheckpoints.installCandidate `
+            -NotePropertyName actionTimeHumanConfirmed -NotePropertyValue $true
         Assert-OperatorV2SelfTestRejected $badV2 $preflightV2Binding `
-            "Evidence finalizer accepted missing Developer Mode change tracking."
+            "Evidence finalizer accepted an obsolete per-action human-confirmation field."
 
         $badV2 = Copy-JsonObject $operatorV2
-        $badV2.consentCheckpoints.developerModeChange.actionTimeHumanConfirmed = $false
+        Add-Member -InputObject $badV2 -NotePropertyName humanVisualReview `
+            -NotePropertyValue ([pscustomobject]@{ confirmed = $true })
+        Assert-OperatorV2SelfTestRejected $badV2 $preflightV2Binding `
+            "Evidence finalizer accepted an obsolete human visual-review object."
+
+        $badV2 = Copy-JsonObject $operatorV2
+        $badV2.consentCheckpoints.installCandidate.approvalRef = [String]::new([char]"f", 64)
+        Assert-OperatorV2SelfTestRejected $badV2 $preflightV2Binding `
+            "Evidence finalizer accepted a checkpoint bound to another approval."
+
+        $badV2 = Copy-JsonObject $operatorV2
+        $badV2.consentCheckpoints.developerModeChange.approvalRef = [String]::new([char]"f", 64)
         Assert-OperatorV2SelfTestRejected $badV2 $preflightV2Binding `
             "Evidence finalizer accepted a Developer Mode change without action-time consent."
 
         $badV2 = Copy-JsonObject $operatorV2
-        $badV2.initialState.developerMode.value = "enabled"
-        $badV2.initialState.developerMode.changedByRun = $true
-        $badV2.consentCheckpoints.developerModeChange.performed = $true
-        $badV2.consentCheckpoints.developerModeChange.actionTimeHumanConfirmed = $true
-        $badV2.restoration.developerMode.finalValue = "enabled"
+        $badV2.consentCheckpoints.removeTestOwnedExtension.approvalRef = [String]::new([char]"f", 64)
         Assert-OperatorV2SelfTestRejected $badV2 $preflightV2Binding `
-            "Evidence finalizer accepted a Developer Mode change when the required test state already matched."
+            "Evidence finalizer accepted test-copy removal without ownership consent."
+
+        $badV2 = Copy-JsonObject $operatorV2
+        $badV2.consentCheckpoints.installCandidate.approvalRef = [String]::new([char]"f", 64)
+        Assert-OperatorV2SelfTestRejected $badV2 $preflightV2Binding `
+            "Evidence finalizer accepted candidate installation without ownership consent."
+
+        $badV2 = Copy-JsonObject $operatorV2
+        $badV2.independentVisualReview.reviewerSessionRef = $badV2.independentVisualReview.executorSessionRef
+        Assert-OperatorV2SelfTestRejected $badV2 $preflightV2Binding `
+            "Evidence finalizer accepted same-session visual review. Evidence finalizer accepted a same-session independent review."
 
         $badV2 = Copy-JsonObject $operatorV2
         $badV2.restoration.developerMode.finalValue = "enabled"
@@ -2982,16 +4216,6 @@ function Invoke-SelfTest {
         $badV2.restoration.fullAccess.finalValue = "disabled"
         Assert-OperatorV2SelfTestRejected $badV2 $preflightV2Binding `
             "Evidence finalizer accepted a Full Access restoration mismatch."
-
-        $badV2 = Copy-JsonObject $operatorV2
-        $badV2.consentCheckpoints.extensionDisposition.testOwnedRemovalConfirmed = $false
-        Assert-OperatorV2SelfTestRejected $badV2 $preflightV2Binding `
-            "Evidence finalizer accepted test-copy removal without ownership consent."
-
-        $badV2 = Copy-JsonObject $operatorV2
-        $badV2.consentCheckpoints.installCandidate.ownershipConfirmed = $false
-        Assert-OperatorV2SelfTestRejected $badV2 $preflightV2Binding `
-            "Evidence finalizer accepted candidate installation without ownership consent."
 
         $badV2 = Copy-JsonObject $operatorV2
         $badV2.initialState.candidateExtensionPresent = $true
@@ -3029,17 +4253,6 @@ function Invoke-SelfTest {
             "Evidence finalizer accepted a screenshot surface inconsistent with the declared capture surface."
 
         $badV2 = Copy-JsonObject $operatorV2
-        foreach ($name in @(
-            "dedicatedWindowCreation", "chromeExtensionsPage", "nativeLoadUnpackedPicker",
-            "extensionPopup", "chromeDebuggerNotice", "browserApiResult",
-            "computerShareAction", "acceptanceScreenshots"
-        )) {
-            $badV2.actionSurfaces.$name = "human-on-stock-chrome"
-        }
-        Assert-OperatorV2SelfTestRejected $badV2 $preflightV2Binding `
-            "Evidence finalizer accepted a human-only record without the packaged computer-helper chain."
-
-        $badV2 = Copy-JsonObject $operatorV2
         $badV2.computerHelperChain.chromeExtensionsLoadCompleted = $false
         Assert-OperatorV2SelfTestRejected $badV2 $preflightV2Binding `
             "Evidence finalizer accepted an incomplete packaged computer-helper action chain."
@@ -3060,24 +4273,19 @@ function Invoke-SelfTest {
             "Evidence finalizer accepted a competing debugger attachment during the bridge lease."
 
         $badV2 = Copy-JsonObject $operatorV2
-        $badV2.cleanup.savedTokenClear.confirmationAcceptedByHuman = $false
+        $badV2.cleanup.savedTokenClear.approvalRef = [String]::new([char]"f", 64)
+        Assert-OperatorV2SelfTestRejected $badV2 $preflightV2Binding `
+            "Evidence finalizer accepted clear-token confirmation bound to another approval."
+
+        $badV2 = Copy-JsonObject $operatorV2
+        $badV2.cleanup.savedTokenClear.confirmationAcceptedByExecutor = $false
         Assert-OperatorV2SelfTestRejected $badV2 $preflightV2Binding `
             "Evidence finalizer accepted an incomplete clear-token confirmation."
 
         $badV2 = Copy-JsonObject $operatorV2
-        $badV2.consentCheckpoints.clearSavedToken.confirmationActionTimeHumanConfirmed = $false
+        $badV2.consentCheckpoints.restoreCapturedBrowserSettings.performed = $false
         Assert-OperatorV2SelfTestRejected $badV2 $preflightV2Binding `
-            "Evidence finalizer accepted a clear-token dialog without a distinct confirmation receipt."
-
-        $badV2 = Copy-JsonObject $operatorV2
-        $badV2.humanVisualReview.automationPausedForHumanReview = $false
-        Assert-OperatorV2SelfTestRejected $badV2 $preflightV2Binding `
-            "Evidence finalizer accepted an automated visual-review assertion."
-
-        $badV2 = Copy-JsonObject $operatorV2
-        $badV2.humanVisualReview.postSanitizationAttestationCreated = $false
-        Assert-OperatorV2SelfTestRejected $badV2 $preflightV2Binding `
-            "Evidence finalizer accepted review asserted before post-sanitization attestation."
+            "Evidence finalizer accepted a restoration mismatch under scoped approval."
 
         $badV2 = Copy-JsonObject $operatorV2
         $badV2.cleanup.rawScreenshotScratchDeleted = $false
@@ -3105,8 +4313,20 @@ function Invoke-SelfTest {
         $retainedPostflight = [IO.Path]::Combine($retainedV2Root, "candidate-postflight.json")
         $retainedMatrix = [IO.Path]::Combine($retainedV2Root, "browser-api-matrix.json")
         $retainedHelper = [IO.Path]::Combine($retainedV2Root, "browser-computer-helper-chain.json")
+        $retainedApproval = [IO.Path]::Combine($retainedV2Root, "scoped-action-approval.json")
+        $retainedReview = [IO.Path]::Combine($retainedV2Root, "independent-visual-review.json")
+        $retainedExternalPreflight = [IO.Path]::Combine(
+            $retainedV2Root, "external-surface-preflight.json"
+        )
+        $retainedExternalPostflight = [IO.Path]::Combine(
+            $retainedV2Root, "external-surface-postflight.json"
+        )
         $retainedOperator = [IO.Path]::Combine($retainedV2Root, "operator-results.json")
-        foreach ($path in @($retainedPreflight, $retainedPostflight, $retainedMatrix, $retainedHelper, $retainedOperator)) {
+        foreach ($path in @(
+            $retainedPreflight, $retainedPostflight, $retainedMatrix, $retainedHelper,
+            $retainedApproval, $retainedReview, $retainedExternalPreflight,
+            $retainedExternalPostflight, $retainedOperator
+        )) {
             [IO.File]::WriteAllText($path, "{}`n", $script:Utf8NoBom)
         }
         $retainedSidecars = @()
@@ -3122,13 +4342,17 @@ function Invoke-SelfTest {
         }
         $retainedOutput = [IO.Path]::Combine($retainedV2Root, "browser-acceptance.json")
         Assert-RetainedEvidenceDirectoryV2 `
-            $retainedPreflight $retainedPostflight $retainedMatrix $retainedHelper $retainedOperator $retainedSidecars $retainedOutput
+            $retainedPreflight $retainedPostflight $retainedMatrix $retainedHelper $retainedApproval `
+            $retainedReview $retainedExternalPreflight $retainedExternalPostflight `
+            $retainedOperator $retainedSidecars $retainedOutput
         $unexpectedRetainedPath = [IO.Path]::Combine($retainedV2Root, "raw-screenshot.png")
         [IO.File]::WriteAllBytes($unexpectedRetainedPath, [byte[]](1))
         $unexpectedRetainedRejected = $false
         try {
             Assert-RetainedEvidenceDirectoryV2 `
-                $retainedPreflight $retainedPostflight $retainedMatrix $retainedHelper $retainedOperator $retainedSidecars $retainedOutput
+                $retainedPreflight $retainedPostflight $retainedMatrix $retainedHelper $retainedApproval `
+                $retainedReview $retainedExternalPreflight $retainedExternalPostflight `
+                $retainedOperator $retainedSidecars $retainedOutput
         }
         catch { $unexpectedRetainedRejected = $true }
         if (-not $unexpectedRetainedRejected) {
@@ -3263,8 +4487,8 @@ function Invoke-SelfTest {
             throw "Evidence finalizer self-test retained a path or placeholder."
         }
 
-        # Exercise the complete v0.12.14 Finalize path with its exact 17-file
-        # retained-input inventory, not only the v2 relation validators.
+        # Exercise the complete v0.12.15 Finalize path with its exact 21-file
+        # retained-input inventory, not only the schema-v3 relation validators.
         $finalizeV2Root = [IO.Path]::Combine($root, "finalize-v2")
         [IO.Directory]::CreateDirectory($finalizeV2Root) | Out-Null
         $finalizeV2PreflightPath = [IO.Path]::Combine($finalizeV2Root, "candidate-preflight.json")
@@ -3308,8 +4532,24 @@ function Invoke-SelfTest {
             $finalizeV2MatrixPath, (($matrixV2 | ConvertTo-Json -Depth 30) + "`n"), $script:Utf8NoBom
         )
 
+        # Keep the complete helper/reviewer/postflight fixture in the past so
+        # exact postflight ordering does not depend on self-test execution speed.
+        $approvalConfirmedAt = [DateTimeOffset]::UtcNow.AddMinutes(-2)
+        $executorRef = [String]::new([char]"d", 64)
+        $reviewerRef = [String]::new([char]"e", 64)
+        $orchestratorRef = [String]::new([char]"6", 64)
+        $approvalV3 = New-PassingScopedApprovalV3SelfTest `
+            $finalizeV2Binding $releaseCandidateV2 $approvalConfirmedAt $orchestratorRef
+        $finalizeV2ApprovalPath = [IO.Path]::Combine(
+            $finalizeV2Root, "scoped-action-approval.json"
+        )
+        [IO.File]::WriteAllText(
+            $finalizeV2ApprovalPath, (($approvalV3 | ConvertTo-Json -Depth 30) + "`n"), $script:Utf8NoBom
+        )
         $helperV2 = New-PassingComputerHelperRecordV2SelfTest `
-            $finalizeV2Binding $releaseCandidateV2 $preflightV2.candidate (Get-Sha256 $finalizeV2MatrixPath)
+            $finalizeV2Binding $releaseCandidateV2 $preflightV2.candidate `
+            (Get-Sha256 $finalizeV2MatrixPath) $approvalV3 (Get-Sha256 $finalizeV2ApprovalPath) `
+            $executorRef $reviewerRef
         $finalizeV2HelperPath = [IO.Path]::Combine(
             $finalizeV2Root, "browser-computer-helper-chain.json"
         )
@@ -3317,17 +4557,141 @@ function Invoke-SelfTest {
             $finalizeV2HelperPath, (($helperV2 | ConvertTo-Json -Depth 30) + "`n"), $script:Utf8NoBom
         )
 
-        $operatorV2Finalize = New-PassingOperatorV2SelfTest $finalizeV2Binding $releaseCandidateV2
-        $finalizeV2OperatorPath = [IO.Path]::Combine($finalizeV2Root, "operator-results.json")
-        [IO.File]::WriteAllText(
-            $finalizeV2OperatorPath, (($operatorV2Finalize | ConvertTo-Json -Depth 30) + "`n"), $script:Utf8NoBom
+        foreach ($purpose in $script:ExpectedScreenshotsV2.Keys) {
+            [IO.File]::WriteAllBytes(
+                [IO.Path]::Combine($finalizeV2Root, $script:ExpectedScreenshotsV2[$purpose]), $png
+            )
+        }
+        $pngSha = Get-Sha256 ([IO.Path]::Combine(
+            $finalizeV2Root, $script:ExpectedScreenshotsV2["extension-loaded"]
+        ))
+        $reviewV3 = New-PassingIndependentReviewV3SelfTest `
+            $finalizeV2Binding $releaseCandidateV2 $executorRef $reviewerRef $pngSha `
+            $approvalConfirmedAt.AddSeconds(61)
+        $finalizeV2ReviewPath = [IO.Path]::Combine(
+            $finalizeV2Root, "independent-visual-review.json"
         )
-
+        [IO.File]::WriteAllText(
+            $finalizeV2ReviewPath, (($reviewV3 | ConvertTo-Json -Depth 30) + "`n"), $script:Utf8NoBom
+        )
+        $reviewSha = Get-Sha256 $finalizeV2ReviewPath
+        $releaseCandidateV2Sha = Get-TextSha256 (
+            $releaseCandidateV2 | ConvertTo-Json -Depth 20 -Compress
+        )
+        $externalSurfacePreflightV3 = [ordered]@{
+            schemaVersion = 1
+            evidenceType = "stock-user-chrome-external-surface-attestation"
+            phase = "preflight"
+            releaseCandidateBinding = Copy-JsonObject $releaseCandidateV2
+            releaseCandidateBindingSha256 = $releaseCandidateV2Sha
+            orchestrationSurface = "user-orchestrator-secured-ssh-exported-file-review"
+            chromeMcpState = "not-used-before-candidate-execution"
+            computerUseState = "released-before-candidate-execution"
+            reviewerInputState = "review-not-started"
+            attestorKind = "orchestrator-agent"
+            attestorSessionRef = $orchestratorRef
+            attestedAtUtc = Format-CanonicalUtc (
+                (Assert-UtcTimestamp $helperV2.run.startedAtUtc "self-test helper start").AddSeconds(-1)
+            )
+        }
+        $externalSurfacePostflightV3 = [ordered]@{
+            schemaVersion = 1
+            evidenceType = "stock-user-chrome-external-surface-attestation"
+            phase = "postflight"
+            releaseCandidateBinding = Copy-JsonObject $releaseCandidateV2
+            releaseCandidateBindingSha256 = $releaseCandidateV2Sha
+            orchestrationSurface = "user-orchestrator-secured-ssh-exported-file-review"
+            chromeMcpState = "never-used-through-independent-review"
+            computerUseState = "not-resumed-through-independent-review"
+            reviewerInputState = "exported-digest-bound-files-only"
+            attestorKind = "orchestrator-agent"
+            attestorSessionRef = $orchestratorRef
+            attestedAtUtc = Format-CanonicalUtc (
+                (Assert-UtcTimestamp $reviewV3.reviewedAtUtc "self-test review time").AddSeconds(1)
+            )
+        }
+        $finalizeV2ExternalSurfacePreflightPath = [IO.Path]::Combine(
+            $finalizeV2Root, "external-surface-preflight.json"
+        )
+        $finalizeV2ExternalSurfacePostflightPath = [IO.Path]::Combine(
+            $finalizeV2Root, "external-surface-postflight.json"
+        )
+        [IO.File]::WriteAllText(
+            $finalizeV2ExternalSurfacePreflightPath,
+            (($externalSurfacePreflightV3 | ConvertTo-Json -Depth 30) + "`n"),
+            $script:Utf8NoBom
+        )
+        [IO.File]::WriteAllText(
+            $finalizeV2ExternalSurfacePostflightPath,
+            (($externalSurfacePostflightV3 | ConvertTo-Json -Depth 30) + "`n"),
+            $script:Utf8NoBom
+        )
+        $externalPreflightValidated = Assert-ExternalSurfaceAttestationV3 `
+            $externalSurfacePreflightV3 ([String]::new([char]"1", 64)) `
+            $releaseCandidateV2 "preflight"
+        $externalPostflightValidated = Assert-ExternalSurfaceAttestationV3 `
+            $externalSurfacePostflightV3 ([String]::new([char]"2", 64)) `
+            $releaseCandidateV2 "postflight"
+        [void](Assert-ExternalSurfaceAttestationPairV3 `
+            $externalPreflightValidated $externalPostflightValidated `
+            $helperV2 $approvalV3 $reviewV3)
+        foreach ($externalMutation in @(
+            "wrong-session", "wrong-candidate-digest", "wrong-phase", "stale-preflight",
+            "postflight-before-review", "postflight-expired"
+        )) {
+            $badExternalPreflight = Copy-JsonObject $externalSurfacePreflightV3
+            $badExternalPostflight = Copy-JsonObject $externalSurfacePostflightV3
+            switch ($externalMutation) {
+                "wrong-session" {
+                    $badExternalPostflight.attestorSessionRef = [String]::new([char]"7", 64)
+                }
+                "wrong-candidate-digest" {
+                    $badExternalPreflight.releaseCandidateBindingSha256 = `
+                        [String]::new([char]"7", 64)
+                }
+                "wrong-phase" { $badExternalPostflight.phase = "preflight" }
+                "stale-preflight" {
+                    $badExternalPreflight.attestedAtUtc = Format-CanonicalUtc (
+                        (Assert-UtcTimestamp $helperV2.run.startedAtUtc `
+                            "self-test helper start").AddMinutes(-31)
+                    )
+                }
+                "postflight-before-review" {
+                    $badExternalPostflight.attestedAtUtc = Format-CanonicalUtc (
+                        (Assert-UtcTimestamp $reviewV3.reviewedAtUtc `
+                            "self-test review time").AddSeconds(-1)
+                    )
+                }
+                "postflight-expired" {
+                    $badExternalPostflight.attestedAtUtc = Format-CanonicalUtc (
+                        (Assert-UtcTimestamp $reviewV3.reviewedAtUtc `
+                            "self-test review time").AddMinutes(31)
+                    )
+                }
+            }
+            $badExternalRejected = $false
+            try {
+                $badExternalPreflightValidated = Assert-ExternalSurfaceAttestationV3 `
+                    $badExternalPreflight ([String]::new([char]"3", 64)) `
+                    $releaseCandidateV2 "preflight"
+                $badExternalPostflightValidated = Assert-ExternalSurfaceAttestationV3 `
+                    $badExternalPostflight ([String]::new([char]"4", 64)) `
+                    $releaseCandidateV2 "postflight"
+                [void](Assert-ExternalSurfaceAttestationPairV3 `
+                    $badExternalPreflightValidated $badExternalPostflightValidated `
+                    $helperV2 $approvalV3 $reviewV3)
+            }
+            catch { $badExternalRejected = $true }
+            if (-not $badExternalRejected) {
+                throw "Evidence finalizer accepted a $externalMutation external-surface attestation pair."
+            }
+        }
         $finalizeV2Sidecars = @()
+        $reviewIndex = 0
         foreach ($purpose in $script:ExpectedScreenshotsV2.Keys) {
             $imageName = $script:ExpectedScreenshotsV2[$purpose]
             $imagePathV2 = [IO.Path]::Combine($finalizeV2Root, $imageName)
-            [IO.File]::WriteAllBytes($imagePathV2, $png)
+            $reviewEntry = $reviewV3.entries[$reviewIndex]
             $sidecarV2 = [ordered]@{
                 schemaVersion = 1; evidenceType = "stock-user-chrome-screenshot"; purpose = $purpose
                 releaseCandidateBinding = Copy-JsonObject $releaseCandidateV2
@@ -3339,8 +4703,11 @@ function Invoke-SelfTest {
                 }
                 image = [ordered]@{ name = $imageName; bytes = $png.Length; sha256 = Get-Sha256 $imagePathV2; width = 120; height = 32 }
                 cropApplied = $true; metadataStrippedByDecodeAndReencode = $true; forbiddenMetadataChunksPresent = $false
-                automatedTextInspectionPerformed = $false; manualVisualReviewRequired = $true
-                manualVisualReviewConfirmed = $true; automaticPixelRedactionPerformed = $false; unknownPixelSafetyClaimed = $false
+                automatedTextInspectionPerformed = $false
+                independentVisualReviewRequired = $true; independentVisualReviewCompleted = $true
+                reviewRecordSha256 = $reviewSha
+                reviewEntryRef = Get-TextSha256 "$reviewSha`n$($reviewEntry.sequence)`n$($reviewEntry.purpose)`n$($reviewEntry.sha256)"
+                automaticPixelRedactionPerformed = $false; unknownPixelSafetyClaimed = $false
                 reviewStatement = $script:ReviewStatementV2
             }
             $sidecarPathV2 = [IO.Path]::Combine(
@@ -3350,18 +4717,31 @@ function Invoke-SelfTest {
                 $sidecarPathV2, (($sidecarV2 | ConvertTo-Json -Depth 12) + "`n"), $script:Utf8NoBom
             )
             $finalizeV2Sidecars += $sidecarPathV2
+            $reviewIndex += 1
         }
+        $finalizeV2OperatorPath = [IO.Path]::Combine($finalizeV2Root, "operator-results.json")
+        & $PSCommandPath -Mode BuildOperator -PreflightRecord $finalizeV2PreflightPath `
+            -ComputerHelperRecord $finalizeV2HelperPath -ScopedApprovalRecord $finalizeV2ApprovalPath `
+            -IndependentReviewRecord $finalizeV2ReviewPath `
+            -ExternalSurfacePreflightAttestation $finalizeV2ExternalSurfacePreflightPath `
+            -ExternalSurfacePostflightAttestation $finalizeV2ExternalSurfacePostflightPath `
+            -BrowserVersion "151.0.7390.0" `
+            -OutputRecord $finalizeV2OperatorPath | Out-Null
+        $operatorV2Finalize = Read-Json $finalizeV2OperatorPath "mechanically built operator results"
         $finalizeV2OutputPath = [IO.Path]::Combine($finalizeV2Root, "browser-acceptance.json")
         & $PSCommandPath -Mode Finalize -PreflightRecord $finalizeV2PreflightPath `
             -PostflightRecord $finalizeV2PostflightPath -ApiMatrixRecord $finalizeV2MatrixPath `
             -ComputerHelperRecord $finalizeV2HelperPath -OperatorResults $finalizeV2OperatorPath `
+            -ScopedApprovalRecord $finalizeV2ApprovalPath -IndependentReviewRecord $finalizeV2ReviewPath `
+            -ExternalSurfacePreflightAttestation $finalizeV2ExternalSurfacePreflightPath `
+            -ExternalSurfacePostflightAttestation $finalizeV2ExternalSurfacePostflightPath `
             -ScreenshotRecords $finalizeV2Sidecars `
             -OutputRecord $finalizeV2OutputPath | Out-Null
-        $persistedV2 = Read-Json $finalizeV2OutputPath "finalized v0.12.14 self-test record"
-        if ($persistedV2.schemaVersion -ne 2 -or $persistedV2.candidate.version -cne $script:OperatorV2Version -or
+        $persistedV2 = Read-Json $finalizeV2OutputPath "finalized v0.12.15 self-test record"
+        if ($persistedV2.schemaVersion -ne 3 -or $persistedV2.candidate.version -cne $script:OperatorV2Version -or
             $persistedV2.passed -ne $true -or
-            @(Get-ChildItem -LiteralPath $finalizeV2Root -Force).Count -ne 18) {
-            throw "Evidence finalizer complete v0.12.14 self-test failed."
+            @(Get-ChildItem -LiteralPath $finalizeV2Root -Force).Count -ne 22) {
+            throw "Evidence finalizer complete v0.12.15 self-test failed."
         }
 
         $replayedHelperV2 = Copy-JsonObject $helperV2
@@ -3379,6 +4759,173 @@ function Invoke-SelfTest {
         }
 
         $matrixShaV2 = Get-Sha256 $finalizeV2MatrixPath
+
+        foreach ($requestCountDelta in @(-1, 1)) {
+            $badHelperV2 = Copy-JsonObject $helperV2
+            $badHelperV2.operatorExchange.requestCount += $requestCountDelta
+            Assert-HelperV2SelfTestRejected `
+                $badHelperV2 $finalizeV2Binding $preflightV2.candidate `
+                $operatorV2Finalize $matrixShaV2 `
+                "Evidence finalizer accepted an operator request count missing or adding a request outside status, fresh-frame, and scoped-approval decisions."
+        }
+
+        $badApprovalV3 = Copy-JsonObject $approvalV3
+        $badApprovalV3.candidateBinding.runNonce = [String]::new([char]"1", 64)
+        $badApprovalRejected = $false
+        try {
+            [void](Assert-ScopedApprovalRecordV3 `
+                $badApprovalV3 $finalizeV2Binding $releaseCandidateV2 $preflightV2.candidate)
+        }
+        catch { $badApprovalRejected = $true }
+        if (-not $badApprovalRejected) {
+            throw "Evidence finalizer accepted an approval replayed from another candidate run. Evidence finalizer accepted a replayed scoped approval."
+        }
+
+        $badApprovalV3 = Copy-JsonObject $approvalV3
+        $badApprovalV3.response.deliveredBy = "executor"
+        $badApprovalRejected = $false
+        try {
+            [void](Assert-ScopedApprovalRecordV3 `
+                $badApprovalV3 $finalizeV2Binding $releaseCandidateV2 $preflightV2.candidate)
+        }
+        catch { $badApprovalRejected = $true }
+        if (-not $badApprovalRejected) {
+            throw "Evidence finalizer accepted approval not delivered by the user-facing orchestrator."
+        }
+
+        foreach ($collision in @(
+            [pscustomobject]@{
+                Ref = $executorRef
+                Message = "Evidence finalizer accepted an approval delivered through the executor session."
+            },
+            [pscustomobject]@{
+                Ref = $reviewerRef
+                Message = "Evidence finalizer accepted an approval delivered through the reviewer session."
+            }
+        )) {
+            $badApprovalV3 = Copy-JsonObject $approvalV3
+            $badApprovalV3.response.orchestratorSessionRef = [string]$collision.Ref
+            $badApprovalCrossRejected = $false
+            try {
+                Assert-ApprovalMatchesHelperV3 `
+                    $badApprovalV3 (Get-Sha256 $finalizeV2ApprovalPath) $helperV2 $operatorV2Finalize
+            }
+            catch { $badApprovalCrossRejected = $true }
+            if (-not $badApprovalCrossRejected) {
+                throw "Evidence finalizer accepted an orchestrator session colliding with executor or reviewer. Evidence finalizer accepted an approval delivered through the executor session. Evidence finalizer accepted an approval delivered through the reviewer session."
+            }
+        }
+
+        $badApprovalV3 = Copy-JsonObject $approvalV3
+        $swap = $badApprovalV3.request.coveredActions[0]
+        $badApprovalV3.request.coveredActions[0] = $badApprovalV3.request.coveredActions[1]
+        $badApprovalV3.request.coveredActions[1] = $swap
+        $badApprovalRejected = $false
+        try {
+            [void](Assert-ScopedApprovalRecordV3 `
+                $badApprovalV3 $finalizeV2Binding $releaseCandidateV2 $preflightV2.candidate)
+        }
+        catch { $badApprovalRejected = $true }
+        if (-not $badApprovalRejected) {
+            throw "Evidence finalizer accepted a reordered approval scope."
+        }
+
+        foreach ($reviewMutation in @("same-session", "reordered", "uncertain", "sensitive")) {
+            $badReviewV3 = Copy-JsonObject $reviewV3
+            switch ($reviewMutation) {
+                "same-session" { $badReviewV3.reviewerSessionRef = $badReviewV3.executorSessionRef }
+                "reordered" {
+                    $entrySwap = $badReviewV3.entries[0]
+                    $badReviewV3.entries[0] = $badReviewV3.entries[1]
+                    $badReviewV3.entries[1] = $entrySwap
+                }
+                "uncertain" { $badReviewV3.entries[0].uncertain = $true }
+                "sensitive" { $badReviewV3.entries[0].sensitivePixelsObserved = $true }
+            }
+            $badReviewRejected = $false
+            try {
+                [void](Assert-IndependentReviewRecordV3 `
+                    $badReviewV3 $finalizeV2Binding $releaseCandidateV2 $preflightV2.candidate)
+            }
+            catch { $badReviewRejected = $true }
+            if (-not $badReviewRejected) {
+                throw "Evidence finalizer accepted a $reviewMutation independent-review record. Evidence finalizer accepted reordered independent review entries. Evidence finalizer accepted an uncertain independent review. Evidence finalizer accepted sensitive pixels in independent review."
+            }
+        }
+
+        $badHelperV2 = Copy-JsonObject $helperV2
+        $badHelperV2.actions[2].dispatchedAtUtc = $badHelperV2.scopedActionApproval.approvalConfirmedAtUtc
+        Assert-HelperV2SelfTestRejected $badHelperV2 $finalizeV2Binding $preflightV2.candidate `
+            $operatorV2Finalize $matrixShaV2 `
+            "Evidence finalizer accepted approval at or after the first covered action dispatch. Evidence finalizer accepted a scoped approval at or after the first covered action."
+
+        $badHelperV2 = Copy-JsonObject $helperV2
+        $badHelperV2.scopedActionApproval.approvalExpiresAtUtc = Format-CanonicalUtc (
+            $approvalConfirmedAt.AddSeconds(1)
+        )
+        Assert-HelperV2SelfTestRejected $badHelperV2 $finalizeV2Binding $preflightV2.candidate `
+            $operatorV2Finalize $matrixShaV2 `
+            "Evidence finalizer accepted an approval expired before the first covered action."
+
+        $badApprovalV3 = Copy-JsonObject $approvalV3
+        $badApprovalV3.consumption.consumedBeforeExpiry = $false
+        $expiredConsumptionRejected = $false
+        try {
+            [void](Assert-ScopedApprovalRecordV3 `
+                $badApprovalV3 $finalizeV2Binding $releaseCandidateV2 $preflightV2.candidate)
+        }
+        catch { $expiredConsumptionRejected = $true }
+        if (-not $expiredConsumptionRejected) {
+            throw "Evidence finalizer accepted a false approval-before-expiry claim."
+        }
+
+        $badApprovalV3 = Copy-JsonObject $approvalV3
+        $badApprovalV3.consumption.preDispatchFrameRef = `
+            $badApprovalV3.request.challengeFrameRef
+        $reusedApprovalFrameRejected = $false
+        try {
+            [void](Assert-ScopedApprovalRecordV3 `
+                $badApprovalV3 $finalizeV2Binding $releaseCandidateV2 $preflightV2.candidate)
+        }
+        catch { $reusedApprovalFrameRejected = $true }
+        if (-not $reusedApprovalFrameRejected) {
+            throw "Evidence finalizer accepted reuse of the approval challenge frame for pre-dispatch revalidation."
+        }
+
+        $badApprovalV3 = Copy-JsonObject $approvalV3
+        $badApprovalV3.consumption.freshStateRevalidatedAfterApproval = $false
+        $changedApprovalStateRejected = $false
+        try {
+            [void](Assert-ScopedApprovalRecordV3 `
+                $badApprovalV3 $finalizeV2Binding $releaseCandidateV2 $preflightV2.candidate)
+        }
+        catch { $changedApprovalStateRejected = $true }
+        if (-not $changedApprovalStateRejected) {
+            throw "Evidence finalizer accepted changed state after scoped approval."
+        }
+
+        $badHelperV2 = Copy-JsonObject $helperV2
+        $badHelperV2.scopedActionApproval.preDispatchVerifiedAtUtc = `
+            $badHelperV2.scopedActionApproval.firstCoveredActionDispatchedAtUtc
+        $badHelperV2.scopedActionApproval.preDispatchFrameRef = `
+            $badHelperV2.scopedActionApproval.approvalChallengeFrameRef
+        Assert-HelperV2SelfTestRejected `
+            $badHelperV2 $finalizeV2Binding $preflightV2.candidate `
+            $operatorV2Finalize $matrixShaV2 `
+            "Evidence finalizer accepted an aged or reused-frame pre-dispatch approval revalidation."
+
+        $badHelperV2 = Copy-JsonObject $helperV2
+        $badHelperV2.actions[1].operatorDecisionRef = $badHelperV2.actions[0].operatorDecisionRef
+        Assert-HelperV2SelfTestRejected $badHelperV2 $finalizeV2Binding $preflightV2.candidate `
+            $operatorV2Finalize $matrixShaV2 `
+            "Evidence finalizer accepted a replayed operator decision. Evidence finalizer accepted a reused operator decision reference."
+
+        $badHelperV2 = Copy-JsonObject $helperV2
+        $badHelperV2.actions[1].dispatchedAtUtc = $badHelperV2.run.startedAtUtc
+        Assert-HelperV2SelfTestRejected $badHelperV2 $finalizeV2Binding $preflightV2.candidate `
+            $operatorV2Finalize $matrixShaV2 `
+            "Evidence finalizer accepted reordered or duplicated action timing."
+
         $badHelperV2 = Copy-JsonObject $helperV2
         $badHelperV2.actions[0].source = "human-on-stock-chrome"
         Assert-HelperV2SelfTestRejected $badHelperV2 $finalizeV2Binding $preflightV2.candidate `
@@ -3594,6 +5141,7 @@ function Invoke-SelfTest {
 
 switch ($Mode) {
     "InitializeOperator" { Invoke-InitializeOperator }
+    "BuildOperator" { Invoke-BuildOperator }
     "Finalize" { Invoke-Finalize }
     "SelfTest" { Invoke-SelfTest }
 }

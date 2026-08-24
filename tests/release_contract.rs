@@ -87,6 +87,7 @@ fn windows_ci_and_release_validate_the_complete_browser_evidence_toolchain() {
             "scripts/verify-windows-release-candidate.ps1",
             "scripts/wait-windows-foreground-arm-handoff.ps1",
             "scripts/write-browser-evidence-record.ps1",
+            "scripts/write-stock-chrome-operator-response.ps1",
             "tests/fixtures/windows/WindowsComputerUseFixture.ps1",
         ] {
             assert!(
@@ -104,6 +105,7 @@ fn windows_ci_and_release_validate_the_complete_browser_evidence_toolchain() {
             "./scripts/wait-windows-foreground-arm-handoff.ps1 -Mode SelfTest",
             "./tests/fixtures/windows/WindowsComputerUseFixture.ps1 -SelfTest",
             "./scripts/write-browser-evidence-record.ps1 -Mode SelfTest",
+            "./scripts/write-stock-chrome-operator-response.ps1 -Mode SelfTest",
         ] {
             assert!(
                 workflow.contains(invocation),
@@ -144,6 +146,7 @@ fn windows_ci_and_release_validate_the_complete_browser_evidence_toolchain() {
             "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/sanitize-browser-evidence-screenshot.ps1 -Mode SelfTest",
             "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-browser-api.ps1 -SelfTest",
             "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/write-browser-evidence-record.ps1 -Mode SelfTest",
+            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/write-stock-chrome-operator-response.ps1 -Mode SelfTest",
             "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-computer-use.ps1 -SelfTest",
             "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-artifacts.ps1 -Version 0.0.0 -SelfTest",
             "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-stock-chrome.ps1 -SelfTest",
@@ -168,6 +171,7 @@ fn release_runs_every_browser_evidence_self_test_under_windows_powershell_51() {
         "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/sanitize-browser-evidence-screenshot.ps1 -Mode SelfTest",
         "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-browser-api.ps1 -SelfTest",
         "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/write-browser-evidence-record.ps1 -Mode SelfTest",
+        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/write-stock-chrome-operator-response.ps1 -Mode SelfTest",
         "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-computer-use.ps1 -SelfTest",
         "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-artifacts.ps1 -Version 0.0.0 -SelfTest",
         "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-stock-chrome.ps1 -SelfTest",
@@ -197,6 +201,7 @@ fn windows_release_tooling_hashes_without_module_discovery() {
         "scripts/verify-windows-release-candidate.ps1",
         "scripts/wait-windows-foreground-arm-handoff.ps1",
         "scripts/write-browser-evidence-record.ps1",
+        "scripts/write-stock-chrome-operator-response.ps1",
         "tests/fixtures/windows/WindowsComputerUseFixture.ps1",
     ] {
         let tooling = source(path);
@@ -210,7 +215,7 @@ fn windows_release_tooling_hashes_without_module_discovery() {
 #[test]
 fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
     let watcher = source("scripts/wait-macos-pointer-concurrency-handoff.mjs");
-    let producer = source("evidence/v0.12.14/computer/helper-evidence-rig.mjs");
+    let producer = source("evidence/v0.12.15/computer/helper-evidence-rig.mjs");
     let ci = source(".github/workflows/ci.yml");
     let release = source(".github/workflows/deploy.yml");
     let local = source("scripts/deploy.sh");
@@ -238,7 +243,7 @@ fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
     );
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.14\";",
+        "const PRODUCT_VERSION = \"0.12.15\";",
         "const SCHEMA_VERSION = 1;",
         "const OPERATOR_DIRECTORY = \"operator\";",
         "macos-pointer-concurrency-handoff-request.json",
@@ -289,12 +294,12 @@ fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
 
     for integration in [&ci, &release, &local] {
         assert!(
-            integration.contains("node --check evidence/v0.12.14/computer/helper-evidence-rig.mjs"),
+            integration.contains("node --check evidence/v0.12.15/computer/helper-evidence-rig.mjs"),
             "release path does not syntax-check the exact macOS evidence rig"
         );
         assert!(
             integration
-                .contains("node evidence/v0.12.14/computer/helper-evidence-rig.mjs --self-test")
+                .contains("node evidence/v0.12.15/computer/helper-evidence-rig.mjs --self-test")
         );
     }
     for integration in [&ci, &release] {
@@ -305,7 +310,7 @@ fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
         ] {
             assert!(
                 integration.contains(&format!(
-                    "xcrun swiftc -typecheck evidence/v0.12.14/computer/{source}"
+                    "xcrun swiftc -typecheck evidence/v0.12.15/computer/{source}"
                 )),
                 "macOS workflow does not typecheck {source}"
             );
@@ -869,6 +874,8 @@ fn release_evidence_gate_requires_exact_current_attempt_and_complete_ui_proofs()
         "assert_release_candidate_binding \"$preflight\" '.releaseCandidateBinding'",
         "assert_release_candidate_binding \"$postflight\" '.releaseCandidateBinding'",
         "assert_release_candidate_binding \"$helper\" '.releaseCandidateBinding'",
+        "assert_release_candidate_binding \"$approval\" '.releaseCandidateBinding'",
+        "assert_release_candidate_binding \"$review\" '.releaseCandidateBinding'",
         "assert_release_candidate_binding \"$operator\" '.releaseCandidateBinding'",
         "assert_release_candidate_binding \"$sidecar\" '.releaseCandidateBinding'",
         "workflowRunAttempt: $workflow_run_attempt",
@@ -882,7 +889,17 @@ fn release_evidence_gate_requires_exact_current_attempt_and_complete_ui_proofs()
         "browser-04-stop-paused.png",
         "browser-05-cancel-paused.png",
         "browser-06-post-handback-resume.png",
-        ".retainedEvidence.inputFileCount == 17 and .retainedEvidence.finalFileCount == 18",
+        ".retainedEvidence.inputFileCount == 21 and .retainedEvidence.finalFileCount == 22",
+        "external-surface-preflight.json",
+        "external-surface-postflight.json",
+        "scoped-action-approval.json",
+        "independent-visual-review.json",
+        ".response.deliveredBy == \"user-via-orchestrator\"",
+        ".operatorExchange.requestCount == (.operatorExchange.statusDecisionCount + .operatorExchange.freshFrameDecisionCount + 1)",
+        ".response.orchestratorSessionRef != .operatorExchange.executorSessionRef",
+        ".response.orchestratorSessionRef != .operatorExchange.reviewerSessionRef",
+        ".independentVisualReview.noUncertaintyReported == true",
+        ".independentVisualReview.visualJudgmentNotPixelSafetyProof == true",
         "source-schema complete contract replay",
         "zlib.decompressobj()",
         "PNG IDAT does not decode to the claimed raster",
@@ -892,8 +909,9 @@ fn release_evidence_gate_requires_exact_current_attempt_and_complete_ui_proofs()
         ".pixelSha256",
         ".aggregateChecks.screenshotPixelHashesMatched == true",
         ".automatedTextInspectionPerformed == false",
-        ".manualVisualReviewRequired == true",
-        "stock-Chrome screenshot sidecar is not the exact manual-only V2 review schema",
+        ".independentVisualReviewRequired == true",
+        ".independentVisualReviewCompleted == true",
+        "stock-Chrome screenshot sidecar is not the exact independent digest-bound review schema",
         "extract_macos_candidate_facts",
         "LC_CODE_SIGNATURE",
         ".package.serverSha256 == $package_facts[0].serverSha256",

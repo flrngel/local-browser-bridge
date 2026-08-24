@@ -101,6 +101,7 @@ jobs:
             "scripts/verify-windows-release-candidate.ps1",
             "scripts/wait-windows-foreground-arm-handoff.ps1",
             "scripts/write-browser-evidence-record.ps1",
+            "scripts/write-stock-chrome-operator-response.ps1",
             "tests/fixtures/windows/WindowsComputerUseFixture.ps1"
           )
           foreach ($script in $scripts) {
@@ -118,6 +119,7 @@ jobs:
           & ./scripts/browser-evidence-candidate.ps1 -Mode SelfTest
           & ./scripts/record-computer-helper-chain.ps1 -Mode SelfTest
           & ./scripts/sanitize-browser-evidence-screenshot.ps1 -Mode SelfTest
+          & ./scripts/write-stock-chrome-operator-response.ps1 -Mode SelfTest
           & ./scripts/test-windows-browser-api.ps1 -SelfTest
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/browser-evidence-candidate.ps1 -Mode SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 candidate binder self-test failed." }
@@ -129,6 +131,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 browser API self-test failed." }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/write-browser-evidence-record.ps1 -Mode SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 browser evidence finalizer self-test failed." }
+          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/write-stock-chrome-operator-response.ps1 -Mode SelfTest
+          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 stock-Chrome response writer self-test failed." }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-computer-use.ps1 -SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 computer-use self-test failed." }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-artifacts.ps1 -Version 0.0.0 -SelfTest
@@ -144,6 +148,7 @@ jobs:
           & ./scripts/test-windows-computer-use.ps1 -SelfTest
           & ./scripts/wait-windows-foreground-arm-handoff.ps1 -Mode SelfTest
           & ./scripts/write-browser-evidence-record.ps1 -Mode SelfTest
+          & ./scripts/write-stock-chrome-operator-response.ps1 -Mode SelfTest
       - name: Check Windows formatting, lint, and tests
         shell: pwsh
         run: |
@@ -192,12 +197,12 @@ jobs:
           node scripts/finalize-macos-acceptance.mjs --self-test
       - name: Validate the macOS packaged-evidence harness
         run: |
-          node --check evidence/v0.12.14/computer/helper-evidence-rig.mjs
-          node evidence/v0.12.14/computer/helper-evidence-rig.mjs --self-test
-          xcrun swiftc -typecheck evidence/v0.12.14/computer/HelperEvidenceFixture.swift
-          xcrun swiftc -typecheck evidence/v0.12.14/computer/SystemProbe.swift
-          xcrun swiftc -typecheck evidence/v0.12.14/computer/PointerHandoff.swift
-          xcrun swiftc evidence/v0.12.14/computer/PointerHandoff.swift -o "$RUNNER_TEMP/lbb-pointer-handoff-self-test"
+          node --check evidence/v0.12.15/computer/helper-evidence-rig.mjs
+          node evidence/v0.12.15/computer/helper-evidence-rig.mjs --self-test
+          xcrun swiftc -typecheck evidence/v0.12.15/computer/HelperEvidenceFixture.swift
+          xcrun swiftc -typecheck evidence/v0.12.15/computer/SystemProbe.swift
+          xcrun swiftc -typecheck evidence/v0.12.15/computer/PointerHandoff.swift
+          xcrun swiftc evidence/v0.12.15/computer/PointerHandoff.swift -o "$RUNNER_TEMP/lbb-pointer-handoff-self-test"
           "$RUNNER_TEMP/lbb-pointer-handoff-self-test" --self-test
       - name: Install the minimum supported Rust toolchain
         run: |
