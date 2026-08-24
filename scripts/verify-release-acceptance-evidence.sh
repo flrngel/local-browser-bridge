@@ -6,7 +6,7 @@ export LC_ALL=C
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly API_VERSION="2026-03-10"
 readonly RECEIPT_SCHEMA_VERSION="2"
-readonly EVIDENCE_PRODUCT_VERSION="0.12.20"
+readonly EVIDENCE_PRODUCT_VERSION="0.12.21"
 readonly EVIDENCE_MAX_BLOB_BYTES=20971520
 readonly EVIDENCE_MAX_TOTAL_BYTES=209715200
 readonly EVIDENCE_MAX_PATH_BYTES=1024
@@ -852,23 +852,29 @@ write_mac_harness_source_binding() {
   local runner="$harness_root/helper-evidence-rig.mjs"
   local fixture="$harness_root/HelperEvidenceFixture.swift"
   local system_probe="$harness_root/SystemProbe.swift"
-  local pointer_handoff="$harness_root/PointerHandoff.swift"
+  local app_share_handoff="$harness_root/AppShareHandoff.swift"
+  local physical_pointer_handoff="$harness_root/PhysicalPointerHandoff.swift"
   local finalizer="scripts/finalize-macos-acceptance.mjs"
   local source_path
-  local runner_sha256 fixture_sha256 system_probe_sha256 pointer_handoff_sha256 finalizer_sha256
+  local runner_sha256 fixture_sha256 system_probe_sha256 app_share_handoff_sha256
+  local physical_pointer_handoff_sha256 finalizer_sha256
 
   test ! -e "$output" && test ! -L "$output" || return 1
-  for source_path in "$runner" "$fixture" "$system_probe" "$pointer_handoff" "$finalizer"; do
+  for source_path in \
+    "$runner" "$fixture" "$system_probe" "$app_share_handoff" \
+    "$physical_pointer_handoff" "$finalizer"; do
     test -f "$source_path" && test ! -L "$source_path" || return 1
   done
   runner_sha256="$(sha256_file "$runner")"
   fixture_sha256="$(sha256_file "$fixture")"
   system_probe_sha256="$(sha256_file "$system_probe")"
-  pointer_handoff_sha256="$(sha256_file "$pointer_handoff")"
+  app_share_handoff_sha256="$(sha256_file "$app_share_handoff")"
+  physical_pointer_handoff_sha256="$(sha256_file "$physical_pointer_handoff")"
   finalizer_sha256="$(sha256_file "$finalizer")"
   for source_path in \
     "$runner_sha256" "$fixture_sha256" "$system_probe_sha256" \
-    "$pointer_handoff_sha256" "$finalizer_sha256"; do
+    "$app_share_handoff_sha256" "$physical_pointer_handoff_sha256" \
+    "$finalizer_sha256"; do
     is_sha256 "$source_path" || return 1
   done
 
@@ -876,13 +882,15 @@ write_mac_harness_source_binding() {
     --arg runner_sha256 "$runner_sha256" \
     --arg fixture_sha256 "$fixture_sha256" \
     --arg system_probe_sha256 "$system_probe_sha256" \
-    --arg pointer_handoff_sha256 "$pointer_handoff_sha256" \
+    --arg app_share_handoff_sha256 "$app_share_handoff_sha256" \
+    --arg physical_pointer_handoff_sha256 "$physical_pointer_handoff_sha256" \
     --arg finalizer_sha256 "$finalizer_sha256" '
       {
         runnerSha256: $runner_sha256,
         fixtureSha256: $fixture_sha256,
         systemProbeSha256: $system_probe_sha256,
-        pointerHandoffSha256: $pointer_handoff_sha256,
+        appShareHandoffSha256: $app_share_handoff_sha256,
+        physicalPointerHandoffSha256: $physical_pointer_handoff_sha256,
         acceptanceFinalizerSha256: $finalizer_sha256,
         packagedHelperSpawnCount: 1
       }
@@ -899,12 +907,14 @@ validate_mac_harness_source_binding() {
   jq -e '
       (keys_unsorted == [
         "runnerSha256", "fixtureSha256", "systemProbeSha256",
-        "pointerHandoffSha256", "acceptanceFinalizerSha256",
+        "appShareHandoffSha256", "physicalPointerHandoffSha256",
+        "acceptanceFinalizerSha256",
         "packagedHelperSpawnCount"
       ])
       and ([
         .runnerSha256, .fixtureSha256, .systemProbeSha256,
-        .pointerHandoffSha256, .acceptanceFinalizerSha256
+        .appShareHandoffSha256, .physicalPointerHandoffSha256,
+        .acceptanceFinalizerSha256
       ] | all(type == "string" and test("^[0-9a-f]{64}$")))
       and .packagedHelperSpawnCount == 1
     ' "$expected" >/dev/null || return 1
@@ -916,6 +926,315 @@ validate_mac_harness_source_binding() {
     ' "$quiet_result" "$deliberate_result" >/dev/null
 }
 
+validate_macos_pointer_app_share_contract() {
+  local result="$1"
+  local lane="$2"
+  [[ "$lane" == quiet || "$lane" == deliberate-concurrency ]] || return 1
+  jq -e --arg lane "$lane" '
+      (has("operatorHandoff") | not)
+      and (.pointerEvidence | keys_unsorted == [
+        "requestedLane", "quietObserved", "concurrentSharedSeatActivityObserved",
+        "unknownObserved", "rawCursorPositionsRetained",
+        "rawPlatformActivityCountersRetained", "rawHidSystemCountersRetained",
+        "hidSystemActivityClaimedAsPhysical"
+      ])
+      and .pointerEvidence.requestedLane == $lane
+      and .pointerEvidence.quietObserved == true
+      and .pointerEvidence.concurrentSharedSeatActivityObserved == false
+      and .pointerEvidence.unknownObserved == false
+      and .pointerEvidence.rawCursorPositionsRetained == false
+      and .pointerEvidence.rawPlatformActivityCountersRetained == false
+      and .pointerEvidence.rawHidSystemCountersRetained == false
+      and .pointerEvidence.hidSystemActivityClaimedAsPhysical == false
+      and (.appShareHandoff | keys_unsorted == [
+        "requested", "requestPublicationAcknowledged", "startReceiptAcknowledged",
+        "completePublicationAcknowledged", "promptClosed", "exactAppBundleObserved",
+        "exactWindowObserved", "exactButtonObserved", "buttonDisabledAfterAction",
+        "acceptanceButtonActionObserved", "appShareSurfaceObservedAtProductBoundaries",
+        "sharedHidInputObserved", "sampledSharedContextUnchanged", "actionDispatched",
+        "targetPostconditionObserved", "productBoundaryQuiet", "independentBoundaryQuiet",
+        "physicalHumanProvenanceClaimed", "cryptographicToolIdentityClaimed",
+        "orchestrationNotProductControl", "markerNotificationOnly",
+        "markerAcceptedAsProductAuthority", "rawAppIdentityRetainedInResult",
+        "rawPointerDataRetained"
+      ])
+      and (if $lane == "quiet" then
+        .appShareHandoff == {
+          requested: false,
+          requestPublicationAcknowledged: false,
+          startReceiptAcknowledged: false,
+          completePublicationAcknowledged: false,
+          promptClosed: false,
+          exactAppBundleObserved: false,
+          exactWindowObserved: false,
+          exactButtonObserved: false,
+          buttonDisabledAfterAction: false,
+          acceptanceButtonActionObserved: false,
+          appShareSurfaceObservedAtProductBoundaries: false,
+          sharedHidInputObserved: null,
+          sampledSharedContextUnchanged: false,
+          actionDispatched: false,
+          targetPostconditionObserved: false,
+          productBoundaryQuiet: false,
+          independentBoundaryQuiet: false,
+          physicalHumanProvenanceClaimed: false,
+          cryptographicToolIdentityClaimed: false,
+          orchestrationNotProductControl: true,
+          markerNotificationOnly: false,
+          markerAcceptedAsProductAuthority: false,
+          rawAppIdentityRetainedInResult: false,
+          rawPointerDataRetained: false
+        }
+      else
+        .appShareHandoff == {
+          requested: true,
+          requestPublicationAcknowledged: true,
+          startReceiptAcknowledged: true,
+          completePublicationAcknowledged: true,
+          promptClosed: true,
+          exactAppBundleObserved: true,
+          exactWindowObserved: true,
+          exactButtonObserved: true,
+          buttonDisabledAfterAction: true,
+          acceptanceButtonActionObserved: true,
+          appShareSurfaceObservedAtProductBoundaries: true,
+          sharedHidInputObserved: false,
+          sampledSharedContextUnchanged: true,
+          actionDispatched: true,
+          targetPostconditionObserved: true,
+          productBoundaryQuiet: true,
+          independentBoundaryQuiet: true,
+          physicalHumanProvenanceClaimed: false,
+          cryptographicToolIdentityClaimed: false,
+          orchestrationNotProductControl: true,
+          markerNotificationOnly: false,
+          markerAcceptedAsProductAuthority: false,
+          rawAppIdentityRetainedInResult: false,
+          rawPointerDataRetained: false
+        }
+      end)
+    ' "$result" >/dev/null
+}
+
+validate_macos_app_share_marker_chain() {
+  local request_marker="$1"
+  local start_marker="$2"
+  local complete_marker="$3"
+  local expected_request_sha256="$4"
+  local expected_start_sha256="$5"
+  local expected_complete_sha256="$6"
+  local lane_result="$7"
+  local marker
+
+  for marker in "$request_marker" "$start_marker" "$complete_marker"; do
+    test -f "$marker" && test ! -L "$marker" || return 1
+    test "$(wc -c < "$marker" | tr -d ' ')" -ge 1 || return 1
+    test "$(wc -c < "$marker" | tr -d ' ')" -le 16384 || return 1
+  done
+  test -f "$lane_result" && test ! -L "$lane_result" || return 1
+  is_sha256 "$expected_request_sha256" \
+    && is_sha256 "$expected_start_sha256" \
+    && is_sha256 "$expected_complete_sha256" || return 1
+  test "$(sha256_file "$request_marker")" = "$expected_request_sha256" \
+    && test "$(sha256_file "$start_marker")" = "$expected_start_sha256" \
+    && test "$(sha256_file "$complete_marker")" = "$expected_complete_sha256" \
+    || return 1
+
+  python3 - \
+    "$request_marker" "$start_marker" "$complete_marker" \
+    "$expected_request_sha256" "$expected_start_sha256" \
+    "$expected_complete_sha256" "$EVIDENCE_PRODUCT_VERSION" "$lane_result" <<'PY'
+import datetime
+import hashlib
+import json
+import re
+import sys
+
+request_path, start_path, complete_path, request_sha, start_sha, complete_sha, version, result_path = sys.argv[1:]
+request_fields = [
+    "schemaVersion", "kind", "productVersion", "requestId", "createdAt", "expiresAt",
+    "runnerPid", "promptPid", "expectedBundleIdentifier", "expectedWindowTitle",
+    "expectedButtonText", "expectedButtonAccessibilityIdentifier",
+    "expectedButtonEnabledAfterDelivery", "exactAppObserved", "exactWindowObserved",
+    "requestDelivered", "panelOnScreen", "panelNonactivating", "notificationOnly",
+    "exactAppShareRequired", "physicalHumanProvenanceRequired",
+    "acceptedAsProductAuthority",
+]
+start_fields = [
+    "acceptedAsAuthority", "buttonAccepted", "buttonActionObserved", "createdAt",
+    "cryptographicToolIdentityClaimed", "kind", "physicalHumanProvenanceClaimed",
+    "productVersion", "promptPid", "requestId", "requestSha256", "schemaVersion",
+]
+complete_fields = [
+    "acceptedAsAuthority", "buttonRemainedDisabledDuringProductAction", "createdAt",
+    "cryptographicToolIdentityClaimed", "handoffStateSequenceBound", "kind",
+    "physicalHumanProvenanceClaimed", "productActionCompletedAt", "productActionStartedAt",
+    "productVersion", "promptPid", "requestId", "requestSha256", "schemaVersion",
+    "startReceiptSha256",
+]
+timestamp_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
+
+def fail(message):
+    raise SystemExit(message)
+
+def read_exact(path, expected_fields, label, expected_sha):
+    raw = open(path, "rb").read()
+    if hashlib.sha256(raw).hexdigest() != expected_sha:
+        fail(f"{label} SHA-256 mismatch")
+    try:
+        text = raw.decode("utf-8", "strict")
+    except UnicodeDecodeError:
+        fail(f"{label} is not strict UTF-8")
+    if not text.endswith("\n") or "\x00" in text or text.startswith("\ufeff"):
+        fail(f"{label} bytes are noncanonical")
+    pairs_seen = []
+    def exact_object(pairs):
+        keys = [key for key, _ in pairs]
+        if len(keys) != len(set(keys)):
+            fail(f"{label} contains a duplicate key")
+        pairs_seen.append(keys)
+        return dict(pairs)
+    try:
+        value = json.loads(text, object_pairs_hook=exact_object)
+    except json.JSONDecodeError:
+        fail(f"{label} is invalid JSON")
+    if not isinstance(value, dict) or not pairs_seen or pairs_seen[-1] != expected_fields:
+        fail(f"{label} fields are not exact and ordered")
+    if json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n" != text:
+        fail(f"{label} is not canonical compact JSON")
+    return value
+
+def instant(value, label):
+    if not isinstance(value, str) or not timestamp_pattern.fullmatch(value):
+        fail(f"{label} is not canonical UTC")
+    try:
+        parsed = datetime.datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError:
+        fail(f"{label} is not a real timestamp")
+    if parsed.isoformat(timespec="milliseconds").replace("+00:00", "Z") != value:
+        fail(f"{label} is not a real canonical timestamp")
+    return parsed
+
+def exact_bool(value, expected, label):
+    if type(value) is not bool or value is not expected:
+        fail(f"{label} must be {expected}")
+
+request = read_exact(request_path, request_fields, "request marker", request_sha)
+start = read_exact(start_path, start_fields, "start receipt", start_sha)
+complete = read_exact(complete_path, complete_fields, "complete receipt", complete_sha)
+
+if request["schemaVersion"] != 2 or type(request["schemaVersion"]) is not int:
+    fail("request schemaVersion is invalid")
+if request["kind"] != "macos-app-share-concurrency-handoff-request" or request["productVersion"] != version:
+    fail("request kind or productVersion is invalid")
+if not isinstance(request["requestId"], str) or not re.fullmatch(r"[0-9a-f]{32}", request["requestId"]):
+    fail("requestId is invalid")
+for field in ("runnerPid", "promptPid"):
+    if type(request[field]) is not int or not 1 <= request[field] <= 2_147_483_647:
+        fail(f"request {field} is invalid")
+if request["runnerPid"] == request["promptPid"]:
+    fail("request process identities are not distinct")
+if (
+    request["expectedBundleIdentifier"] != "dev.flrngel.local-browser-bridge.acceptance.app-share"
+    or request["expectedWindowTitle"] != "LBB macOS Acceptance App Share"
+    or request["expectedButtonText"] != "START APP-SHARE CHECK"
+    or request["expectedButtonAccessibilityIdentifier"] != "lbb-app-share-start"
+):
+    fail("request exact-app surface binding is invalid")
+for field, expected in (
+    ("expectedButtonEnabledAfterDelivery", True), ("exactAppObserved", True),
+    ("exactWindowObserved", True), ("requestDelivered", True), ("panelOnScreen", True),
+    ("panelNonactivating", True), ("notificationOnly", False),
+    ("exactAppShareRequired", True), ("physicalHumanProvenanceRequired", False),
+    ("acceptedAsProductAuthority", False),
+):
+    exact_bool(request[field], expected, f"request {field}")
+request_created = instant(request["createdAt"], "request createdAt")
+request_expires = instant(request["expiresAt"], "request expiresAt")
+request_lifetime = (request_expires - request_created).total_seconds()
+if request_lifetime <= 0 or request_lifetime > 300:
+    fail("request lifetime is outside the bounded interval")
+
+if start["schemaVersion"] != 2 or type(start["schemaVersion"]) is not int:
+    fail("start schemaVersion is invalid")
+if (
+    start["kind"] != "macos-app-share-concurrency-handoff-start"
+    or start["productVersion"] != version
+    or start["requestId"] != request["requestId"]
+    or start["requestSha256"] != request_sha
+    or start["promptPid"] != request["promptPid"]
+):
+    fail("start receipt request binding is invalid")
+for field, expected in (
+    ("acceptedAsAuthority", False), ("buttonAccepted", True),
+    ("buttonActionObserved", True), ("cryptographicToolIdentityClaimed", False),
+    ("physicalHumanProvenanceClaimed", False),
+):
+    exact_bool(start[field], expected, f"start {field}")
+start_created = instant(start["createdAt"], "start createdAt")
+if start_created < request_created or start_created > request_expires:
+    fail("start receipt is outside its request interval")
+
+if complete["schemaVersion"] != 2 or type(complete["schemaVersion"]) is not int:
+    fail("complete schemaVersion is invalid")
+if (
+    complete["kind"] != "macos-app-share-concurrency-handoff-complete"
+    or complete["productVersion"] != version
+    or complete["requestId"] != request["requestId"]
+    or complete["requestSha256"] != request_sha
+    or complete["startReceiptSha256"] != start_sha
+    or complete["promptPid"] != request["promptPid"]
+):
+    fail("complete receipt request/start binding is invalid")
+for field, expected in (
+    ("acceptedAsAuthority", False),
+    ("buttonRemainedDisabledDuringProductAction", True),
+    ("cryptographicToolIdentityClaimed", False),
+    ("handoffStateSequenceBound", True),
+    ("physicalHumanProvenanceClaimed", False),
+):
+    exact_bool(complete[field], expected, f"complete {field}")
+action_started = instant(complete["productActionStartedAt"], "product action start")
+action_completed = instant(complete["productActionCompletedAt"], "product action completion")
+complete_created = instant(complete["createdAt"], "complete createdAt")
+if (
+    action_started < start_created
+    or (action_started - start_created).total_seconds() > 10
+    or action_completed < action_started
+    or (action_completed - action_started).total_seconds() > 10
+    or complete_created < action_completed
+    or (complete_created - action_started).total_seconds() > 10
+    or (complete_created - start_created).total_seconds() > 10
+    or (complete_created - request_created).total_seconds() > 310
+):
+    fail("complete receipt timestamps are outside the bounded action interval")
+with open(result_path, encoding="utf-8") as source:
+    result = json.load(source)
+lane_started = instant(result.get("startedAt"), "lane startedAt")
+lane_captured = instant(result.get("capturedAt"), "lane capturedAt")
+if request_created < lane_started or complete_created > lane_captured:
+    fail("app-share marker chain falls outside the deliberate lane interval")
+PY
+}
+
+validate_macos_app_share_operator_inventory() {
+  local aggregate="$1"
+  local aggregate_lane_key="$2"
+  jq -e --arg key "$aggregate_lane_key" '
+      (.lanes[$key].operatorMarkers | length == 3)
+      and ([.lanes[$key].operatorMarkers[] | keys_unsorted]
+        | all(. == ["file", "sha256"]))
+      and [.lanes[$key].operatorMarkers[].file] == [
+        "operator/macos-app-share-concurrency-handoff-request.json",
+        "operator/macos-app-share-concurrency-handoff-start.json",
+        "operator/macos-app-share-concurrency-handoff-complete.json"
+      ]
+      and ([.lanes[$key].operatorMarkers[].sha256]
+        | all(test("^[0-9a-f]{64}$")))
+      and ([.lanes[$key].operatorMarkers[].sha256] | unique | length == 3)
+    ' "$aggregate" >/dev/null
+}
+
 verify_mac_lane() {
   local evidence_root="$1"
   local aggregate="$2"
@@ -924,7 +1243,13 @@ verify_mac_lane() {
   local result_sha256="$5"
   local lane_root="$evidence_root/macos/$lane_name"
   local result="$lane_root/helper-results.json"
-  local log_file log_sha256
+  local log_file log_sha256 expected_inventory_count actual_inventory_count
+
+  expected_inventory_count=8
+  [[ "$lane_name" == quiet ]] || expected_inventory_count=11
+  actual_inventory_count="$(find "$lane_root" -type f | wc -l | tr -d ' ')"
+  test "$actual_inventory_count" = "$expected_inventory_count" \
+    || die "macOS $lane_name lane does not have its exact $expected_inventory_count-file inventory"
 
   assert_json_hash "$result" "$result_sha256"
   add_allowed "macos/$lane_name/helper-results.json"
@@ -943,7 +1268,7 @@ verify_mac_lane() {
     --arg archive_sha256 "$(manifest_asset_sha256 "$CANDIDATE_DIR/SHA256SUMS.txt" "local-browser-bridge-v${EVIDENCE_PRODUCT_VERSION}-macos-universal.tar.gz")" \
     --arg acceptance_finalizer_sha256 "$(sha256_file scripts/finalize-macos-acceptance.mjs)" \
     --slurpfile package_facts "$MACOS_CANDIDATE_FACTS" '
-      .schemaVersion == 6
+      .schemaVersion == 7
       and .productVersion == $version
       and .status == "passed-release-candidate"
       and .evidenceClass == "exact-release-candidate-package-live-observation"
@@ -984,13 +1309,6 @@ verify_mac_lane() {
       and .package.serverArchitectures == $package_facts[0].serverArchitectures
       and .package.helperArchitectures == $package_facts[0].helperArchitectures
       and .package.strictCodeSignatureVerification == "passed"
-      and .pointerEvidence.requestedLane == $lane
-      and .pointerEvidence.quietObserved == true
-      and .pointerEvidence.unknownObserved == false
-      and .pointerEvidence.rawCursorPositionsRetained == false
-      and .pointerEvidence.rawPlatformActivityCountersRetained == false
-      and .pointerEvidence.rawHidSystemCountersRetained == false
-      and .pointerEvidence.hidSystemActivityClaimedAsPhysical == false
       and .quietSeatStabilization.requiredStableMilliseconds == 30000
       and .quietSeatStabilization.maximumWaitMilliseconds == 1800000
       and .quietSeatStabilization.sampleIntervalMilliseconds == 500
@@ -1010,35 +1328,9 @@ verify_mac_lane() {
       and .assertions.total > 0
       and ([.assertions.details[] | select(.passed != true)] | length == 0)
       and (.screenshots | type == "array" and length == 6)
-      and (if $lane == "quiet" then
-        .pointerEvidence.concurrentSharedSeatActivityObserved == false
-        and .operatorHandoff.requested == false
-        and .operatorHandoff.requestPublicationAcknowledged == false
-        and .operatorHandoff.completePublicationAcknowledged == false
-        and .operatorHandoff.promptClosed == false
-        and .operatorHandoff.sustainedMotionSamples == 0
-        and .operatorHandoff.sustainedMotionSpanMilliseconds == 0
-        and .operatorHandoff.clickFreeMotionObserved == false
-        and .operatorHandoff.actionDispatched == false
-        and .operatorHandoff.productBoundaryContaminated == false
-        and .operatorHandoff.independentBoundaryContaminated == false
-      else
-        .pointerEvidence.concurrentSharedSeatActivityObserved == true
-        and .operatorHandoff.requested == true
-        and .operatorHandoff.requestPublicationAcknowledged == true
-        and .operatorHandoff.completePublicationAcknowledged == true
-        and .operatorHandoff.promptClosed == true
-        and .operatorHandoff.sustainedMotionSamples >= 3
-        and (.operatorHandoff.sustainedMotionSpanMilliseconds >= 500 and .operatorHandoff.sustainedMotionSpanMilliseconds <= 300000)
-        and .operatorHandoff.clickFreeMotionObserved == true
-        and .operatorHandoff.actionDispatched == true
-        and .operatorHandoff.productBoundaryContaminated == true
-        and .operatorHandoff.independentBoundaryContaminated == true
-        and .operatorHandoff.markerNotificationOnly == true
-        and .operatorHandoff.markerAcceptedAsAuthority == false
-        and .operatorHandoff.externalAcknowledgementConsumed == false
-      end)
     ' "$result" >/dev/null || die "macOS $lane_name result failed its pass, binding, or lane invariants"
+  validate_macos_pointer_app_share_contract "$result" "$lane_name" \
+    || die "macOS $lane_name pointer/app-share contract is noncanonical"
 
   log_file="$(jq -er --arg key "$aggregate_lane_key" '.lanes[$key].logFile' "$aggregate")"
   log_sha256="$(jq -er --arg key "$aggregate_lane_key" '.lanes[$key].logSha256' "$aggregate")"
@@ -1085,82 +1377,24 @@ verify_mac_lane() {
     jq -e --arg key "$aggregate_lane_key" '.lanes[$key].operatorMarkers == []' "$aggregate" >/dev/null \
       || die "quiet macOS lane must not retain operator markers"
   else
-    local request_relative="operator/macos-pointer-concurrency-handoff-request.json"
-    local complete_relative="operator/macos-pointer-concurrency-handoff-complete.json"
+    local request_relative="operator/macos-app-share-concurrency-handoff-request.json"
+    local start_relative="operator/macos-app-share-concurrency-handoff-start.json"
+    local complete_relative="operator/macos-app-share-concurrency-handoff-complete.json"
     local request_marker="$lane_root/$request_relative"
+    local start_marker="$lane_root/$start_relative"
     local complete_marker="$lane_root/$complete_relative"
-    local request_sha256 complete_sha256
-    jq -e \
-      --arg key "$aggregate_lane_key" \
-      --arg request "$request_relative" \
-      --arg complete "$complete_relative" '
-        (.lanes[$key].operatorMarkers | length == 2)
-        and .lanes[$key].operatorMarkers[0].file == $request
-        and (.lanes[$key].operatorMarkers[0].sha256 | test("^[0-9a-f]{64}$"))
-        and .lanes[$key].operatorMarkers[1].file == $complete
-        and (.lanes[$key].operatorMarkers[1].sha256 | test("^[0-9a-f]{64}$"))
-      ' "$aggregate" >/dev/null || die "deliberate macOS lane operator-marker inventory is noncanonical"
+    local request_sha256 start_sha256 complete_sha256
+    validate_macos_app_share_operator_inventory "$aggregate" "$aggregate_lane_key" \
+      || die "deliberate macOS lane exact-app-share marker inventory is noncanonical"
     request_sha256="$(jq -er --arg key "$aggregate_lane_key" '.lanes[$key].operatorMarkers[0].sha256' "$aggregate")"
-    complete_sha256="$(jq -er --arg key "$aggregate_lane_key" '.lanes[$key].operatorMarkers[1].sha256' "$aggregate")"
-    test -f "$request_marker" && test ! -L "$request_marker" && test "$(sha256_file "$request_marker")" = "$request_sha256" \
-      || die "macOS pointer request marker does not match its aggregate hash"
-    test -f "$complete_marker" && test ! -L "$complete_marker" && test "$(sha256_file "$complete_marker")" = "$complete_sha256" \
-      || die "macOS pointer completion marker does not match its aggregate hash"
-    jq -e --arg version "$EVIDENCE_PRODUCT_VERSION" '
-        .schemaVersion == 1
-        and .kind == "macos-pointer-concurrency-handoff-request"
-        and .productVersion == $version
-        and (.requestId | test("^[0-9a-f]{32}$"))
-        and (.runnerPid | type == "number" and . > 0)
-        and (.promptPid | type == "number" and . > 0)
-        and (.runnerPid != .promptPid)
-        and .requestDelivered == true
-        and .panelOnScreen == true
-        and .panelNonactivating == true
-        and .notificationOnly == true
-        and .acceptedAsAuthority == false
-      ' "$request_marker" >/dev/null || die "macOS pointer request marker invariants failed"
-    jq -e \
-      --arg version "$EVIDENCE_PRODUCT_VERSION" \
-      --slurpfile request "$request_marker" \
-      --slurpfile result "$result" '
-        .schemaVersion == 1
-        and .kind == "macos-pointer-concurrency-handoff-complete"
-        and .productVersion == $version
-        and .requestId == $request[0].requestId
-        and .runnerPid == $request[0].runnerPid
-        and .promptPid == $request[0].promptPid
-        and .requestDelivered == true
-        and .panelOnScreen == true
-        and .panelNonactivating == true
-        and .notificationOnly == true
-        and .acceptedAsAuthority == false
-        and (.sustainedMotionSamples >= 3)
-        and (.sustainedMotionSpanMilliseconds >= 500 and .sustainedMotionSpanMilliseconds <= 300000)
-        and .sustainedMotionSamples == $result[0].operatorHandoff.sustainedMotionSamples
-        and .sustainedMotionSpanMilliseconds == $result[0].operatorHandoff.sustainedMotionSpanMilliseconds
-        and .productBoundaryContaminated == true
-        and .independentBoundaryContaminated == true
-        and .clickFreeMotionObserved == true
-      ' "$complete_marker" >/dev/null || die "macOS pointer completion marker invariants failed"
-    python3 - "$request_marker" "$complete_marker" <<'PY'
-import datetime
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as source:
-    request = json.load(source)
-with open(sys.argv[2], encoding="utf-8") as source:
-    complete = json.load(source)
-def instant(value):
-    if not isinstance(value, str) or not value.endswith("Z"):
-        raise SystemExit("macOS pointer marker timestamp is noncanonical")
-    return datetime.datetime.fromisoformat(value[:-1] + "+00:00")
-elapsed = (instant(complete.get("createdAt")) - instant(request.get("createdAt"))).total_seconds()
-if elapsed < 0 or elapsed > 310:
-    raise SystemExit("macOS pointer markers exceed the bounded handoff interval")
-PY
+    start_sha256="$(jq -er --arg key "$aggregate_lane_key" '.lanes[$key].operatorMarkers[1].sha256' "$aggregate")"
+    complete_sha256="$(jq -er --arg key "$aggregate_lane_key" '.lanes[$key].operatorMarkers[2].sha256' "$aggregate")"
+    validate_macos_app_share_marker_chain \
+      "$request_marker" "$start_marker" "$complete_marker" \
+      "$request_sha256" "$start_sha256" "$complete_sha256" "$result" \
+      || die "macOS exact-app-share request/start/complete chain failed its exact schema, hash, or timestamp binding"
     add_allowed "macos/$lane_name/$request_relative"
+    add_allowed "macos/$lane_name/$start_relative"
     add_allowed "macos/$lane_name/$complete_relative"
   fi
 }
@@ -1709,7 +1943,7 @@ PY
   jq -e '
       .schemaVersion == 1
       and .evidenceType == "stock-user-chrome-api-matrix"
-      and .version == "0.12.20" and .target == "loopback-demo" and .passed == true
+      and .version == "0.12.21" and .target == "loopback-demo" and .passed == true
       and .methodCount == 25 and (.methods | length) == 25
       and ([.methods[].name] == [
         "status","browser.control.start","browser.control.status","browser.control.stop",
@@ -1748,7 +1982,7 @@ PY
       . as $root
       |
       .schemaVersion == 2 and .evidenceType == "stock-user-chrome-computer-helper-chain"
-      and .version == "0.12.20" and .passed == true
+      and .version == "0.12.21" and .passed == true
       and .server.soleListener == "127.0.0.1:17373" and .server.updateCheckDisabled == true
       and .helper.connectedThroughLoopbackServer == true and .helper.serverApiOnly == true
       and .extensionPayload.fileCount == 11
@@ -1887,7 +2121,7 @@ PY
       and ([.computerHelperChain[] | select(type == "boolean")] | all(. == true))
       and .initialState.capturedBeforeRelevantMutation == true
       and .initialState.candidateExtensionPresent == false and .initialState.savedTokenConfigured == false
-      and .extension.cardCount == 1 and .extension.version == "0.12.20" and .extension.enabled == true
+      and .extension.cardCount == 1 and .extension.version == "0.12.21" and .extension.enabled == true
       and .extension.loadErrors == 0 and .extension.loadedVia == "chrome://extensions-load-unpacked"
       and .extension.loadedDirectoryByteMatchesCandidateZip == true and .extension.popupConnected == true
       and .extension.debuggerLeaseActiveAtFirstCapture == true and .extension.nativeDebuggerUseIndicatorSeen == true
@@ -2439,7 +2673,7 @@ verify_evidence_commit() {
     --arg quiet_sha256 "$(jq -er '.macosQuietResultSha256' "$receipt_file")" \
     --arg deliberate_sha256 "$(jq -er '.macosDeliberateConcurrencyResultSha256' "$receipt_file")" \
     --arg acceptance_finalizer_sha256 "$(sha256_file scripts/finalize-macos-acceptance.mjs)" '
-      .schemaVersion == 1
+      .schemaVersion == 2
       and .productVersion == $version
       and .status == "passed-release-candidate"
       and .evidenceClass == "exact-release-candidate-macos-dual-lane-aggregate"
@@ -2462,7 +2696,8 @@ verify_evidence_commit() {
       and .aggregateChecks.laneDirectoriesDisjoint == true
       and .aggregateChecks.exactInventories == true
       and .aggregateChecks.resultsByteDistinct == true
-      and .aggregateChecks.inventoryFileCount == 18
+      and .aggregateChecks.passingResultSchemaVersion == 7
+      and .aggregateChecks.inventoryFileCount == 19
       and .aggregateChecks.screenshotCount == 12
       and .aggregateChecks.screenshotHashesMatched == true
       and .aggregateChecks.screenshotPixelHashesMatched == true
@@ -2675,15 +2910,15 @@ self_test() {
   local sha1_b="2222222222222222222222222222222222222222"
   local sha256_a="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   local receipt="$scratch/receipt.json"
-  printf '%s' '{"schemaVersion":2,"tag":"v0.12.20","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"1","releaseCandidateArtifactId":"456","releaseCandidateArtifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","evidenceRef":"refs/heads/evidence/v0.12.20-release-run-123-attempt-1","evidenceCommitSha":"3333333333333333333333333333333333333333","macosPassed":true,"macosAcceptanceSha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","macosQuietResultSha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","macosDeliberateConcurrencyResultSha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","windowsPassed":true,"windowsResultSha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","stockChromePassed":true,"stockChrome":true,"stockChromeResultSha256":"9999999999999999999999999999999999999999999999999999999999999999"}' > "$receipt"
-  validate_receipt "$receipt" v0.12.20 "$sha1_a" "$sha1_b" 123 1 "$sha256_a" \
+  printf '%s' '{"schemaVersion":2,"tag":"v0.12.21","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"1","releaseCandidateArtifactId":"456","releaseCandidateArtifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","evidenceRef":"refs/heads/evidence/v0.12.21-release-run-123-attempt-1","evidenceCommitSha":"3333333333333333333333333333333333333333","macosPassed":true,"macosAcceptanceSha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","macosQuietResultSha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","macosDeliberateConcurrencyResultSha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","windowsPassed":true,"windowsResultSha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","stockChromePassed":true,"stockChrome":true,"stockChromeResultSha256":"9999999999999999999999999999999999999999999999999999999999999999"}' > "$receipt"
+  validate_receipt "$receipt" v0.12.21 "$sha1_a" "$sha1_b" 123 1 "$sha256_a" \
     || die "self-test rejected a valid canonical schema-2 receipt"
   jq -cS . "$receipt" > "$scratch/noncanonical.json"
-  if validate_receipt "$scratch/noncanonical.json" v0.12.20 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
+  if validate_receipt "$scratch/noncanonical.json" v0.12.21 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
     die "self-test accepted reordered receipt keys"
   fi
   jq -c '.schemaVersion = 1' "$receipt" > "$scratch/stale.json"
-  if validate_receipt "$scratch/stale.json" v0.12.20 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
+  if validate_receipt "$scratch/stale.json" v0.12.21 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
     die "self-test accepted a stale schema-1 receipt"
   fi
   mkdir "$scratch/safe"
@@ -2703,7 +2938,7 @@ self_test() {
   fi
 
   EXPECTED_RELEASE_CANDIDATE_BINDING="$scratch/expected-binding.json"
-  printf '%s' '{"productVersion":"0.12.20","repository":"flrngel/local-browser-bridge","tag":"v0.12.20","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"2","artifactId":"456","artifactName":"release-candidate","artifactZipBytes":789,"artifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","attestationInvocationUri":"https://github.com/flrngel/local-browser-bridge/actions/runs/123/attempts/2","attestedAssetCount":5,"githubHostedRunner":true,"assets":[]}' > "$EXPECTED_RELEASE_CANDIDATE_BINDING"
+  printf '%s' '{"productVersion":"0.12.21","repository":"flrngel/local-browser-bridge","tag":"v0.12.21","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"2","artifactId":"456","artifactName":"release-candidate","artifactZipBytes":789,"artifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","attestationInvocationUri":"https://github.com/flrngel/local-browser-bridge/actions/runs/123/attempts/2","attestedAssetCount":5,"githubHostedRunner":true,"assets":[]}' > "$EXPECTED_RELEASE_CANDIDATE_BINDING"
   printf '%s' "{\"releaseCandidateBinding\":$(<"$EXPECTED_RELEASE_CANDIDATE_BINDING")}" > "$scratch/current-binding.json"
   assert_release_candidate_binding "$scratch/current-binding.json" '.releaseCandidateBinding'
   jq -c '.releaseCandidateBinding.workflowRunAttempt = "1"' "$scratch/current-binding.json" > "$scratch/replayed-binding.json"
@@ -2777,15 +3012,252 @@ self_test() {
     die "self-test accepted decoded macOS pixels replayed across lanes"
   fi
 
-  printf '%s' '{"aggregateChecks":{"passingResultSchemaVersion":6}}' > "$scratch/mac-schema-aggregate.json"
-  printf '%s' '{"schemaVersion":6}' > "$scratch/mac-schema-quiet.json"
-  printf '%s' '{"schemaVersion":6}' > "$scratch/mac-schema-deliberate.json"
+  jq -cn --arg lane quiet --argjson deliberate false '
+      {
+        pointerEvidence: {
+          requestedLane: $lane,
+          quietObserved: true,
+          concurrentSharedSeatActivityObserved: false,
+          unknownObserved: false,
+          rawCursorPositionsRetained: false,
+          rawPlatformActivityCountersRetained: false,
+          rawHidSystemCountersRetained: false,
+          hidSystemActivityClaimedAsPhysical: false
+        },
+        appShareHandoff: {
+          requested: $deliberate,
+          requestPublicationAcknowledged: $deliberate,
+          startReceiptAcknowledged: $deliberate,
+          completePublicationAcknowledged: $deliberate,
+          promptClosed: $deliberate,
+          exactAppBundleObserved: $deliberate,
+          exactWindowObserved: $deliberate,
+          exactButtonObserved: $deliberate,
+          buttonDisabledAfterAction: $deliberate,
+          acceptanceButtonActionObserved: $deliberate,
+          appShareSurfaceObservedAtProductBoundaries: $deliberate,
+          sharedHidInputObserved: null,
+          sampledSharedContextUnchanged: $deliberate,
+          actionDispatched: $deliberate,
+          targetPostconditionObserved: $deliberate,
+          productBoundaryQuiet: $deliberate,
+          independentBoundaryQuiet: $deliberate,
+          physicalHumanProvenanceClaimed: false,
+          cryptographicToolIdentityClaimed: false,
+          orchestrationNotProductControl: true,
+          markerNotificationOnly: false,
+          markerAcceptedAsProductAuthority: false,
+          rawAppIdentityRetainedInResult: false,
+          rawPointerDataRetained: false
+        }
+      }
+    ' > "$scratch/mac-quiet-app-share-contract.json"
+  jq -cn --arg lane deliberate-concurrency --argjson deliberate true '
+      {
+        pointerEvidence: {
+          requestedLane: $lane,
+          quietObserved: true,
+          concurrentSharedSeatActivityObserved: false,
+          unknownObserved: false,
+          rawCursorPositionsRetained: false,
+          rawPlatformActivityCountersRetained: false,
+          rawHidSystemCountersRetained: false,
+          hidSystemActivityClaimedAsPhysical: false
+        },
+        appShareHandoff: {
+          requested: $deliberate,
+          requestPublicationAcknowledged: $deliberate,
+          startReceiptAcknowledged: $deliberate,
+          completePublicationAcknowledged: $deliberate,
+          promptClosed: $deliberate,
+          exactAppBundleObserved: $deliberate,
+          exactWindowObserved: $deliberate,
+          exactButtonObserved: $deliberate,
+          buttonDisabledAfterAction: $deliberate,
+          acceptanceButtonActionObserved: $deliberate,
+          appShareSurfaceObservedAtProductBoundaries: $deliberate,
+          sharedHidInputObserved: false,
+          sampledSharedContextUnchanged: $deliberate,
+          actionDispatched: $deliberate,
+          targetPostconditionObserved: $deliberate,
+          productBoundaryQuiet: $deliberate,
+          independentBoundaryQuiet: $deliberate,
+          physicalHumanProvenanceClaimed: false,
+          cryptographicToolIdentityClaimed: false,
+          orchestrationNotProductControl: true,
+          markerNotificationOnly: false,
+          markerAcceptedAsProductAuthority: false,
+          rawAppIdentityRetainedInResult: false,
+          rawPointerDataRetained: false
+        }
+      }
+    ' > "$scratch/mac-deliberate-app-share-contract.json"
+  validate_macos_pointer_app_share_contract "$scratch/mac-quiet-app-share-contract.json" quiet \
+    || die "self-test rejected the exact quiet pointer/app-share contract"
+  validate_macos_pointer_app_share_contract \
+    "$scratch/mac-deliberate-app-share-contract.json" deliberate-concurrency \
+    || die "self-test rejected the exact deliberate app-share contract"
+  jq -c '.pointerEvidence.concurrentSharedSeatActivityObserved = true' \
+    "$scratch/mac-deliberate-app-share-contract.json" \
+    > "$scratch/mac-deliberate-contaminated-pointer-contract.json"
+  if validate_macos_pointer_app_share_contract \
+      "$scratch/mac-deliberate-contaminated-pointer-contract.json" deliberate-concurrency; then
+    die "self-test accepted mandatory sustained-motion/contamination evidence"
+  fi
+  jq -c '.operatorHandoff = {legacyContract:true}' \
+    "$scratch/mac-deliberate-app-share-contract.json" \
+    > "$scratch/mac-deliberate-legacy-operator-contract.json"
+  if validate_macos_pointer_app_share_contract \
+      "$scratch/mac-deliberate-legacy-operator-contract.json" deliberate-concurrency; then
+    die "self-test accepted the removed legacy pointer operator contract"
+  fi
+
+  local app_share_request="$scratch/macos-app-share-request.json"
+  local app_share_start="$scratch/macos-app-share-start.json"
+  local app_share_complete="$scratch/macos-app-share-complete.json"
+  local app_share_lane_result="$scratch/macos-app-share-lane-result.json"
+  local app_share_request_sha256 app_share_start_sha256 app_share_complete_sha256
+  jq -cn --arg version "$EVIDENCE_PRODUCT_VERSION" '{
+      schemaVersion: 2,
+      kind: "macos-app-share-concurrency-handoff-request",
+      productVersion: $version,
+      requestId: "0123456789abcdef0123456789abcdef",
+      createdAt: "2026-08-24T00:00:00.000Z",
+      expiresAt: "2026-08-24T00:05:00.000Z",
+      runnerPid: 101,
+      promptPid: 202,
+      expectedBundleIdentifier: "dev.flrngel.local-browser-bridge.acceptance.app-share",
+      expectedWindowTitle: "LBB macOS Acceptance App Share",
+      expectedButtonText: "START APP-SHARE CHECK",
+      expectedButtonAccessibilityIdentifier: "lbb-app-share-start",
+      expectedButtonEnabledAfterDelivery: true,
+      exactAppObserved: true,
+      exactWindowObserved: true,
+      requestDelivered: true,
+      panelOnScreen: true,
+      panelNonactivating: true,
+      notificationOnly: false,
+      exactAppShareRequired: true,
+      physicalHumanProvenanceRequired: false,
+      acceptedAsProductAuthority: false
+    }' > "$app_share_request"
+  app_share_request_sha256="$(sha256_file "$app_share_request")"
+  jq -cn \
+    --arg version "$EVIDENCE_PRODUCT_VERSION" \
+    --arg request_sha256 "$app_share_request_sha256" '{
+      acceptedAsAuthority: false,
+      buttonAccepted: true,
+      buttonActionObserved: true,
+      createdAt: "2026-08-24T00:00:01.000Z",
+      cryptographicToolIdentityClaimed: false,
+      kind: "macos-app-share-concurrency-handoff-start",
+      physicalHumanProvenanceClaimed: false,
+      productVersion: $version,
+      promptPid: 202,
+      requestId: "0123456789abcdef0123456789abcdef",
+      requestSha256: $request_sha256,
+      schemaVersion: 2
+    }' > "$app_share_start"
+  app_share_start_sha256="$(sha256_file "$app_share_start")"
+  jq -cn \
+    --arg version "$EVIDENCE_PRODUCT_VERSION" \
+    --arg request_sha256 "$app_share_request_sha256" \
+    --arg start_sha256 "$app_share_start_sha256" '{
+      acceptedAsAuthority: false,
+      buttonRemainedDisabledDuringProductAction: true,
+      createdAt: "2026-08-24T00:00:03.500Z",
+      cryptographicToolIdentityClaimed: false,
+      handoffStateSequenceBound: true,
+      kind: "macos-app-share-concurrency-handoff-complete",
+      physicalHumanProvenanceClaimed: false,
+      productActionCompletedAt: "2026-08-24T00:00:03.000Z",
+      productActionStartedAt: "2026-08-24T00:00:02.000Z",
+      productVersion: $version,
+      promptPid: 202,
+      requestId: "0123456789abcdef0123456789abcdef",
+      requestSha256: $request_sha256,
+      schemaVersion: 2,
+      startReceiptSha256: $start_sha256
+    }' > "$app_share_complete"
+  app_share_complete_sha256="$(sha256_file "$app_share_complete")"
+  jq -cn '{
+      startedAt: "2026-08-23T23:59:59.000Z",
+      capturedAt: "2026-08-24T00:00:04.000Z"
+    }' > "$app_share_lane_result"
+  validate_macos_app_share_marker_chain \
+    "$app_share_request" "$app_share_start" "$app_share_complete" \
+    "$app_share_request_sha256" "$app_share_start_sha256" "$app_share_complete_sha256" \
+    "$app_share_lane_result" \
+    || die "self-test rejected a valid exact-app-share request/start/complete chain"
+
+  jq -c '.requestSha256 = "0000000000000000000000000000000000000000000000000000000000000000"' \
+    "$app_share_start" > "$scratch/macos-app-share-start-replayed.json"
+  if validate_macos_app_share_marker_chain \
+      "$app_share_request" "$scratch/macos-app-share-start-replayed.json" "$app_share_complete" \
+      "$app_share_request_sha256" \
+      "$(sha256_file "$scratch/macos-app-share-start-replayed.json")" \
+      "$app_share_complete_sha256" "$app_share_lane_result" >/dev/null 2>&1; then
+    die "self-test accepted an exact-app-share start receipt with a replayed request hash"
+  fi
+  jq -c '.productActionStartedAt = "2026-08-24T00:00:04.000Z"' \
+    "$app_share_complete" > "$scratch/macos-app-share-complete-reordered.json"
+  if validate_macos_app_share_marker_chain \
+      "$app_share_request" "$app_share_start" "$scratch/macos-app-share-complete-reordered.json" \
+      "$app_share_request_sha256" "$app_share_start_sha256" \
+      "$(sha256_file "$scratch/macos-app-share-complete-reordered.json")" \
+      "$app_share_lane_result" >/dev/null 2>&1; then
+    die "self-test accepted a non-forward exact-app-share product timestamp chain"
+  fi
+  jq -c '
+      .productActionStartedAt = "2026-08-24T00:00:11.100Z"
+      | .productActionCompletedAt = "2026-08-24T00:00:11.200Z"
+      | .createdAt = "2026-08-24T00:00:11.300Z"
+    ' "$app_share_complete" > "$scratch/macos-app-share-complete-late-after-start.json"
+  jq -cn '{
+      startedAt: "2026-08-23T23:59:59.000Z",
+      capturedAt: "2026-08-24T00:00:12.000Z"
+    }' > "$scratch/macos-app-share-late-lane-result.json"
+  if validate_macos_app_share_marker_chain \
+      "$app_share_request" "$app_share_start" \
+      "$scratch/macos-app-share-complete-late-after-start.json" \
+      "$app_share_request_sha256" "$app_share_start_sha256" \
+      "$(sha256_file "$scratch/macos-app-share-complete-late-after-start.json")" \
+      "$scratch/macos-app-share-late-lane-result.json" >/dev/null 2>&1; then
+    die "self-test accepted an app-share completion more than ten seconds after its start receipt"
+  fi
+
+  jq -cn \
+    --arg request_sha256 "$app_share_request_sha256" \
+    --arg start_sha256 "$app_share_start_sha256" \
+    --arg complete_sha256 "$app_share_complete_sha256" '{
+      lanes: {deliberateConcurrency: {operatorMarkers: [
+        {file: "operator/macos-app-share-concurrency-handoff-request.json", sha256: $request_sha256},
+        {file: "operator/macos-app-share-concurrency-handoff-start.json", sha256: $start_sha256},
+        {file: "operator/macos-app-share-concurrency-handoff-complete.json", sha256: $complete_sha256}
+      ]}}
+    }' > "$scratch/mac-app-share-marker-inventory.json"
+  validate_macos_app_share_operator_inventory \
+    "$scratch/mac-app-share-marker-inventory.json" deliberateConcurrency \
+    || die "self-test rejected the exact three-file app-share marker inventory"
+  jq -c '.lanes.deliberateConcurrency.operatorMarkers += [{
+      file: "operator/macos-physical-pointer-concurrency-handoff-complete.json",
+      sha256: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    }]' "$scratch/mac-app-share-marker-inventory.json" \
+    > "$scratch/mac-app-share-marker-inventory-with-physical.json"
+  if validate_macos_app_share_operator_inventory \
+      "$scratch/mac-app-share-marker-inventory-with-physical.json" deliberateConcurrency; then
+    die "self-test allowed an optional physical-pointer artifact to satisfy the mandatory app-share allowlist"
+  fi
+
+  printf '%s' '{"aggregateChecks":{"passingResultSchemaVersion":7}}' > "$scratch/mac-schema-aggregate.json"
+  printf '%s' '{"schemaVersion":7}' > "$scratch/mac-schema-quiet.json"
+  printf '%s' '{"schemaVersion":7}' > "$scratch/mac-schema-deliberate.json"
   validate_mac_result_schema_binding \
     "$scratch/mac-schema-aggregate.json" \
     "$scratch/mac-schema-quiet.json" \
     "$scratch/mac-schema-deliberate.json" \
     || die "self-test rejected aligned macOS result schemas"
-  jq -c '.aggregateChecks.passingResultSchemaVersion = 5' \
+  jq -c '.aggregateChecks.passingResultSchemaVersion = 6' \
     "$scratch/mac-schema-aggregate.json" > "$scratch/mac-schema-stale-aggregate.json"
   if validate_mac_result_schema_binding \
       "$scratch/mac-schema-stale-aggregate.json" \
@@ -2793,7 +3265,7 @@ self_test() {
       "$scratch/mac-schema-deliberate.json"; then
     die "self-test accepted a stale macOS aggregate result schema"
   fi
-  jq -c '.schemaVersion = 5' \
+  jq -c '.schemaVersion = 6' \
     "$scratch/mac-schema-deliberate.json" > "$scratch/mac-schema-stale-deliberate.json"
   if validate_mac_result_schema_binding \
       "$scratch/mac-schema-aggregate.json" \
@@ -2823,7 +3295,8 @@ self_test() {
   local wrong_harness_sha256="0000000000000000000000000000000000000000000000000000000000000000"
   for harness_field in \
     runnerSha256 fixtureSha256 systemProbeSha256 \
-    pointerHandoffSha256 acceptanceFinalizerSha256; do
+    appShareHandoffSha256 physicalPointerHandoffSha256 \
+    acceptanceFinalizerSha256; do
     jq -c --arg field "$harness_field" --arg wrong "$wrong_harness_sha256" \
       '.bindings.harness[$field] = $wrong' \
       "$mac_harness_aggregate" > "$scratch/mac-harness-tampered-aggregate.json"

@@ -57,6 +57,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+$script:ForegroundSentinelWindowTitle = "LBB Foreground Sentinel"
 
 function ConvertFrom-JsonPreservingStrings {
     param([Parameter(Mandatory = $true, ValueFromPipeline = $true)][string]$Json)
@@ -1405,7 +1406,7 @@ function New-ForegroundArmRequestMarker {
         operatorActionRequired = $operatorActionRequired
         preferredRelaySurface = "windows-computer-use-app-share"
         fallbackRelaySurface = "human-on-windows-session"
-        expectedVisibleWindowTitle = if ($operatorActionRequired) { "LBB Windows Acceptance - ACTION REQUIRED" } else { "LBB Windows Acceptance - ARMED" }
+        expectedVisibleWindowTitle = $script:ForegroundSentinelWindowTitle
         expectedVisibleButtonText = if ($operatorActionRequired) { "CLICK TO ARM" } else { "ARMED - DO NOT USE THIS SESSION" }
         expectedAccessibleName = "Click to arm Windows acceptance"
         action = if ($operatorActionRequired) { "single-left-click" } else { "none" }
@@ -1979,7 +1980,7 @@ if ($SelfTest) {
     try {
         $operatorMarkerSelfTestRequestId = "0123456789abcdef0123456789abcdef"
         $operatorRequestMarker = New-ForegroundArmRequestMarker `
-            -ProductVersion "0.12.20" `
+            -ProductVersion "0.12.21" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -InputStateAtPublication "not-started" `
             -TimeoutSeconds 120 `
@@ -2006,13 +2007,14 @@ if ($SelfTest) {
         )
         if ((@($operatorRequestRecord.PSObject.Properties.Name) -join "|") -cne ($expectedRequestMarkerProperties -join "|") -or
             $operatorRequestRecord.schemaVersion -ne 2 -or
-            $operatorRequestRecord.productVersion -cne "0.12.20" -or
+            $operatorRequestRecord.productVersion -cne "0.12.21" -or
             $operatorRequestRecord.status -cne "action-required" -or
             $operatorRequestRecord.requestId -cne $operatorMarkerSelfTestRequestId -or
             $operatorRequestRecord.operatorActionRequired -ne $true -or
             $operatorRequestRecord.preferredRelaySurface -cne "windows-computer-use-app-share" -or
             $operatorRequestRecord.fallbackRelaySurface -cne "human-on-windows-session" -or
-            $operatorRequestRecord.expectedVisibleWindowTitle -cne "LBB Windows Acceptance - ACTION REQUIRED" -or
+            $script:ForegroundSentinelWindowTitle -cne "LBB Foreground Sentinel" -or
+            $operatorRequestRecord.expectedVisibleWindowTitle -cne $script:ForegroundSentinelWindowTitle -or
             $operatorRequestRecord.expectedVisibleButtonText -cne "CLICK TO ARM" -or
             $operatorRequestRecord.expectedAccessibleName -cne "Click to arm Windows acceptance" -or
             $operatorRequestRecord.action -cne "single-left-click" -or
@@ -2051,7 +2053,7 @@ if ($SelfTest) {
         }
 
         $alreadyArmedMarker = New-ForegroundArmRequestMarker `
-            -ProductVersion "0.12.20" `
+            -ProductVersion "0.12.21" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -InputStateAtPublication "already-acknowledged" `
             -TimeoutSeconds 120 `
@@ -2060,7 +2062,8 @@ if ($SelfTest) {
             -NativeTopologyMatched $true
         if ($alreadyArmedMarker.status -cne "already-armed" -or
             $alreadyArmedMarker.operatorActionRequired -ne $false -or
-            $alreadyArmedMarker.expectedVisibleWindowTitle -cne "LBB Windows Acceptance - ARMED" -or
+            $alreadyArmedMarker.expectedVisibleWindowTitle -cne $script:ForegroundSentinelWindowTitle -or
+            $alreadyArmedMarker.expectedVisibleWindowTitle -cne $operatorRequestRecord.expectedVisibleWindowTitle -or
             $alreadyArmedMarker.expectedVisibleButtonText -cne "ARMED - DO NOT USE THIS SESSION" -or
             $alreadyArmedMarker.action -cne "none" -or
             $alreadyArmedMarker.maximumClickAttempts -ne 0 -or
@@ -2085,7 +2088,7 @@ if ($SelfTest) {
             stableSamplesRequired = 3
         }
         $operatorReceivedMarker = New-ForegroundArmReceivedMarker `
-            -ProductVersion "0.12.20" `
+            -ProductVersion "0.12.21" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -Proof $operatorReceivedProof
         $operatorReceivedPath = Write-NewOperatorMarker `
@@ -2104,7 +2107,7 @@ if ($SelfTest) {
         if ((@($operatorReceivedRecord.PSObject.Properties.Name) -join "|") -cne ($expectedReceivedMarkerProperties -join "|") -or
             $operatorReceivedRecord.status -cne "received" -or
             $operatorReceivedRecord.schemaVersion -ne 2 -or
-            $operatorReceivedRecord.productVersion -cne "0.12.20" -or
+            $operatorReceivedRecord.productVersion -cne "0.12.21" -or
             $operatorReceivedRecord.requestId -cne $operatorRequestRecord.requestId -or
             $operatorReceivedRecord.exactClickCountsMatched -ne $true -or
             $operatorReceivedRecord.stableSamplesObserved -ne 3 -or
@@ -2116,7 +2119,7 @@ if ($SelfTest) {
         $incompleteReceivedMarkerFailure = $null
         try {
             $null = New-ForegroundArmReceivedMarker `
-                -ProductVersion "0.12.20" `
+                -ProductVersion "0.12.21" `
                 -RequestId $operatorMarkerSelfTestRequestId `
                 -Proof $operatorReceivedProof
         }
@@ -2147,10 +2150,10 @@ if ($SelfTest) {
         }
         $candidateBindingSelfTestPath = [IO.Path]::Combine($candidateBindingSelfTestRoot, "candidate-binding.json")
         $candidateBindingNames = @(
-            "local-browser-bridge-v0.12.20-windows-x86_64.exe",
-            "local-computer-helper-v0.12.20-windows-x86_64.exe",
-            "local-browser-bridge-v0.12.20-macos-universal.tar.gz",
-            "local-browser-bridge-extension-v0.12.20.zip"
+            "local-browser-bridge-v0.12.21-windows-x86_64.exe",
+            "local-computer-helper-v0.12.21-windows-x86_64.exe",
+            "local-browser-bridge-v0.12.21-macos-universal.tar.gz",
+            "local-browser-bridge-extension-v0.12.21.zip"
         )
         $candidateBindingChecksums = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
         for ($index = 0; $index -lt $candidateBindingNames.Count; $index++) {
@@ -2175,9 +2178,9 @@ if ($SelfTest) {
         })
         $candidateBindingSelfTestRecord = [ordered]@{
             schemaVersion = 1
-            productVersion = "0.12.20"
+            productVersion = "0.12.21"
             repository = "flrngel/local-browser-bridge"
-            tag = "v0.12.20"
+            tag = "v0.12.21"
             sourceSha = [String]::new([char]'b', 40)
             tagObjectSha = [String]::new([char]'c', 40)
             workflowRunId = "32650000000"
@@ -2200,7 +2203,7 @@ if ($SelfTest) {
         )
         $candidateBindingSelfTestResult = Read-ExactReleaseCandidateBinding `
             -Path $candidateBindingSelfTestPath `
-            -ExpectedVersion "0.12.20" `
+            -ExpectedVersion "0.12.21" `
             -ExpectedManifestSha256 $candidateBindingManifestSha `
             -ExpectedChecksums $candidateBindingChecksums `
             -ExpectedAssetNames $candidateBindingNames
@@ -2219,7 +2222,7 @@ if ($SelfTest) {
         try {
             $null = Read-ExactReleaseCandidateBinding `
                 -Path $candidateBindingSelfTestPath `
-                -ExpectedVersion "0.12.20" `
+                -ExpectedVersion "0.12.21" `
                 -ExpectedManifestSha256 $candidateBindingManifestSha `
                 -ExpectedChecksums $candidateBindingChecksums `
                 -ExpectedAssetNames $candidateBindingNames

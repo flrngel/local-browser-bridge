@@ -22,9 +22,10 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { deflateSync, inflateSync } from "node:zlib";
 
-const PRODUCT_VERSION = "0.12.20";
-const RESULT_SCHEMA_VERSION = 6;
-const AGGREGATE_SCHEMA_VERSION = 1;
+const PRODUCT_VERSION = "0.12.21";
+const RESULT_SCHEMA_VERSION = 7;
+const AGGREGATE_SCHEMA_VERSION = 2;
+const APP_SHARE_MARKER_SCHEMA_VERSION = 2;
 const OUTPUT_FILE = "macos-acceptance.json";
 const MAX_FRESH_AGE_MS = 12 * 60 * 60 * 1_000;
 const FUTURE_TOLERANCE_MS = 5_000;
@@ -33,8 +34,9 @@ const MAX_RESULT_BYTES = 8 * 1024 * 1024;
 const MAX_LOG_BYTES = 8 * 1024 * 1024;
 const MAX_MARKER_BYTES = 16 * 1024;
 const MAX_SCREENSHOT_BYTES = 64 * 1024 * 1024;
-const MAX_MOTION_SPAN_MS = 300_000;
+const MAX_REQUEST_LIFETIME_MS = 300_000;
 const MAX_REQUEST_TO_COMPLETE_MS = 310_000;
+const MAX_ACTION_TO_COMPLETE_MS = 10_000;
 const QUIET_SEAT_REQUIRED_STABLE_MS = 30_000;
 const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;
 const QUIET_SEAT_SAMPLE_INTERVAL_MS = 500;
@@ -62,13 +64,22 @@ const BASE_LANE_FILES = [
   "helper-results.json",
   "helper-rig.log",
 ].sort();
-const REQUEST_MARKER = "operator/macos-pointer-concurrency-handoff-request.json";
-const COMPLETE_MARKER = "operator/macos-pointer-concurrency-handoff-complete.json";
+const REQUEST_MARKER = "operator/macos-app-share-concurrency-handoff-request.json";
+const START_MARKER = "operator/macos-app-share-concurrency-handoff-start.json";
+const COMPLETE_MARKER = "operator/macos-app-share-concurrency-handoff-complete.json";
 const DELIBERATE_LANE_FILES = [
   ...BASE_LANE_FILES,
   REQUEST_MARKER,
+  START_MARKER,
   COMPLETE_MARKER,
 ].sort();
+const APP_SHARE_REQUEST_KIND = "macos-app-share-concurrency-handoff-request";
+const APP_SHARE_START_KIND = "macos-app-share-concurrency-handoff-start";
+const APP_SHARE_COMPLETE_KIND = "macos-app-share-concurrency-handoff-complete";
+const APP_SHARE_BUNDLE_IDENTIFIER = "dev.flrngel.local-browser-bridge.acceptance.app-share";
+const APP_SHARE_WINDOW_TITLE = "LBB macOS Acceptance App Share";
+const APP_SHARE_BUTTON_TEXT = "START APP-SHARE CHECK";
+const APP_SHARE_BUTTON_IDENTIFIER = "lbb-app-share-start";
 const ARCHIVE_FILE = `local-browser-bridge-v${PRODUCT_VERSION}-macos-universal.tar.gz`;
 const CANDIDATE_NOTICE =
   `This becomes release evidence only after the supplied checksum manifest and archive are published immutably for v${PRODUCT_VERSION}.`;
@@ -86,7 +97,7 @@ const RESULT_FIELDS = [
   "capabilityBinding",
   "quietSeatStabilization",
   "pointerEvidence",
-  "operatorHandoff",
+  "appShareHandoff",
   "environment",
   "package",
   "harness",
@@ -160,7 +171,8 @@ const HARNESS_FIELDS = [
   "runnerSha256",
   "fixtureSha256",
   "systemProbeSha256",
-  "pointerHandoffSha256",
+  "appShareHandoffSha256",
+  "physicalPointerHandoffSha256",
   "acceptanceFinalizerSha256",
   "packagedHelperSpawnCount",
 ];
@@ -174,21 +186,30 @@ const POINTER_FIELDS = [
   "rawHidSystemCountersRetained",
   "hidSystemActivityClaimedAsPhysical",
 ];
-const HANDOFF_FIELDS = [
+const APP_SHARE_HANDOFF_FIELDS = [
   "requested",
   "requestPublicationAcknowledged",
+  "startReceiptAcknowledged",
   "completePublicationAcknowledged",
   "promptClosed",
-  "sustainedMotionSamples",
-  "sustainedMotionSpanMilliseconds",
-  "clickFreeMotionObserved",
+  "exactAppBundleObserved",
+  "exactWindowObserved",
+  "exactButtonObserved",
+  "buttonDisabledAfterAction",
+  "acceptanceButtonActionObserved",
+  "appShareSurfaceObservedAtProductBoundaries",
+  "sharedHidInputObserved",
+  "sampledSharedContextUnchanged",
   "actionDispatched",
-  "productBoundaryContaminated",
-  "independentBoundaryContaminated",
+  "targetPostconditionObserved",
+  "productBoundaryQuiet",
+  "independentBoundaryQuiet",
+  "physicalHumanProvenanceClaimed",
+  "cryptographicToolIdentityClaimed",
+  "orchestrationNotProductControl",
   "markerNotificationOnly",
-  "markerAcceptedAsAuthority",
-  "externalAcknowledgementConsumed",
-  "rawPromptIdentityRetainedInResult",
+  "markerAcceptedAsProductAuthority",
+  "rawAppIdentityRetainedInResult",
   "rawPointerDataRetained",
 ];
 const QUIET_SEAT_FIELDS = [
@@ -212,21 +233,54 @@ const REQUEST_MARKER_FIELDS = [
   "productVersion",
   "requestId",
   "createdAt",
+  "expiresAt",
   "runnerPid",
   "promptPid",
+  "expectedBundleIdentifier",
+  "expectedWindowTitle",
+  "expectedButtonText",
+  "expectedButtonAccessibilityIdentifier",
+  "expectedButtonEnabledAfterDelivery",
+  "exactAppObserved",
+  "exactWindowObserved",
   "requestDelivered",
   "panelOnScreen",
   "panelNonactivating",
   "notificationOnly",
+  "exactAppShareRequired",
+  "physicalHumanProvenanceRequired",
+  "acceptedAsProductAuthority",
+];
+const START_MARKER_FIELDS = [
   "acceptedAsAuthority",
+  "buttonAccepted",
+  "buttonActionObserved",
+  "createdAt",
+  "cryptographicToolIdentityClaimed",
+  "kind",
+  "physicalHumanProvenanceClaimed",
+  "productVersion",
+  "promptPid",
+  "requestId",
+  "requestSha256",
+  "schemaVersion",
 ];
 const COMPLETE_MARKER_FIELDS = [
-  ...REQUEST_MARKER_FIELDS,
-  "sustainedMotionSamples",
-  "sustainedMotionSpanMilliseconds",
-  "productBoundaryContaminated",
-  "independentBoundaryContaminated",
-  "clickFreeMotionObserved",
+  "acceptedAsAuthority",
+  "buttonRemainedDisabledDuringProductAction",
+  "createdAt",
+  "cryptographicToolIdentityClaimed",
+  "handoffStateSequenceBound",
+  "kind",
+  "physicalHumanProvenanceClaimed",
+  "productActionCompletedAt",
+  "productActionStartedAt",
+  "productVersion",
+  "promptPid",
+  "requestId",
+  "requestSha256",
+  "schemaVersion",
+  "startReceiptSha256",
 ];
 
 class FinalizerError extends Error {}
@@ -484,6 +538,15 @@ async function readStableJson(path, label, maximumBytes) {
     ...record,
     value: parseJsonWithoutDuplicateKeys(strictUtf8(record.bytes, label), label),
   };
+}
+
+async function readStableCanonicalMarker(path, label) {
+  const record = await readStableJson(path, label, MAX_MARKER_BYTES);
+  const canonical = Buffer.from(`${JSON.stringify(record.value)}\n`, "utf8");
+  if (!record.bytes.equals(canonical)) {
+    fail(`${label} is not one compact canonical JSON record.`);
+  }
+  return record;
 }
 
 function pathContains(parent, child) {
@@ -773,7 +836,7 @@ function validatePackageBinding(value, label) {
 function validateHarnessBinding(value, label) {
   exactKeys(value, HARNESS_FIELDS, label);
   const harness = {};
-  for (const field of HARNESS_FIELDS.slice(0, 5)) {
+  for (const field of HARNESS_FIELDS.slice(0, -1)) {
     harness[field] = canonicalString(value[field], /^[0-9a-f]{64}$/, `${label} ${field}`);
   }
   harness.packagedHelperSpawnCount = exactInteger(
@@ -799,46 +862,45 @@ function validatePointerEvidence(value, lane, label) {
   exactKeys(value, POINTER_FIELDS, label);
   exactString(value.requestedLane, lane, `${label} requestedLane`);
   exactBoolean(value.quietObserved, true, `${label} quietObserved`);
-  exactBoolean(
-    value.concurrentSharedSeatActivityObserved,
-    lane === "deliberate-concurrency",
-    `${label} concurrentSharedSeatActivityObserved`,
-  );
+  exactBoolean(value.concurrentSharedSeatActivityObserved, false, `${label} concurrentSharedSeatActivityObserved`);
   for (const field of POINTER_FIELDS.slice(3)) exactBoolean(value[field], false, `${label} ${field}`);
 }
 
-function validateOperatorHandoff(value, lane, label) {
-  exactKeys(value, HANDOFF_FIELDS, label);
+function validateAppShareHandoff(value, lane, label) {
+  exactKeys(value, APP_SHARE_HANDOFF_FIELDS, label);
   const deliberate = lane === "deliberate-concurrency";
   exactBoolean(value.requested, deliberate, `${label} requested`);
   for (const field of [
     "requestPublicationAcknowledged",
+    "startReceiptAcknowledged",
     "completePublicationAcknowledged",
     "promptClosed",
-    "clickFreeMotionObserved",
+    "exactAppBundleObserved",
+    "exactWindowObserved",
+    "exactButtonObserved",
+    "buttonDisabledAfterAction",
+    "acceptanceButtonActionObserved",
+    "appShareSurfaceObservedAtProductBoundaries",
+    "sampledSharedContextUnchanged",
     "actionDispatched",
-    "productBoundaryContaminated",
-    "independentBoundaryContaminated",
+    "targetPostconditionObserved",
+    "productBoundaryQuiet",
+    "independentBoundaryQuiet",
   ]) {
     exactBoolean(value[field], deliberate, `${label} ${field}`);
   }
-  exactInteger(
-    value.sustainedMotionSamples,
-    deliberate ? 3 : 0,
-    deliberate ? 1_000_000 : 0,
-    `${label} sustainedMotionSamples`,
-  );
-  exactInteger(
-    value.sustainedMotionSpanMilliseconds,
-    deliberate ? 500 : 0,
-    deliberate ? MAX_MOTION_SPAN_MS : 0,
-    `${label} sustainedMotionSpanMilliseconds`,
-  );
-  exactBoolean(value.markerNotificationOnly, true, `${label} markerNotificationOnly`);
+  exactBoolean(value.orchestrationNotProductControl, true, `${label} orchestrationNotProductControl`);
+  if (deliberate) {
+    exactBoolean(value.sharedHidInputObserved, false, `${label} sharedHidInputObserved`);
+  } else if (value.sharedHidInputObserved !== null) {
+    fail(`${label} sharedHidInputObserved must be null when app-share is not requested.`);
+  }
   for (const field of [
-    "markerAcceptedAsAuthority",
-    "externalAcknowledgementConsumed",
-    "rawPromptIdentityRetainedInResult",
+    "physicalHumanProvenanceClaimed",
+    "cryptographicToolIdentityClaimed",
+    "markerNotificationOnly",
+    "markerAcceptedAsProductAuthority",
+    "rawAppIdentityRetainedInResult",
     "rawPointerDataRetained",
   ]) {
     exactBoolean(value[field], false, `${label} ${field}`);
@@ -950,7 +1012,7 @@ function validateResultEnvelope(result, lane, resultMtimeMs, now, label) {
     fail(`${label} limitations are invalid.`);
   }
   validatePointerEvidence(result.pointerEvidence, lane, `${label} pointerEvidence`);
-  validateOperatorHandoff(result.operatorHandoff, lane, `${label} operatorHandoff`);
+  validateAppShareHandoff(result.appShareHandoff, lane, `${label} appShareHandoff`);
   validateQuietSeatStabilization(
     result.quietSeatStabilization,
     lane,
@@ -1031,74 +1093,203 @@ async function validateScreenshots(root, result, label) {
   return summaries;
 }
 
-function validateMarkerBase(marker, fields, expectedKind, label, now) {
-  exactKeys(marker, fields, label);
-  exactInteger(marker.schemaVersion, 1, 1, `${label} schemaVersion`);
-  exactString(marker.kind, expectedKind, `${label} kind`);
+function validateMarkerFileTimestamp(record, createdAtMs, label) {
+  if (Math.abs(Number(record.stats.mtimeNs / 1_000_000n) - createdAtMs) > FILE_TIMESTAMP_TOLERANCE_MS) {
+    fail(`${label} file timestamp is not bound to createdAt.`);
+  }
+}
+
+function validateRequestMarker(record, now, label) {
+  const marker = record.value;
+  exactKeys(marker, REQUEST_MARKER_FIELDS, label);
+  exactInteger(
+    marker.schemaVersion,
+    APP_SHARE_MARKER_SCHEMA_VERSION,
+    APP_SHARE_MARKER_SCHEMA_VERSION,
+    `${label} schemaVersion`,
+  );
+  exactString(marker.kind, APP_SHARE_REQUEST_KIND, `${label} kind`);
   exactString(marker.productVersion, PRODUCT_VERSION, `${label} productVersion`);
   canonicalString(marker.requestId, /^[0-9a-f]{32}$/, `${label} requestId`);
   const createdAtMs = canonicalTimestamp(marker.createdAt, `${label} createdAt`);
+  const expiresAtMs = canonicalTimestamp(marker.expiresAt, `${label} expiresAt`);
   validateFreshTimestamp(createdAtMs, now, `${label} createdAt`);
+  if (
+    expiresAtMs <= createdAtMs ||
+    expiresAtMs - createdAtMs > MAX_REQUEST_LIFETIME_MS
+  ) {
+    fail(`${label} lifetime is invalid.`);
+  }
   exactInteger(marker.runnerPid, 1, MAX_PID, `${label} runnerPid`);
   exactInteger(marker.promptPid, 1, MAX_PID, `${label} promptPid`);
   if (marker.runnerPid === marker.promptPid) fail(`${label} runnerPid and promptPid must be distinct.`);
-  for (const field of ["requestDelivered", "panelOnScreen", "panelNonactivating", "notificationOnly"]) {
-    exactBoolean(marker[field], true, `${label} ${field}`);
+  exactString(
+    marker.expectedBundleIdentifier,
+    APP_SHARE_BUNDLE_IDENTIFIER,
+    `${label} expectedBundleIdentifier`,
+  );
+  exactString(marker.expectedWindowTitle, APP_SHARE_WINDOW_TITLE, `${label} expectedWindowTitle`);
+  exactString(marker.expectedButtonText, APP_SHARE_BUTTON_TEXT, `${label} expectedButtonText`);
+  exactString(
+    marker.expectedButtonAccessibilityIdentifier,
+    APP_SHARE_BUTTON_IDENTIFIER,
+    `${label} expectedButtonAccessibilityIdentifier`,
+  );
+  for (const [field, expected] of [
+    ["expectedButtonEnabledAfterDelivery", true],
+    ["exactAppObserved", true],
+    ["exactWindowObserved", true],
+    ["requestDelivered", true],
+    ["panelOnScreen", true],
+    ["panelNonactivating", true],
+    ["notificationOnly", false],
+    ["exactAppShareRequired", true],
+    ["physicalHumanProvenanceRequired", false],
+    ["acceptedAsProductAuthority", false],
+  ]) {
+    exactBoolean(marker[field], expected, `${label} ${field}`);
   }
-  exactBoolean(marker.acceptedAsAuthority, false, `${label} acceptedAsAuthority`);
-  return createdAtMs;
+  validateMarkerFileTimestamp(record, createdAtMs, label);
+  return { marker, createdAtMs, expiresAtMs, sha256: record.sha256 };
+}
+
+function validateStartMarker(record, request, now, label) {
+  const marker = record.value;
+  exactKeys(marker, START_MARKER_FIELDS, label);
+  exactInteger(
+    marker.schemaVersion,
+    APP_SHARE_MARKER_SCHEMA_VERSION,
+    APP_SHARE_MARKER_SCHEMA_VERSION,
+    `${label} schemaVersion`,
+  );
+  exactString(marker.kind, APP_SHARE_START_KIND, `${label} kind`);
+  exactString(marker.productVersion, PRODUCT_VERSION, `${label} productVersion`);
+  canonicalString(marker.requestId, /^[0-9a-f]{32}$/, `${label} requestId`);
+  canonicalString(marker.requestSha256, /^[0-9a-f]{64}$/, `${label} requestSha256`);
+  exactInteger(marker.promptPid, 1, MAX_PID, `${label} promptPid`);
+  if (
+    marker.requestId !== request.marker.requestId ||
+    marker.requestSha256 !== request.sha256 ||
+    marker.promptPid !== request.marker.promptPid
+  ) {
+    fail(`${label} request/hash/process binding does not match.`);
+  }
+  for (const [field, expected] of [
+    ["acceptedAsAuthority", false],
+    ["buttonAccepted", true],
+    ["buttonActionObserved", true],
+    ["cryptographicToolIdentityClaimed", false],
+    ["physicalHumanProvenanceClaimed", false],
+  ]) {
+    exactBoolean(marker[field], expected, `${label} ${field}`);
+  }
+  const createdAtMs = canonicalTimestamp(marker.createdAt, `${label} createdAt`);
+  validateFreshTimestamp(createdAtMs, now, `${label} createdAt`);
+  if (createdAtMs < request.createdAtMs || createdAtMs > request.expiresAtMs) {
+    fail(`${label} timestamp is outside its request interval.`);
+  }
+  validateMarkerFileTimestamp(record, createdAtMs, label);
+  return { marker, createdAtMs, sha256: record.sha256 };
+}
+
+function validateCompleteMarker(record, request, start, now, label) {
+  const marker = record.value;
+  exactKeys(marker, COMPLETE_MARKER_FIELDS, label);
+  exactInteger(
+    marker.schemaVersion,
+    APP_SHARE_MARKER_SCHEMA_VERSION,
+    APP_SHARE_MARKER_SCHEMA_VERSION,
+    `${label} schemaVersion`,
+  );
+  exactString(marker.kind, APP_SHARE_COMPLETE_KIND, `${label} kind`);
+  exactString(marker.productVersion, PRODUCT_VERSION, `${label} productVersion`);
+  canonicalString(marker.requestId, /^[0-9a-f]{32}$/, `${label} requestId`);
+  canonicalString(marker.requestSha256, /^[0-9a-f]{64}$/, `${label} requestSha256`);
+  canonicalString(marker.startReceiptSha256, /^[0-9a-f]{64}$/, `${label} startReceiptSha256`);
+  exactInteger(marker.promptPid, 1, MAX_PID, `${label} promptPid`);
+  if (
+    marker.requestId !== request.marker.requestId ||
+    marker.requestSha256 !== request.sha256 ||
+    marker.startReceiptSha256 !== start.sha256 ||
+    marker.promptPid !== request.marker.promptPid
+  ) {
+    fail(`${label} request/start hash or process binding does not match.`);
+  }
+  for (const [field, expected] of [
+    ["acceptedAsAuthority", false],
+    ["buttonRemainedDisabledDuringProductAction", true],
+    ["cryptographicToolIdentityClaimed", false],
+    ["handoffStateSequenceBound", true],
+    ["physicalHumanProvenanceClaimed", false],
+  ]) {
+    exactBoolean(marker[field], expected, `${label} ${field}`);
+  }
+  const productStartedAtMs = canonicalTimestamp(
+    marker.productActionStartedAt,
+    `${label} productActionStartedAt`,
+  );
+  const productCompletedAtMs = canonicalTimestamp(
+    marker.productActionCompletedAt,
+    `${label} productActionCompletedAt`,
+  );
+  const createdAtMs = canonicalTimestamp(marker.createdAt, `${label} createdAt`);
+  validateFreshTimestamp(createdAtMs, now, `${label} createdAt`);
+  if (
+    productStartedAtMs < start.createdAtMs ||
+    productStartedAtMs - start.createdAtMs > MAX_ACTION_TO_COMPLETE_MS ||
+    productCompletedAtMs < productStartedAtMs ||
+    productCompletedAtMs - productStartedAtMs > MAX_ACTION_TO_COMPLETE_MS ||
+    createdAtMs < productCompletedAtMs ||
+    createdAtMs - productStartedAtMs > MAX_ACTION_TO_COMPLETE_MS ||
+    createdAtMs - start.createdAtMs > MAX_ACTION_TO_COMPLETE_MS ||
+    createdAtMs - request.createdAtMs > MAX_REQUEST_TO_COMPLETE_MS
+  ) {
+    fail(`${label} timestamps are outside the bound product-action interval.`);
+  }
+  validateMarkerFileTimestamp(record, createdAtMs, label);
+  return { marker, createdAtMs, sha256: record.sha256 };
 }
 
 async function validateDeliberateMarkers(root, result, now, label) {
-  const requestRecord = await readStableJson(join(root, REQUEST_MARKER), `${label} request marker`, MAX_MARKER_BYTES);
-  const completeRecord = await readStableJson(join(root, COMPLETE_MARKER), `${label} complete marker`, MAX_MARKER_BYTES);
-  const requestAt = validateMarkerBase(
-    requestRecord.value,
-    REQUEST_MARKER_FIELDS,
-    "macos-pointer-concurrency-handoff-request",
+  const requestRecord = await readStableCanonicalMarker(
+    join(root, REQUEST_MARKER),
     `${label} request marker`,
-    now,
   );
-  const completeAt = validateMarkerBase(
-    completeRecord.value,
-    COMPLETE_MARKER_FIELDS,
-    "macos-pointer-concurrency-handoff-complete",
-    `${label} complete marker`,
-    now,
+  const startRecord = await readStableCanonicalMarker(
+    join(root, START_MARKER),
+    `${label} start receipt`,
   );
-  for (const field of ["requestId", "runnerPid", "promptPid"]) {
-    if (requestRecord.value[field] !== completeRecord.value[field]) {
-      fail(`${label} marker ${field} binding does not match.`);
-    }
-  }
-  if (completeAt < requestAt || completeAt - requestAt > MAX_REQUEST_TO_COMPLETE_MS) {
-    fail(`${label} marker timestamps are outside the bounded handoff interval.`);
-  }
+  const completeRecord = await readStableCanonicalMarker(
+    join(root, COMPLETE_MARKER),
+    `${label} complete receipt`,
+  );
+  const request = validateRequestMarker(requestRecord, now, `${label} request marker`);
+  const start = validateStartMarker(startRecord, request, now, `${label} start receipt`);
+  const complete = validateCompleteMarker(
+    completeRecord,
+    request,
+    start,
+    now,
+    `${label} complete receipt`,
+  );
   const laneStartedAt = Date.parse(result.startedAt);
   const laneCapturedAt = Date.parse(result.capturedAt);
-  if (requestAt < laneStartedAt || completeAt > laneCapturedAt) {
+  if (request.createdAtMs < laneStartedAt || complete.createdAtMs > laneCapturedAt) {
     fail(`${label} marker timestamps are outside the deliberate lane interval.`);
   }
   if (
-    Math.abs(Number(requestRecord.stats.mtimeNs / 1_000_000n) - requestAt) > FILE_TIMESTAMP_TOLERANCE_MS ||
-    Math.abs(Number(completeRecord.stats.mtimeNs / 1_000_000n) - completeAt) > FILE_TIMESTAMP_TOLERANCE_MS
+    !result.appShareHandoff.requestPublicationAcknowledged ||
+    !result.appShareHandoff.startReceiptAcknowledged ||
+    !result.appShareHandoff.completePublicationAcknowledged ||
+    !result.appShareHandoff.acceptanceButtonActionObserved ||
+    !result.appShareHandoff.appShareSurfaceObservedAtProductBoundaries ||
+    !result.appShareHandoff.targetPostconditionObserved
   ) {
-    fail(`${label} marker file timestamps are not bound to createdAt.`);
-  }
-  const complete = completeRecord.value;
-  exactInteger(complete.sustainedMotionSamples, 3, 1_000_000, `${label} complete marker sustainedMotionSamples`);
-  exactInteger(complete.sustainedMotionSpanMilliseconds, 500, MAX_MOTION_SPAN_MS, `${label} complete marker sustainedMotionSpanMilliseconds`);
-  for (const field of ["productBoundaryContaminated", "independentBoundaryContaminated", "clickFreeMotionObserved"]) {
-    exactBoolean(complete[field], true, `${label} complete marker ${field}`);
-  }
-  if (
-    complete.sustainedMotionSamples !== result.operatorHandoff.sustainedMotionSamples ||
-    complete.sustainedMotionSpanMilliseconds !== result.operatorHandoff.sustainedMotionSpanMilliseconds
-  ) {
-    fail(`${label} complete marker is not bound to the result handoff summary.`);
+    fail(`${label} marker chain is not bound to the result app-share summary.`);
   }
   return [
     { file: REQUEST_MARKER, sha256: requestRecord.sha256 },
+    { file: START_MARKER, sha256: startRecord.sha256 },
     { file: COMPLETE_MARKER, sha256: completeRecord.sha256 },
   ];
 }
@@ -1464,7 +1655,8 @@ function selfTestBindings() {
       runnerSha256: hash("1"),
       fixtureSha256: hash("2"),
       systemProbeSha256: hash("3"),
-      pointerHandoffSha256: hash("4"),
+      appShareHandoffSha256: hash("4"),
+      physicalPointerHandoffSha256: hash("5"),
       acceptanceFinalizerSha256: FINALIZER_SOURCE_SHA256,
       packagedHelperSpawnCount: 1,
     },
@@ -1477,28 +1669,37 @@ function selfTestPointer(lane) {
     pointerEvidence: {
       requestedLane: lane,
       quietObserved: true,
-      concurrentSharedSeatActivityObserved: deliberate,
+      concurrentSharedSeatActivityObserved: false,
       unknownObserved: false,
       rawCursorPositionsRetained: false,
       rawPlatformActivityCountersRetained: false,
       rawHidSystemCountersRetained: false,
       hidSystemActivityClaimedAsPhysical: false,
     },
-    operatorHandoff: {
+    appShareHandoff: {
       requested: deliberate,
       requestPublicationAcknowledged: deliberate,
+      startReceiptAcknowledged: deliberate,
       completePublicationAcknowledged: deliberate,
       promptClosed: deliberate,
-      sustainedMotionSamples: deliberate ? 3 : 0,
-      sustainedMotionSpanMilliseconds: deliberate ? 750 : 0,
-      clickFreeMotionObserved: deliberate,
+      exactAppBundleObserved: deliberate,
+      exactWindowObserved: deliberate,
+      exactButtonObserved: deliberate,
+      buttonDisabledAfterAction: deliberate,
+      acceptanceButtonActionObserved: deliberate,
+      appShareSurfaceObservedAtProductBoundaries: deliberate,
+      sharedHidInputObserved: deliberate ? false : null,
+      sampledSharedContextUnchanged: deliberate,
       actionDispatched: deliberate,
-      productBoundaryContaminated: deliberate,
-      independentBoundaryContaminated: deliberate,
-      markerNotificationOnly: true,
-      markerAcceptedAsAuthority: false,
-      externalAcknowledgementConsumed: false,
-      rawPromptIdentityRetainedInResult: false,
+      targetPostconditionObserved: deliberate,
+      productBoundaryQuiet: deliberate,
+      independentBoundaryQuiet: deliberate,
+      physicalHumanProvenanceClaimed: false,
+      cryptographicToolIdentityClaimed: false,
+      orchestrationNotProductControl: true,
+      markerNotificationOnly: false,
+      markerAcceptedAsProductAuthority: false,
+      rawAppIdentityRetainedInResult: false,
       rawPointerDataRetained: false,
     },
   };
@@ -1565,7 +1766,7 @@ async function createSelfTestLane(parent, name, lane, mutate = null) {
     },
     quietSeatStabilization: selfTestQuietSeatStabilization(lane),
     pointerEvidence: pointer.pointerEvidence,
-    operatorHandoff: pointer.operatorHandoff,
+    appShareHandoff: pointer.appShareHandoff,
     environment: { selfTest: true },
     package: bindings.package,
     harness: bindings.harness,
@@ -1586,32 +1787,70 @@ async function createSelfTestLane(parent, name, lane, mutate = null) {
   if (lane === "deliberate-concurrency") {
     const operatorPath = join(lanePath, "operator");
     await mkdir(operatorPath, { mode: 0o700 });
-    const base = {
-      schemaVersion: 1,
-      kind: "macos-pointer-concurrency-handoff-request",
+    const request = {
+      schemaVersion: APP_SHARE_MARKER_SCHEMA_VERSION,
+      kind: APP_SHARE_REQUEST_KIND,
       productVersion: PRODUCT_VERSION,
       requestId: "5".repeat(32),
       createdAt: new Date(now - 2_000).toISOString(),
+      expiresAt: new Date(now + MAX_REQUEST_LIFETIME_MS - 2_000).toISOString(),
       runnerPid: 101,
       promptPid: 202,
+      expectedBundleIdentifier: APP_SHARE_BUNDLE_IDENTIFIER,
+      expectedWindowTitle: APP_SHARE_WINDOW_TITLE,
+      expectedButtonText: APP_SHARE_BUTTON_TEXT,
+      expectedButtonAccessibilityIdentifier: APP_SHARE_BUTTON_IDENTIFIER,
+      expectedButtonEnabledAfterDelivery: true,
+      exactAppObserved: true,
+      exactWindowObserved: true,
       requestDelivered: true,
       panelOnScreen: true,
       panelNonactivating: true,
-      notificationOnly: true,
+      notificationOnly: false,
+      exactAppShareRequired: true,
+      physicalHumanProvenanceRequired: false,
+      acceptedAsProductAuthority: false,
+    };
+    const requestBytes = Buffer.from(`${JSON.stringify(request)}\n`, "utf8");
+    const start = {
       acceptedAsAuthority: false,
+      buttonAccepted: true,
+      buttonActionObserved: true,
+      createdAt: new Date(now - 1_500).toISOString(),
+      cryptographicToolIdentityClaimed: false,
+      kind: APP_SHARE_START_KIND,
+      physicalHumanProvenanceClaimed: false,
+      productVersion: PRODUCT_VERSION,
+      promptPid: 202,
+      requestId: request.requestId,
+      requestSha256: sha256(requestBytes),
+      schemaVersion: APP_SHARE_MARKER_SCHEMA_VERSION,
     };
+    const startBytes = Buffer.from(`${JSON.stringify(start)}\n`, "utf8");
     const complete = {
-      ...base,
-      kind: "macos-pointer-concurrency-handoff-complete",
-      createdAt: new Date(now - 1_000).toISOString(),
-      sustainedMotionSamples: result.operatorHandoff.sustainedMotionSamples,
-      sustainedMotionSpanMilliseconds: result.operatorHandoff.sustainedMotionSpanMilliseconds,
-      productBoundaryContaminated: true,
-      independentBoundaryContaminated: true,
-      clickFreeMotionObserved: true,
+      acceptedAsAuthority: false,
+      buttonRemainedDisabledDuringProductAction: true,
+      createdAt: new Date(now - 750).toISOString(),
+      cryptographicToolIdentityClaimed: false,
+      handoffStateSequenceBound: true,
+      kind: APP_SHARE_COMPLETE_KIND,
+      physicalHumanProvenanceClaimed: false,
+      productActionCompletedAt: new Date(now - 1_000).toISOString(),
+      productActionStartedAt: new Date(now - 1_250).toISOString(),
+      productVersion: PRODUCT_VERSION,
+      promptPid: 202,
+      requestId: request.requestId,
+      requestSha256: sha256(requestBytes),
+      schemaVersion: APP_SHARE_MARKER_SCHEMA_VERSION,
+      startReceiptSha256: sha256(startBytes),
     };
-    await writeFile(join(operatorPath, basename(REQUEST_MARKER)), `${JSON.stringify(base, null, 2)}\n`, { mode: 0o600 });
-    await writeFile(join(operatorPath, basename(COMPLETE_MARKER)), `${JSON.stringify(complete, null, 2)}\n`, { mode: 0o600 });
+    await writeFile(join(operatorPath, basename(REQUEST_MARKER)), requestBytes, { mode: 0o600 });
+    await writeFile(join(operatorPath, basename(START_MARKER)), startBytes, { mode: 0o600 });
+    await writeFile(
+      join(operatorPath, basename(COMPLETE_MARKER)),
+      Buffer.from(`${JSON.stringify(complete)}\n`, "utf8"),
+      { mode: 0o600 },
+    );
   }
   return lanePath;
 }
@@ -1630,6 +1869,29 @@ async function expectSelfTestFailure(action, fragment) {
     throw error;
   }
   throw new Error(`self-test expected rejection containing ${JSON.stringify(fragment)}`);
+}
+
+async function expectSelfTestResultTamper(root, name, lane, mutate, fragment) {
+  const quiet = await createSelfTestLane(
+    root,
+    `${name}-quiet`,
+    "quiet",
+    lane === "quiet" ? mutate : null,
+  );
+  const deliberate = await createSelfTestLane(
+    root,
+    `${name}-deliberate`,
+    "deliberate-concurrency",
+    lane === "deliberate-concurrency" ? mutate : null,
+  );
+  const output = await freshSelfTestOutput(root, `${name}-output`);
+  await expectSelfTestFailure(() => finalize(quiet, deliberate, output), fragment);
+}
+
+async function tamperSelfTestJson(path, mutate) {
+  const value = JSON.parse(await readFile(path, "utf8"));
+  mutate(value);
+  await writeFile(path, `${JSON.stringify(value)}\n`, { mode: 0o600 });
 }
 
 async function runSelfTest() {
@@ -1653,13 +1915,51 @@ async function runSelfTest() {
       aggregate.aggregateChecks.passingResultSchemaVersion !== RESULT_SCHEMA_VERSION ||
       aggregate.lanes.quiet.resultSha256 === aggregate.lanes.deliberateConcurrency.resultSha256 ||
       aggregate.lanes.quiet.operatorMarkers.length !== 0 ||
-      aggregate.lanes.deliberateConcurrency.operatorMarkers.length !== 2 ||
-      aggregate.aggregateChecks.inventoryFileCount !== 18 ||
+      aggregate.lanes.deliberateConcurrency.operatorMarkers.length !== 3 ||
+      aggregate.aggregateChecks.inventoryFileCount !== 19 ||
       aggregate.aggregateChecks.screenshotCount !== 12 ||
       aggregate.aggregateChecks.screenshotPixelHashesMatched !== true
     ) {
       throw new Error("self-test aggregate did not preserve the dual-lane bindings.");
     }
+    const markerProbeNow = Date.now();
+    const requestProbeRecord = await readStableCanonicalMarker(
+      join(deliberate, REQUEST_MARKER),
+      "self-test request marker",
+    );
+    const requestProbe = validateRequestMarker(
+      requestProbeRecord,
+      markerProbeNow,
+      "self-test request marker",
+    );
+    const startProbeRecord = await readStableCanonicalMarker(
+      join(deliberate, START_MARKER),
+      "self-test start receipt",
+    );
+    const startProbe = validateStartMarker(
+      startProbeRecord,
+      requestProbe,
+      markerProbeNow,
+      "self-test start receipt",
+    );
+    const completeProbeRecord = await readStableCanonicalMarker(
+      join(deliberate, COMPLETE_MARKER),
+      "self-test complete receipt",
+    );
+    await expectSelfTestFailure(
+      () => Promise.resolve(validateCompleteMarker(
+        completeProbeRecord,
+        requestProbe,
+        {
+          ...startProbe,
+          createdAtMs: Date.parse(completeProbeRecord.value.productActionStartedAt) -
+            MAX_ACTION_TO_COMPLETE_MS - 1,
+        },
+        markerProbeNow,
+        "self-test late complete receipt",
+      )),
+      "timestamps are outside the bound product-action interval",
+    );
     const before = Buffer.from(aggregateBytes);
     await expectSelfTestFailure(() => finalize(quiet, deliberate, output), "fresh and empty");
     if (!(await readFile(published.path)).equals(before)) {
@@ -1794,6 +2094,56 @@ async function runSelfTest() {
       "fields are not in exact canonical order",
     );
 
+    await expectSelfTestResultTamper(
+      root,
+      "quiet-pointer-concurrency",
+      "quiet",
+      (result) => { result.pointerEvidence.concurrentSharedSeatActivityObserved = true; },
+      "pointerEvidence concurrentSharedSeatActivityObserved",
+    );
+    await expectSelfTestResultTamper(
+      root,
+      "deliberate-pointer-concurrency",
+      "deliberate-concurrency",
+      (result) => { result.pointerEvidence.concurrentSharedSeatActivityObserved = true; },
+      "pointerEvidence concurrentSharedSeatActivityObserved",
+    );
+    await expectSelfTestResultTamper(
+      root,
+      "shared-seat-claim",
+      "deliberate-concurrency",
+      (result) => { result.appShareHandoff.sharedHidInputObserved = true; },
+      "appShareHandoff sharedHidInputObserved",
+    );
+    await expectSelfTestResultTamper(
+      root,
+      "physical-human-claim",
+      "deliberate-concurrency",
+      (result) => { result.appShareHandoff.physicalHumanProvenanceClaimed = true; },
+      "appShareHandoff physicalHumanProvenanceClaimed",
+    );
+    await expectSelfTestResultTamper(
+      root,
+      "cryptographic-tool-claim",
+      "deliberate-concurrency",
+      (result) => { result.appShareHandoff.cryptographicToolIdentityClaimed = true; },
+      "appShareHandoff cryptographicToolIdentityClaimed",
+    );
+    await expectSelfTestResultTamper(
+      root,
+      "orchestration-authority",
+      "deliberate-concurrency",
+      (result) => { result.appShareHandoff.orchestrationNotProductControl = false; },
+      "appShareHandoff orchestrationNotProductControl",
+    );
+    await expectSelfTestResultTamper(
+      root,
+      "missing-target-postcondition",
+      "deliberate-concurrency",
+      (result) => { result.appShareHandoff.targetPostconditionObserved = false; },
+      "appShareHandoff targetPostconditionObserved",
+    );
+
     const overlapQuiet = await createSelfTestLane(root, "overlap-quiet", "quiet");
     const overlapDeliberate = await createSelfTestLane(
       root,
@@ -1911,16 +2261,77 @@ async function runSelfTest() {
       "is stale",
     );
 
+    const requestHashQuiet = await createSelfTestLane(root, "request-hash-quiet", "quiet");
+    const requestHashDeliberate = await createSelfTestLane(
+      root,
+      "request-hash-deliberate",
+      "deliberate-concurrency",
+    );
+    await tamperSelfTestJson(join(requestHashDeliberate, START_MARKER), (marker) => {
+      marker.requestSha256 = "e".repeat(64);
+    });
+    const requestHashOutput = await freshSelfTestOutput(root, "request-hash-output");
+    await expectSelfTestFailure(
+      () => finalize(requestHashQuiet, requestHashDeliberate, requestHashOutput),
+      "start receipt request/hash/process binding does not match",
+    );
+
+    const startHashQuiet = await createSelfTestLane(root, "start-hash-quiet", "quiet");
+    const startHashDeliberate = await createSelfTestLane(
+      root,
+      "start-hash-deliberate",
+      "deliberate-concurrency",
+    );
+    await tamperSelfTestJson(join(startHashDeliberate, COMPLETE_MARKER), (marker) => {
+      marker.startReceiptSha256 = "e".repeat(64);
+    });
+    const startHashOutput = await freshSelfTestOutput(root, "start-hash-output");
+    await expectSelfTestFailure(
+      () => finalize(startHashQuiet, startHashDeliberate, startHashOutput),
+      "complete receipt request/start hash or process binding does not match",
+    );
+
+    const markerTimeQuiet = await createSelfTestLane(root, "marker-time-quiet", "quiet");
+    const markerTimeDeliberate = await createSelfTestLane(
+      root,
+      "marker-time-deliberate",
+      "deliberate-concurrency",
+    );
+    await tamperSelfTestJson(join(markerTimeDeliberate, COMPLETE_MARKER), (marker) => {
+      marker.productActionCompletedAt = new Date(
+        Date.parse(marker.productActionStartedAt) - 1,
+      ).toISOString();
+    });
+    const markerTimeOutput = await freshSelfTestOutput(root, "marker-time-output");
+    await expectSelfTestFailure(
+      () => finalize(markerTimeQuiet, markerTimeDeliberate, markerTimeOutput),
+      "complete receipt timestamps are outside the bound product-action interval",
+    );
+
+    const markerFormatQuiet = await createSelfTestLane(root, "marker-format-quiet", "quiet");
+    const markerFormatDeliberate = await createSelfTestLane(
+      root,
+      "marker-format-deliberate",
+      "deliberate-concurrency",
+    );
+    const markerFormatPath = join(markerFormatDeliberate, START_MARKER);
+    const markerFormatValue = JSON.parse(await readFile(markerFormatPath, "utf8"));
+    await writeFile(markerFormatPath, `${JSON.stringify(markerFormatValue, null, 2)}\n`, { mode: 0o600 });
+    const markerFormatOutput = await freshSelfTestOutput(root, "marker-format-output");
+    await expectSelfTestFailure(
+      () => finalize(markerFormatQuiet, markerFormatDeliberate, markerFormatOutput),
+      "is not one compact canonical JSON record",
+    );
+
     const markerQuiet = await createSelfTestLane(root, "marker-quiet", "quiet");
     const markerDeliberate = await createSelfTestLane(root, "marker-deliberate", "deliberate-concurrency");
-    const completeMarkerPath = join(markerDeliberate, COMPLETE_MARKER);
-    const mismatchedMarker = JSON.parse(await readFile(completeMarkerPath, "utf8"));
-    mismatchedMarker.requestId = "7".repeat(32);
-    await writeFile(completeMarkerPath, `${JSON.stringify(mismatchedMarker, null, 2)}\n`, { mode: 0o600 });
+    await tamperSelfTestJson(join(markerDeliberate, COMPLETE_MARKER), (marker) => {
+      marker.requestId = "7".repeat(32);
+    });
     const markerOutput = await freshSelfTestOutput(root, "marker-output");
     await expectSelfTestFailure(
       () => finalize(markerQuiet, markerDeliberate, markerOutput),
-      "marker requestId binding does not match",
+      "complete receipt request/start hash or process binding does not match",
     );
 
     await expectSelfTestFailure(

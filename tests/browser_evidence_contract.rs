@@ -88,7 +88,7 @@ fn candidate_binder_is_exact_external_and_immutable() {
         "Self-test cleanup existing-path probe failed.",
         "$fixtureOwned = $true",
         "function Initialize-TrustedGitExecutable",
-        "TrustedGitExecutable must be an absolute path for v0.12.20.",
+        "TrustedGitExecutable must be an absolute path for v0.12.21.",
         "& $script:GitExecutable --no-replace-objects --no-lazy-fetch `",
         "-c core.longpaths=true -c core.fsmonitor=false -c core.hooksPath=$script:EmptyHooksDirectory `",
         "Preserve the v0.12.2 contract",
@@ -439,7 +439,7 @@ fn withdrawn_v0128_browser_protocol_is_byte_exact_unexecuted_and_not_current() {
     assert!(readme.contains("no v0.12.8 GitHub Release exists"));
 
     let finalizer = source("scripts/write-browser-evidence-record.ps1");
-    assert!(finalizer.contains("$script:OperatorV2Version = \"0.12.20\""));
+    assert!(finalizer.contains("$script:OperatorV2Version = \"0.12.21\""));
     assert!(finalizer.contains(
         "No stock-user-Chrome operator schema is registered for candidate version $ExpectedVersion."
     ));
@@ -494,7 +494,7 @@ fn withdrawn_v0129_browser_protocol_is_byte_exact_unexecuted_and_not_current() {
     assert!(readme.contains("It is protocol infrastructure, not passing"));
 
     let finalizer = source("scripts/write-browser-evidence-record.ps1");
-    assert!(finalizer.contains("$script:OperatorV2Version = \"0.12.20\""));
+    assert!(finalizer.contains("$script:OperatorV2Version = \"0.12.21\""));
     assert!(!finalizer.contains("$script:OperatorV2Version = \"0.12.9\""));
     assert!(!finalizer.contains("evidence\", \"v0.12.9\", \"browser"));
 }
@@ -513,7 +513,7 @@ fn v0122_browser_protocol_is_byte_exact_while_v01220_uses_schema_three() {
         "abc28e66f4a14426d9d3cca3370354300354bb07e3c973a4d965e0f3606b8ac4"
     );
 
-    let entries = fs::read_dir("evidence/v0.12.20/browser")
+    let entries = fs::read_dir("evidence/v0.12.21/browser")
         .unwrap()
         .map(Result::unwrap)
         .map(|entry| {
@@ -540,31 +540,31 @@ fn v0122_browser_protocol_is_byte_exact_while_v01220_uses_schema_three() {
     );
 
     let template: Value = serde_json::from_str(&source(
-        "evidence/v0.12.20/browser/operator-results.template.json",
+        "evidence/v0.12.21/browser/operator-results.template.json",
     ))
     .unwrap();
     let schema: Value = serde_json::from_str(&source(
-        "evidence/v0.12.20/browser/operator-results.schema.json",
+        "evidence/v0.12.21/browser/operator-results.schema.json",
     ))
     .unwrap();
     let helper_schema: Value = serde_json::from_str(&source(
-        "evidence/v0.12.20/browser/computer-helper-chain.schema.json",
+        "evidence/v0.12.21/browser/computer-helper-chain.schema.json",
     ))
     .unwrap();
     let approval_schema: Value = serde_json::from_str(&source(
-        "evidence/v0.12.20/browser/scoped-action-approval.schema.json",
+        "evidence/v0.12.21/browser/scoped-action-approval.schema.json",
     ))
     .unwrap();
     let review_schema: Value = serde_json::from_str(&source(
-        "evidence/v0.12.20/browser/independent-visual-review.schema.json",
+        "evidence/v0.12.21/browser/independent-visual-review.schema.json",
     ))
     .unwrap();
     let external_schema: Value = serde_json::from_str(&source(
-        "evidence/v0.12.20/browser/external-surface-attestation.schema.json",
+        "evidence/v0.12.21/browser/external-surface-attestation.schema.json",
     ))
     .unwrap();
     assert_eq!(template["schemaVersion"], 3);
-    assert_eq!(template["extension"]["version"], "0.12.20");
+    assert_eq!(template["extension"]["version"], "0.12.21");
     assert_eq!(
         schema["$schema"],
         "https://json-schema.org/draft/2020-12/schema"
@@ -692,15 +692,15 @@ fn v0122_browser_protocol_is_byte_exact_while_v01220_uses_schema_three() {
 fn v01220_finalizer_enforces_surface_consent_restoration_and_retention_relations() {
     let script = source("scripts/write-browser-evidence-record.ps1");
     let coordinator = source("scripts/test-windows-stock-chrome.ps1");
-    let readme = source("evidence/v0.12.20/browser/README.md");
-    let operator_schema = source("evidence/v0.12.20/browser/operator-results.schema.json");
+    let readme = source("evidence/v0.12.21/browser/README.md");
+    let operator_schema = source("evidence/v0.12.21/browser/operator-results.schema.json");
 
     assert!(operator_schema.contains(
         "\"orchestrationAndConsent\": { \"const\": \"user-orchestrator-secured-ssh-exported-file-review\" }"
     ));
 
     for required in [
-        "$script:OperatorV2Version = \"0.12.20\"",
+        "$script:OperatorV2Version = \"0.12.21\"",
         "Assert-OperatorResultsV1",
         "Assert-OperatorResultsV2",
         "Assert-ScopedApprovalRecordV3",
@@ -760,11 +760,11 @@ fn v01220_finalizer_enforces_surface_consent_restoration_and_retention_relations
         "Evidence finalizer accepted reordered independent review entries.",
         "Evidence finalizer accepted a reordered approval scope.",
         "Evidence finalizer accepted retained raw screenshot scratch data.",
-        "Evidence finalizer complete v0.12.20 self-test failed.",
+        "Evidence finalizer complete v0.12.21 self-test failed.",
     ] {
         assert!(
             script.contains(required),
-            "v0.12.20 finalizer is missing {required}"
+            "v0.12.21 finalizer is missing {required}"
         );
     }
 
@@ -805,7 +805,7 @@ fn v01220_finalizer_enforces_surface_consent_restoration_and_retention_relations
     ] {
         assert!(
             readme.contains(required),
-            "v0.12.20 operator protocol is missing {required}"
+            "v0.12.21 operator protocol is missing {required}"
         );
     }
     for forbidden in [
@@ -1077,18 +1077,18 @@ fn finalizer_is_allowlisted_and_requires_handback_polling_cleanup_and_review() {
 fn screenshot_tool_strips_metadata_but_never_claims_unknown_pixel_redaction() {
     let script = source("scripts/sanitize-browser-evidence-screenshot.ps1");
     let finalizer = source("scripts/write-browser-evidence-record.ps1");
-    let v01220_readme = source("evidence/v0.12.20/browser/README.md");
+    let v01220_readme = source("evidence/v0.12.21/browser/README.md");
     let coordinator = source("scripts/test-windows-stock-chrome.ps1");
     for required in [
         "LegacyV0122ReviewConfirmed is mandatory for v0.12.2 compatibility.",
-        "LegacyV0122ReviewConfirmed is forbidden for the v0.12.20 independent-review protocol.",
+        "LegacyV0122ReviewConfirmed is forbidden for the v0.12.21 independent-review protocol.",
         "stock-user-chrome-screenshot-review-pending",
         "$legacyOnePhase = $script:CandidateVersionFromPreflight -ceq \"0.12.2\"",
         "$script:PendingReviewStatement",
         "$script:CompletedReviewStatement",
         "$script:LegacyReviewStatement",
         "$script:CandidateVersionFromPreflight",
-        "BindReview is available only for the v0.12.20 independent-review protocol.",
+        "BindReview is available only for the v0.12.21 independent-review protocol.",
         "The sanitized PNG changed after its pending review record was created.",
         "Screenshot review binding succeeded without an independent review record.",
         "IndependentReviewRecord contains a mismatched, failed, sensitive, uncertain, or reordered entry.",
@@ -1329,7 +1329,7 @@ fn token_cleanup_proof_is_bound_to_the_trusted_popup_and_reduced_state() {
     let popup_script = source("extension/popup.js");
     let finalizer = source("scripts/write-browser-evidence-record.ps1");
     let readme = source("evidence/v0.12.2/browser/README.md");
-    let v01220_readme = source("evidence/v0.12.20/browser/README.md");
+    let v01220_readme = source("evidence/v0.12.21/browser/README.md");
 
     for required in [
         "id=\"clear-token\"",
@@ -1391,7 +1391,7 @@ fn v01220_computer_helper_chain_is_live_exact_window_and_six_capture_bound() {
     let recorder = source("scripts/record-computer-helper-chain.ps1");
     let finalizer = source("scripts/write-browser-evidence-record.ps1");
     let schema: Value = serde_json::from_str(&source(
-        "evidence/v0.12.20/browser/computer-helper-chain.schema.json",
+        "evidence/v0.12.21/browser/computer-helper-chain.schema.json",
     ))
     .unwrap();
 
@@ -1584,8 +1584,8 @@ fn v01220_powershell_entrypoints_cannot_fall_through_legacy_gates() {
 
     let candidate = source("scripts/browser-evidence-candidate.ps1");
     for required in [
-        "$Version -ceq \"0.12.20\"",
-        "$ExpectedVersion -ceq \"0.12.20\"",
+        "$Version -ceq \"0.12.21\"",
+        "$ExpectedVersion -ceq \"0.12.21\"",
         "$testVersion = \"0.12.2\"",
         "Preserve the v0.12.2 contract",
     ] {
@@ -1596,19 +1596,19 @@ fn v01220_powershell_entrypoints_cannot_fall_through_legacy_gates() {
     }
 
     let sanitizer = source("scripts/sanitize-browser-evidence-screenshot.ps1");
-    assert!(sanitizer.contains("@(\"0.12.2\", \"0.12.20\")"));
-    assert!(sanitizer.contains("$script:CandidateVersionFromPreflight -ceq \"0.12.20\""));
+    assert!(sanitizer.contains("@(\"0.12.2\", \"0.12.21\")"));
+    assert!(sanitizer.contains("$script:CandidateVersionFromPreflight -ceq \"0.12.21\""));
 
     let finalizer = source("scripts/write-browser-evidence-record.ps1");
-    assert!(finalizer.contains("$script:OperatorV2Version = \"0.12.20\""));
+    assert!(finalizer.contains("$script:OperatorV2Version = \"0.12.21\""));
     assert!(finalizer.contains("@(\"0.12.2\", $script:OperatorV2Version)"));
-    assert!(finalizer.contains("\"evidence\", \"v0.12.20\", \"browser\""));
+    assert!(finalizer.contains("\"evidence\", \"v0.12.21\", \"browser\""));
 
     let recorder = source("scripts/record-computer-helper-chain.ps1");
-    assert!(recorder.contains("$script:Version = \"0.12.20\""));
+    assert!(recorder.contains("$script:Version = \"0.12.21\""));
 
     let browser_runner = source("scripts/test-windows-browser-api.ps1");
-    assert!(browser_runner.contains("$Version -ceq \"0.12.20\""));
+    assert!(browser_runner.contains("$Version -ceq \"0.12.21\""));
     for required in [
         "preflight-release-candidate-binding",
         "Assert-ReleaseCandidateBinding",
@@ -1624,13 +1624,13 @@ fn v01220_powershell_entrypoints_cannot_fall_through_legacy_gates() {
     }
 
     let computer_runner = source("scripts/test-windows-computer-use.ps1");
-    assert!(computer_runner.contains("-ProductVersion \"0.12.20\""));
-    assert!(computer_runner.contains("productVersion -cne \"0.12.20\""));
+    assert!(computer_runner.contains("-ProductVersion \"0.12.21\""));
+    assert!(computer_runner.contains("productVersion -cne \"0.12.21\""));
 
     let watcher = source("scripts/wait-windows-foreground-arm-handoff.ps1");
-    assert!(watcher.contains("$script:ProductVersion = \"0.12.20\""));
+    assert!(watcher.contains("$script:ProductVersion = \"0.12.21\""));
     assert!(watcher.contains("$script:MarkerSchemaVersion = 2"));
-    assert!(watcher.contains("productVersion = \"0.12.20\""));
+    assert!(watcher.contains("productVersion = \"0.12.21\""));
 }
 
 #[test]
@@ -1804,13 +1804,13 @@ fn new_browser_evidence_files_are_english_only() {
         "evidence/v0.12.9/browser/operator-results.template.json",
         "evidence/v0.12.9/browser/operator-results.schema.json",
         "evidence/v0.12.9/browser/computer-helper-chain.schema.json",
-        "evidence/v0.12.20/browser/README.md",
-        "evidence/v0.12.20/browser/operator-results.template.json",
-        "evidence/v0.12.20/browser/operator-results.schema.json",
-        "evidence/v0.12.20/browser/computer-helper-chain.schema.json",
-        "evidence/v0.12.20/browser/scoped-action-approval.schema.json",
-        "evidence/v0.12.20/browser/independent-visual-review.schema.json",
-        "evidence/v0.12.20/browser/external-surface-attestation.schema.json",
+        "evidence/v0.12.21/browser/README.md",
+        "evidence/v0.12.21/browser/operator-results.template.json",
+        "evidence/v0.12.21/browser/operator-results.schema.json",
+        "evidence/v0.12.21/browser/computer-helper-chain.schema.json",
+        "evidence/v0.12.21/browser/scoped-action-approval.schema.json",
+        "evidence/v0.12.21/browser/independent-visual-review.schema.json",
+        "evidence/v0.12.21/browser/external-surface-attestation.schema.json",
     ] {
         let text = source(path);
         assert!(

@@ -120,6 +120,47 @@ Release verification checks both source and each architecture slice of the packa
 
 The browser extension remains the preferred actuator for Chromium web content. It has renderer-aware CDP input and browser-owned revocation that generic native window messages cannot reproduce.
 
+## Acceptance-only app-share orchestration
+
+The macOS release harness includes a separate nonactivating acceptance app. It
+is not shipped as a product backend and exposes no bridge command. Its exact
+bundle identifier, stable window title, and unique accessibility button give a
+separately authorized Computer Use app share one deliberately narrow surface:
+press the start button once, then stop interacting.
+
+The runner publishes a create-once request bound to its process and deadline.
+The app opens that exact file without following links, verifies its digest and
+identity, disables the button, and writes a create-once start receipt. The app
+remains alive while the bridge performs the real bounded action against a
+different target. After the runner proves the target-owned postcondition and
+records matching foreground, focus, active Space, cursor, and HID endpoint
+samples, it asks the app to write the bound completion receipt. A read-only
+watcher validates the three-record chain but never writes authority into the
+run.
+
+The request/start/complete chain is orchestration evidence, not a
+notification-only signal and not product authority. Its schema names the
+bounded observations narrowly: `acceptanceButtonActionObserved`,
+`appShareSurfaceObservedAtProductBoundaries`, `sharedHidInputObserved`, and
+`sampledSharedContextUnchanged`. The quiet lane records
+`sharedHidInputObserved: null` because no app-share transaction exists there;
+the deliberate lane records `false` when its cumulative HID boundary shows no
+pointer or keyboard activity. The completion receipt's
+`handoffStateSequenceBound: true` binds the ordered state sequence; it does not
+claim continuous observation of the handoff window.
+
+The chain records that the exact acceptance surface and sampled shared context
+matched at the required product boundaries. Endpoint samples plus cumulative
+HID pointer/keyboard counters cannot prove zero transient programmatic changes,
+a continuous monitor, atomic identity of the app-share provider, or zero
+transient focus/window manipulation. The chain also cannot identify the
+controller cryptographically, prove physical-human input, authorize product
+control, or create a separate OS input seat. All product authority and effect
+proof still comes from the authenticated bridge protocol, sealed exact-target
+route, and application-owned postcondition. The v0.12.20 physical-pointer lane
+is retained only as historical, optional adversarial coverage; its artifacts
+cannot satisfy the v0.12.21 release contract.
+
 ## Capture is not isolation
 
 An exact-window stream can avoid recording unrelated windows. A sealed target-routed action can avoid requesting global pointer movement and can preserve the OS-front process/window before and after supported actions. On macOS that does not exclude the disclosed transient target `AXFrontmost` lease or prove zero interruption. Shared pointer activity can occur independently while the action runs. These properties do not create a second desktop, input queue, login, credential store, or security principal.

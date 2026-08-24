@@ -6,51 +6,55 @@ fn finalizer_source() -> String {
 }
 
 #[test]
-fn macos_v0_12_20_result_schema_is_aligned_end_to_end() {
+fn macos_v0_12_21_result_and_aggregate_schemas_are_aligned_end_to_end() {
     let finalizer = finalizer_source().replace("\r\n", "\n");
-    let producer = fs::read_to_string("evidence/v0.12.20/computer/helper-evidence-rig.mjs")
+    let producer = fs::read_to_string("evidence/v0.12.21/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let documentation = fs::read_to_string("evidence/v0.12.20/computer/README.md")
+    let documentation = fs::read_to_string("evidence/v0.12.21/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let verifier = fs::read_to_string("scripts/verify-release-acceptance-evidence.sh")
         .unwrap()
         .replace("\r\n", "\n");
 
-    assert!(finalizer.contains("const RESULT_SCHEMA_VERSION = 6;"));
-    assert!(producer.matches("schemaVersion: 6,").count() >= 2);
-    assert!(documentation.contains("retained schema-v6 result"));
-    assert!(documentation.contains("Schema v6 uses a tri-state dispatch field"));
+    assert!(finalizer.contains("const PRODUCT_VERSION = \"0.12.21\";"));
+    assert!(finalizer.contains("const RESULT_SCHEMA_VERSION = 7;"));
+    assert!(finalizer.contains("const AGGREGATE_SCHEMA_VERSION = 2;"));
+    assert!(producer.matches("schemaVersion: 7,").count() >= 2);
+    assert!(documentation.contains("schema-7 result"));
+    assert!(documentation.contains("marker schema 2"));
     for producer_contract in [
         "passingResultSchemaVersion: RESULT_SCHEMA_VERSION",
         "aggregate.aggregateChecks.passingResultSchemaVersion !== RESULT_SCHEMA_VERSION",
+        "aggregate.aggregateChecks.inventoryFileCount !== 19",
     ] {
         assert!(
             finalizer.contains(producer_contract),
-            "macOS finalizer is missing result-schema producer contract: {producer_contract}"
+            "macOS finalizer is missing schema/inventory producer contract: {producer_contract}"
         );
     }
     for required in [
-        ".schemaVersion == 6",
+        ".schemaVersion == 7",
+        ".schemaVersion == 2",
         "validate_mac_result_schema_binding()",
         "--argjson quiet_result_schema_version",
         "--argjson deliberate_result_schema_version",
         ".aggregateChecks.passingResultSchemaVersion == $quiet_result_schema_version",
         "$quiet_result_schema_version == $deliberate_result_schema_version",
+        ".aggregateChecks.inventoryFileCount == 19",
         "self-test accepted a stale macOS aggregate result schema",
         "self-test accepted mismatched macOS lane result schemas",
     ] {
         assert!(
             verifier.contains(required),
-            "release evidence verifier is missing the result-schema binding: {required}"
+            "release evidence verifier is missing the v0.12.21 schema binding: {required}"
         );
     }
-    assert!(!verifier.contains(".aggregateChecks.passingResultSchemaVersion == 5"));
 }
 
 #[test]
-fn macos_v0_12_20_release_verifier_recomputes_every_tagged_harness_hash() {
+fn macos_v0_12_21_release_verifier_recomputes_every_tagged_harness_hash() {
     let verifier = fs::read_to_string("scripts/verify-release-acceptance-evidence.sh")
         .unwrap()
         .replace("\r\n", "\n");
@@ -62,13 +66,15 @@ fn macos_v0_12_20_release_verifier_recomputes_every_tagged_harness_hash() {
         "helper-evidence-rig.mjs",
         "HelperEvidenceFixture.swift",
         "SystemProbe.swift",
-        "PointerHandoff.swift",
+        "AppShareHandoff.swift",
+        "PhysicalPointerHandoff.swift",
         "scripts/finalize-macos-acceptance.mjs",
         "test -f \"$source_path\" && test ! -L \"$source_path\"",
         "runner_sha256=\"$(sha256_file \"$runner\")\"",
         "fixture_sha256=\"$(sha256_file \"$fixture\")\"",
         "system_probe_sha256=\"$(sha256_file \"$system_probe\")\"",
-        "pointer_handoff_sha256=\"$(sha256_file \"$pointer_handoff\")\"",
+        "app_share_handoff_sha256=\"$(sha256_file \"$app_share_handoff\")\"",
+        "physical_pointer_handoff_sha256=\"$(sha256_file \"$physical_pointer_handoff\")\"",
         "finalizer_sha256=\"$(sha256_file \"$finalizer\")\"",
         ".bindings.harness == $expected[0]",
         "length == 2 and all(.[]; .harness == $expected[0])",
@@ -86,7 +92,8 @@ fn macos_v0_12_20_release_verifier_recomputes_every_tagged_harness_hash() {
         "runnerSha256",
         "fixtureSha256",
         "systemProbeSha256",
-        "pointerHandoffSha256",
+        "appShareHandoffSha256",
+        "physicalPointerHandoffSha256",
         "acceptanceFinalizerSha256",
     ] {
         assert!(
@@ -105,7 +112,7 @@ fn macos_v0_12_20_release_verifier_recomputes_every_tagged_harness_hash() {
 }
 
 #[test]
-fn macos_v0_12_14_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
+fn macos_v0_12_21_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
     let source = finalizer_source().replace("\r\n", "\n");
 
     for import in source.lines().filter(|line| line.contains(" from \"")) {
@@ -121,11 +128,15 @@ fn macos_v0_12_14_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
     }
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.20\";",
-        "const RESULT_SCHEMA_VERSION = 6;",
-        "const AGGREGATE_SCHEMA_VERSION = 1;",
+        "const PRODUCT_VERSION = \"0.12.21\";",
+        "const RESULT_SCHEMA_VERSION = 7;",
+        "const AGGREGATE_SCHEMA_VERSION = 2;",
+        "const APP_SHARE_MARKER_SCHEMA_VERSION = 2;",
         "const OUTPUT_FILE = \"macos-acceptance.json\";",
         "const MAX_FRESH_AGE_MS = 12 * 60 * 60 * 1_000;",
+        "const MAX_REQUEST_LIFETIME_MS = 300_000;",
+        "const MAX_REQUEST_TO_COMPLETE_MS = 310_000;",
+        "const MAX_ACTION_TO_COMPLETE_MS = 10_000;",
         "const MAX_LANE_DURATION_MS = 2 * 60 * 60 * 1_000;",
         "const MAX_DELIBERATE_REVIEW_DELAY_MS = 30 * 60 * 1_000;",
         "const QUIET_SEAT_REQUIRED_STABLE_MS = 30_000;",
@@ -139,9 +150,16 @@ fn macos_v0_12_14_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
         "computer-06-persistent-share-resize.png",
         "helper-results.json",
         "helper-rig.log",
-        "operator/macos-pointer-concurrency-handoff-request.json",
-        "operator/macos-pointer-concurrency-handoff-complete.json",
+        "operator/macos-app-share-concurrency-handoff-request.json",
+        "operator/macos-app-share-concurrency-handoff-start.json",
+        "operator/macos-app-share-concurrency-handoff-complete.json",
+        "dev.flrngel.local-browser-bridge.acceptance.app-share",
+        "LBB macOS Acceptance App Share",
+        "START APP-SHARE CHECK",
+        "lbb-app-share-start",
         "const FINALIZER_SOURCE_PATH = fileURLToPath(import.meta.url);",
+        "appShareHandoffSha256",
+        "physicalPointerHandoffSha256",
         "acceptanceFinalizerSha256",
         "executing macOS acceptance finalizer does not match the exact tagged harness binding",
         "bounded 30-minute review interval",
@@ -217,6 +235,8 @@ fn macos_v0_12_14_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
         "spawn(",
         "rename(temporaryPath, outputPath)",
         "writeFile(outputPath",
+        "operator/macos-pointer-concurrency-handoff-request.json",
+        "operatorHandoff",
     ] {
         assert!(
             !source.contains(forbidden),
@@ -226,46 +246,70 @@ fn macos_v0_12_14_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
 }
 
 #[test]
-fn macos_v0_12_14_dual_lane_finalizer_enforces_lane_and_screenshot_invariants() {
+fn macos_v0_12_21_finalizer_enforces_exact_app_share_and_quiet_pointer_invariants() {
     let source = finalizer_source().replace("\r\n", "\n");
     for required in [
         "exactString(value.requestedLane, lane",
         "exactString(result.fixture.evidenceLane, lane",
         "exactBoolean(value.quietObserved, true",
-        "lane === \"deliberate-concurrency\"",
-        "value.concurrentSharedSeatActivityObserved",
+        "exactBoolean(value.concurrentSharedSeatActivityObserved, false",
         "for (const field of POINTER_FIELDS.slice(3))",
+        "validateAppShareHandoff",
         "exactBoolean(value.requested, deliberate",
         "requestPublicationAcknowledged",
+        "startReceiptAcknowledged",
         "completePublicationAcknowledged",
-        "clickFreeMotionObserved",
+        "promptClosed",
+        "exactAppBundleObserved",
+        "exactWindowObserved",
+        "exactButtonObserved",
+        "buttonDisabledAfterAction",
+        "acceptanceButtonActionObserved",
+        "appShareSurfaceObservedAtProductBoundaries",
+        "sharedHidInputObserved",
+        "sampledSharedContextUnchanged",
         "actionDispatched",
-        "productBoundaryContaminated",
-        "independentBoundaryContaminated",
-        "deliberate ? 3 : 0",
-        "deliberate ? 500 : 0",
-        "markerAcceptedAsAuthority",
-        "externalAcknowledgementConsumed",
-        "validateDeliberateMarkers",
+        "targetPostconditionObserved",
+        "productBoundaryQuiet",
+        "independentBoundaryQuiet",
+        "physicalHumanProvenanceClaimed",
+        "cryptographicToolIdentityClaimed",
+        "orchestrationNotProductControl",
+        "markerNotificationOnly",
+        "markerAcceptedAsProductAuthority",
+        "rawAppIdentityRetainedInResult",
+        "validateRequestMarker",
+        "validateStartMarker",
+        "validateCompleteMarker",
+        "marker.requestSha256 !== request.sha256",
+        "marker.startReceiptSha256 !== start.sha256",
         "marker timestamps are outside the deliberate lane interval",
-        "complete marker is not bound to the result handoff summary",
+        "marker chain is not bound to the result app-share summary",
+        "aggregate.lanes.deliberateConcurrency.operatorMarkers.length !== 3",
+        "aggregate.aggregateChecks.inventoryFileCount !== 19",
+        "request-hash-deliberate",
+        "start-hash-deliberate",
+        "marker-time-deliberate",
+        "quiet-pointer-concurrency",
+        "deliberate-pointer-concurrency",
+        "shared-seat-claim",
+        "physical-human-claim",
+        "cryptographic-tool-claim",
+        "orchestration-authority",
+        "missing-target-postcondition",
         "result.screenshots.length !== SCREENSHOT_FILES.length",
         "exactKeys(screenshot, SCREENSHOT_FIELDS",
         "record.bytes.length !== bytes || record.sha256 !== screenshot.sha256",
         "const pixelSha256 = validatePng(",
         "width * height > 1_000_000",
-        "data[8] !== 8 || data[9] !== 6",
         "crc32(bytes.subarray(offset + 4, dataEnd))",
-        "contains an unexpected ancillary or critical PNG chunk",
         "inflateSync(Buffer.concat(imageData), { maxOutputLength: expectedInflatedBytes })",
         "pixel stream could not be decoded within its bound",
-        "decoded pixel row has an invalid filter",
         "screenshots are not six byte-distinct captures",
         "screenshots are not six decoded-pixel-distinct captures",
         "macOS dual-lane evidence must contain twelve byte-distinct screenshot captures",
         "macOS dual-lane evidence must contain twelve decoded-pixel-distinct screenshot captures",
         "requireGloballyDistinctScreenshots(quiet, deliberate)",
-        "screenshot.sourceSequence !== null || screenshot.transportSequence !== null",
         "screenshots are not bound to one exact window",
         "screenshots reuse a frame identity",
         "value.details.length !== total",
@@ -302,7 +346,7 @@ fn macos_v0_12_14_dual_lane_finalizer_enforces_lane_and_screenshot_invariants() 
 }
 
 #[test]
-fn macos_v0_12_14_dual_lane_finalizer_self_test_passes() {
+fn macos_v0_12_21_dual_lane_finalizer_self_test_passes() {
     let syntax = Command::new("node")
         .args(["--check", "scripts/finalize-macos-acceptance.mjs"])
         .output()

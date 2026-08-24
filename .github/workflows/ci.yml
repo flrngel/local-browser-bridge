@@ -35,7 +35,11 @@ jobs:
           rustup default 1.88.0
       - name: Audit distributed versions
         run: bash scripts/audit-versions.sh
-      - name: Validate the read-only macOS pointer handoff watcher
+      - name: Validate the read-only macOS app-share handoff watcher
+        run: |
+          node --check scripts/wait-macos-app-share-concurrency-handoff.mjs
+          node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test
+      - name: Validate the optional adversarial macOS pointer handoff watcher
         run: |
           node --check scripts/wait-macos-pointer-concurrency-handoff.mjs
           node scripts/wait-macos-pointer-concurrency-handoff.mjs --mode self-test
@@ -188,22 +192,23 @@ jobs:
           package-manager-cache: false
       - name: Verify the macOS build SDK and runtime floor
         run: bash scripts/verify-macos-build-host.sh
-      - name: Validate the macOS pointer handoff watcher on macOS
+      - name: Validate the macOS app-share handoff watcher on macOS
         run: |
           bash -n scripts/fetch-verify-release-candidate.sh
-          node --check scripts/wait-macos-pointer-concurrency-handoff.mjs
-          node scripts/wait-macos-pointer-concurrency-handoff.mjs --mode self-test
+          node --check scripts/wait-macos-app-share-concurrency-handoff.mjs
+          node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test
           node --check scripts/finalize-macos-acceptance.mjs
           node scripts/finalize-macos-acceptance.mjs --self-test
       - name: Validate the macOS packaged-evidence harness
         run: |
-          node --check evidence/v0.12.20/computer/helper-evidence-rig.mjs
-          node evidence/v0.12.20/computer/helper-evidence-rig.mjs --self-test
-          xcrun swiftc -typecheck evidence/v0.12.20/computer/HelperEvidenceFixture.swift
-          xcrun swiftc -typecheck evidence/v0.12.20/computer/SystemProbe.swift
-          xcrun swiftc -typecheck evidence/v0.12.20/computer/PointerHandoff.swift
-          xcrun swiftc evidence/v0.12.20/computer/PointerHandoff.swift -o "$RUNNER_TEMP/lbb-pointer-handoff-self-test"
-          "$RUNNER_TEMP/lbb-pointer-handoff-self-test" --self-test
+          node --check evidence/v0.12.21/computer/helper-evidence-rig.mjs
+          node evidence/v0.12.21/computer/helper-evidence-rig.mjs --self-test
+          xcrun swiftc -typecheck evidence/v0.12.21/computer/HelperEvidenceFixture.swift
+          xcrun swiftc -typecheck evidence/v0.12.21/computer/SystemProbe.swift
+          xcrun swiftc -typecheck evidence/v0.12.21/computer/AppShareHandoff.swift
+          xcrun swiftc evidence/v0.12.21/computer/AppShareHandoff.swift -o "$RUNNER_TEMP/lbb-app-share-handoff-self-test"
+          "$RUNNER_TEMP/lbb-app-share-handoff-self-test" --self-test
+          xcrun swiftc -typecheck evidence/v0.12.21/computer/PhysicalPointerHandoff.swift
       - name: Install the minimum supported Rust toolchain
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy

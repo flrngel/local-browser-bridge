@@ -57,15 +57,12 @@ fn release_workflow_and_local_builder_package_both_processes() {
     assert!(local.contains("cargo xwin build --locked --release --bins"));
     assert!(local.contains("release_stage=\"$(mktemp -d)\""));
     assert!(local.contains("validation_stage=\"$(mktemp -d)\""));
-    assert!(
-        local.contains(
-            "pointer_handoff_self_test=\"$validation_stage/lbb-pointer-handoff-self-test\""
-        )
-    );
-    assert!(
-        !local
-            .contains("pointer_handoff_self_test=\"$release_stage/lbb-pointer-handoff-self-test\"")
-    );
+    assert!(local.contains(
+        "app_share_handoff_self_test=\"$validation_stage/lbb-app-share-handoff-self-test\""
+    ));
+    assert!(!local.contains(
+        "app_share_handoff_self_test=\"$release_stage/lbb-app-share-handoff-self-test\""
+    ));
     assert!(
         local.contains("bash scripts/verify-release-assets.sh \"$version\" \"$release_stage\"")
     );
@@ -213,94 +210,142 @@ fn windows_release_tooling_hashes_without_module_discovery() {
 }
 
 #[test]
-fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
-    let watcher = source("scripts/wait-macos-pointer-concurrency-handoff.mjs");
-    let producer = source("evidence/v0.12.20/computer/helper-evidence-rig.mjs");
-    let playbook = source("evidence/v0.12.20/computer/README.md");
+fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_only() {
+    let watcher = source("scripts/wait-macos-app-share-concurrency-handoff.mjs");
+    let adversarial_watcher = source("scripts/wait-macos-pointer-concurrency-handoff.mjs");
+    let producer = source("evidence/v0.12.21/computer/helper-evidence-rig.mjs");
+    let playbook = source("evidence/v0.12.21/computer/README.md");
+    let finalizer = source("scripts/finalize-macos-acceptance.mjs");
+    let verifier = source("scripts/verify-release-acceptance-evidence.sh");
     let ci = source(".github/workflows/ci.yml");
     let release = source(".github/workflows/deploy.yml");
     let local = source("scripts/deploy.sh");
 
     for integration in [&ci, &release, &local] {
         assert!(
-            integration.contains("node --check scripts/wait-macos-pointer-concurrency-handoff.mjs")
+            integration
+                .contains("node --check scripts/wait-macos-app-share-concurrency-handoff.mjs"),
+            "release integration does not syntax-check the exact-app-share watcher"
         );
-        assert!(
-            integration.contains(
-                "node scripts/wait-macos-pointer-concurrency-handoff.mjs --mode self-test"
-            )
-        );
+        assert!(integration.contains(
+            "node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test"
+        ));
     }
     assert!(
-        ci.matches("node --check scripts/wait-macos-pointer-concurrency-handoff.mjs")
+        ci.matches("node --check scripts/wait-macos-app-share-concurrency-handoff.mjs")
             .count()
             >= 2
     );
     assert!(
         release
-            .matches("node --check scripts/wait-macos-pointer-concurrency-handoff.mjs")
+            .matches("node --check scripts/wait-macos-app-share-concurrency-handoff.mjs")
             .count()
             >= 2
     );
 
+    assert!(ci.contains("Validate the optional adversarial macOS pointer handoff watcher"));
+    assert_eq!(
+        ci.matches("node --check scripts/wait-macos-pointer-concurrency-handoff.mjs")
+            .count(),
+        1,
+        "the legacy pointer watcher must remain optional adversarial CI coverage"
+    );
+    for release_path in [&release, &local] {
+        assert!(
+            !release_path.contains("wait-macos-pointer-concurrency-handoff.mjs"),
+            "the legacy pointer watcher must not gate or satisfy release"
+        );
+    }
+    assert!(adversarial_watcher.contains("const PRODUCT_VERSION = \"0.12.21\";"));
+    assert!(
+        adversarial_watcher.contains("macOS pointer-concurrency handoff watcher self-test passed.")
+    );
+    for acceptance_gate in [&producer, &finalizer, &verifier] {
+        for forbidden_legacy_receipt in [
+            "macos-pointer-concurrency-handoff-request.json",
+            "macos-pointer-concurrency-handoff-complete.json",
+            "clickFreeMotionObserved",
+            "productBoundaryContaminated",
+            "independentBoundaryContaminated",
+        ] {
+            assert!(
+                !acceptance_gate.contains(forbidden_legacy_receipt),
+                "legacy pointer evidence can still satisfy release through {forbidden_legacy_receipt}"
+            );
+        }
+    }
+    for aggregate_contract in [
+        "const PRODUCT_VERSION = \"0.12.21\";",
+        "const RESULT_SCHEMA_VERSION = 7;",
+        "const AGGREGATE_SCHEMA_VERSION = 2;",
+        "const REQUEST_MARKER = \"operator/macos-app-share-concurrency-handoff-request.json\";",
+        "const START_MARKER = \"operator/macos-app-share-concurrency-handoff-start.json\";",
+        "const COMPLETE_MARKER = \"operator/macos-app-share-concurrency-handoff-complete.json\";",
+        "aggregate.aggregateChecks.inventoryFileCount !== 19",
+        "lane === \"deliberate-concurrency\"",
+        "deliberateConcurrency:",
+    ] {
+        assert!(
+            finalizer.contains(aggregate_contract),
+            "macOS finalizer is missing {aggregate_contract}"
+        );
+    }
+
     for required in [
-        "const PRODUCT_VERSION = \"0.12.20\";",
-        "const SCHEMA_VERSION = 1;",
+        "const PRODUCT_VERSION = \"0.12.21\";",
+        "const SCHEMA_VERSION = 2;",
         "const OPERATOR_DIRECTORY = \"operator\";",
         "const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;",
         "const PRODUCER_PRE_REQUEST_WORK_BUDGET_MS = 30 * 60_000;",
         "const REQUEST_PUBLICATION_MAXIMUM_WAIT_MS =",
         "const EVIDENCE_DIRECTORY_WAIT_TIMEOUT_MS = 60_000;",
-        "macos-pointer-concurrency-handoff-request.json",
-        "macos-pointer-concurrency-handoff-complete.json",
-        "macos-pointer-concurrency-handoff-request",
-        "macos-pointer-concurrency-handoff-complete",
+        "macos-app-share-concurrency-handoff-request.json",
+        "macos-app-share-concurrency-handoff-start.json",
+        "macos-app-share-concurrency-handoff-complete.json",
+        "dev.flrngel.local-browser-bridge.acceptance.app-share",
+        "LBB macOS Acceptance App Share",
+        "START APP-SHARE CHECK",
+        "lbb-app-share-start",
         "--mode watch --evidence-dir <absolute-path> --runner-pid <pid>",
         "open(path, constants.O_RDONLY | constants.O_NOFOLLOW)",
         "stats.mode & 0o077n",
         "stats.uid !== BigInt(process.getuid())",
         "process.kill(pid, 0)",
-        "is stale.",
-        "currentRequest.identity !== requestRecord.identity",
-        "The request marker disappeared or changed after notification.",
-        "does not match the request marker.",
-        "The watched macOS acceptance runner is not alive.",
-        "The watched macOS acceptance runner exited before creating its evidence directory.",
-        "Timed out waiting for the runner-created macOS evidence directory.",
-        "Self-test did not wait for the runner-created evidence directory.",
-        "Self-test did not permit a producer-bound request after the old ten-minute limit.",
-        "Self-test rejected a valid bound completion after runner exit.",
-        "Self-test rejected valid bound catch-up markers after runner and prompt exit.",
-        "The nonactivating pointer prompt is not alive.",
-        "ACTION REQUIRED: Continuously move the shared pointer without clicking; keep moving until COMPLETE.",
-        "COMPLETE: Both boundaries observed sustained click-free shared-pointer movement.",
-        "macOS pointer-concurrency handoff watcher self-test passed.",
+        "the request marker disappeared or changed after notification.",
+        "the bound request/start chain disappeared or changed before completion.",
+        "timed out waiting for the exact-app-share start receipt.",
+        "timed out waiting for the bound macOS app-share completion receipt.",
+        "ACTION REQUIRED: In the exact app share for",
+        "START RECEIVED: The bound button action was recorded.",
+        "COMPLETE: Exact-app-share orchestration and the quiet shared-seat product boundary",
+        "macOS app-share-concurrency handoff watcher self-test passed.",
     ] {
         assert!(
             watcher.contains(required),
-            "macOS handoff watcher is missing {required}"
+            "macOS app-share handoff watcher is missing {required}"
         );
     }
 
     for shared_contract in [
-        "macos-pointer-concurrency-handoff-request.json",
-        "macos-pointer-concurrency-handoff-complete.json",
-        "macos-pointer-concurrency-handoff-request",
-        "macos-pointer-concurrency-handoff-complete",
-        "sustainedMotionSamples",
-        "sustainedMotionSpanMilliseconds",
-        "productBoundaryContaminated",
-        "independentBoundaryContaminated",
-        "clickFreeMotionObserved",
+        "macos-app-share-concurrency-handoff-request.json",
+        "macos-app-share-concurrency-handoff-start.json",
+        "macos-app-share-concurrency-handoff-complete.json",
+        "macos-app-share-concurrency-handoff-request",
+        "macos-app-share-concurrency-handoff-start",
+        "macos-app-share-concurrency-handoff-complete",
+        "dev.flrngel.local-browser-bridge.acceptance.app-share",
+        "LBB macOS Acceptance App Share",
+        "START APP-SHARE CHECK",
+        "requestSha256",
+        "startReceiptSha256",
     ] {
         assert!(watcher.contains(shared_contract));
         assert!(
             producer.contains(shared_contract),
-            "macOS handoff producer and watcher disagree on {shared_contract}"
+            "macOS app-share producer and watcher disagree on {shared_contract}"
         );
     }
-    assert!(producer.contains("const POINTER_HANDOFF_MARKER_SCHEMA = 1;"));
-    assert!(producer.contains("const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;"));
+    assert!(producer.contains("const APP_SHARE_HANDOFF_MARKER_SCHEMA = 2;"));
     for shared_timing_contract in [
         "const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;",
         "const PRODUCER_PRE_REQUEST_WORK_BUDGET_MS = 30 * 60_000;",
@@ -310,7 +355,7 @@ fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
         assert!(watcher.contains(shared_timing_contract));
         assert!(
             producer.contains(shared_timing_contract),
-            "macOS handoff producer and watcher disagree on {shared_timing_contract}"
+            "macOS app-share producer and watcher disagree on {shared_timing_contract}"
         );
     }
     for producer_deadline_contract in [
@@ -321,7 +366,7 @@ fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
     ] {
         assert!(
             producer.contains(producer_deadline_contract),
-            "macOS handoff producer is missing {producer_deadline_contract}"
+            "macOS app-share producer is missing {producer_deadline_contract}"
         );
     }
     assert!(producer.contains("const operatorDirectory = join(outputDir, \"operator\");"));
@@ -343,8 +388,14 @@ fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
         "DELIBERATE_REVIEW_MANIFEST=",
         "jq -er '.screenshots[] | \"\\(.sha256)  \\(.file)\"' helper-results.json",
         ".status == \"passed-release-candidate\"",
-        ".aggregateChecks.passingResultSchemaVersion == 6",
-        ".aggregateChecks.inventoryFileCount == 18",
+        ".schemaVersion == 2",
+        ".aggregateChecks.passingResultSchemaVersion == 7",
+        ".aggregateChecks.inventoryFileCount == 19",
+        "macos-app-share-concurrency-handoff-start.json",
+        ".appShareHandoff.startReceiptAcknowledged == true",
+        ".appShareHandoff.completePublicationAcknowledged == true",
+        ".appShareHandoff.productBoundaryQuiet == true",
+        ".appShareHandoff.independentBoundaryQuiet == true",
         "MACOS_ACCEPTANCE_SHA256=",
         "complete Phase 1 visual review first",
         "complete Phase 2 visual review first",
@@ -357,28 +408,41 @@ fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
 
     for integration in [&ci, &release, &local] {
         assert!(
-            integration.contains("node --check evidence/v0.12.20/computer/helper-evidence-rig.mjs"),
-            "release path does not syntax-check the exact macOS evidence rig"
+            integration.contains("node --check evidence/v0.12.21/computer/helper-evidence-rig.mjs"),
+            "release path does not syntax-check the exact v0.12.21 macOS evidence rig"
         );
         assert!(
             integration
-                .contains("node evidence/v0.12.20/computer/helper-evidence-rig.mjs --self-test")
+                .contains("node evidence/v0.12.21/computer/helper-evidence-rig.mjs --self-test")
+        );
+        assert!(
+            !integration.contains("evidence/v0.12.20/computer/"),
+            "active integration still targets the withdrawn v0.12.20 harness"
         );
     }
     for integration in [&ci, &release] {
         for source in [
             "HelperEvidenceFixture.swift",
             "SystemProbe.swift",
-            "PointerHandoff.swift",
+            "AppShareHandoff.swift",
         ] {
             assert!(
                 integration.contains(&format!(
-                    "xcrun swiftc -typecheck evidence/v0.12.20/computer/{source}"
+                    "xcrun swiftc -typecheck evidence/v0.12.21/computer/{source}"
                 )),
                 "macOS workflow does not typecheck {source}"
             );
         }
-        assert!(integration.contains("lbb-pointer-handoff-self-test\" --self-test"));
+        assert!(integration.contains("lbb-app-share-handoff-self-test\" --self-test"));
+    }
+    assert!(ci.contains(
+        "xcrun swiftc -typecheck evidence/v0.12.21/computer/PhysicalPointerHandoff.swift"
+    ));
+    for release_path in [&release, &local] {
+        assert!(
+            !release_path.contains("PhysicalPointerHandoff.swift"),
+            "the physical-pointer adversarial helper must not become a release-path requirement"
+        );
     }
 
     for field in [
@@ -387,22 +451,45 @@ fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
         "productVersion",
         "requestId",
         "createdAt",
+        "expiresAt",
         "runnerPid",
         "promptPid",
+        "expectedBundleIdentifier",
+        "expectedWindowTitle",
+        "expectedButtonText",
+        "expectedButtonAccessibilityIdentifier",
+        "expectedButtonEnabledAfterDelivery",
+        "exactAppObserved",
+        "exactWindowObserved",
         "requestDelivered",
         "panelOnScreen",
         "panelNonactivating",
         "notificationOnly",
-        "acceptedAsAuthority",
-        "sustainedMotionSamples",
-        "sustainedMotionSpanMilliseconds",
-        "productBoundaryContaminated",
-        "independentBoundaryContaminated",
-        "clickFreeMotionObserved",
+        "exactAppShareRequired",
+        "physicalHumanProvenanceRequired",
+        "acceptedAsProductAuthority",
     ] {
         assert!(
             watcher.contains(&format!("\"{field}\"")),
-            "macOS handoff watcher omits schema field {field}"
+            "macOS app-share watcher omits request field {field}"
+        );
+    }
+    for field in [
+        "acceptedAsAuthority",
+        "buttonAccepted",
+        "buttonActionObserved",
+        "cryptographicToolIdentityClaimed",
+        "physicalHumanProvenanceClaimed",
+        "requestSha256",
+        "buttonRemainedDisabledDuringProductAction",
+        "handoffStateSequenceBound",
+        "productActionCompletedAt",
+        "productActionStartedAt",
+        "startReceiptSha256",
+    ] {
+        assert!(
+            watcher.contains(&format!("\"{field}\"")),
+            "macOS app-share watcher omits chained receipt field {field}"
         );
     }
 
@@ -417,12 +504,12 @@ fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
         "readline",
         "child_process",
         "acceptedAsAuthority: true",
-        "notificationOnly: false",
+        "acceptedAsProductAuthority: true",
         "--ack",
     ] {
         assert!(
             !watcher.contains(forbidden),
-            "read-only macOS handoff watcher contains forbidden primitive: {forbidden}"
+            "read-only macOS app-share watcher contains forbidden primitive: {forbidden}"
         );
     }
 }
@@ -857,6 +944,12 @@ fn release_evidence_verifier_fails_closed_on_artifact_or_commit_substitution() {
         "macOS package does not have the exact independently inspected inventory",
         "macOS deliberate-concurrency lane did not start after the quiet lane passed",
         "aggregate lane start timestamp differs from its raw result",
+        ".schemaVersion == 7",
+        ".aggregateChecks.passingResultSchemaVersion == 7",
+        ".aggregateChecks.inventoryFileCount == 19",
+        "macos-app-share-concurrency-handoff-request.json",
+        "macos-app-share-concurrency-handoff-start.json",
+        "macos-app-share-concurrency-handoff-complete.json",
     ] {
         assert!(
             verifier.contains(required),
@@ -868,7 +961,6 @@ fn release_evidence_verifier_fails_closed_on_artifact_or_commit_substitution() {
         ".pointerEvidence.quietObserved == true",
         ".pointerEvidence.unknownObserved == false",
         ".pointerEvidence.concurrentSharedSeatActivityObserved == false",
-        ".pointerEvidence.concurrentSharedSeatActivityObserved == true",
         ".quietSeatStabilization.required == true",
         ".quietSeatStabilization.completed == true",
         ".quietSeatStabilization.completedBeforeCandidateExecution == true",
@@ -876,9 +968,37 @@ fn release_evidence_verifier_fails_closed_on_artifact_or_commit_substitution() {
         ".quietSeatStabilization.observedSamples >= 61",
         ".quietSeatStabilization.stableTransitions >= 60",
         ".quietSeatStabilization.monitoringUnknown == false",
-        ".operatorHandoff.clickFreeMotionObserved == true",
-        ".operatorHandoff.productBoundaryContaminated == true",
-        ".operatorHandoff.independentBoundaryContaminated == true",
+        "(if $lane == \"quiet\" then",
+        ".appShareHandoff == {",
+        "requested: false,",
+        "requestPublicationAcknowledged: false,",
+        "startReceiptAcknowledged: false,",
+        "completePublicationAcknowledged: false,",
+        "requested: true,",
+        "requestPublicationAcknowledged: true,",
+        "startReceiptAcknowledged: true,",
+        "completePublicationAcknowledged: true,",
+        "promptClosed: true,",
+        "exactAppBundleObserved: true,",
+        "exactWindowObserved: true,",
+        "exactButtonObserved: true,",
+        "buttonDisabledAfterAction: true,",
+        "acceptanceButtonActionObserved: true,",
+        "appShareSurfaceObservedAtProductBoundaries: true,",
+        "sharedHidInputObserved: null,",
+        "sharedHidInputObserved: false,",
+        "sampledSharedContextUnchanged: true,",
+        "actionDispatched: true,",
+        "targetPostconditionObserved: true,",
+        "productBoundaryQuiet: true,",
+        "independentBoundaryQuiet: true,",
+        "physicalHumanProvenanceClaimed: false,",
+        "cryptographicToolIdentityClaimed: false,",
+        "orchestrationNotProductControl: true,",
+        "markerNotificationOnly: false,",
+        "markerAcceptedAsProductAuthority: false,",
+        "rawAppIdentityRetainedInResult: false,",
+        "rawPointerDataRetained: false",
     ] {
         assert!(verifier.contains(lane_assertion));
     }

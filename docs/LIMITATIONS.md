@@ -163,34 +163,57 @@ boundary observed unrelated shared-seat `mouseMoved`/cursor activity. That is
 valid contamination evidence, not helper attribution. The deliberate lane,
 Windows, and stock-Chrome were not started and publication was canceled.
 
-Version 0.12.20 keeps sealed route provenance plus conservative shared-pointer
+Version 0.12.20 passed its quiet macOS lane but timed out before product dispatch
+in its then-mandatory physical-pointer lane. Its Windows run separately timed out
+because the action surface could not be found under a state-mutating title.
+Both outcomes are preserved as negative evidence; Chrome never started and no
+Release was published. That pointer lane is historical in v0.12.21; its tools
+remain optional adversarial coverage and cannot satisfy publication.
+
+Version 0.12.21 keeps sealed route provenance plus conservative shared-pointer
 monitoring. Before either lane invokes a candidate executable, fixture, server,
-or helper, a native SystemProbe gate requires 30 continuous quiet seconds and
-at least 60 stable transitions sampled every 500 ms. Pointer, cursor,
+or helper, a native SystemProbe gate requires a 30-second sampled quiet epoch
+with at least 60 stable transitions sampled every 500 ms. Pointer, cursor,
 foreground, AX-focus/front-window, or active-Space activity resets the complete
 epoch under one immutable 30-minute deadline; unknown or unhealthy monitoring
 fails immediately. This reduces ambient pre-run contamination but cannot
 reserve the shared login seat, so every later per-action and whole-run boundary
-remains unchanged and mandatory. The persistent runner-owned, nonactivating
-macOS handoff panel's request and completion files are notification-only and
-are never acceptance authority. The deliberate action gate still requires sustained independent HID
-`mouseMoved` counter advances with button, drag, scroll, and tablet counters
-stable, a fresh immediately-pre-action baseline, and the same click-free motion
-plus contamination at both the product and independent post-action boundaries.
-Before product dispatch only, disallowed input or foreground/focus/Space
-contamination resets the clean-motion baseline under the original absolute
-deadline. Each `MOVE` interval, the transition into `ACTION`, and the final
-independent pre-dispatch sample use that same classifier; an affected `ACTION`
-sample returns to `MOVE`, and the final accepted sample becomes the dispatch
-baseline without another probe seam. Unknown monitoring and all contamination
-after dispatch remain terminal fail-closed outcomes.
-Entering `ACTION` starts a separate 10-second hard action/completion grace,
-capped by a 310-second total prompt lifetime; the nonactivating panel terminates
-at the earlier deadline even after turning green. Its source contract
-still does not satisfy a release gate: the exact packaged macOS,
-interactive-Windows, stock-Chrome, and immutable-publication paths must all run
-fresh. Quiet and deliberate-concurrency evidence are separate lanes; neither
-may be relabelled as the other.
+remains unchanged and mandatory.
+
+The deliberate lane's separate nonactivating macOS acceptance app is test
+orchestration, not a product capability. Its exact bundle/window/button and
+create-once request, start, and completion receipts record the acceptance-button
+action and an ordered state sequence around the product boundaries. The chain
+is orchestration evidence, not notification-only and not product authority. It
+cannot prove who or which provider produced the click, authenticate a Computer
+Use implementation cryptographically, or turn the shared login session into a
+separate input seat.
+
+The narrowed result fields intentionally avoid stronger claims:
+`acceptanceButtonActionObserved` reports the app-owned button receipt;
+`appShareSurfaceObservedAtProductBoundaries` and
+`sampledSharedContextUnchanged` report boundary samples, not continuous custody;
+and `sharedHidInputObserved` is `null` in quiet because no app-share transaction
+exists but `false` in deliberate when no HID pointer/keyboard activity was
+observed across that transaction. The completion marker's
+`handoffStateSequenceBound` binds the ordered marker state, not uninterrupted
+window observation. Endpoint samples plus cumulative HID pointer/keyboard
+counters cannot prove zero transient programmatic changes, a continuous monitor,
+atomic provider identity, or zero transient focus/window manipulation. Unknown
+state, a duplicate or stale click, changed marker bytes, lost sampled app/window
+binding, or observed shared-seat activity fails closed.
+
+Marker publication and receipt reads use create-once names, stable descriptor/path
+identity checks, nonblocking and no-follow opens, and deadline checks immediately
+before and after every filesystem step. User-space code cannot preempt an
+operating-system filesystem call already in progress, so a stalled local
+filesystem can delay fail-closed termination. It cannot turn a late marker into
+passing evidence.
+
+These source contracts still do not satisfy a release gate: the exact packaged
+macOS, interactive-Windows, stock-Chrome, evidence-commit, and immutable-
+publication paths must all run fresh. Quiet and deliberate-concurrency evidence
+are separate lanes; neither may be relabelled as the other.
 
 The checked-in [evidence index](../evidence/) records what was actually run. A code path, unit test, or transport acknowledgement alone is not evidence that an application accepted the action or that the user's desktop remained unchanged.
 

@@ -16,7 +16,7 @@ Everything runs locally through `127.0.0.1`. The server and computer helper are 
 - Optionally observe and operate one exact desktop application window
 - Share that window through native macOS or Windows capture with a requested 1–10 FPS cap
 - Prefer macOS Accessibility or Windows UI Automation before pixel input
-- Prove the exact target route, check the application's result when possible, and preserve the foreground and active desktop at supported action boundaries; macOS may briefly use and restore an Accessibility focus lease
+- Prove the exact target route, check the application's result when possible, and compare the foreground and active desktop at supported action boundaries; macOS may briefly use and restore an Accessibility focus lease
 
 The bridge has no cloud relay, telemetry, silent installer, or silent updater. It does not add shell, filesystem, clipboard, download, or process-launch tools to the computer helper.
 
@@ -32,7 +32,9 @@ The agent must use a browser running on the same computer. A cloud-hosted browse
 
 Use the extension for Chrome and Edge web content. Use the optional helper for one already-open desktop window when that application's background route is supported. A separate Windows login/input seat is a different mode that requires another session or VM; it is not implied by exact-window sharing. The current helper is cooperative: it shares the person's login session, so unrelated pointer activity can occur while an action is running.
 
-On macOS, the helper may briefly borrow and restore app focus while leaving the user's foreground window unchanged at checked boundaries. It reports shared pointer activity separately from proof about the helper's own sealed action route; see [Limitations](docs/LIMITATIONS.md) for details.
+On macOS, the helper may briefly borrow and restore app focus while leaving the user's foreground window unchanged at checked boundaries. It reports shared pointer activity separately from proof about the helper's own sealed action route. Those endpoint samples and cumulative HID pointer/keyboard counters do not prove continuous monitoring, atomic identity of an app-share provider, zero transient programmatic changes, or zero transient focus/window manipulation; see [Limitations](docs/LIMITATIONS.md) for details.
+
+The v0.12.21 release harness uses a create-once request/start/complete chain around one acceptance-only app-share button action. That chain is orchestration evidence, not a notification-only signal and not authority to control the product target.
 
 ## Requirements
 
@@ -48,9 +50,9 @@ See [Capabilities](docs/CAPABILITIES.md) for the exact platform matrix and [Limi
 
 Download one version-matched set from [GitHub Releases](https://github.com/flrngel/local-browser-bridge/releases/latest):
 
-> Version 0.12.20 is the current source and release target. It is not published until its two macOS lanes, Windows, stock-Chrome, evidence-commit, and immutable-release gates all pass. Version 0.12.13 was withdrawn after its quiet macOS lane passed 192 of 193 assertions but the unchanged whole-run boundary detected unrelated shared-seat pointer activity; deliberate macOS, Windows, and stock-Chrome never started, publication was canceled, and it never became a Release. Version 0.12.15 was stopped before tagging when hosted PowerShell 7 coerced a canonical JSON timestamp into a `DateTime`; 0.12.16 fixed that path but stopped at the next source gate because modern .NET omits the legacy static `Directory.SetAccessControl` API. Version 0.12.17 selected the supported directory-ACL API, then stopped before tagging when PowerShell 7 rejected the legacy secure named-pipe constructor and an incomplete task-disposal error masked that primary failure. Version 0.12.18 passed its complete source matrix, but its protected-tag candidate was withdrawn before execution when an independent audit found the macOS aggregate producer emitted result schema 6 while the publication verifier still required schema 5; [workflow 32718436613](https://github.com/flrngel/local-browser-bridge/actions/runs/32718436613) was canceled and no Release exists. Version 0.12.19 passed every non-Windows CI lane but was stopped before tagging when a second PowerShell 7 relay self-test exposed disposal of task-backed, potentially cached async wait handles; [workflow 32720788086](https://github.com/flrngel/local-browser-bridge/actions/runs/32720788086) retained the failure. Version 0.12.20 removes that unsafe wait-handle ownership pattern on both ends of the credential pipe while preserving the prior runtime and macOS schema fixes. It also retains the 30-second native quiet-seat gate before candidate execution in both macOS lanes without weakening later action or whole-run checks. Its stock-Chrome gate uses one exact candidate-bound approval, autonomous digest-bound independent review, and a durable no-rerun ledger without requiring Node.js. Install only one version-matched set from an actual published Release.
+> Version 0.12.21 is the current source and release target. Install only from an actual published Release after its macOS, Windows, stock-Chrome, evidence, and immutable-publication gates pass. Version 0.12.20 was withdrawn without a Release after its then-mandatory physical-pointer test timed out and its Windows action window was not discoverable. That pointer lane is historical; its tools remain optional adversarial coverage and cannot satisfy v0.12.21. The current target instead uses an exact-app-share orchestration check and gives the Windows sentinel one stable title.
 
-The v0.12.13 negative record is retained only on branch `evidence/v0.12.13-macos-quiet-pointer-contamination-32695400912` at commit `bdcc3620e28260e31a3a78bf7e584adf1f0db44e`, under `evidence/v0.12.13/computer/attempts/withdrawn-7d2692d-macos-quiet-pointer-contamination/`; it is historical evidence, not v0.12.20 input.
+Historical failed candidates and their exact negative evidence are documented in [Development](docs/DEVELOPMENT.md) and [the evidence index](evidence/). Their binaries, screenshots, approvals, and receipts never satisfy a later release.
 
 - the server for your platform;
 - `local-browser-bridge-extension-vVERSION.zip`; and

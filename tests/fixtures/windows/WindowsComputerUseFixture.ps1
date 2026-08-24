@@ -763,6 +763,7 @@ namespace LbbWindowsFixture
 
     internal sealed class SentinelForm : Form
     {
+        internal const string StableWindowTitle = "LBB Foreground Sentinel";
         private readonly EvidenceStore store;
         private readonly Label statusLabel;
         private readonly Button armButton;
@@ -776,8 +777,8 @@ namespace LbbWindowsFixture
         internal SentinelForm(EvidenceStore evidenceStore)
         {
             store = evidenceStore;
-            Text = "LBB Foreground Sentinel";
-            AccessibleName = "LBB Foreground Sentinel";
+            Text = StableWindowTitle;
+            AccessibleName = StableWindowTitle;
             StartPosition = FormStartPosition.Manual;
             Rectangle area = Screen.PrimaryScreen.WorkingArea;
             Location = new Point(Math.Max(area.Left + 10, area.Right - 390), Math.Max(area.Top + 10, area.Bottom - 230));
@@ -848,7 +849,6 @@ namespace LbbWindowsFixture
                 }
                 if (FixtureRuntime.TryAcknowledgeForegroundArm(pressed))
                 {
-                    Text = "LBB Windows Acceptance - ARMED";
                     statusLabel.Text = "ARMED\r\nDo not use this session until the run finishes";
                     armButton.Text = "ARMED - DO NOT USE THIS SESSION";
                     armButton.BackColor = Color.FromArgb(198, 239, 206);
@@ -874,7 +874,6 @@ namespace LbbWindowsFixture
                 if (FixtureRuntime.RecordForegroundArmRequest(generation))
                 {
                     pressedArmGeneration = 0;
-                    Text = "LBB Windows Acceptance - ACTION REQUIRED";
                     statusLabel.Text = "ACTION REQUIRED\r\nClick once, then stop using this session";
                     armButton.Enabled = true;
                     FixtureRuntime.MarkForegroundArmButtonEnabled();
@@ -1077,6 +1076,10 @@ namespace LbbWindowsFixture
 
         public static void RunSelfTest()
         {
+            if (SentinelForm.StableWindowTitle != "LBB Foreground Sentinel")
+            {
+                throw new InvalidOperationException("The stable foreground-sentinel window title failed its self-test.");
+            }
             if (ForegroundArmRequestedGeneration != 0 ||
                 ForegroundArmAcknowledgedGeneration != 0 ||
                 ForegroundArmRequestCount != 0 ||
@@ -1251,6 +1254,37 @@ if ($null -eq $fixtureRuntimeType) {
 }
 
 if ($SelfTest) {
+    $sentinelSourceStart = $fixtureSource.IndexOf(
+        'internal sealed class SentinelForm : Form',
+        [StringComparison]::Ordinal
+    )
+    $sentinelSourceEnd = $fixtureSource.IndexOf(
+        'internal sealed class OccluderForm : Form',
+        $sentinelSourceStart + 1,
+        [StringComparison]::Ordinal
+    )
+    if ($sentinelSourceStart -lt 0 -or $sentinelSourceEnd -le $sentinelSourceStart) {
+        throw "The foreground-sentinel source boundary failed its self-test."
+    }
+    $sentinelSource = $fixtureSource.Substring(
+        $sentinelSourceStart,
+        $sentinelSourceEnd - $sentinelSourceStart
+    )
+    $sentinelTitleAssignments = [regex]::Matches(
+        $sentinelSource,
+        '(?m)^[ \t]*Text[ \t]*=[ \t]*StableWindowTitle;[ \t]*$'
+    )
+    $allTopLevelTitleAssignments = [regex]::Matches(
+        $sentinelSource,
+        '(?m)^[ \t]*Text[ \t]*='
+    )
+    if ($sentinelTitleAssignments.Count -ne 1 -or $allTopLevelTitleAssignments.Count -ne 1) {
+        throw "The foreground-sentinel top-level title must be assigned exactly once from its stable creation-time constant."
+    }
+    if ($sentinelSource.IndexOf('LBB Windows Acceptance - ACTION REQUIRED', [StringComparison]::Ordinal) -ge 0 -or
+        $sentinelSource.IndexOf('LBB Windows Acceptance - ARMED', [StringComparison]::Ordinal) -ge 0) {
+        throw "The foreground-sentinel top-level title must not encode its arm state."
+    }
     $fixtureRuntimeType::RunSelfTest()
     Write-Output "Windows computer-use fixture self-test passed."
     return

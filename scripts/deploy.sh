@@ -9,12 +9,12 @@ release_stage="$(mktemp -d)"
 validation_stage="$(mktemp -d)"
 trap 'rm -rf "$release_stage" "$validation_stage"' EXIT
 
-node --check scripts/wait-macos-pointer-concurrency-handoff.mjs
-node scripts/wait-macos-pointer-concurrency-handoff.mjs --mode self-test
+node --check scripts/wait-macos-app-share-concurrency-handoff.mjs
+node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test
 node --check scripts/finalize-macos-acceptance.mjs
 node scripts/finalize-macos-acceptance.mjs --self-test
-node --check evidence/v0.12.20/computer/helper-evidence-rig.mjs
-node evidence/v0.12.20/computer/helper-evidence-rig.mjs --self-test
+node --check evidence/v0.12.21/computer/helper-evidence-rig.mjs
+node evidence/v0.12.21/computer/helper-evidence-rig.mjs --self-test
 bash -n scripts/fetch-verify-release-candidate.sh
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
@@ -87,12 +87,12 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 bash scripts/verify-macos-build-host.sh
-xcrun swiftc -typecheck evidence/v0.12.20/computer/HelperEvidenceFixture.swift
-xcrun swiftc -typecheck evidence/v0.12.20/computer/SystemProbe.swift
-xcrun swiftc -typecheck evidence/v0.12.20/computer/PointerHandoff.swift
-pointer_handoff_self_test="$validation_stage/lbb-pointer-handoff-self-test"
-xcrun swiftc evidence/v0.12.20/computer/PointerHandoff.swift -o "$pointer_handoff_self_test"
-"$pointer_handoff_self_test" --self-test
+xcrun swiftc -typecheck evidence/v0.12.21/computer/HelperEvidenceFixture.swift
+xcrun swiftc -typecheck evidence/v0.12.21/computer/SystemProbe.swift
+xcrun swiftc -typecheck evidence/v0.12.21/computer/AppShareHandoff.swift
+app_share_handoff_self_test="$validation_stage/lbb-app-share-handoff-self-test"
+xcrun swiftc evidence/v0.12.21/computer/AppShareHandoff.swift -o "$app_share_handoff_self_test"
+"$app_share_handoff_self_test" --self-test
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 cargo build --locked --release --bins --target aarch64-apple-darwin
 cargo build --locked --release --bins --target x86_64-apple-darwin

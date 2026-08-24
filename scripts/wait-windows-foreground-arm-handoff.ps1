@@ -32,7 +32,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$script:ProductVersion = "0.12.20"
+$script:ProductVersion = "0.12.21"
+$script:ForegroundSentinelWindowTitle = "LBB Foreground Sentinel"
 $script:MarkerSchemaVersion = 2
 $script:MaximumMarkerBytes = 16384
 $script:Utf8StrictNoBom = [Text.UTF8Encoding]::new($false, $true)
@@ -187,6 +188,10 @@ function Assert-ExactMarkerSchema {
         $Marker.expectedAccessibleName -cne "Click to arm Windows acceptance") {
         throw "The marker accessible target is invalid."
     }
+    if ($Marker.expectedVisibleWindowTitle -isnot [string] -or
+        $Marker.expectedVisibleWindowTitle -cne $script:ForegroundSentinelWindowTitle) {
+        throw "The marker stable foreground-sentinel window title is invalid."
+    }
 
     Assert-ExactBoolean $Marker.stopUiAfterAction $true "marker stopUiAfterAction"
     Assert-ExactBoolean $Marker.requiresSeparateAuthorization $true "marker requiresSeparateAuthorization"
@@ -210,8 +215,6 @@ function Assert-ExactMarkerSchema {
         Assert-ExactIntegerRange $Marker.maximumClickAttempts 1 1 "action-required maximumClickAttempts"
         if ($Marker.inputStateAtPublication -isnot [string] -or
             $Marker.inputStateAtPublication -cne "not-started" -or
-            $Marker.expectedVisibleWindowTitle -isnot [string] -or
-            $Marker.expectedVisibleWindowTitle -cne "LBB Windows Acceptance - ACTION REQUIRED" -or
             $Marker.expectedVisibleButtonText -isnot [string] -or
             $Marker.expectedVisibleButtonText -cne "CLICK TO ARM" -or
             $Marker.action -isnot [string] -or
@@ -226,8 +229,6 @@ function Assert-ExactMarkerSchema {
         Assert-ExactIntegerRange $Marker.maximumClickAttempts 0 0 "already-armed maximumClickAttempts"
         if ($Marker.inputStateAtPublication -isnot [string] -or
             $Marker.inputStateAtPublication -cne "already-acknowledged" -or
-            $Marker.expectedVisibleWindowTitle -isnot [string] -or
-            $Marker.expectedVisibleWindowTitle -cne "LBB Windows Acceptance - ARMED" -or
             $Marker.expectedVisibleButtonText -isnot [string] -or
             $Marker.expectedVisibleButtonText -cne "ARMED - DO NOT USE THIS SESSION" -or
             $Marker.action -isnot [string] -or
@@ -519,7 +520,7 @@ function New-SelfTestMarker {
     $actionRequired = $Status -ceq "action-required"
     $record = [ordered]@{
         schemaVersion = 2
-        productVersion = "0.12.20"
+        productVersion = "0.12.21"
         kind = "foreground-arm"
         status = $Status
         requestId = "0123456789abcdef0123456789abcdef"
@@ -528,7 +529,7 @@ function New-SelfTestMarker {
         operatorActionRequired = $actionRequired
         preferredRelaySurface = "windows-computer-use-app-share"
         fallbackRelaySurface = "human-on-windows-session"
-        expectedVisibleWindowTitle = if ($actionRequired) { "LBB Windows Acceptance - ACTION REQUIRED" } else { "LBB Windows Acceptance - ARMED" }
+        expectedVisibleWindowTitle = $script:ForegroundSentinelWindowTitle
         expectedVisibleButtonText = if ($actionRequired) { "CLICK TO ARM" } else { "ARMED - DO NOT USE THIS SESSION" }
         expectedAccessibleName = "Click to arm Windows acceptance"
         action = if ($actionRequired) { "single-left-click" } else { "none" }
@@ -613,6 +614,8 @@ function Invoke-SelfTest {
     Assert-Condition ($validResult.status -ceq "action-required" -and
         $validResult.action -ceq "single-left-click" -and
         $validResult.maximumClickAttempts -eq 1 -and
+        $script:ForegroundSentinelWindowTitle -ceq "LBB Foreground Sentinel" -and
+        $validResult.expectedVisibleWindowTitle -ceq $script:ForegroundSentinelWindowTitle -and
         $validResult.externalAuthorizationVerifiedByWatcher -eq $false -and
         $validCounter.reads -eq 1) "The valid action-required handoff failed its self-test."
     $singleEmission = @($validResult | ConvertTo-Json -Depth 8 -Compress)
@@ -636,7 +639,17 @@ function Invoke-SelfTest {
     Assert-Condition ($alreadyResult.status -ceq "already-armed" -and
         $alreadyResult.operatorActionRequired -eq $false -and
         $alreadyResult.action -ceq "none" -and
+        $alreadyResult.expectedVisibleWindowTitle -ceq $script:ForegroundSentinelWindowTitle -and
+        $alreadyResult.expectedVisibleWindowTitle -ceq $validResult.expectedVisibleWindowTitle -and
         $alreadyResult.maximumClickAttempts -eq 0) "The already-armed handoff failed its self-test."
+
+    $unstableTitleAtomic = New-SelfTestMarker $now.AddSeconds(-1) "action-required" 300
+    $unstableTitleAtomic.marker.expectedVisibleWindowTitle = "LBB Windows Acceptance - ACTION REQUIRED"
+    $unstableTitleJson = $unstableTitleAtomic.marker | ConvertTo-Json -Depth 8
+    Assert-SelfTestFailure `
+        -Operation { $null = ConvertFrom-ExactMarkerJson $unstableTitleJson } `
+        -ExpectedText "stable foreground-sentinel window title is invalid" `
+        -Label "state-mutating window title"
 
     Assert-SelfTestFailure `
         -Operation { $null = ConvertFrom-ExactMarkerJson '{not-json' } `
