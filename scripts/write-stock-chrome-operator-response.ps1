@@ -23,7 +23,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $script:Utf8 = [Text.UTF8Encoding]::new($false, $true)
-$script:Version = "0.12.17"
+$script:Version = "0.12.18"
 
 function ConvertFrom-JsonPreservingStrings {
     param([Parameter(Mandatory = $true, ValueFromPipeline = $true)][string]$Json)
@@ -161,6 +161,20 @@ function New-PrivateTokenRelayPipe([string]$Name) {
             [Security.AccessControl.AccessControlType]::Allow
         )
         [void]$Security.AddAccessRule($Rule)
+        if ($PSVersionTable.PSEdition -ceq "Core") {
+            return [IO.Pipes.NamedPipeServerStreamAcl]::Create(
+                $Name,
+                [IO.Pipes.PipeDirection]::Out,
+                1,
+                [IO.Pipes.PipeTransmissionMode]::Byte,
+                [IO.Pipes.PipeOptions]::Asynchronous,
+                4096,
+                4096,
+                $Security,
+                [IO.HandleInheritability]::None,
+                [IO.Pipes.PipeAccessRights]0
+            )
+        }
         return [IO.Pipes.NamedPipeServerStream]::new(
             $Name,
             [IO.Pipes.PipeDirection]::Out,
@@ -237,12 +251,9 @@ function Invoke-GitHubTokenRelay(
             throw "The GitHub token relay exceeded its 4096-byte bound."
         }
         $Flush = $Pipe.FlushAsync()
-        try {
-            if (-not $Flush.Wait((Get-RemainingRelayMilliseconds $Deadline))) {
-                throw "The GitHub token relay timed out while flushing its client."
-            }
+        if (-not $Flush.Wait((Get-RemainingRelayMilliseconds $Deadline))) {
+            throw "The GitHub token relay timed out while flushing its client."
         }
-        finally { $Flush.Dispose() }
     }
     finally {
         [Array]::Clear($OneByte, 0, $OneByte.Length)
@@ -1300,8 +1311,10 @@ function Invoke-SelfTest {
         }
         finally {
             $RelayInput.Dispose()
-            $ConnectTask.Dispose()
             $RelayClient.Dispose()
+            if (-not $ConnectTask.IsCompleted) {
+                try { [void]$ConnectTask.Wait(1000) } catch {}
+            }
             [Array]::Clear($Received, 0, $Received.Length)
             [Array]::Clear($DummyBytes, 0, $DummyBytes.Length)
         }

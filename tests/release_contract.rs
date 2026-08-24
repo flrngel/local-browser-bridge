@@ -215,7 +215,7 @@ fn windows_release_tooling_hashes_without_module_discovery() {
 #[test]
 fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
     let watcher = source("scripts/wait-macos-pointer-concurrency-handoff.mjs");
-    let producer = source("evidence/v0.12.17/computer/helper-evidence-rig.mjs");
+    let producer = source("evidence/v0.12.18/computer/helper-evidence-rig.mjs");
     let ci = source(".github/workflows/ci.yml");
     let release = source(".github/workflows/deploy.yml");
     let local = source("scripts/deploy.sh");
@@ -243,7 +243,7 @@ fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
     );
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.17\";",
+        "const PRODUCT_VERSION = \"0.12.18\";",
         "const SCHEMA_VERSION = 1;",
         "const OPERATOR_DIRECTORY = \"operator\";",
         "macos-pointer-concurrency-handoff-request.json",
@@ -294,12 +294,12 @@ fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
 
     for integration in [&ci, &release, &local] {
         assert!(
-            integration.contains("node --check evidence/v0.12.17/computer/helper-evidence-rig.mjs"),
+            integration.contains("node --check evidence/v0.12.18/computer/helper-evidence-rig.mjs"),
             "release path does not syntax-check the exact macOS evidence rig"
         );
         assert!(
             integration
-                .contains("node evidence/v0.12.17/computer/helper-evidence-rig.mjs --self-test")
+                .contains("node evidence/v0.12.18/computer/helper-evidence-rig.mjs --self-test")
         );
     }
     for integration in [&ci, &release] {
@@ -310,7 +310,7 @@ fn macos_pointer_concurrency_handoff_watcher_is_read_only_and_release_gated() {
         ] {
             assert!(
                 integration.contains(&format!(
-                    "xcrun swiftc -typecheck evidence/v0.12.17/computer/{source}"
+                    "xcrun swiftc -typecheck evidence/v0.12.18/computer/{source}"
                 )),
                 "macOS workflow does not typecheck {source}"
             );

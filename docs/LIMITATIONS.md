@@ -163,7 +163,7 @@ boundary observed unrelated shared-seat `mouseMoved`/cursor activity. That is
 valid contamination evidence, not helper attribution. The deliberate lane,
 Windows, and stock-Chrome were not started and publication was canceled.
 
-Version 0.12.17 keeps sealed route provenance plus conservative shared-pointer
+Version 0.12.18 keeps sealed route provenance plus conservative shared-pointer
 monitoring. Before either lane invokes a candidate executable, fixture, server,
 or helper, a native SystemProbe gate requires 30 continuous quiet seconds and
 at least 60 stable transitions sampled every 500 ms. Pointer, cursor,

@@ -22,7 +22,7 @@ fn macos_v0_12_14_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
     }
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.17\";",
+        "const PRODUCT_VERSION = \"0.12.18\";",
         "const RESULT_SCHEMA_VERSION = 6;",
         "const AGGREGATE_SCHEMA_VERSION = 1;",
         "const OUTPUT_FILE = \"macos-acceptance.json\";",
