@@ -188,7 +188,7 @@ function Get-CandidateBindingFromPreflight {
         $record = $script:Utf8NoBom.GetString($bytes) | ConvertFrom-Json
         $actual = @($record.PSObject.Properties.Name)
         $expected = @("schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed", "runNonce", "candidate")
-        if ([string]$record.candidate.version -ceq "0.12.12") {
+        if ([string]$record.candidate.version -ceq "0.12.13") {
             $expected = @(
                 "schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed",
                 "runNonce", "releaseCandidateBinding", "candidate"
@@ -200,13 +200,13 @@ function Get-CandidateBindingFromPreflight {
             $record.phase -cne "preflight" -or $record.passed -ne $true -or
             [string]$record.runNonce -cnotmatch '^[0-9a-f]{64}$' -or
             [string]$record.candidate.finalSha -cnotmatch '^[0-9a-f]{40}$' -or
-            @("0.12.2", "0.12.12") -cnotcontains [string]$record.candidate.version) {
+            @("0.12.2", "0.12.13") -cnotcontains [string]$record.candidate.version) {
             throw "PreflightRecord identity is invalid."
         }
         foreach ($value in @(
             [string]$record.candidate.checksumManifest.sha256,
             [string]$record.candidate.server.sha256,
-            $(if ([string]$record.candidate.version -ceq "0.12.12") { [string]$record.candidate.computerHelper.sha256 } else { [string]$record.candidate.server.sha256 }),
+            $(if ([string]$record.candidate.version -ceq "0.12.13") { [string]$record.candidate.computerHelper.sha256 } else { [string]$record.candidate.server.sha256 }),
             [string]$record.candidate.extension.sha256,
             [string]$record.candidate.extension.combinedPayloadSha256
         )) {
@@ -215,7 +215,7 @@ function Get-CandidateBindingFromPreflight {
             }
         }
         $script:CandidateVersionFromPreflight = [string]$record.candidate.version
-        if ($script:CandidateVersionFromPreflight -ceq "0.12.12") {
+        if ($script:CandidateVersionFromPreflight -ceq "0.12.13") {
             Assert-ReleaseCandidateBindingBasic $record.releaseCandidateBinding $record.candidate
             $script:ReleaseCandidateBindingFromPreflight = $record.releaseCandidateBinding
         }
@@ -227,7 +227,7 @@ function Get-CandidateBindingFromPreflight {
             checksumManifestSha256 = [string]$record.candidate.checksumManifest.sha256
             serverSha256 = [string]$record.candidate.server.sha256
         }
-        if ($script:CandidateVersionFromPreflight -ceq "0.12.12") {
+        if ($script:CandidateVersionFromPreflight -ceq "0.12.13") {
             $binding.computerHelperSha256 = [string]$record.candidate.computerHelper.sha256
         }
         $binding.extensionZipSha256 = [string]$record.candidate.extension.sha256
@@ -482,7 +482,7 @@ function Invoke-Sanitize {
                         $expectedScreenshots[$Purpose]
                     ) + ".raw.png"
                     if ([IO.Path]::GetFileName($inputPath) -cne $expectedRawName) {
-                        throw "v0.12.12 InputImage must use the canonical raw helper-capture filename."
+                        throw "v0.12.13 InputImage must use the canonical raw helper-capture filename."
                     }
                     $sourceCapture = [ordered]@{
                         name = $expectedRawName
@@ -638,8 +638,8 @@ function Invoke-AttestReview {
     }
     $denyValues = @(Read-DenyValues $DenyValuesFile)
     $candidateBinding = Get-CandidateBindingFromPreflight $PreflightRecord
-    if ($script:CandidateVersionFromPreflight -cne "0.12.12") {
-        throw "AttestReview is available only for the v0.12.12 two-phase screenshot protocol."
+    if ($script:CandidateVersionFromPreflight -cne "0.12.13") {
+        throw "AttestReview is available only for the v0.12.13 two-phase screenshot protocol."
     }
     $pending = Read-StrictJson $pendingPath "PendingRecord"
     $fields = @(
@@ -836,7 +836,7 @@ function Invoke-SelfTest {
             passed = $true
             runNonce = $bindingHash
             releaseCandidateBinding = [ordered]@{
-                productVersion = "0.12.12"; repository = "flrngel/local-browser-bridge"; tag = "v0.12.12"
+                productVersion = "0.12.13"; repository = "flrngel/local-browser-bridge"; tag = "v0.12.13"
                 sourceSha = [String]::new([char]"0", 40); tagObjectSha = [String]::new([char]"1", 40)
                 workflowRunId = "1"; workflowRunAttempt = "1"; artifactId = "1"; artifactName = "release-candidate"
                 artifactZipBytes = 1; artifactZipSha256 = $bindingHash; checksumManifestSha256 = $bindingHash
@@ -847,7 +847,7 @@ function Invoke-SelfTest {
                 })
             }
             candidate = [ordered]@{
-                version = "0.12.12"
+                version = "0.12.13"
                 finalSha = [String]::new([char]"0", 40)
                 checksumManifest = [ordered]@{ sha256 = $bindingHash }
                 server = [ordered]@{ sha256 = $bindingHash }

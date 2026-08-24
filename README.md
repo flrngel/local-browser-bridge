@@ -48,7 +48,7 @@ See [Capabilities](docs/CAPABILITIES.md) for the exact platform matrix and [Limi
 
 Download one version-matched set from [GitHub Releases](https://github.com/flrngel/local-browser-bridge/releases/latest):
 
-> Version 0.12.12 is the current source and release target. It is not published until its two macOS lanes, Windows, stock-Chrome, evidence-commit, and immutable-release gates all pass. Version 0.12.11 was withdrawn before execution because its receipt could not authenticate both required macOS lanes; version 0.12.10 stopped earlier at its pointer handoff. Neither became a Release. Install only one version-matched set from an actual published Release.
+> Version 0.12.13 is the current source and release target. It is not published until its two macOS lanes, Windows, stock-Chrome, evidence-commit, and immutable-release gates all pass. Version 0.12.12 was withdrawn after three macOS deliberate-concurrency attempts stopped before product dispatch; Windows and stock-Chrome did not complete. It never became a Release. Install only one version-matched set from an actual published Release.
 
 - the server for your platform;
 - `local-browser-bridge-extension-vVERSION.zip`; and

@@ -6,7 +6,7 @@ fn finalizer_source() -> String {
 }
 
 #[test]
-fn macos_v0_12_12_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
+fn macos_v0_12_13_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
     let source = finalizer_source().replace("\r\n", "\n");
 
     for import in source.lines().filter(|line| line.contains(" from \"")) {
@@ -22,7 +22,7 @@ fn macos_v0_12_12_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
     }
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.12\";",
+        "const PRODUCT_VERSION = \"0.12.13\";",
         "const RESULT_SCHEMA_VERSION = 5;",
         "const AGGREGATE_SCHEMA_VERSION = 1;",
         "const OUTPUT_FILE = \"macos-acceptance.json\";",
@@ -120,7 +120,7 @@ fn macos_v0_12_12_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
 }
 
 #[test]
-fn macos_v0_12_12_dual_lane_finalizer_enforces_lane_and_screenshot_invariants() {
+fn macos_v0_12_13_dual_lane_finalizer_enforces_lane_and_screenshot_invariants() {
     let source = finalizer_source().replace("\r\n", "\n");
     for required in [
         "exactString(value.requestedLane, lane",
@@ -196,7 +196,7 @@ fn macos_v0_12_12_dual_lane_finalizer_enforces_lane_and_screenshot_invariants() 
 }
 
 #[test]
-fn macos_v0_12_12_dual_lane_finalizer_self_test_passes() {
+fn macos_v0_12_13_dual_lane_finalizer_self_test_passes() {
     let syntax = Command::new("node")
         .args(["--check", "scripts/finalize-macos-acceptance.mjs"])
         .output()

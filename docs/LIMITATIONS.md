@@ -150,13 +150,24 @@ required fresh, non-mergeable quiet and deliberate-concurrency lanes; one hash
 could not authenticate both without collapsing the boundary the test was meant
 to prove.
 
-Version 0.12.12 keeps sealed route provenance plus conservative shared-pointer
+Version 0.12.12 was withdrawn after three deliberate-concurrency attempts all
+stopped with no product dispatch. One final SystemProbe inherited only the
+nearly exhausted arm-deadline budget; one arm interval contained disallowed
+pointer input; and one `ACTION` transition contained input plus foreground/focus
+contamination. Those failures remain valid negative evidence, not proof of a
+helper action.
+
+Version 0.12.13 keeps sealed route provenance plus conservative shared-pointer
 monitoring and adds a persistent runner-owned, nonactivating macOS handoff
 panel. Its request and completion files are notification-only and are never
 acceptance authority. The actual gate still requires sustained independent HID
 `mouseMoved` counter advances with button, drag, scroll, and tablet counters
 stable, a fresh immediately-pre-action baseline, and the same click-free motion
 plus contamination at both the product and independent post-action boundaries.
+Before product dispatch only, disallowed input or foreground/focus/Space
+contamination resets the clean-motion baseline under the original absolute
+deadline; an affected `ACTION` transition returns to `MOVE`. Unknown monitoring
+and all contamination after dispatch remain terminal fail-closed outcomes.
 Entering `ACTION` starts a separate 10-second hard action/completion grace,
 capped by a 310-second total prompt lifetime; the nonactivating panel terminates
 at the earlier deadline even after turning green. Its source contract

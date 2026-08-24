@@ -192,12 +192,12 @@ jobs:
           node scripts/finalize-macos-acceptance.mjs --self-test
       - name: Validate the macOS packaged-evidence harness
         run: |
-          node --check evidence/v0.12.12/computer/helper-evidence-rig.mjs
-          node evidence/v0.12.12/computer/helper-evidence-rig.mjs --self-test
-          xcrun swiftc -typecheck evidence/v0.12.12/computer/HelperEvidenceFixture.swift
-          xcrun swiftc -typecheck evidence/v0.12.12/computer/SystemProbe.swift
-          xcrun swiftc -typecheck evidence/v0.12.12/computer/PointerHandoff.swift
-          xcrun swiftc evidence/v0.12.12/computer/PointerHandoff.swift -o "$RUNNER_TEMP/lbb-pointer-handoff-self-test"
+          node --check evidence/v0.12.13/computer/helper-evidence-rig.mjs
+          node evidence/v0.12.13/computer/helper-evidence-rig.mjs --self-test
+          xcrun swiftc -typecheck evidence/v0.12.13/computer/HelperEvidenceFixture.swift
+          xcrun swiftc -typecheck evidence/v0.12.13/computer/SystemProbe.swift
+          xcrun swiftc -typecheck evidence/v0.12.13/computer/PointerHandoff.swift
+          xcrun swiftc evidence/v0.12.13/computer/PointerHandoff.swift -o "$RUNNER_TEMP/lbb-pointer-handoff-self-test"
           "$RUNNER_TEMP/lbb-pointer-handoff-self-test" --self-test
       - name: Install the minimum supported Rust toolchain
         run: |

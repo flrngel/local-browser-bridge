@@ -101,15 +101,15 @@ function Assert-NoReparseAncestorChain {
 }
 
 function Initialize-TrustedGitExecutable {
-    if ($Mode -cne "SelfTest" -and $Version -ceq "0.12.12") {
+    if ($Mode -cne "SelfTest" -and $Version -ceq "0.12.13") {
         Assert-RequiredArgument $TrustedGitExecutable "TrustedGitExecutable"
         if (-not [IO.Path]::IsPathRooted($TrustedGitExecutable)) {
-            throw "TrustedGitExecutable must be an absolute path for v0.12.12."
+            throw "TrustedGitExecutable must be an absolute path for v0.12.13."
         }
         $script:GitExecutable = Resolve-RequiredFile $TrustedGitExecutable "TrustedGitExecutable"
         Assert-RequiredArgument $TrustedEmptyHooksDirectory "TrustedEmptyHooksDirectory"
         if (-not [IO.Path]::IsPathRooted($TrustedEmptyHooksDirectory)) {
-            throw "TrustedEmptyHooksDirectory must be an absolute path for v0.12.12."
+            throw "TrustedEmptyHooksDirectory must be an absolute path for v0.12.13."
         }
         $script:EmptyHooksDirectory = Resolve-RequiredDirectory $TrustedEmptyHooksDirectory "TrustedEmptyHooksDirectory"
         if (@(Get-ChildItem -LiteralPath $script:EmptyHooksDirectory -Force).Count -ne 0) {
@@ -450,7 +450,7 @@ function Remove-ExactSelfTestDirectory {
 function Invoke-GitText {
     param([string]$RepositoryPath, [string[]]$Arguments)
     if ($script:UseHardenedGit) {
-        # v0.12.12 accepts only a fresh isolated clone. These global switches
+        # v0.12.13 accepts only a fresh isolated clone. These global switches
         # prevent replacement-object substitution and lazy-fetch helpers;
         # command-scoped settings neutralize monitor and hook execution.
         $output = & $script:GitExecutable --no-replace-objects --no-lazy-fetch `
@@ -472,7 +472,7 @@ function Assert-HardenedGitEnvironment {
     if ($env:GIT_CONFIG_NOSYSTEM -cne "1" -or $env:GIT_CONFIG_GLOBAL -cne "NUL" -or
         $env:GIT_ATTR_NOSYSTEM -cne "1" -or $env:GIT_ALLOW_PROTOCOL -cne "https" -or
         $env:GIT_CONFIG_COUNT -cne "0" -or $env:GIT_TERMINAL_PROMPT -cne "0") {
-        throw "v0.12.12 requires the isolated Git environment declared by the acceptance protocol."
+        throw "v0.12.13 requires the isolated Git environment declared by the acceptance protocol."
     }
     $allowedGitEnvironment = @(
         "GIT_ALLOW_PROTOCOL", "GIT_ATTR_NOSYSTEM", "GIT_CONFIG_COUNT",
@@ -481,11 +481,11 @@ function Assert-HardenedGitEnvironment {
     foreach ($entry in [Environment]::GetEnvironmentVariables("Process").GetEnumerator()) {
         $name = [string]$entry.Key
         if ($name -cmatch '^GIT_' -and $allowedGitEnvironment -cnotcontains $name) {
-            throw "v0.12.12 refuses unexpected Git process variables."
+            throw "v0.12.13 refuses unexpected Git process variables."
         }
     }
     if (-not [String]::IsNullOrEmpty($env:SSH_ASKPASS)) {
-        throw "v0.12.12 refuses SSH_ASKPASS in the isolated HTTPS Git environment."
+        throw "v0.12.13 refuses SSH_ASKPASS in the isolated HTTPS Git environment."
     }
     # Git is isolated with its explicit process-scoped configuration variables.
     # The acceptance lane must not repurpose HOME or USERPROFILE because they are
@@ -496,22 +496,22 @@ function Assert-HardenedRepositoryMetadata {
     param([string]$RepositoryPath)
     $gitDirectory = [IO.Path]::Combine($RepositoryPath, ".git")
     if (-not [IO.Directory]::Exists($gitDirectory)) {
-        throw "v0.12.12 requires a fresh clone with an ordinary .git directory."
+        throw "v0.12.13 requires a fresh clone with an ordinary .git directory."
     }
     $gitDirectoryInfo = [IO.DirectoryInfo]::new($gitDirectory)
     if (($gitDirectoryInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw "v0.12.12 refuses a reparse-point Git directory."
+        throw "v0.12.13 refuses a reparse-point Git directory."
     }
     $configPath = Resolve-RequiredFile ([IO.Path]::Combine($gitDirectory, "config")) "repository local Git config"
     $configText = [IO.File]::ReadAllText($configPath, $script:Utf8NoBom)
     $dangerousConfig = '(?im)^\s*\[(?:include(?:if)?|filter|diff|credential|protocol|url)(?:\s|\])|^\s*(?:fsmonitor|hooksPath|attributesFile|promisor|partialCloneFilter|uploadPack|receivePack)\s*='
     if ([regex]::IsMatch($configText, $dangerousConfig)) {
-        throw "v0.12.12 refuses executable, included, rewritten, or promisor local Git configuration."
+        throw "v0.12.13 refuses executable, included, rewritten, or promisor local Git configuration."
     }
     $originPattern = '(?im)^\s*url\s*=\s*' + [regex]::Escape($script:TrustedRepositoryOrigin) + '\s*$'
     if (-not [regex]::IsMatch($configText, '^\s*\[remote\s+"origin"\]\s*$', [Text.RegularExpressions.RegexOptions]::Multiline) -or
         -not [regex]::IsMatch($configText, $originPattern)) {
-        throw "v0.12.12 repository origin is not the fixed HTTPS release repository."
+        throw "v0.12.13 repository origin is not the fixed HTTPS release repository."
     }
     foreach ($forbiddenPath in @(
         [IO.Path]::Combine($gitDirectory, "refs", "replace"),
@@ -519,7 +519,7 @@ function Assert-HardenedRepositoryMetadata {
         [IO.Path]::Combine($gitDirectory, "shallow")
     )) {
         if ([IO.File]::Exists($forbiddenPath) -or [IO.Directory]::Exists($forbiddenPath)) {
-            throw "v0.12.12 repository contains replacement, alternate, or shallow object state."
+            throw "v0.12.13 repository contains replacement, alternate, or shallow object state."
         }
     }
     $packDirectory = [IO.Path]::Combine($gitDirectory, "objects", "pack")
@@ -527,7 +527,7 @@ function Assert-HardenedRepositoryMetadata {
         $packInfo = [IO.DirectoryInfo]::new($packDirectory)
         if (($packInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
             @($packInfo.GetFiles("*.promisor", [IO.SearchOption]::TopDirectoryOnly)).Count -ne 0) {
-            throw "v0.12.12 repository contains promisor object state."
+            throw "v0.12.13 repository contains promisor object state."
         }
     }
 }
@@ -561,7 +561,7 @@ function Assert-CleanExactCheckout {
     if ($script:UseHardenedGit) {
         $indexFlags = @(Invoke-GitText $RepositoryPath @("ls-files", "-v") -split "`n")
         if (@($indexFlags | Where-Object { $_ -cnotmatch '^H ' }).Count -ne 0) {
-            throw "v0.12.12 refuses assume-unchanged or skip-worktree index entries."
+            throw "v0.12.13 refuses assume-unchanged or skip-worktree index entries."
         }
     }
 }
@@ -984,9 +984,9 @@ function Get-CandidateSnapshot {
         throw "Server executable does not match the canonical checksum manifest."
     }
     $helperBinding = $null
-    if ($ExpectedVersion -ceq "0.12.12") {
+    if ($ExpectedVersion -ceq "0.12.13") {
         if ([String]::IsNullOrWhiteSpace($ComputerHelperPath)) {
-            throw "Computer helper executable is required for v0.12.12."
+            throw "Computer helper executable is required for v0.12.13."
         }
         $expectedHelperName = "local-computer-helper-v$ExpectedVersion-windows-x86_64.exe"
         if ([IO.Path]::GetFileName($ComputerHelperPath) -cne $expectedHelperName) {
@@ -1041,7 +1041,7 @@ function Get-CandidateSnapshot {
             sha256 = $serverSha
         }
     }
-    if ($ExpectedVersion -ceq "0.12.12") {
+    if ($ExpectedVersion -ceq "0.12.13") {
         $candidate.computerHelper = $helperBinding
     }
     $candidate.extension = [ordered]@{
@@ -1070,7 +1070,7 @@ function Get-CandidateBindingDomain {
         checksumManifestSha256 = [string]$Candidate.checksumManifest.sha256
         serverSha256 = [string]$Candidate.server.sha256
     }
-    if ($Candidate.version -ceq "0.12.12") {
+    if ($Candidate.version -ceq "0.12.13") {
         $binding.computerHelperSha256 = [string]$Candidate.computerHelper.sha256
     }
     $binding.extensionZipSha256 = [string]$Candidate.extension.sha256
@@ -1081,7 +1081,7 @@ function Get-CandidateBindingDomain {
 function Assert-BindingRecord {
     param([object]$Record, [string]$ExpectedPhase)
     $expectedKeys = @("schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed", "runNonce", "candidate")
-    if ($Record.candidate.version -ceq "0.12.12") {
+    if ($Record.candidate.version -ceq "0.12.13") {
         $expectedKeys = @(
             "schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed",
             "runNonce", "releaseCandidateBinding", "candidate"
@@ -1097,7 +1097,7 @@ function Assert-BindingRecord {
     if ($Record.runNonce -isnot [string] -or $Record.runNonce -cnotmatch '^[0-9a-f]{64}$') {
         throw "Candidate binding record run nonce is invalid."
     }
-    if ($Record.candidate.version -ceq "0.12.12") {
+    if ($Record.candidate.version -ceq "0.12.13") {
         Assert-ReleaseCandidateBindingDomain $Record.releaseCandidateBinding $Record.candidate "releaseCandidateBinding"
     }
     if ($ExpectedPhase -ceq "postflight") {
@@ -1107,7 +1107,7 @@ function Assert-BindingRecord {
         $unchangedKeys = @(
             "checkoutHead", "checkoutClean", "checksumManifest", "serverExecutable", "extensionZip", "extractedPayload"
         )
-        if ($Record.candidate.version -ceq "0.12.12") {
+        if ($Record.candidate.version -ceq "0.12.13") {
             $unchangedKeys = @(
                 "checkoutHead", "checkoutClean", "checksumManifest", "serverExecutable",
                 "computerHelperExecutable", "extensionZip", "extractedPayload"
@@ -1123,7 +1123,7 @@ function Assert-BindingRecord {
             "runNonce", "preflightRecordSha256", "finalSha", "checksumManifestSha256",
             "serverSha256", "extensionZipSha256", "extractedPayloadSha256"
         )
-        if ($Record.candidate.version -ceq "0.12.12") {
+        if ($Record.candidate.version -ceq "0.12.13") {
             $bindingKeys = @(
                 "runNonce", "preflightRecordSha256", "finalSha", "checksumManifestSha256",
                 "serverSha256", "computerHelperSha256", "extensionZipSha256", "extractedPayloadSha256"
@@ -1137,7 +1137,7 @@ function Assert-BindingRecord {
         }
     }
     $candidateKeys = @("version", "finalSha", "gitClean", "checksumManifest", "server", "extension")
-    if ($Record.candidate.version -ceq "0.12.12") {
+    if ($Record.candidate.version -ceq "0.12.13") {
         $candidateKeys = @("version", "finalSha", "gitClean", "checksumManifest", "server", "computerHelper", "extension")
     }
     Assert-ExactKeys $Record.candidate $candidateKeys "candidate binding"
@@ -1149,7 +1149,7 @@ function Assert-BindingRecord {
         "permissions", "hostPermissions", "extractedPayloadInventory", "checkoutPayloadInventory", "combinedPayloadSha256"
     ) "candidate extension binding"
     Assert-ExactKeys $Record.candidate.server @("name", "bytes", "sha256") "candidate server binding"
-    if ($Record.candidate.version -ceq "0.12.12") {
+    if ($Record.candidate.version -ceq "0.12.13") {
         Assert-ExactKeys $Record.candidate.computerHelper @("name", "bytes", "sha256") "candidate computer helper binding"
     }
 }
@@ -1167,7 +1167,7 @@ function Invoke-Preflight {
     $manifestPath = Resolve-RequiredFile $ChecksumManifest "ChecksumManifest"
     $serverPath = Resolve-RequiredFile $ServerExecutable "ServerExecutable"
     $helperPath = $null
-    if ($Version -ceq "0.12.12") {
+    if ($Version -ceq "0.12.13") {
         Assert-RequiredArgument $ComputerHelperExecutable "ComputerHelperExecutable"
         Assert-RequiredArgument $ReleaseCandidateBinding "ReleaseCandidateBinding"
         $helperPath = Resolve-RequiredFile $ComputerHelperExecutable "ComputerHelperExecutable"
@@ -1177,7 +1177,7 @@ function Invoke-Preflight {
     $outputPath = Resolve-NewOutputFile $OutputRecord "OutputRecord"
     $candidate = Get-CandidateSnapshot $Version $FinalSha $repositoryPath $manifestPath $ChecksumManifestSha256 $serverPath $helperPath $zipPath $extractedPath
     $releaseBinding = $null
-    if ($Version -ceq "0.12.12") {
+    if ($Version -ceq "0.12.13") {
         $releaseBinding = Get-ValidatedReleaseCandidateBinding `
             $ReleaseCandidateBinding $candidate ([IO.Path]::GetDirectoryName($manifestPath))
     }
@@ -1189,7 +1189,7 @@ function Invoke-Preflight {
         passed = $true
         runNonce = New-RunNonce
     }
-    if ($Version -ceq "0.12.12") { $record.releaseCandidateBinding = $releaseBinding }
+    if ($Version -ceq "0.12.13") { $record.releaseCandidateBinding = $releaseBinding }
     $record.candidate = $candidate
     Write-NewJson $outputPath $record
     Write-Output "Candidate preflight passed; the allowlisted binding record was written."
@@ -1208,7 +1208,7 @@ function Invoke-Postflight {
     $manifestPath = Resolve-RequiredFile $ChecksumManifest "ChecksumManifest"
     $serverPath = Resolve-RequiredFile $ServerExecutable "ServerExecutable"
     $helperPath = $null
-    if ($Version -ceq "0.12.12") {
+    if ($Version -ceq "0.12.13") {
         Assert-RequiredArgument $ComputerHelperExecutable "ComputerHelperExecutable"
         Assert-RequiredArgument $ReleaseCandidateBinding "ReleaseCandidateBinding"
         $helperPath = Resolve-RequiredFile $ComputerHelperExecutable "ComputerHelperExecutable"
@@ -1222,7 +1222,7 @@ function Invoke-Postflight {
     $preflightSha256 = Get-Sha256 $preflightPath
     $candidate = Get-CandidateSnapshot $Version $FinalSha $repositoryPath $manifestPath $ChecksumManifestSha256 $serverPath $helperPath $zipPath $extractedPath
     $releaseBinding = $null
-    if ($Version -ceq "0.12.12") {
+    if ($Version -ceq "0.12.13") {
         $releaseBinding = Get-ValidatedReleaseCandidateBinding `
             $ReleaseCandidateBinding $candidate ([IO.Path]::GetDirectoryName($manifestPath))
         if (($releaseBinding | ConvertTo-Json -Depth 10 -Compress) -cne
@@ -1243,7 +1243,7 @@ function Invoke-Postflight {
         passed = $true
         runNonce = [string]$preflight.runNonce
     }
-    if ($Version -ceq "0.12.12") { $record.releaseCandidateBinding = $releaseBinding }
+    if ($Version -ceq "0.12.13") { $record.releaseCandidateBinding = $releaseBinding }
     $record.candidate = $candidate
     $record.candidateBinding = Get-CandidateBindingDomain ([string]$preflight.runNonce) $preflightSha256 $candidate
     $record.preflightRecordSha256 = $preflightSha256
@@ -1253,7 +1253,7 @@ function Invoke-Postflight {
             checksumManifest = $true
             serverExecutable = $true
     }
-    if ($Version -ceq "0.12.12") {
+    if ($Version -ceq "0.12.13") {
         $record.unchanged.computerHelperExecutable = $true
     }
     $record.unchanged.extensionZip = $true
@@ -1320,7 +1320,7 @@ function Invoke-SelfTest {
         if ($LASTEXITCODE -ne 0) { throw "Self-test Git fixture failed." }
         $testSha = (& $script:GitExecutable -C $repositoryPath rev-parse HEAD).Trim()
 
-        # Exercise the v0.12.12 metadata gate without enabling hardened dispatch
+        # Exercise the v0.12.13 metadata gate without enabling hardened dispatch
         # for the recursive v0.12.2 compatibility fixture below.
         Assert-HardenedRepositoryMetadata $repositoryPath
         foreach ($adversarialConfig in @(
@@ -1334,7 +1334,7 @@ function Invoke-SelfTest {
             try { Assert-HardenedRepositoryMetadata $repositoryPath }
             catch { $refused = $true }
             if (-not $refused) {
-                throw "v0.12.12 metadata gate accepted adversarial $($adversarialConfig.Label) config."
+                throw "v0.12.13 metadata gate accepted adversarial $($adversarialConfig.Label) config."
             }
             & $script:GitExecutable -C $repositoryPath config --unset-all $adversarialConfig.Key
             if ($LASTEXITCODE -ne 0) { throw "Self-test could not remove adversarial Git config." }
@@ -1346,7 +1346,7 @@ function Invoke-SelfTest {
         try { Assert-HardenedRepositoryMetadata $repositoryPath }
         catch { $replaceRefused = $true }
         if (-not $replaceRefused) {
-            throw "v0.12.12 metadata gate accepted a replacement-object ref."
+            throw "v0.12.13 metadata gate accepted a replacement-object ref."
         }
         [IO.File]::Delete([IO.Path]::Combine($replaceDirectory, $testSha))
         [IO.Directory]::Delete($replaceDirectory, $false)
@@ -1356,7 +1356,7 @@ function Invoke-SelfTest {
         try { Assert-HardenedRepositoryMetadata $repositoryPath }
         catch { $promisorRefused = $true }
         if (-not $promisorRefused) {
-            throw "v0.12.12 metadata gate accepted a promisor object marker."
+            throw "v0.12.13 metadata gate accepted a promisor object marker."
         }
         [IO.File]::Delete($promisorPath)
         Assert-HardenedRepositoryMetadata $repositoryPath
@@ -1425,13 +1425,13 @@ function Invoke-SelfTest {
         $v2Hash = [String]::new([char]"a", 64)
         $v2Source = [String]::new([char]"b", 40)
         $v2Names = @(
-            "local-browser-bridge-v0.12.12-windows-x86_64.exe",
-            "local-computer-helper-v0.12.12-windows-x86_64.exe",
-            "local-browser-bridge-v0.12.12-macos-universal.tar.gz",
-            "local-browser-bridge-extension-v0.12.12.zip"
+            "local-browser-bridge-v0.12.13-windows-x86_64.exe",
+            "local-computer-helper-v0.12.13-windows-x86_64.exe",
+            "local-browser-bridge-v0.12.13-macos-universal.tar.gz",
+            "local-browser-bridge-extension-v0.12.13.zip"
         )
         $v2Candidate = [ordered]@{
-            version = "0.12.12"
+            version = "0.12.13"
             finalSha = $v2Source
             checksumManifest = [ordered]@{
                 sha256 = $v2Hash
@@ -1446,9 +1446,9 @@ function Invoke-SelfTest {
             $v2Assets += [ordered]@{ file = $name; bytes = 1; sha256 = $v2Hash }
         }
         $v2ReleaseBinding = [ordered]@{
-            productVersion = "0.12.12"
+            productVersion = "0.12.13"
             repository = "flrngel/local-browser-bridge"
-            tag = "v0.12.12"
+            tag = "v0.12.13"
             sourceSha = $v2Source
             tagObjectSha = [String]::new([char]"c", 40)
             workflowRunId = "123456789"
