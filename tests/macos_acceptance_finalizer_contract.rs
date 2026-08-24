@@ -6,12 +6,12 @@ fn finalizer_source() -> String {
 }
 
 #[test]
-fn macos_v0_12_19_result_schema_is_aligned_end_to_end() {
+fn macos_v0_12_20_result_schema_is_aligned_end_to_end() {
     let finalizer = finalizer_source().replace("\r\n", "\n");
-    let producer = fs::read_to_string("evidence/v0.12.19/computer/helper-evidence-rig.mjs")
+    let producer = fs::read_to_string("evidence/v0.12.20/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let documentation = fs::read_to_string("evidence/v0.12.19/computer/README.md")
+    let documentation = fs::read_to_string("evidence/v0.12.20/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let verifier = fs::read_to_string("scripts/verify-release-acceptance-evidence.sh")
@@ -50,7 +50,7 @@ fn macos_v0_12_19_result_schema_is_aligned_end_to_end() {
 }
 
 #[test]
-fn macos_v0_12_19_release_verifier_recomputes_every_tagged_harness_hash() {
+fn macos_v0_12_20_release_verifier_recomputes_every_tagged_harness_hash() {
     let verifier = fs::read_to_string("scripts/verify-release-acceptance-evidence.sh")
         .unwrap()
         .replace("\r\n", "\n");
@@ -121,7 +121,7 @@ fn macos_v0_12_14_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
     }
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.19\";",
+        "const PRODUCT_VERSION = \"0.12.20\";",
         "const RESULT_SCHEMA_VERSION = 6;",
         "const AGGREGATE_SCHEMA_VERSION = 1;",
         "const OUTPUT_FILE = \"macos-acceptance.json\";",

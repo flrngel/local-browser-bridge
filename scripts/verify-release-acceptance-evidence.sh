@@ -6,7 +6,7 @@ export LC_ALL=C
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly API_VERSION="2026-03-10"
 readonly RECEIPT_SCHEMA_VERSION="2"
-readonly EVIDENCE_PRODUCT_VERSION="0.12.19"
+readonly EVIDENCE_PRODUCT_VERSION="0.12.20"
 readonly EVIDENCE_MAX_BLOB_BYTES=20971520
 readonly EVIDENCE_MAX_TOTAL_BYTES=209715200
 readonly EVIDENCE_MAX_PATH_BYTES=1024
@@ -1709,7 +1709,7 @@ PY
   jq -e '
       .schemaVersion == 1
       and .evidenceType == "stock-user-chrome-api-matrix"
-      and .version == "0.12.19" and .target == "loopback-demo" and .passed == true
+      and .version == "0.12.20" and .target == "loopback-demo" and .passed == true
       and .methodCount == 25 and (.methods | length) == 25
       and ([.methods[].name] == [
         "status","browser.control.start","browser.control.status","browser.control.stop",
@@ -1748,7 +1748,7 @@ PY
       . as $root
       |
       .schemaVersion == 2 and .evidenceType == "stock-user-chrome-computer-helper-chain"
-      and .version == "0.12.19" and .passed == true
+      and .version == "0.12.20" and .passed == true
       and .server.soleListener == "127.0.0.1:17373" and .server.updateCheckDisabled == true
       and .helper.connectedThroughLoopbackServer == true and .helper.serverApiOnly == true
       and .extensionPayload.fileCount == 11
@@ -1887,7 +1887,7 @@ PY
       and ([.computerHelperChain[] | select(type == "boolean")] | all(. == true))
       and .initialState.capturedBeforeRelevantMutation == true
       and .initialState.candidateExtensionPresent == false and .initialState.savedTokenConfigured == false
-      and .extension.cardCount == 1 and .extension.version == "0.12.19" and .extension.enabled == true
+      and .extension.cardCount == 1 and .extension.version == "0.12.20" and .extension.enabled == true
       and .extension.loadErrors == 0 and .extension.loadedVia == "chrome://extensions-load-unpacked"
       and .extension.loadedDirectoryByteMatchesCandidateZip == true and .extension.popupConnected == true
       and .extension.debuggerLeaseActiveAtFirstCapture == true and .extension.nativeDebuggerUseIndicatorSeen == true
@@ -2675,15 +2675,15 @@ self_test() {
   local sha1_b="2222222222222222222222222222222222222222"
   local sha256_a="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   local receipt="$scratch/receipt.json"
-  printf '%s' '{"schemaVersion":2,"tag":"v0.12.19","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"1","releaseCandidateArtifactId":"456","releaseCandidateArtifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","evidenceRef":"refs/heads/evidence/v0.12.19-release-run-123-attempt-1","evidenceCommitSha":"3333333333333333333333333333333333333333","macosPassed":true,"macosAcceptanceSha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","macosQuietResultSha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","macosDeliberateConcurrencyResultSha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","windowsPassed":true,"windowsResultSha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","stockChromePassed":true,"stockChrome":true,"stockChromeResultSha256":"9999999999999999999999999999999999999999999999999999999999999999"}' > "$receipt"
-  validate_receipt "$receipt" v0.12.19 "$sha1_a" "$sha1_b" 123 1 "$sha256_a" \
+  printf '%s' '{"schemaVersion":2,"tag":"v0.12.20","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"1","releaseCandidateArtifactId":"456","releaseCandidateArtifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","evidenceRef":"refs/heads/evidence/v0.12.20-release-run-123-attempt-1","evidenceCommitSha":"3333333333333333333333333333333333333333","macosPassed":true,"macosAcceptanceSha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","macosQuietResultSha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","macosDeliberateConcurrencyResultSha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","windowsPassed":true,"windowsResultSha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","stockChromePassed":true,"stockChrome":true,"stockChromeResultSha256":"9999999999999999999999999999999999999999999999999999999999999999"}' > "$receipt"
+  validate_receipt "$receipt" v0.12.20 "$sha1_a" "$sha1_b" 123 1 "$sha256_a" \
     || die "self-test rejected a valid canonical schema-2 receipt"
   jq -cS . "$receipt" > "$scratch/noncanonical.json"
-  if validate_receipt "$scratch/noncanonical.json" v0.12.19 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
+  if validate_receipt "$scratch/noncanonical.json" v0.12.20 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
     die "self-test accepted reordered receipt keys"
   fi
   jq -c '.schemaVersion = 1' "$receipt" > "$scratch/stale.json"
-  if validate_receipt "$scratch/stale.json" v0.12.19 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
+  if validate_receipt "$scratch/stale.json" v0.12.20 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
     die "self-test accepted a stale schema-1 receipt"
   fi
   mkdir "$scratch/safe"
@@ -2703,7 +2703,7 @@ self_test() {
   fi
 
   EXPECTED_RELEASE_CANDIDATE_BINDING="$scratch/expected-binding.json"
-  printf '%s' '{"productVersion":"0.12.19","repository":"flrngel/local-browser-bridge","tag":"v0.12.19","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"2","artifactId":"456","artifactName":"release-candidate","artifactZipBytes":789,"artifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","attestationInvocationUri":"https://github.com/flrngel/local-browser-bridge/actions/runs/123/attempts/2","attestedAssetCount":5,"githubHostedRunner":true,"assets":[]}' > "$EXPECTED_RELEASE_CANDIDATE_BINDING"
+  printf '%s' '{"productVersion":"0.12.20","repository":"flrngel/local-browser-bridge","tag":"v0.12.20","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"2","artifactId":"456","artifactName":"release-candidate","artifactZipBytes":789,"artifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","attestationInvocationUri":"https://github.com/flrngel/local-browser-bridge/actions/runs/123/attempts/2","attestedAssetCount":5,"githubHostedRunner":true,"assets":[]}' > "$EXPECTED_RELEASE_CANDIDATE_BINDING"
   printf '%s' "{\"releaseCandidateBinding\":$(<"$EXPECTED_RELEASE_CANDIDATE_BINDING")}" > "$scratch/current-binding.json"
   assert_release_candidate_binding "$scratch/current-binding.json" '.releaseCandidateBinding'
   jq -c '.releaseCandidateBinding.workflowRunAttempt = "1"' "$scratch/current-binding.json" > "$scratch/replayed-binding.json"

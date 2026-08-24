@@ -236,12 +236,12 @@ jobs:
           bash -n scripts/fetch-verify-release-candidate.sh
           node --check scripts/finalize-macos-acceptance.mjs
           node scripts/finalize-macos-acceptance.mjs --self-test
-          node --check evidence/v0.12.19/computer/helper-evidence-rig.mjs
-          node evidence/v0.12.19/computer/helper-evidence-rig.mjs --self-test
-          xcrun swiftc -typecheck evidence/v0.12.19/computer/HelperEvidenceFixture.swift
-          xcrun swiftc -typecheck evidence/v0.12.19/computer/SystemProbe.swift
-          xcrun swiftc -typecheck evidence/v0.12.19/computer/PointerHandoff.swift
-          xcrun swiftc evidence/v0.12.19/computer/PointerHandoff.swift -o "$RUNNER_TEMP/lbb-pointer-handoff-self-test"
+          node --check evidence/v0.12.20/computer/helper-evidence-rig.mjs
+          node evidence/v0.12.20/computer/helper-evidence-rig.mjs --self-test
+          xcrun swiftc -typecheck evidence/v0.12.20/computer/HelperEvidenceFixture.swift
+          xcrun swiftc -typecheck evidence/v0.12.20/computer/SystemProbe.swift
+          xcrun swiftc -typecheck evidence/v0.12.20/computer/PointerHandoff.swift
+          xcrun swiftc evidence/v0.12.20/computer/PointerHandoff.swift -o "$RUNNER_TEMP/lbb-pointer-handoff-self-test"
           "$RUNNER_TEMP/lbb-pointer-handoff-self-test" --self-test
       - name: Install the minimum supported Rust toolchain and targets
         run: |

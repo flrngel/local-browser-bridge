@@ -32,7 +32,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$script:ProductVersion = "0.12.19"
+$script:ProductVersion = "0.12.20"
 $script:MarkerSchemaVersion = 2
 $script:MaximumMarkerBytes = 16384
 $script:Utf8StrictNoBom = [Text.UTF8Encoding]::new($false, $true)
@@ -519,7 +519,7 @@ function New-SelfTestMarker {
     $actionRequired = $Status -ceq "action-required"
     $record = [ordered]@{
         schemaVersion = 2
-        productVersion = "0.12.19"
+        productVersion = "0.12.20"
         kind = "foreground-arm"
         status = $Status
         requestId = "0123456789abcdef0123456789abcdef"

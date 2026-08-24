@@ -23,7 +23,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $script:Utf8 = [Text.UTF8Encoding]::new($false, $true)
-$script:Version = "0.12.19"
+$script:Version = "0.12.20"
 
 function ConvertFrom-JsonPreservingStrings {
     param([Parameter(Mandatory = $true, ValueFromPipeline = $true)][string]$Json)
@@ -204,26 +204,18 @@ function Invoke-GitHubTokenRelay(
     $Pipe = New-PrivateTokenRelayPipe $PipeName
     $OneByte = New-Object byte[] 1
     try {
-        $Accept = $Pipe.BeginWaitForConnection($null, $null)
-        try {
-            if (-not $Accept.AsyncWaitHandle.WaitOne(
-                (Get-RemainingRelayMilliseconds $Deadline))) {
-                throw "The GitHub token relay timed out waiting for its one local client."
-            }
-            $Pipe.EndWaitForConnection($Accept)
+        $AcceptTask = $Pipe.WaitForConnectionAsync()
+        if (-not $AcceptTask.Wait((Get-RemainingRelayMilliseconds $Deadline))) {
+            throw "The GitHub token relay timed out waiting for its one local client."
         }
-        finally { $Accept.AsyncWaitHandle.Dispose() }
+        [void]$AcceptTask.GetAwaiter().GetResult()
         $Completed = $false
         for ($Count = 0; $Count -le 4096; $Count += 1) {
-            $ReadResult = $InputStream.BeginRead($OneByte, 0, 1, $null, $null)
-            try {
-                if (-not $ReadResult.AsyncWaitHandle.WaitOne(
-                    (Get-RemainingRelayMilliseconds $Deadline))) {
-                    throw "The GitHub token relay stdin stalled before its line terminator."
-                }
-                $ReadCount = $InputStream.EndRead($ReadResult)
+            $ReadTask = $InputStream.ReadAsync($OneByte, 0, 1)
+            if (-not $ReadTask.Wait((Get-RemainingRelayMilliseconds $Deadline))) {
+                throw "The GitHub token relay stdin stalled before its line terminator."
             }
-            finally { $ReadResult.AsyncWaitHandle.Dispose() }
+            $ReadCount = $ReadTask.GetAwaiter().GetResult()
             if ($ReadCount -ne 1) {
                 throw "The GitHub token relay stdin ended before its line terminator."
             }
@@ -235,15 +227,11 @@ function Invoke-GitHubTokenRelay(
             elseif ($Byte -lt 33 -or $Byte -gt 126) {
                 throw "The GitHub token relay accepts one bounded printable-ASCII line."
             }
-            $WriteResult = $Pipe.BeginWrite($OneByte, 0, 1, $null, $null)
-            try {
-                if (-not $WriteResult.AsyncWaitHandle.WaitOne(
-                    (Get-RemainingRelayMilliseconds $Deadline))) {
-                    throw "The GitHub token relay client stalled during delivery."
-                }
-                $Pipe.EndWrite($WriteResult)
+            $WriteTask = $Pipe.WriteAsync($OneByte, 0, 1)
+            if (-not $WriteTask.Wait((Get-RemainingRelayMilliseconds $Deadline))) {
+                throw "The GitHub token relay client stalled during delivery."
             }
-            finally { $WriteResult.AsyncWaitHandle.Dispose() }
+            [void]$WriteTask.GetAwaiter().GetResult()
             $OneByte[0] = 0
             if ($Completed) { break }
         }
@@ -254,6 +242,7 @@ function Invoke-GitHubTokenRelay(
         if (-not $Flush.Wait((Get-RemainingRelayMilliseconds $Deadline))) {
             throw "The GitHub token relay timed out while flushing its client."
         }
+        [void]$Flush.GetAwaiter().GetResult()
     }
     finally {
         [Array]::Clear($OneByte, 0, $OneByte.Length)
@@ -1278,45 +1267,47 @@ function Invoke-SelfTest {
             $SecondRef -cnotmatch '^[0-9a-f]{64}$' -or $FirstRef -ceq $SecondRef) {
             throw "Responder self-test did not create distinct CSPRNG session references."
         }
-        $RelayName = "lbb-gh-" + [Guid]::NewGuid().ToString("N")
-        $RelayClient = [IO.Pipes.NamedPipeClientStream]::new(
-            ".", $RelayName, [IO.Pipes.PipeDirection]::In,
-            [IO.Pipes.PipeOptions]::Asynchronous
-        )
-        $ConnectTask = $RelayClient.ConnectAsync(5000)
-        $DummyBytes = [Text.Encoding]::ASCII.GetBytes(
-            "github_pat_self_test_value_1234567890`n"
-        )
-        $RelayInput = [IO.MemoryStream]::new($DummyBytes, $false)
-        $Received = New-Object byte[] $DummyBytes.Length
-        try {
-            Invoke-GitHubTokenRelay $RelayName $RelayInput 5
-            if (-not $ConnectTask.Wait(5000) -or -not $RelayClient.IsConnected) {
-                throw "Responder self-test token relay client did not connect."
-            }
-            $Offset = 0
-            while ($Offset -lt $Received.Length) {
-                $Read = $RelayClient.Read($Received, $Offset, $Received.Length - $Offset)
-                if ($Read -le 0) { break }
-                $Offset += $Read
-            }
-            if ($Offset -ne $DummyBytes.Length) {
-                throw "Responder self-test token relay truncated its bounded input."
-            }
-            for ($Index = 0; $Index -lt $DummyBytes.Length; $Index += 1) {
-                if ($Received[$Index] -ne $DummyBytes[$Index]) {
-                    throw "Responder self-test token relay changed its bounded input."
+        foreach ($RelayIteration in 1..2) {
+            $RelayName = "lbb-gh-" + [Guid]::NewGuid().ToString("N")
+            $RelayClient = [IO.Pipes.NamedPipeClientStream]::new(
+                ".", $RelayName, [IO.Pipes.PipeDirection]::In,
+                [IO.Pipes.PipeOptions]::Asynchronous
+            )
+            $ConnectTask = $RelayClient.ConnectAsync(5000)
+            $DummyBytes = [Text.Encoding]::ASCII.GetBytes(
+                "github_pat_self_test_value_1234567890`n"
+            )
+            $RelayInput = [IO.MemoryStream]::new($DummyBytes, $false)
+            $Received = New-Object byte[] $DummyBytes.Length
+            try {
+                Invoke-GitHubTokenRelay $RelayName $RelayInput 5
+                if (-not $ConnectTask.Wait(5000) -or -not $RelayClient.IsConnected) {
+                    throw "Responder self-test token relay client did not connect."
+                }
+                $Offset = 0
+                while ($Offset -lt $Received.Length) {
+                    $Read = $RelayClient.Read($Received, $Offset, $Received.Length - $Offset)
+                    if ($Read -le 0) { break }
+                    $Offset += $Read
+                }
+                if ($Offset -ne $DummyBytes.Length) {
+                    throw "Responder self-test token relay truncated its bounded input."
+                }
+                for ($Index = 0; $Index -lt $DummyBytes.Length; $Index += 1) {
+                    if ($Received[$Index] -ne $DummyBytes[$Index]) {
+                        throw "Responder self-test token relay changed its bounded input."
+                    }
                 }
             }
-        }
-        finally {
-            $RelayInput.Dispose()
-            $RelayClient.Dispose()
-            if (-not $ConnectTask.IsCompleted) {
-                try { [void]$ConnectTask.Wait(1000) } catch {}
+            finally {
+                $RelayInput.Dispose()
+                $RelayClient.Dispose()
+                if (-not $ConnectTask.IsCompleted) {
+                    try { [void]$ConnectTask.Wait(1000) } catch {}
+                }
+                [Array]::Clear($Received, 0, $Received.Length)
+                [Array]::Clear($DummyBytes, 0, $DummyBytes.Length)
             }
-            [Array]::Clear($Received, 0, $Received.Length)
-            [Array]::Clear($DummyBytes, 0, $DummyBytes.Length)
         }
 
         foreach ($EscapingName in @("..\outside.png", "/outside.png", "C:\outside.png")) {
