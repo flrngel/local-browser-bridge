@@ -5,17 +5,160 @@ project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_root"
 
 version="$(bash scripts/audit-versions.sh)"
+dist_dir="$project_root/dist"
+release_stage=""
+validation_stage=""
+mac_stage=""
+publish_stage=""
+dist_rollback_parent=""
+dist_rollback_path=""
+dist_replacement_pending=0
+dist_publish_installing=0
+dist_publish_installed=0
+dist_publish_verified=0
+failed_publish_parent=""
+failed_publish_path=""
+
+is_recognized_generated_release_asset() {
+  local name="$1"
+  if [[ "$name" == "SHA256SUMS.txt" ]]; then
+    return 0
+  fi
+  if [[ "$name" =~ ^local-browser-bridge-v[0-9]+\.[0-9]+\.[0-9]+-windows-x86_64\.exe$ ]] \
+    || [[ "$name" =~ ^local-computer-helper-v[0-9]+\.[0-9]+\.[0-9]+-windows-x86_64\.exe$ ]] \
+    || [[ "$name" =~ ^local-browser-bridge-v[0-9]+\.[0-9]+\.[0-9]+-macos-universal\.tar\.gz$ ]] \
+    || [[ "$name" =~ ^local-browser-bridge-extension-v[0-9]+\.[0-9]+\.[0-9]+\.zip$ ]]; then
+    return 0
+  fi
+  return 1
+}
+
+validate_replaceable_dist() {
+  local candidate="$1"
+  if [[ -L "$candidate" ]]; then
+    echo "Refusing to replace a linked dist path: $candidate" >&2
+    return 1
+  fi
+  if [[ ! -e "$candidate" ]]; then
+    return 0
+  fi
+  if [[ ! -d "$candidate" || ! -r "$candidate" || ! -x "$candidate" ]]; then
+    echo "Refusing to replace dist because it is not a readable, searchable directory: $candidate" >&2
+    return 1
+  fi
+
+  local nullglob_was_set=0
+  local dotglob_was_set=0
+  shopt -q nullglob && nullglob_was_set=1
+  shopt -q dotglob && dotglob_was_set=1
+  shopt -s nullglob dotglob
+  local entries=("$candidate"/*)
+  (( nullglob_was_set == 1 )) || shopt -u nullglob
+  (( dotglob_was_set == 1 )) || shopt -u dotglob
+
+  local entry name
+  for entry in "${entries[@]}"; do
+    name="${entry##*/}"
+    if [[ -L "$entry" || ! -f "$entry" ]]; then
+      echo "Refusing to replace dist because it contains a linked or non-file entry: $name" >&2
+      return 1
+    fi
+    if ! is_recognized_generated_release_asset "$name"; then
+      echo "Refusing to replace dist because it contains an unrecognized entry: $name" >&2
+      return 1
+    fi
+  done
+}
+
+restore_dist_rollback() {
+  if (( dist_replacement_pending == 0 )); then
+    return 0
+  fi
+  if [[ -e "$dist_dir" || -L "$dist_dir" ]]; then
+    echo "Could not restore the previous dist because the destination is occupied; rollback retained at $dist_rollback_path" >&2
+    return 1
+  fi
+  if ! mv "$dist_rollback_path" "$dist_dir"; then
+    echo "Could not restore the previous dist; rollback retained at $dist_rollback_path" >&2
+    return 1
+  fi
+  dist_replacement_pending=0
+}
+
+quarantine_unverified_dist() {
+  if (( dist_publish_installed == 0 && dist_publish_installing == 0 )); then
+    return 0
+  fi
+  if (( dist_publish_installing == 1 )) \
+    && [[ -e "$publish_stage" || -L "$publish_stage" ]]; then
+    return 0
+  fi
+  if [[ ! -e "$dist_dir" && ! -L "$dist_dir" ]]; then
+    dist_publish_installing=0
+    dist_publish_installed=0
+    return 0
+  fi
+  if ! failed_publish_parent="$(mktemp -d "$project_root/.dist-failed.XXXXXX")"; then
+    echo "Could not allocate a quarantine for the unverified dist replacement." >&2
+    return 1
+  fi
+  failed_publish_path="$failed_publish_parent/dist"
+  if ! mv "$dist_dir" "$failed_publish_path"; then
+    echo "Could not quarantine the unverified dist replacement; the previous rollback remains at $dist_rollback_path" >&2
+    return 1
+  fi
+  dist_publish_installing=0
+  dist_publish_installed=0
+  echo "Preserved the unverified dist replacement at $failed_publish_path" >&2
+}
+
+cleanup() {
+  local status="$?"
+  trap - EXIT
+  set +e
+  if (( dist_publish_verified == 0 )); then
+    quarantine_unverified_dist || status=1
+  else
+    dist_replacement_pending=0
+  fi
+  if (( dist_replacement_pending == 1 )); then
+    restore_dist_rollback || status=1
+  fi
+  local temporary_path
+  for temporary_path in "$release_stage" "$validation_stage" "$mac_stage" "$publish_stage"; do
+    if [[ -n "$temporary_path" && ( -e "$temporary_path" || -L "$temporary_path" ) ]]; then
+      rm -rf "$temporary_path"
+    fi
+  done
+  if [[ -n "$dist_rollback_parent" && -d "$dist_rollback_parent" ]]; then
+    if [[ -n "$dist_rollback_path" && ( -e "$dist_rollback_path" || -L "$dist_rollback_path" ) ]]; then
+      echo "Preserved the previous dist rollback at $dist_rollback_path" >&2
+    else
+      rmdir "$dist_rollback_parent" 2>/dev/null || true
+    fi
+  fi
+  if [[ -n "$failed_publish_path" && ( -e "$failed_publish_path" || -L "$failed_publish_path" ) ]]; then
+    echo "Retained the failed dist publication at $failed_publish_path" >&2
+  fi
+  exit "$status"
+}
+
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 release_stage="$(mktemp -d)"
 validation_stage="$(mktemp -d)"
-trap 'rm -rf "$release_stage" "$validation_stage"' EXIT
+validate_replaceable_dist "$dist_dir"
 
 node --check scripts/wait-macos-app-share-concurrency-handoff.mjs
 node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test
 node --check scripts/finalize-macos-acceptance.mjs
 node scripts/finalize-macos-acceptance.mjs --self-test
-node --check evidence/v0.12.26/computer/helper-evidence-rig.mjs
-node evidence/v0.12.26/computer/helper-evidence-rig.mjs --self-test
+node --check evidence/v0.12.27/computer/helper-evidence-rig.mjs
+node evidence/v0.12.27/computer/helper-evidence-rig.mjs --self-test
 bash -n scripts/fetch-verify-release-candidate.sh
+bash scripts/fetch-verify-release-candidate.sh --self-test
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
@@ -87,17 +230,16 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 bash scripts/verify-macos-build-host.sh
-xcrun swiftc -typecheck evidence/v0.12.26/computer/HelperEvidenceFixture.swift
-xcrun swiftc -typecheck evidence/v0.12.26/computer/SystemProbe.swift
-xcrun swiftc -typecheck evidence/v0.12.26/computer/AppShareHandoff.swift
+xcrun swiftc -typecheck evidence/v0.12.27/computer/HelperEvidenceFixture.swift
+xcrun swiftc -typecheck evidence/v0.12.27/computer/SystemProbe.swift
+xcrun swiftc -typecheck evidence/v0.12.27/computer/AppShareHandoff.swift
 app_share_handoff_self_test="$validation_stage/lbb-app-share-handoff-self-test"
-xcrun swiftc evidence/v0.12.26/computer/AppShareHandoff.swift -o "$app_share_handoff_self_test"
+xcrun swiftc evidence/v0.12.27/computer/AppShareHandoff.swift -o "$app_share_handoff_self_test"
 "$app_share_handoff_self_test" --self-test
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 cargo build --locked --release --bins --target aarch64-apple-darwin
 cargo build --locked --release --bins --target x86_64-apple-darwin
 mac_stage="$(mktemp -d)"
-trap 'rm -rf "$release_stage" "$validation_stage" "$mac_stage"' EXIT
 mkdir -p "$mac_stage/Local Computer Helper.app/Contents/MacOS"
 cp LICENSE THIRD_PARTY_LICENSES.txt "$mac_stage/"
 chmod 644 "$mac_stage/LICENSE" "$mac_stage/THIRD_PARTY_LICENSES.txt"
@@ -151,10 +293,52 @@ tar -tzf "$mac_output" | grep -Fxq local-browser-bridge
 tar -tzf "$mac_output" | grep -Fxq "Local Computer Helper.app/Contents/MacOS/local-computer-helper"
 bash scripts/verify-release-assets.sh "$version" "$release_stage"
 
-mkdir -p dist
+publish_stage="$(mktemp -d "$project_root/.dist-publish.XXXXXX")"
 for asset in "${assets[@]}" SHA256SUMS.txt; do
-  cp "$release_stage/$asset" "dist/$asset"
+  cp "$release_stage/$asset" "$publish_stage/$asset"
 done
+bash scripts/verify-release-assets.sh "$version" "$publish_stage"
+
+validate_replaceable_dist "$dist_dir"
+if [[ -e "$dist_dir" ]]; then
+  dist_rollback_parent="$(mktemp -d "$project_root/.dist-rollback.XXXXXX")"
+  dist_rollback_path="$dist_rollback_parent/dist"
+  if ! mv "$dist_dir" "$dist_rollback_path"; then
+    echo "Failed to move the previous dist into its rollback directory." >&2
+    exit 1
+  fi
+  dist_replacement_pending=1
+  validate_replaceable_dist "$dist_rollback_path"
+fi
+if [[ -e "$dist_dir" || -L "$dist_dir" ]]; then
+  echo "Refusing to publish because dist changed during replacement." >&2
+  restore_dist_rollback || true
+  exit 1
+fi
+dist_publish_installing=1
+if ! mv "$publish_stage" "$dist_dir"; then
+  dist_publish_installing=0
+  echo "Failed to install the verified dist replacement." >&2
+  restore_dist_rollback || true
+  exit 1
+fi
+dist_publish_installed=1
+dist_publish_installing=0
+publish_stage=""
+if ! bash scripts/verify-release-assets.sh "$version" "$dist_dir"; then
+  echo "The installed dist replacement failed verification." >&2
+  quarantine_unverified_dist || true
+  restore_dist_rollback || true
+  exit 1
+fi
+dist_publish_verified=1
+dist_publish_installed=0
+dist_replacement_pending=0
+if [[ -n "$dist_rollback_parent" ]]; then
+  rm -rf "$dist_rollback_parent"
+  dist_rollback_parent=""
+  dist_rollback_path=""
+fi
 
 echo "Created and verified Local Browser Bridge $version:"
 printf '  %s\n' \

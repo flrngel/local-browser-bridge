@@ -6,7 +6,7 @@ export LC_ALL=C
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly API_VERSION="2026-03-10"
 readonly RECEIPT_SCHEMA_VERSION="2"
-readonly EVIDENCE_PRODUCT_VERSION="0.12.26"
+readonly EVIDENCE_PRODUCT_VERSION="0.12.27"
 readonly EVIDENCE_MAX_BLOB_BYTES=20971520
 readonly EVIDENCE_MAX_TOTAL_BYTES=209715200
 readonly EVIDENCE_MAX_PATH_BYTES=1024
@@ -40,6 +40,156 @@ is_sha256() {
 
 is_positive_integer() {
   [[ "$1" =~ ^[1-9][0-9]*$ ]]
+}
+
+# Keep this filter as one production and self-test contract. GitHub can return
+# more than one valid attestation when a rerun reproduces byte-identical assets.
+# Every result must still be a well-formed, same-run, GitHub-hosted provenance
+# statement for the exact subject; exactly one result must name this attempt.
+# BEGIN EXACT_ATTEMPT_ATTESTATION_FILTER
+EXACT_ATTEMPT_ATTESTATION_FILTER='
+  def canonical_sha256:
+    type == "string" and test("^[0-9a-f]{64}$");
+  def valid_subjects:
+    try (
+      type == "array" and length >= 1 and
+      all(.[];
+        type == "object" and
+        (.name | type) == "string" and
+        (.digest | type) == "object" and
+        (.digest.sha256 | canonical_sha256)
+      ) and
+      ([.[] | select(
+        .name == $subject_name and .digest.sha256 == $subject_sha256
+      )] | length) == 1
+    ) catch false;
+  def valid_attestation:
+    try (
+      type == "object" and
+      (.verificationResult | type) == "object" and
+      (.verificationResult.statement | type) == "object" and
+      (.verificationResult.statement.predicate | type) == "object" and
+      (.verificationResult.statement.predicate.buildDefinition | type) == "object" and
+      (.verificationResult.statement.predicate.buildDefinition.externalParameters | type) == "object" and
+      (.verificationResult.statement.predicate.buildDefinition.externalParameters.workflow | type) == "object" and
+      (.verificationResult.statement.predicate.runDetails | type) == "object" and
+      (.verificationResult.statement.predicate.runDetails.metadata | type) == "object" and
+      (.verificationResult.signature | type) == "object" and
+      (.verificationResult.signature.certificate | type) == "object" and
+      .verificationResult.statement.predicateType == "https://slsa.dev/provenance/v1" and
+      .verificationResult.statement.predicate.buildDefinition.buildType == "https://actions.github.io/buildtypes/workflow/v1" and
+      .verificationResult.statement.predicate.buildDefinition.externalParameters.workflow.path == $workflow and
+      .verificationResult.statement.predicate.buildDefinition.externalParameters.workflow.ref == $tag_ref and
+      .verificationResult.statement.predicate.buildDefinition.externalParameters.workflow.repository == ("https://github.com/" + $repository) and
+      (.verificationResult.statement.predicate.runDetails.metadata.invocationId | type) == "string" and
+      (.verificationResult.signature.certificate.runInvocationURI | type) == "string" and
+      .verificationResult.statement.predicate.runDetails.metadata.invocationId ==
+        .verificationResult.signature.certificate.runInvocationURI and
+      (.verificationResult.statement.predicate.runDetails.metadata.invocationId as $entry_invocation |
+        $entry_invocation | startswith($same_run_invocation_prefix)) and
+      (.verificationResult.statement.predicate.runDetails.metadata.invocationId as $entry_invocation |
+        $entry_invocation[($same_run_invocation_prefix | length):] |
+        test("^[1-9][0-9]*$")) and
+      .verificationResult.signature.certificate.githubWorkflowSHA == $source and
+      .verificationResult.signature.certificate.githubWorkflowRepository == $repository and
+      .verificationResult.signature.certificate.githubWorkflowRef == $tag_ref and
+      .verificationResult.signature.certificate.runnerEnvironment == "github-hosted" and
+      .verificationResult.signature.certificate.sourceRepositoryDigest == $source and
+      .verificationResult.signature.certificate.sourceRepositoryRef == $tag_ref and
+      (.verificationResult.statement.subject | valid_subjects)
+    ) catch false;
+  try (
+    type == "array" and length >= 1 and
+    all(.[]; valid_attestation) and
+    ([.[] | select(
+      .verificationResult.statement.predicate.runDetails.metadata.invocationId == $invocation and
+      .verificationResult.signature.certificate.runInvocationURI == $invocation
+    )] | length) == 1
+  ) catch false
+'
+# END EXACT_ATTEMPT_ATTESTATION_FILTER
+
+verify_exact_attempt_attestation_set() {
+  local input_path=$1
+  local invocation=$2
+  local repository=$3
+  local run_id=$4
+  local source=$5
+  local tag_ref=$6
+  local workflow=$7
+  local subject_name=$8
+  local subject_sha256=$9
+  local same_run_invocation_prefix
+  same_run_invocation_prefix="https://github.com/${repository}/actions/runs/${run_id}/attempts/"
+  jq -e \
+    --arg invocation "$invocation" \
+    --arg same_run_invocation_prefix "$same_run_invocation_prefix" \
+    --arg repository "$repository" \
+    --arg source "$source" \
+    --arg tag_ref "$tag_ref" \
+    --arg workflow "$workflow" \
+    --arg subject_name "$subject_name" \
+    --arg subject_sha256 "$subject_sha256" \
+    "$EXACT_ATTEMPT_ATTESTATION_FILTER" "$input_path" >/dev/null
+}
+
+self_test_attestation_selection() {
+  local repository="flrngel/local-browser-bridge"
+  local run_id="123456789"
+  local source="1111111111111111111111111111111111111111"
+  local tag_ref="refs/tags/v0.0.0"
+  local workflow=".github/workflows/deploy.yml"
+  local subject_name="fixture.bin"
+  local subject_sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  local old_invocation="https://github.com/$repository/actions/runs/$run_id/attempts/1"
+  local current_invocation="https://github.com/$repository/actions/runs/$run_id/attempts/2"
+  local old current
+  old=$(jq -cn \
+    --arg invocation "$old_invocation" --arg repository "$repository" \
+    --arg source "$source" --arg tag_ref "$tag_ref" --arg workflow "$workflow" \
+    --arg subject_name "$subject_name" --arg subject_sha256 "$subject_sha256" '
+      {verificationResult:{statement:{predicateType:"https://slsa.dev/provenance/v1",
+      subject:[{name:$subject_name,digest:{sha256:$subject_sha256}}],predicate:{
+      buildDefinition:{buildType:"https://actions.github.io/buildtypes/workflow/v1",
+      externalParameters:{workflow:{path:$workflow,ref:$tag_ref,
+      repository:("https://github.com/" + $repository)}}},
+      runDetails:{metadata:{invocationId:$invocation}}}},signature:{certificate:{
+      runInvocationURI:$invocation,githubWorkflowSHA:$source,
+      githubWorkflowRepository:$repository,githubWorkflowRef:$tag_ref,
+      runnerEnvironment:"github-hosted",sourceRepositoryDigest:$source,
+      sourceRepositoryRef:$tag_ref}}}}')
+  current=$(jq -cn --argjson base "$old" --arg invocation "$current_invocation" '
+    $base |
+    .verificationResult.statement.predicate.runDetails.metadata.invocationId = $invocation |
+    .verificationResult.signature.certificate.runInvocationURI = $invocation')
+
+  if ! jq -cn --argjson old "$old" --argjson current "$current" '[$old,$current]' |
+    verify_exact_attempt_attestation_set - "$current_invocation" "$repository" "$run_id" \
+      "$source" "$tag_ref" "$workflow" "$subject_name" "$subject_sha256"; then
+    die "attestation selection self-test rejected one old plus one current result"
+  fi
+  if jq -cn --argjson old "$old" '[$old]' |
+    verify_exact_attempt_attestation_set - "$current_invocation" "$repository" "$run_id" \
+      "$source" "$tag_ref" "$workflow" "$subject_name" "$subject_sha256"; then
+    die "attestation selection self-test accepted an old-only result"
+  fi
+  if jq -cn --argjson current "$current" '[$current,$current]' |
+    verify_exact_attempt_attestation_set - "$current_invocation" "$repository" "$run_id" \
+      "$source" "$tag_ref" "$workflow" "$subject_name" "$subject_sha256"; then
+    die "attestation selection self-test accepted duplicate current results"
+  fi
+  if jq -cn --argjson old "$old" --argjson current "$current" \
+      '[$old,($current | del(.verificationResult.signature.certificate))]' |
+    verify_exact_attempt_attestation_set - "$current_invocation" "$repository" "$run_id" \
+      "$source" "$tag_ref" "$workflow" "$subject_name" "$subject_sha256"; then
+    die "attestation selection self-test accepted a malformed current result"
+  fi
+  if jq -cn --argjson old "$old" --argjson current "$current" \
+      '[$old,($current | .verificationResult.statement.subject[0].name = "wrong.bin")]' |
+    verify_exact_attempt_attestation_set - "$current_invocation" "$repository" "$run_id" \
+      "$source" "$tag_ref" "$workflow" "$subject_name" "$subject_sha256"; then
+    die "attestation selection self-test accepted a wrong current subject"
+  fi
 }
 
 is_canonical_decimal_at_most() {
@@ -596,32 +746,11 @@ PY
       --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/deploy.yml" \
       --deny-self-hosted-runners \
       --format json > "$attestation_json"
-    jq -e \
-      --arg invocation "$expected_invocation_uri" \
-      --arg repository "$GITHUB_REPOSITORY" \
-      --arg source_sha "$VERIFIED_SOURCE_SHA" \
-      --arg tag_ref "refs/tags/$RELEASE_TAG" \
-      --arg subject_name "$attested_asset" \
-      --arg subject_sha256 "$attested_sha256" '
-        (type == "array") and (length >= 1) and all(.[];
-          .verificationResult.statement.predicateType == "https://slsa.dev/provenance/v1"
-          and .verificationResult.statement.predicate.buildDefinition.buildType == "https://actions.github.io/buildtypes/workflow/v1"
-          and .verificationResult.statement.predicate.buildDefinition.externalParameters.workflow.path == ".github/workflows/deploy.yml"
-          and .verificationResult.statement.predicate.buildDefinition.externalParameters.workflow.ref == $tag_ref
-          and .verificationResult.statement.predicate.buildDefinition.externalParameters.workflow.repository == ("https://github.com/" + $repository)
-          and .verificationResult.statement.predicate.runDetails.metadata.invocationId == $invocation
-          and .verificationResult.signature.certificate.runInvocationURI == $invocation
-          and .verificationResult.signature.certificate.githubWorkflowSHA == $source_sha
-          and .verificationResult.signature.certificate.githubWorkflowRepository == $repository
-          and .verificationResult.signature.certificate.githubWorkflowRef == $tag_ref
-          and .verificationResult.signature.certificate.runnerEnvironment == "github-hosted"
-          and .verificationResult.signature.certificate.sourceRepositoryDigest == $source_sha
-          and .verificationResult.signature.certificate.sourceRepositoryRef == $tag_ref
-          and any(.verificationResult.statement.subject[];
-            .name == $subject_name and .digest.sha256 == $subject_sha256)
-        )
-      ' "$attestation_json" >/dev/null \
-      || die "candidate provenance did not bind the exact workflow attempt: $attested_asset"
+    verify_exact_attempt_attestation_set \
+      "$attestation_json" "$expected_invocation_uri" "$GITHUB_REPOSITORY" \
+      "$GITHUB_RUN_ID" "$VERIFIED_SOURCE_SHA" "refs/tags/$RELEASE_TAG" \
+      ".github/workflows/deploy.yml" "$attested_asset" "$attested_sha256" ||
+      die "candidate provenance did not bind one exact workflow-attempt attestation: $attested_asset"
   done
   test "$(sha256_file "$extracted/SHA256SUMS.txt")" = "$(jq -er '.checksumManifestSha256' "$receipt_file")" \
     || die "raw artifact checksum manifest does not match the receipt"
@@ -1994,7 +2123,7 @@ PY
   jq -e '
       .schemaVersion == 1
       and .evidenceType == "stock-user-chrome-api-matrix"
-      and .version == "0.12.26" and .target == "loopback-demo" and .passed == true
+      and .version == "0.12.27" and .target == "loopback-demo" and .passed == true
       and .methodCount == 25 and (.methods | length) == 25
       and ([.methods[].name] == [
         "status","browser.control.start","browser.control.status","browser.control.stop",
@@ -2033,7 +2162,7 @@ PY
       . as $root
       |
       .schemaVersion == 2 and .evidenceType == "stock-user-chrome-computer-helper-chain"
-      and .version == "0.12.26" and .passed == true
+      and .version == "0.12.27" and .passed == true
       and .server.soleListener == "127.0.0.1:17373" and .server.updateCheckDisabled == true
       and .helper.connectedThroughLoopbackServer == true and .helper.serverApiOnly == true
       and .extensionPayload.fileCount == 11
@@ -2172,7 +2301,7 @@ PY
       and ([.computerHelperChain[] | select(type == "boolean")] | all(. == true))
       and .initialState.capturedBeforeRelevantMutation == true
       and .initialState.candidateExtensionPresent == false and .initialState.savedTokenConfigured == false
-      and .extension.cardCount == 1 and .extension.version == "0.12.26" and .extension.enabled == true
+      and .extension.cardCount == 1 and .extension.version == "0.12.27" and .extension.enabled == true
       and .extension.loadErrors == 0 and .extension.loadedVia == "chrome://extensions-load-unpacked"
       and .extension.loadedDirectoryByteMatchesCandidateZip == true and .extension.popupConnected == true
       and .extension.debuggerLeaseActiveAtFirstCapture == true and .extension.nativeDebuggerUseIndicatorSeen == true
@@ -2961,15 +3090,16 @@ self_test() {
   local sha1_b="2222222222222222222222222222222222222222"
   local sha256_a="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   local receipt="$scratch/receipt.json"
-  printf '%s' '{"schemaVersion":2,"tag":"v0.12.26","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"1","releaseCandidateArtifactId":"456","releaseCandidateArtifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","evidenceRef":"refs/heads/evidence/v0.12.26-release-run-123-attempt-1","evidenceCommitSha":"3333333333333333333333333333333333333333","macosPassed":true,"macosAcceptanceSha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","macosQuietResultSha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","macosDeliberateConcurrencyResultSha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","windowsPassed":true,"windowsResultSha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","stockChromePassed":true,"stockChrome":true,"stockChromeResultSha256":"9999999999999999999999999999999999999999999999999999999999999999"}' > "$receipt"
-  validate_receipt "$receipt" v0.12.26 "$sha1_a" "$sha1_b" 123 1 "$sha256_a" \
+  self_test_attestation_selection
+  printf '%s' '{"schemaVersion":2,"tag":"v0.12.27","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"1","releaseCandidateArtifactId":"456","releaseCandidateArtifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","evidenceRef":"refs/heads/evidence/v0.12.27-release-run-123-attempt-1","evidenceCommitSha":"3333333333333333333333333333333333333333","macosPassed":true,"macosAcceptanceSha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","macosQuietResultSha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","macosDeliberateConcurrencyResultSha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","windowsPassed":true,"windowsResultSha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","stockChromePassed":true,"stockChrome":true,"stockChromeResultSha256":"9999999999999999999999999999999999999999999999999999999999999999"}' > "$receipt"
+  validate_receipt "$receipt" v0.12.27 "$sha1_a" "$sha1_b" 123 1 "$sha256_a" \
     || die "self-test rejected a valid canonical schema-2 receipt"
   jq -cS . "$receipt" > "$scratch/noncanonical.json"
-  if validate_receipt "$scratch/noncanonical.json" v0.12.26 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
+  if validate_receipt "$scratch/noncanonical.json" v0.12.27 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
     die "self-test accepted reordered receipt keys"
   fi
   jq -c '.schemaVersion = 1' "$receipt" > "$scratch/stale.json"
-  if validate_receipt "$scratch/stale.json" v0.12.26 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
+  if validate_receipt "$scratch/stale.json" v0.12.27 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
     die "self-test accepted a stale schema-1 receipt"
   fi
   mkdir "$scratch/safe"
@@ -2989,7 +3119,7 @@ self_test() {
   fi
 
   EXPECTED_RELEASE_CANDIDATE_BINDING="$scratch/expected-binding.json"
-  printf '%s' '{"productVersion":"0.12.26","repository":"flrngel/local-browser-bridge","tag":"v0.12.26","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"2","artifactId":"456","artifactName":"release-candidate","artifactZipBytes":789,"artifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","attestationInvocationUri":"https://github.com/flrngel/local-browser-bridge/actions/runs/123/attempts/2","attestedAssetCount":5,"githubHostedRunner":true,"assets":[]}' > "$EXPECTED_RELEASE_CANDIDATE_BINDING"
+  printf '%s' '{"productVersion":"0.12.27","repository":"flrngel/local-browser-bridge","tag":"v0.12.27","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"2","artifactId":"456","artifactName":"release-candidate","artifactZipBytes":789,"artifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","attestationInvocationUri":"https://github.com/flrngel/local-browser-bridge/actions/runs/123/attempts/2","attestedAssetCount":5,"githubHostedRunner":true,"assets":[]}' > "$EXPECTED_RELEASE_CANDIDATE_BINDING"
   printf '%s' "{\"releaseCandidateBinding\":$(<"$EXPECTED_RELEASE_CANDIDATE_BINDING")}" > "$scratch/current-binding.json"
   assert_release_candidate_binding "$scratch/current-binding.json" '.releaseCandidateBinding'
   jq -c '.releaseCandidateBinding.workflowRunAttempt = "1"' "$scratch/current-binding.json" > "$scratch/replayed-binding.json"

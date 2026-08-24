@@ -83,8 +83,8 @@ fn windows_candidate_binder_is_a_clean_child_binary_safe_fail_closed_gate() {
         "Executing trust wrapper does not match the exact tagged wrapper blob.",
         "\"attestation\", \"verify\"",
         "--deny-self-hosted-runners\", \"--format\", \"json",
-        "$Predicate.runDetails.metadata.invocationId -cne $ExpectedInvocationUri",
-        "$Certificate.runInvocationURI -cne $ExpectedInvocationUri",
+        "$EntryInvocation -cne $CertificateInvocation",
+        "$CurrentAttemptCount -ne 1",
         "$Certificate.githubWorkflowSHA -cne $SourceSha",
         "$Certificate.githubWorkflowRepository -cne $Repository",
         "$Certificate.runnerEnvironment -cne \"github-hosted\"",
@@ -141,6 +141,117 @@ fn windows_candidate_binder_is_a_clean_child_binary_safe_fail_closed_gate() {
     assert!(
         script.contains("$ExpectedArtifactSha256 = ([string]$DirectArtifact.digest).Substring(7)")
     );
+}
+
+#[test]
+fn all_candidate_consumers_select_one_exact_attempt_from_valid_same_run_attestations() {
+    let bash_paths = [
+        "scripts/fetch-verify-release-candidate.sh",
+        "scripts/verify-release-acceptance-evidence.sh",
+    ];
+    let powershell_paths = [
+        "scripts/verify-windows-release-candidate.ps1",
+        "scripts/test-windows-stock-chrome.ps1",
+    ];
+
+    let bash_sources: Vec<String> = bash_paths
+        .iter()
+        .map(|path| normalized_source(path))
+        .collect();
+    let bash_filters: Vec<&str> = bash_sources
+        .iter()
+        .map(|source| {
+            source
+                .split("# BEGIN EXACT_ATTEMPT_ATTESTATION_FILTER\n")
+                .nth(1)
+                .unwrap()
+                .split("# END EXACT_ATTEMPT_ATTESTATION_FILTER")
+                .next()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(
+        bash_filters[0], bash_filters[1],
+        "both Bash trust gates must execute the same attestation selector"
+    );
+    for required in [
+        "all(.[]; valid_attestation)",
+        "$entry_invocation | startswith($same_run_invocation_prefix)",
+        "test(\"^[1-9][0-9]*$\")",
+        ".verificationResult.statement.predicate.runDetails.metadata.invocationId ==\n        .verificationResult.signature.certificate.runInvocationURI",
+        "([.[] | select(\n        .name == $subject_name and .digest.sha256 == $subject_sha256\n      )] | length) == 1",
+        "([.[] | select(\n      .verificationResult.statement.predicate.runDetails.metadata.invocationId == $invocation",
+        ")] | length) == 1",
+    ] {
+        assert!(
+            bash_filters[0].contains(required),
+            "Bash attestation selector is missing `{required}`"
+        );
+    }
+    assert!(!bash_filters[0].contains("test($same_run_invocation_pattern)"));
+    for source in &bash_sources {
+        for case in [
+            "old-only",
+            "duplicate current",
+            "malformed current",
+            "wrong current subject",
+        ] {
+            assert!(
+                source.contains(case),
+                "Bash attestation self-test is missing `{case}`"
+            );
+        }
+        assert!(source.contains("verify_exact_attempt_attestation_set"));
+    }
+
+    let powershell_sources: Vec<String> = powershell_paths
+        .iter()
+        .map(|path| normalized_source(path))
+        .collect();
+    let powershell_selectors: Vec<&str> = powershell_sources
+        .iter()
+        .map(|source| {
+            source
+                .split("# BEGIN EXACT_ATTEMPT_ATTESTATION_SELECTOR\n")
+                .nth(1)
+                .unwrap()
+                .split("# END EXACT_ATTEMPT_ATTESTATION_SELECTOR")
+                .next()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(
+        powershell_selectors[0], powershell_selectors[1],
+        "both Windows trust gates must execute the same attestation selector"
+    );
+    for required in [
+        "$ExpectedInvocationUri.StartsWith($SameRunInvocationPrefix, [StringComparison]::Ordinal)",
+        "$EntryInvocation.StartsWith($SameRunInvocationPrefix, [StringComparison]::Ordinal)",
+        "$EntryAttemptSuffix -cnotmatch '^[1-9][0-9]*$'",
+        "$EntryInvocation -cne $CertificateInvocation",
+        "$MatchingSubjects.Count -ne 1",
+        "$CurrentAttemptCount -ne 1",
+        "malformed, unrelated, or ambiguous statement",
+    ] {
+        assert!(
+            powershell_selectors[0].contains(required),
+            "PowerShell attestation selector is missing `{required}`"
+        );
+    }
+    for source in &powershell_sources {
+        for case in [
+            "old-only",
+            "duplicate-current",
+            "malformed-current",
+            "wrong-current-subject",
+        ] {
+            assert!(
+                source.contains(case),
+                "PowerShell attestation self-test is missing `{case}`"
+            );
+        }
+        assert!(source.contains("Invoke-AttestationSelectionSelfTest"));
+    }
 }
 
 #[test]

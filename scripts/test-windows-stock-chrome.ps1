@@ -56,6 +56,202 @@ function Set-DirectoryAccessControlPortable(
   }
 }
 
+# GitHub can return more than one valid attestation when a workflow rerun
+# reproduces byte-identical assets. Historical entries are admissible only
+# when they remain fully valid for the same run and exact subject. Exactly one
+# entry must bind the expected attempt.
+# BEGIN EXACT_ATTEMPT_ATTESTATION_SELECTOR
+function Assert-ExactAttemptAttestationSet(
+  [object[]]$Attestations,
+  [string]$ExpectedInvocationUri,
+  [string]$WorkflowRunId,
+  [string]$WorkflowPath,
+  [string]$Repository,
+  [string]$TagRef,
+  [string]$SourceSha,
+  [string]$SubjectName,
+  [string]$SubjectSha256
+) {
+  $SameRunInvocationPrefix = "https://github.com/$Repository/actions/runs/$WorkflowRunId/attempts/"
+  $ExpectedAttemptSuffix = $(if ($null -ne $ExpectedInvocationUri -and
+      $ExpectedInvocationUri.StartsWith($SameRunInvocationPrefix, [StringComparison]::Ordinal)) {
+    $ExpectedInvocationUri.Substring($SameRunInvocationPrefix.Length)
+  } else { "" })
+  if ($null -eq $Attestations -or $Attestations.Count -lt 1 -or
+      $ExpectedAttemptSuffix -cnotmatch '^[1-9][0-9]*$' -or
+      [String]::IsNullOrWhiteSpace($WorkflowPath) -or
+      [String]::IsNullOrWhiteSpace($SubjectName) -or
+      $SourceSha -cnotmatch '^[0-9a-f]{40}$' -or
+      $SubjectSha256 -cnotmatch '^[0-9a-f]{64}$') {
+    throw "GitHub attestation selection inputs are invalid."
+  }
+  $CurrentAttemptCount = 0
+  foreach ($Attestation in $Attestations) {
+    $EntryIsValid = $false
+    $EntryInvocation = $null
+    try {
+      if ($null -eq $Attestation -or $Attestation -is [string] -or
+          $Attestation -is [ValueType]) {
+        throw "Attestation entry is not an object."
+      }
+      $Verification = $Attestation.verificationResult
+      $Statement = $Verification.statement
+      $Predicate = $Statement.predicate
+      $BuildDefinition = $Predicate.buildDefinition
+      $Workflow = $BuildDefinition.externalParameters.workflow
+      $Certificate = $Verification.signature.certificate
+      if ($null -eq $Verification -or $null -eq $Statement -or
+          $null -eq $Predicate -or $null -eq $BuildDefinition -or
+          $null -eq $Workflow -or $null -eq $Certificate -or
+          $Statement.subject -isnot [Array]) {
+        throw "Attestation entry is missing a required object or array."
+      }
+      $AllSubjects = @($Statement.subject)
+      if ($AllSubjects.Count -lt 1) { throw "Attestation subject array is empty." }
+      foreach ($Subject in $AllSubjects) {
+        if ($null -eq $Subject -or $Subject -is [string] -or
+            $Subject -is [ValueType] -or $Subject.name -isnot [string] -or
+            $null -eq $Subject.digest -or $Subject.digest.sha256 -isnot [string] -or
+            [string]$Subject.digest.sha256 -cnotmatch '^[0-9a-f]{64}$') {
+          throw "Attestation subject shape is invalid."
+        }
+      }
+      $MatchingSubjects = @($AllSubjects | Where-Object {
+        $_.name -ceq $SubjectName -and $_.digest.sha256 -ceq $SubjectSha256
+      })
+      $EntryInvocation = $Predicate.runDetails.metadata.invocationId
+      $CertificateInvocation = $Certificate.runInvocationURI
+      $EntryAttemptSuffix = $(if ($EntryInvocation -is [string] -and
+          $EntryInvocation.StartsWith($SameRunInvocationPrefix, [StringComparison]::Ordinal)) {
+        $EntryInvocation.Substring($SameRunInvocationPrefix.Length)
+      } else { "" })
+      if ($EntryInvocation -isnot [string] -or $CertificateInvocation -isnot [string] -or
+          $EntryInvocation -cne $CertificateInvocation -or
+          $EntryAttemptSuffix -cnotmatch '^[1-9][0-9]*$' -or
+          $Statement.predicateType -cne "https://slsa.dev/provenance/v1" -or
+          $BuildDefinition.buildType -cne "https://actions.github.io/buildtypes/workflow/v1" -or
+          $Workflow.path -cne $WorkflowPath -or $Workflow.ref -cne $TagRef -or
+          $Workflow.repository -cne "https://github.com/$Repository" -or
+          $Certificate.githubWorkflowSHA -cne $SourceSha -or
+          $Certificate.githubWorkflowRepository -cne $Repository -or
+          $Certificate.githubWorkflowRef -cne $TagRef -or
+          $Certificate.runnerEnvironment -cne "github-hosted" -or
+          $Certificate.sourceRepositoryDigest -cne $SourceSha -or
+          $Certificate.sourceRepositoryRef -cne $TagRef -or
+          $MatchingSubjects.Count -ne 1) {
+        throw "Attestation entry is not exact and unambiguous."
+      }
+      $EntryIsValid = $true
+    }
+    catch { $EntryIsValid = $false }
+    if (-not $EntryIsValid) {
+      throw "GitHub attestation set contains a malformed, unrelated, or ambiguous statement."
+    }
+    if ($EntryInvocation -ceq $ExpectedInvocationUri) { $CurrentAttemptCount += 1 }
+  }
+  if ($CurrentAttemptCount -ne 1) {
+    throw "GitHub attestation set does not contain exactly one current-attempt statement."
+  }
+}
+# END EXACT_ATTEMPT_ATTESTATION_SELECTOR
+
+function New-AttestationSelectionSelfTestEntry(
+  [string]$Invocation,
+  [string]$Repository,
+  [string]$WorkflowPath,
+  [string]$TagRef,
+  [string]$SourceSha,
+  [string]$SubjectName,
+  [string]$SubjectSha256
+) {
+  return [pscustomobject]@{
+    verificationResult = [pscustomobject]@{
+      statement = [pscustomobject]@{
+        predicateType = "https://slsa.dev/provenance/v1"
+        subject = @([pscustomobject]@{
+          name = $SubjectName
+          digest = [pscustomobject]@{ sha256 = $SubjectSha256 }
+        })
+        predicate = [pscustomobject]@{
+          buildDefinition = [pscustomobject]@{
+            buildType = "https://actions.github.io/buildtypes/workflow/v1"
+            externalParameters = [pscustomobject]@{ workflow = [pscustomobject]@{
+              path = $WorkflowPath
+              ref = $TagRef
+              repository = "https://github.com/$Repository"
+            }}
+          }
+          runDetails = [pscustomobject]@{
+            metadata = [pscustomobject]@{ invocationId = $Invocation }
+          }
+        }
+      }
+      signature = [pscustomobject]@{ certificate = [pscustomobject]@{
+        runInvocationURI = $Invocation
+        githubWorkflowSHA = $SourceSha
+        githubWorkflowRepository = $Repository
+        githubWorkflowRef = $TagRef
+        runnerEnvironment = "github-hosted"
+        sourceRepositoryDigest = $SourceSha
+        sourceRepositoryRef = $TagRef
+      }}
+    }
+  }
+}
+
+function Invoke-AttestationSelectionSelfTest {
+  $TestRepository = "flrngel/local-browser-bridge"
+  $TestRunId = "123456789"
+  $TestWorkflow = ".github/workflows/deploy.yml"
+  $TestTagRef = "refs/tags/v0.0.0"
+  $TestSource = "1111111111111111111111111111111111111111"
+  $TestSubject = "fixture.bin"
+  $TestSubjectSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  $OldInvocation = "https://github.com/$TestRepository/actions/runs/$TestRunId/attempts/1"
+  $CurrentInvocation = "https://github.com/$TestRepository/actions/runs/$TestRunId/attempts/2"
+  $Old = New-AttestationSelectionSelfTestEntry `
+    $OldInvocation $TestRepository $TestWorkflow $TestTagRef $TestSource $TestSubject $TestSubjectSha
+  $Current = New-AttestationSelectionSelfTestEntry `
+    $CurrentInvocation $TestRepository $TestWorkflow $TestTagRef $TestSource $TestSubject $TestSubjectSha
+  $Arguments = @{
+    ExpectedInvocationUri = $CurrentInvocation
+    WorkflowRunId = $TestRunId
+    WorkflowPath = $TestWorkflow
+    Repository = $TestRepository
+    TagRef = $TestTagRef
+    SourceSha = $TestSource
+    SubjectName = $TestSubject
+    SubjectSha256 = $TestSubjectSha
+  }
+  Assert-ExactAttemptAttestationSet -Attestations @($Old, $Current) @Arguments
+  $Serialized = ConvertTo-Json -InputObject @($Old, $Current) -Depth 20 -Compress
+  $RoundTripped = @(
+    Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $Serialized
+  )
+  Assert-ExactAttemptAttestationSet -Attestations $RoundTripped @Arguments
+
+  $MalformedCurrent = New-AttestationSelectionSelfTestEntry `
+    $CurrentInvocation $TestRepository $TestWorkflow $TestTagRef $TestSource $TestSubject $TestSubjectSha
+  $MalformedCurrent.verificationResult.signature = [pscustomobject]@{}
+  $WrongSubjectCurrent = New-AttestationSelectionSelfTestEntry `
+    $CurrentInvocation $TestRepository $TestWorkflow $TestTagRef $TestSource "wrong.bin" $TestSubjectSha
+  foreach ($RejectedCase in @(
+    [pscustomobject]@{ Label = "old-only"; Entries = @($Old) },
+    [pscustomobject]@{ Label = "duplicate-current"; Entries = @($Current, $Current) },
+    [pscustomobject]@{ Label = "malformed-current"; Entries = @($Old, $MalformedCurrent) },
+    [pscustomobject]@{ Label = "wrong-current-subject"; Entries = @($Old, $WrongSubjectCurrent) }
+  )) {
+    $Rejected = $false
+    try {
+      Assert-ExactAttemptAttestationSet -Attestations @($RejectedCase.Entries) @Arguments
+    }
+    catch { $Rejected = $true }
+    if (-not $Rejected) {
+      throw "Attestation selection self-test accepted $($RejectedCase.Label)."
+    }
+  }
+}
+
 function Invoke-CoordinatorSelfTest {
   $Source = [IO.File]::ReadAllText($PSCommandPath, [Text.UTF8Encoding]::new($false))
   foreach ($Required in @(
@@ -118,6 +314,7 @@ function Invoke-CoordinatorSelfTest {
   if ($KnownCrc32 -ne [uint32]3421780262) {
     throw "CRC-32 known-answer self-test failed."
   }
+  Invoke-AttestationSelectionSelfTest
 
   Add-Type -AssemblyName System.IO.Compression -ErrorAction Stop
   Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
@@ -767,7 +964,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$Version = "0.12.26"
+$Version = "0.12.27"
 $script:ReviewExchangeDirectory = $null
 $script:ReviewExchangeArtifacts = New-Object Collections.Generic.List[string]
 $script:ReviewResponseReservations = New-Object Collections.Generic.List[object]
@@ -784,7 +981,7 @@ $Origin = "https://github.com/flrngel/local-browser-bridge.git"
 $ExpectedInvocationUri = "https://github.com/flrngel/local-browser-bridge/actions/runs/$WorkflowRunId/attempts/$WorkflowRunAttempt"
 
 if (-not $SelfTestRequested) {
-  if ($Version -cne "0.12.26" -or $FinalSha -cnotmatch '^[0-9a-f]{40}$' -or
+  if ($Version -cne "0.12.27" -or $FinalSha -cnotmatch '^[0-9a-f]{40}$' -or
       $TagObjectSha -cnotmatch '^[0-9a-f]{40}$' -or
       $WorkflowRunId -cnotmatch '^[1-9][0-9]*$' -or
       $WorkflowRunAttempt -cnotmatch '^[1-9][0-9]*$' -or
@@ -2602,34 +2799,23 @@ function Invoke-TrustedGhAttestation([string]$Name) {
     $Output = $OutputTask.GetAwaiter().GetResult()
     [void]$ErrorTask.GetAwaiter().GetResult()
     if ($Process.ExitCode -ne 0) { throw "GitHub attestation verification failed." }
-    $Attestations = @($Output | ConvertFrom-JsonPreservingStrings)
-    if ($Attestations.Count -lt 1) { throw "GitHub attestation verification returned no statement." }
-    $ExpectedAssetSha = Get-TrustedSha256 (Join-Path $Candidate $Name)
-    foreach ($Attestation in $Attestations) {
-      $Verification = $Attestation.verificationResult
-      $Certificate = $Verification.signature.certificate
-      $Statement = $Verification.statement
-      $Workflow = $Statement.predicate.buildDefinition.externalParameters.workflow
-      $Subjects = @($Statement.subject | Where-Object {
-        $_.name -ceq $Name -and $_.digest.sha256 -ceq $ExpectedAssetSha
-      })
-      if ($Statement.predicateType -cne "https://slsa.dev/provenance/v1" -or
-          $Statement.predicate.buildDefinition.buildType -cne "https://actions.github.io/buildtypes/workflow/v1" -or
-          $Workflow.path -cne ".github/workflows/deploy.yml" -or
-          $Workflow.ref -cne "refs/tags/v$Version" -or
-          $Workflow.repository -cne "https://github.com/flrngel/local-browser-bridge" -or
-          $Statement.predicate.runDetails.metadata.invocationId -cne $ExpectedInvocationUri -or
-          $Certificate.runInvocationURI -cne $ExpectedInvocationUri -or
-          $Certificate.githubWorkflowSHA -cne $FinalSha -or
-          $Certificate.githubWorkflowRepository -cne "flrngel/local-browser-bridge" -or
-          $Certificate.githubWorkflowRef -cne "refs/tags/v$Version" -or
-          $Certificate.runnerEnvironment -cne "github-hosted" -or
-          $Certificate.sourceRepositoryDigest -cne $FinalSha -or
-          $Certificate.sourceRepositoryRef -cne "refs/tags/v$Version" -or
-          $Subjects.Count -lt 1) {
-        throw "GitHub attestation did not bind the exact workflow attempt and subject."
-      }
+    $TrimmedOutput = $Output.Trim()
+    if (-not $TrimmedOutput.StartsWith("[", [StringComparison]::Ordinal) -or
+        -not $TrimmedOutput.EndsWith("]", [StringComparison]::Ordinal)) {
+      throw "GitHub attestation verification did not return a JSON array."
     }
+    $Attestations = @($Output | ConvertFrom-JsonPreservingStrings)
+    $ExpectedAssetSha = Get-TrustedSha256 (Join-Path $Candidate $Name)
+    Assert-ExactAttemptAttestationSet `
+      -Attestations $Attestations `
+      -ExpectedInvocationUri $ExpectedInvocationUri `
+      -WorkflowRunId $WorkflowRunId `
+      -WorkflowPath ".github/workflows/deploy.yml" `
+      -Repository "flrngel/local-browser-bridge" `
+      -TagRef "refs/tags/v$Version" `
+      -SourceSha $FinalSha `
+      -SubjectName $Name `
+      -SubjectSha256 $ExpectedAssetSha
   }
   finally {
     if ($null -ne $Info) { $Info.EnvironmentVariables.Remove("GH_TOKEN") }
@@ -2697,12 +2883,12 @@ $TrustedRelativeFiles = @(
   "scripts/record-computer-helper-chain.ps1",
   "scripts/sanitize-browser-evidence-screenshot.ps1",
   "scripts/write-stock-chrome-operator-response.ps1",
-  "evidence/v0.12.26/browser/operator-results.template.json",
-  "evidence/v0.12.26/browser/operator-results.schema.json",
-  "evidence/v0.12.26/browser/computer-helper-chain.schema.json",
-  "evidence/v0.12.26/browser/scoped-action-approval.schema.json",
-  "evidence/v0.12.26/browser/independent-visual-review.schema.json",
-  "evidence/v0.12.26/browser/external-surface-attestation.schema.json"
+  "evidence/v0.12.27/browser/operator-results.template.json",
+  "evidence/v0.12.27/browser/operator-results.schema.json",
+  "evidence/v0.12.27/browser/computer-helper-chain.schema.json",
+  "evidence/v0.12.27/browser/scoped-action-approval.schema.json",
+  "evidence/v0.12.27/browser/independent-visual-review.schema.json",
+  "evidence/v0.12.27/browser/external-surface-attestation.schema.json"
 )
 function Export-ExactTrustedBlob([string]$ObjectId, [string]$Relative) {
   if ($ObjectId -cnotmatch '^[0-9a-f]{40}$' -or $TrustedRelativeFiles -cnotcontains $Relative) {
@@ -2884,7 +3070,7 @@ $Captures = [ordered]@{
   "post-handback-resume" = "browser-06-post-handback-resume"
 }
 $RequiredVisibleStates = [ordered]@{
-  "extension-loaded" = "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.26 card with no load errors and Chrome's debugger-use indicator during the active bridge lease"
+  "extension-loaded" = "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.27 card with no load errors and Chrome's debugger-use indicator during the active bridge lease"
   "api-action-result" = "the loopback demo visibly shows Hello, Bridge Matrix. blue selected. after the browser API action"
   "computer-share-action" = "the exact shared Chrome window visibly shows the post-click demo state and synthetic session pointer from a fresh helper frame"
   "stop-paused" = "the trusted extension popup visibly shows the human pause and Resume remote control after the in-page Stop handback"

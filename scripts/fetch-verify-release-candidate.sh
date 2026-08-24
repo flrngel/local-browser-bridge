@@ -4,6 +4,7 @@ set -euo pipefail
 usage() {
   cat >&2 <<'EOF'
 Usage: scripts/fetch-verify-release-candidate.sh VERSION RUN_ID RUN_ATTEMPT ARTIFACT_ID SOURCE_SHA TAG_OBJECT_SHA DESTINATION
+       scripts/fetch-verify-release-candidate.sh --self-test
 
 Downloads one GitHub Actions release-candidate artifact into a new private
 directory, binds it to the exact tagged workflow attempt, verifies the flat
@@ -12,6 +13,171 @@ candidate-binding.json. It never executes candidate bytes.
 EOF
   exit 2
 }
+
+# Keep this filter as one production and self-test contract. GitHub can return
+# more than one valid attestation when a rerun reproduces byte-identical assets.
+# Every result must still be a well-formed, same-run, GitHub-hosted provenance
+# statement for the exact subject; exactly one result must name this attempt.
+# BEGIN EXACT_ATTEMPT_ATTESTATION_FILTER
+EXACT_ATTEMPT_ATTESTATION_FILTER='
+  def canonical_sha256:
+    type == "string" and test("^[0-9a-f]{64}$");
+  def valid_subjects:
+    try (
+      type == "array" and length >= 1 and
+      all(.[];
+        type == "object" and
+        (.name | type) == "string" and
+        (.digest | type) == "object" and
+        (.digest.sha256 | canonical_sha256)
+      ) and
+      ([.[] | select(
+        .name == $subject_name and .digest.sha256 == $subject_sha256
+      )] | length) == 1
+    ) catch false;
+  def valid_attestation:
+    try (
+      type == "object" and
+      (.verificationResult | type) == "object" and
+      (.verificationResult.statement | type) == "object" and
+      (.verificationResult.statement.predicate | type) == "object" and
+      (.verificationResult.statement.predicate.buildDefinition | type) == "object" and
+      (.verificationResult.statement.predicate.buildDefinition.externalParameters | type) == "object" and
+      (.verificationResult.statement.predicate.buildDefinition.externalParameters.workflow | type) == "object" and
+      (.verificationResult.statement.predicate.runDetails | type) == "object" and
+      (.verificationResult.statement.predicate.runDetails.metadata | type) == "object" and
+      (.verificationResult.signature | type) == "object" and
+      (.verificationResult.signature.certificate | type) == "object" and
+      .verificationResult.statement.predicateType == "https://slsa.dev/provenance/v1" and
+      .verificationResult.statement.predicate.buildDefinition.buildType == "https://actions.github.io/buildtypes/workflow/v1" and
+      .verificationResult.statement.predicate.buildDefinition.externalParameters.workflow.path == $workflow and
+      .verificationResult.statement.predicate.buildDefinition.externalParameters.workflow.ref == $tag_ref and
+      .verificationResult.statement.predicate.buildDefinition.externalParameters.workflow.repository == ("https://github.com/" + $repository) and
+      (.verificationResult.statement.predicate.runDetails.metadata.invocationId | type) == "string" and
+      (.verificationResult.signature.certificate.runInvocationURI | type) == "string" and
+      .verificationResult.statement.predicate.runDetails.metadata.invocationId ==
+        .verificationResult.signature.certificate.runInvocationURI and
+      (.verificationResult.statement.predicate.runDetails.metadata.invocationId as $entry_invocation |
+        $entry_invocation | startswith($same_run_invocation_prefix)) and
+      (.verificationResult.statement.predicate.runDetails.metadata.invocationId as $entry_invocation |
+        $entry_invocation[($same_run_invocation_prefix | length):] |
+        test("^[1-9][0-9]*$")) and
+      .verificationResult.signature.certificate.githubWorkflowSHA == $source and
+      .verificationResult.signature.certificate.githubWorkflowRepository == $repository and
+      .verificationResult.signature.certificate.githubWorkflowRef == $tag_ref and
+      .verificationResult.signature.certificate.runnerEnvironment == "github-hosted" and
+      .verificationResult.signature.certificate.sourceRepositoryDigest == $source and
+      .verificationResult.signature.certificate.sourceRepositoryRef == $tag_ref and
+      (.verificationResult.statement.subject | valid_subjects)
+    ) catch false;
+  try (
+    type == "array" and length >= 1 and
+    all(.[]; valid_attestation) and
+    ([.[] | select(
+      .verificationResult.statement.predicate.runDetails.metadata.invocationId == $invocation and
+      .verificationResult.signature.certificate.runInvocationURI == $invocation
+    )] | length) == 1
+  ) catch false
+'
+# END EXACT_ATTEMPT_ATTESTATION_FILTER
+
+verify_exact_attempt_attestation_set() {
+  local input_path=$1
+  local invocation=$2
+  local repository=$3
+  local run_id=$4
+  local source=$5
+  local tag_ref=$6
+  local workflow=$7
+  local subject_name=$8
+  local subject_sha256=$9
+  local same_run_invocation_prefix
+  same_run_invocation_prefix="https://github.com/${repository}/actions/runs/${run_id}/attempts/"
+  jq -e \
+    --arg invocation "$invocation" \
+    --arg same_run_invocation_prefix "$same_run_invocation_prefix" \
+    --arg repository "$repository" \
+    --arg source "$source" \
+    --arg tag_ref "$tag_ref" \
+    --arg workflow "$workflow" \
+    --arg subject_name "$subject_name" \
+    --arg subject_sha256 "$subject_sha256" \
+    "$EXACT_ATTEMPT_ATTESTATION_FILTER" "$input_path" >/dev/null
+}
+
+run_attestation_selection_self_test() {
+  command -v jq >/dev/null || {
+    echo "Required command is unavailable: jq" >&2
+    return 1
+  }
+  local repository="flrngel/local-browser-bridge"
+  local run_id="123456789"
+  local source="1111111111111111111111111111111111111111"
+  local tag_ref="refs/tags/v0.0.0"
+  local workflow=".github/workflows/deploy.yml"
+  local subject_name="fixture.bin"
+  local subject_sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  local old_invocation="https://github.com/$repository/actions/runs/$run_id/attempts/1"
+  local current_invocation="https://github.com/$repository/actions/runs/$run_id/attempts/2"
+  local old current
+  old=$(jq -cn \
+    --arg invocation "$old_invocation" --arg repository "$repository" \
+    --arg source "$source" --arg tag_ref "$tag_ref" --arg workflow "$workflow" \
+    --arg subject_name "$subject_name" --arg subject_sha256 "$subject_sha256" '
+      {verificationResult:{statement:{predicateType:"https://slsa.dev/provenance/v1",
+      subject:[{name:$subject_name,digest:{sha256:$subject_sha256}}],predicate:{
+      buildDefinition:{buildType:"https://actions.github.io/buildtypes/workflow/v1",
+      externalParameters:{workflow:{path:$workflow,ref:$tag_ref,
+      repository:("https://github.com/" + $repository)}}},
+      runDetails:{metadata:{invocationId:$invocation}}}},signature:{certificate:{
+      runInvocationURI:$invocation,githubWorkflowSHA:$source,
+      githubWorkflowRepository:$repository,githubWorkflowRef:$tag_ref,
+      runnerEnvironment:"github-hosted",sourceRepositoryDigest:$source,
+      sourceRepositoryRef:$tag_ref}}}}')
+  current=$(jq -cn --argjson base "$old" --arg invocation "$current_invocation" '
+    $base |
+    .verificationResult.statement.predicate.runDetails.metadata.invocationId = $invocation |
+    .verificationResult.signature.certificate.runInvocationURI = $invocation')
+
+  if ! jq -cn --argjson old "$old" --argjson current "$current" '[$old,$current]' |
+    verify_exact_attempt_attestation_set - "$current_invocation" "$repository" "$run_id" \
+      "$source" "$tag_ref" "$workflow" "$subject_name" "$subject_sha256"; then
+    echo "Attestation selection self-test rejected one old plus one current result." >&2
+    return 1
+  fi
+  if jq -cn --argjson old "$old" '[$old]' |
+    verify_exact_attempt_attestation_set - "$current_invocation" "$repository" "$run_id" \
+      "$source" "$tag_ref" "$workflow" "$subject_name" "$subject_sha256"; then
+    echo "Attestation selection self-test accepted an old-only result." >&2
+    return 1
+  fi
+  if jq -cn --argjson current "$current" '[$current,$current]' |
+    verify_exact_attempt_attestation_set - "$current_invocation" "$repository" "$run_id" \
+      "$source" "$tag_ref" "$workflow" "$subject_name" "$subject_sha256"; then
+    echo "Attestation selection self-test accepted duplicate current results." >&2
+    return 1
+  fi
+  if jq -cn --argjson old "$old" --argjson current "$current" \
+      '[$old,($current | del(.verificationResult.signature.certificate))]' |
+    verify_exact_attempt_attestation_set - "$current_invocation" "$repository" "$run_id" \
+      "$source" "$tag_ref" "$workflow" "$subject_name" "$subject_sha256"; then
+    echo "Attestation selection self-test accepted a malformed current result." >&2
+    return 1
+  fi
+  if jq -cn --argjson old "$old" --argjson current "$current" \
+      '[$old,($current | .verificationResult.statement.subject[0].name = "wrong.bin")]' |
+    verify_exact_attempt_attestation_set - "$current_invocation" "$repository" "$run_id" \
+      "$source" "$tag_ref" "$workflow" "$subject_name" "$subject_sha256"; then
+    echo "Attestation selection self-test accepted a wrong current subject." >&2
+    return 1
+  fi
+  echo "Release-candidate attestation selection self-test passed."
+}
+
+if [[ $# -eq 1 && $1 == --self-test ]]; then
+  run_attestation_selection_self_test
+  exit $?
+fi
 
 [[ $# -eq 7 ]] || usage
 VERSION=$1
@@ -361,32 +527,11 @@ for name in "${RELEASE_FILES[@]}"; do
     --signer-workflow "$REPOSITORY/.github/workflows/deploy.yml" \
     --deny-self-hosted-runners \
     --format json > "$attestation_json"
-  jq -e \
-    --arg invocation "$INVOCATION_URI" \
-    --arg repository "$REPOSITORY" \
-    --arg source "$SOURCE_SHA" \
-    --arg tag_ref "refs/tags/$TAG" \
-    --arg workflow ".github/workflows/deploy.yml" \
-    --arg subject_name "$name" \
-    --arg subject_sha256 "$(sha256_file "$PAYLOAD_DIRECTORY/$name")" '
-      length >= 1 and all(.[];
-        .verificationResult.statement.predicateType == "https://slsa.dev/provenance/v1" and
-        .verificationResult.statement.predicate.buildDefinition.buildType == "https://actions.github.io/buildtypes/workflow/v1" and
-        .verificationResult.statement.predicate.buildDefinition.externalParameters.workflow.path == $workflow and
-        .verificationResult.statement.predicate.buildDefinition.externalParameters.workflow.ref == $tag_ref and
-        .verificationResult.statement.predicate.buildDefinition.externalParameters.workflow.repository == ("https://github.com/" + $repository) and
-        .verificationResult.statement.predicate.runDetails.metadata.invocationId == $invocation and
-        .verificationResult.signature.certificate.runInvocationURI == $invocation and
-        .verificationResult.signature.certificate.githubWorkflowSHA == $source and
-        .verificationResult.signature.certificate.githubWorkflowRepository == $repository and
-        .verificationResult.signature.certificate.githubWorkflowRef == $tag_ref and
-        .verificationResult.signature.certificate.runnerEnvironment == "github-hosted" and
-        .verificationResult.signature.certificate.sourceRepositoryDigest == $source and
-        .verificationResult.signature.certificate.sourceRepositoryRef == $tag_ref and
-        any(.verificationResult.statement.subject[];
-          .name == $subject_name and .digest.sha256 == $subject_sha256)
-      )
-    ' "$attestation_json" >/dev/null || fail "exact-attempt attestation mismatch for $name"
+  verify_exact_attempt_attestation_set \
+    "$attestation_json" "$INVOCATION_URI" "$REPOSITORY" "$RUN_ID" \
+    "$SOURCE_SHA" "refs/tags/$TAG" ".github/workflows/deploy.yml" \
+    "$name" "$(sha256_file "$PAYLOAD_DIRECTORY/$name")" ||
+    fail "exact-attempt attestation mismatch or ambiguity for $name"
 done
 
 ASSETS_JSON="$DESTINATION/assets.json"

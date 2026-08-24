@@ -29,6 +29,27 @@ fn extension_package_sources_are_lf_stable_on_every_checkout() {
 }
 
 #[test]
+fn candidate_fetch_verifier_self_test_follows_syntax_validation_everywhere() {
+    let syntax_check = "bash -n scripts/fetch-verify-release-candidate.sh";
+    let self_test = "bash scripts/fetch-verify-release-candidate.sh --self-test";
+
+    for path in [
+        ".github/workflows/ci.yml",
+        ".github/workflows/deploy.yml",
+        "scripts/deploy.sh",
+    ] {
+        let integration = source(path);
+        let lines: Vec<_> = integration.lines().collect();
+        assert!(
+            lines
+                .windows(2)
+                .any(|pair| pair[0].trim() == syntax_check && pair[1].trim() == self_test),
+            "{path} must run the release-candidate verifier self-test immediately after its retained bash syntax check"
+        );
+    }
+}
+
+#[test]
 fn release_workflow_and_local_builder_package_both_processes() {
     let workflow = source(".github/workflows/deploy.yml");
     let local = source("scripts/deploy.sh");
@@ -66,7 +87,114 @@ fn release_workflow_and_local_builder_package_both_processes() {
     assert!(
         local.contains("bash scripts/verify-release-assets.sh \"$version\" \"$release_stage\"")
     );
-    assert!(local.contains("cp \"$release_stage/$asset\" \"dist/$asset\""));
+    assert!(local.contains("cp \"$release_stage/$asset\" \"$publish_stage/$asset\""));
+}
+
+#[test]
+fn local_deploy_atomically_replaces_only_generated_release_assets_with_rollback() {
+    let local = source("scripts/deploy.sh");
+
+    for required in [
+        "is_recognized_generated_release_asset() {",
+        "^local-browser-bridge-v[0-9]+\\.[0-9]+\\.[0-9]+-windows-x86_64\\.exe$",
+        "^local-computer-helper-v[0-9]+\\.[0-9]+\\.[0-9]+-windows-x86_64\\.exe$",
+        "^local-browser-bridge-v[0-9]+\\.[0-9]+\\.[0-9]+-macos-universal\\.tar\\.gz$",
+        "^local-browser-bridge-extension-v[0-9]+\\.[0-9]+\\.[0-9]+\\.zip$",
+        "[[ \"$name\" == \"SHA256SUMS.txt\" ]]",
+        "Refusing to replace a linked dist path",
+        "Refusing to replace dist because it contains a linked or non-file entry",
+        "Refusing to replace dist because it contains an unrecognized entry",
+        "publish_stage=\"$(mktemp -d \"$project_root/.dist-publish.XXXXXX\")\"",
+        "dist_rollback_parent=\"$(mktemp -d \"$project_root/.dist-rollback.XXXXXX\")\"",
+        "mv \"$dist_dir\" \"$dist_rollback_path\"",
+        "mv \"$publish_stage\" \"$dist_dir\"",
+        "restore_dist_rollback || true",
+        "quarantine_unverified_dist() {",
+        "failed_publish_parent=\"$(mktemp -d \"$project_root/.dist-failed.XXXXXX\")\"",
+        "mv \"$dist_dir\" \"$failed_publish_path\"",
+        "Preserved the unverified dist replacement at",
+        "trap cleanup EXIT",
+        "trap 'exit 130' INT",
+        "trap 'exit 143' TERM",
+    ] {
+        assert!(
+            local.contains(required),
+            "local deploy atomic-publish contract is missing: {required}"
+        );
+    }
+
+    assert_eq!(
+        local
+            .matches("validate_replaceable_dist \"$dist_dir\"")
+            .count(),
+        2,
+        "existing dist must be checked before the build and again immediately before replacement"
+    );
+    assert!(
+        !local.contains("cp \"$release_stage/$asset\" \"dist/$asset\""),
+        "release assets must never be copied individually into the live dist directory"
+    );
+
+    let build_stage_verified = local
+        .find("bash scripts/verify-release-assets.sh \"$version\" \"$release_stage\"")
+        .unwrap();
+    let publish_stage_created = local
+        .find("publish_stage=\"$(mktemp -d \"$project_root/.dist-publish.XXXXXX\")\"")
+        .unwrap();
+    let publish_stage_verified = local
+        .find("bash scripts/verify-release-assets.sh \"$version\" \"$publish_stage\"")
+        .unwrap();
+    let final_existing_dist_check = local
+        .rfind("validate_replaceable_dist \"$dist_dir\"")
+        .unwrap();
+    let old_dist_moved = local
+        .find("mv \"$dist_dir\" \"$dist_rollback_path\"")
+        .unwrap();
+    let rollback_revalidated = local
+        .find("validate_replaceable_dist \"$dist_rollback_path\"")
+        .unwrap();
+    let replacement_installed = local.find("mv \"$publish_stage\" \"$dist_dir\"").unwrap();
+    let installed_dist_verified = local
+        .find("bash scripts/verify-release-assets.sh \"$version\" \"$dist_dir\"")
+        .unwrap();
+    let installed_dist_quarantined_on_failure = local[replacement_installed..]
+        .find("quarantine_unverified_dist || true")
+        .map(|offset| replacement_installed + offset)
+        .unwrap();
+    let rollback_restored_after_quarantine = local[installed_dist_quarantined_on_failure..]
+        .find("restore_dist_rollback || true")
+        .map(|offset| installed_dist_quarantined_on_failure + offset)
+        .unwrap();
+    let installed_dist_committed = local.rfind("dist_publish_verified=1").unwrap();
+    let rollback_disarmed = local.rfind("dist_replacement_pending=0").unwrap();
+    let rollback_removed = local.find("rm -rf \"$dist_rollback_parent\"").unwrap();
+
+    assert!(build_stage_verified < publish_stage_created);
+    assert!(publish_stage_created < publish_stage_verified);
+    assert!(publish_stage_verified < final_existing_dist_check);
+    assert!(final_existing_dist_check < old_dist_moved);
+    assert!(old_dist_moved < rollback_revalidated);
+    assert!(rollback_revalidated < replacement_installed);
+    assert!(replacement_installed < installed_dist_verified);
+    assert!(installed_dist_verified < installed_dist_quarantined_on_failure);
+    assert!(installed_dist_quarantined_on_failure < rollback_restored_after_quarantine);
+    assert!(rollback_restored_after_quarantine < installed_dist_committed);
+    assert!(installed_dist_committed < rollback_disarmed);
+    assert!(rollback_disarmed < rollback_removed);
+
+    let cleanup = local
+        .split("cleanup() {")
+        .nth(1)
+        .unwrap()
+        .split("\n}\n\ntrap cleanup EXIT")
+        .next()
+        .unwrap();
+    let cleanup_quarantine = cleanup.find("quarantine_unverified_dist").unwrap();
+    let cleanup_restore = cleanup.find("restore_dist_rollback").unwrap();
+    assert!(
+        cleanup_quarantine < cleanup_restore,
+        "EXIT and signal cleanup must quarantine an installed-but-unverified replacement before restoring the previous dist"
+    );
 }
 
 #[test]
@@ -299,8 +427,8 @@ fn windows_release_tooling_hashes_without_module_discovery() {
 fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_only() {
     let watcher = source("scripts/wait-macos-app-share-concurrency-handoff.mjs");
     let adversarial_watcher = source("scripts/wait-macos-pointer-concurrency-handoff.mjs");
-    let producer = source("evidence/v0.12.26/computer/helper-evidence-rig.mjs");
-    let playbook = source("evidence/v0.12.26/computer/README.md");
+    let producer = source("evidence/v0.12.27/computer/helper-evidence-rig.mjs");
+    let playbook = source("evidence/v0.12.27/computer/README.md");
     let finalizer = source("scripts/finalize-macos-acceptance.mjs");
     let verifier = source("scripts/verify-release-acceptance-evidence.sh");
     let ci = source(".github/workflows/ci.yml");
@@ -342,7 +470,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
             "the legacy pointer watcher must not gate or satisfy release"
         );
     }
-    assert!(adversarial_watcher.contains("const PRODUCT_VERSION = \"0.12.26\";"));
+    assert!(adversarial_watcher.contains("const PRODUCT_VERSION = \"0.12.27\";"));
     assert!(
         adversarial_watcher.contains("macOS pointer-concurrency handoff watcher self-test passed.")
     );
@@ -361,7 +489,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         }
     }
     for aggregate_contract in [
-        "const PRODUCT_VERSION = \"0.12.26\";",
+        "const PRODUCT_VERSION = \"0.12.27\";",
         "const RESULT_SCHEMA_VERSION = 8;",
         "const AGGREGATE_SCHEMA_VERSION = 2;",
         "const REQUEST_MARKER = \"operator/macos-app-share-concurrency-handoff-request.json\";",
@@ -378,7 +506,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
     }
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.26\";",
+        "const PRODUCT_VERSION = \"0.12.27\";",
         "const SCHEMA_VERSION = 2;",
         "const OPERATOR_DIRECTORY = \"operator\";",
         "const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;",
@@ -494,12 +622,12 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
 
     for integration in [&ci, &release, &local] {
         assert!(
-            integration.contains("node --check evidence/v0.12.26/computer/helper-evidence-rig.mjs"),
-            "release path does not syntax-check the exact v0.12.26 macOS evidence rig"
+            integration.contains("node --check evidence/v0.12.27/computer/helper-evidence-rig.mjs"),
+            "release path does not syntax-check the exact v0.12.27 macOS evidence rig"
         );
         assert!(
             integration
-                .contains("node evidence/v0.12.26/computer/helper-evidence-rig.mjs --self-test")
+                .contains("node evidence/v0.12.27/computer/helper-evidence-rig.mjs --self-test")
         );
         assert!(
             !integration.contains("evidence/v0.12.20/computer/"),
@@ -514,7 +642,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         ] {
             assert!(
                 integration.contains(&format!(
-                    "xcrun swiftc -typecheck evidence/v0.12.26/computer/{source}"
+                    "xcrun swiftc -typecheck evidence/v0.12.27/computer/{source}"
                 )),
                 "macOS workflow does not typecheck {source}"
             );
@@ -522,7 +650,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         assert!(integration.contains("lbb-app-share-handoff-self-test\" --self-test"));
     }
     assert!(ci.contains(
-        "xcrun swiftc -typecheck evidence/v0.12.26/computer/PhysicalPointerHandoff.swift"
+        "xcrun swiftc -typecheck evidence/v0.12.27/computer/PhysicalPointerHandoff.swift"
     ));
     for release_path in [&release, &local] {
         assert!(

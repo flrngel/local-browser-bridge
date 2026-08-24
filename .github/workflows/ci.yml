@@ -269,20 +269,21 @@ jobs:
       - name: Validate the macOS app-share handoff watcher on macOS
         run: |
           bash -n scripts/fetch-verify-release-candidate.sh
+          bash scripts/fetch-verify-release-candidate.sh --self-test
           node --check scripts/wait-macos-app-share-concurrency-handoff.mjs
           node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test
           node --check scripts/finalize-macos-acceptance.mjs
           node scripts/finalize-macos-acceptance.mjs --self-test
       - name: Validate the macOS packaged-evidence harness
         run: |
-          node --check evidence/v0.12.26/computer/helper-evidence-rig.mjs
-          node evidence/v0.12.26/computer/helper-evidence-rig.mjs --self-test
-          xcrun swiftc -typecheck evidence/v0.12.26/computer/HelperEvidenceFixture.swift
-          xcrun swiftc -typecheck evidence/v0.12.26/computer/SystemProbe.swift
-          xcrun swiftc -typecheck evidence/v0.12.26/computer/AppShareHandoff.swift
-          xcrun swiftc evidence/v0.12.26/computer/AppShareHandoff.swift -o "$RUNNER_TEMP/lbb-app-share-handoff-self-test"
+          node --check evidence/v0.12.27/computer/helper-evidence-rig.mjs
+          node evidence/v0.12.27/computer/helper-evidence-rig.mjs --self-test
+          xcrun swiftc -typecheck evidence/v0.12.27/computer/HelperEvidenceFixture.swift
+          xcrun swiftc -typecheck evidence/v0.12.27/computer/SystemProbe.swift
+          xcrun swiftc -typecheck evidence/v0.12.27/computer/AppShareHandoff.swift
+          xcrun swiftc evidence/v0.12.27/computer/AppShareHandoff.swift -o "$RUNNER_TEMP/lbb-app-share-handoff-self-test"
           "$RUNNER_TEMP/lbb-app-share-handoff-self-test" --self-test
-          xcrun swiftc -typecheck evidence/v0.12.26/computer/PhysicalPointerHandoff.swift
+          xcrun swiftc -typecheck evidence/v0.12.27/computer/PhysicalPointerHandoff.swift
       - name: Install the minimum supported Rust toolchain
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
