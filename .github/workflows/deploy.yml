@@ -214,11 +214,36 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Dedicated Windows fixture executable self-test failed." }
           }
           finally {
-            if (Test-Path -LiteralPath $fixtureExecutableSelfTest) {
-              Remove-Item -LiteralPath $fixtureExecutableSelfTest -Force -ErrorAction Stop
-            }
-            if (Test-Path -LiteralPath $fixtureExecutableSelfTest) {
-              throw "The dedicated Windows fixture executable self-test artifact remained after cleanup."
+            $fixtureCleanupDeadline = [DateTime]::UtcNow.AddSeconds(10)
+            $fixtureCleanupError = $null
+            do {
+              try {
+                if ([IO.Directory]::Exists($fixtureExecutableSelfTest)) {
+                  throw "The dedicated Windows fixture executable path was replaced by a directory."
+                }
+                if ([IO.File]::Exists($fixtureExecutableSelfTest)) {
+                  $fixtureExecutableAttributes = [IO.File]::GetAttributes($fixtureExecutableSelfTest)
+                  if (($fixtureExecutableAttributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                      ($fixtureExecutableAttributes -band [IO.FileAttributes]::Directory) -ne 0) {
+                    throw "The dedicated Windows fixture executable cleanup target is not an ordinary file."
+                  }
+                  [IO.File]::SetAttributes($fixtureExecutableSelfTest, [IO.FileAttributes]::Normal)
+                  [IO.File]::Delete($fixtureExecutableSelfTest)
+                }
+                $fixtureCleanupError = $null
+                break
+              }
+              catch {
+                $fixtureCleanupError = $_.Exception
+                Start-Sleep -Milliseconds 100
+              }
+            } while ([DateTime]::UtcNow -lt $fixtureCleanupDeadline)
+            if ([IO.File]::Exists($fixtureExecutableSelfTest) -or
+                [IO.Directory]::Exists($fixtureExecutableSelfTest)) {
+              throw [IO.IOException]::new(
+                "The dedicated Windows fixture executable self-test artifact remained after bounded cleanup.",
+                $fixtureCleanupError
+              )
             }
           }
           & ./scripts/test-windows-computer-use.ps1 -SelfTest

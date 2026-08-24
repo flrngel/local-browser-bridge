@@ -183,8 +183,16 @@ fn windows_ci_and_release_compile_execute_and_self_clean_the_dedicated_fixture()
             "throw \"Windows PowerShell 5.1 dedicated fixture build failed.\"",
             "& $fixtureExecutableSelfTest --self-test",
             "throw \"Dedicated Windows fixture executable self-test failed.\"",
-            "Remove-Item -LiteralPath $fixtureExecutableSelfTest -Force -ErrorAction Stop",
-            "throw \"The dedicated Windows fixture executable self-test artifact remained after cleanup.\"",
+            "$fixtureCleanupDeadline = [DateTime]::UtcNow.AddSeconds(10)",
+            "if ([IO.Directory]::Exists($fixtureExecutableSelfTest))",
+            "throw \"The dedicated Windows fixture executable path was replaced by a directory.\"",
+            "$fixtureExecutableAttributes = [IO.File]::GetAttributes($fixtureExecutableSelfTest)",
+            "($fixtureExecutableAttributes -band [IO.FileAttributes]::ReparsePoint) -ne 0",
+            "[IO.File]::SetAttributes($fixtureExecutableSelfTest, [IO.FileAttributes]::Normal)",
+            "[IO.File]::Delete($fixtureExecutableSelfTest)",
+            "Start-Sleep -Milliseconds 100",
+            "[DateTime]::UtcNow -lt $fixtureCleanupDeadline",
+            "The dedicated Windows fixture executable self-test artifact remained after bounded cleanup.",
         ] {
             assert!(
                 workflow.contains(required),
@@ -212,10 +220,10 @@ fn windows_ci_and_release_compile_execute_and_self_clean_the_dedicated_fixture()
             .map(|offset| execute + offset)
             .unwrap();
         let remove = workflow
-            .find("Remove-Item -LiteralPath $fixtureExecutableSelfTest -Force -ErrorAction Stop")
+            .find("[IO.File]::Delete($fixtureExecutableSelfTest)")
             .unwrap();
         let refuse_remnant = workflow
-            .find("The dedicated Windows fixture executable self-test artifact remained after cleanup.")
+            .find("The dedicated Windows fixture executable self-test artifact remained after bounded cleanup.")
             .unwrap();
         assert!(ps_self_test < temp_executable);
         assert!(temp_executable < source_hash);
