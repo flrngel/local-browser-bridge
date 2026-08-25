@@ -906,8 +906,8 @@ fn background_invariant_failures_use_stage_bound_closed_vocabulary() {
 
 #[test]
 fn macos_v0_12_27_pointer_evidence_is_bounded_corroboration_not_causal_attribution() {
-    let rig = fs::read_to_string("evidence/v0.12.27/computer/helper-evidence-rig.mjs").unwrap();
-    let probe = fs::read_to_string("evidence/v0.12.27/computer/SystemProbe.swift").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs").unwrap();
+    let probe = fs::read_to_string("evidence/v0.12.28/computer/SystemProbe.swift").unwrap();
     assert!(rig.contains("failureProbeBaseline"));
     assert!(rig.contains("collectFailureDiagnostics"));
     assert!(rig.contains("systemInvariants(failureProbeBaseline.system, after)"));
@@ -953,7 +953,7 @@ fn macos_v0_12_27_pointer_evidence_is_bounded_corroboration_not_causal_attributi
     ] {
         assert!(
             rig.contains(required),
-            "missing v0.12.27 pointer contract: {required}"
+            "missing v0.12.28 pointer contract: {required}"
         );
     }
     assert!(!rig.contains("cursorUnchanged"));
@@ -999,7 +999,7 @@ fn macos_v0_12_27_pointer_evidence_is_bounded_corroboration_not_causal_attributi
 
 #[test]
 fn macos_v0_12_27_action_pointer_classifier_matches_the_sealed_action_schema() {
-    let rig = fs::read_to_string("evidence/v0.12.27/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let server = fs::read_to_string("src/server.rs")
@@ -1122,10 +1122,10 @@ fn macos_v0_12_27_action_pointer_classifier_matches_the_sealed_action_schema() {
 
 #[test]
 fn macos_v0_12_14_quiet_lane_stabilizes_the_native_seat_before_candidate_execution() {
-    let rig = fs::read_to_string("evidence/v0.12.27/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.27/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.28/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1200,22 +1200,22 @@ fn macos_v0_12_14_quiet_lane_stabilizes_the_native_seat_before_candidate_executi
 
 #[test]
 fn macos_v0_12_27_app_share_handoff_is_exact_non_authoritative_and_fail_closed() {
-    let app = fs::read_to_string("evidence/v0.12.27/computer/AppShareHandoff.swift")
+    let app = fs::read_to_string("evidence/v0.12.28/computer/AppShareHandoff.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.27/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.28/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.27/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.27/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.28/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let normalized_readme = readme.split_whitespace().collect::<Vec<_>>().join(" ");
 
     for required in [
-        "private let productVersion = \"0.12.27\"",
+        "private let productVersion = \"0.12.28\"",
         "private let stableWindowTitle = \"LBB macOS Acceptance App Share\"",
         "private let readyButtonTitle = \"START APP-SHARE CHECK\"",
         "private final class NonactivatingHandoffPanel: NSPanel",
@@ -1453,7 +1453,7 @@ fn macos_v0_12_27_app_share_handoff_is_exact_non_authoritative_and_fail_closed()
 
 #[test]
 fn macos_v0_12_27_refreshes_post_handoff_share_action_authority_before_click() {
-    let rig = fs::read_to_string("evidence/v0.12.27/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let computer = fs::read_to_string("src/computer.rs")
@@ -1627,7 +1627,7 @@ fn macos_v0_12_27_refreshes_post_handoff_share_action_authority_before_click() {
 fn macos_pointer_arm_state_machine_execution_regressions_pass() {
     let output = match Command::new("node")
         .args([
-            "evidence/v0.12.27/computer/helper-evidence-rig.mjs",
+            "evidence/v0.12.28/computer/helper-evidence-rig.mjs",
             "--self-test",
         ])
         .output()
@@ -1656,7 +1656,7 @@ fn macos_pointer_arm_state_machine_execution_regressions_pass() {
 
 #[test]
 fn v0_12_27_marker_identity_is_exact_on_windows_and_posix() {
-    let rig = fs::read_to_string("evidence/v0.12.27/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -2619,7 +2619,7 @@ fn withdrawn_v0_12_9_macos_cursor_invariant_attempt_is_byte_exact_and_fail_close
 
 #[test]
 fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
-    let entries = fs::read_dir("evidence/v0.12.27/computer")
+    let entries = fs::read_dir("evidence/v0.12.28/computer")
         .unwrap()
         .map(Result::unwrap)
         .map(|entry| {
@@ -2644,12 +2644,12 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
         ])
     );
 
-    let rig = fs::read_to_string("evidence/v0.12.27/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let fixture =
-        fs::read_to_string("evidence/v0.12.27/computer/HelperEvidenceFixture.swift").unwrap();
-    let readme = fs::read_to_string("evidence/v0.12.27/computer/README.md").unwrap();
+        fs::read_to_string("evidence/v0.12.28/computer/HelperEvidenceFixture.swift").unwrap();
+    let readme = fs::read_to_string("evidence/v0.12.28/computer/README.md").unwrap();
 
     assert!(rig.contains(&format!("const EXPECTED_VERSION = \"{VERSION}\";")));
     assert!(rig.contains("const EXPECTED_ARCHIVE = `local-browser-bridge-v${EXPECTED_VERSION}-macos-universal.tar.gz`;"));
@@ -2673,10 +2673,10 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
     assert!(readme.contains(&format!(
         "local-browser-bridge-v{VERSION}-macos-universal.tar.gz"
     )));
-    assert!(!rig.replace("v0.12.27", "").contains("v0.12.1"));
-    assert!(!fixture.replace("v0.12.27", "").contains("v0.12.1"));
-    assert!(!rig.replace("v0.12.27", "").contains("v0.12.2"));
-    assert!(!fixture.replace("v0.12.27", "").contains("v0.12.2"));
+    assert!(!rig.replace("v0.12.28", "").contains("v0.12.1"));
+    assert!(!fixture.replace("v0.12.28", "").contains("v0.12.1"));
+    assert!(!rig.replace("v0.12.28", "").contains("v0.12.2"));
+    assert!(!fixture.replace("v0.12.28", "").contains("v0.12.2"));
     let current_readme = readme
         .split("## Withdrawn v0.12.10 exact-candidate result")
         .next()
@@ -2723,10 +2723,10 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
 
 #[test]
 fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
-    let rig = fs::read_to_string("evidence/v0.12.27/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.27/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.28/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let binder = fs::read_to_string("scripts/fetch-verify-release-candidate.sh")
@@ -2870,7 +2870,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
 
 #[test]
 fn macos_packaged_evidence_streams_one_exact_bounded_pax_free_archive() {
-    let rig = fs::read_to_string("evidence/v0.12.27/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -2974,7 +2974,7 @@ fn macos_package_preparer_accepts_only_the_canonical_bounded_ustar_package() {
     }
 
     let repository = std::env::current_dir().unwrap();
-    let rig = repository.join("evidence/v0.12.27/computer/helper-evidence-rig.mjs");
+    let rig = repository.join("evidence/v0.12.28/computer/helper-evidence-rig.mjs");
     let temporary = tempfile::tempdir().unwrap();
     set_mode(temporary.path(), 0o700);
     let generator = temporary.path().join("make-package.py");
@@ -3044,7 +3044,7 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
         let case_root = temporary.path().join(scenario);
         fs::create_dir(&case_root).unwrap();
         set_mode(&case_root, 0o700);
-        let archive = case_root.join("local-browser-bridge-v0.12.27-macos-universal.tar.gz");
+        let archive = case_root.join("local-browser-bridge-v0.12.28-macos-universal.tar.gz");
         let generated = Command::new("python3")
             .arg(&generator)
             .arg(scenario)
@@ -3060,10 +3060,10 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
         let archive_sha256 = file_sha256(archive.to_str().unwrap());
         let zero_hash = "0".repeat(64);
         let manifest_text = format!(
-            "{zero_hash}  local-browser-bridge-v0.12.27-windows-x86_64.exe\n\
-             {zero_hash}  local-computer-helper-v0.12.27-windows-x86_64.exe\n\
-             {archive_sha256}  local-browser-bridge-v0.12.27-macos-universal.tar.gz\n\
-             {zero_hash}  local-browser-bridge-extension-v0.12.27.zip\n"
+            "{zero_hash}  local-browser-bridge-v0.12.28-windows-x86_64.exe\n\
+             {zero_hash}  local-computer-helper-v0.12.28-windows-x86_64.exe\n\
+             {archive_sha256}  local-browser-bridge-v0.12.28-macos-universal.tar.gz\n\
+             {zero_hash}  local-browser-bridge-extension-v0.12.28.zip\n"
         );
         let manifest = case_root.join("SHA256SUMS.txt");
         fs::write(&manifest, &manifest_text).unwrap();
@@ -3191,7 +3191,7 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
 
 #[test]
 fn macos_packaged_evidence_uses_a_clean_tagged_harness_and_fresh_lane_outputs() {
-    let rig = fs::read_to_string("evidence/v0.12.27/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -3249,7 +3249,7 @@ fn macos_packaged_evidence_uses_a_clean_tagged_harness_and_fresh_lane_outputs() 
 
 #[test]
 fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
-    let rig = fs::read_to_string("evidence/v0.12.27/computer/helper-evidence-rig.mjs").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs").unwrap();
     assert!(rig.contains("capturedFrameMatchesWindowGeometry"));
     assert!(rig.contains("share-resize-settled"));
     assert!(rig.contains("sample.sourceSequence > resizeTransition.sample.sourceSequence"));
@@ -3261,12 +3261,12 @@ fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
 
 #[test]
 fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.27/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     assert!(rig.contains("function childEnvironment(overrides = {})"));
     assert!(!rig.contains("...process.env"));
-    let fixture = fs::read_to_string("evidence/v0.12.27/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.28/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -3444,10 +3444,10 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
 
 #[test]
 fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.27/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.27/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.28/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let normalized_readme = readme.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -3579,21 +3579,21 @@ fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() 
 
 #[test]
 fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negative() {
-    let fixture = fs::read_to_string("evidence/v0.12.27/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.28/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.27/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.28/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.27/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.27/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.28/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
     for required in [
-        "private let siblingFixtureTitle = \"LBB v0.12.27 Same-PID Sibling Receiver\"",
+        "private let siblingFixtureTitle = \"LBB v0.12.28 Same-PID Sibling Receiver\"",
         "var primaryWindowId = 0",
         "var siblingWindowId = 0",
         "var siblingTextLength = 0",
@@ -4775,6 +4775,993 @@ fn windows_foreground_arm_operator_markers_are_atomic_and_notification_only() {
 }
 
 #[test]
+fn windows_acceptance_coordinator_is_single_attempt_non_ui_and_fail_closed() {
+    let coordinator = fs::read_to_string("scripts/run-windows-computer-use-acceptance.ps1")
+        .unwrap()
+        .replace("\r\n", "\n");
+
+    for required in [
+        "#requires -Version 5.1",
+        "[ValidateSet(\"Start\", \"Follow\", \"SelfTest\")]",
+        "$script:SuccessMessage = \"Windows computer-use acceptance coordinator self-test passed.\"",
+        "function Start-Coordinator {",
+        "function Follow-Coordinator {",
+        "function Invoke-SelfTest {",
+        "\"SelfTest\" { Invoke-SelfTest; return }",
+        "\"Follow\" { Follow-Coordinator; return }",
+        "\"Start\" { Start-Coordinator; return }",
+        "status = \"terminal-attempt-boundary\"",
+        "candidateExecutionState = \"unknown-after-this-record\"",
+        "\"candidate-execution-unknown\"",
+        "retryOnUnknownOutcome = $false",
+        "retryAllowed = $false",
+        "status = \"failed-closed\"",
+        "uiActionAllowed = $false",
+        "stopUiAfterAction = $true",
+        "maximumClickAttempts = [int]$handoff.maximumClickAttempts",
+        "runner.stdout.log",
+        "runner.stderr.log",
+        "watcher.stdout.log",
+        "watcher.stderr.log",
+        "worker.stdout.log",
+        "worker.stderr.log",
+        "[IO.FileMode]::CreateNew",
+        "[IO.FileShare]::None",
+        "[IO.File]::Move($temporaryPath, $Path)",
+        "function Get-WhitelistedWorkerEnvironment {",
+        "function Start-DetachedWorkerProcess {",
+        "function Reserve-CandidateAttempt {",
+        "function Copy-FileToPrivateStage {",
+        "function New-WorkerLifetimeJob {",
+        "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE",
+        "AssignProcessToJobObject(handle, GetCurrentProcess())",
+        "$runnerInfo.EnvironmentVariables[\"LBB_TOKEN\"] = $token",
+        "$runnerInfo.EnvironmentVariables.Remove(\"LBB_TOKEN\")",
+        "$token = $null",
+        "-Suite\", \"All\", \"-ShowOccluder\"",
+        "$watcherAccepted = $false",
+        "$handoffPublished = $false",
+        "$acceptanceCompleted = (",
+        "$watcherAccepted -and",
+        "$handoffPublished -and",
+        "$summaryPassed -and",
+        "$summary.passed -is [bool]",
+        "-not [IO.File]::Exists($files.Failure)",
+        "status = if ($acceptanceCompleted) { \"completed\" } else { \"failed-closed\" }",
+        "if (-not $acceptanceCompleted) {",
+        "\"watcher-handoff-missing\"",
+        "\"runner-summary-failed\"",
+        "consumerMustDeduplicateByRequestId = $true",
+        "externalAuthorizationVerifiedByWatcher = $false",
+        "Write-Output $script:SuccessMessage",
+    ] {
+        assert!(
+            coordinator.contains(required),
+            "Windows acceptance coordinator is missing: {required}"
+        );
+    }
+
+    let lower = coordinator.to_ascii_lowercase();
+    for forbidden in [
+        "start-job",
+        "invoke-expression",
+        "cmd.exe",
+        "tee-object",
+        "-executionpolicy",
+        "-execution-policy",
+        "get-filehash",
+        "setforegroundwindow",
+        "attachthreadinput",
+        "sendinput",
+        "mouse_event",
+        "setcursorpos",
+        "postmessage",
+        "sendmessage",
+        "performclick",
+        "system.windows.forms",
+        "uiautomation",
+        "retryonunknownoutcome = $true",
+        "retryallowed = $true",
+    ] {
+        assert!(
+            !lower.contains(forbidden),
+            "Windows acceptance coordinator contains a forbidden retry, shell, module-discovery, or UI-control primitive: {forbidden}"
+        );
+    }
+
+    let worker = coordinator
+        .split("function Invoke-CoordinatorWorker {")
+        .nth(1)
+        .unwrap()
+        .split("function Get-BootstrapFieldNames {")
+        .next()
+        .unwrap();
+    assert_eq!(
+        worker
+            .matches("$runnerCapture = Start-CapturedProcess $runnerInfo $files.RunnerOut $files.RunnerErr")
+            .count(),
+        1,
+        "the worker must launch exactly one bound acceptance runner"
+    );
+    assert_eq!(
+        worker
+            .matches("$watcherCapture = Start-CapturedProcess $watcherInfo $files.WatcherOut $files.WatcherErr")
+            .count(),
+        1,
+        "the worker must launch exactly one read-only foreground watcher"
+    );
+    let launch_intent = worker.find("Write-CreateOnceJson $files.Intent").unwrap();
+    let runner_launch = worker
+        .find("$runnerCapture = Start-CapturedProcess $runnerInfo")
+        .unwrap();
+    let runner_record_publish = worker
+        .find("Write-CreateOnceJson $files.Runner $runnerRecord")
+        .unwrap();
+    let runner_started = worker.find("Write-CreateOnceJson $files.Runner").unwrap();
+    let watcher_launch = worker
+        .find("$watcherCapture = Start-CapturedProcess $watcherInfo")
+        .unwrap();
+    assert!(
+        launch_intent < runner_launch
+            && runner_launch < runner_record_publish
+            && runner_record_publish == runner_started
+            && runner_started < watcher_launch,
+        "the terminal candidate intent boundary, runner identity record, and watcher launch are misordered"
+    );
+
+    let runner_arguments = worker
+        .split("$runnerArguments = @(")
+        .nth(1)
+        .unwrap()
+        .split("$runnerInfo = New-ProcessStartInfo")
+        .next()
+        .unwrap();
+    assert!(
+        !runner_arguments.contains("LBB_TOKEN") && !runner_arguments.contains("$token"),
+        "the bridge token must never enter candidate argv"
+    );
+    let config = coordinator
+        .split("$config = [ordered]@{")
+        .nth(1)
+        .unwrap()
+        .split("Write-CreateOnceJson $files.Config $config")
+        .next()
+        .unwrap();
+    assert!(
+        !config.contains("LBB_TOKEN") && !config.contains("token ="),
+        "the bridge token must never enter the durable coordinator configuration"
+    );
+
+    for required in [
+        "$runnerCapture = Start-CapturedProcess $runnerInfo $files.RunnerOut $files.RunnerErr",
+        "$watcherCapture = Start-CapturedProcess $watcherInfo $files.WatcherOut $files.WatcherErr",
+        "-StdoutPath $files.WorkerOut",
+        "-StderrPath $files.WorkerErr",
+        "PROC_THREAD_ATTRIBUTE_HANDLE_LIST",
+        "stdoutPath, GENERIC_WRITE, FILE_SHARE_READ",
+        "stderrPath, GENERIC_WRITE, FILE_SHARE_READ",
+    ] {
+        assert!(
+            coordinator.contains(required),
+            "the coordinator does not retain a distinct durable process stream: {required}"
+        );
+    }
+
+    let atomic_writer = coordinator
+        .split("function Write-CreateOnceJson {")
+        .nth(1)
+        .unwrap()
+        .split("function Read-BoundedJson {")
+        .next()
+        .unwrap();
+    let flush = atomic_writer.find("$stream.Flush($true)").unwrap();
+    let publish = atomic_writer
+        .find("[IO.File]::Move($temporaryPath, $Path)")
+        .unwrap();
+    assert!(
+        flush < publish && !atomic_writer.contains("[IO.FileShare]::Read"),
+        "coordinator records must be flushed to a private temporary file before atomic publication"
+    );
+
+    let request_marker = worker
+        .find("[IO.File]::Exists($requestMarkerPath)")
+        .unwrap();
+    assert!(
+        request_marker < watcher_launch,
+        "the watcher budget must not start before the foreground-arm request marker exists"
+    );
+    assert!(
+        coordinator.contains(
+            "$process.StartTime.ToUniversalTime().Ticks -eq $StartedAtUtc.ToUniversalTime().Ticks"
+        ),
+        "coordinator process binding must compare exact UTC ticks"
+    );
+    assert!(
+        coordinator.contains("uiActionAllowed = $false")
+            && !coordinator.contains("uiActionAllowed = $actionRequired"),
+        "the non-authoritative watcher notification must never become click permission"
+    );
+    let follow = coordinator
+        .split("function Follow-Coordinator {")
+        .nth(1)
+        .unwrap()
+        .split("function Invoke-SelfTest {")
+        .next()
+        .unwrap();
+    let terminal_projection = coordinator
+        .split("function Get-TerminalFollowOutput {")
+        .nth(1)
+        .unwrap()
+        .split("function Follow-Coordinator {")
+        .next()
+        .unwrap();
+    assert!(
+        terminal_projection
+            .find("[IO.File]::Exists($Files.Failure)")
+            .unwrap()
+            < terminal_projection
+                .find("[IO.File]::Exists($Files.Final)")
+                .unwrap(),
+        "Follow must preserve terminal failure stage/reason before considering Final"
+    );
+    assert!(
+        follow.contains("bound-worker-not-alive")
+            && follow.contains("Test-BoundProcessAlive ([int]$workerRecord.workerPid"),
+        "Follow must fail closed when the exact retained worker is no longer alive"
+    );
+    assert!(
+        coordinator.contains("Follow runner-finalizing self-test failed.")
+            && follow.contains("-Phase \"runner-finalizing\"")
+            && follow.contains("-Phase \"worker-guard-ownership-transfer\"")
+            && follow.contains("-Phase \"runner-starting-or-waiting-for-handoff\""),
+        "Follow must distinguish a live worker finalizing an exited runner from a dead worker"
+    );
+}
+
+#[test]
+fn windows_acceptance_coordinator_publication_and_detached_environment_are_closed() {
+    let coordinator = fs::read_to_string("scripts/run-windows-computer-use-acceptance.ps1")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let atomic_writer = coordinator
+        .split("function Write-CreateOnceJson {")
+        .nth(1)
+        .unwrap()
+        .split("function Read-BoundedJson {")
+        .next()
+        .unwrap();
+    for required in [
+        "$directory = Resolve-OrdinaryPath ([IO.Path]::GetDirectoryName($Path)) $false \"Coordinator record parent\"",
+        "$temporaryLeaf = \".\" + [IO.Path]::GetFileName($Path) + \".\" + [Guid]::NewGuid().ToString(\"N\") + \".tmp\"",
+        "$temporaryPath = Assert-NewChildPath $directory $temporaryLeaf",
+        "[IO.FileMode]::CreateNew",
+        "[IO.FileAccess]::Write",
+        "[IO.FileShare]::None",
+        "$stream.Flush($true)",
+        "[IO.File]::Move($temporaryPath, $Path)",
+        "if ([IO.File]::Exists($temporaryPath)) {",
+        "[IO.File]::Delete($temporaryPath)",
+    ] {
+        assert!(
+            atomic_writer.contains(required),
+            "atomic coordinator record publication is missing: {required}"
+        );
+    }
+    let temporary_path = atomic_writer
+        .find("$temporaryPath = Assert-NewChildPath")
+        .unwrap();
+    let open = atomic_writer.find("[IO.File]::Open(").unwrap();
+    let flush = atomic_writer.find("$stream.Flush($true)").unwrap();
+    let publish = atomic_writer
+        .find("[IO.File]::Move($temporaryPath, $Path)")
+        .unwrap();
+    let cleanup = atomic_writer
+        .find("[IO.File]::Delete($temporaryPath)")
+        .unwrap();
+    assert!(temporary_path < open && open < flush && flush < publish && publish < cleanup);
+    for forbidden in [
+        "[IO.File]::Open($Path",
+        "[IO.File]::WriteAllText($Path",
+        "[IO.File]::WriteAllBytes($Path",
+        "[IO.FileMode]::Create,",
+        "[IO.FileMode]::OpenOrCreate",
+        "[IO.FileMode]::Append",
+        "[IO.FileShare]::Read",
+    ] {
+        assert!(
+            !atomic_writer.contains(forbidden),
+            "atomic publication writes or exposes the final pathname before publication: {forbidden}"
+        );
+    }
+    let terminal_writer = coordinator
+        .split("function Write-TerminalFailure {")
+        .nth(1)
+        .unwrap()
+        .split("function Get-WorkerConfiguration {")
+        .next()
+        .unwrap();
+    assert!(terminal_writer.contains("catch [IO.IOException]"));
+    assert!(terminal_writer.contains("if (-not [IO.File]::Exists($Files.Failure)) { throw }"));
+
+    let allowlist = coordinator
+        .split("function Get-WhitelistedWorkerEnvironment {")
+        .nth(1)
+        .unwrap()
+        .split("function Start-DetachedWorkerProcess {")
+        .next()
+        .unwrap();
+    for required in [
+        "\"SystemRoot\"",
+        "\"TEMP\"",
+        "\"TMP\"",
+        "\"USERPROFILE\"",
+        "$value = [Environment]::GetEnvironmentVariable($name, \"Process\")",
+        "$environment[$name] = $value",
+        "if (-not $environment.Contains($required)",
+    ] {
+        assert!(
+            allowlist.contains(required),
+            "detached worker allowlist is missing: {required}"
+        );
+    }
+    assert!(!allowlist.contains("GetEnvironmentVariables("));
+    assert!(!allowlist.contains("\"PATH\""));
+
+    let detached_launcher = coordinator
+        .split("function Start-DetachedWorkerProcess {")
+        .nth(1)
+        .unwrap()
+        .split("function Stop-DetachedWorkerProcessExact {")
+        .next()
+        .unwrap();
+    for required in [
+        "NativeDetachedWorkerLauncher",
+        "CreateProcess(",
+        "BuildEnvironment(environment)",
+        "SortedDictionary<string, string>",
+        "PROC_THREAD_ATTRIBUTE_HANDLE_LIST",
+        "PROC_THREAD_ATTRIBUTE_JOB_LIST",
+        "CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_BREAKAWAY_FROM_JOB",
+        "IsProcessInJob(nativeProcess.Process, guardJob, out guarded)",
+        "ResumeThread(nativeProcess.Thread)",
+        "TransferGuardOwnership()",
+        "return [LbbCoordinator.NativeDetachedWorkerLauncher]::Start(",
+    ] {
+        assert!(
+            detached_launcher.contains(required),
+            "detached worker environment boundary is missing: {required}"
+        );
+    }
+    let environment = detached_launcher
+        .find("BuildEnvironment(environment)")
+        .unwrap();
+    let guard = detached_launcher
+        .find("guardJob = CreateKillOnCloseJob()")
+        .unwrap();
+    let create = detached_launcher
+        .find("bool started = CreateProcess(")
+        .unwrap();
+    let verify = detached_launcher
+        .find("IsProcessInJob(nativeProcess.Process, guardJob, out guarded)")
+        .unwrap();
+    let resume = detached_launcher
+        .find("ResumeThread(nativeProcess.Thread)")
+        .unwrap();
+    let transfer = detached_launcher
+        .find("ownershipTransferred = true")
+        .unwrap();
+    assert!(
+        environment < guard
+            && guard < create
+            && create < verify
+            && verify < resume
+            && resume < transfer
+    );
+    assert!(!coordinator.contains("Start-Process"));
+
+    let start = coordinator
+        .split("function Start-Coordinator {")
+        .nth(1)
+        .unwrap()
+        .split("function Write-FollowFailureOutput {")
+        .next()
+        .unwrap();
+    for required in [
+        "$workerEnvironment = Get-WhitelistedWorkerEnvironment",
+        "$workerEnvironment[\"LBB_WINDOWS_COORDINATOR_WORKER_NONCE\"] = $workerNonce",
+        "$workerEnvironment[\"LBB_WINDOWS_COORDINATOR_CONFIG\"] = $files.Config",
+        "$worker = Start-DetachedWorkerProcess",
+        "-Environment $workerEnvironment",
+        "The detached worker allowlist retained an unlisted environment value.",
+    ] {
+        assert!(
+            coordinator.contains(required),
+            "production or self-test detached-environment proof is missing: {required}"
+        );
+    }
+    assert_eq!(
+        start.matches("$workerEnvironment[").count(),
+        2,
+        "Start may add only the worker nonce and private config path to the detached allowlist"
+    );
+    let handoff = start.find("$workerHandedOff = $true").unwrap();
+    let guard_transfer = start.find("$worker.TransferGuardOwnership()").unwrap();
+    let ownership_record = start
+        .find("Write-CreateOnceJson $files.Ownership $ownershipRecord")
+        .unwrap();
+    let catch = start.find("\n    catch {").unwrap();
+    let final_output = start.rfind("Write-Output $startOutput").unwrap();
+    assert!(
+        guard_transfer < ownership_record
+            && ownership_record < handoff
+            && handoff < catch
+            && catch < final_output,
+        "Start must transfer worker ownership before emitting to a fallible output consumer"
+    );
+    assert!(
+        start.contains("if (-not $workerHandedOff -and $null -ne $worker)")
+            && start
+                .contains("if (-not $workerHandedOff -and -not [IO.File]::Exists($files.Failure))"),
+        "Start may terminate or record failure only before durable worker handoff"
+    );
+    let launch_try = &start[..catch];
+    assert!(
+        !launch_try.contains("Write-Output"),
+        "a closed Start output pipeline must not re-enter launch cleanup and kill the worker"
+    );
+    let start_catch = &start[catch..final_output];
+    let classify_runner = start_catch
+        .find("$attemptState = if ([IO.File]::Exists($files.Runner))")
+        .unwrap();
+    let classify_unknown = start_catch
+        .find("elseif (-not $workerCleanupConfirmed -or [IO.File]::Exists($files.Intent))")
+        .unwrap();
+    assert!(
+        classify_runner < classify_unknown,
+        "a published runner record must outrank cleanup uncertainty when classifying terminal state"
+    );
+}
+
+#[test]
+fn windows_acceptance_coordinator_owns_children_and_delays_watcher_until_marker() {
+    let coordinator = fs::read_to_string("scripts/run-windows-computer-use-acceptance.ps1")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let lifetime_job = coordinator
+        .split("function Get-WorkerLifetimeSupportSource {")
+        .nth(1)
+        .unwrap()
+        .split("function New-WorkerLifetimeSupportAssembly {")
+        .next()
+        .unwrap();
+    for required in [
+        "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000",
+        "limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE",
+        "OpenJobObject(",
+        "TerminateJobObject(job, 1)",
+        "QueryInformationJobObject(",
+        "accounting.ActiveProcesses == 0",
+        "ERROR_ALREADY_EXISTS = 183",
+        "SetLastError(0)",
+        "IntPtr candidate = CreateJobObject(IntPtr.Zero, name)",
+        "if (createError == 0)",
+        "CloseHandle(candidate)",
+        "if (!recoveredExistingJob || recoveryDeadline == null)",
+        "recoveryDeadline.ElapsedMilliseconds >= timeoutMilliseconds",
+        "SleepForRecoveryPoll(",
+        "SetInformationJobObject(handle, JobObjectExtendedLimitInformation, buffer, (uint)size)",
+        "AssignProcessToJobObject(handle, GetCurrentProcess())",
+        "CloseHandle(handle)",
+    ] {
+        assert!(
+            lifetime_job.contains(required),
+            "worker lifetime ownership is missing: {required}"
+        );
+    }
+    assert!(lifetime_job.contains("allowChildBreakaway ? JOB_OBJECT_LIMIT_BREAKAWAY_OK : 0"));
+    assert!(!lifetime_job.contains("JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK"));
+    let fresh_job = lifetime_job
+        .split("private static IntPtr CreateFreshJob(")
+        .nth(1)
+        .unwrap()
+        .split("private static void TerminateAndWaitForEmpty(")
+        .next()
+        .unwrap();
+    let create_candidate = fresh_job
+        .find("IntPtr candidate = CreateJobObject(IntPtr.Zero, name)")
+        .unwrap();
+    let capture_status = fresh_job
+        .find("int createError = Marshal.GetLastWin32Error()")
+        .unwrap();
+    let accept_fresh = fresh_job.find("if (createError == 0)").unwrap();
+    let close_existing = fresh_job.find("CloseHandle(candidate)").unwrap();
+    let inspected_gate = fresh_job
+        .find("if (!recoveredExistingJob || recoveryDeadline == null)")
+        .unwrap();
+    let retry_wait = fresh_job.find("SleepForRecoveryPoll(").unwrap();
+    assert!(
+        create_candidate < capture_status
+            && capture_status < accept_fresh
+            && accept_fresh < close_existing
+            && close_existing < inspected_gate
+            && inspected_gate < retry_wait,
+        "fresh named-Job recovery must capture status, accept only a fresh create, close an existing handle, and retry only after inspected recovery"
+    );
+    assert!(fresh_job.contains(
+        "The prior coordinator lifetime Job name did not become available for a fresh object"
+    ));
+    assert!(coordinator.contains(
+        "WorkerLifetimeJobName = \"Local\\LBBWindowsAcceptanceCoordinatorLifetimeJob-v1\""
+    ));
+    assert!(coordinator.contains("CREATE_BREAKAWAY_FROM_JOB"));
+    assert!(coordinator.contains("PROC_THREAD_ATTRIBUTE_JOB_LIST"));
+    assert!(coordinator.contains("$worker.TransferGuardOwnership()"));
+    let worker = coordinator
+        .split("function Invoke-CoordinatorWorker {")
+        .nth(1)
+        .unwrap()
+        .split("function Get-BootstrapFieldNames {")
+        .next()
+        .unwrap();
+    let mutex_acquire = worker.find("$exclusiveMutex.WaitOne(0)").unwrap();
+    let lifetime_recovery = worker
+        .find("$workerLifetimeJob = New-WorkerLifetimeJob")
+        .unwrap();
+    let worker_record = worker.find("Write-CreateOnceJson $files.Worker").unwrap();
+    assert!(
+        mutex_acquire < lifetime_recovery && lifetime_recovery < worker_record,
+        "the stable mutex must serialize old-Job recovery before a new worker is admitted"
+    );
+    for required in [
+        "-Name $script:WorkerLifetimeJobName",
+        "-RecoverExisting",
+        "-RecoveryTimeoutMilliseconds $script:WorkerLifetimeRecoveryMilliseconds",
+    ] {
+        assert!(
+            worker.contains(required),
+            "production worker lifetime recovery is missing: {required}"
+        );
+    }
+    let support_loader = coordinator
+        .split("function Initialize-WorkerLifetimeSupport {")
+        .nth(1)
+        .unwrap()
+        .split("function New-WorkerLifetimeJob {")
+        .next()
+        .unwrap();
+    for required in [
+        "$assemblyBytes = [IO.File]::ReadAllBytes($resolved)",
+        "$loadedAssemblySha256 = ConvertTo-LowerHex ($sha256.ComputeHash($assemblyBytes))",
+        "$null = [Reflection.Assembly]::Load($assemblyBytes)",
+    ] {
+        assert!(
+            support_loader.contains(required),
+            "worker support must hash and load the same exact byte array: {required}"
+        );
+    }
+    assert!(!support_loader.contains("Add-Type -Path"));
+
+    let worker = coordinator
+        .split("function Invoke-CoordinatorWorker {")
+        .nth(1)
+        .unwrap()
+        .split("function Get-BootstrapFieldNames {")
+        .next()
+        .unwrap();
+    let bind_job = worker
+        .find("$workerLifetimeJob = New-WorkerLifetimeJob")
+        .unwrap();
+    let acquire_mutex = worker.find("$exclusiveMutex.WaitOne(0)").unwrap();
+    let worker_record = worker.find("Write-CreateOnceJson $files.Worker").unwrap();
+    let ownership_record = worker.find("Assert-ExactOwnershipRecord").unwrap();
+    let launch_intent = worker.find("Write-CreateOnceJson $files.Intent").unwrap();
+    let runner_launch = worker
+        .find("$runnerCapture = Start-CapturedProcess $runnerInfo")
+        .unwrap();
+    let runner_record_publish = worker
+        .find("Write-CreateOnceJson $files.Runner $runnerRecord")
+        .unwrap();
+    assert!(
+        acquire_mutex < bind_job
+            && bind_job < worker_record
+            && worker_record < ownership_record
+            && ownership_record < launch_intent
+            && launch_intent < runner_launch
+            && runner_launch < runner_record_publish,
+        "exclusive admission and old-Job recovery must complete before any candidate-attempt record or child"
+    );
+    assert!(
+        !worker.contains("$runnerStarted"),
+        "terminal attempt classification must come only from published state records"
+    );
+    let worker_catch = worker.rsplit("\n    catch {").next().unwrap();
+    let classify_runner = worker_catch
+        .find("if ([IO.File]::Exists($files.Runner))")
+        .unwrap();
+    let classify_intent = worker_catch
+        .find("elseif ([IO.File]::Exists($files.Intent))")
+        .unwrap();
+    assert!(classify_runner < classify_intent);
+    for required in [
+        "Local\\LBBWindowsAcceptanceCoordinator",
+        "Write-TerminalFailure $files \"worker-exclusivity\" \"not-started\" \"another-coordinator-is-active\"",
+        "Write-TerminalFailure $files \"worker-ownership\" \"not-started\" \"worker-ownership-unavailable\"",
+        "$script:ProcessLifetimeCoordinatorMutex = $exclusiveMutex",
+        "[GC]::KeepAlive($script:ProcessLifetimeCoordinatorMutex)",
+        "[GC]::KeepAlive($workerLifetimeJob)",
+    ] {
+        assert!(
+            worker.contains(required),
+            "worker ownership fail-closed state is missing: {required}"
+        );
+    }
+    assert!(
+        !worker.contains("LBBWindowsAcceptanceCoordinator-v"),
+        "the session exclusivity mutex must remain stable across product versions"
+    );
+    assert!(
+        !worker.contains("$exclusiveMutex.ReleaseMutex()"),
+        "the worker must retain its exclusion mutex until process teardown"
+    );
+    let runner_cleanup = worker.rfind("if ($null -ne $runnerCapture)").unwrap();
+    let retain_mutex = worker
+        .rfind("[GC]::KeepAlive($script:ProcessLifetimeCoordinatorMutex)")
+        .unwrap();
+    let keep_job = worker.rfind("[GC]::KeepAlive($workerLifetimeJob)").unwrap();
+    assert!(runner_cleanup < retain_mutex && retain_mutex < keep_job);
+
+    let capture = coordinator
+        .split("function Start-CapturedProcess {")
+        .nth(1)
+        .unwrap()
+        .split("function Complete-CapturedProcess {")
+        .next()
+        .unwrap();
+    let capture_try = capture.find("    try {").unwrap();
+    let stdout_open = capture.find("$stdout = [IO.File]::Open").unwrap();
+    let stderr_open = capture.find("$stderr = [IO.File]::Open").unwrap();
+    let process_create = capture
+        .find("$process = [Diagnostics.Process]::new()")
+        .unwrap();
+    assert!(capture_try < stdout_open && stdout_open < stderr_open && stderr_open < process_create);
+    for required in [
+        "if ($null -ne $process) { $process.Dispose() }",
+        "if ($null -ne $stdout) { $stdout.Dispose() }",
+        "if ($null -ne $stderr) { $stderr.Dispose() }",
+        "Captured-stream partial-acquisition self-test did not fail closed.",
+        "Captured-stream partial-acquisition self-test left a locked path.",
+    ] {
+        assert!(
+            coordinator.contains(required),
+            "captured-process partial acquisition is not safely cleaned up or self-tested: {required}"
+        );
+    }
+
+    let open_worker = coordinator
+        .find("$boundWorkerProcess = [LbbCoordinator.DetachedWorkerProcess]::OpenExact")
+        .unwrap();
+    let open_sleeper = coordinator
+        .find("$boundSleeperProcess = [LbbCoordinator.DetachedWorkerProcess]::OpenExact")
+        .unwrap();
+    let probe_transfer = coordinator
+        .rfind("$ownershipLauncherProcess.TransferGuardOwnership()")
+        .unwrap();
+    let probe_assertion = coordinator
+        .find("The launcher-exit durability probe did not retain only its intended processes.")
+        .unwrap();
+    assert!(
+        open_worker < probe_transfer
+            && open_sleeper < probe_transfer
+            && probe_transfer < probe_assertion,
+        "the ownership self-test must retain exact cleanup handles before its fallible transfer assertions"
+    );
+
+    let marker_directory = worker
+        .find("$operatorDirectory = [IO.Path]::Combine($resolvedEvidenceDirectory, \"operator\")")
+        .unwrap();
+    let marker_path = worker
+        .find("$requestMarkerPath = [IO.Path]::Combine($resolvedOperatorDirectory, \"foreground-arm-request.json\")")
+        .unwrap();
+    let marker_resolved = worker
+        .find("Resolve-OrdinaryPath $requestMarkerPath $true \"Foreground-arm request marker\"")
+        .unwrap();
+    let marker_seen = worker.find("$requestMarkerAppeared = $true").unwrap();
+    let watcher_gate = worker
+        .find("if ($requestMarkerAppeared -and -not $runnerCapture.Process.HasExited)")
+        .unwrap();
+    let watcher_launch = worker
+        .find("$watcherCapture = Start-CapturedProcess $watcherInfo")
+        .unwrap();
+    assert!(
+        marker_directory < marker_path
+            && marker_path < marker_resolved
+            && marker_resolved < marker_seen
+            && marker_seen < watcher_gate
+            && watcher_gate < watcher_launch,
+        "the watcher timeout must begin only after an ordinary request marker is published"
+    );
+
+    let liveness = coordinator
+        .split("function Test-BoundProcessAlive {")
+        .nth(1)
+        .unwrap()
+        .split("function Assert-InteractiveInputDesktop {")
+        .next()
+        .unwrap();
+    assert!(liveness.contains("-not $process.HasExited"));
+    assert!(liveness.contains(
+        "$process.StartTime.ToUniversalTime().Ticks -eq $StartedAtUtc.ToUniversalTime().Ticks"
+    ));
+    for forbidden in [
+        "[Math]::Abs",
+        "TotalMilliseconds",
+        "AddMilliseconds",
+        "AddSeconds",
+    ] {
+        assert!(
+            !liveness.contains(forbidden),
+            "process identity must not use a liveness tolerance: {forbidden}"
+        );
+    }
+    for required in [
+        "Test-BoundProcessAlive $worker.Id $workerStartedAt",
+        "Test-BoundProcessAlive ([int]$workerRecord.workerPid) $workerStartedAt",
+        "Test-BoundProcessAlive ([int]$runnerRecord.runnerPid) $started",
+        "Test-BoundProcessAlive $currentProcess.Id $currentStartedAt.AddTicks(1)",
+    ] {
+        assert!(
+            coordinator.contains(required),
+            "exact process identity is not enforced or self-tested: {required}"
+        );
+    }
+    assert!(coordinator.contains("$runnerCapture.Process.Id"));
+    assert!(coordinator.contains("$runnerCapture.StartedAtUtc"));
+
+    let guard_close_mode = coordinator
+        .split("if (args[0] == \"sleeper\" || args[0] == \"control\")")
+        .nth(1)
+        .unwrap()
+        .split("if (args[0] == \"launcher\" && args.Length == 2)")
+        .next()
+        .unwrap();
+    assert!(guard_close_mode.contains("Thread.Sleep(120000)"));
+    assert!(
+        !guard_close_mode.contains("BindCurrentProcessToKillOnCloseJob"),
+        "the pre-transfer guard-close worker must not create its own lifetime Job"
+    );
+    let guard_close_probe = coordinator
+        .split("$guardCloseLauncherProcess = Start-DetachedWorkerProcess")
+        .nth(1)
+        .unwrap()
+        .split("$controlInfo = New-ProcessStartInfo")
+        .next()
+        .unwrap();
+    assert!(guard_close_probe.contains("-Arguments (Join-NativeArguments @(\"sleeper\"))"));
+    let retain_exact_guard_worker = guard_close_probe
+        .find("$guardCloseBoundProcess = [LbbCoordinator.DetachedWorkerProcess]::OpenExact")
+        .unwrap();
+    let require_live_guard_worker = guard_close_probe
+        .find("$guardCloseLauncherProcess.GuardOwnershipTransferred")
+        .unwrap();
+    let close_guard = guard_close_probe
+        .find("$guardCloseLauncherProcess.Dispose()")
+        .unwrap();
+    let await_guard_worker = guard_close_probe
+        .find("$guardCloseBoundProcess.WaitForExit(5000)")
+        .unwrap();
+    let reject_live_guard_worker = guard_close_probe
+        .find("Test-BoundProcessAlive $guardClosePid $guardCloseStartedAt")
+        .unwrap();
+    let reopen_guard_stream_exclusively = guard_close_probe.find("[IO.FileShare]::None").unwrap();
+    let delete_guard_stream = guard_close_probe
+        .find("[IO.File]::Delete($guardCloseLogPath)")
+        .unwrap();
+    assert!(
+        retain_exact_guard_worker < require_live_guard_worker
+            && require_live_guard_worker < close_guard
+            && close_guard < await_guard_worker
+            && await_guard_worker < reject_live_guard_worker,
+        "the pre-transfer guard-close probe must retain an exact handle, prove liveness and launcher ownership, dispose without transfer, then prove bounded exact termination"
+    );
+    assert!(
+        reject_live_guard_worker < reopen_guard_stream_exclusively
+            && reopen_guard_stream_exclusively < delete_guard_stream,
+        "the pre-transfer guard-close probe must prove process termination before proving inherited stream handles closed"
+    );
+    assert!(
+        !guard_close_probe.contains("TransferGuardOwnership()"),
+        "the pre-transfer guard-close probe must exercise launcher guard closure"
+    );
+}
+
+#[test]
+fn windows_acceptance_follow_is_non_authoritative_and_summary_bound() {
+    let coordinator = fs::read_to_string("scripts/run-windows-computer-use-acceptance.ps1")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let worker = coordinator
+        .split("function Invoke-CoordinatorWorker {")
+        .nth(1)
+        .unwrap()
+        .split("function Get-BootstrapFieldNames {")
+        .next()
+        .unwrap();
+    let terminal = worker
+        .split("$runnerExit = Complete-CapturedProcess")
+        .nth(1)
+        .unwrap()
+        .split("\n    }\n    catch {")
+        .next()
+        .unwrap();
+    for required in [
+        "$summaryPassed = $false",
+        "$summary = Read-BoundedJson $summaryPath 1048576 \"Windows acceptance summary\"",
+        "$summaryPassed = $summary.passed -is [bool] -and $summary.passed -eq $true",
+        "catch { $summaryPassed = $false }",
+        "$summaryPassed -and",
+        "summaryPassed = $summaryPassed",
+        "elseif (-not $summaryPassed) { \"runner-summary-failed\" }",
+    ] {
+        assert!(
+            terminal.contains(required),
+            "terminal completion is not bound to a bounded passing summary: {required}"
+        );
+    }
+    let summary_default = terminal.find("$summaryPassed = $false").unwrap();
+    let summary_read = terminal.find("$summary = Read-BoundedJson").unwrap();
+    let summary_truth = terminal
+        .find("$summaryPassed = $summary.passed -is [bool] -and $summary.passed -eq $true")
+        .unwrap();
+    let completion = terminal.find("$acceptanceCompleted = (").unwrap();
+    let final_record = terminal.find("$finalRecord = [pscustomobject]").unwrap();
+    let terminal_failure = terminal.find("if (-not $acceptanceCompleted)").unwrap();
+    let final_publish = terminal.find("Write-CreateOnceJson $files.Final").unwrap();
+    assert!(
+        summary_default < summary_read
+            && summary_read < summary_truth
+            && summary_truth < completion
+            && completion < final_record
+            && final_record < terminal_failure
+            && terminal_failure < final_publish
+    );
+
+    let failure_output = coordinator
+        .split("function Write-FollowFailureOutput {")
+        .nth(1)
+        .unwrap()
+        .split("function Write-FollowWaitingOutput {")
+        .next()
+        .unwrap();
+    let waiting_output = coordinator
+        .split("function Write-FollowWaitingOutput {")
+        .nth(1)
+        .unwrap()
+        .split("function Get-TerminalFollowOutput {")
+        .next()
+        .unwrap();
+    let follow = coordinator
+        .split("function Follow-Coordinator {")
+        .nth(1)
+        .unwrap()
+        .split("function Invoke-SelfTest {")
+        .next()
+        .unwrap();
+    let chain = coordinator
+        .split("function Get-ValidatedFollowChain {")
+        .nth(1)
+        .unwrap()
+        .split("function ConvertTo-ExactPrivateHandoffRecord {")
+        .next()
+        .unwrap();
+    for required in [
+        "Assert-ExactStartRecord $start $Config",
+        "The coordinator ownership record has no worker predecessor.",
+        "The runner intent has no ownership predecessor.",
+        "The runner record has no launch-intent predecessor.",
+        "The watcher record has no runner predecessor.",
+        "The handoff record has no accepted watcher predecessor.",
+        "The final record has no runner predecessor.",
+    ] {
+        assert!(
+            chain.contains(required),
+            "Follow predecessor-chain validation is missing: {required}"
+        );
+    }
+    let terminal_before_chain = follow
+        .find("$terminalOutput = @(Get-TerminalFollowOutput $files $config)")
+        .unwrap();
+    let nonterminal_chain = follow
+        .find("$followChain = Get-ValidatedFollowChain $files $config -SkipFinal")
+        .unwrap();
+    assert!(
+        terminal_before_chain < nonterminal_chain,
+        "the first terminal failure must outrank malformed later final state"
+    );
+    assert!(
+        !coordinator.contains("Get-TerminalFollowOutput $files)"),
+        "every Follow terminal projection must receive its validated configuration"
+    );
+    for output in [failure_output, waiting_output] {
+        assert!(output.contains("uiActionAllowed = $false"));
+        assert!(output.contains("notificationOnly = $true"));
+        assert!(output.contains("acceptedAsAuthority = $false"));
+    }
+    assert!(follow.contains("uiActionAllowed = $false"));
+    assert!(follow.contains("notificationOnly = [bool]$handoff.notificationOnly"));
+    assert!(follow.contains("acceptedAsAuthority = [bool]$handoff.acceptedAsAuthority"));
+    for required in [
+        "requiresSeparateAuthorization = [bool]$handoff.requiresSeparateAuthorization",
+        "markerGrantsAuthorization = [bool]$handoff.markerGrantsAuthorization",
+        "markerGrantsConsent = [bool]$handoff.markerGrantsConsent",
+        "externalOneShotConsentRequired = [bool]$handoff.externalOneShotConsentRequired",
+        "externalAuthorizationVerifiedByWatcher = [bool]$handoff.externalAuthorizationVerifiedByWatcher",
+        "consumerMustDeduplicateByRequestId = $true",
+        "uiActionAllowed = $false",
+        "notificationOnly = [bool]$handoff.notificationOnly",
+        "acceptedAsAuthority = [bool]$handoff.acceptedAsAuthority",
+    ] {
+        assert!(
+            follow.contains(required),
+            "Follow handoff is not explicitly non-authoritative: {required}"
+        );
+    }
+    for forbidden in [
+        "Write-CreateOnceJson",
+        "Start-CapturedProcess",
+        "Start-DetachedWorkerProcess",
+        ".Kill()",
+        "SetEnvironmentVariable",
+        "[IO.File]::Write",
+        "[IO.File]::Move",
+        "[IO.File]::Delete",
+    ] {
+        assert!(
+            !follow.contains(forbidden),
+            "Follow must remain a read-only notification projection: {forbidden}"
+        );
+    }
+    let terminal_projection = coordinator
+        .split("function Get-TerminalFollowOutput {")
+        .nth(1)
+        .unwrap();
+    let terminal_projection = terminal_projection
+        .split("function Follow-Coordinator {")
+        .next()
+        .unwrap();
+    assert!(
+        !terminal_projection.contains("return $null"),
+        "an absent terminal record must emit no pipeline object"
+    );
+    let failure_check = terminal_projection
+        .find("if ([IO.File]::Exists($Files.Failure))")
+        .unwrap();
+    let final_check = terminal_projection
+        .find("\n    if (-not [IO.File]::Exists($Files.Final)) { return }")
+        .unwrap();
+    assert!(failure_check < final_check);
+    let failure_branch = &terminal_projection[failure_check..final_check];
+    assert!(failure_branch.contains("Write-FollowFailureOutput"));
+    assert!(failure_branch.contains("return"));
+    assert!(terminal_projection.contains("[int]$final.exitCode -ne 0"));
+    assert!(terminal_projection.contains("$final.summaryPresent -ne $true"));
+    assert!(terminal_projection.contains("$final.summaryPassed -ne $true"));
+    assert!(terminal_projection.contains("$final.evidenceDirectoryPresent -ne $true"));
+    assert!(terminal_projection.contains("-ReasonCode \"final-record-not-successful\""));
+    for required in [
+        "Follow non-authoritative repeated-handoff self-test failed.",
+        "Follow terminal-failure precedence self-test failed.",
+        "Follow lone-final chain self-test accepted an impossible completion.",
+        "Follow missing-intent chain self-test accepted an impossible handoff.",
+        "$final.summaryPassed -ne $true",
+    ] {
+        assert!(
+            coordinator.contains(required),
+            "Follow failure precedence or summary binding is not self-tested: {required}"
+        );
+    }
+}
+
+#[test]
 fn windows_foreground_arm_handoff_watcher_is_strict_read_only_and_non_authoritative() {
     let watcher = fs::read_to_string("scripts/wait-windows-foreground-arm-handoff.ps1")
         .unwrap()
@@ -4784,7 +5771,7 @@ fn windows_foreground_arm_handoff_watcher_is_strict_read_only_and_non_authoritat
         .replace("\r\n", "\n");
 
     for required in [
-        "$script:ProductVersion = \"0.12.27\"",
+        "$script:ProductVersion = \"0.12.28\"",
         "$script:MarkerSchemaVersion = 2",
         "function Assert-ExactPropertyOrder {",
         "function Assert-ExactMarkerSchema {",
@@ -4929,7 +5916,7 @@ fn windows_foreground_arm_handoff_watcher_is_strict_read_only_and_non_authoritat
         "$markerReader = { return Read-AtomicRequestMarker $markerPath $operatorDirectory }.GetNewClosure()"
     ));
     assert!(runner.contains("-ProductVersion $Version"));
-    assert!(runner.contains("-ProductVersion \"0.12.27\""));
+    assert!(runner.contains("-ProductVersion \"0.12.28\""));
     assert!(runner.contains("maximumClickAttempts -ne 1"));
     assert!(runner.contains("maximumClickAttempts -ne 0"));
 }

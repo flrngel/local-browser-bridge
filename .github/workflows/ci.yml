@@ -97,6 +97,7 @@ jobs:
           $scripts = @(
             "scripts/browser-evidence-candidate.ps1",
             "scripts/record-computer-helper-chain.ps1",
+            "scripts/run-windows-computer-use-acceptance.ps1",
             "scripts/sanitize-browser-evidence-screenshot.ps1",
             "scripts/test-windows-browser-api.ps1",
             "scripts/test-windows-computer-use.ps1",
@@ -129,6 +130,28 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 candidate binder self-test failed." }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/record-computer-helper-chain.ps1 -Mode SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 computer-helper recorder self-test failed." }
+          $coordinatorPathForPs51 = (Resolve-Path ./scripts/run-windows-computer-use-acceptance.ps1).Path
+          $previousCoordinatorPathForPs51 = $env:LBB_PS51_COORDINATOR_PARSE
+          $coordinatorParserCommand = '$tokens = $null; $errors = $null; [Management.Automation.Language.Parser]::ParseFile([IO.Path]::GetFullPath($env:LBB_PS51_COORDINATOR_PARSE), [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -ne 0) { throw (($errors | ForEach-Object { $_.Message }) -join [Environment]::NewLine) }'
+          try {
+            $env:LBB_PS51_COORDINATOR_PARSE = $coordinatorPathForPs51
+            & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -Command $coordinatorParserCommand
+            if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 computer-use acceptance coordinator parser failed." }
+          }
+          finally {
+            if ($null -eq $previousCoordinatorPathForPs51) {
+              Remove-Item Env:\LBB_PS51_COORDINATOR_PARSE -ErrorAction SilentlyContinue
+            }
+            else {
+              $env:LBB_PS51_COORDINATOR_PARSE = $previousCoordinatorPathForPs51
+            }
+          }
+          $coordinatorSelfTestOutput = @(& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/run-windows-computer-use-acceptance.ps1 -Mode SelfTest)
+          if ($LASTEXITCODE -ne 0 -or
+              $coordinatorSelfTestOutput.Count -ne 1 -or
+              $coordinatorSelfTestOutput[0] -cne "Windows computer-use acceptance coordinator self-test passed.") {
+            throw "Windows PowerShell 5.1 computer-use acceptance coordinator self-test failed."
+          }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/sanitize-browser-evidence-screenshot.ps1 -Mode SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 screenshot sanitizer self-test failed." }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-browser-api.ps1 -SelfTest
@@ -276,14 +299,14 @@ jobs:
           node scripts/finalize-macos-acceptance.mjs --self-test
       - name: Validate the macOS packaged-evidence harness
         run: |
-          node --check evidence/v0.12.27/computer/helper-evidence-rig.mjs
-          node evidence/v0.12.27/computer/helper-evidence-rig.mjs --self-test
-          xcrun swiftc -typecheck evidence/v0.12.27/computer/HelperEvidenceFixture.swift
-          xcrun swiftc -typecheck evidence/v0.12.27/computer/SystemProbe.swift
-          xcrun swiftc -typecheck evidence/v0.12.27/computer/AppShareHandoff.swift
-          xcrun swiftc evidence/v0.12.27/computer/AppShareHandoff.swift -o "$RUNNER_TEMP/lbb-app-share-handoff-self-test"
+          node --check evidence/v0.12.28/computer/helper-evidence-rig.mjs
+          node evidence/v0.12.28/computer/helper-evidence-rig.mjs --self-test
+          xcrun swiftc -typecheck evidence/v0.12.28/computer/HelperEvidenceFixture.swift
+          xcrun swiftc -typecheck evidence/v0.12.28/computer/SystemProbe.swift
+          xcrun swiftc -typecheck evidence/v0.12.28/computer/AppShareHandoff.swift
+          xcrun swiftc evidence/v0.12.28/computer/AppShareHandoff.swift -o "$RUNNER_TEMP/lbb-app-share-handoff-self-test"
           "$RUNNER_TEMP/lbb-app-share-handoff-self-test" --self-test
-          xcrun swiftc -typecheck evidence/v0.12.27/computer/PhysicalPointerHandoff.swift
+          xcrun swiftc -typecheck evidence/v0.12.28/computer/PhysicalPointerHandoff.swift
       - name: Install the minimum supported Rust toolchain
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy

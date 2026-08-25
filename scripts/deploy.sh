@@ -4,6 +4,12 @@ set -euo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_root"
 
+release_blocker="$project_root/RELEASE_BLOCKED"
+if [[ -e "$release_blocker" || -L "$release_blocker" ]]; then
+  echo "Release is blocked; resolve docs/WINDOWS_ACCEPTANCE_HANDOFF.md and remove RELEASE_BLOCKED in the reviewed unblock commit." >&2
+  exit 1
+fi
+
 version="$(bash scripts/audit-versions.sh)"
 dist_dir="$project_root/dist"
 release_stage=""
@@ -155,8 +161,8 @@ node --check scripts/wait-macos-app-share-concurrency-handoff.mjs
 node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test
 node --check scripts/finalize-macos-acceptance.mjs
 node scripts/finalize-macos-acceptance.mjs --self-test
-node --check evidence/v0.12.27/computer/helper-evidence-rig.mjs
-node evidence/v0.12.27/computer/helper-evidence-rig.mjs --self-test
+node --check evidence/v0.12.28/computer/helper-evidence-rig.mjs
+node evidence/v0.12.28/computer/helper-evidence-rig.mjs --self-test
 bash -n scripts/fetch-verify-release-candidate.sh
 bash scripts/fetch-verify-release-candidate.sh --self-test
 cargo fmt --all -- --check
@@ -230,11 +236,11 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 bash scripts/verify-macos-build-host.sh
-xcrun swiftc -typecheck evidence/v0.12.27/computer/HelperEvidenceFixture.swift
-xcrun swiftc -typecheck evidence/v0.12.27/computer/SystemProbe.swift
-xcrun swiftc -typecheck evidence/v0.12.27/computer/AppShareHandoff.swift
+xcrun swiftc -typecheck evidence/v0.12.28/computer/HelperEvidenceFixture.swift
+xcrun swiftc -typecheck evidence/v0.12.28/computer/SystemProbe.swift
+xcrun swiftc -typecheck evidence/v0.12.28/computer/AppShareHandoff.swift
 app_share_handoff_self_test="$validation_stage/lbb-app-share-handoff-self-test"
-xcrun swiftc evidence/v0.12.27/computer/AppShareHandoff.swift -o "$app_share_handoff_self_test"
+xcrun swiftc evidence/v0.12.28/computer/AppShareHandoff.swift -o "$app_share_handoff_self_test"
 "$app_share_handoff_self_test" --self-test
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 cargo build --locked --release --bins --target aarch64-apple-darwin

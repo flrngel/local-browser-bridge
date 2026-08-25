@@ -8,6 +8,31 @@ Setup requirements such as browser loading, matching versions, macOS permissions
 
 The persisted bearer token is protected against accidental cross-user exposure, not against software already running as the same account, an administrator that takes ownership, or kernel compromise. Inside Chrome, extension storage is restricted to `TRUSTED_CONTEXTS`, which excludes content scripts but does not protect against a compromised extension service worker or popup. The bridge creates or hardens only the exact computed default `.local-browser-bridge` parent under the current user's absolute profile path; missing or non-absolute profile metadata fails closed instead of selecting the working directory, and a matching directory name elsewhere does not establish ownership. It never recursively creates missing ancestors and never rewrites an existing custom parent's permissions. Any custom `LBB_TOKEN_PATH` parent—including the process working directory for a bare relative path—must already be an ordinary, non-link private directory or startup fails before a token is created. Unix requires current-user ownership with exact mode `0700`, creates token files with mode `0600`, opens persisted tokens without following symlinks or blocking on special entries, and rejects multiply linked entries without replacing either name. The complete Unix read, temporary-file, replacement, verification, and cleanup lifecycle remains relative to the same validated directory descriptor, so renaming or substituting the parent path cannot redirect it. A managed Unix directory can have group/other access removed, but missing owner permissions are never added. Windows requires a protected TokenUser-only DACL, rejects a reparse-point final parent, reparse or multiply linked token files, and filesystems that cannot retain that security descriptor. Parent path opening can still traverse an ancestor profile junction; the bridge tolerates that redirection but rechecks the final ordinary parent's stable identity and DACL. All exact-case child opens and creates use the retained parent handle as `NtCreateFile.RootDirectory`; replacement and cleanup use retained file handles. A private typed capability keeps the exact internally created temporary handle open from creation through write, flush, and atomic rename, and every pre-rename failure deletes that handle rather than reopening its old name. Parent-path identity checks detect relocation before a success is reported, but they are not relied on to select a child. This does not defend the secret against another process already running as that same TokenUser.
 
+## Acceptance-tool security boundary
+
+The Windows acceptance coordinator is crash-resistant release tooling, not a
+sandbox for hostile candidate code. Its fixed LocalAppData roots, exact ACLs,
+staging hashes, predecessor-chain validation, process identities, Job Objects,
+and create-once records protect against accidental mix-ups, abandoned shells,
+partial launches, and unrelated users. The trusted runner and the frozen,
+GitHub-attested candidate still execute as the same signed-in Windows account
+that owns those roots. Malicious code already running as that account can alter
+or delete the attempt ledger, coordinator records, staged files, and evidence;
+the records are not cryptographically authenticated against that account. A
+release decision must therefore begin with independently verified GitHub
+provenance and treats the candidate as trusted input. Do not use this harness to
+analyze an untrusted executable.
+
+The stronger named-Job recovery design is still a blocked v0.12.28 source
+target, not a shipped or Windows-validated property. See the
+[Windows acceptance handoff](WINDOWS_ACCEPTANCE_HANDOFF.md).
+
+Coordinator records flush their file contents before an atomic create-once
+rename. That survives a dropped remote shell and ordinary process failure, but
+does not claim that Windows has committed the parent directory entry across a
+sudden machine or storage power loss. Any ambiguous post-crash state is
+outcome-unknown and those candidate bytes must not be retried.
+
 ## Browser limits
 
 - The agent browser must run on the same computer. A cloud-hosted browser cannot reach the user's `127.0.0.1` server.
@@ -195,7 +220,7 @@ Version 0.12.25 retained the authority refresh and made that watcher portable
 to exact system PowerShell 5.1 by passing marker paths as explicit callback
 arguments.
 
-Version 0.12.27 retains sealed route provenance, the v0.12.23 classifier
+Version 0.12.28 retains sealed route provenance, the v0.12.23 classifier
 separation, and conservative shared-pointer monitoring. After the app-share
 `ACTION` receipt it must obtain a strictly newer frame from the same share,
 target, and geometry within the reserved deadline before deriving click

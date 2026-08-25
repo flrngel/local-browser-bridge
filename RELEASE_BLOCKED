@@ -1,0 +1,3 @@
+version=0.12.28
+reason=windows-acceptance-source-gate
+handoff=docs/WINDOWS_ACCEPTANCE_HANDOFF.md

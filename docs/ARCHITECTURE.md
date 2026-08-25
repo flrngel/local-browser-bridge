@@ -166,9 +166,53 @@ reused after 43.807 seconds; `computer.click` correctly refused it with HTTP 409
 `COMPUTER_STALE_FRAME` before dispatch. Version 0.12.24 therefore added a
 strictly newer frame with the same share, target, and geometry after the
 `ACTION` receipt and within the reserved deadline before deriving click
-authority; version 0.12.27 retains that boundary unchanged. The v0.12.20 physical-pointer lane is retained only as historical,
-optional adversarial coverage; its artifacts cannot satisfy the v0.12.27
-release contract.
+authority; version 0.12.28 retains that boundary unchanged. The v0.12.20
+physical-pointer lane is retained only as historical, optional adversarial
+coverage; its artifacts cannot satisfy the v0.12.28 release contract.
+
+## Windows acceptance coordinator
+
+The v0.12.28 Windows acceptance coordinator is release tooling, not a product
+control surface. `Start` enters an exact clean system-PowerShell bootstrap,
+reserves one per-version attempt below a fixed owner-private LocalAppData root,
+then creates owner-private state with flush-before-move create-once publication
+and launches one retained worker from an explicit ordinary-environment
+allowlist. The intended boundary uses a session-wide admission mutex and stable
+named, worker-owned kill-on-close Job Object to exclude another coordinator and
+contain the runner/watcher process tree. The provisional v0.12.28 source
+terminates a prior named Job and waits for its native active-process count to
+reach zero, but its fresh-name acquisition remains release-blocked pending the
+Windows-local work in [WINDOWS_ACCEPTANCE_HANDOFF.md](WINDOWS_ACCEPTANCE_HANDOFF.md).
+Separate worker, runner, and watcher output files survive an abandoned remote
+shell. The records do not claim sudden-power-loss durability; ambiguity after a
+machine or storage failure is outcome-unknown and forbids retry.
+
+The worker records launch intent before starting the exact runner and binds the
+worker and runner by PID plus start time. It does not start the read-only watcher
+merely because the evidence directory exists; it waits until the exact atomic
+`operator/foreground-arm-request.json` marker exists. The watcher validates the
+fresh notification and live runner, then the coordinator preserves its
+non-authority fields. `Follow` is a read-only projection: waiting, handoff,
+failure, and completion outputs all set `uiActionAllowed: false`,
+`notificationOnly: true`, and `acceptedAsAuthority: false`. A separate fresh
+one-shot authorization and visual state check are still required before the one
+allowed external click. Repeated `Follow` calls do not create new authority and
+must be deduplicated by request ID.
+
+The coordinator's non-product self-test covers owner-only ACLs, atomic state,
+the environment allowlist and token isolation, the stable session mutex, the
+provisional named-Job recovery and required fresh-name refusal cases,
+launcher-exit worker survival and descendant cleanup, concurrent
+stream retention, exact process identity and liveness, complete predecessor
+chains, repeated handoff and request-ID deduplication, and terminal-failure
+precedence without starting a candidate or opening UI.
+
+This tooling assumes the independently verified GitHub-attested candidate is
+trusted. The runner and candidate execute as the same Windows account that owns
+the coordinator, ledger, and evidence ACLs; this is not a restricted-token or
+AppContainer boundary against malicious same-account code. Those records are
+release-orchestration evidence, not cryptographic writer authentication against
+that account.
 
 ## Capture is not isolation
 
