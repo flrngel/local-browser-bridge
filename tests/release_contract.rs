@@ -1158,6 +1158,11 @@ fn two_phase_release_is_tagless_reviewed_low_cost_and_provenance_bound() {
         !candidate.contains("merge_commit_sha"),
         "candidate verification must not depend on the field removed by GitHub API 2026-03-10"
     );
+    assert!(candidate.contains("] | all(. as $required | any($response.check_runs[];"));
+    assert!(
+        !candidate.contains("all(.[] as $required"),
+        "jq all(condition) already evaluates each array element and must not iterate each check name as a second array"
+    );
     for asset in [
         "local-browser-bridge-v${version}-windows-x86_64.exe",
         "local-computer-helper-v${version}-windows-x86_64.exe",
