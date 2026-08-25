@@ -161,8 +161,8 @@ node --check scripts/wait-macos-app-share-concurrency-handoff.mjs
 node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test
 node --check scripts/finalize-macos-acceptance.mjs
 node scripts/finalize-macos-acceptance.mjs --self-test
-node --check evidence/v0.12.29/computer/helper-evidence-rig.mjs
-node evidence/v0.12.29/computer/helper-evidence-rig.mjs --self-test
+node --check evidence/v0.12.30/computer/helper-evidence-rig.mjs
+node evidence/v0.12.30/computer/helper-evidence-rig.mjs --self-test
 bash -n scripts/fetch-verify-release-candidate.sh
 bash scripts/fetch-verify-release-candidate.sh --self-test
 cargo fmt --all -- --check
@@ -236,11 +236,11 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 bash scripts/verify-macos-build-host.sh
-xcrun swiftc -typecheck evidence/v0.12.29/computer/HelperEvidenceFixture.swift
-xcrun swiftc -typecheck evidence/v0.12.29/computer/SystemProbe.swift
-xcrun swiftc -typecheck evidence/v0.12.29/computer/AppShareHandoff.swift
+xcrun swiftc -typecheck evidence/v0.12.30/computer/HelperEvidenceFixture.swift
+xcrun swiftc -typecheck evidence/v0.12.30/computer/SystemProbe.swift
+xcrun swiftc -typecheck evidence/v0.12.30/computer/AppShareHandoff.swift
 app_share_handoff_self_test="$validation_stage/lbb-app-share-handoff-self-test"
-xcrun swiftc evidence/v0.12.29/computer/AppShareHandoff.swift -o "$app_share_handoff_self_test"
+xcrun swiftc evidence/v0.12.30/computer/AppShareHandoff.swift -o "$app_share_handoff_self_test"
 "$app_share_handoff_self_test" --self-test
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 cargo build --locked --release --bins --target aarch64-apple-darwin

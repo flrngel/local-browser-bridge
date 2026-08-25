@@ -1,0 +1,286 @@
+name: Publish accepted release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact accepted package version (for example, 0.12.30)
+        required: true
+        type: string
+      source_sha:
+        description: Exact 40-character main commit used by the candidate
+        required: true
+        type: string
+      candidate_run_id:
+        description: Successful Build release candidate workflow run ID
+        required: true
+        type: string
+      candidate_run_attempt:
+        description: Exact successful candidate workflow run attempt
+        required: true
+        type: string
+      acceptance_receipt:
+        description: Canonical one-line schema-3 acceptance receipt JSON
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-release-${{ github.repository }}-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Verify accepted candidate outside release environment
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
+    outputs:
+      approval_artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      approval_artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      acceptance_receipt_sha256: ${{ steps.approval.outputs.acceptance_receipt_sha256 }}
+      candidate_artifact_id: ${{ steps.candidate.outputs.candidate_artifact_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind publication to exact current main source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          VERIFIED_SOURCE_SHA: ${{ inputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          [[ "$GITHUB_REF" == "refs/heads/main" ]]
+          [[ "$VERIFIED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$GITHUB_SHA" = "$VERIFIED_SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$VERIFIED_SOURCE_SHA"
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$VERIFIED_SOURCE_SHA"
+          test "$(git rev-parse --abbrev-ref HEAD)" = HEAD
+          test -z "$(git status --porcelain=v2 --untracked-files=all)"
+          git diff --quiet HEAD --
+          git diff --cached --quiet
+          test -z "$(git ls-files --deleted)"
+          test -z "$(git ls-files --others --exclude-standard)"
+          git fsck --full
+          if [[ -e RELEASE_BLOCKED || -L RELEASE_BLOCKED ]]; then
+            echo "Release is blocked by RELEASE_BLOCKED." >&2
+            exit 1
+          fi
+          version="$(bash scripts/audit-versions.sh "$RELEASE_VERSION")"
+          test "$version" = "$RELEASE_VERSION"
+
+      - name: Bind exact successful candidate workflow attempt
+        id: candidate
+        env:
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+          GH_TOKEN: ${{ github.token }}
+          VERIFIED_SOURCE_SHA: ${{ inputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          [[ "$CANDIDATE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$CANDIDATE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          scratch="$(mktemp -d)"
+          chmod 700 "$scratch"
+          trap 'rm -rf -- "$scratch"' EXIT
+          gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID/attempts/$CANDIDATE_RUN_ATTEMPT" \
+            > "$scratch/run.json"
+          jq -e \
+            --arg source "$VERIFIED_SOURCE_SHA" \
+            --argjson attempt "$CANDIDATE_RUN_ATTEMPT" '
+              .event == "workflow_dispatch" and .head_branch == "main" and
+              .head_sha == $source and .run_attempt == $attempt and
+              .path == ".github/workflows/deploy.yml" and
+              .status == "completed" and .conclusion == "success"
+            ' "$scratch/run.json" >/dev/null
+          gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID/artifacts?per_page=100" \
+            > "$scratch/artifacts.json"
+          artifact_id="$(jq -er \
+            --argjson run_id "$CANDIDATE_RUN_ID" \
+            --arg source "$VERIFIED_SOURCE_SHA" '
+              (.total_count < 100) and
+              ([.artifacts[] | select(
+                .name == "release-candidate" and .expired == false and
+                .workflow_run.id == $run_id and .workflow_run.head_sha == $source
+              )] | length == 1) as $valid |
+              if $valid then
+                [.artifacts[] | select(
+                  .name == "release-candidate" and .expired == false and
+                  .workflow_run.id == $run_id and .workflow_run.head_sha == $source
+                )][0].id | tostring
+              else error("candidate artifact is absent or ambiguous") end
+            ' "$scratch/artifacts.json")"
+          printf 'candidate_artifact_id=%s\n' "$artifact_id" >> "$GITHUB_OUTPUT"
+
+      - name: Download and verify exact candidate bytes and attestations
+        env:
+          CANDIDATE_ARTIFACT_ID: ${{ steps.candidate.outputs.candidate_artifact_id }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          VERIFIED_SOURCE_SHA: ${{ inputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          work="$RUNNER_TEMP/publication-preflight"
+          test ! -e "$work"
+          mkdir -m 700 "$work"
+          bash scripts/fetch-verify-release-candidate.sh \
+            "$RELEASE_VERSION" \
+            "$CANDIDATE_RUN_ID" \
+            "$CANDIDATE_RUN_ATTEMPT" \
+            "$CANDIDATE_ARTIFACT_ID" \
+            "$VERIFIED_SOURCE_SHA" \
+            "$work/candidate"
+
+      - name: Verify canonical schema-3 acceptance evidence
+        env:
+          ACCEPTANCE_RECEIPT: ${{ inputs.acceptance_receipt }}
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: v${{ inputs.version }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          VERIFIED_SOURCE_SHA: ${{ inputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          receipt="$RUNNER_TEMP/publication-preflight/acceptance-receipt.json"
+          printf '%s' "$ACCEPTANCE_RECEIPT" > "$receipt"
+          test "$(wc -l < "$receipt" | tr -d ' ')" = 0
+          test "$(jq -c . "$receipt")" = "$(<"$receipt")"
+          jq -e '.schemaVersion == 3' "$receipt" >/dev/null
+          bash scripts/verify-release-acceptance-evidence.sh \
+            "$receipt" \
+            "$RUNNER_TEMP/publication-preflight/candidate/payload"
+
+      - name: Create immutable publication approval bundle
+        id: approval
+        env:
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: v${{ inputs.version }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          VERIFIED_SOURCE_SHA: ${{ inputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/publish-release.sh prepare \
+            "$RUNNER_TEMP/publication-preflight/acceptance-receipt.json" \
+            "$RUNNER_TEMP/publication-preflight/candidate" \
+            "$RUNNER_TEMP/publication-approved"
+
+      - name: Refuse a conflicting tag, draft, or published release before approval
+        env:
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_RECEIPT_SHA256: ${{ steps.approval.outputs.acceptance_receipt_sha256 }}
+          RELEASE_TAG: v${{ inputs.version }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          VERIFIED_SOURCE_SHA: ${{ inputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/publish-release.sh check-remote \
+            "$RUNNER_TEMP/publication-approved" \
+            "$EXPECTED_RECEIPT_SHA256"
+
+      - name: Upload exact preflight-approved publication bundle
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: publication-approval-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/publication-approved/*
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+          retention-days: 1
+
+  release:
+    name: Publish exact accepted release
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: release
+      url: https://github.com/${{ github.repository }}/releases/tag/v${{ inputs.version }}
+    permissions:
+      actions: read
+      attestations: read
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind exact approval artifact metadata
+        env:
+          APPROVAL_ARTIFACT_DIGEST: ${{ needs.preflight.outputs.approval_artifact_digest }}
+          APPROVAL_ARTIFACT_ID: ${{ needs.preflight.outputs.approval_artifact_id }}
+          GH_TOKEN: ${{ github.token }}
+          VERIFIED_SOURCE_SHA: ${{ inputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$APPROVAL_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$APPROVAL_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          metadata="$(mktemp)"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$APPROVAL_ARTIFACT_ID" > "$metadata"
+          jq -e \
+            --arg name "publication-approval-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --arg digest "sha256:$APPROVAL_ARTIFACT_DIGEST" \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            --arg source "$VERIFIED_SOURCE_SHA" '
+              .name == $name and .expired == false and .digest == $digest and
+              (.size_in_bytes > 0 and .size_in_bytes <= 536870912) and
+              .workflow_run.id == $run_id and .workflow_run.head_sha == $source
+            ' "$metadata" >/dev/null
+          rm -f -- "$metadata"
+
+      - name: Download only the exact preflight-approved bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.preflight.outputs.approval_artifact_id }}
+          path: ${{ runner.temp }}/publication-approved
+          merge-multiple: true
+
+      - name: Create or recover and verify immutable GitHub Release
+        env:
+          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_RECEIPT_SHA256: ${{ needs.preflight.outputs.acceptance_receipt_sha256 }}
+          RELEASE_TAG: v${{ inputs.version }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          VERIFIED_SOURCE_SHA: ${{ inputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/publish-release.sh publish \
+            "$RUNNER_TEMP/publication-approved" \
+            "$EXPECTED_RECEIPT_SHA256"

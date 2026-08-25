@@ -166,13 +166,14 @@ reused after 43.807 seconds; `computer.click` correctly refused it with HTTP 409
 `COMPUTER_STALE_FRAME` before dispatch. Version 0.12.24 therefore added a
 strictly newer frame with the same share, target, and geometry after the
 `ACTION` receipt and within the reserved deadline before deriving click
-authority; version 0.12.29 retains that boundary unchanged. The v0.12.20
+authority; version 0.12.30 retains that boundary unchanged. The v0.12.20
 physical-pointer lane is retained only as historical, optional adversarial
-coverage; its artifacts cannot satisfy the v0.12.29 release contract.
+coverage; its artifacts cannot satisfy the v0.12.30 release contract.
 
 ## Windows acceptance coordinator
 
-The v0.12.29 Windows acceptance coordinator is release tooling, not a product
+The Windows acceptance coordinator completed its source gate in v0.12.29 and is
+retained for v0.12.30 release acceptance. It is release tooling, not a product
 control surface. `Start` enters an exact clean system-PowerShell bootstrap,
 reserves one per-version attempt below a fixed owner-private LocalAppData root,
 then creates owner-private state with flush-before-move create-once publication
@@ -248,6 +249,18 @@ PiP automation, virtual displays, VM orchestration, RDP loopback, and separate O
 ## Release and update flow
 
 The server performs a metadata-only check against the fixed public GitHub Releases API. It accepts only a canonical stable release marked immutable by GitHub and never downloads or installs an update. Release artifacts are built as a Windows server executable, Windows helper executable, macOS universal archive with helper app, matching extension ZIP, checksum manifest, and GitHub provenance. Project and locked dependency licenses are embedded in both executables; the macOS archive and extension package also carry their applicable notice files.
+
+Version 0.12.30 separates immutable candidate construction from publication.
+The candidate workflow runs manually against one reviewed `main` source SHA,
+creates no tag or deployment, and emits a schema-3 binding for the exact
+five-file artifact set, source, workflow run, workflow attempt, manifest, and
+attestations. Platform and stock-Chrome acceptance records bind to that
+candidate. A separate workflow verifies the candidate and complete acceptance
+receipt before its only protected-environment job can create the annotated tag,
+publish the exact assets, make the Release immutable, and redownload and verify
+the public bytes. The environment therefore represents publication approval,
+not every speculative candidate build. No v0.12.30 packaged candidate or
+public Release proof exists yet.
 
 See [Security](../SECURITY.md) for trust details, [Protocol](PROTOCOL.md) for envelopes and commands, and [Limitations](LIMITATIONS.md) for platform-specific boundaries.
 

@@ -3,11 +3,11 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-Usage: scripts/fetch-verify-release-candidate.sh VERSION RUN_ID RUN_ATTEMPT ARTIFACT_ID SOURCE_SHA TAG_OBJECT_SHA DESTINATION
+Usage: scripts/fetch-verify-release-candidate.sh VERSION RUN_ID RUN_ATTEMPT ARTIFACT_ID SOURCE_SHA DESTINATION
        scripts/fetch-verify-release-candidate.sh --self-test
 
 Downloads one GitHub Actions release-candidate artifact into a new private
-directory, binds it to the exact tagged workflow attempt, verifies the flat
+directory, binds it to the exact main-branch workflow_dispatch attempt, verifies the flat
 five-file payload and every GitHub build attestation, and writes a sanitized
 candidate-binding.json. It never executes candidate bytes.
 EOF
@@ -113,7 +113,7 @@ run_attestation_selection_self_test() {
   local repository="flrngel/local-browser-bridge"
   local run_id="123456789"
   local source="1111111111111111111111111111111111111111"
-  local tag_ref="refs/tags/v0.0.0"
+  local tag_ref="refs/heads/main"
   local workflow=".github/workflows/deploy.yml"
   local subject_name="fixture.bin"
   local subject_sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -179,21 +179,19 @@ if [[ $# -eq 1 && $1 == --self-test ]]; then
   exit $?
 fi
 
-[[ $# -eq 7 ]] || usage
+[[ $# -eq 6 ]] || usage
 VERSION=$1
 RUN_ID=$2
 RUN_ATTEMPT=$3
 ARTIFACT_ID=$4
 SOURCE_SHA=$5
-TAG_OBJECT_SHA=$6
-DESTINATION=$7
+DESTINATION=$6
 
 [[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || usage
 [[ $RUN_ID =~ ^[1-9][0-9]*$ ]] || usage
 [[ $RUN_ATTEMPT =~ ^[1-9][0-9]*$ ]] || usage
 [[ $ARTIFACT_ID =~ ^[1-9][0-9]*$ ]] || usage
 [[ $SOURCE_SHA =~ ^[0-9a-f]{40}$ ]] || usage
-[[ $TAG_OBJECT_SHA =~ ^[0-9a-f]{40}$ ]] || usage
 [[ $DESTINATION == /* ]] || { echo "DESTINATION must be absolute." >&2; exit 2; }
 
 for command_name in gh git jq shasum file wc find awk sort cmp chmod mkdir \
@@ -206,7 +204,9 @@ done
 
 umask 077
 REPOSITORY="flrngel/local-browser-bridge"
-TAG="v$VERSION"
+RELEASE_TAG="v$VERSION"
+WORKFLOW_REF="refs/heads/main"
+WORKFLOW_PATH=".github/workflows/deploy.yml"
 SCRIPT_PATH=$(python3 - "${BASH_SOURCE[0]}" <<'PY'
 import os
 import stat
@@ -324,12 +324,10 @@ byte_count() {
 }
 
 # The trust program itself must be an exact tracked blob in a clean detached
-# checkout of the independently supplied source and annotated tag.
+# checkout of the independently supplied source commit. The release tag is
+# intentionally absent until the candidate passes acceptance.
 [[ $(git -C "$SOURCE_ROOT" rev-parse HEAD) == "$SOURCE_SHA" ]] || fail "source HEAD mismatch"
 [[ $(git -C "$SOURCE_ROOT" rev-parse --abbrev-ref HEAD) == HEAD ]] || fail "source checkout is not detached"
-[[ $(git -C "$SOURCE_ROOT" cat-file -t "$TAG_OBJECT_SHA") == tag ]] || fail "tag object is not annotated"
-[[ $(git -C "$SOURCE_ROOT" rev-parse "$TAG") == "$TAG_OBJECT_SHA" ]] || fail "tag object mismatch"
-[[ $(git -C "$SOURCE_ROOT" rev-parse "$TAG^{}") == "$SOURCE_SHA" ]] || fail "tag peel mismatch"
 [[ -z $(git -C "$SOURCE_ROOT" status --porcelain=v2 --untracked-files=all) ]] || fail "source checkout is dirty"
 git -C "$SOURCE_ROOT" diff --quiet HEAD -- || fail "source worktree diff is nonempty"
 git -C "$SOURCE_ROOT" diff --cached --quiet || fail "source index diff is nonempty"
@@ -339,27 +337,25 @@ git -C "$SOURCE_ROOT" fsck --full >/dev/null || fail "source object database fai
 SCRIPT_RELATIVE=${SCRIPT_PATH#"$SOURCE_ROOT/"}
 [[ $SCRIPT_RELATIVE != "$SCRIPT_PATH" ]] || fail "trust script is outside source checkout"
 [[ $(git -C "$SOURCE_ROOT" rev-parse "HEAD:$SCRIPT_RELATIVE") == $(git -C "$SOURCE_ROOT" hash-object -- "$SCRIPT_PATH") ]] ||
-  fail "trust script does not match the tagged source blob"
+  fail "trust script does not match the exact source blob"
 
 RUN_JSON="$DESTINATION/workflow-run.json"
 JOBS_JSON="$DESTINATION/workflow-jobs.json"
 ARTIFACTS_JSON="$DESTINATION/workflow-artifacts.json"
 ARTIFACT_API_JSON="$DESTINATION/release-candidate-artifact-api.json"
-REMOTE_REF_JSON="$DESTINATION/remote-tag-ref.json"
-REMOTE_TAG_JSON="$DESTINATION/remote-tag-object.json"
 gh api "repos/$REPOSITORY/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT" > "$RUN_JSON"
 gh api "repos/$REPOSITORY/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs?per_page=100" > "$JOBS_JSON"
 gh api "repos/$REPOSITORY/actions/runs/$RUN_ID/artifacts?per_page=100" > "$ARTIFACTS_JSON"
 gh api "repos/$REPOSITORY/actions/artifacts/$ARTIFACT_ID" > "$ARTIFACT_API_JSON"
-gh api "repos/$REPOSITORY/git/ref/tags/$TAG" > "$REMOTE_REF_JSON"
-gh api "repos/$REPOSITORY/git/tags/$TAG_OBJECT_SHA" > "$REMOTE_TAG_JSON"
-
 jq -e \
   --arg source "$SOURCE_SHA" \
-  --arg tag "$TAG" \
+  --arg repository "$REPOSITORY" \
+  --argjson run_id "$RUN_ID" \
   --argjson attempt "$RUN_ATTEMPT" '
-    .event == "push" and .head_sha == $source and .head_branch == $tag and
-    .run_attempt == $attempt and .path == ".github/workflows/deploy.yml"
+    .id == $run_id and .repository.full_name == $repository and
+    .event == "workflow_dispatch" and .head_sha == $source and .head_branch == "main" and
+    .run_attempt == $attempt and .path == ".github/workflows/deploy.yml" and
+    .status == "completed" and .conclusion == "success"
   ' "$RUN_JSON" >/dev/null || fail "workflow run binding mismatch"
 jq -e '
     (.total_count < 100) and (.jobs | length) == .total_count and
@@ -368,13 +364,6 @@ jq -e '
     ($matched[0].started_at | type) == "string" and
     ($matched[0].completed_at | type) == "string"
   ' "$JOBS_JSON" >/dev/null || fail "workflow assemble-job binding mismatch"
-jq -e --arg tag_object "$TAG_OBJECT_SHA" '
-  .object.type == "tag" and .object.sha == $tag_object
-  ' "$REMOTE_REF_JSON" >/dev/null || fail "remote annotated tag ref mismatch"
-jq -e --arg source "$SOURCE_SHA" --arg tag "$TAG" '
-  .tag == $tag and .object.type == "commit" and .object.sha == $source
-  ' "$REMOTE_TAG_JSON" >/dev/null || fail "remote annotated tag object mismatch"
-
 ARTIFACT_JSON="$DESTINATION/release-candidate-artifact.json"
 jq -e \
   --argjson artifact_id "$ARTIFACT_ID" \
@@ -522,14 +511,14 @@ for name in "${RELEASE_FILES[@]}"; do
   attestation_json="$ATTESTATION_DIRECTORY/$name.json"
   gh attestation verify "$PAYLOAD_DIRECTORY/$name" \
     --repo "$REPOSITORY" \
-    --source-ref "refs/tags/$TAG" \
+    --source-ref "$WORKFLOW_REF" \
     --source-digest "$SOURCE_SHA" \
     --signer-workflow "$REPOSITORY/.github/workflows/deploy.yml" \
     --deny-self-hosted-runners \
     --format json > "$attestation_json"
   verify_exact_attempt_attestation_set \
     "$attestation_json" "$INVOCATION_URI" "$REPOSITORY" "$RUN_ID" \
-    "$SOURCE_SHA" "refs/tags/$TAG" ".github/workflows/deploy.yml" \
+    "$SOURCE_SHA" "$WORKFLOW_REF" "$WORKFLOW_PATH" \
     "$name" "$(sha256_file "$PAYLOAD_DIRECTORY/$name")" ||
     fail "exact-attempt attestation mismatch or ambiguity for $name"
 done
@@ -547,9 +536,8 @@ BINDING="$DESTINATION/candidate-binding.json"
 jq -cn \
   --arg version "$VERSION" \
   --arg repository "$REPOSITORY" \
-  --arg tag "$TAG" \
+  --arg release_tag "$RELEASE_TAG" \
   --arg source "$SOURCE_SHA" \
-  --arg tag_object "$TAG_OBJECT_SHA" \
   --arg run_id "$RUN_ID" \
   --arg run_attempt "$RUN_ATTEMPT" \
   --arg artifact_id "$ARTIFACT_ID" \
@@ -558,7 +546,7 @@ jq -cn \
   --arg manifest_sha256 "$MANIFEST_SHA256" \
   --arg invocation "$INVOCATION_URI" \
   --slurpfile assets "$ASSETS_JSON" \
-  '{schemaVersion:1,productVersion:$version,repository:$repository,tag:$tag,sourceSha:$source,tagObjectSha:$tag_object,workflowRunId:$run_id,workflowRunAttempt:$run_attempt,artifactId:$artifact_id,artifactName:"release-candidate",artifactZipBytes:$artifact_bytes,artifactZipSha256:$artifact_sha256,checksumManifestSha256:$manifest_sha256,attestationInvocationUri:$invocation,attestedAssetCount:5,githubHostedRunner:true,assets:$assets[0],passed:true}' \
+  '{schemaVersion:3,version:$version,releaseTag:$release_tag,repository:$repository,sourceSha:$source,workflowRunId:$run_id,workflowRunAttempt:$run_attempt,workflowEvent:"workflow_dispatch",workflowRef:"refs/heads/main",workflowPath:".github/workflows/deploy.yml",artifactId:$artifact_id,artifactName:"release-candidate",artifactZipBytes:$artifact_bytes,artifactZipSha256:$artifact_sha256,checksumManifestSha256:$manifest_sha256,attestationInvocationUri:$invocation,attestedAssetCount:5,githubHostedRunner:true,assets:$assets[0],passed:true}' \
   > "$BINDING"
 
 chmod 600 "$DESTINATION"/*.json "$ARTIFACT_ZIP" "$PAYLOAD_DIRECTORY"/* "$ATTESTATION_DIRECTORY"/*.json

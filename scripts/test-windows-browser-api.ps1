@@ -275,20 +275,24 @@ function Assert-ReleaseCandidateBinding {
         [Parameter(Mandatory = $true)][string]$Boundary
     )
     $fields = @(
-        "productVersion", "repository", "tag", "sourceSha", "tagObjectSha",
-        "workflowRunId", "workflowRunAttempt", "artifactId", "artifactName",
+        "schemaVersion", "version", "releaseTag", "repository", "sourceSha",
+        "workflowRunId", "workflowRunAttempt", "workflowEvent", "workflowRef", "workflowPath",
+        "artifactId", "artifactName",
         "artifactZipBytes", "artifactZipSha256", "checksumManifestSha256",
         "attestationInvocationUri", "attestedAssetCount", "githubHostedRunner", "assets"
     )
     Assert-ExactPropertyOrder $Binding $fields $Boundary
-    Assert-Acceptance ($Binding.productVersion -ceq $Version) "$Boundary-version"
+    Assert-Acceptance ($Binding.schemaVersion -eq 3) "$Boundary-schema-version"
+    Assert-Acceptance ($Binding.version -ceq $Version) "$Boundary-version"
+    Assert-Acceptance ($Binding.releaseTag -ceq "v$Version") "$Boundary-release-tag"
     Assert-Acceptance ($Binding.repository -ceq "flrngel/local-browser-bridge") "$Boundary-repository"
-    Assert-Acceptance ($Binding.tag -ceq "v$Version") "$Boundary-tag"
     Assert-Acceptance ($Binding.sourceSha -ceq $Candidate.finalSha) "$Boundary-source"
-    Assert-Acceptance ([string]$Binding.tagObjectSha -cmatch '^[0-9a-f]{40}$') "$Boundary-tag-object"
     foreach ($name in @("workflowRunId", "workflowRunAttempt", "artifactId")) {
         Assert-Acceptance ([string]$Binding.$name -cmatch '^[1-9][0-9]*$') "$Boundary-$name"
     }
+    Assert-Acceptance ($Binding.workflowEvent -ceq "workflow_dispatch") "$Boundary-workflow-event"
+    Assert-Acceptance ($Binding.workflowRef -ceq "refs/heads/main") "$Boundary-workflow-ref"
+    Assert-Acceptance ($Binding.workflowPath -ceq ".github/workflows/deploy.yml") "$Boundary-workflow-path"
     Assert-Acceptance ($Binding.artifactName -ceq "release-candidate") "$Boundary-artifact-name"
     Assert-Acceptance ($Binding.artifactZipBytes -is [ValueType] -and
         [int64]$Binding.artifactZipBytes -gt 0) "$Boundary-artifact-size"
@@ -330,7 +334,7 @@ function Get-CandidateBindingFromPreflight {
         $preflightFields = @(
             "schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed", "runNonce", "candidate"
         )
-        if ($Version -ceq "0.12.29") {
+        if ($Version -ceq "0.12.30") {
             $preflightFields = @(
                 "schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed",
                 "runNonce", "releaseCandidateBinding", "candidate"
@@ -346,13 +350,13 @@ function Get-CandidateBindingFromPreflight {
         foreach ($value in @(
             [string]$record.candidate.checksumManifest.sha256,
             [string]$record.candidate.server.sha256,
-            $(if ($Version -ceq "0.12.29") { [string]$record.candidate.computerHelper.sha256 } else { [string]$record.candidate.server.sha256 }),
+            $(if ($Version -ceq "0.12.30") { [string]$record.candidate.computerHelper.sha256 } else { [string]$record.candidate.server.sha256 }),
             [string]$record.candidate.extension.sha256,
             [string]$record.candidate.extension.combinedPayloadSha256
         )) {
             Assert-Acceptance ($value -cmatch '^[0-9a-f]{64}$') "preflight-candidate-hash"
         }
-        if ($Version -ceq "0.12.29") {
+        if ($Version -ceq "0.12.30") {
             Assert-ReleaseCandidateBinding $record.releaseCandidateBinding $record.candidate `
                 "preflight-release-candidate-binding"
             $script:ReleaseCandidateBinding = $record.releaseCandidateBinding
@@ -364,7 +368,7 @@ function Get-CandidateBindingFromPreflight {
             checksumManifestSha256 = [string]$record.candidate.checksumManifest.sha256
             serverSha256 = [string]$record.candidate.server.sha256
         }
-        if ($Version -ceq "0.12.29") {
+        if ($Version -ceq "0.12.30") {
             $binding.computerHelperSha256 = [string]$record.candidate.computerHelper.sha256
         }
         $binding.extensionZipSha256 = [string]$record.candidate.extension.sha256
@@ -426,7 +430,7 @@ function Assert-ReducedEvidenceRecord {
         "runNonce", "preflightRecordSha256", "finalSha", "checksumManifestSha256",
         "serverSha256", "extensionZipSha256", "extractedPayloadSha256"
     )
-    if ($Version -ceq "0.12.29") {
+    if ($Version -ceq "0.12.30") {
         $bindingFields = @(
             "runNonce", "preflightRecordSha256", "finalSha", "checksumManifestSha256",
             "serverSha256", "computerHelperSha256", "extensionZipSha256", "extractedPayloadSha256"
@@ -517,13 +521,13 @@ function Invoke-RecordSelfTest {
         checksumManifestSha256 = [String]::new([char]"d", 64)
         serverSha256 = [String]::new([char]"e", 64)
     }
-    if ($Version -ceq "0.12.29") {
+    if ($Version -ceq "0.12.30") {
         $selfTestBinding.computerHelperSha256 = [String]::new([char]"1", 64)
     }
     $selfTestBinding.extensionZipSha256 = [String]::new([char]"f", 64)
     $selfTestBinding.extractedPayloadSha256 = [String]::new([char]"0", 64)
     $script:CandidateBinding = [pscustomobject]$selfTestBinding
-    if ($Version -ceq "0.12.29") {
+    if ($Version -ceq "0.12.30") {
         $selfTestCandidate = [pscustomobject][ordered]@{
             version = $Version
             finalSha = $selfTestBinding.finalSha
@@ -553,13 +557,16 @@ function Invoke-RecordSelfTest {
             }
         }
         $releaseBinding = [pscustomobject][ordered]@{
-            productVersion = $Version
+            schemaVersion = 3
+            version = $Version
+            releaseTag = "v$Version"
             repository = "flrngel/local-browser-bridge"
-            tag = "v$Version"
             sourceSha = $selfTestBinding.finalSha
-            tagObjectSha = [String]::new([char]"3", 40)
             workflowRunId = "123"
             workflowRunAttempt = "1"
+            workflowEvent = "workflow_dispatch"
+            workflowRef = "refs/heads/main"
+            workflowPath = ".github/workflows/deploy.yml"
             artifactId = "456"
             artifactName = "release-candidate"
             artifactZipBytes = 5000
@@ -627,7 +634,7 @@ function Invoke-RecordSelfTest {
 
 if ($SelfTest) {
     if ([String]::IsNullOrWhiteSpace($Version)) {
-        $Version = "0.12.29"
+        $Version = "0.12.30"
     }
     Invoke-RecordSelfTest
     exit 0
@@ -639,7 +646,7 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 if ([String]::IsNullOrWhiteSpace($Version) -or $Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
     throw "Version must be an explicit stable semantic version."
 }
-if ($Version -ceq "0.12.29") {
+if ($Version -ceq "0.12.30") {
     $MethodScreenshots = $MethodScreenshotsV2
 }
 if ([String]::IsNullOrWhiteSpace($PreflightRecord)) {

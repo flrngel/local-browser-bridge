@@ -30,7 +30,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
 $script:SchemaVersion = 1
-$script:ProductVersion = "0.12.29"
+$script:ProductVersion = "0.12.30"
 $script:ExpectedWindowTitle = "LBB Foreground Sentinel"
 $script:ExpectedActionButton = "CLICK TO ARM"
 $script:ExpectedArmedButton = "ARMED - DO NOT USE THIS SESSION"
@@ -5318,8 +5318,8 @@ finally {
             throw "Exact process identity self-test failed."
         }
         $selfTestInputs = New-PrivateChildDirectory $testRoot "follow-inputs" "Follow self-test inputs"
-        $inputServer = [IO.Path]::Combine($selfTestInputs, "local-browser-bridge-v0.12.29-windows-x86_64.exe")
-        $inputHelper = [IO.Path]::Combine($selfTestInputs, "local-computer-helper-v0.12.29-windows-x86_64.exe")
+        $inputServer = [IO.Path]::Combine($selfTestInputs, "local-browser-bridge-v0.12.30-windows-x86_64.exe")
+        $inputHelper = [IO.Path]::Combine($selfTestInputs, "local-computer-helper-v0.12.30-windows-x86_64.exe")
         $inputManifest = [IO.Path]::Combine($selfTestInputs, "SHA256SUMS.txt")
         $inputBinding = [IO.Path]::Combine($selfTestInputs, "candidate-binding.json")
         [IO.File]::WriteAllText($inputServer, "server-self-test", $script:Utf8NoBom)

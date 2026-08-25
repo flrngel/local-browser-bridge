@@ -10,7 +10,6 @@ param(
   [string]$ArtifactId,
   [Alias("FinalSha")]
   [string]$SourceSha,
-  [string]$TagObjectSha,
   [string]$Destination,
   [string]$TrustedGit,
   [string]$TrustedGh,
@@ -103,7 +102,6 @@ if ([String]::IsNullOrWhiteSpace($CleanCoordinatorNonce)) {
   $Info.EnvironmentVariables["LBB_WINDOWS_TRUST_RUN_ATTEMPT"] = $WorkflowRunAttempt
   $Info.EnvironmentVariables["LBB_WINDOWS_TRUST_ARTIFACT_ID"] = $ArtifactId
   $Info.EnvironmentVariables["LBB_WINDOWS_TRUST_SOURCE_SHA"] = $SourceSha
-  $Info.EnvironmentVariables["LBB_WINDOWS_TRUST_TAG_OBJECT_SHA"] = $TagObjectSha
   $Info.EnvironmentVariables["LBB_WINDOWS_TRUST_DESTINATION"] = $Destination
   $Info.EnvironmentVariables["LBB_WINDOWS_TRUST_GIT"] = $TrustedGit
   $Info.EnvironmentVariables["LBB_WINDOWS_TRUST_GH"] = $TrustedGh
@@ -139,7 +137,6 @@ $WorkflowRunId = [Environment]::GetEnvironmentVariable("LBB_WINDOWS_TRUST_RUN_ID
 $WorkflowRunAttempt = [Environment]::GetEnvironmentVariable("LBB_WINDOWS_TRUST_RUN_ATTEMPT", "Process")
 $ArtifactId = [Environment]::GetEnvironmentVariable("LBB_WINDOWS_TRUST_ARTIFACT_ID", "Process")
 $SourceSha = [Environment]::GetEnvironmentVariable("LBB_WINDOWS_TRUST_SOURCE_SHA", "Process")
-$TagObjectSha = [Environment]::GetEnvironmentVariable("LBB_WINDOWS_TRUST_TAG_OBJECT_SHA", "Process")
 $Destination = [Environment]::GetEnvironmentVariable("LBB_WINDOWS_TRUST_DESTINATION", "Process")
 $TrustedGit = [Environment]::GetEnvironmentVariable("LBB_WINDOWS_TRUST_GIT", "Process")
 $TrustedGh = [Environment]::GetEnvironmentVariable("LBB_WINDOWS_TRUST_GH", "Process")
@@ -147,7 +144,7 @@ foreach ($HandoffName in @(
   "LBB_WINDOWS_TRUST_NONCE", "LBB_WINDOWS_TRUST_SELF_TEST",
   "LBB_WINDOWS_TRUST_VERSION", "LBB_WINDOWS_TRUST_RUN_ID",
   "LBB_WINDOWS_TRUST_RUN_ATTEMPT", "LBB_WINDOWS_TRUST_ARTIFACT_ID",
-  "LBB_WINDOWS_TRUST_SOURCE_SHA", "LBB_WINDOWS_TRUST_TAG_OBJECT_SHA",
+  "LBB_WINDOWS_TRUST_SOURCE_SHA",
   "LBB_WINDOWS_TRUST_DESTINATION", "LBB_WINDOWS_TRUST_GIT", "LBB_WINDOWS_TRUST_GH"
 )) {
   [Environment]::SetEnvironmentVariable($HandoffName, $null, "Process")
@@ -163,7 +160,8 @@ $ProgressPreference = "SilentlyContinue"
 $Repository = "flrngel/local-browser-bridge"
 $Origin = "https://github.com/$Repository.git"
 $WorkflowPath = ".github/workflows/deploy.yml"
-$ProductVersion = "0.12.29"
+$ProductVersion = "0.12.30"
+$WorkflowRef = "refs/heads/main"
 $MaximumCandidateBytes = [int64]536870912
 
 function Get-TrustedSha256([string]$Path) {
@@ -800,7 +798,7 @@ function Invoke-AttestationSelectionSelfTest {
   $TestRepository = "flrngel/local-browser-bridge"
   $TestRunId = "123456789"
   $TestWorkflow = ".github/workflows/deploy.yml"
-  $TestTagRef = "refs/tags/v0.0.0"
+  $TestTagRef = "refs/heads/main"
   $TestSource = "1111111111111111111111111111111111111111"
   $TestSubject = "fixture.bin"
   $TestSubjectSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -951,9 +949,8 @@ if ($Version -cne $ProductVersion -or $Version -cnotmatch '^[0-9]+\.[0-9]+\.[0-9
     $WorkflowRunId -cnotmatch '^[1-9][0-9]*$' -or
     $WorkflowRunAttempt -cnotmatch '^[1-9][0-9]*$' -or
     $ArtifactId -cnotmatch '^[1-9][0-9]*$' -or
-    $SourceSha -cnotmatch '^[0-9a-f]{40}$' -or
-    $TagObjectSha -cnotmatch '^[0-9a-f]{40}$') {
-  throw "Candidate identifiers are not canonical v0.12.29 identifiers."
+    $SourceSha -cnotmatch '^[0-9a-f]{40}$') {
+  throw "Candidate identifiers are not canonical v0.12.30 identifiers."
 }
 $Tag = "v$Version"
 $ExpectedInvocationUri = "https://github.com/$Repository/actions/runs/$WorkflowRunId/attempts/$WorkflowRunAttempt"
@@ -1201,7 +1198,7 @@ $null = Invoke-TrustedGit (@($GitCommon) + @(
   "clone", "--no-checkout", "--no-local", "--origin", "origin", "--template=$EmptyTemplates", $Origin, $SourceDirectory
 )) $Destination "Fixed-origin fresh source clone"
 $null = Invoke-TrustedGit (@($GitCommon) + @("-C", $SourceDirectory, "config", "--local", "core.longpaths", "true")) $Destination "Long-path source configuration"
-$null = Invoke-TrustedGit (@($GitCommon) + @("-C", $SourceDirectory, "fetch", "--force", "--tags", "origin")) $Destination "Exact tag fetch"
+$null = Invoke-TrustedGit (@($GitCommon) + @("-C", $SourceDirectory, "fetch", "--force", "origin", $SourceSha)) $Destination "Exact source fetch"
 $null = Invoke-TrustedGit (@($GitCommon) + @("-C", $SourceDirectory, "checkout", "--detach", "--force", $SourceSha)) $Destination "Exact detached source checkout"
 
 function Invoke-SourceGit([string[]]$Arguments, [string]$FailureLabel) {
@@ -1211,13 +1208,9 @@ function Invoke-SourceGit([string[]]$Arguments, [string]$FailureLabel) {
 $OriginFetch = Invoke-SourceGit @("remote", "get-url", "origin") "Source origin inspection"
 $OriginPush = @(Invoke-SourceGit @("remote", "get-url", "--push", "--all", "origin") "Source push-origin inspection")
 $ObservedHead = Invoke-SourceGit @("rev-parse", "--verify", "HEAD") "Source HEAD inspection"
-$ObservedTagObject = Invoke-SourceGit @("rev-parse", "--verify", "refs/tags/$Tag") "Source tag inspection"
-$ObservedTagType = Invoke-SourceGit @("cat-file", "-t", $ObservedTagObject) "Source tag-type inspection"
-$ObservedTagPeel = Invoke-SourceGit @("rev-parse", "--verify", "refs/tags/$Tag^{}") "Source tag-peel inspection"
 if ($OriginFetch -cne $Origin -or $OriginPush.Count -ne 1 -or $OriginPush[0] -cne $Origin -or
-    $ObservedHead -cne $SourceSha -or $ObservedTagObject -cne $TagObjectSha -or
-    $ObservedTagType -cne "tag" -or $ObservedTagPeel -cne $SourceSha) {
-  throw "Fresh source origin, commit, or annotated tag binding mismatch."
+    $ObservedHead -cne $SourceSha) {
+  throw "Fresh source origin or exact commit binding mismatch."
 }
 $SymbolicInfo = [Diagnostics.ProcessStartInfo]::new()
 $SymbolicInfo.FileName = $TrustedGit
@@ -1275,7 +1268,7 @@ foreach ($Relative in $TrustedRelativeFiles) {
 }
 $FreshWrapper = Join-Path $SourceDirectory "scripts/verify-windows-release-candidate.ps1"
 if ((Get-TrustedSha256 $FreshWrapper) -cne (Get-TrustedSha256 $PSCommandPath)) {
-  throw "Executing trust wrapper does not match the exact tagged wrapper blob."
+  throw "Executing trust wrapper does not match the exact source wrapper blob."
 }
 
 if ($null -eq $SecureGhToken) {
@@ -1289,9 +1282,10 @@ $Run = Invoke-TrustedGhJson @(
   "api", "--hostname", "github.com",
   "repos/$Repository/actions/runs/$WorkflowRunId/attempts/$WorkflowRunAttempt"
 ) "Exact-attempt workflow run API"
-if ($Run.event -cne "push" -or $Run.head_sha -cne $SourceSha -or
-    $Run.head_branch -cne $Tag -or [string]$Run.run_attempt -cne $WorkflowRunAttempt -or
-    $Run.path -cne $WorkflowPath -or $Run.repository.full_name -cne $Repository) {
+if ($Run.event -cne "workflow_dispatch" -or $Run.head_sha -cne $SourceSha -or
+    $Run.head_branch -cne "main" -or [string]$Run.run_attempt -cne $WorkflowRunAttempt -or
+    $Run.path -cne $WorkflowPath -or $Run.repository.full_name -cne $Repository -or
+    $Run.status -cne "completed" -or $Run.conclusion -cne "success") {
   throw "Workflow run API binding mismatch."
 }
 $JobsResponse = Invoke-TrustedGhJson @(
@@ -1346,7 +1340,7 @@ if ($Artifact.name -cne "release-candidate" -or $Artifact.expired -ne $false -or
     [int64]$Artifact.size_in_bytes -gt $MaximumCandidateBytes -or
     $Artifact.digest -cnotmatch '^sha256:[0-9a-f]{64}$' -or
     [string]$Artifact.workflow_run.id -cne $WorkflowRunId -or
-    $Artifact.workflow_run.head_sha -cne $SourceSha -or $Artifact.workflow_run.head_branch -cne $Tag) {
+    $Artifact.workflow_run.head_sha -cne $SourceSha -or $Artifact.workflow_run.head_branch -cne "main") {
   throw "Release-candidate artifact API binding mismatch."
 }
 $DirectArtifact = Invoke-TrustedGhJson @(
@@ -1359,7 +1353,7 @@ if ([string]$DirectArtifact.id -cne $ArtifactId -or
     $DirectArtifact.digest -cnotmatch '^sha256:[0-9a-f]{64}$' -or
     [string]$DirectArtifact.workflow_run.id -cne $WorkflowRunId -or
     $DirectArtifact.workflow_run.head_sha -cne $SourceSha -or
-    $DirectArtifact.workflow_run.head_branch -cne $Tag -or
+    $DirectArtifact.workflow_run.head_branch -cne "main" -or
     [string]$DirectArtifact.id -cne [string]$Artifact.id -or
     [int64]$DirectArtifact.size_in_bytes -ne [int64]$Artifact.size_in_bytes -or
     $DirectArtifact.digest -cne $Artifact.digest -or
@@ -1377,21 +1371,6 @@ if (-not [DateTimeOffset]::TryParse(
     $ArtifactCreatedAt -lt $AssembleStartedAt -or $ArtifactCreatedAt -gt $AssembleCompletedAt) {
   throw "Direct artifact metadata is not bound to the successful current-attempt assembly job."
 }
-$RemoteRef = Invoke-TrustedGhJson @(
-  "api", "--hostname", "github.com", "repos/$Repository/git/ref/tags/$Tag"
-) "Remote tag-ref API"
-if ($RemoteRef.ref -cne "refs/tags/$Tag" -or $RemoteRef.object.type -cne "tag" -or
-    $RemoteRef.object.sha -cne $TagObjectSha) {
-  throw "Remote annotated tag-ref binding mismatch."
-}
-$RemoteTag = Invoke-TrustedGhJson @(
-  "api", "--hostname", "github.com", "repos/$Repository/git/tags/$TagObjectSha"
-) "Remote tag-object API"
-if ($RemoteTag.tag -cne $Tag -or $RemoteTag.object.type -cne "commit" -or
-    $RemoteTag.object.sha -cne $SourceSha) {
-  throw "Remote annotated tag-object binding mismatch."
-}
-
 $ArtifactZip = Join-Path $Destination "release-candidate-artifact-$ArtifactId.zip"
 $ArtifactPartial = "$ArtifactZip.partial"
 Invoke-TrustedGhBinary @(
@@ -1470,7 +1449,7 @@ foreach ($Name in $ExpectedFiles) {
   $AttestationText = Invoke-TrustedProcessText $TrustedGh @(
     "attestation", "verify", (Join-Path $PayloadDirectory $Name),
     "--hostname", "github.com", "--repo", $Repository,
-    "--source-ref", "refs/tags/$Tag", "--source-digest", $SourceSha,
+    "--source-ref", $WorkflowRef, "--source-digest", $SourceSha,
     "--signer-workflow", "$Repository/$WorkflowPath",
     "--deny-self-hosted-runners", "--format", "json"
   ) $Destination "GitHub attestation verification" $true 120000
@@ -1488,7 +1467,7 @@ foreach ($Name in $ExpectedFiles) {
     -WorkflowRunId $WorkflowRunId `
     -WorkflowPath $WorkflowPath `
     -Repository $Repository `
-    -TagRef "refs/tags/$Tag" `
+    -TagRef $WorkflowRef `
     -SourceSha $SourceSha `
     -SubjectName $Name `
     -SubjectSha256 $SubjectSha256
@@ -1504,14 +1483,16 @@ foreach ($Name in $ExpectedFiles) {
   })
 }
 $Binding = [ordered]@{
-  schemaVersion = 1
-  productVersion = $Version
+  schemaVersion = 3
+  version = $Version
+  releaseTag = $Tag
   repository = $Repository
-  tag = $Tag
   sourceSha = $SourceSha
-  tagObjectSha = $TagObjectSha
   workflowRunId = $WorkflowRunId
   workflowRunAttempt = $WorkflowRunAttempt
+  workflowEvent = "workflow_dispatch"
+  workflowRef = $WorkflowRef
+  workflowPath = $WorkflowPath
   artifactId = $ArtifactId
   artifactName = "release-candidate"
   artifactZipBytes = $ExpectedArtifactBytes

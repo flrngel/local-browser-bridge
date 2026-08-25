@@ -5,8 +5,8 @@ export LC_ALL=C
 
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly API_VERSION="2026-03-10"
-readonly RECEIPT_SCHEMA_VERSION="2"
-readonly EVIDENCE_PRODUCT_VERSION="0.12.29"
+readonly RECEIPT_SCHEMA_VERSION="3"
+readonly EVIDENCE_PRODUCT_VERSION="0.12.30"
 readonly EVIDENCE_MAX_BLOB_BYTES=20971520
 readonly EVIDENCE_MAX_TOTAL_BYTES=209715200
 readonly EVIDENCE_MAX_PATH_BYTES=1024
@@ -137,7 +137,7 @@ self_test_attestation_selection() {
   local repository="flrngel/local-browser-bridge"
   local run_id="123456789"
   local source="1111111111111111111111111111111111111111"
-  local tag_ref="refs/tags/v0.0.0"
+  local tag_ref="refs/heads/main"
   local workflow=".github/workflows/deploy.yml"
   local subject_name="fixture.bin"
   local subject_sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -280,9 +280,9 @@ PY
 
 validate_receipt() {
   local receipt_file="$1"
-  local expected_tag="$2"
-  local expected_source_sha="$3"
-  local expected_tag_object_sha="$4"
+  local expected_version="$2"
+  local expected_tag="$3"
+  local expected_source_sha="$4"
   local expected_run_id="$5"
   local expected_run_attempt="$6"
   local expected_manifest_sha256="$7"
@@ -293,15 +293,15 @@ validate_receipt() {
   test "$(jq -c . "$receipt_file")" = "$(<"$receipt_file")" || return 1
 
   jq -e \
-    --arg tag "$expected_tag" \
+    --arg version "$expected_version" \
+    --arg release_tag "$expected_tag" \
     --arg source_sha "$expected_source_sha" \
-    --arg tag_object_sha "$expected_tag_object_sha" \
     --arg run_id "$expected_run_id" \
     --arg run_attempt "$expected_run_attempt" \
     --arg manifest_sha256 "$expected_manifest_sha256" '
       (type == "object")
       and (keys_unsorted == [
-        "schemaVersion", "tag", "sourceSha", "tagObjectSha",
+        "schemaVersion", "version", "releaseTag", "sourceSha",
         "workflowRunId", "workflowRunAttempt",
         "releaseCandidateArtifactId", "releaseCandidateArtifactZipSha256",
         "checksumManifestSha256", "evidenceRef", "evidenceCommitSha",
@@ -310,13 +310,13 @@ validate_receipt() {
         "windowsPassed", "windowsResultSha256",
         "stockChromePassed", "stockChrome", "stockChromeResultSha256"
       ])
-      and ((.schemaVersion | type) == "number") and (.schemaVersion == 2)
-      and ((.tag | type) == "string")
-      and (.tag | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) and (.tag == $tag)
+      and ((.schemaVersion | type) == "number") and (.schemaVersion == 3)
+      and ((.version | type) == "string")
+      and (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) and (.version == $version)
+      and ((.releaseTag | type) == "string")
+      and (.releaseTag == ("v" + .version)) and (.releaseTag == $release_tag)
       and ((.sourceSha | type) == "string")
       and (.sourceSha | test("^[0-9a-f]{40}$")) and (.sourceSha == $source_sha)
-      and ((.tagObjectSha | type) == "string")
-      and (.tagObjectSha | test("^[0-9a-f]{40}$")) and (.tagObjectSha == $tag_object_sha)
       and ((.workflowRunId | type) == "string")
       and (.workflowRunId | test("^[1-9][0-9]*$")) and (.workflowRunId == $run_id)
       and ((.workflowRunAttempt | type) == "string")
@@ -329,7 +329,7 @@ validate_receipt() {
       and (.checksumManifestSha256 | test("^[0-9a-f]{64}$"))
       and (.checksumManifestSha256 == $manifest_sha256)
       and ((.evidenceRef | type) == "string")
-      and (.evidenceRef == ("refs/heads/evidence/" + .tag + "-release-run-" + .workflowRunId + "-attempt-" + .workflowRunAttempt))
+      and (.evidenceRef == ("refs/heads/evidence/" + .releaseTag + "-release-run-" + .workflowRunId + "-attempt-" + .workflowRunAttempt))
       and ((.evidenceCommitSha | type) == "string")
       and (.evidenceCommitSha | test("^[0-9a-f]{40}$"))
       and ((.macosPassed | type) == "boolean") and (.macosPassed == true)
@@ -576,26 +576,27 @@ verify_raw_release_candidate() {
   gh api \
     -H 'Accept: application/vnd.github+json' \
     -H "X-GitHub-Api-Version: $API_VERSION" \
-    "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" \
+    "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID/attempts/$CANDIDATE_RUN_ATTEMPT" \
     > "$run_json"
   jq -e \
-    --argjson run_id "$GITHUB_RUN_ID" \
-    --argjson run_attempt "$GITHUB_RUN_ATTEMPT" \
+    --argjson run_id "$CANDIDATE_RUN_ID" \
+    --argjson run_attempt "$CANDIDATE_RUN_ATTEMPT" \
     --arg source_sha "$VERIFIED_SOURCE_SHA" \
-    --arg tag "$RELEASE_TAG" \
     --arg workflow_path ".github/workflows/deploy.yml" '
       (.id == $run_id)
       and (.run_attempt == $run_attempt)
       and (.head_sha == $source_sha)
-      and (.head_branch == $tag)
-      and (.event == "push")
+      and (.head_branch == "main")
+      and (.event == "workflow_dispatch")
       and (.path == $workflow_path)
+      and (.status == "completed")
+      and (.conclusion == "success")
     ' "$run_json" >/dev/null || die "current workflow attempt identity did not match the receipt"
 
   gh api \
     -H 'Accept: application/vnd.github+json' \
     -H "X-GitHub-Api-Version: $API_VERSION" \
-    "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
+    "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID/attempts/$CANDIDATE_RUN_ATTEMPT/jobs?per_page=100" \
     > "$jobs_json"
   jq -e '
       (.total_count < 100)
@@ -609,11 +610,11 @@ verify_raw_release_candidate() {
   gh api \
     -H 'Accept: application/vnd.github+json' \
     -H "X-GitHub-Api-Version: $API_VERSION" \
-    "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
+    "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID/artifacts?per_page=100" \
     > "$artifacts_json"
   jq -e \
     --argjson artifact_id "$artifact_id" \
-    --argjson run_id "$GITHUB_RUN_ID" \
+    --argjson run_id "$CANDIDATE_RUN_ID" \
     --arg source_sha "$VERIFIED_SOURCE_SHA" '
       (.total_count < 100)
       and ([.artifacts[] | select(.id == $artifact_id)] | length == 1)
@@ -635,7 +636,7 @@ verify_raw_release_candidate() {
     > "$artifact_json"
   jq -e \
     --argjson artifact_id "$artifact_id" \
-    --argjson run_id "$GITHUB_RUN_ID" \
+    --argjson run_id "$CANDIDATE_RUN_ID" \
     --arg source_sha "$VERIFIED_SOURCE_SHA" \
     --slurpfile jobs "$jobs_json" '
       .id == $artifact_id
@@ -728,8 +729,8 @@ with zipfile.ZipFile(archive) as bundle:
 PY
 
   local version="${RELEASE_TAG#v}"
-  bash scripts/verify-release-assets.sh "$version" "$extracted"
-  local expected_invocation_uri="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT"
+  bash scripts/verify-release-assets.sh "$version" "$extracted" --static-only
+  local expected_invocation_uri="https://github.com/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID/attempts/$CANDIDATE_RUN_ATTEMPT"
   local attested_asset attestation_json attested_sha256
   for attested_asset in \
     "local-browser-bridge-v${version}-windows-x86_64.exe" \
@@ -741,14 +742,14 @@ PY
     attested_sha256="$(sha256_file "$extracted/$attested_asset")"
     gh attestation verify "$extracted/$attested_asset" \
       --repo "$GITHUB_REPOSITORY" \
-      --source-ref "refs/tags/$RELEASE_TAG" \
+      --source-ref "refs/heads/main" \
       --source-digest "$VERIFIED_SOURCE_SHA" \
       --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/deploy.yml" \
       --deny-self-hosted-runners \
       --format json > "$attestation_json"
     verify_exact_attempt_attestation_set \
       "$attestation_json" "$expected_invocation_uri" "$GITHUB_REPOSITORY" \
-      "$GITHUB_RUN_ID" "$VERIFIED_SOURCE_SHA" "refs/tags/$RELEASE_TAG" \
+      "$CANDIDATE_RUN_ID" "$VERIFIED_SOURCE_SHA" "refs/heads/main" \
       ".github/workflows/deploy.yml" "$attested_asset" "$attested_sha256" ||
       die "candidate provenance did not bind one exact workflow-attempt attestation: $attested_asset"
   done
@@ -779,13 +780,12 @@ for name in [
 json.dump(assets, open(output, "x", encoding="utf-8"), separators=(",", ":"))
 PY
   jq -cn \
-    --arg product_version "$version" \
+    --arg version "$version" \
+    --arg release_tag "$RELEASE_TAG" \
     --arg repository "$GITHUB_REPOSITORY" \
-    --arg tag "$RELEASE_TAG" \
     --arg source_sha "$VERIFIED_SOURCE_SHA" \
-    --arg tag_object_sha "$VERIFIED_TAG_SHA" \
-    --arg workflow_run_id "$GITHUB_RUN_ID" \
-    --arg workflow_run_attempt "$GITHUB_RUN_ATTEMPT" \
+    --arg workflow_run_id "$CANDIDATE_RUN_ID" \
+    --arg workflow_run_attempt "$CANDIDATE_RUN_ATTEMPT" \
     --arg artifact_id "$artifact_id" \
     --arg artifact_name "release-candidate" \
     --argjson artifact_zip_bytes "$(wc -c < "$raw_zip" | tr -d ' ')" \
@@ -794,13 +794,16 @@ PY
     --arg attestation_invocation_uri "$expected_invocation_uri" \
     --slurpfile assets "$binding_assets" '
       {
-        productVersion: $product_version,
+        schemaVersion: 3,
+        version: $version,
+        releaseTag: $release_tag,
         repository: $repository,
-        tag: $tag,
         sourceSha: $source_sha,
-        tagObjectSha: $tag_object_sha,
         workflowRunId: $workflow_run_id,
         workflowRunAttempt: $workflow_run_attempt,
+        workflowEvent: "workflow_dispatch",
+        workflowRef: "refs/heads/main",
+        workflowPath: ".github/workflows/deploy.yml",
         artifactId: $artifact_id,
         artifactName: $artifact_name,
         artifactZipBytes: $artifact_zip_bytes,
@@ -1417,11 +1420,11 @@ verify_mac_lane() {
   test -f "$MACOS_CANDIDATE_FACTS" || die "independent macOS package facts are unavailable"
   jq -e \
     --arg version "$EVIDENCE_PRODUCT_VERSION" \
+    --arg release_tag "$RELEASE_TAG" \
     --arg lane "$lane_name" \
     --arg source_sha "$VERIFIED_SOURCE_SHA" \
-    --arg tag_object_sha "$VERIFIED_TAG_SHA" \
-    --arg run_id "$GITHUB_RUN_ID" \
-    --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+    --arg run_id "$CANDIDATE_RUN_ID" \
+    --arg run_attempt "$CANDIDATE_RUN_ATTEMPT" \
     --arg artifact_id "$(jq -er '.releaseCandidateArtifactId' "$RECEIPT_FILE")" \
     --arg artifact_zip_sha256 "$(jq -er '.releaseCandidateArtifactZipSha256' "$RECEIPT_FILE")" \
     --arg manifest_sha256 "$(jq -er '.checksumManifestSha256' "$RECEIPT_FILE")" \
@@ -1436,16 +1439,21 @@ verify_mac_lane() {
       and (.startedAt | type) == "string"
       and (.capturedAt | type) == "string"
       and (.releaseCandidateBinding == {
+        schemaVersion: 3,
+        version: $version,
+        releaseTag: $release_tag,
+        repository: "flrngel/local-browser-bridge",
         sourceSha: $source_sha,
-        tagObjectSha: $tag_object_sha,
         workflowRunId: $run_id,
         workflowRunAttempt: $run_attempt,
+        workflowEvent: "workflow_dispatch",
+        workflowRef: "refs/heads/main",
+        workflowPath: ".github/workflows/deploy.yml",
         artifactId: $artifact_id,
         artifactZipSha256: $artifact_zip_sha256,
         checksumManifestSha256: $manifest_sha256
       })
       and .harnessSourceBinding.sourceSha == $source_sha
-      and .harnessSourceBinding.annotatedTagObjectSha == $tag_object_sha
       and .harnessSourceBinding.detachedHead == true
       and .harnessSourceBinding.cleanTrackedAndUntracked == true
       and .harnessSourceBinding.fsckPassed == true
@@ -2123,7 +2131,7 @@ PY
   jq -e '
       .schemaVersion == 1
       and .evidenceType == "stock-user-chrome-api-matrix"
-      and .version == "0.12.29" and .target == "loopback-demo" and .passed == true
+      and .version == "0.12.30" and .target == "loopback-demo" and .passed == true
       and .methodCount == 25 and (.methods | length) == 25
       and ([.methods[].name] == [
         "status","browser.control.start","browser.control.status","browser.control.stop",
@@ -2162,7 +2170,7 @@ PY
       . as $root
       |
       .schemaVersion == 2 and .evidenceType == "stock-user-chrome-computer-helper-chain"
-      and .version == "0.12.29" and .passed == true
+      and .version == "0.12.30" and .passed == true
       and .server.soleListener == "127.0.0.1:17373" and .server.updateCheckDisabled == true
       and .helper.connectedThroughLoopbackServer == true and .helper.serverApiOnly == true
       and .extensionPayload.fileCount == 11
@@ -2301,7 +2309,7 @@ PY
       and ([.computerHelperChain[] | select(type == "boolean")] | all(. == true))
       and .initialState.capturedBeforeRelevantMutation == true
       and .initialState.candidateExtensionPresent == false and .initialState.savedTokenConfigured == false
-      and .extension.cardCount == 1 and .extension.version == "0.12.29" and .extension.enabled == true
+      and .extension.cardCount == 1 and .extension.version == "0.12.30" and .extension.enabled == true
       and .extension.loadErrors == 0 and .extension.loadedVia == "chrome://extensions-load-unpacked"
       and .extension.loadedDirectoryByteMatchesCandidateZip == true and .extension.popupConnected == true
       and .extension.debuggerLeaseActiveAtFirstCapture == true and .extension.nativeDebuggerUseIndicatorSeen == true
@@ -2724,8 +2732,8 @@ verify_evidence_commit() {
   local evidence_ref evidence_commit_sha remote_lines remote_sha parent_line commit parent extra
   evidence_ref="$(jq -er '.evidenceRef' "$receipt_file")"
   evidence_commit_sha="$(jq -er '.evidenceCommitSha' "$receipt_file")"
-  local canonical_ref="refs/heads/evidence/${RELEASE_TAG}-release-run-${GITHUB_RUN_ID}-attempt-${GITHUB_RUN_ATTEMPT}"
-  local canonical_root="evidence/${RELEASE_TAG}/release/run-${GITHUB_RUN_ID}-attempt-${GITHUB_RUN_ATTEMPT}"
+  local canonical_ref="refs/heads/evidence/${RELEASE_TAG}-release-run-${CANDIDATE_RUN_ID}-attempt-${CANDIDATE_RUN_ATTEMPT}"
+  local canonical_root="evidence/${RELEASE_TAG}/release/run-${CANDIDATE_RUN_ID}-attempt-${CANDIDATE_RUN_ATTEMPT}"
   test "$evidence_ref" = "$canonical_ref" || die "evidence ref is not canonical for this workflow attempt"
   is_sha1 "$evidence_commit_sha" || die "evidence commit SHA is invalid"
   local origin_url
@@ -2835,39 +2843,44 @@ verify_evidence_commit() {
 
   local mac_harness_source_binding="$scratch_root/macos-harness-source-binding.json"
   write_mac_harness_source_binding "$mac_harness_source_binding" \
-    || die "could not independently hash the exact tagged macOS harness sources"
+    || die "could not independently hash the exact macOS harness sources"
   validate_mac_harness_source_binding \
     "$mac_harness_source_binding" "$mac_aggregate" "$quiet_result" "$deliberate_result" \
-    || die "macOS retained lanes or aggregate do not match the exact tagged harness source hashes"
+    || die "macOS retained lanes or aggregate do not match the exact harness source hashes"
   validate_mac_result_schema_binding "$mac_aggregate" "$quiet_result" "$deliberate_result" \
     || die "macOS aggregate result schema does not match both retained lanes"
   jq -e \
     --arg version "$EVIDENCE_PRODUCT_VERSION" \
+    --arg release_tag "$RELEASE_TAG" \
     --arg source_sha "$VERIFIED_SOURCE_SHA" \
-    --arg tag_object_sha "$VERIFIED_TAG_SHA" \
-    --arg run_id "$GITHUB_RUN_ID" \
-    --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+    --arg run_id "$CANDIDATE_RUN_ID" \
+    --arg run_attempt "$CANDIDATE_RUN_ATTEMPT" \
     --arg artifact_id "$(jq -er '.releaseCandidateArtifactId' "$receipt_file")" \
     --arg artifact_zip_sha256 "$(jq -er '.releaseCandidateArtifactZipSha256' "$receipt_file")" \
     --arg manifest_sha256 "$(jq -er '.checksumManifestSha256' "$receipt_file")" \
     --arg quiet_sha256 "$(jq -er '.macosQuietResultSha256' "$receipt_file")" \
     --arg deliberate_sha256 "$(jq -er '.macosDeliberateConcurrencyResultSha256' "$receipt_file")" \
     --arg acceptance_finalizer_sha256 "$(sha256_file scripts/finalize-macos-acceptance.mjs)" '
-      .schemaVersion == 2
+      .schemaVersion == 3
       and .productVersion == $version
       and .status == "passed-release-candidate"
       and .evidenceClass == "exact-release-candidate-macos-dual-lane-aggregate"
       and (.bindings.releaseCandidate == {
+        schemaVersion: 3,
+        version: $version,
+        releaseTag: $release_tag,
+        repository: "flrngel/local-browser-bridge",
         sourceSha: $source_sha,
-        tagObjectSha: $tag_object_sha,
         workflowRunId: $run_id,
         workflowRunAttempt: $run_attempt,
+        workflowEvent: "workflow_dispatch",
+        workflowRef: "refs/heads/main",
+        workflowPath: ".github/workflows/deploy.yml",
         artifactId: $artifact_id,
         artifactZipSha256: $artifact_zip_sha256,
         checksumManifestSha256: $manifest_sha256
       })
       and .bindings.source.sourceSha == $source_sha
-      and .bindings.source.annotatedTagObjectSha == $tag_object_sha
       and .bindings.harness.acceptanceFinalizerSha256 == $acceptance_finalizer_sha256
       and .lanes.quiet.resultFile == "helper-results.json"
       and .lanes.quiet.resultSha256 == $quiet_sha256
@@ -3087,20 +3100,19 @@ self_test() {
   chmod 700 "$scratch"
   trap 'rm -rf -- "$scratch"' RETURN
   local sha1_a="1111111111111111111111111111111111111111"
-  local sha1_b="2222222222222222222222222222222222222222"
   local sha256_a="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   local receipt="$scratch/receipt.json"
   self_test_attestation_selection
-  printf '%s' '{"schemaVersion":2,"tag":"v0.12.29","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"1","releaseCandidateArtifactId":"456","releaseCandidateArtifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","evidenceRef":"refs/heads/evidence/v0.12.29-release-run-123-attempt-1","evidenceCommitSha":"3333333333333333333333333333333333333333","macosPassed":true,"macosAcceptanceSha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","macosQuietResultSha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","macosDeliberateConcurrencyResultSha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","windowsPassed":true,"windowsResultSha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","stockChromePassed":true,"stockChrome":true,"stockChromeResultSha256":"9999999999999999999999999999999999999999999999999999999999999999"}' > "$receipt"
-  validate_receipt "$receipt" v0.12.29 "$sha1_a" "$sha1_b" 123 1 "$sha256_a" \
-    || die "self-test rejected a valid canonical schema-2 receipt"
+  printf '%s' '{"schemaVersion":3,"version":"0.12.30","releaseTag":"v0.12.30","sourceSha":"1111111111111111111111111111111111111111","workflowRunId":"123","workflowRunAttempt":"1","releaseCandidateArtifactId":"456","releaseCandidateArtifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","evidenceRef":"refs/heads/evidence/v0.12.30-release-run-123-attempt-1","evidenceCommitSha":"3333333333333333333333333333333333333333","macosPassed":true,"macosAcceptanceSha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","macosQuietResultSha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","macosDeliberateConcurrencyResultSha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","windowsPassed":true,"windowsResultSha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","stockChromePassed":true,"stockChrome":true,"stockChromeResultSha256":"9999999999999999999999999999999999999999999999999999999999999999"}' > "$receipt"
+  validate_receipt "$receipt" 0.12.30 v0.12.30 "$sha1_a" 123 1 "$sha256_a" \
+    || die "self-test rejected a valid canonical schema-3 receipt"
   jq -cS . "$receipt" > "$scratch/noncanonical.json"
-  if validate_receipt "$scratch/noncanonical.json" v0.12.29 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
+  if validate_receipt "$scratch/noncanonical.json" 0.12.30 v0.12.30 "$sha1_a" 123 1 "$sha256_a"; then
     die "self-test accepted reordered receipt keys"
   fi
-  jq -c '.schemaVersion = 1' "$receipt" > "$scratch/stale.json"
-  if validate_receipt "$scratch/stale.json" v0.12.29 "$sha1_a" "$sha1_b" 123 1 "$sha256_a"; then
-    die "self-test accepted a stale schema-1 receipt"
+  jq -c '.schemaVersion = 2' "$receipt" > "$scratch/stale.json"
+  if validate_receipt "$scratch/stale.json" 0.12.30 v0.12.30 "$sha1_a" 123 1 "$sha256_a"; then
+    die "self-test accepted a stale schema-2 receipt"
   fi
   mkdir "$scratch/safe"
   printf '%s\n' '{"passed":true,"credentialRetained":false,"expectedVisibleWindowTitle":"LBB Windows Acceptance - ARMED"}' > "$scratch/safe/result.json"
@@ -3119,7 +3131,7 @@ self_test() {
   fi
 
   EXPECTED_RELEASE_CANDIDATE_BINDING="$scratch/expected-binding.json"
-  printf '%s' '{"productVersion":"0.12.29","repository":"flrngel/local-browser-bridge","tag":"v0.12.29","sourceSha":"1111111111111111111111111111111111111111","tagObjectSha":"2222222222222222222222222222222222222222","workflowRunId":"123","workflowRunAttempt":"2","artifactId":"456","artifactName":"release-candidate","artifactZipBytes":789,"artifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","attestationInvocationUri":"https://github.com/flrngel/local-browser-bridge/actions/runs/123/attempts/2","attestedAssetCount":5,"githubHostedRunner":true,"assets":[]}' > "$EXPECTED_RELEASE_CANDIDATE_BINDING"
+  printf '%s' '{"schemaVersion":3,"version":"0.12.30","releaseTag":"v0.12.30","repository":"flrngel/local-browser-bridge","sourceSha":"1111111111111111111111111111111111111111","workflowRunId":"123","workflowRunAttempt":"2","workflowEvent":"workflow_dispatch","workflowRef":"refs/heads/main","workflowPath":".github/workflows/deploy.yml","artifactId":"456","artifactName":"release-candidate","artifactZipBytes":789,"artifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","attestationInvocationUri":"https://github.com/flrngel/local-browser-bridge/actions/runs/123/attempts/2","attestedAssetCount":5,"githubHostedRunner":true,"assets":[]}' > "$EXPECTED_RELEASE_CANDIDATE_BINDING"
   printf '%s' "{\"releaseCandidateBinding\":$(<"$EXPECTED_RELEASE_CANDIDATE_BINDING")}" > "$scratch/current-binding.json"
   assert_release_candidate_binding "$scratch/current-binding.json" '.releaseCandidateBinding'
   jq -c '.releaseCandidateBinding.workflowRunAttempt = "1"' "$scratch/current-binding.json" > "$scratch/replayed-binding.json"
@@ -3525,7 +3537,7 @@ self_test() {
   validate_mac_harness_source_binding \
     "$mac_harness_source_binding" "$mac_harness_aggregate" \
     "$mac_harness_quiet" "$mac_harness_deliberate" \
-    || die "self-test rejected exact tagged macOS harness source hashes"
+    || die "self-test rejected exact macOS harness source hashes"
 
   local harness_field
   local wrong_harness_sha256="0000000000000000000000000000000000000000000000000000000000000000"
@@ -3539,7 +3551,7 @@ self_test() {
     if validate_mac_harness_source_binding \
         "$mac_harness_source_binding" "$scratch/mac-harness-tampered-aggregate.json" \
         "$mac_harness_quiet" "$mac_harness_deliberate"; then
-      die "self-test accepted a macOS aggregate tagged-harness hash mismatch: $harness_field"
+      die "self-test accepted a macOS aggregate harness hash mismatch: $harness_field"
     fi
 
     jq -c --arg field "$harness_field" --arg wrong "$wrong_harness_sha256" \
@@ -3548,7 +3560,7 @@ self_test() {
     if validate_mac_harness_source_binding \
         "$mac_harness_source_binding" "$mac_harness_aggregate" \
         "$scratch/mac-harness-tampered-quiet.json" "$mac_harness_deliberate"; then
-      die "self-test accepted a quiet-lane tagged-harness hash mismatch: $harness_field"
+      die "self-test accepted a quiet-lane harness hash mismatch: $harness_field"
     fi
 
     jq -c --arg field "$harness_field" --arg wrong "$wrong_harness_sha256" \
@@ -3557,7 +3569,7 @@ self_test() {
     if validate_mac_harness_source_binding \
         "$mac_harness_source_binding" "$mac_harness_aggregate" \
         "$mac_harness_quiet" "$scratch/mac-harness-tampered-deliberate.json"; then
-      die "self-test accepted a deliberate-lane tagged-harness hash mismatch: $harness_field"
+      die "self-test accepted a deliberate-lane harness hash mismatch: $harness_field"
     fi
   done
 
@@ -3595,24 +3607,24 @@ test "$#" = 2 || die "usage: $SCRIPT_NAME <canonical-receipt.json> <downloaded-c
 readonly RECEIPT_FILE="$1"
 readonly CANDIDATE_DIR="$2"
 
-for variable in GITHUB_REPOSITORY GITHUB_RUN_ID GITHUB_RUN_ATTEMPT RELEASE_TAG VERIFIED_SOURCE_SHA VERIFIED_TAG_SHA GH_TOKEN; do
+for variable in GITHUB_REPOSITORY CANDIDATE_RUN_ID CANDIDATE_RUN_ATTEMPT RELEASE_VERSION RELEASE_TAG VERIFIED_SOURCE_SHA GH_TOKEN; do
   test -n "${!variable:-}" || die "required environment variable is empty: $variable"
 done
 for command_name in awk cmp cp env find gh git jq mkfifo pwsh python3 sed sha256sum tar; do require_command "$command_name"; done
-test "$RELEASE_TAG" = "v$EVIDENCE_PRODUCT_VERSION" || die "this evidence gate is bound only to v$EVIDENCE_PRODUCT_VERSION"
+test "$RELEASE_VERSION" = "$EVIDENCE_PRODUCT_VERSION" || die "this evidence gate is bound only to version $EVIDENCE_PRODUCT_VERSION"
+test "$RELEASE_TAG" = "v$RELEASE_VERSION" || die "release tag does not match the intended release version"
 is_sha1 "$VERIFIED_SOURCE_SHA" || die "verified source SHA is invalid"
-is_sha1 "$VERIFIED_TAG_SHA" || die "verified tag object SHA is invalid"
-is_positive_integer "$GITHUB_RUN_ID" || die "workflow run ID is invalid"
-is_positive_integer "$GITHUB_RUN_ATTEMPT" || die "workflow run attempt is invalid"
+is_positive_integer "$CANDIDATE_RUN_ID" || die "workflow run ID is invalid"
+is_positive_integer "$CANDIDATE_RUN_ATTEMPT" || die "workflow run attempt is invalid"
 test -d "$CANDIDATE_DIR" && test ! -L "$CANDIDATE_DIR" || die "candidate directory is invalid"
 readonly FROZEN_MANIFEST_SHA256="$(sha256_file "$CANDIDATE_DIR/SHA256SUMS.txt")"
-validate_receipt "$RECEIPT_FILE" "$RELEASE_TAG" "$VERIFIED_SOURCE_SHA" "$VERIFIED_TAG_SHA" \
-  "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$FROZEN_MANIFEST_SHA256" \
-  || die "protected schema-2 acceptance receipt is noncanonical, stale, or incorrectly bound"
+validate_receipt "$RECEIPT_FILE" "$RELEASE_VERSION" "$RELEASE_TAG" "$VERIFIED_SOURCE_SHA" \
+  "$CANDIDATE_RUN_ID" "$CANDIDATE_RUN_ATTEMPT" "$FROZEN_MANIFEST_SHA256" \
+  || die "protected schema-3 acceptance receipt is noncanonical, stale, or incorrectly bound"
 
 SCRATCH_ROOT="$(mktemp -d)"
 chmod 700 "$SCRATCH_ROOT"
 trap 'rm -rf -- "$SCRATCH_ROOT"' EXIT
 verify_raw_release_candidate "$RECEIPT_FILE" "$CANDIDATE_DIR" "$SCRATCH_ROOT"
 verify_evidence_commit "$RECEIPT_FILE" "$CANDIDATE_DIR" "$SCRATCH_ROOT"
-printf '%s\n' "Release acceptance evidence commit and exact workflow artifact passed schema-2 verification."
+printf '%s\n' "Release acceptance evidence commit and exact workflow artifact passed schema-3 verification."

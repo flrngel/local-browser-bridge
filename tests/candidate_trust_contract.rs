@@ -15,7 +15,6 @@ fn windows_candidate_binder_is_a_clean_child_binary_safe_fail_closed_gate() {
         "[string]$WorkflowRunAttempt",
         "[string]$ArtifactId",
         "[string]$SourceSha",
-        "[string]$TagObjectSha",
         "[string]$Destination",
         "[string]$TrustedGit",
         "[string]$TrustedGh",
@@ -80,7 +79,7 @@ fn windows_candidate_binder_is_a_clean_child_binary_safe_fail_closed_gate() {
         "tests/fixtures/windows/WindowsComputerUseFixture.ps1",
         "rev-parse\", \"--verify\", \"HEAD:$Relative",
         "hash-object\", \"--no-filters\", \"--\", $Relative",
-        "Executing trust wrapper does not match the exact tagged wrapper blob.",
+        "Executing trust wrapper does not match the exact source wrapper blob.",
         "\"attestation\", \"verify\"",
         "--deny-self-hosted-runners\", \"--format\", \"json",
         "$EntryInvocation -cne $CertificateInvocation",
@@ -267,7 +266,8 @@ fn all_candidate_consumers_select_one_exact_attempt_from_valid_same_run_attestat
 fn dedicated_windows_fixture_is_trusted_source_only_not_a_release_asset() {
     let windows_binder = normalized_source("scripts/verify-windows-release-candidate.ps1");
     let bash_binder = normalized_source("scripts/fetch-verify-release-candidate.sh");
-    let release = normalized_source(".github/workflows/deploy.yml");
+    let candidate_workflow = normalized_source(".github/workflows/deploy.yml");
+    let ci = normalized_source(".github/workflows/ci.yml");
     let asset_verifier = normalized_source("scripts/verify-release-assets.sh");
 
     let windows_assets = windows_binder
@@ -343,7 +343,7 @@ fn dedicated_windows_fixture_is_trusted_source_only_not_a_release_asset() {
     assert!(!bash_assets.to_ascii_lowercase().contains("fixture"));
     assert!(bash_binder.contains("attestedAssetCount:5"));
 
-    let assembled_assets = release
+    let assembled_assets = candidate_workflow
         .split("          assets=(\n")
         .nth(1)
         .unwrap()
@@ -359,14 +359,17 @@ fn dedicated_windows_fixture_is_trusted_source_only_not_a_release_asset() {
         "release assembly must contain exactly four product assets before the manifest"
     );
     assert!(!assembled_assets.to_ascii_lowercase().contains("fixture"));
-    assert!(release.contains("(cd dist && sha256sum \"${assets[@]}\" > SHA256SUMS.txt)"));
-    assert!(release.contains("name: release-candidate\n          path: dist/*"));
-    assert!(release.contains(
+    assert!(
+        candidate_workflow.contains("(cd dist && sha256sum \"${assets[@]}\" > SHA256SUMS.txt)")
+    );
+    assert!(candidate_workflow.contains("name: release-candidate\n          path: dist/*"));
+    assert!(ci.contains(
         "$fixtureExecutableSelfTest = Join-Path $env:RUNNER_TEMP (\"lbb-windows-fixture-\""
     ));
-    assert!(!release.contains("dist/lbb-windows-fixture-"));
-    assert!(!release.contains("dist/lbb-windows-computer-use-fixture"));
-    assert!(!release.contains("Copy-Item $fixtureExecutableSelfTest"));
+    assert!(!candidate_workflow.contains("$fixtureExecutableSelfTest"));
+    assert!(!candidate_workflow.contains("dist/lbb-windows-fixture-"));
+    assert!(!candidate_workflow.contains("dist/lbb-windows-computer-use-fixture"));
+    assert!(!candidate_workflow.contains("Copy-Item $fixtureExecutableSelfTest"));
 
     for required in [
         "windows_server=\"$assets_dir/local-browser-bridge-v${version}-windows-x86_64.exe\"",
@@ -447,13 +450,15 @@ fn bash_and_windows_candidate_binding_schemas_stay_identical() {
     let windows = normalized_source("scripts/verify-windows-release-candidate.ps1");
     let fields = [
         "schemaVersion",
-        "productVersion",
+        "version",
+        "releaseTag",
         "repository",
-        "tag",
         "sourceSha",
-        "tagObjectSha",
         "workflowRunId",
         "workflowRunAttempt",
+        "workflowEvent",
+        "workflowRef",
+        "workflowPath",
         "artifactId",
         "artifactName",
         "artifactZipBytes",
@@ -466,7 +471,7 @@ fn bash_and_windows_candidate_binding_schemas_stay_identical() {
         "passed",
     ];
 
-    let bash_binding = bash.rfind("'{schemaVersion:1").unwrap();
+    let bash_binding = bash.rfind("'{schemaVersion:3").unwrap();
     let windows_binding = windows.rfind("$Binding = [ordered]@{").unwrap();
     let mut bash_cursor = bash_binding;
     let mut windows_cursor = windows_binding;
@@ -522,7 +527,7 @@ fn candidate_binder_is_source_attempt_artifact_and_attestation_bound() {
         "shasum -a 256 -c SHA256SUMS.txt",
         "verify-release-assets.sh",
         "gh attestation verify",
-        "--source-ref \"refs/tags/$TAG\"",
+        "--source-ref \"$WORKFLOW_REF\"",
         "--source-digest \"$SOURCE_SHA\"",
         "--signer-workflow \"$REPOSITORY/.github/workflows/deploy.yml\"",
         "--deny-self-hosted-runners",

@@ -22,9 +22,9 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { deflateSync, inflateSync } from "node:zlib";
 
-const PRODUCT_VERSION = "0.12.29";
+const PRODUCT_VERSION = "0.12.30";
 const RESULT_SCHEMA_VERSION = 8;
-const AGGREGATE_SCHEMA_VERSION = 2;
+const AGGREGATE_SCHEMA_VERSION = 3;
 const APP_SHARE_MARKER_SCHEMA_VERSION = 2;
 const OUTPUT_FILE = "macos-acceptance.json";
 const MAX_FRESH_AGE_MS = 12 * 60 * 60 * 1_000;
@@ -119,17 +119,22 @@ const SCREENSHOT_FIELDS = [
   "transportSequence",
 ];
 const CANDIDATE_FIELDS = [
+  "schemaVersion",
+  "version",
+  "releaseTag",
+  "repository",
   "sourceSha",
-  "tagObjectSha",
   "workflowRunId",
   "workflowRunAttempt",
+  "workflowEvent",
+  "workflowRef",
+  "workflowPath",
   "artifactId",
   "artifactZipSha256",
   "checksumManifestSha256",
 ];
 const SOURCE_FIELDS = [
   "sourceSha",
-  "annotatedTagObjectSha",
   "detachedHead",
   "cleanTrackedAndUntracked",
   "fsckPassed",
@@ -743,11 +748,24 @@ function validatePng(bytes, expectedWidth, expectedHeight, label) {
 
 function validateReleaseCandidateBinding(value, label) {
   exactKeys(value, CANDIDATE_FIELDS, label);
+  exactInteger(value.schemaVersion, 3, 3, `${label} schemaVersion`);
+  exactString(value.version, PRODUCT_VERSION, `${label} version`);
+  exactString(value.releaseTag, `v${PRODUCT_VERSION}`, `${label} releaseTag`);
+  exactString(value.repository, "flrngel/local-browser-bridge", `${label} repository`);
+  exactString(value.workflowEvent, "workflow_dispatch", `${label} workflowEvent`);
+  exactString(value.workflowRef, "refs/heads/main", `${label} workflowRef`);
+  exactString(value.workflowPath, ".github/workflows/deploy.yml", `${label} workflowPath`);
   return {
+    schemaVersion: value.schemaVersion,
+    version: value.version,
+    releaseTag: value.releaseTag,
+    repository: value.repository,
     sourceSha: canonicalString(value.sourceSha, /^[0-9a-f]{40}$/, `${label} sourceSha`),
-    tagObjectSha: canonicalString(value.tagObjectSha, /^[0-9a-f]{40}$/, `${label} tagObjectSha`),
     workflowRunId: canonicalString(value.workflowRunId, /^[1-9][0-9]*$/, `${label} workflowRunId`),
     workflowRunAttempt: canonicalString(value.workflowRunAttempt, /^[1-9][0-9]*$/, `${label} workflowRunAttempt`),
+    workflowEvent: value.workflowEvent,
+    workflowRef: value.workflowRef,
+    workflowPath: value.workflowPath,
     artifactId: canonicalString(value.artifactId, /^[1-9][0-9]*$/, `${label} artifactId`),
     artifactZipSha256: canonicalString(value.artifactZipSha256, /^[0-9a-f]{64}$/, `${label} artifactZipSha256`),
     checksumManifestSha256: canonicalString(value.checksumManifestSha256, /^[0-9a-f]{64}$/, `${label} checksumManifestSha256`),
@@ -758,13 +776,12 @@ function validateSourceBinding(value, label) {
   exactKeys(value, SOURCE_FIELDS, label);
   const source = {
     sourceSha: canonicalString(value.sourceSha, /^[0-9a-f]{40}$/, `${label} sourceSha`),
-    annotatedTagObjectSha: canonicalString(value.annotatedTagObjectSha, /^[0-9a-f]{40}$/, `${label} annotatedTagObjectSha`),
     detachedHead: value.detachedHead,
     cleanTrackedAndUntracked: value.cleanTrackedAndUntracked,
     fsckPassed: value.fsckPassed,
     exactTrackedHarnessBlobs: value.exactTrackedHarnessBlobs,
   };
-  for (const field of SOURCE_FIELDS.slice(2)) exactBoolean(source[field], true, `${label} ${field}`);
+  for (const field of SOURCE_FIELDS.slice(1)) exactBoolean(source[field], true, `${label} ${field}`);
   return source;
 }
 
@@ -1392,10 +1409,7 @@ function validateCrossBindings(quiet, deliberate, executingFinalizerSha256, now)
     requireIdentical(quiet.envelope[field], deliberate.envelope[field], field);
   }
   const { releaseCandidate, source, package: packageBinding } = quiet.envelope;
-  if (
-    releaseCandidate.sourceSha !== source.sourceSha ||
-    releaseCandidate.tagObjectSha !== source.annotatedTagObjectSha
-  ) {
+  if (releaseCandidate.sourceSha !== source.sourceSha) {
     fail("candidate and checked-out harness source bindings do not match.");
   }
   if (
@@ -1405,7 +1419,7 @@ function validateCrossBindings(quiet, deliberate, executingFinalizerSha256, now)
     fail("candidate and package checksum-manifest bindings do not match.");
   }
   if (quiet.envelope.harness.acceptanceFinalizerSha256 !== executingFinalizerSha256) {
-    fail("executing macOS acceptance finalizer does not match the exact tagged harness binding.");
+    fail("executing macOS acceptance finalizer does not match the exact source harness binding.");
   }
   if (Date.parse(deliberate.envelope.startedAt) <= Date.parse(quiet.envelope.capturedAt)) {
     fail("deliberate-concurrency lane must start only after the quiet lane passed.");
@@ -1629,17 +1643,22 @@ function selfTestBindings() {
   const hash = (character) => character.repeat(64);
   return {
     releaseCandidateBinding: {
+      schemaVersion: 3,
+      version: PRODUCT_VERSION,
+      releaseTag: `v${PRODUCT_VERSION}`,
+      repository: "flrngel/local-browser-bridge",
       sourceSha: "a".repeat(40),
-      tagObjectSha: "b".repeat(40),
       workflowRunId: "32650000000",
       workflowRunAttempt: "1",
+      workflowEvent: "workflow_dispatch",
+      workflowRef: "refs/heads/main",
+      workflowPath: ".github/workflows/deploy.yml",
       artifactId: "9500000000",
       artifactZipSha256: hash("c"),
       checksumManifestSha256: hash("d"),
     },
     harnessSourceBinding: {
       sourceSha: "a".repeat(40),
-      annotatedTagObjectSha: "b".repeat(40),
       detachedHead: true,
       cleanTrackedAndUntracked: true,
       fsckPassed: true,

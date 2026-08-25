@@ -1,299 +1,175 @@
-name: Build verified release
+name: Build release candidate
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact package version from Cargo.toml (for example, 0.12.30)
+        required: true
+        type: string
+      source_sha:
+        description: Exact 40-character origin/main commit to build
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.repository }}-${{ github.ref_name }}
+  group: release-candidate-${{ github.repository }}-${{ inputs.version }}-${{ inputs.source_sha }}
   cancel-in-progress: false
 
 env:
-  RELEASE_TAG: ${{ github.ref_name }}
-  SOURCE_REF: ${{ github.sha }}
+  CARGO_TERM_COLOR: always
+  RELEASE_VERSION: ${{ inputs.version }}
+  SOURCE_REF: ${{ inputs.source_sha }}
 
 jobs:
   verify:
-    name: Verify source and extension contract
+    name: Verify release candidate source
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      id-token: write
+      attestations: write
+      pull-requests: read
     outputs:
-      source_sha: ${{ steps.release_source.outputs.source_sha }}
-      tag_sha: ${{ steps.release_source.outputs.tag_sha }}
-      version: ${{ steps.release_source.outputs.version }}
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      version: ${{ steps.source.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_REF }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Refuse a release-blocked source
+      - name: Bind the candidate to exact green main source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
+          [[ "$GITHUB_REF" == "refs/heads/main" ]]
+          [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$GITHUB_SHA" = "$SOURCE_REF"
+          test "$(git rev-parse HEAD)" = "$SOURCE_REF"
+          test "$(git rev-parse origin/main)" = "$SOURCE_REF"
+          test -z "$(git status --porcelain=v2 --untracked-files=all)"
+          git diff --quiet HEAD --
+          git diff --cached --quiet
+          git fsck --full
           if [[ -e RELEASE_BLOCKED || -L RELEASE_BLOCKED ]]; then
-            echo "Release is blocked by RELEASE_BLOCKED; resolve its recorded source gate and remove it in a reviewed unblock commit." >&2
+            echo "Release is blocked by RELEASE_BLOCKED." >&2
             exit 1
           fi
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: 24
-          package-manager-cache: false
-      - name: Install the minimum supported Rust toolchain
-        run: |
-          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
-          rustup default 1.88.0
-      - name: Validate release tag and aligned versions
-        id: release_source
-        shell: bash
-        run: |
-          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          test "$(git cat-file -t "$RELEASE_TAG")" = tag
-          version="$(bash scripts/audit-versions.sh "$RELEASE_TAG")"
-          test "$RELEASE_TAG" = "v$version"
-          source_sha="$(git rev-parse HEAD)"
-          test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$source_sha"
-          test "$GITHUB_SHA" = "$source_sha"
-          tag_sha="$(git rev-parse "$RELEASE_TAG")"
-          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
-          echo "tag_sha=$tag_sha" >> "$GITHUB_OUTPUT"
+          version="$(bash scripts/audit-versions.sh "$RELEASE_VERSION")"
+          test "$version" = "$RELEASE_VERSION"
+          release_tag="v$version"
+          remote_tag="$(git ls-remote --refs origin "refs/tags/$release_tag")"
+          test -z "$remote_tag"
+          release_index="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 10000 --json tagName)"
+          test "$(jq --arg tag "$release_tag" '[.[] | select(.tagName == $tag)] | length' <<<"$release_index")" = 0
+
+          merged_pulls="$(mktemp)"
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/commits/$SOURCE_REF/pulls?per_page=100" \
+            > "$merged_pulls"
+          reviewed_head="$(jq -er \
+            --arg source "$SOURCE_REF" \
+            --arg repository "$GITHUB_REPOSITORY" '
+              [.[] | select(
+                .merged_at != null
+                and .merge_commit_sha == $source
+                and .base.ref == "main"
+                and .base.repo.full_name == $repository
+              )]
+              | if length == 1 then .[0].head.sha
+                else error("source must belong to exactly one merged main PR") end
+            ' "$merged_pulls")"
+          [[ "$reviewed_head" =~ ^[0-9a-f]{40}$ ]]
+
+          checks="$(mktemp)"
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/commits/$reviewed_head/check-runs?per_page=100" \
+            > "$checks"
+          jq -e --arg source "$reviewed_head" '
+            . as $response
+            | ($response.total_count < 100)
+            and ([
+              "Rust, extension, and packaging",
+              "Windows native validation",
+              "macOS native validation"
+            ] | all(.[] as $required | any($response.check_runs[];
+              .name == $required
+              and .head_sha == $source
+              and .status == "completed"
+              and .conclusion == "success"
+              and .app.slug == "github-actions"
+            )))
+          ' "$checks" >/dev/null
+          echo "source_sha=$SOURCE_REF" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - name: Self-test the release acceptance evidence gate
+      - name: Audit locked production dependencies
         shell: bash
-        run: bash scripts/verify-release-acceptance-evidence.sh --self-test
-      - name: Validate the read-only macOS app-share handoff watcher
-        run: |
-          node --check scripts/wait-macos-app-share-concurrency-handoff.mjs
-          node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test
-      - name: Run formatting, lint, unit, integration, and extension tests
-        run: |
-          cargo fmt --all -- --check
-          cargo clippy --locked --all-targets -- -D warnings
-          cargo test --locked --all-targets
-      - name: Audit locked Rust dependencies
         run: |
           cargo install cargo-audit --locked --version 0.22.2
           cargo audit
-      - name: Verify locked dependency licenses
+      - name: Self-test the acceptance and package contracts
+        shell: bash
         run: |
-          cargo install cargo-about --locked --version 0.9.2 --features cli
-          bash scripts/check-licenses.sh
+          bash -n scripts/*.sh
+          bash -n scripts/fetch-verify-release-candidate.sh
+          bash scripts/fetch-verify-release-candidate.sh --self-test
+          bash -n scripts/verify-release-acceptance-evidence.sh
+          bash scripts/verify-release-acceptance-evidence.sh --self-test
+          bash scripts/publish-release.sh --self-test
+          bash scripts/package-extension.sh
+      - name: Attest extension build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.zip
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: chromium-extension
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 1
 
   windows:
     name: Build Windows x86_64
     needs: verify
     runs-on: windows-latest
+    timeout-minutes: 30
     permissions:
       contents: read
-      id-token: write # Required by actions/attest-build-provenance.
-      attestations: write # Publishes provenance for the exact Windows binaries.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.source_sha }}
           persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: 24
-          package-manager-cache: false
-      - name: Install the minimum supported Rust toolchain
+      - name: Install the supported Rust toolchain
         shell: pwsh
         run: |
-          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
+          rustup toolchain install 1.88.0 --profile minimal
           rustup default 1.88.0
           rustup target add x86_64-pc-windows-msvc
-      - name: Validate stock-user Chrome evidence tooling
-        shell: pwsh
-        run: |
-          if ([String]::IsNullOrWhiteSpace($env:SystemRoot) -or
-              -not [IO.Path]::IsPathRooted($env:SystemRoot)) {
-            throw "The Windows system root is unavailable."
-          }
-          $windowsPowerShell = [IO.Path]::GetFullPath([IO.Path]::Combine(
-            $env:SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"
-          ))
-          if (-not [IO.File]::Exists($windowsPowerShell) -or
-              ([IO.FileInfo]::new($windowsPowerShell).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-            throw "The exact system Windows PowerShell executable is unavailable or linked."
-          }
-          $ps51IdentityCommand = 'Write-Output ("{0}.{1}|{2}" -f $PSVersionTable.PSVersion.Major, $PSVersionTable.PSVersion.Minor, $PSVersionTable.PSEdition)'
-          $ps51Identity = @(& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -Command $ps51IdentityCommand)
-          if ($LASTEXITCODE -ne 0 -or $ps51Identity.Count -ne 1 -or
-              $ps51Identity[0] -cne "5.1|Desktop") {
-            throw "The exact system PowerShell self-test host is not Windows PowerShell 5.1 Desktop."
-          }
-          $scripts = @(
-            "scripts/browser-evidence-candidate.ps1",
-            "scripts/record-computer-helper-chain.ps1",
-            "scripts/run-windows-computer-use-acceptance.ps1",
-            "scripts/sanitize-browser-evidence-screenshot.ps1",
-            "scripts/test-windows-browser-api.ps1",
-            "scripts/test-windows-computer-use.ps1",
-            "scripts/test-windows-stock-chrome.ps1",
-            "scripts/verify-windows-artifacts.ps1",
-            "scripts/verify-windows-release-candidate.ps1",
-            "scripts/wait-windows-foreground-arm-handoff.ps1",
-            "scripts/write-browser-evidence-record.ps1",
-            "scripts/write-stock-chrome-operator-response.ps1",
-            "tests/fixtures/windows/WindowsComputerUseFixture.ps1"
-          )
-          foreach ($script in $scripts) {
-            $tokens = $null
-            $errors = $null
-            [Management.Automation.Language.Parser]::ParseFile(
-              (Resolve-Path $script).Path,
-              [ref]$tokens,
-              [ref]$errors
-            ) | Out-Null
-            if ($errors.Count -ne 0) {
-              throw ($errors | ForEach-Object { $_.Message } | Out-String)
-            }
-          }
-          & ./scripts/browser-evidence-candidate.ps1 -Mode SelfTest
-          & ./scripts/record-computer-helper-chain.ps1 -Mode SelfTest
-          & ./scripts/sanitize-browser-evidence-screenshot.ps1 -Mode SelfTest
-          & ./scripts/write-stock-chrome-operator-response.ps1 -Mode SelfTest
-          & ./scripts/test-windows-browser-api.ps1 -SelfTest
-          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/browser-evidence-candidate.ps1 -Mode SelfTest
-          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 candidate binder self-test failed." }
-          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/record-computer-helper-chain.ps1 -Mode SelfTest
-          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 computer-helper recorder self-test failed." }
-          $coordinatorPathForPs51 = (Resolve-Path ./scripts/run-windows-computer-use-acceptance.ps1).Path
-          $previousCoordinatorPathForPs51 = $env:LBB_PS51_COORDINATOR_PARSE
-          $coordinatorParserCommand = '$tokens = $null; $errors = $null; [Management.Automation.Language.Parser]::ParseFile([IO.Path]::GetFullPath($env:LBB_PS51_COORDINATOR_PARSE), [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -ne 0) { throw (($errors | ForEach-Object { $_.Message }) -join [Environment]::NewLine) }'
-          try {
-            $env:LBB_PS51_COORDINATOR_PARSE = $coordinatorPathForPs51
-            & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -Command $coordinatorParserCommand
-            if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 computer-use acceptance coordinator parser failed." }
-          }
-          finally {
-            if ($null -eq $previousCoordinatorPathForPs51) {
-              Remove-Item Env:\LBB_PS51_COORDINATOR_PARSE -ErrorAction SilentlyContinue
-            }
-            else {
-              $env:LBB_PS51_COORDINATOR_PARSE = $previousCoordinatorPathForPs51
-            }
-          }
-          $coordinatorSelfTestOutput = @(& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/run-windows-computer-use-acceptance.ps1 -Mode SelfTest)
-          if ($LASTEXITCODE -ne 0 -or
-              $coordinatorSelfTestOutput.Count -ne 1 -or
-              $coordinatorSelfTestOutput[0] -cne "Windows computer-use acceptance coordinator self-test passed.") {
-            throw "Windows PowerShell 5.1 computer-use acceptance coordinator self-test failed."
-          }
-          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/sanitize-browser-evidence-screenshot.ps1 -Mode SelfTest
-          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 screenshot sanitizer self-test failed." }
-          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-browser-api.ps1 -SelfTest
-          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 browser API self-test failed." }
-          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/write-browser-evidence-record.ps1 -Mode SelfTest
-          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 browser evidence finalizer self-test failed." }
-          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/write-stock-chrome-operator-response.ps1 -Mode SelfTest
-          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 stock-Chrome response writer self-test failed." }
-          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-computer-use.ps1 -SelfTest
-          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 computer-use self-test failed." }
-          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-artifacts.ps1 -Version 0.0.0 -SelfTest
-          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 artifact verifier self-test failed." }
-          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-release-candidate.ps1 -SelfTest
-          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 release-candidate trust self-test failed." }
-          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-stock-chrome.ps1 -SelfTest
-          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 stock-Chrome coordinator self-test failed." }
-          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/wait-windows-foreground-arm-handoff.ps1 -Mode SelfTest
-          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 foreground-arm handoff self-test failed." }
-          $watcherPathForPs51 = (Resolve-Path ./scripts/wait-windows-foreground-arm-handoff.ps1).Path
-          $previousWatcherPathForPs51 = $env:LBB_PS51_WATCHER_SELF_TEST
-          $watcherCallOperatorCommand = '$ErrorActionPreference = "Stop"; $watcherScript = [ScriptBlock]::Create([IO.File]::ReadAllText([IO.Path]::GetFullPath($env:LBB_PS51_WATCHER_SELF_TEST))); & $watcherScript -Mode SelfTest'
-          try {
-            $env:LBB_PS51_WATCHER_SELF_TEST = $watcherPathForPs51
-            $watcherCallOperatorOutput = @(& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -Command $watcherCallOperatorCommand)
-            if ($LASTEXITCODE -ne 0 -or
-                $watcherCallOperatorOutput.Count -ne 1 -or
-                $watcherCallOperatorOutput[0] -cne "Windows foreground-arm handoff watcher self-test passed.") {
-              throw "Windows PowerShell 5.1 foreground-arm call-operator self-test failed."
-            }
-          }
-          finally {
-            if ($null -eq $previousWatcherPathForPs51) {
-              Remove-Item Env:\LBB_PS51_WATCHER_SELF_TEST -ErrorAction SilentlyContinue
-            }
-            else {
-              $env:LBB_PS51_WATCHER_SELF_TEST = $previousWatcherPathForPs51
-            }
-          }
-          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./tests/fixtures/windows/WindowsComputerUseFixture.ps1 -SelfTest
-          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 fixture self-test failed." }
-          $fixtureExecutableSelfTest = Join-Path $env:RUNNER_TEMP ("lbb-windows-fixture-" + [Guid]::NewGuid().ToString("N") + ".exe")
-          $fixtureSourcePath = (Resolve-Path ./tests/fixtures/windows/WindowsComputerUseFixture.ps1).Path
-          $fixtureSourceStream = [IO.File]::OpenRead($fixtureSourcePath)
-          $fixtureSourceHasher = [Security.Cryptography.SHA256]::Create()
-          try {
-            $fixtureSourceSha256 = (($fixtureSourceHasher.ComputeHash($fixtureSourceStream) | ForEach-Object { $_.ToString("x2") }) -join '')
-          }
-          finally {
-            $fixtureSourceHasher.Dispose()
-            $fixtureSourceStream.Dispose()
-          }
-          try {
-            $fixtureBuildOutput = @(& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File $fixtureSourcePath -BuildExecutablePath $fixtureExecutableSelfTest -ExpectedSourceSha256 $fixtureSourceSha256)
-            if ($LASTEXITCODE -ne 0 -or
-                $fixtureBuildOutput.Count -ne 1 -or
-                $fixtureBuildOutput[0] -cne "Windows computer-use fixture executable built.") {
-              throw "Windows PowerShell 5.1 dedicated fixture build failed."
-            }
-            & $fixtureExecutableSelfTest --self-test
-            if ($LASTEXITCODE -ne 0) { throw "Dedicated Windows fixture executable self-test failed." }
-          }
-          finally {
-            $fixtureCleanupDeadline = [DateTime]::UtcNow.AddSeconds(10)
-            $fixtureCleanupError = $null
-            do {
-              try {
-                if ([IO.Directory]::Exists($fixtureExecutableSelfTest)) {
-                  throw "The dedicated Windows fixture executable path was replaced by a directory."
-                }
-                if ([IO.File]::Exists($fixtureExecutableSelfTest)) {
-                  $fixtureExecutableAttributes = [IO.File]::GetAttributes($fixtureExecutableSelfTest)
-                  if (($fixtureExecutableAttributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
-                      ($fixtureExecutableAttributes -band [IO.FileAttributes]::Directory) -ne 0) {
-                    throw "The dedicated Windows fixture executable cleanup target is not an ordinary file."
-                  }
-                  [IO.File]::SetAttributes($fixtureExecutableSelfTest, [IO.FileAttributes]::Normal)
-                  [IO.File]::Delete($fixtureExecutableSelfTest)
-                }
-                $fixtureCleanupError = $null
-                break
-              }
-              catch {
-                $fixtureCleanupError = $_.Exception
-                Start-Sleep -Milliseconds 100
-              }
-            } while ([DateTime]::UtcNow -lt $fixtureCleanupDeadline)
-            if ([IO.File]::Exists($fixtureExecutableSelfTest) -or
-                [IO.Directory]::Exists($fixtureExecutableSelfTest)) {
-              throw [IO.IOException]::new(
-                "The dedicated Windows fixture executable self-test artifact remained after bounded cleanup.",
-                $fixtureCleanupError
-              )
-            }
-          }
-          & ./scripts/test-windows-computer-use.ps1 -SelfTest
-          & ./scripts/wait-windows-foreground-arm-handoff.ps1 -Mode SelfTest
-          & ./scripts/write-browser-evidence-record.ps1 -Mode SelfTest
-          & ./scripts/write-stock-chrome-operator-response.ps1 -Mode SelfTest
-      - name: Run Windows formatting, lint, and tests
-        shell: pwsh
-        run: |
-          cargo fmt --all -- --check
-          cargo clippy --locked --target x86_64-pc-windows-msvc --all-targets -- -D warnings
-          cargo test --locked --target x86_64-pc-windows-msvc --all-targets
-      - name: Build and verify the standalone executables
+      - name: Build and verify standalone executables
         env:
           VERIFIED_VERSION: ${{ needs.verify.outputs.version }}
         shell: pwsh
         run: |
           cargo build --locked --release --bins --target x86_64-pc-windows-msvc
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"$').Matches[0].Groups[1].Value
-          if ($version -ne $env:VERIFIED_VERSION) { throw "Source version changed after verification" }
+          if ($version -cne $env:VERIFIED_VERSION) { throw "Source version changed after verification." }
           New-Item -ItemType Directory -Force dist | Out-Null
           $server = "dist/local-browser-bridge-v${version}-windows-x86_64.exe"
           $helper = "dist/local-computer-helper-v${version}-windows-x86_64.exe"
@@ -309,59 +185,35 @@ jobs:
           name: windows-x86_64
           path: dist/*.exe
           if-no-files-found: error
+          retention-days: 1
 
   macos:
     name: Build macOS universal
     needs: verify
-    # apple-metal 0.8.8's Swift bridge names Metal APIs introduced in the
-    # macOS 26 SDK. Artifact inspection still enforces the macOS 13 runtime floor.
     runs-on: macos-26
+    timeout-minutes: 30
     permissions:
       contents: read
-      id-token: write # Required by actions/attest-build-provenance.
-      attestations: write # Publishes provenance for the exact macOS archive.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.source_sha }}
           persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: 24
-          package-manager-cache: false
-      - name: Verify the macOS build SDK and runtime floor
-        run: bash scripts/verify-macos-build-host.sh
-      - name: Validate the macOS app-share handoff watcher on macOS
-        run: |
-          node --check scripts/wait-macos-app-share-concurrency-handoff.mjs
-          node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test
-      - name: Validate the macOS packaged-evidence harness
-        run: |
-          bash -n scripts/fetch-verify-release-candidate.sh
-          bash scripts/fetch-verify-release-candidate.sh --self-test
-          node --check scripts/finalize-macos-acceptance.mjs
-          node scripts/finalize-macos-acceptance.mjs --self-test
-          node --check evidence/v0.12.29/computer/helper-evidence-rig.mjs
-          node evidence/v0.12.29/computer/helper-evidence-rig.mjs --self-test
-          xcrun swiftc -typecheck evidence/v0.12.29/computer/HelperEvidenceFixture.swift
-          xcrun swiftc -typecheck evidence/v0.12.29/computer/SystemProbe.swift
-          xcrun swiftc -typecheck evidence/v0.12.29/computer/AppShareHandoff.swift
-          xcrun swiftc evidence/v0.12.29/computer/AppShareHandoff.swift -o "$RUNNER_TEMP/lbb-app-share-handoff-self-test"
-          "$RUNNER_TEMP/lbb-app-share-handoff-self-test" --self-test
-      - name: Install the minimum supported Rust toolchain and targets
-        run: |
-          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
-          rustup default 1.88.0
-          rustup target add aarch64-apple-darwin x86_64-apple-darwin
-      - name: Run native macOS formatting, lint, and tests
-        run: |
-          cargo fmt --all -- --check
-          cargo clippy --locked --all-targets -- -D warnings
-          cargo test --locked --all-targets
-      - name: Build and verify universal server and helper app
+      - name: Verify build host and install Rust targets
         shell: bash
         run: |
-          version="$(bash scripts/audit-versions.sh "$RELEASE_TAG")"
+          bash scripts/verify-macos-build-host.sh
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Build and verify universal server and helper app
+        env:
+          VERIFIED_VERSION: ${{ needs.verify.outputs.version }}
+        shell: bash
+        run: |
+          version="$(bash scripts/audit-versions.sh "$VERIFIED_VERSION")"
           cargo build --locked --release --bins --target aarch64-apple-darwin
           cargo build --locked --release --bins --target x86_64-apple-darwin
           mkdir -p dist stage "stage/Local Computer Helper.app/Contents/MacOS"
@@ -377,18 +229,6 @@ jobs:
             -output "stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"
           sed "s/@VERSION@/$version/g" packaging/macos/Info.plist.in > "stage/Local Computer Helper.app/Contents/Info.plist"
           chmod 755 stage/local-browser-bridge "stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"
-          for executable in stage/local-browser-bridge "stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"; do
-            architectures="$(lipo -archs "$executable")"
-            [[ "$architectures" == *"arm64"* && "$architectures" == *"x86_64"* ]]
-          done
-          test "$(stage/local-browser-bridge --version)" = "local-browser-bridge $version"
-          test "$("stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper" --version)" = "local-computer-helper $version"
-          for executable in stage/local-browser-bridge "stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"; do
-            license_report="$("$executable" --licenses)"
-            grep -Fq 'Local Browser Bridge third-party licenses' <<<"$license_report"
-            grep -Fq 'MIT License' <<<"$license_report"
-            grep -Fq 'Apache License' <<<"$license_report"
-          done
           codesign --force --sign - stage/local-browser-bridge
           codesign --verify --strict stage/local-browser-bridge
           codesign --force --deep --sign - "stage/Local Computer Helper.app"
@@ -397,11 +237,11 @@ jobs:
             "$version" \
             stage/local-browser-bridge \
             "stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"
-          COPYFILE_DISABLE=1 tar --format ustar --no-xattrs -czf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" -C stage local-browser-bridge "Local Computer Helper.app" LICENSE THIRD_PARTY_LICENSES.txt
-          tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | grep -Fxq local-browser-bridge
-          tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | grep -Fxq "Local Computer Helper.app/Contents/MacOS/local-computer-helper"
-          tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | grep -Fxq LICENSE
-          tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | grep -Fxq THIRD_PARTY_LICENSES.txt
+          COPYFILE_DISABLE=1 tar --format ustar --no-xattrs -czf \
+            "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" \
+            -C stage local-browser-bridge "Local Computer Helper.app" LICENSE THIRD_PARTY_LICENSES.txt
+          tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | LC_ALL=C sort > archive.txt
+          test "$(wc -l < archive.txt | tr -d ' ')" = 10
       - name: Attest macOS build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -411,71 +251,45 @@ jobs:
           name: macos-universal
           path: dist/*.tar.gz
           if-no-files-found: error
-
-  extension:
-    name: Package Chromium extension
-    needs: verify
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write # Required by actions/attest-build-provenance.
-      attestations: write # Publishes provenance for the exact extension archive.
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.verify.outputs.source_sha }}
-          persist-credentials: false
-      - name: Package and verify the exact extension file set
-        shell: bash
-        run: |
-          bash scripts/audit-versions.sh "$RELEASE_TAG"
-          bash scripts/package-extension.sh
-      - name: Attest extension build provenance
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: dist/*.zip
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: chromium-extension
-          path: dist/*.zip
-          if-no-files-found: error
+          retention-days: 1
 
   assemble:
     name: Assemble frozen release candidate
-    needs: [verify, windows, macos, extension]
+    needs: [verify, windows, macos]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
-      id-token: write # Required to attest the checksum manifest.
-      attestations: write # Publishes provenance for the checksum manifest.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.source_sha }}
-          fetch-depth: 0
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
           merge-multiple: true
       - name: Generate and verify checksums
+        env:
+          VERIFIED_VERSION: ${{ needs.verify.outputs.version }}
         shell: bash
         run: |
-          version="${RELEASE_TAG#v}"
           assets=(
-            "local-browser-bridge-v${version}-windows-x86_64.exe"
-            "local-computer-helper-v${version}-windows-x86_64.exe"
-            "local-browser-bridge-v${version}-macos-universal.tar.gz"
-            "local-browser-bridge-extension-v${version}.zip"
+            "local-browser-bridge-v${VERIFIED_VERSION}-windows-x86_64.exe"
+            "local-computer-helper-v${VERIFIED_VERSION}-windows-x86_64.exe"
+            "local-browser-bridge-v${VERIFIED_VERSION}-macos-universal.tar.gz"
+            "local-browser-bridge-extension-v${VERIFIED_VERSION}.zip"
           )
-          for asset in "${assets[@]}"; do test -f "dist/$asset"; done
+          test "$(find dist -maxdepth 1 -type f ! -type l | wc -l | tr -d ' ')" = 4
           (cd dist && sha256sum "${assets[@]}" > SHA256SUMS.txt)
-          bash scripts/verify-release-assets.sh "$version" dist
+          bash scripts/verify-release-assets.sh "$VERIFIED_VERSION" dist
       - name: Attest the checksum manifest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/SHA256SUMS.txt
-      - name: Verify every GitHub build attestation before freezing the candidate
+      - name: Verify exact-source GitHub build attestations
         env:
           GH_TOKEN: ${{ github.token }}
           VERIFIED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
@@ -486,7 +300,7 @@ jobs:
             for attempt in 1 2 3 4 5; do
               if gh attestation verify "$subject" \
                 --repo "$GITHUB_REPOSITORY" \
-                --source-ref "$GITHUB_REF" \
+                --source-ref refs/heads/main \
                 --source-digest "$VERIFIED_SOURCE_SHA" \
                 --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/deploy.yml" \
                 --deny-self-hosted-runners; then
@@ -496,428 +310,11 @@ jobs:
             done
             return 1
           }
-          for subject in dist/*; do
-            verify_attestation "$subject"
-          done
-      - name: Freeze the exact candidate for interactive acceptance
+          for subject in dist/*; do verify_attestation "$subject"; done
+      - name: Freeze the candidate for desktop and browser acceptance
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-candidate
           path: dist/*
           if-no-files-found: error
           retention-days: 14
-
-  release:
-    name: Publish GitHub Release
-    needs: [verify, assemble]
-    runs-on: ubuntu-latest
-    environment:
-      name: release
-    permissions:
-      actions: read # Re-downloads and raw-hashes the exact frozen workflow artifact.
-      contents: write # Creates the immutable release and uploads accepted assets.
-      attestations: read # Verifies provenance without minting or publishing attestations.
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.verify.outputs.source_sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: release-candidate
-          path: dist
-      - name: Refuse publication unless release immutability is enabled
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          test "$(gh api \
-            -H 'Accept: application/vnd.github+json' \
-            -H 'X-GitHub-Api-Version: 2026-03-10' \
-            "repos/$GITHUB_REPOSITORY/immutable-releases" \
-            --jq '.enabled')" = true
-      - name: Re-verify the frozen candidate and every build attestation
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERIFIED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
-        shell: bash
-        run: |
-          version="${RELEASE_TAG#v}"
-          bash scripts/verify-release-assets.sh "$version" dist
-          verify_attestation() {
-            local subject="$1"
-            for attempt in 1 2 3 4 5; do
-              if gh attestation verify "$subject" \
-                --repo "$GITHUB_REPOSITORY" \
-                --source-ref "$GITHUB_REF" \
-                --source-digest "$VERIFIED_SOURCE_SHA" \
-                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/deploy.yml" \
-                --deny-self-hosted-runners; then
-                return 0
-              fi
-              sleep 2
-            done
-            return 1
-          }
-          for subject in dist/*; do
-            verify_attestation "$subject"
-          done
-      - name: Require exact candidate-bound committed acceptance evidence
-        env:
-          LBB_RELEASE_ACCEPTANCE_V2: ${{ vars.LBB_RELEASE_ACCEPTANCE_V2 }}
-          GH_TOKEN: ${{ github.token }}
-          VERIFIED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
-          VERIFIED_TAG_SHA: ${{ needs.verify.outputs.tag_sha }}
-        shell: bash
-        run: |
-          test -n "${LBB_RELEASE_ACCEPTANCE_V2:-}"
-          test "${#LBB_RELEASE_ACCEPTANCE_V2}" -le 4096
-          receipt_file="$(mktemp)"
-          printf '%s' "$LBB_RELEASE_ACCEPTANCE_V2" > "$receipt_file"
-          bash scripts/verify-release-acceptance-evidence.sh "$receipt_file" dist
-          acceptance_receipt_sha256="$(sha256sum "$receipt_file" | awk '{ print $1 }')"
-          printf 'LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256=%s\n' \
-            "$acceptance_receipt_sha256" >> "$GITHUB_ENV"
-      - name: Recover a verified draft or publish immutable release assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERIFIED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
-          VERIFIED_TAG_SHA: ${{ needs.verify.outputs.tag_sha }}
-        shell: bash
-        run: |
-          version="${RELEASE_TAG#v}"
-          [[ "${LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]
-          expected_title="Local Browser Bridge ${version}"
-          candidate_manifest_sha256="$(sha256sum dist/SHA256SUMS.txt | awk '{ print $1 }')"
-          release_marker="<!-- local-browser-bridge-release:v2 source-sha=$VERIFIED_SOURCE_SHA tag-object-sha=$VERIFIED_TAG_SHA manifest-sha256=$candidate_manifest_sha256 acceptance-receipt-sha256=$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256 -->"
-          candidate_assets=(
-            "local-browser-bridge-v${version}-windows-x86_64.exe"
-            "local-computer-helper-v${version}-windows-x86_64.exe"
-            "local-browser-bridge-v${version}-macos-universal.tar.gz"
-            "local-browser-bridge-extension-v${version}.zip"
-            "SHA256SUMS.txt"
-          )
-          cat > release-notes.md <<EOF
-          $release_marker
-
-          Standalone Local Browser Bridge ${version} for Windows and macOS, its separate native computer helper, and the matching Chromium extension.
-
-          ## Install
-
-          1. Download the Windows server and helper executables, or the combined universal macOS archive, plus the extension ZIP.
-          2. Verify every file with \`gh release verify-asset $RELEASE_TAG <file> -R $GITHUB_REPOSITORY\` or against \`SHA256SUMS.txt\`. For provenance, also run \`gh attestation verify <file> -R $GITHUB_REPOSITORY --source-ref refs/tags/$RELEASE_TAG --signer-workflow $GITHUB_REPOSITORY/.github/workflows/deploy.yml --deny-self-hosted-runners\`.
-          3. Run the server. Run the separate helper only when desktop control is wanted. On macOS, first run \`./Local\\ Computer\\ Helper.app/Contents/MacOS/local-computer-helper --request-permissions\`, grant Screen Recording and Accessibility if prompted, then start the helper normally.
-          4. Extract the extension ZIP, load it from \`chrome://extensions\` in Chrome or \`edge://extensions\` in Edge with Developer mode enabled, and paste the token printed by the server into its popup.
-          5. Keep the server, helper, and extension on this same version.
-
-          For an upgrade, release control first. Disable the existing unpacked extension and replace the contents of its existing folder before reloading the same card. If you extract to a new folder, remove the old card before loading the new one. Confirm that exactly one Local Browser Bridge card remains.
-
-          ## Trust notice
-
-          These binaries are built by public GitHub Actions and include GitHub artifact attestations. No release asset auto-installs itself. This release is not yet signed with a Microsoft publisher certificate or Apple Developer ID and is not Apple-notarized, so SmartScreen or Gatekeeper may show an unfamiliar-developer warning. Do not weaken system security globally; verify the release and source first.
-
-          Acceptance receipt SHA-256: \`$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256\`
-          EOF
-          assert_remote_tag() {
-            test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$(git rev-parse HEAD)"
-            test "$(git rev-parse "$RELEASE_TAG")" = "$VERIFIED_TAG_SHA"
-            local remote_tag_sha
-            remote_tag_sha="$(git ls-remote --refs origin "refs/tags/$RELEASE_TAG" | awk '{ print $1 }')"
-            test "$remote_tag_sha" = "$VERIFIED_TAG_SHA"
-          }
-
-          assert_release_identity() {
-            local release_json="$1"
-            local expected_draft="$2"
-            local expected_immutable="$3"
-            jq -e \
-              --arg repository "$GITHUB_REPOSITORY" \
-              --arg tag "$RELEASE_TAG" \
-              --arg title "$expected_title" \
-              --argjson draft "$expected_draft" \
-              --argjson immutable "$expected_immutable" '
-                ((.databaseId | type) == "number")
-                and (.databaseId > 0)
-                and (.apiUrl == ("https://api.github.com/repos/" + $repository + "/releases/" + (.databaseId | tostring)))
-                and (.tagName == $tag)
-                and (.name == $title)
-                and ((.body | type) == "string")
-                and (.isDraft == $draft)
-                and (.isImmutable == $immutable)
-                and (.isPrerelease == false)
-                and ((.assets | type) == "array")
-              ' "$release_json" >/dev/null
-            local release_body
-            release_body="$(mktemp)"
-            jq -ej '.body | select(type == "string")' "$release_json" > "$release_body"
-            cmp -s release-notes.md "$release_body"
-          }
-
-          assert_candidate_asset_name() {
-            local actual="$1"
-            local expected
-            for expected in "${candidate_assets[@]}"; do
-              if [[ "$actual" == "$expected" ]]; then
-                return 0
-              fi
-            done
-            echo "Release contains a non-candidate asset name." >&2
-            return 1
-          }
-
-          assert_release_assets() {
-            local release_json="$1"
-            local expected_mode="$2"
-            local asset_count unique_asset_count
-            local -a release_asset_names=()
-            mapfile -t release_asset_names < <(jq -r '.assets[].name' "$release_json")
-            asset_count="${#release_asset_names[@]}"
-            unique_asset_count="$(printf '%s\n' "${release_asset_names[@]}" | sed '/^$/d' | LC_ALL=C sort -u | wc -l | tr -d ' ')"
-            test "$asset_count" = "$unique_asset_count"
-            if [[ "$expected_mode" == exact ]]; then
-              test "$asset_count" = "${#candidate_assets[@]}"
-            else
-              test "$expected_mode" = subset
-              test "$asset_count" -le "${#candidate_assets[@]}"
-            fi
-            local asset_name
-            for asset_name in "${release_asset_names[@]}"; do
-              assert_candidate_asset_name "$asset_name"
-            done
-            jq -e \
-              --arg asset_api_prefix "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/" '
-              all(.assets[];
-                ((.apiUrl | type) == "string")
-                and (.apiUrl | startswith($asset_api_prefix))
-                and ((.apiUrl | ltrimstr($asset_api_prefix)) | test("^[1-9][0-9]*$"))
-                and ((.size | type) == "number")
-                and (.size > 0)
-                and (.state == "uploaded")
-              )
-            ' "$release_json" >/dev/null
-          }
-
-          release_fingerprint() {
-            jq -cS '
-              {
-                databaseId,
-                apiUrl,
-                tagName,
-                name,
-                body,
-                isDraft,
-                isImmutable,
-                isPrerelease,
-                assets: ([.assets[] | {apiUrl, name, size, state, digest, createdAt, updatedAt}] | sort_by(.name))
-              }
-            ' "$1"
-          }
-
-          download_and_compare_release_assets() {
-            local release_json="$1"
-            local download_dir asset_api_url asset_id asset_name
-            download_dir="$(mktemp -d)"
-            while IFS=$'\t' read -r asset_api_url asset_name; do
-              assert_candidate_asset_name "$asset_name"
-              asset_id="${asset_api_url##*/}"
-              [[ "$asset_api_url" == "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" ]]
-              [[ "$asset_id" =~ ^[1-9][0-9]*$ ]]
-              gh api \
-                -H 'Accept: application/octet-stream' \
-                -H 'X-GitHub-Api-Version: 2026-03-10' \
-                "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
-                > "$download_dir/$asset_name"
-            done < <(jq -r '.assets[] | [.apiUrl, .name] | @tsv' "$release_json")
-            local downloaded_count
-            downloaded_count="$(find "$download_dir" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
-            test "$downloaded_count" = "$(jq '.assets | length' "$release_json")"
-            test "$(find "$download_dir" -mindepth 1 -maxdepth 1 -type f ! -type l | wc -l | tr -d ' ')" = "$downloaded_count"
-            while IFS= read -r asset_name; do
-              test -f "dist/$asset_name"
-              test ! -L "dist/$asset_name"
-              cmp -s "dist/$asset_name" "$download_dir/$asset_name"
-            done < <(jq -r '.assets[].name' "$release_json")
-          }
-
-          wait_for_release_absence() {
-            local release_index release_count
-            for attempt in 1 2 3 4 5 6 7 8 9 10; do
-              release_index="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 10000 --json tagName)"
-              release_count="$(jq --arg tag "$RELEASE_TAG" '[.[] | select(.tagName == $tag)] | length' <<<"$release_index")"
-              if [[ "$release_count" == 0 ]]; then
-                return 0
-              fi
-              sleep 2
-            done
-            return 1
-          }
-
-          assert_remote_tag
-          release_index="$(gh release list \
-            --repo "$GITHUB_REPOSITORY" \
-            --limit 10000 \
-            --json tagName)"
-          release_count="$(jq --arg tag "$RELEASE_TAG" '[.[] | select(.tagName == $tag)] | length' <<<"$release_index")"
-          test "$release_count" -le 1
-
-          if [[ "$release_count" == 1 ]]; then
-            existing_release="$(mktemp)"
-            gh release view "$RELEASE_TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              --json databaseId,apiUrl,assets,body,isDraft,isImmutable,isPrerelease,name,tagName \
-              > "$existing_release"
-            if jq -e '.isDraft == true and .isImmutable == false' "$existing_release" >/dev/null; then
-              assert_release_identity "$existing_release" true false
-              assert_release_assets "$existing_release" subset
-              download_and_compare_release_assets "$existing_release"
-              draft_fingerprint="$(release_fingerprint "$existing_release")"
-              draft_release_id="$(jq -er '.databaseId | select((type == "number") and (. > 0))' "$existing_release")"
-              refreshed_draft="$(mktemp)"
-              gh release view "$RELEASE_TAG" \
-                --repo "$GITHUB_REPOSITORY" \
-                --json databaseId,apiUrl,assets,body,isDraft,isImmutable,isPrerelease,name,tagName \
-                > "$refreshed_draft"
-              assert_release_identity "$refreshed_draft" true false
-              assert_release_assets "$refreshed_draft" subset
-              test "$(release_fingerprint "$refreshed_draft")" = "$draft_fingerprint"
-              assert_remote_tag
-              gh api \
-                --method DELETE \
-                -H 'X-GitHub-Api-Version: 2026-03-10' \
-                "repos/$GITHUB_REPOSITORY/releases/$draft_release_id"
-              wait_for_release_absence
-              assert_remote_tag
-            elif jq -e '.isDraft == false and .isImmutable == true' "$existing_release" >/dev/null; then
-              assert_release_identity "$existing_release" false true
-              assert_release_assets "$existing_release" exact
-              download_and_compare_release_assets "$existing_release"
-              published_fingerprint="$(release_fingerprint "$existing_release")"
-              refreshed_published="$(mktemp)"
-              gh release view "$RELEASE_TAG" \
-                --repo "$GITHUB_REPOSITORY" \
-                --json databaseId,apiUrl,assets,body,isDraft,isImmutable,isPrerelease,name,tagName \
-                > "$refreshed_published"
-              assert_release_identity "$refreshed_published" false true
-              assert_release_assets "$refreshed_published" exact
-              test "$(release_fingerprint "$refreshed_published")" = "$published_fingerprint"
-              assert_remote_tag
-              echo "The exact immutable release is already published; continuing with post-publication verification."
-              exit 0
-            else
-              echo "The existing release is neither a recoverable draft nor an immutable publication." >&2
-              exit 1
-            fi
-          fi
-
-          assert_remote_tag
-          gh release create "$RELEASE_TAG" \
-            --draft \
-            --verify-tag \
-            --title "$expected_title" \
-            --notes-file release-notes.md
-          gh release upload "$RELEASE_TAG" dist/*
-          created_draft="$(mktemp)"
-          gh release view "$RELEASE_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --json databaseId,apiUrl,assets,body,isDraft,isImmutable,isPrerelease,name,tagName \
-            > "$created_draft"
-          assert_release_identity "$created_draft" true false
-          assert_release_assets "$created_draft" exact
-          download_and_compare_release_assets "$created_draft"
-          created_draft_fingerprint="$(release_fingerprint "$created_draft")"
-          created_draft_id="$(jq -er '.databaseId | select((type == "number") and (. > 0))' "$created_draft")"
-          refreshed_created_draft="$(mktemp)"
-          gh release view "$RELEASE_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --json databaseId,apiUrl,assets,body,isDraft,isImmutable,isPrerelease,name,tagName \
-            > "$refreshed_created_draft"
-          assert_release_identity "$refreshed_created_draft" true false
-          assert_release_assets "$refreshed_created_draft" exact
-          test "$(release_fingerprint "$refreshed_created_draft")" = "$created_draft_fingerprint"
-          assert_remote_tag
-          test "$(gh api \
-            -H 'Accept: application/vnd.github+json' \
-            -H 'X-GitHub-Api-Version: 2026-03-10' \
-            "repos/$GITHUB_REPOSITORY/immutable-releases" \
-            --jq '.enabled')" = true
-          gh api \
-            --method PATCH \
-            -H 'X-GitHub-Api-Version: 2026-03-10' \
-            "repos/$GITHUB_REPOSITORY/releases/$created_draft_id" \
-            -F draft=false \
-            >/dev/null
-          published_release="$(mktemp)"
-          publication_visible=false
-          for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            if gh release view "$RELEASE_TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              --json databaseId,apiUrl,assets,body,isDraft,isImmutable,isPrerelease,name,tagName,url \
-              > "$published_release" \
-              && jq -e '.isDraft == false and .isImmutable == true' "$published_release" >/dev/null; then
-              publication_visible=true
-              break
-            fi
-            sleep 2
-          done
-          test "$publication_visible" = true
-          assert_release_identity "$published_release" false true
-          assert_release_assets "$published_release" exact
-          test "$(jq -er '.databaseId' "$published_release")" = "$created_draft_id"
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json url,tagName,isDraft,isImmutable,isPrerelease
-      - name: Re-download and verify the immutable published release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERIFIED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
-          VERIFIED_TAG_SHA: ${{ needs.verify.outputs.tag_sha }}
-        shell: bash
-        run: |
-          version="${RELEASE_TAG#v}"
-          mkdir published
-          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir published
-          test "$(find published -maxdepth 1 -type f | wc -l | tr -d ' ')" = 5
-          bash scripts/verify-release-assets.sh "$version" published
-          for subject in dist/*; do
-            asset="$(basename "$subject")"
-            cmp -s "$subject" "published/$asset"
-          done
-
-          retry_release_check() {
-            for attempt in 1 2 3 4 5 6 7 8 9 10; do
-              if "$@"; then
-                return 0
-              fi
-              sleep 3
-            done
-            return 1
-          }
-
-          release_verification=""
-          for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            if release_verification="$(gh release verify "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --format json)"; then
-              break
-            fi
-            sleep 3
-          done
-          test -n "$release_verification"
-          expected_purl="pkg:github/${GITHUB_REPOSITORY}@${RELEASE_TAG}"
-          release_tag_sha="$(jq -er \
-            --arg repository "$GITHUB_REPOSITORY" \
-            --arg tag "$RELEASE_TAG" \
-            --arg purl "$expected_purl" '
-              .verificationResult.statement as $statement
-              | select($statement.predicate.repository == $repository)
-              | select($statement.predicate.tag == $tag)
-              | [$statement.subject[] | select(.uri == $purl) | .digest.sha1]
-              | if length == 1 then .[0] else error("release tag subject must be exact and unique") end
-            ' <<<"$release_verification")"
-          test "$release_tag_sha" = "$VERIFIED_TAG_SHA"
-          for subject in published/*; do
-            retry_release_check gh release verify-asset "$RELEASE_TAG" "$subject" --repo "$GITHUB_REPOSITORY"
-            gh attestation verify "$subject" \
-              --repo "$GITHUB_REPOSITORY" \
-              --source-ref "$GITHUB_REF" \
-              --source-digest "$VERIFIED_SOURCE_SHA" \
-              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/deploy.yml" \
-              --deny-self-hosted-runners
-          done

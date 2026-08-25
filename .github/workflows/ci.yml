@@ -1,9 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches:
-      - main
   pull_request:
   workflow_dispatch:
 
@@ -19,11 +16,13 @@ env:
 
 jobs:
   rust:
-    name: Rust formatting, lint, and tests
+    name: Rust, extension, and packaging
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
@@ -35,6 +34,11 @@ jobs:
           rustup default 1.88.0
       - name: Audit distributed versions
         run: bash scripts/audit-versions.sh
+      - name: Validate the extension manifest and packaging scripts
+        run: |
+          python3 -m json.tool extension/manifest.json >/dev/null
+          bash -n scripts/*.sh
+          bash scripts/publish-release.sh --self-test
       - name: Validate the read-only macOS app-share handoff watcher
         run: |
           node --check scripts/wait-macos-app-share-concurrency-handoff.mjs
@@ -43,20 +47,48 @@ jobs:
         run: |
           node --check scripts/wait-macos-pointer-concurrency-handoff.mjs
           node scripts/wait-macos-pointer-concurrency-handoff.mjs --mode self-test
-      - name: Verify locked dependency licenses
+      - name: Detect dependency-policy changes
+        id: dependency_policy
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
         run: |
+          if [[ -z "${BASE_SHA:-}" ]] || ! git diff --quiet "$BASE_SHA" HEAD -- \
+            Cargo.toml Cargo.lock about.toml about.hbs THIRD_PARTY_LICENSES.txt \
+            scripts/check-licenses.sh; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Audit changed dependencies and licenses
+        if: steps.dependency_policy.outputs.changed == 'true'
+        run: |
+          cargo install cargo-audit --locked --version 0.22.2
+          cargo audit
           cargo install cargo-about --locked --version 0.9.2 --features cli
           bash scripts/check-licenses.sh
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Reject lint warnings
         run: cargo clippy --locked --all-targets -- -D warnings
-      - name: Run all tests
+      - name: Run all Rust, extension, and integration tests
         run: cargo test --locked --all-targets
+      - name: Build the extension twice and compare bytes
+        shell: bash
+        run: |
+          stage="$(mktemp -d)"
+          trap 'rm -rf "$stage"' EXIT
+          bash scripts/package-extension.sh "$stage/first.zip" >/dev/null
+          bash scripts/package-extension.sh "$stage/second.zip" >/dev/null
+          cmp "$stage/first.zip" "$stage/second.zip"
+          unzip -tq "$stage/first.zip"
+      - name: Ensure packaging did not mutate tracked source
+        run: git diff --exit-code
 
   windows:
-    name: Windows compile, tests, and artifact policy
+    name: Windows native validation
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -298,29 +330,12 @@ jobs:
           cargo fmt --all -- --check
           cargo clippy --locked --target x86_64-pc-windows-msvc --all-targets -- -D warnings
           cargo test --locked --target x86_64-pc-windows-msvc --all-targets
-      - name: Build and inspect standalone Windows executables
-        shell: pwsh
-        run: |
-          cargo build --locked --release --bins --target x86_64-pc-windows-msvc
-          $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"$').Matches[0].Groups[1].Value
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target/x86_64-pc-windows-msvc/release/local-browser-bridge.exe "dist/local-browser-bridge-v${version}-windows-x86_64.exe"
-          Copy-Item target/x86_64-pc-windows-msvc/release/local-computer-helper.exe "dist/local-computer-helper-v${version}-windows-x86_64.exe"
-          ./scripts/verify-windows-artifacts.ps1 -Version $version -ChecksumManifestPath dist/SHA256SUMS-windows.txt
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: windows-ci-${{ github.sha }}
-          path: |
-            dist/*.exe
-            dist/SHA256SUMS-windows.txt
-          if-no-files-found: error
-          retention-days: 7
-
   macos:
-    name: macOS formatting, lint, and tests
+    name: macOS native validation
     # apple-metal 0.8.8's Swift bridge names Metal APIs introduced in the
     # macOS 26 SDK. Artifact inspection still enforces the macOS 13 runtime floor.
     runs-on: macos-26
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -341,14 +356,14 @@ jobs:
           node scripts/finalize-macos-acceptance.mjs --self-test
       - name: Validate the macOS packaged-evidence harness
         run: |
-          node --check evidence/v0.12.29/computer/helper-evidence-rig.mjs
-          node evidence/v0.12.29/computer/helper-evidence-rig.mjs --self-test
-          xcrun swiftc -typecheck evidence/v0.12.29/computer/HelperEvidenceFixture.swift
-          xcrun swiftc -typecheck evidence/v0.12.29/computer/SystemProbe.swift
-          xcrun swiftc -typecheck evidence/v0.12.29/computer/AppShareHandoff.swift
-          xcrun swiftc evidence/v0.12.29/computer/AppShareHandoff.swift -o "$RUNNER_TEMP/lbb-app-share-handoff-self-test"
+          node --check evidence/v0.12.30/computer/helper-evidence-rig.mjs
+          node evidence/v0.12.30/computer/helper-evidence-rig.mjs --self-test
+          xcrun swiftc -typecheck evidence/v0.12.30/computer/HelperEvidenceFixture.swift
+          xcrun swiftc -typecheck evidence/v0.12.30/computer/SystemProbe.swift
+          xcrun swiftc -typecheck evidence/v0.12.30/computer/AppShareHandoff.swift
+          xcrun swiftc evidence/v0.12.30/computer/AppShareHandoff.swift -o "$RUNNER_TEMP/lbb-app-share-handoff-self-test"
           "$RUNNER_TEMP/lbb-app-share-handoff-self-test" --self-test
-          xcrun swiftc -typecheck evidence/v0.12.29/computer/PhysicalPointerHandoff.swift
+          xcrun swiftc -typecheck evidence/v0.12.30/computer/PhysicalPointerHandoff.swift
       - name: Install the minimum supported Rust toolchain
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
@@ -358,47 +373,3 @@ jobs:
           cargo fmt --all -- --check
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked --all-targets
-
-  extension:
-    name: Extension static and behavior contracts
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: 24
-          package-manager-cache: false
-      - name: Install the minimum supported Rust toolchain
-        run: |
-          rustup toolchain install 1.88.0 --profile minimal
-          rustup default 1.88.0
-      - name: Validate the manifest as JSON
-        run: python3 -m json.tool extension/manifest.json >/dev/null
-      - name: Run extension capability, safety, and protocol contract tests
-        run: cargo test --locked --test extension_contract
-
-  package:
-    name: Reproducible extension package (Node-free)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Check packaging scripts and versions
-        shell: bash
-        run: |
-          bash -n scripts/*.sh
-          bash scripts/audit-versions.sh
-      - name: Build the extension twice and compare bytes
-        shell: bash
-        run: |
-          stage="$(mktemp -d)"
-          trap 'rm -rf "$stage"' EXIT
-          bash scripts/package-extension.sh "$stage/first.zip" >/dev/null
-          bash scripts/package-extension.sh "$stage/second.zip" >/dev/null
-          cmp "$stage/first.zip" "$stage/second.zip"
-          unzip -tq "$stage/first.zip"
-      - name: Ensure packaging did not mutate tracked source
-        run: git diff --exit-code
