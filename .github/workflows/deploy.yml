@@ -79,19 +79,50 @@ jobs:
             -H 'X-GitHub-Api-Version: 2026-03-10' \
             "repos/$GITHUB_REPOSITORY/commits/$SOURCE_REF/pulls?per_page=100" \
             > "$merged_pulls"
-          reviewed_head="$(jq -er \
-            --arg source "$SOURCE_REF" \
+          reviewed_association="$(jq -cer \
             --arg repository "$GITHUB_REPOSITORY" '
               [.[] | select(
                 .merged_at != null
-                and .merge_commit_sha == $source
                 and .base.ref == "main"
                 and .base.repo.full_name == $repository
               )]
-              | if length == 1 then .[0].head.sha
+              | if length == 1 then .[0]
                 else error("source must belong to exactly one merged main PR") end
             ' "$merged_pulls")"
+          reviewed_number="$(jq -er '
+            if (.number | type) == "number" and .number > 0
+            then .number | tostring
+            else error("associated pull request number is invalid") end
+          ' <<<"$reviewed_association")"
+          associated_head="$(jq -er '.head.sha' <<<"$reviewed_association")"
+
+          reviewed_pull="$(mktemp)"
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/pulls/$reviewed_number" \
+            > "$reviewed_pull"
+          reviewed_head="$(jq -er \
+            --argjson number "$reviewed_number" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg associated_head "$associated_head" '
+              if (
+                .merged_at != null
+                and .number == $number
+                and .base.ref == "main"
+                and .base.repo.full_name == $repository
+                and .head.sha == $associated_head
+              ) then .head.sha
+              else error("pull request detail does not bind the reviewed source") end
+            ' "$reviewed_pull")"
           [[ "$reviewed_head" =~ ^[0-9a-f]{40}$ ]]
+          reviewed_tree="$(gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/git/commits/$reviewed_head" \
+            --jq '.tree.sha')"
+          [[ "$reviewed_tree" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse "$SOURCE_REF^{tree}")" = "$reviewed_tree"
 
           checks="$(mktemp)"
           gh api \

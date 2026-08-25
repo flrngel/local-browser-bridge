@@ -1121,9 +1121,12 @@ fn two_phase_release_is_tagless_reviewed_low_cost_and_provenance_bound() {
         "test \"$GITHUB_SHA\" = \"$SOURCE_REF\"",
         "test \"$(git rev-parse origin/main)\" = \"$SOURCE_REF\"",
         "commits/$SOURCE_REF/pulls?per_page=100",
-        ".merge_commit_sha == $source",
+        "repos/$GITHUB_REPOSITORY/pulls/$reviewed_number",
+        "repos/$GITHUB_REPOSITORY/git/commits/$reviewed_head",
+        "test \"$(git rev-parse \"$SOURCE_REF^{tree}\")\" = \"$reviewed_tree\"",
         ".base.ref == \"main\"",
         "source must belong to exactly one merged main PR",
+        "pull request detail does not bind the reviewed source",
         "commits/$reviewed_head/check-runs?per_page=100",
         "\"Rust, extension, and packaging\"",
         "\"Windows native validation\"",
@@ -1138,6 +1141,23 @@ fn two_phase_release_is_tagless_reviewed_low_cost_and_provenance_bound() {
             "candidate source/CI binding is missing {source_gate}"
         );
     }
+    let association_lookup = candidate
+        .find("commits/$SOURCE_REF/pulls?per_page=100")
+        .unwrap();
+    let detail_lookup = candidate
+        .find("repos/$GITHUB_REPOSITORY/pulls/$reviewed_number")
+        .unwrap();
+    let tree_lookup = candidate
+        .find("repos/$GITHUB_REPOSITORY/git/commits/$reviewed_head")
+        .unwrap();
+    assert!(
+        association_lookup < detail_lookup && detail_lookup < tree_lookup,
+        "candidate verification must resolve the associated PR detail before comparing source trees"
+    );
+    assert!(
+        !candidate.contains("merge_commit_sha"),
+        "candidate verification must not depend on the field removed by GitHub API 2026-03-10"
+    );
     for asset in [
         "local-browser-bridge-v${version}-windows-x86_64.exe",
         "local-computer-helper-v${version}-windows-x86_64.exe",
