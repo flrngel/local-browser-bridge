@@ -79,7 +79,7 @@ $script:ExpectedScreenshotsV2 = [ordered]@{
     "post-handback-resume" = "browser-06-post-handback-resume.png"
 }
 $script:RequiredVisibleStatesV2 = [ordered]@{
-    "extension-loaded" = "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.29 card with no load errors and Chrome's debugger-use indicator during the active bridge lease"
+    "extension-loaded" = "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.30 card with no load errors and Chrome's debugger-use indicator during the active bridge lease"
     "api-action-result" = "the loopback demo visibly shows Hello, Bridge Matrix. blue selected. after the browser API action"
     "computer-share-action" = "the exact shared Chrome window visibly shows the post-click demo state and synthetic session pointer from a fresh helper frame"
     "stop-paused" = "the trusted extension popup visibly shows the human pause and Resume remote control after the in-page Stop handback"
@@ -235,19 +235,23 @@ function Assert-CanonicalUtcTimestamp {
 function Assert-ReleaseCandidateBindingBasic {
     param([object]$Binding, [object]$Candidate)
     $fields = @(
-        "productVersion", "repository", "tag", "sourceSha", "tagObjectSha",
-        "workflowRunId", "workflowRunAttempt", "artifactId", "artifactName",
+        "schemaVersion", "version", "releaseTag", "repository", "sourceSha",
+        "workflowRunId", "workflowRunAttempt", "workflowEvent", "workflowRef", "workflowPath",
+        "artifactId", "artifactName",
         "artifactZipBytes", "artifactZipSha256", "checksumManifestSha256",
         "attestationInvocationUri", "attestedAssetCount", "githubHostedRunner", "assets"
     )
     Assert-ExactKeys $Binding $fields "preflight releaseCandidateBinding"
-    if ($Binding.productVersion -cne $Candidate.version -or
+    if ($Binding.schemaVersion -ne 3 -or
+        $Binding.version -cne $Candidate.version -or
+        $Binding.releaseTag -cne "v$($Candidate.version)" -or
         $Binding.repository -cne "flrngel/local-browser-bridge" -or
-        $Binding.tag -cne "v$($Candidate.version)" -or
         $Binding.sourceSha -cne $Candidate.finalSha -or
-        [string]$Binding.tagObjectSha -cnotmatch '^[0-9a-f]{40}$' -or
         [string]$Binding.workflowRunId -cnotmatch '^[1-9][0-9]*$' -or
         [string]$Binding.workflowRunAttempt -cnotmatch '^[1-9][0-9]*$' -or
+        $Binding.workflowEvent -cne "workflow_dispatch" -or
+        $Binding.workflowRef -cne "refs/heads/main" -or
+        $Binding.workflowPath -cne ".github/workflows/deploy.yml" -or
         [string]$Binding.artifactId -cnotmatch '^[1-9][0-9]*$' -or
         $Binding.artifactName -cne "release-candidate" -or
         $Binding.artifactZipBytes -isnot [ValueType] -or [int64]$Binding.artifactZipBytes -le 0 -or
@@ -281,7 +285,7 @@ function Get-CandidateBindingFromPreflight {
         $record = ConvertFrom-JsonPreservingStrings ($script:Utf8NoBom.GetString($bytes))
         $actual = @($record.PSObject.Properties.Name)
         $expected = @("schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed", "runNonce", "candidate")
-        if ([string]$record.candidate.version -ceq "0.12.29") {
+        if ([string]$record.candidate.version -ceq "0.12.30") {
             $expected = @(
                 "schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed",
                 "runNonce", "releaseCandidateBinding", "candidate"
@@ -293,13 +297,13 @@ function Get-CandidateBindingFromPreflight {
             $record.phase -cne "preflight" -or $record.passed -ne $true -or
             [string]$record.runNonce -cnotmatch '^[0-9a-f]{64}$' -or
             [string]$record.candidate.finalSha -cnotmatch '^[0-9a-f]{40}$' -or
-            @("0.12.2", "0.12.29") -cnotcontains [string]$record.candidate.version) {
+            @("0.12.2", "0.12.30") -cnotcontains [string]$record.candidate.version) {
             throw "PreflightRecord identity is invalid."
         }
         foreach ($value in @(
             [string]$record.candidate.checksumManifest.sha256,
             [string]$record.candidate.server.sha256,
-            $(if ([string]$record.candidate.version -ceq "0.12.29") { [string]$record.candidate.computerHelper.sha256 } else { [string]$record.candidate.server.sha256 }),
+            $(if ([string]$record.candidate.version -ceq "0.12.30") { [string]$record.candidate.computerHelper.sha256 } else { [string]$record.candidate.server.sha256 }),
             [string]$record.candidate.extension.sha256,
             [string]$record.candidate.extension.combinedPayloadSha256
         )) {
@@ -308,7 +312,7 @@ function Get-CandidateBindingFromPreflight {
             }
         }
         $script:CandidateVersionFromPreflight = [string]$record.candidate.version
-        if ($script:CandidateVersionFromPreflight -ceq "0.12.29") {
+        if ($script:CandidateVersionFromPreflight -ceq "0.12.30") {
             Assert-ReleaseCandidateBindingBasic $record.releaseCandidateBinding $record.candidate
             $script:ReleaseCandidateBindingFromPreflight = $record.releaseCandidateBinding
         }
@@ -320,7 +324,7 @@ function Get-CandidateBindingFromPreflight {
             checksumManifestSha256 = [string]$record.candidate.checksumManifest.sha256
             serverSha256 = [string]$record.candidate.server.sha256
         }
-        if ($script:CandidateVersionFromPreflight -ceq "0.12.29") {
+        if ($script:CandidateVersionFromPreflight -ceq "0.12.30") {
             $binding.computerHelperSha256 = [string]$record.candidate.computerHelper.sha256
         }
         $binding.extensionZipSha256 = [string]$record.candidate.extension.sha256
@@ -546,7 +550,7 @@ function Invoke-Sanitize {
         throw "LegacyV0122ReviewConfirmed is mandatory for v0.12.2 compatibility."
     }
     if (-not $legacyOnePhase -and $LegacyV0122ReviewConfirmed) {
-        throw "LegacyV0122ReviewConfirmed is forbidden for the v0.12.29 independent-review protocol."
+        throw "LegacyV0122ReviewConfirmed is forbidden for the v0.12.30 independent-review protocol."
     }
     $cropValues = @($CropX, $CropY, $CropWidth, $CropHeight)
     $hasCrop = @($cropValues | Where-Object { $_ -ne -1 }).Count -gt 0
@@ -583,7 +587,7 @@ function Invoke-Sanitize {
                         $expectedScreenshots[$Purpose]
                     ) + ".raw.png"
                     if ([IO.Path]::GetFileName($inputPath) -cne $expectedRawName) {
-                        throw "v0.12.29 InputImage must use the canonical raw helper-capture filename."
+                        throw "v0.12.30 InputImage must use the canonical raw helper-capture filename."
                     }
                     $sourceCapture = [ordered]@{
                         name = $expectedRawName
@@ -738,8 +742,8 @@ function Invoke-BindReview {
     }
     $denyValues = @(Read-DenyValues $DenyValuesFile)
     $candidateBinding = Get-CandidateBindingFromPreflight $PreflightRecord
-    if ($script:CandidateVersionFromPreflight -cne "0.12.29") {
-        throw "BindReview is available only for the v0.12.29 independent-review protocol."
+    if ($script:CandidateVersionFromPreflight -cne "0.12.30") {
+        throw "BindReview is available only for the v0.12.30 independent-review protocol."
     }
     $pendingStable = Read-StrictJsonWithDigest $pendingPath "PendingRecord"
     $pending = $pendingStable.Value
@@ -1029,9 +1033,11 @@ function Invoke-SelfTest {
             passed = $true
             runNonce = $bindingHash
             releaseCandidateBinding = [ordered]@{
-                productVersion = "0.12.29"; repository = "flrngel/local-browser-bridge"; tag = "v0.12.29"
-                sourceSha = [String]::new([char]"0", 40); tagObjectSha = [String]::new([char]"1", 40)
-                workflowRunId = "1"; workflowRunAttempt = "1"; artifactId = "1"; artifactName = "release-candidate"
+                schemaVersion = 3; version = "0.12.30"; releaseTag = "v0.12.30"
+                repository = "flrngel/local-browser-bridge"; sourceSha = [String]::new([char]"0", 40)
+                workflowRunId = "1"; workflowRunAttempt = "1"; workflowEvent = "workflow_dispatch"
+                workflowRef = "refs/heads/main"; workflowPath = ".github/workflows/deploy.yml"
+                artifactId = "1"; artifactName = "release-candidate"
                 artifactZipBytes = 1; artifactZipSha256 = $bindingHash; checksumManifestSha256 = $bindingHash
                 attestationInvocationUri = "https://github.com/flrngel/local-browser-bridge/actions/runs/1/attempts/1"
                 attestedAssetCount = 5; githubHostedRunner = $true
@@ -1040,7 +1046,7 @@ function Invoke-SelfTest {
                 })
             }
             candidate = [ordered]@{
-                version = "0.12.29"
+                version = "0.12.30"
                 finalSha = [String]::new([char]"0", 40)
                 checksumManifest = [ordered]@{ sha256 = $bindingHash }
                 server = [ordered]@{ sha256 = $bindingHash }

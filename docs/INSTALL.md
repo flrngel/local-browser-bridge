@@ -1,146 +1,202 @@
 # Installation and update guide
 
-Local Browser Bridge has two required matching components—the standalone server and Chromium extension—and one optional matching computer helper for native desktop control. Always use every installed component from the same release version.
+This guide is for published stable releases. The source tree can be newer than
+the latest release, so do not infer that the version in `Cargo.toml` is
+available for download. A version is installable only when it appears on the
+public [GitHub Releases page](https://github.com/flrngel/local-browser-bridge/releases/latest).
 
-Browser control, including recursive cross-origin iframe control, requires Chrome or Edge 140 or later. Version 0.12.29 retains this floor because Chromium 140 is the first supported line in which the extension can restrict persisted local storage to trusted extension contexts. The complete macOS archive requires macOS 13 or later; native Windows support is intended for Windows 11 in the signed-in interactive session.
+For a development build from the current source, use [Building from
+source](BUILD.md) instead.
 
-## 1. Download the matching files
+## Choose a platform
 
-Open the [official GitHub Releases page](https://github.com/flrngel/local-browser-bridge/releases/latest) and download:
+- [Install on Windows 11](INSTALL_WINDOWS.md)
+- [Install on macOS 13 or later](INSTALL_MACOS.md)
 
-- Windows: `local-browser-bridge-vVERSION-windows-x86_64.exe` and, for desktop control, `local-computer-helper-vVERSION-windows-x86_64.exe`
-- macOS Intel or Apple silicon: `local-browser-bridge-vVERSION-macos-universal.tar.gz`, which contains the server and `Local Computer Helper.app`
-- Every platform: `local-browser-bridge-extension-vVERSION.zip`
-- Verification: `SHA256SUMS.txt`
+Both installations use the same unpacked Chromium extension procedure below.
 
-There is no installer, background service, browser hijack, autostart entry, or silent updater. The server and optional helper run only while you launch them. The helper opens no listening socket; it connects outbound to the loopback server.
+## Components
 
-## 2. Verify before running
+Every installation needs two matching components and can use a third:
 
-The release page is public, its workflow is reviewable, and each artifact has GitHub build provenance. With the GitHub CLI installed, verify the release assets directly:
+| Component | Required | Purpose |
+|---|---:|---|
+| Local Browser Bridge server | Yes | Hosts the authenticated control page and loopback connector |
+| Chrome/Edge extension | Yes | Connects real browser tabs to the server |
+| Local Computer Helper | No | Observes and operates one selected desktop application window |
+
+Always use all installed components from one release. The server refuses a
+helper or extension whose package or protocol version does not match.
+
+The release contains exactly these five nonempty assets:
+
+```text
+local-browser-bridge-vVERSION-windows-x86_64.exe
+local-computer-helper-vVERSION-windows-x86_64.exe
+local-browser-bridge-vVERSION-macos-universal.tar.gz
+local-browser-bridge-extension-vVERSION.zip
+SHA256SUMS.txt
+```
+
+The macOS archive contains both the server and `Local Computer Helper.app`.
+Windows provides the server and helper as separate executables.
+
+There is no installer, service, login item, browser store package, or silent
+updater. The programs run only while you launch them. The helper opens no
+listening socket; it connects outbound to the server on loopback.
+
+## Verify a published release
+
+Download `SHA256SUMS.txt` with the platform assets. Compare each local SHA-256
+digest before running an executable. The platform guides include native hash
+commands.
+
+For stronger binding, use a current GitHub CLI that provides `gh release
+verify` and `gh release verify-asset`:
 
 ```bash
 gh release verify vVERSION -R flrngel/local-browser-bridge
-gh release verify-asset vVERSION PATH_TO_DOWNLOADED_FILE -R flrngel/local-browser-bridge
-gh attestation verify PATH_TO_DOWNLOADED_FILE \
+gh release verify-asset vVERSION PATH_TO_DOWNLOADED_FILE \
+  -R flrngel/local-browser-bridge
+tag_object="$(gh api \
+  repos/flrngel/local-browser-bridge/git/ref/tags/vVERSION \
+  --jq '.object.sha')"
+source_sha="$(gh api \
+  repos/flrngel/local-browser-bridge/git/tags/$tag_object \
+  --jq '.object.sha')"
+if ! gh attestation verify PATH_TO_DOWNLOADED_FILE \
   -R flrngel/local-browser-bridge \
-  --source-ref refs/tags/vVERSION \
+  --source-ref refs/heads/main \
+  --source-digest "$source_sha" \
   --signer-workflow flrngel/local-browser-bridge/.github/workflows/deploy.yml \
-  --deny-self-hosted-runners
+  --deny-self-hosted-runners; then
+  # Compatibility path for releases built by the older tag-triggered workflow.
+  gh attestation verify PATH_TO_DOWNLOADED_FILE \
+    -R flrngel/local-browser-bridge \
+    --source-ref refs/tags/vVERSION \
+    --source-digest "$source_sha" \
+    --signer-workflow flrngel/local-browser-bridge/.github/workflows/deploy.yml \
+    --deny-self-hosted-runners
+fi
 ```
 
-The first two commands bind the download to the immutable GitHub release. The last command additionally requires provenance from this repository's tagged release workflow on a GitHub-hosted runner. You can also compare the local SHA-256 value with the release's `SHA256SUMS.txt` manifest.
+Run the asset and provenance commands for every downloaded file, including
+`SHA256SUMS.txt`. The release command binds the tag and asset inventory to
+GitHub's release attestation. The two API calls peel the required annotated
+release tag to its accepted source commit. The provenance check then requires
+the artifact to come from that exact source through this repository's candidate
+workflow on a GitHub-hosted runner. The fallback covers older immutable releases
+whose builder ran directly from the release tag; it does not relax the source
+digest or signer-workflow checks.
 
-On macOS, `shasum -a 256 FILE` prints the local SHA-256 value. On Windows PowerShell, use `Get-FileHash FILE -Algorithm SHA256`.
+The published Windows executables are not yet signed with a Microsoft publisher
+certificate. The macOS package is ad-hoc signed but is not Developer ID-signed
+or notarized. SmartScreen or Gatekeeper can therefore show an unknown-developer
+warning. Keep those protections enabled, verify the release first, and do not
+weaken operating-system security globally.
 
-The macOS archive contains `LICENSE` and `THIRD_PARTY_LICENSES.txt`, and the extension ZIP contains `LICENSE`. Both Windows executables and both macOS executables expose the same embedded notices without starting the server or helper:
+## Load the Chrome or Edge extension
 
-```text
-PROGRAM --licenses
-```
-
-## 3. Run the server
-
-By default, the token lives in the dedicated `.local-browser-bridge` directory under the current user's profile. The bridge may create and narrow permissions on that one exact default directory because it owns the directory. If `$HOME` on Unix or `%USERPROFILE%` on Windows is unavailable, empty, or not absolute, startup fails instead of placing the token under the process working directory; use an explicit `LBB_TOKEN` or a token file in a pre-created private `LBB_TOKEN_PATH` parent. Every `LBB_TOKEN_PATH` value that differs from the computed default is custom—even when its parent is also named `.local-browser-bridge`. A custom parent must already exist and already be private: mode `0700` and current-user ownership on Unix, or a protected current-user-only DACL on Windows. The bridge validates a custom parent without changing it and fails before creating a token when the check does not pass. Create a separate private directory first; never point the variable at Desktop, Documents, a repository, or another general-purpose directory.
-
-The validation and token read-or-create operation use one retained directory capability. On Unix, every token and temporary-file operation is relative to the validated directory descriptor. On Windows, every child open and create is resolved by `NtCreateFile` relative to the retained no-follow directory handle; target inspection, atomic replacement, and failed-temporary cleanup also stay on retained file or directory handles. Stable parent and replaced-file identities are checked after mutation, but pathname checks are detection rather than authority. Replacing any parent pathname during the transaction therefore cannot redirect a child operation into a decoy directory.
-
-### Windows 11
-
-Run the downloaded `.exe` from PowerShell or Explorer. It prints a control-surface URL and a random extension token. No Node.js installation is required.
-
-The generated token is stored under `%USERPROFILE%\.local-browser-bridge\token`. The server protects that directory and file with a non-inherited DACL granting only the signed-in user full control. It retains the validated ordinary final parent as the root capability, rejects a reparse-point final parent and reparse children, and keeps each typed private temporary-file handle open with delete authority through the atomic handle-based rename. Custom token leaf names containing alternate-stream syntax, Win32-reserved characters or device names, control characters, or trailing dot/space ambiguity are rejected, and exact-case lookup avoids selecting a case-only sibling. Windows can traverse an ancestor profile junction while opening the parent; the bridge tolerates that redirection only while the final parent's identity and DACL remain stable. If the final parent or token is a reparse point, the token has another hard-link name, the parent identity changes, or the filesystem cannot retain and report the required ACL, startup fails without weakening that path.
-
-The binary is not yet signed with a Microsoft publisher certificate. Microsoft SmartScreen can therefore report an unknown publisher. Keep SmartScreen enabled. Verify the GitHub release, checksum, and provenance first; do not run the file if its hash or origin differs.
-
-### macOS
-
-Extract and run the universal binary:
-
-```bash
-tar -xzf local-browser-bridge-vVERSION-macos-universal.tar.gz
-./local-browser-bridge
-```
-
-The archive supports both Apple silicon and Intel. It is not yet signed with an Apple Developer ID or notarized. Gatekeeper may block the first launch. Keep Gatekeeper enabled. After verifying the source and artifact, macOS provides a per-app **Open Anyway** action under **System Settings → Privacy & Security**; do not disable Gatekeeper globally.
-
-## 4. Start native desktop control only when wanted
-
-The helper is optional. Its console states what it can do. Stop it with `Ctrl+C` or by closing its console. It shares the server's generated token file automatically, so there is no second secret to paste. The Windows launcher stays open and supervises disposable workers. The macOS helper stays open only for its current server connection and deliberately exits when that connection ends.
-
-### Windows 11
-
-From a second PowerShell window:
-
-```powershell
-.\local-computer-helper-vVERSION-windows-x86_64.exe
-```
-
-Run it as the signed-in user, not as a Windows service and not from Session 0. Administrator rights are not required for ordinary desktop control. The server UI should show **Computer connected**.
-
-The executable you launch is a supervisor. If its hidden worker loses the server transport, the supervisor replaces that worker with backoff and reconnects when the server is available. Choosing **Stop share** stops only the active capture stream and leaves the worker running.
-
-### macOS
-
-The helper is packaged as a stable application identity so Screen Recording and Accessibility are granted to the helper rather than to an arbitrary executable path. From a second Terminal window, first request/check both permissions:
-
-```bash
-./Local\ Computer\ Helper.app/Contents/MacOS/local-computer-helper --request-permissions
-```
-
-If macOS opens System Settings, enable **Local Computer Helper** under **Privacy & Security → Screen & System Audio Recording** and **Privacy & Security → Accessibility**. Then start the helper for the current server session:
-
-```bash
-./Local\ Computer\ Helper.app/Contents/MacOS/local-computer-helper
-```
-
-The macOS helper deliberately terminates after either an intentional server shutdown or an unexpected loss of its server transport. Relaunch it after the server is available again. Choosing **Stop share** is an in-process operation: it stops the current `SCStream` but does not exit the helper.
-
-The permission check reports `screenCaptureReady`, `inputReady`, and `semanticReady` separately. Screenshots can work while Accessibility is unavailable, but `inputReady` stays false because ordinary click, drag, scroll, key, and text routes may need the AX-backed exact-window focus lease. Semantic element refs are also omitted until Accessibility is granted. Pointer trajectory has a no-focus implementation, but readiness advertises the requirements of the complete input backend rather than a partial exception.
-
-Live sharing uses a ScreenCaptureKit stream for the exact window chosen in the bridge control page. The operating system can show its current capture indicator and Stop affordance, but the helper does not present Apple's system content picker. The target must be on screen, non-minimized, and have a nonzero area when the share starts.
-
-The app bundle is ad-hoc signed for internal consistency, but it is not Developer ID-signed or notarized. A new build can require the grants again. Do not grant Accessibility to an unrelated shell or globally weaken Gatekeeper.
-
-## 5. Load the extension
-
-1. Extract `local-browser-bridge-extension-vVERSION.zip` to a stable folder.
+1. Extract `local-browser-bridge-extension-vVERSION.zip` into a stable folder.
+   The ZIP has `manifest.json` at its root.
 2. Open `chrome://extensions` in Chrome or `edge://extensions` in Edge.
 3. Enable **Developer mode**.
-4. Select **Load unpacked** and choose the extracted folder containing `manifest.json`.
-5. Open the Local Browser Bridge popup and confirm that its version matches the server version.
-6. Paste the token printed by the server, keep port `17373`, and select **Save and connect**.
-7. Reload every already-open page you plan to control. The trusted Stop guard is installed at `document_start`; an old page that predates the extension install or update fails control start until a normal reload installs that early guard.
+4. Select **Load unpacked** and choose the extracted folder containing
+   `manifest.json`.
+5. Open the Local Browser Bridge popup and confirm that its version matches the
+   server.
+6. Paste the token printed by the server, keep port `17373`, and select **Save
+   and connect**.
+7. Reload every already-open page you plan to control. The trusted Stop guard is
+   installed at `document_start`; pages opened before installation or update
+   must be reloaded.
 
-The popup stores that token until the extension is removed or you select **Clear saved token** and confirm. Clearing revokes active browser control, cancels work that has not reached Chrome yet, discards any waiting approval, disconnects the connector, removes the `token` entry from extension storage, and reports the connection as not configured even if Bridge control was paused. Turning off **Bridge control** only pauses the connector; it deliberately keeps the saved token for later use.
+The selected release's `manifest.json` declares its minimum Chromium version.
+Use that version or a newer Chrome or Edge build. The extension contains no
+remote code, analytics, cookie API, native-messaging host, downloader, or
+external update endpoint.
 
-Chrome and Edge 140 or later are required. Older builds are refused by the manifest because they cannot enforce the extension's persisted-storage access boundary.
+The popup stores the bridge token in extension-local storage. **Clear saved
+token** disconnects, revokes active browser control, discards any waiting
+approval, and removes that credential. Turning off **Bridge control** only
+pauses the connector and deliberately keeps the token.
 
-The extension includes no remote code, analytics, cookie API, native messaging host, downloader, or external update endpoint. Chrome does not auto-update unpacked extensions on Windows or macOS. The server's metadata-only checker accepts only a canonical stable release marked immutable by GitHub with the exact five uploaded, nonempty assets and GitHub SHA-256 digests.
+## Confirm the installation
 
-When the local UI reports a new release, repeat the download and verification steps, release browser and computer control, and stop the old server and helper. Update all three components together. For the unpacked extension, use one of these procedures:
+Before giving an agent control, verify all of the following:
 
-1. To preserve its identity and saved settings, disable the existing card at `chrome://extensions`, replace the contents of that card's existing unpacked folder with the verified new ZIP contents, then re-enable and reload the same card.
-2. To extract to a new folder, first remove the old extension card, then select **Load unpacked** for the new folder and enter the server's new token again.
+- the server reports the expected version with `--version`;
+- the extension popup shows that same version and reports connected;
+- exactly one Local Browser Bridge card exists on the extensions page;
+- the control page reports the intended browser tab connector;
+- if the helper is running, the control page reports **Computer connected**;
+- a reloaded target page shows the in-page status surface when control starts;
+  and
+- Chrome displays its browser-owned debugging warning during the trusted lease.
 
-Finish by confirming that `chrome://extensions` shows exactly one Local Browser Bridge card and that its popup version matches the server and helper, then reload every open target page before controlling it. Loading a second extracted path without removing the first creates another unpacked extension identity and can leave the old connector active.
+The complete control-page URL contains a bearer token in its fragment. Treat it
+as a credential. Do not paste it into logs, screenshots, issue reports, or
+untrusted pages.
 
-## 6. Understand the authority granted
+## Update all components together
 
-Full Access mode is enabled by default and can control all regular HTTP(S) tabs in the selected Chromium profile, enter sensitive text, close tabs, send keys, click coordinates, and evaluate page JavaScript. Use a dedicated browser profile if you do not want the bridge to reach personal sessions. Turn Full Access off to use the site allowlist and one-time approvals in Safe mode.
+At startup the server checks only the fixed public GitHub Releases metadata
+endpoint. It accepts only a canonical stable, immutable release with the exact
+five uploaded assets and GitHub SHA-256 digests. It does not download or install
+anything. `--check-updates` performs the same metadata-only check and exits.
+Use `--no-update-check` or `LBB_DISABLE_UPDATE_CHECK=1` to disable the startup
+request.
 
-The computer helper can take one-shot observations and start a persistent native stream with a requested 1–10 FPS cap for the exact application window selected in the control page. macOS uses ScreenCaptureKit; Windows uses Windows Graphics Capture and leaves capture indication under operating-system control. The helper routes supported background mouse or keyboard events only to that `(process, window)` target. It does not use global HID input, request a hardware-cursor mutation, change the active desktop/Space, or silently fall back to foreground control.
+When an update is available:
 
-On macOS, focus-capable input may briefly release the saved user's Accessibility `AXFrontmost` state and make the exact target `AXFrontmost=true` under a private focus lease, then restore and verify both applications. WindowServer's user-front process/window remains unchanged before and after; the helper does not call `AXRaise` or `_SLPSSetFrontProcessWithOptions`. On Windows, the backend does not call `SetForegroundWindow`. These are before/after guarantees for an accepted action, not proof of zero visible or focus-state interruption. macOS pixel/key routing uses unsupported private SkyLight interfaces and fails closed if the required route is unavailable or changes.
+1. Download and verify the new version before stopping the old one.
+2. Release browser control and stop any active computer share.
+3. Stop the old helper and server.
+4. Replace the platform binaries or macOS package with the matching new
+   release.
+5. Update the unpacked extension with one of these methods:
+   - To preserve its extension identity and saved settings, disable the existing
+     card, replace the contents of its existing folder with the verified ZIP
+     contents, then re-enable and reload that same card.
+   - To use a new folder, remove the old card before selecting **Load unpacked**
+     for the new folder, then enter the current server token.
+6. Confirm that exactly one extension card remains and that the server, helper,
+   and popup versions match.
+7. Reload each open target page before starting control.
 
-Native action results keep three questions separate: whether the helper used its sealed exact-target route, whether an operating-system API exposed and returned an acceptance signal, and whether the target application showed the requested postcondition. API acceptance or queueing is never target-effect proof. The sampled global cursor position is diagnostic because another person, virtual HID source, remote session, or process can move the shared pointer during the action. A healthy platform activity monitor can corroborate that shared-session activity without claiming it came from a physical device; ambiguous monitoring or route evidence fails closed.
+Unpacked extensions do not update automatically. Loading a new extracted folder
+without removing the previous card creates a second extension identity and can
+leave an old connector active.
 
-Exact-window capture and target-routed input are cooperative shared-session features. They do not prevent a person or another process from interacting at the same time, and they do not provide independent concurrency. Use another login/session or a managed VM when the agent needs its own focus, pointer, input queue, or stronger isolation. The helper also offers no shell, filesystem, clipboard, process-launch, downloader, or telemetry commands.
+## Uninstall or reset
 
-Version 0.12.9 was withdrawn after its one exact packaged macOS run observed a cursor-position delta during the first semantic action. The retained record could not attribute the motion to the helper or to concurrent external activity. Version 0.12.10 was also withdrawn after its exact macOS run passed 69 assertions but received no separately authorized pointer movement during its 300-second handoff, so the final action never started. Version 0.12.11 passed build and provenance checks but was withdrawn before execution because its release receipt could not authenticate the two fresh, non-mergeable macOS lanes required by its own policy. Version 0.12.12 was withdrawn after three macOS deliberate-concurrency attempts stopped before product dispatch—one at the shared arm deadline and two on pre-dispatch pointer/input contamination. Version 0.12.20 later passed its quiet macOS lane but timed out before product dispatch in its then-mandatory physical-pointer lane; its Windows action window was also not discoverable under a changing title, so Chrome never started. Version 0.12.21 was withdrawn before candidate execution or publication after a pre-gate macOS verifier execution path and a Windows-only filesystem assertion were found. Version 0.12.22 passed its quiet-seat preflight and returned a Confirmed first semantic action with safe action invariants, but the acceptance harness misclassified that pointer-only record as an incomplete independent pointer-plus-keyboard sample and stopped after 55 of 56 checks. No deliberate macOS, Windows, Chrome, or Release followed. Version 0.12.23 separated those schemas while retaining fail-closed unknown and contamination handling. Its quiet packaged lane passed 208/208 checks; the deliberate lane accepted the exact app-share start receipt and completed 89/89 recorded assertions, then correctly failed HTTP 409 `COMPUTER_STALE_FRAME` before dispatch when a pre-handoff stream frame was reused after 43.807 seconds. No completion receipt, Windows, Chrome, publication, or Release followed; the exact negative record is retained on the immutable [v0.12.23 evidence commit](https://github.com/flrngel/local-browser-bridge/tree/4e4db75a4ede915d982d139a82dacac8a6c4772a/evidence/v0.12.23/computer/attempts/withdrawn-9e50811-macos-app-share-stale-frame). Version 0.12.24 retained those corrections but its exact Windows read-only handoff watcher failed before operator action when a closure-created PowerShell 5.1 dynamic module could not resolve the atomic marker reader; Chrome and publication did not follow. Version 0.12.25 retained the separated classifiers and made the Windows watcher portable, passed its packaged macOS lanes, then stopped before Windows product actions because its `powershell.exe`-hosted sentinel was absent from the Windows app-share inventory. Stock-Chrome never started and no Release was published. Version 0.12.26 keeps the same-share/same-target/same-geometry refresh and uses a source-bound dedicated Windows GUI fixture so the app-share can discover the acceptance surface. The old physical-pointer lane is historical optional coverage and cannot satisfy publication. The current gate still uses a non-executing preflight verifier, explicit-argument portable marker checks, the create-once exact-app-share request/start/complete chain introduced in v0.12.22, one stable Windows sentinel title, two separately bound macOS results, and fresh Windows and stock-Chrome evidence.
+1. Release browser and computer control.
+2. Stop the helper and server.
+3. Use **Clear saved token** in the extension popup, then remove the extension
+   card from `chrome://extensions` or `edge://extensions`.
+4. Delete the downloaded executable/archive folders.
+5. If you also want to invalidate the saved bridge credential, remove the token
+   file only after both programs have stopped:
+   - Windows: `%USERPROFILE%\.local-browser-bridge\token`
+   - macOS: `$HOME/.local-browser-bridge/token`
 
-Version 0.12.26 attempt 1 bound and executed only the macOS quiet lane; it failed closed when shared-seat HID pointer activity was observed during `computer.typeText`, then its negative evidence was preserved and the attempt was canceled. Attempt 2 rebuilt but stopped before execution because the byte-identical extension returned one valid attestation per attempt and the verifier incorrectly required every returned statement to name the current attempt. That negative record was also preserved and canceled. Neither attempt reached Windows, stock Chrome, or a public Release. Version 0.12.27 retained strict exact-attempt attestation selection and atomic five-file local deployment, then passed both packaged macOS lanes and independent review. Its Windows trust, source, parser, and self-tests passed, but the repository runner PowerShell process exited before creating its evidence directory. The ad-hoc external launcher retained no stdout, stderr, exit code, or process-start telemetry. Because server/helper `--version` probes precede creation of that directory, candidate-byte execution cannot be proved or excluded and is recorded as outcome-unknown. No Computer Use action, stock-Chrome run, evidence commit, approval, or public Release followed; the waiting release job was canceled. This was an acceptance-coordinator persistence gap, not an observed product failure. Version 0.12.28 added provisional checked-in Windows coordinator source with atomic owner-private state, an allowlisted worker environment, persistent output files, kill-on-close ownership of its runner/watcher tree, and exact predecessor-chain validation, but remained a blocked source checkpoint and never became a candidate. Version 0.12.29 completes the Windows-native coordinator source gate: the stable mutex precedes one monotonic recovery deadline; the exact prior Job is terminated and queried to zero active processes; namespace disappearance is observed; `CreateJobObject` is called once; every nonzero last-error result, including `ERROR_ALREADY_EXISTS`, is closed and refused; and the fresh Job is configured and bound before Worker or Intent publication. All eight GUID-scoped native SelfTest scenarios passed under exact 64-bit system Windows PowerShell 5.1, and independent review found no P0/P1 issue. This is non-product source proof only. No packaged 0.12.29 candidate has been built, downloaded, or executed; no macOS or Windows candidate acceptance, stock-Chrome acceptance, tag, evidence publication, approval, or public Release has occurred. The coordinator trusts a future independently verified GitHub-attested candidate and is not a hostile-code sandbox. Fresh candidate artifacts and every platform, browser, evidence, and immutable-publication gate remain mandatory. Install only an actual published Release.
+Removing the token causes the next server start to generate a new one, so any
+remaining extension configuration will no longer connect. The application
+creates no service, scheduled task, login item, or system-wide uninstaller.
 
-Stop the helper whenever native application authority is not needed. Review the current [capability matrix](CAPABILITIES.md) and [limitations](LIMITATIONS.md) before using desktop control with consequential applications.
+## Authority and limitations
 
-Stopping the server immediately breaks both connector sessions. The macOS helper then exits and must be relaunched after the server returns. On Windows, the supervisor keeps replacing disconnected workers with backoff and reconnects one when the server returns. You can also stop the helper, pause browser control in the extension popup, select **Clear saved token** there to disconnect and forget the extension credential, or remove the extension from `chrome://extensions`.
+Full Access is enabled by default and can act in signed-in browser sessions,
+enter sensitive text, and interact with consequential pages. Use Safe mode or a
+dedicated browser profile when broad access is inappropriate.
+
+The helper is cooperative local remote-control software. It shares the signed-in
+session and does not provide an independent virtual desktop, pointer, or input
+queue. Stop it whenever native application authority is not needed. Review the
+[security model](../SECURITY.md), [capability matrix](CAPABILITIES.md), and
+[limitations](LIMITATIONS.md) before using it with sensitive applications.
+
+On macOS, focus-capable input can briefly release the saved user's
+Accessibility `AXFrontmost` state and set the exact target's
+`AXFrontmost=true` under a private focus lease, then restore and verify both
+applications. These sampled before-and-after boundaries are not proof of zero visible or focus-state interruption.

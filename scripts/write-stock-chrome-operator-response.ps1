@@ -23,7 +23,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $script:Utf8 = [Text.UTF8Encoding]::new($false, $true)
-$script:Version = "0.12.29"
+$script:Version = "0.12.30"
 
 function ConvertFrom-JsonPreservingStrings {
     param([Parameter(Mandatory = $true, ValueFromPipeline = $true)][string]$Json)
@@ -595,20 +595,22 @@ function Write-AtomicJson([string]$Path, [object]$Response, [switch]$ReserveClai
 
 function Get-ExactReleaseCandidateBinding([object]$Binding) {
     Assert-ExactKeys $Binding @(
-        "schemaVersion", "productVersion", "repository", "tag", "sourceSha",
-        "tagObjectSha", "workflowRunId", "workflowRunAttempt", "artifactId",
+        "schemaVersion", "version", "releaseTag", "repository", "sourceSha",
+        "workflowRunId", "workflowRunAttempt", "workflowEvent", "workflowRef", "workflowPath", "artifactId",
         "artifactName", "artifactZipBytes", "artifactZipSha256",
         "checksumManifestSha256", "attestationInvocationUri", "attestedAssetCount",
         "githubHostedRunner", "assets", "passed"
     ) "release-candidate trust binding"
-    if ($Binding.schemaVersion -ne 1 -or
-        $Binding.productVersion -cne $script:Version -or
+    if ($Binding.schemaVersion -ne 3 -or
+        $Binding.version -cne $script:Version -or
+        $Binding.releaseTag -cne "v$($script:Version)" -or
         $Binding.repository -cne "flrngel/local-browser-bridge" -or
-        $Binding.tag -cne "v$($script:Version)" -or
         [string]$Binding.sourceSha -cnotmatch '^[0-9a-f]{40}$' -or
-        [string]$Binding.tagObjectSha -cnotmatch '^[0-9a-f]{40}$' -or
         [string]$Binding.workflowRunId -cnotmatch '^[1-9][0-9]*$' -or
         [string]$Binding.workflowRunAttempt -cnotmatch '^[1-9][0-9]*$' -or
+        $Binding.workflowEvent -cne "workflow_dispatch" -or
+        $Binding.workflowRef -cne "refs/heads/main" -or
+        $Binding.workflowPath -cne ".github/workflows/deploy.yml" -or
         [string]$Binding.artifactId -cnotmatch '^[1-9][0-9]*$' -or
         $Binding.artifactName -cne "release-candidate" -or
         $Binding.artifactZipBytes -isnot [ValueType] -or [int64]$Binding.artifactZipBytes -le 0 -or
@@ -642,13 +644,16 @@ function Get-ExactReleaseCandidateBinding([object]$Binding) {
         }
     }
     return [ordered]@{
-        productVersion = [string]$Binding.productVersion
+        schemaVersion = 3
+        version = [string]$Binding.version
+        releaseTag = [string]$Binding.releaseTag
         repository = [string]$Binding.repository
-        tag = [string]$Binding.tag
         sourceSha = [string]$Binding.sourceSha
-        tagObjectSha = [string]$Binding.tagObjectSha
         workflowRunId = [string]$Binding.workflowRunId
         workflowRunAttempt = [string]$Binding.workflowRunAttempt
+        workflowEvent = [string]$Binding.workflowEvent
+        workflowRef = [string]$Binding.workflowRef
+        workflowPath = [string]$Binding.workflowPath
         artifactId = [string]$Binding.artifactId
         artifactName = [string]$Binding.artifactName
         artifactZipBytes = [int64]$Binding.artifactZipBytes
@@ -887,12 +892,12 @@ function Invoke-SelfTest {
             })
         }
         $TrustBinding = [ordered]@{
-            schemaVersion = 1; productVersion = $script:Version
-            repository = "flrngel/local-browser-bridge"; tag = "v$($script:Version)"
+            schemaVersion = 3; version = $script:Version; releaseTag = "v$($script:Version)"
+            repository = "flrngel/local-browser-bridge"
             sourceSha = [String]::new([char]"b", 40)
-            tagObjectSha = [String]::new([char]"c", 40)
-            workflowRunId = "123"; workflowRunAttempt = "1"; artifactId = "456"
-            artifactName = "release-candidate"; artifactZipBytes = 5000
+            workflowRunId = "123"; workflowRunAttempt = "1"; workflowEvent = "workflow_dispatch"
+            workflowRef = "refs/heads/main"; workflowPath = ".github/workflows/deploy.yml"
+            artifactId = "456"; artifactName = "release-candidate"; artifactZipBytes = 5000
             artifactZipSha256 = [String]::new([char]"d", 64)
             checksumManifestSha256 = [String]::new([char]"e", 64)
             attestationInvocationUri = "https://github.com/flrngel/local-browser-bridge/actions/runs/123/attempts/1"

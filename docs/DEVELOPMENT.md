@@ -1,11 +1,12 @@
 # Development
 
-End users do not need Node.js. The entry points are Rust executables; the macOS build links a bundled Swift ScreenCaptureKit bridge and system frameworks. Developers running the complete contract suite need Node.js 24 for the checked-in extension and dashboard behavior harnesses, and some browser evidence rigs use the same test-only runtime. Node.js is never packaged into or invoked by the server, helper, or extension.
+End users do not need Node.js. The entry points are Rust executables; the macOS build links a bundled Swift ScreenCaptureKit bridge and system frameworks. Developers running the complete contract suite need Node.js 24 for the checked-in extension and dashboard behavior harnesses, and Unix-only contract helpers also use Bash and Python 3. None of those test tools is packaged into or invoked by the server, helper, or extension. See [Building from source](BUILD.md) for platform setup, native commands, output paths, and package construction.
 
 ## Prerequisites
 
-- Rust 1.88 or later with Cargo and rustfmt
+- Rust 1.88 or later with Cargo, rustfmt, and clippy
 - Node.js 24 for extension/dashboard behavior contracts and browser evidence rigs
+- Bash and Python 3 for the complete contract suite on Unix
 - Platform SDK and linker for the target operating system. Native macOS builds
   require the macOS 26 SDK or newer because the locked `apple-metal` Swift
   bridge names Metal 4 APIs at compile time. The resulting universal package
@@ -32,18 +33,10 @@ Use the exact versions in `Cargo.lock`. Distributed versions in `Cargo.toml`, `C
 
 ## Build
 
-```bash
-cargo build --locked --release
-```
-
-The two main binaries are:
-
-```text
-target/release/local-browser-bridge
-target/release/local-computer-helper
-```
-
-The server embeds its UI. Do not add a runtime dependency on a JavaScript package manager, remote script, or CDN.
+Use the platform-specific [building guide](BUILD.md). It distinguishes native
+development binaries from the Windows release shape and the universal macOS
+server/helper app bundle. The server embeds its UI; do not add a runtime
+dependency on a JavaScript package manager, remote script, or CDN.
 
 ## Local protocol test
 
@@ -103,10 +96,10 @@ Test one-shot observation and persistent sharing as separate lifecycles:
 
 Do not report cross-Space, minimized, protected, elevated, or framework-specific behavior as supported merely because a stream or message API returned success.
 
-The v0.12.29 macOS harness defines two fresh, non-mergeable release lanes in [`evidence/v0.12.29/computer/README.md`](../evidence/v0.12.29/computer/README.md). Both require a healthy monitor, unchanged sampled cursor, no shared input activity, and `sharedPointerActivityState: quiet` for every evidence cell. The `deliberate-concurrency` compatibility lane adds a separately authorized exact-app-share button action and proves—through a target-owned request/start/complete chain plus independent bundle/window/button and shared-seat probes—that app-scoped orchestration spanned the real product action without using the shared desktop. It does not claim physical-human or cryptographic Computer Use provider identity. Never convert, merge, or substitute optional physical-pointer adversarial bytes into either release lane. An unknown monitor or boundary fails closed.
+The v0.12.30 macOS harness defines two fresh, non-mergeable release lanes in [`evidence/v0.12.30/computer/README.md`](../evidence/v0.12.30/computer/README.md). Both require a healthy monitor, unchanged sampled cursor, no shared input activity, and `sharedPointerActivityState: quiet` for every evidence cell. The `deliberate-concurrency` compatibility lane adds a separately authorized exact-app-share button action and proves—through a target-owned request/start/complete chain plus independent bundle/window/button and shared-seat probes—that app-scoped orchestration spanned the real product action without using the shared desktop. It does not claim physical-human or cryptographic Computer Use provider identity. Never convert, merge, or substitute optional physical-pointer adversarial bytes into either release lane. An unknown monitor or boundary fails closed.
 
 Before either lane invokes a candidate binary—even with `--version`—the exact
-tagged SystemProbe must complete a 30-second native quiet-seat epoch with at
+source-bound SystemProbe must complete a 30-second native quiet-seat epoch with at
 least 60 stable transitions at 500 ms cadence. Any cumulative pointer/cursor,
 foreground, AX focus/front-window, or active-Space change resets all epoch
 progress under the original 30-minute deadline. Unknown or unhealthy monitoring
@@ -115,7 +108,7 @@ fixture/server/helper after completion, and keeps every later per-action and
 whole-run proof unchanged. The deliberate lane uses this gate before its
 exact-app-share request; no shared-pointer movement is required or accepted.
 
-For the deliberate-concurrency lane, start the packaged evidence runner and then run `node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode watch --evidence-dir "$ABSOLUTE_EVIDENCE_DIRECTORY" --runner-pid "$RUNNER_PID"` in a separate terminal. The read-only watcher waits for the exact runner-created lane, opens only the request/start/complete records without following links, validates schema 2, v0.12.29, the stable app surface, request hash, start-receipt hash, canonical timestamps, and process binding, and writes nothing. On `ACTION REQUIRED`, use the separately authorized exact-app share for bundle `dev.flrngel.local-browser-bridge.acceptance.app-share`, press `START APP-SHARE CHECK` exactly once, do not use the shared desktop or retry, and stop all UI use after `START RECEIVED`. The app independently verifies the request hash before writing its create-once start receipt and disabling the button. After that receipt, the runner must obtain a strictly newer streamed frame from the same share, exact target, and unchanged geometry within the reserved handoff deadline; only that fresh frame may authorize the product click. It then proves unchanged foreground/focus/Space/cursor/HID state, dispatches the real bounded product action, requires the target postcondition and quiet product/independent boundaries, and completes the app-owned receipt chain. A copied, stale, changed, or missing record, duplicate action, unknown native boundary, dead runner/app, shared-seat activity, frame-refresh failure, or timeout fails closed. The marker chain and watcher are orchestration evidence, never product authority. Validate with `node --check scripts/wait-macos-app-share-concurrency-handoff.mjs`, `node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test`, `node --check evidence/v0.12.29/computer/helper-evidence-rig.mjs`, `node evidence/v0.12.29/computer/helper-evidence-rig.mjs --self-test`, and Swift typechecks for `AppShareHandoff.swift`, `PhysicalPointerHandoff.swift`, and `SystemProbe.swift`. The old pointer watcher and physical prompt remain optional adversarial tooling and cannot satisfy release.
+For the deliberate-concurrency lane, start the packaged evidence runner and then run `node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode watch --evidence-dir "$ABSOLUTE_EVIDENCE_DIRECTORY" --runner-pid "$RUNNER_PID"` in a separate terminal. The read-only watcher waits for the exact runner-created lane, opens only the request/start/complete records without following links, validates the v0.12.30 marker-schema-2 records, stable app surface, request hash, start-receipt hash, canonical timestamps, and process binding, and writes nothing. The candidate identity nested in the lane is the separate schema-3 binding. On `ACTION REQUIRED`, use the separately authorized exact-app share for bundle `dev.flrngel.local-browser-bridge.acceptance.app-share`, press `START APP-SHARE CHECK` exactly once, do not use the shared desktop or retry, and stop all UI use after `START RECEIVED`. The app independently verifies the request hash before writing its create-once start receipt and disabling the button. After that receipt, the runner must obtain a strictly newer streamed frame from the same share, exact target, and unchanged geometry within the reserved handoff deadline; only that fresh frame may authorize the product click. It then proves unchanged foreground/focus/Space/cursor/HID state, dispatches the real bounded product action, requires the target postcondition and quiet product/independent boundaries, and completes the app-owned receipt chain. A copied, stale, changed, or missing record, duplicate action, unknown native boundary, dead runner/app, shared-seat activity, frame-refresh failure, or timeout fails closed. The marker chain and watcher are orchestration evidence, never product authority. Validate with `node --check scripts/wait-macos-app-share-concurrency-handoff.mjs`, `node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test`, `node --check evidence/v0.12.30/computer/helper-evidence-rig.mjs`, `node evidence/v0.12.30/computer/helper-evidence-rig.mjs --self-test`, and Swift typechecks for `AppShareHandoff.swift`, `PhysicalPointerHandoff.swift`, and `SystemProbe.swift`. The old pointer watcher and physical prompt remain optional adversarial tooling and cannot satisfy release.
 
 ### Deterministic Windows live acceptance
 
@@ -134,14 +127,14 @@ Live acceptance does not host that UI in PowerShell or a terminal. The runner ha
 
 The dedicated entry point accepts only exact, case-sensitive `--self-test` or `--evidence-directory DRIVE_ABSOLUTE_NON_ROOT_PATH [--show-occluder]`. Drive-relative, root-relative, drive-root, relative, and UNC paths are refused, as are reordered, duplicated, unknown, or differently cased arguments and any evidence directory that already contains a protected fixture record. Before opening UI it sets the stable AppUserModelID `LocalBrowserBridge.WindowsAcceptance`. That AUMID is discoverability metadata for an app-share picker, not process identity, consent, click provenance, or acceptance authority.
 
-The runner establishes the actual GUI identity independently: the live process image must equal the just-built executable, its session must equal the runner's signed-in interactive session, the ready-file PID must equal that live process, and it must be the runner's sole exact-image direct child. The executable hash must still match at the initial live image binding. These checks precede server startup. The sanitized schema-2 summary retains them under `fixtureProcessBinding`, including source/executable hashes and stability, entry-point self-test, exact image/session/direct-child/ready-PID matches, `executionMode: dedicated-windows-application`, `terminalHostUsed: false`, and eventual executable removal; it retains no executable path.
+The runner establishes the actual GUI identity independently: the live process image must equal the just-built executable, its session must equal the runner's signed-in interactive session, the ready-file PID must equal that live process, and it must be the runner's sole exact-image direct child. The executable hash must still match at the initial live image binding. These checks precede server startup. The sanitized schema-2 result summary retains them under `fixtureProcessBinding`, while its `releaseCandidateBinding` is schema 3. It includes source/executable hashes and stability, entry-point self-test, exact image/session/direct-child/ready-PID matches, `executionMode: dedicated-windows-application`, `terminalHostUsed: false`, and eventual executable removal; it retains no executable path.
 
 The checked-in coordinator runs `scripts/test-windows-computer-use.ps1` exactly once from a signed-in interactive Windows session. Use a dedicated test session. After the helper, recovery event, and exact target binding are ready, the runner posts a fresh test-only generation to the fixture. It waits for a separate bounded receipt proving that exact generation was processed once, the exact same-thread fixture-owned root/button topology still holds, the orange sentinel has enabled its large **CLICK TO ARM** button, and input is either untouched or already one internally consistent acknowledgement. This second form handles a valid click made as soon as the button visibly enables. The sentinel is initially shown without activation; the deliberate click can still activate and focus it normally. Its top-level title is the exact stable string **LBB Foreground Sentinel** from creation through waiting, action-required, and armed states; only the in-window status label and button text change. The runner saves the delivery proof, atomically creates the runner-create-once notification `operator/foreground-arm-request.json`, and prints `ACTION REQUIRED`: click only if the button still says **CLICK TO ARM**; if it already says **ARMED**, do not click again. A human or separately trusted Computer Use surface must left-click that button once and stop using the session. The fixture accepts the mouse down only while native global foreground equals the sentinel and the calling UI thread's focus equals the exact button; focus loss, deactivation, or a new generation clears the pending press. Mouse up must repeat the exact generation, button, point, foreground, and focus checks before acknowledgement. Total button left-down/up attempt counts must each remain exactly one. After the click and three stable native samples, the runner atomically creates the matching `operator/foreground-arm-received.json`; it still requires an exact arm-to-baseline continuity check before any product action. Both operator files are sanitized, create-once notifications. The runner never reads them and they are never acceptance authority, so a copied, stale, changed, or replayed marker cannot satisfy the click proof. Before the first baseline command, it re-binds the original authenticated helper session and PID to the same exact-image direct child and completes another `computer.status` round trip; a worker restart during the arm wait fails closed. It never calls `SetForegroundWindow`, synthesizes an Alt key, or loops to steal focus. This is a trusted interactive-session receipt, not cryptographic proof that a physical human produced the window messages; the acceptance session must exclude untrusted same-integrity injectors. The explicit setup boundary makes subsequent background-control invariants deterministic without treating `TopMost`, `Shown`, or a WinForms activation callback as global-foreground proof. The runner requires the intended version, the frozen candidate's exact `SHA256SUMS.txt`, its SHA-256 recorded independently by the release coordinator, canonical server/helper filenames, fixture, evidence directory, and ephemeral token. Before launch it requires the manifest's exact four-asset inventory, matches both executable hashes, checks both VERSIONINFO versions, and checks bounded `--version` output. It never installs software, changes security or network settings, dismisses warnings, or terminates processes it did not start. It refuses files carrying Windows download-zone metadata instead of unblocking them or bypassing a Windows warning.
 
 Live mode intentionally runs only under the system Windows PowerShell 5.1 Desktop host because compilation and the acceptance fixture use WinForms/.NET Framework. PowerShell 7 remains a parser and self-test surface. The checked-in coordinator resolves the native Windows system directory without depending on a Machine-scoped `SystemRoot`, re-enters its exact 64-bit Windows PowerShell host through a nonce-bound clean bootstrap, and requires identity `5.1|Desktop|True` before any candidate launch. The compiled GUI is nevertheless launched as its own Windows-application process, not as terminal-hosted PowerShell UI.
 
 ```powershell
-$version = "0.12.29"
+$version = "0.12.30"
 $server = (Resolve-Path ".\dist\local-browser-bridge-v$version-windows-x86_64.exe").Path
 $helper = (Resolve-Path ".\dist\local-computer-helper-v$version-windows-x86_64.exe").Path
 $manifest = (Resolve-Path .\dist\SHA256SUMS.txt).Path
@@ -216,7 +209,7 @@ record and refuses both waiting and handoff output unless the exact worker
 PID/start time is still live.
 
 The watcher reads only `operator/foreground-arm-request.json`. It requires the
-exact v0.12.29/schema-2 field set and order, a fresh non-expired publication,
+exact v0.12.30/schema-2 marker field set and order, a fresh non-expired publication,
 ordinary non-reparse paths, and the same live runner PID/start time both before
 and after parsing. It emits exactly one compact sanitized
 `foreground-arm-visual-handoff` JSON object or fails closed. It neither writes
@@ -317,7 +310,7 @@ The independently runnable suites are `Smoke`, `Recovery`, `Semantic`, `Keyboard
 
 `Recovery` is a launch-time-only fault proof, not a remotely callable protocol capability. The runner gives the helper supervisor a unique validated `Local\\LBBTestSharePump-*` manual-reset kernel-event name through `LBB_TEST_STALL_SHARE_PUMP_ONCE_EVENT`. The supervisor creates and holds the initially unsignaled event before launching a worker. The first disposable Windows worker signals it and stalls its first active-share conversion task; the worker's hard deadline emits a best-effort `COMPUTER_HELPER_WATCHDOG` error and exits, while the supervisor remains alive and replaces it. The suite requires the event to become signaled, a new direct-child worker PID and helper session ID, unchanged supervisor and server PIDs, continuously successful server-state polls, then a fresh exact-window observation and live native-share frame from the replacement worker. Replacement is accepted only when the server exposed `COMPUTER_HELPER_WATCHDOG` or at least 11.5 seconds elapsed after the runner observed the signaled fault event, providing a conservative timing lower bound for the 12-second watchdog; both share-start and event-relative durations are retained. Later workers observe the supervisor-held signaled event and do not stall. Closing the private Job releases the event; the runner verifies that it no longer exists. The hook neither creates a file nor adds a remotely triggerable protocol method.
 
-The manifest SHA-256 is an out-of-band binding value: do not derive it from the same untrusted copy immediately before the run. The release coordinator records it when downloading the exact gated workflow artifact and sends that value with the candidate. The runner also requires the trust wrapper's create-once `candidate-binding.json`, validates its exact source/tag/run/attempt/artifact/raw-ZIP/attestation and five-file facts, and retains those sanitized facts as `releaseCandidateBinding` in schema-2 `summary.json`. The evidence directory must be new or empty. Prefer the process-scoped `LBB_TOKEN` environment input shown above: the runner consumes and clears it immediately, then passes the value to its children through explicit environment blocks. An optional `-Token` remains available for programmatic callers that already hold the value in memory, but placing a literal token in a new process command line or shell history is unsafe. The runner intentionally discards child-process stdout because the server prints its bearer token and filters unrelated window and tab collections plus raw text values from saved API responses. Each child starts suspended with `STARTUPINFOEX`; `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` restricts inheritance to the single intended NUL handle used for standard input, output, and error. The child enters a private Windows Job Object configured with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` before it resumes, so neither unrelated PowerShell handles nor helper worker descendants escape the runner's boundary. A failed pre-resume launch terminates the suspended child and verifies bounded process exit before releasing its only process handles; a cleanup failure is surfaced together with the original launch error. The runner's outer `finally` block stops an active share, requests fixture shutdown, terminates and verifies zero active Job-owned descendants, closes the kill-on-close handle, disposes the fixture/builder/self-test process handles, and then removes only the exact expected executable plus its now-empty build directory. Cleanup refuses a reparse point, an unexpected entry, or recursive deletion; any such condition invalidates the run instead of broadening the target. It then verifies that the selected loopback port is bindable again, scans every retained evidence file for the raw token and deletes any offending test-owned file while failing the run, removes the in-memory token variable, and writes `summary.json` on success or failure. Every summary records `candidateBinding.checksumManifestMatched: true`, the expected manifest hash, exact server/helper hashes, VERSIONINFO values, CLI-reported versions, and the sanitized `fixtureProcessBinding` without recording paths.
+The manifest SHA-256 is an out-of-band binding value: do not derive it from the same untrusted copy immediately before the run. The release coordinator records it when downloading the exact gated workflow artifact and sends that value with the candidate. The runner also requires the trust wrapper's create-once `candidate-binding.json`, validates its exact source, `refs/heads/main` source ref, workflow run and attempt, artifact, raw-ZIP, attestation, and five-file facts, and retains that schema-3 object as `releaseCandidateBinding` inside the schema-2 result summary. The evidence directory must be new or empty. Prefer the process-scoped `LBB_TOKEN` environment input shown above: the runner consumes and clears it immediately, then passes the value to its children through explicit environment blocks. An optional `-Token` remains available for programmatic callers that already hold the value in memory, but placing a literal token in a new process command line or shell history is unsafe. The runner intentionally discards child-process stdout because the server prints its bearer token and filters unrelated window and tab collections plus raw text values from saved API responses. Each child starts suspended with `STARTUPINFOEX`; `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` restricts inheritance to the single intended NUL handle used for standard input, output, and error. The child enters a private Windows Job Object configured with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` before it resumes, so neither unrelated PowerShell handles nor helper worker descendants escape the runner's boundary. A failed pre-resume launch terminates the suspended child and verifies bounded process exit before releasing its only process handles; a cleanup failure is surfaced together with the original launch error. The runner's outer `finally` block stops an active share, requests fixture shutdown, terminates and verifies zero active Job-owned descendants, closes the kill-on-close handle, disposes the fixture/builder/self-test process handles, and then removes only the exact expected executable plus its now-empty build directory. Cleanup refuses a reparse point, an unexpected entry, or recursive deletion; any such condition invalidates the run instead of broadening the target. It then verifies that the selected loopback port is bindable again, scans every retained evidence file for the raw token and deletes any offending test-owned file while failing the run, removes the in-memory token variable, and writes `summary.json` on success or failure. Every summary records `candidateBinding.checksumManifestMatched: true`, the expected manifest hash, exact server/helper hashes, VERSIONINFO values, CLI-reported versions, and the sanitized `fixtureProcessBinding` without recording paths.
 
 This harness is live Windows evidence, not a substitute for extension testing in real Chrome, clean-VM artifact verification, mixed-DPI coverage, UIPI negative tests, resize/minimize/close races, or long-duration endurance. `systemIndicator: true` is recorded only as the helper's no-suppression policy metadata; the exact-window screenshots remain non-proof. The `Capture` suite therefore compares separate pre-share and active-share desktop-level crops limited to the fixture target plus a 16-pixel band. A fixture-owned topmost `#101820` backdrop extends beyond that crop, and the runner deletes the crop unless at least 95% of its outer perimeter matches the backdrop. The saved provenance includes OS/session/capture metadata and SHA-256 proofs for the supplied server, helper, fixture, and runner, but intentionally omits artifact paths, hostname, username, and the rest of the desktop. The active-share border band must differ visibly from the baseline. Any missing arm acknowledgement, unstable pre-baseline sample, or later foreground invariant fails closed. Preserve that negative result; never convert an unbound retry into release evidence.
 
@@ -392,18 +385,74 @@ Run `bash scripts/audit-versions.sh` before packaging. Commit finished work with
 
 ## Deployment
 
-In this repository, `deploy` means more than a local build. It means committing and pushing the intended version, building the Windows server and helper, building the universal macOS server/helper archive, packaging the matching extension, publishing all artifacts plus `SHA256SUMS.txt` and GitHub provenance in an immutable public GitHub Release, then downloading and verifying every published asset.
+In this repository, `deploy` means finishing the entire release operation, not
+merely compiling or starting the bridge. The intended version must be committed
+and pushed; one exact green `main` commit must become a frozen cross-platform
+candidate; the required macOS, Windows, and stock-Chrome acceptance lanes must
+pass against those bytes; and only then may those unchanged bytes become an
+annotated tag and immutable public GitHub Release. Publication is a separate,
+manual workflow so failed candidates do not create tags, Releases, or protected
+environment deployments.
 
-The canonical release path is `.github/workflows/deploy.yml` from a matching annotated `vVERSION` tag. It is tag-push only; rerun that tag-triggered workflow rather than dispatching it from a branch, but treat every rerun as a new attempt with a new artifact and receipt. Automatic draft recovery is deliberately limited to a byte-identical draft bound to the current attempt's exact receipt. A draft left by an older failed attempt cannot be relabelled or automatically deleted by the new attempt; inspect and remove that unpublished draft through an explicitly authorized recovery operation before starting fresh acceptance. Windows, macOS, and extension jobs build and attest their outputs; an assembly job then creates `SHA256SUMS.txt`, verifies the exact five-file set, and uploads one frozen `release-candidate` workflow artifact retained for 14 days. The publication job is bound to the protected, `v*`-only `release` environment and cannot start until its required reviewer approves it. Download that exact candidate from the waiting workflow run, record its source commit and asset SHA-256 values, and run the real macOS and designated Windows/stock-Chrome acceptance suites against those bytes. The macOS gate must also verify each architecture slice of the exact packaged helper against the forbidden global-input API list and expected targeted dynamic-symbol allowlist; this is shipped-route evidence, not Apple support for private SkyLight. Approve publication only after every required lane passes. The gated job downloads the same workflow artifact, re-verifies every file and attestation, and publishes those unchanged bytes. Never substitute a local rebuild or post-publication smoke test for this pre-publication acceptance gate.
+### Phase 1: build a tagless release candidate
 
-GitHub may return multiple valid provenance statements when a rerun reproduces a byte-identical asset. Version 0.12.29 validates the complete returned set: every statement must be well formed and bind the same workflow run, source commit, tag, signer workflow, GitHub-hosted runner, and exact subject name and SHA-256. Exactly one statement must bind the requested current attempt. An empty set, zero or duplicate current-attempt statements, or any malformed, wrong-run, wrong-source, wrong-tag, wrong-workflow, self-hosted, or wrong-subject statement fails closed.
+Run `.github/workflows/deploy.yml` manually from `main`. Before dispatch, ensure
+that the version is aligned across the Rust package and extension, the exact
+source is the current `origin/main` tip, the required CI jobs are green for that
+source tree, and neither `vVERSION` nor a Release with that name exists.
 
-Publication also requires one candidate-bound evidence commit and a nonsecret
-canonical V2 receipt. The evidence branch is exactly
-`evidence/v0.12.29-release-run-RUN_ID-attempt-RUN_ATTEMPT`; its tip must be one
-commit whose sole parent is the tagged source commit. That commit may only add
-ordinary mode-`100644` allowlisted files beneath
-`evidence/v0.12.29/release/run-RUN_ID-attempt-RUN_ATTEMPT/`. The five required
+```bash
+REPOSITORY="flrngel/local-browser-bridge"
+VERSION="0.12.30"
+SOURCE_SHA="EXACT_40_CHARACTER_GREEN_MAIN_SHA"
+
+gh workflow run deploy.yml \
+  --repo "$REPOSITORY" \
+  --ref main \
+  -f version="$VERSION" \
+  -f source_sha="$SOURCE_SHA"
+```
+
+The candidate workflow has four jobs:
+
+1. **Source and extension** binds the request to the exact green `main` source,
+   runs the package/acceptance contract self-tests, packages the extension, and
+   attests it.
+2. **Windows** builds and verifies the x86_64 MSVC server and helper, then
+   attests both executables.
+3. **macOS** builds and verifies the universal server and stable helper app
+   bundle, then attests the archive.
+4. **Assemble** downloads those outputs, creates the canonical
+   `SHA256SUMS.txt`, verifies the exact five-file set and exact-source
+   attestations, and freezes one `release-candidate` artifact for 14 days.
+
+This phase has no release environment and deliberately creates no tag, draft,
+deployment, or Release. Record the workflow run ID, run attempt, artifact ID,
+raw artifact-ZIP SHA-256, checksum-manifest SHA-256, source SHA, and all asset
+hashes before executing candidate bytes. A rerun is a distinct attempt even
+when its payload is byte-identical; never relabel evidence from one attempt as
+evidence for another.
+
+### Acceptance and the schema-3 receipt
+
+Download and verify the exact frozen artifact, then run both fresh macOS lanes,
+interactive Windows helper acceptance, and stock-Chrome acceptance against that
+same set. The macOS gate must also verify both packaged-helper architecture
+slices against the forbidden global-input API list and targeted dynamic-symbol
+allowlist. This is shipped-route evidence, not Apple support for private APIs.
+
+The accepted evidence commit must be a single candidate-bound commit whose sole
+parent is the exact `main` source. It may add only the allowlisted, sanitized
+evidence tree for this version, workflow run, and attempt. Keep the required
+macOS lane results, Windows helper summary, stock-Chrome final record, referenced
+screenshots, logs, operator markers, fixture records, sidecars, and independent
+review records. Never retain credentials, bearer tokens, personal paths,
+operator identity, raw browser/API data, or unrelated screen content.
+
+For v0.12.30, the canonical evidence branch is
+`evidence/v0.12.30-release-run-RUN_ID-attempt-RUN_ATTEMPT`, and its additions
+live below
+`evidence/v0.12.30/release/run-RUN_ID-attempt-RUN_ATTEMPT/`. The five primary
 machine records are:
 
 - `macos/macos-acceptance.json`;
@@ -412,55 +461,68 @@ machine records are:
 - `windows/computer/summary.json`; and
 - `windows/browser/browser-acceptance.json`.
 
-The verifier also requires the result-referenced lane screenshots, logs,
-operator markers, Windows steps/fixture records, and the browser finalizer's
-exact schema-V3 inventory of 21 input files and 22 finalized files. It validates
-duplicate-free JSON/NDJSON, PNG structure and metadata policy, cleanup,
-candidate-bound approval, digest-bound independent exported-file review, the
-preflight/postflight external-surface attestations, candidate identity, and a
-leakage denylist. Never copy credentials, tokens, paths, operator identity, raw
-browser/API data, or unrelated screen content into the evidence commit.
+After every required lane passes, create the canonical, nonsecret, one-line
+schema-3 acceptance receipt using the checked-in evidence procedure. It binds
+`refs/heads/main` and the exact source SHA to the candidate workflow run and
+attempt, candidate artifact ID and raw ZIP digest, checksum manifest and asset
+digests, and the exact evidence ref, commit, and result digests. There is no tag
+object at this stage: the publication workflow creates the tag only after its
+preflight succeeds. A missing, stale, differently ordered, malformed, or
+cross-attempt receipt fails closed.
 
-Only after both fresh macOS lanes, interactive Windows helper acceptance, and
-stock-Chrome acceptance pass against the same frozen artifact should the
-coordinator create the exact one-line receipt. Its keys and their order are
-canonical; run and artifact identifiers are strings:
+### Phase 2: publish the accepted bytes
+
+Dispatch `.github/workflows/publish.yml` manually from `main`, passing the
+receipt directly as a workflow input. The receipt is not a secret, but it must
+not contain credentials or personal data.
 
 ```bash
-receipt="$(jq -cn \
-  --arg tag "v0.12.29" \
-  --arg source_sha "EXACT_VERIFIED_SOURCE_SHA" \
-  --arg tag_object_sha "EXACT_ANNOTATED_TAG_OBJECT_SHA" \
-  --arg run_id "EXACT_GITHUB_RUN_ID" \
-  --arg run_attempt "EXACT_GITHUB_RUN_ATTEMPT" \
-  --arg artifact_id "EXACT_RELEASE_CANDIDATE_ARTIFACT_ID" \
-  --arg artifact_zip_sha256 "EXACT_RAW_ARTIFACT_ZIP_SHA256" \
-  --arg manifest_sha256 "$(shasum -a 256 SHA256SUMS.txt | awk '{ print $1 }')" \
-  --arg evidence_ref "refs/heads/evidence/v0.12.29-release-run-EXACT_GITHUB_RUN_ID-attempt-EXACT_GITHUB_RUN_ATTEMPT" \
-  --arg evidence_commit_sha "EXACT_REMOTE_EVIDENCE_COMMIT_SHA" \
-  --arg macos_acceptance_sha256 "$(shasum -a 256 macos/macos-acceptance.json | awk '{ print $1 }')" \
-  --arg macos_quiet_sha256 "$(shasum -a 256 macos/quiet/helper-results.json | awk '{ print $1 }')" \
-  --arg macos_deliberate_sha256 "$(shasum -a 256 macos/deliberate-concurrency/helper-results.json | awk '{ print $1 }')" \
-  --arg windows_sha256 "$(shasum -a 256 windows/computer/summary.json | awk '{ print $1 }')" \
-  --arg chrome_sha256 "$(shasum -a 256 windows/browser/browser-acceptance.json | awk '{ print $1 }')" \
-  '{schemaVersion:2,tag:$tag,sourceSha:$source_sha,tagObjectSha:$tag_object_sha,workflowRunId:$run_id,workflowRunAttempt:$run_attempt,releaseCandidateArtifactId:$artifact_id,releaseCandidateArtifactZipSha256:$artifact_zip_sha256,checksumManifestSha256:$manifest_sha256,evidenceRef:$evidence_ref,evidenceCommitSha:$evidence_commit_sha,macosPassed:true,macosAcceptanceSha256:$macos_acceptance_sha256,macosQuietResultSha256:$macos_quiet_sha256,macosDeliberateConcurrencyResultSha256:$macos_deliberate_sha256,windowsPassed:true,windowsResultSha256:$windows_sha256,stockChromePassed:true,stockChrome:true,stockChromeResultSha256:$chrome_sha256}')"
+REPOSITORY="flrngel/local-browser-bridge"
+VERSION="0.12.30"
+SOURCE_SHA="EXACT_40_CHARACTER_GREEN_MAIN_SHA"
+CANDIDATE_RUN_ID="EXACT_GITHUB_RUN_ID"
+CANDIDATE_RUN_ATTEMPT="EXACT_GITHUB_RUN_ATTEMPT"
+ACCEPTANCE_RECEIPT_PATH="/absolute/path/to/acceptance-receipt.json"
+
+gh workflow run publish.yml \
+  --repo "$REPOSITORY" \
+  --ref main \
+  -f version="$VERSION" \
+  -f source_sha="$SOURCE_SHA" \
+  -f candidate_run_id="$CANDIDATE_RUN_ID" \
+  -f candidate_run_attempt="$CANDIDATE_RUN_ATTEMPT" \
+  -f acceptance_receipt="$(<"$ACCEPTANCE_RECEIPT_PATH")"
 ```
 
-Set that exact value as `LBB_RELEASE_ACCEPTANCE_V2` on the protected GitHub
-`release` environment, then approve the waiting job. The variable and evidence
-branch are selectors, not authority. Before any Release mutation, the checked-in
-verifier independently binds the current workflow attempt and assembly job,
-queries the sole live `release-candidate` artifact, downloads and raw-hashes
-its ZIP, compares its exact payload with the job download, fetches the remote
-evidence commit, proves its sole parent/tree, and validates every result,
-sidecar, digest, and binding. The accepted receipt SHA-256 is embedded in the
-immutable release marker and visible notes. A rerun has a new attempt, artifact,
-evidence ref/commit, and receipt; evidence from another attempt is never
-relabelled or reused.
+The first publication job runs outside the protected environment and has no
+Release-mutation authority. It reconstructs the candidate from GitHub, raw-hashes
+the artifact ZIP, verifies the exact five-file payload and attestations, fetches
+and validates the remote evidence commit, and proves every schema-3 receipt and
+evidence binding before preparing the immutable publication input. The receipt
+is supplied per dispatch; there is no mutable release-environment receipt
+variable.
 
-Repository policy is part of that boundary. An active tag ruleset allows the first creation of `refs/tags/v*` but forbids every later update or deletion with no bypass actor. GitHub Actions requires every third-party action reference to use a complete commit SHA. Dependabot security updates, secret-scanning push protection, and private vulnerability reporting remain enabled. Before tagging, read these settings back through the GitHub API; a source contract cannot prove mutable repository policy.
+Only the subsequent `release` job uses the protected `release` environment. It
+must consume the exact preflight-approved bytes, recheck the repository and tag
+policies, create annotated `vVERSION` for the accepted source, create the
+immutable GitHub Release, re-download every published asset, and verify the
+downloaded set byte for byte. If the workflow implements a temporary
+publication-transfer artifact, cleanup may delete only that exact transfer
+artifact. It must not delete the frozen candidate, evidence, unrelated workflow
+artifacts, a tag, or a Release.
 
-On a suitably configured macOS host, `scripts/deploy.sh` performs a local cross-platform candidate build; official Windows artifacts require the MSVC target through `cargo-xwin` or a native Windows build. Local outputs are useful for early testing but are not release proof unless their exact SHA-256 values match the frozen workflow candidate.
+Repository policy remains part of the boundary. The tag ruleset must allow the
+first creation of `refs/tags/v*` while forbidding later update or deletion with
+no bypass actor. Third-party Actions remain pinned to full commit SHAs, and the
+protected `release` environment requires its configured approval. Read mutable
+repository settings back through the GitHub API during publication; source code
+alone cannot prove them.
+
+On a suitably configured macOS host, `scripts/deploy.sh` can produce a local
+cross-platform candidate; official Windows artifacts require the MSVC target
+through `cargo-xwin` or a native Windows build. Local outputs are useful for
+early testing but are not release proof unless their exact SHA-256 values match
+the frozen workflow candidate.
 
 Verify a downloaded release set with:
 
@@ -468,4 +530,5 @@ Verify a downloaded release set with:
 bash scripts/verify-release-assets.sh VERSION dist
 ```
 
-See [Installation](INSTALL.md) for the user-facing artifact verification flow and [Architecture](ARCHITECTURE.md) for component boundaries.
+See [Installation](INSTALL.md) for the user-facing artifact verification flow
+and [Architecture](ARCHITECTURE.md) for component boundaries.

@@ -6,6 +6,48 @@ fn source(path: &str) -> String {
     fs::read_to_string(path).unwrap().replace("\r\n", "\n")
 }
 
+fn workflow_job_ids(workflow: &str) -> Vec<&str> {
+    let mut in_jobs = false;
+    let mut jobs = Vec::new();
+    for line in workflow.lines() {
+        if line == "jobs:" {
+            in_jobs = true;
+            continue;
+        }
+        if !in_jobs {
+            continue;
+        }
+        if !line.is_empty() && !line.starts_with(' ') {
+            break;
+        }
+        if line.starts_with("  ") && !line.starts_with("    ") && line.trim_end().ends_with(':') {
+            jobs.push(line.trim().trim_end_matches(':'));
+        }
+    }
+    jobs
+}
+
+fn job_section<'a>(workflow: &'a str, job: &str) -> &'a str {
+    let start_marker = format!("  {job}:\n");
+    let start = workflow
+        .find(&start_marker)
+        .unwrap_or_else(|| panic!("workflow does not contain job `{job}`"));
+    let after = &workflow[start + start_marker.len()..];
+    let end = after
+        .lines()
+        .scan(0usize, |offset, line| {
+            let current = *offset;
+            *offset += line.len() + 1;
+            Some((current, line))
+        })
+        .find_map(|(offset, line)| {
+            (line.starts_with("  ") && !line.starts_with("    ") && line.trim_end().ends_with(':'))
+                .then_some(offset)
+        })
+        .unwrap_or(after.len());
+    &after[..end]
+}
+
 #[test]
 fn extension_package_sources_are_lf_stable_on_every_checkout() {
     let attributes = source(".gitattributes");
@@ -57,10 +99,8 @@ fn release_workflow_and_local_builder_package_both_processes() {
         "local-browser-bridge-v${version}-windows-x86_64.exe",
         "local-computer-helper-v${version}-windows-x86_64.exe",
         "local-browser-bridge-v${version}-macos-universal.tar.gz",
-        "local-browser-bridge-extension-v${version}.zip",
         "Local Computer Helper.app/Contents/MacOS/local-computer-helper",
         "THIRD_PARTY_LICENSES.txt",
-        "--licenses",
         "codesign --verify --deep --strict",
         "bash scripts/verify-macos-build-host.sh",
         "bash scripts/verify-macos-artifacts.sh",
@@ -74,6 +114,10 @@ fn release_workflow_and_local_builder_package_both_processes() {
             "local builder is missing {required}"
         );
     }
+    assert!(workflow.contains("local-browser-bridge-extension-v${VERIFIED_VERSION}.zip"));
+    assert!(local.contains("local-browser-bridge-extension-v${version}.zip"));
+    assert!(workflow.contains("bash scripts/verify-macos-artifacts.sh"));
+    assert!(source("scripts/verify-macos-artifacts.sh").contains("--licenses"));
     assert!(workflow.contains("cargo build --locked --release --bins"));
     assert!(local.contains("cargo xwin build --locked --release --bins"));
     assert!(local.contains("release_stage=\"$(mktemp -d)\""));
@@ -198,8 +242,8 @@ fn local_deploy_atomically_replaces_only_generated_release_assets_with_rollback(
 }
 
 #[test]
-fn windows_ci_and_release_validate_the_complete_browser_evidence_toolchain() {
-    for path in [".github/workflows/ci.yml", ".github/workflows/deploy.yml"] {
+fn windows_ci_validates_the_complete_browser_evidence_toolchain_before_candidate_builds() {
+    for path in [".github/workflows/ci.yml"] {
         let workflow = source(path);
         for script in [
             "scripts/browser-evidence-candidate.ps1",
@@ -294,13 +338,22 @@ fn windows_ci_and_release_validate_the_complete_browser_evidence_toolchain() {
             );
         }
     }
+
+    let candidate = source(".github/workflows/deploy.yml");
+    assert!(candidate.contains("./scripts/verify-windows-artifacts.ps1 -Version $version"));
+    assert!(candidate.contains("needs: verify"));
+    assert!(candidate.contains("ref: ${{ needs.verify.outputs.source_sha }}"));
+    assert!(
+        !candidate.contains("run-windows-computer-use-acceptance.ps1 -Mode SelfTest"),
+        "the candidate workflow must reuse the exact reviewed CI result instead of paying to repeat the native acceptance coordinator"
+    );
 }
 
 #[test]
-fn windows_ci_and_release_gate_the_acceptance_coordinator_under_exact_ps51() {
+fn windows_ci_gates_the_acceptance_coordinator_under_exact_ps51() {
     let invocation = "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/run-windows-computer-use-acceptance.ps1 -Mode SelfTest";
     let success = "Windows computer-use acceptance coordinator self-test passed.";
-    for path in [".github/workflows/ci.yml", ".github/workflows/deploy.yml"] {
+    for path in [".github/workflows/ci.yml"] {
         let workflow = source(path);
         for required in [
             "\"scripts/run-windows-computer-use-acceptance.ps1\"",
@@ -345,102 +398,105 @@ fn windows_ci_and_release_gate_the_acceptance_coordinator_under_exact_ps51() {
 }
 
 #[test]
-fn v01229_source_is_unblocked_and_release_versions_are_aligned() {
+fn v01230_source_is_unblocked_and_release_versions_are_aligned() {
     match fs::symlink_metadata("RELEASE_BLOCKED") {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => panic!("could not inspect the release-blocker path: {error}"),
         Ok(_) => {
-            panic!("the reviewed v0.12.29 source must not retain a release-blocker file or symlink")
+            panic!("the reviewed v0.12.30 source must not retain a release-blocker file or symlink")
         }
     }
 
     for (path, required) in [
-        ("Cargo.toml", "version = \"0.12.29\""),
+        ("Cargo.toml", "version = \"0.12.30\""),
         (
             "Cargo.lock",
-            "name = \"local-browser-bridge\"\nversion = \"0.12.29\"",
+            "name = \"local-browser-bridge\"\nversion = \"0.12.30\"",
         ),
-        ("extension/manifest.json", "\"version\": \"0.12.29\""),
-        ("extension/lib.js", "export const VERSION = \"0.12.29\";"),
+        ("extension/manifest.json", "\"version\": \"0.12.30\""),
+        ("extension/lib.js", "export const VERSION = \"0.12.30\";"),
         (
             "scripts/run-windows-computer-use-acceptance.ps1",
-            "$script:ProductVersion = \"0.12.29\"",
+            "$script:ProductVersion = \"0.12.30\"",
         ),
         (
             "scripts/finalize-macos-acceptance.mjs",
-            "const PRODUCT_VERSION = \"0.12.29\";",
+            "const PRODUCT_VERSION = \"0.12.30\";",
         ),
         (
             "scripts/record-computer-helper-chain.ps1",
-            "$script:Version = \"0.12.29\"",
+            "$script:Version = \"0.12.30\"",
         ),
         (
             "scripts/test-windows-stock-chrome.ps1",
-            "$Version = \"0.12.29\"",
+            "$Version = \"0.12.30\"",
         ),
         (
             "scripts/verify-release-acceptance-evidence.sh",
-            "readonly EVIDENCE_PRODUCT_VERSION=\"0.12.29\"",
+            "readonly EVIDENCE_PRODUCT_VERSION=\"0.12.30\"",
         ),
         (
             "scripts/verify-windows-release-candidate.ps1",
-            "$ProductVersion = \"0.12.29\"",
+            "$ProductVersion = \"0.12.30\"",
         ),
         (
             "scripts/write-browser-evidence-record.ps1",
-            "$script:OperatorV2Version = \"0.12.29\"",
+            "$script:OperatorV2Version = \"0.12.30\"",
         ),
         (
             "scripts/write-stock-chrome-operator-response.ps1",
-            "$script:Version = \"0.12.29\"",
+            "$script:Version = \"0.12.30\"",
         ),
     ] {
         assert!(
             source(path).contains(required),
-            "v0.12.29 version alignment is missing from {path}: {required}"
+            "v0.12.30 version alignment is missing from {path}: {required}"
         );
     }
 
-    assert!(std::path::Path::new("evidence/v0.12.29/browser").is_dir());
-    assert!(std::path::Path::new("evidence/v0.12.29/computer").is_dir());
+    assert!(std::path::Path::new("evidence/v0.12.30/browser").is_dir());
+    assert!(std::path::Path::new("evidence/v0.12.30/computer").is_dir());
 }
 
 #[test]
 fn release_paths_retain_generic_fail_closed_blocker_enforcement() {
-    let workflow = source(".github/workflows/deploy.yml");
+    let candidate = source(".github/workflows/deploy.yml");
+    let publication = source(".github/workflows/publish.yml");
     let local = source("scripts/deploy.sh");
 
     let workflow_condition = "[[ -e RELEASE_BLOCKED || -L RELEASE_BLOCKED ]]";
-    assert_eq!(workflow.matches(workflow_condition).count(), 1);
+    assert_eq!(candidate.matches(workflow_condition).count(), 1);
     assert_eq!(
-        workflow
-            .matches("- name: Refuse a release-blocked source")
-            .count(),
-        1
+        publication.matches(workflow_condition).count(),
+        1,
+        "publication must recheck the source blocker independently of candidate creation"
     );
-    assert!(
-        workflow
-            .contains("Release is blocked by RELEASE_BLOCKED; resolve its recorded source gate")
-    );
-    let workflow_gate = workflow.find(workflow_condition).unwrap();
-    let workflow_setup = workflow.find("- uses: actions/setup-node@").unwrap();
-    let workflow_build = workflow
-        .find("- name: Run formatting, lint, unit, integration, and extension tests")
-        .unwrap();
-    assert!(workflow_gate < workflow_setup && workflow_setup < workflow_build);
-    assert!(!workflow.contains("continue-on-error:"));
+    assert!(candidate.contains("Release is blocked by RELEASE_BLOCKED."));
+    assert!(publication.contains("Release is blocked by RELEASE_BLOCKED."));
+    let workflow_gate = candidate.find(workflow_condition).unwrap();
+    let workflow_build = candidate.find("bash scripts/package-extension.sh").unwrap();
+    assert!(workflow_gate < workflow_build);
+    assert!(!candidate.contains("continue-on-error:"));
+    assert!(!publication.contains("continue-on-error:"));
     for dependency in [
         "windows:\n    name: Build Windows x86_64\n    needs: verify",
         "macos:\n    name: Build macOS universal\n    needs: verify",
-        "extension:\n    name: Package Chromium extension\n    needs: verify",
-        "assemble:\n    name: Assemble frozen release candidate\n    needs: [verify, windows, macos, extension]",
-        "release:\n    name: Publish GitHub Release\n    needs: [verify, assemble]",
+        "assemble:\n    name: Assemble frozen release candidate\n    needs: [verify, windows, macos]",
     ] {
         assert!(
-            workflow.contains(dependency),
-            "release dependency closure is missing: {dependency}"
+            candidate.contains(dependency),
+            "candidate dependency closure is missing: {dependency}"
         );
     }
+    assert!(
+        publication
+            .contains("release:\n    name: Publish exact accepted release\n    needs: preflight")
+    );
+    let publication_gate = publication.find(workflow_condition).unwrap();
+    let protected_environment = publication
+        .find("environment:\n      name: release")
+        .unwrap();
+    assert!(publication_gate < protected_environment);
 
     let local_condition = "[[ -e \"$release_blocker\" || -L \"$release_blocker\" ]]";
     assert_eq!(local.matches(local_condition).count(), 1);
@@ -462,8 +518,8 @@ fn release_paths_retain_generic_fail_closed_blocker_enforcement() {
 }
 
 #[test]
-fn windows_ci_and_release_compile_execute_and_self_clean_the_dedicated_fixture() {
-    for path in [".github/workflows/ci.yml", ".github/workflows/deploy.yml"] {
+fn windows_ci_compiles_executes_and_self_cleans_the_dedicated_fixture() {
+    for path in [".github/workflows/ci.yml"] {
         let workflow = source(path);
         for required in [
             "$fixtureExecutableSelfTest = Join-Path $env:RUNNER_TEMP (\"lbb-windows-fixture-\" + [Guid]::NewGuid().ToString(\"N\") + \".exe\")",
@@ -542,8 +598,8 @@ fn windows_ci_and_release_compile_execute_and_self_clean_the_dedicated_fixture()
 }
 
 #[test]
-fn release_runs_every_browser_evidence_self_test_under_windows_powershell_51() {
-    let workflow = source(".github/workflows/deploy.yml");
+fn ci_runs_every_browser_evidence_self_test_under_windows_powershell_51() {
+    let workflow = source(".github/workflows/ci.yml");
     for invocation in [
         "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/browser-evidence-candidate.ps1 -Mode SelfTest",
         "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/record-computer-helper-chain.ps1 -Mode SelfTest",
@@ -561,7 +617,7 @@ fn release_runs_every_browser_evidence_self_test_under_windows_powershell_51() {
     ] {
         assert!(
             workflow.contains(invocation),
-            "release validation does not run under Windows PowerShell 5.1: {invocation}"
+            "CI validation does not run under Windows PowerShell 5.1: {invocation}"
         );
     }
 }
@@ -597,19 +653,19 @@ fn windows_release_tooling_hashes_without_module_discovery() {
 fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_only() {
     let watcher = source("scripts/wait-macos-app-share-concurrency-handoff.mjs");
     let adversarial_watcher = source("scripts/wait-macos-pointer-concurrency-handoff.mjs");
-    let producer = source("evidence/v0.12.29/computer/helper-evidence-rig.mjs");
-    let playbook = source("evidence/v0.12.29/computer/README.md");
+    let producer = source("evidence/v0.12.30/computer/helper-evidence-rig.mjs");
+    let playbook = source("evidence/v0.12.30/computer/README.md");
     let finalizer = source("scripts/finalize-macos-acceptance.mjs");
     let verifier = source("scripts/verify-release-acceptance-evidence.sh");
     let ci = source(".github/workflows/ci.yml");
-    let release = source(".github/workflows/deploy.yml");
+    let candidate = source(".github/workflows/deploy.yml");
     let local = source("scripts/deploy.sh");
 
-    for integration in [&ci, &release, &local] {
+    for integration in [&ci, &local] {
         assert!(
             integration
                 .contains("node --check scripts/wait-macos-app-share-concurrency-handoff.mjs"),
-            "release integration does not syntax-check the exact-app-share watcher"
+            "CI/local validation does not syntax-check the exact-app-share watcher"
         );
         assert!(integration.contains(
             "node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test"
@@ -621,10 +677,10 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
             >= 2
     );
     assert!(
-        release
+        local
             .matches("node --check scripts/wait-macos-app-share-concurrency-handoff.mjs")
             .count()
-            >= 2
+            >= 1
     );
 
     assert!(ci.contains("Validate the optional adversarial macOS pointer handoff watcher"));
@@ -634,13 +690,13 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         1,
         "the legacy pointer watcher must remain optional adversarial CI coverage"
     );
-    for release_path in [&release, &local] {
+    for release_path in [&candidate, &local] {
         assert!(
             !release_path.contains("wait-macos-pointer-concurrency-handoff.mjs"),
             "the legacy pointer watcher must not gate or satisfy release"
         );
     }
-    assert!(adversarial_watcher.contains("const PRODUCT_VERSION = \"0.12.29\";"));
+    assert!(adversarial_watcher.contains("const PRODUCT_VERSION = \"0.12.30\";"));
     assert!(
         adversarial_watcher.contains("macOS pointer-concurrency handoff watcher self-test passed.")
     );
@@ -659,9 +715,9 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         }
     }
     for aggregate_contract in [
-        "const PRODUCT_VERSION = \"0.12.29\";",
+        "const PRODUCT_VERSION = \"0.12.30\";",
         "const RESULT_SCHEMA_VERSION = 8;",
-        "const AGGREGATE_SCHEMA_VERSION = 2;",
+        "const AGGREGATE_SCHEMA_VERSION = 3;",
         "const REQUEST_MARKER = \"operator/macos-app-share-concurrency-handoff-request.json\";",
         "const START_MARKER = \"operator/macos-app-share-concurrency-handoff-start.json\";",
         "const COMPLETE_MARKER = \"operator/macos-app-share-concurrency-handoff-complete.json\";",
@@ -676,7 +732,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
     }
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.29\";",
+        "const PRODUCT_VERSION = \"0.12.30\";",
         "const SCHEMA_VERSION = 2;",
         "const OPERATOR_DIRECTORY = \"operator\";",
         "const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;",
@@ -772,7 +828,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         "DELIBERATE_REVIEW_MANIFEST=",
         "jq -er '.screenshots[] | \"\\(.sha256)  \\(.file)\"' helper-results.json",
         ".status == \"passed-release-candidate\"",
-        ".schemaVersion == 2",
+        ".schemaVersion == 3",
         ".aggregateChecks.passingResultSchemaVersion == 8",
         ".aggregateChecks.inventoryFileCount == 19",
         "macos-app-share-concurrency-handoff-start.json",
@@ -790,21 +846,21 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         );
     }
 
-    for integration in [&ci, &release, &local] {
+    for integration in [&ci, &local] {
         assert!(
-            integration.contains("node --check evidence/v0.12.29/computer/helper-evidence-rig.mjs"),
-            "release path does not syntax-check the exact v0.12.29 macOS evidence rig"
+            integration.contains("node --check evidence/v0.12.30/computer/helper-evidence-rig.mjs"),
+            "CI/local validation does not syntax-check the exact v0.12.30 macOS evidence rig"
         );
         assert!(
             integration
-                .contains("node evidence/v0.12.29/computer/helper-evidence-rig.mjs --self-test")
+                .contains("node evidence/v0.12.30/computer/helper-evidence-rig.mjs --self-test")
         );
         assert!(
             !integration.contains("evidence/v0.12.20/computer/"),
             "active integration still targets the withdrawn v0.12.20 harness"
         );
     }
-    for integration in [&ci, &release] {
+    for integration in [&ci, &local] {
         for source in [
             "HelperEvidenceFixture.swift",
             "SystemProbe.swift",
@@ -812,22 +868,25 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         ] {
             assert!(
                 integration.contains(&format!(
-                    "xcrun swiftc -typecheck evidence/v0.12.29/computer/{source}"
+                    "xcrun swiftc -typecheck evidence/v0.12.30/computer/{source}"
                 )),
                 "macOS workflow does not typecheck {source}"
             );
         }
-        assert!(integration.contains("lbb-app-share-handoff-self-test\" --self-test"));
     }
+    assert!(ci.contains("\"$RUNNER_TEMP/lbb-app-share-handoff-self-test\" --self-test"));
+    assert!(local.contains("\"$app_share_handoff_self_test\" --self-test"));
     assert!(ci.contains(
-        "xcrun swiftc -typecheck evidence/v0.12.29/computer/PhysicalPointerHandoff.swift"
+        "xcrun swiftc -typecheck evidence/v0.12.30/computer/PhysicalPointerHandoff.swift"
     ));
-    for release_path in [&release, &local] {
+    for release_path in [&candidate, &local] {
         assert!(
             !release_path.contains("PhysicalPointerHandoff.swift"),
             "the physical-pointer adversarial helper must not become a release-path requirement"
         );
     }
+    assert!(candidate.contains("bash scripts/verify-release-acceptance-evidence.sh --self-test"));
+    assert!(candidate.contains("\"macOS native validation\""));
 
     for field in [
         "schemaVersion",
@@ -1006,68 +1065,218 @@ fn release_asset_archive_readers_are_exact_bounded_and_fail_closed() {
 }
 
 #[test]
-fn release_gates_javascript_macos_and_published_provenance() {
+fn two_phase_release_is_tagless_reviewed_low_cost_and_provenance_bound() {
     let ci = source(".github/workflows/ci.yml");
-    let release = source(".github/workflows/deploy.yml");
+    let candidate = source(".github/workflows/deploy.yml");
+    let publication = source(".github/workflows/publish.yml");
+    let publisher = source("scripts/publish-release.sh");
     let verifier = source("scripts/verify-release-assets.sh");
-    let node_pin = "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0";
 
-    assert!(ci.matches(node_pin).count() >= 4);
-    assert!(!ci.contains("Extension static and contract tests (Node-free)"));
-    assert!(ci.contains("name: macOS formatting, lint, and tests"));
-    assert_eq!(ci.matches("runs-on: macos-26").count(), 1);
-    assert_eq!(release.matches("runs-on: macos-26").count(), 1);
-    assert!(!ci.contains("runs-on: macos-14"));
-    assert!(!release.contains("runs-on: macos-14"));
-    assert!(ci.contains("bash scripts/verify-macos-build-host.sh"));
-    assert!(release.contains("bash scripts/verify-macos-build-host.sh"));
-    let macos_host_verifier = source("scripts/verify-macos-build-host.sh");
-    assert!(macos_host_verifier.contains("required_sdk_major=26"));
-    assert!(macos_host_verifier.contains("required_deployment_target=\"13.0\""));
-    assert!(macos_host_verifier.contains("xcrun --sdk macosx --show-sdk-version"));
-    assert!(!release.contains("workflow_dispatch:"));
-    assert!(release.contains("RELEASE_TAG: ${{ github.ref_name }}"));
-
-    for required in [
-        "Run native macOS formatting, lint, and tests",
-        "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
-        "Assemble frozen release candidate",
-        "Freeze the exact candidate for interactive acceptance",
-        "name: release-candidate",
-        "retention-days: 14",
-        "environment:\n      name: release",
-        "Re-verify the frozen candidate and every build attestation",
-        "Refuse publication unless release immutability is enabled",
-        "Recover a verified draft or publish immutable release assets",
-        "assert_release_identity \"$created_draft\" true false",
-        "assert_release_assets \"$created_draft\" exact",
-        "download_and_compare_release_assets \"$created_draft\"",
-        "cmp -s \"dist/$asset_name\" \"$download_dir/$asset_name\"",
-        "repos/$GITHUB_REPOSITORY/immutable-releases",
-        "X-GitHub-Api-Version: 2026-03-10",
-        "--jq '.enabled'",
-        "--source-ref \"$GITHUB_REF\"",
-        "VERIFIED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}",
-        "--source-digest \"$VERIFIED_SOURCE_SHA\"",
-        "--signer-workflow \"$GITHUB_REPOSITORY/.github/workflows/deploy.yml\"",
-        "--deny-self-hosted-runners",
-        "Re-download and verify the immutable published release",
-        "gh release download \"$RELEASE_TAG\"",
-        "gh release verify \"$RELEASE_TAG\"",
-        "gh release verify \"$RELEASE_TAG\" --repo \"$GITHUB_REPOSITORY\" --format json",
-        "gh release verify-asset \"$RELEASE_TAG\"",
-        "expected_purl=\"pkg:github/${GITHUB_REPOSITORY}@${RELEASE_TAG}\"",
-        ".digest.sha1",
-        "test \"$release_tag_sha\" = \"$VERIFIED_TAG_SHA\"",
-        "bash scripts/verify-release-assets.sh \"$version\" published",
-        "gh release verify-asset $RELEASE_TAG <file>",
-        "--source-ref refs/tags/$RELEASE_TAG",
+    let ci_trigger = ci.split("permissions:").next().unwrap();
+    assert!(ci_trigger.contains("on:\n  pull_request:\n  workflow_dispatch:"));
+    assert!(!ci_trigger.contains("push:"));
+    assert_eq!(workflow_job_ids(&ci), vec!["rust", "windows", "macos"]);
+    for name in [
+        "name: Rust, extension, and packaging",
+        "name: Windows native validation",
+        "name: macOS native validation",
     ] {
         assert!(
-            release.contains(required),
-            "release gate is missing {required}"
+            ci.contains(name),
+            "the three-lane CI contract is missing {name}"
         );
     }
+    assert!(!ci.contains("actions/upload-artifact@"));
+    assert!(ci.contains("cargo test --locked --all-targets"));
+    assert!(ci.contains("cargo test --locked --target x86_64-pc-windows-msvc --all-targets"));
+    assert!(ci.contains("bash scripts/verify-macos-build-host.sh"));
+
+    let candidate_trigger = candidate.split("permissions:").next().unwrap();
+    assert!(candidate_trigger.contains("on:\n  workflow_dispatch:"));
+    assert!(!candidate_trigger.contains("push:"));
+    assert_eq!(
+        workflow_job_ids(&candidate),
+        vec!["verify", "windows", "macos", "assemble"]
+    );
+    let candidate_verify = job_section(&candidate, "verify");
+    assert!(candidate_verify.contains("pull-requests: read"));
+    assert!(!candidate.contains("environment:"));
+    assert!(!candidate.contains("contents: write"));
+    for forbidden in [
+        "gh release create",
+        "gh release upload",
+        "gh release delete",
+        "git tag ",
+        "git push ",
+        "publish-release.sh publish",
+        "refs/tags/${{",
+    ] {
+        assert!(
+            !candidate.contains(forbidden),
+            "tagless candidate workflow contains publication primitive: {forbidden}"
+        );
+    }
+    for source_gate in [
+        "[[ \"$GITHUB_REF\" == \"refs/heads/main\" ]]",
+        "test \"$GITHUB_SHA\" = \"$SOURCE_REF\"",
+        "test \"$(git rev-parse origin/main)\" = \"$SOURCE_REF\"",
+        "commits/$SOURCE_REF/pulls?per_page=100",
+        ".merge_commit_sha == $source",
+        ".base.ref == \"main\"",
+        "source must belong to exactly one merged main PR",
+        "commits/$reviewed_head/check-runs?per_page=100",
+        "\"Rust, extension, and packaging\"",
+        "\"Windows native validation\"",
+        "\"macOS native validation\"",
+        ".head_sha == $source",
+        ".status == \"completed\"",
+        ".conclusion == \"success\"",
+        ".app.slug == \"github-actions\"",
+    ] {
+        assert!(
+            candidate.contains(source_gate),
+            "candidate source/CI binding is missing {source_gate}"
+        );
+    }
+    for asset in [
+        "local-browser-bridge-v${version}-windows-x86_64.exe",
+        "local-computer-helper-v${version}-windows-x86_64.exe",
+        "local-browser-bridge-v${version}-macos-universal.tar.gz",
+        "local-browser-bridge-extension-v${VERIFIED_VERSION}.zip",
+        "SHA256SUMS.txt",
+    ] {
+        assert!(
+            candidate.contains(asset),
+            "candidate omits exact asset {asset}"
+        );
+    }
+    assert_eq!(
+        candidate
+            .matches("actions/attest-build-provenance@")
+            .count(),
+        4
+    );
+    assert_eq!(
+        candidate
+            .lines()
+            .filter(|line| line.trim() == "retention-days: 1")
+            .count(),
+        3
+    );
+    assert_eq!(
+        candidate
+            .lines()
+            .filter(|line| line.trim() == "retention-days: 14")
+            .count(),
+        1
+    );
+    assert!(candidate.contains("name: release-candidate"));
+    assert!(candidate.contains("for subject in dist/*; do verify_attestation \"$subject\"; done"));
+    assert!(candidate.contains("--source-ref refs/heads/main"));
+    assert!(candidate.contains("--source-digest \"$VERIFIED_SOURCE_SHA\""));
+    assert!(
+        candidate.contains("--signer-workflow \"$GITHUB_REPOSITORY/.github/workflows/deploy.yml\"")
+    );
+    assert!(candidate.contains("--deny-self-hosted-runners"));
+
+    assert_eq!(workflow_job_ids(&publication), vec!["preflight", "release"]);
+    let preflight = job_section(&publication, "preflight");
+    let release = job_section(&publication, "release");
+    assert!(!preflight.contains("environment:"));
+    assert!(!preflight.contains("contents: write"));
+    assert!(preflight.contains("bash scripts/fetch-verify-release-candidate.sh"));
+    assert!(preflight.contains("bash scripts/verify-release-acceptance-evidence.sh"));
+    assert!(preflight.contains("jq -e '.schemaVersion == 3'"));
+    assert!(preflight.contains("bash scripts/publish-release.sh prepare"));
+    assert!(preflight.contains("bash scripts/publish-release.sh check-remote"));
+    assert!(preflight.contains("retention-days: 1"));
+    assert!(preflight.contains("compression-level: 0"));
+    assert!(!preflight.contains("publish-release.sh publish"));
+    assert!(release.contains("environment:\n      name: release"));
+    assert!(release.contains("contents: write"));
+    assert!(release.contains("needs: preflight"));
+    assert!(release.contains("artifact-ids: ${{ needs.preflight.outputs.approval_artifact_id }}"));
+    assert!(release.contains("bash scripts/publish-release.sh publish"));
+    assert_eq!(
+        publication
+            .matches("environment:\n      name: release")
+            .count(),
+        1
+    );
+    assert_eq!(publication.matches("contents: write").count(), 1);
+    assert_eq!(publication.matches("publish-release.sh publish").count(), 1);
+
+    for publication_contract in [
+        "readonly CANDIDATE_REF=\"refs/heads/main\"",
+        ".schemaVersion == 3",
+        ".workflowEvent == \"workflow_dispatch\"",
+        ".workflowRef == \"refs/heads/main\"",
+        ".workflowPath == \".github/workflows/deploy.yml\"",
+        ".workflowRunAttempt == $run_attempt",
+        "create_or_verify_tag",
+        "assert_tag",
+        "draft:true",
+        ".draft == false and .immutable == true",
+        "gh release upload \"$RELEASE_TAG\" \"$approved/$name\"",
+        "gh release download \"$RELEASE_TAG\"",
+        "cmp -s \"$approved/$name\" \"$scratch/downloads/$name\"",
+        "gh release verify-asset \"$RELEASE_TAG\"",
+        "gh release verify \"$RELEASE_TAG\"",
+        ".verificationResult.statement.predicate.repository == $repository",
+        ".verificationResult.statement.predicate.tag == $tag",
+        ".digest.sha1 == $tag_object_sha",
+        "--source-ref \"$CANDIDATE_REF\"",
+        "--source-digest \"$VERIFIED_SOURCE_SHA\"",
+        "--signer-workflow \"$REPOSITORY/$CANDIDATE_WORKFLOW\"",
+        "--deny-self-hosted-runners",
+        "Canonical acceptance receipt SHA-256",
+        "assert_repository_release_policy()",
+        "repos/$REPOSITORY/immutable-releases",
+        "test \"$enabled\" = true",
+        ".conditions.ref_name.include == [\"refs/tags/v*\"]",
+        ".conditions.ref_name.exclude == []",
+        "([.rules[].type] | index(\"update\") != null and index(\"deletion\") != null)",
+        "(.bypass_actors | type == \"array\" and length == 0)",
+        ".current_user_can_bypass == \"never\"",
+        "release tags are not protected by one unbypassable update/deletion ruleset",
+    ] {
+        assert!(
+            publisher.contains(publication_contract),
+            "protected publication helper is missing {publication_contract}"
+        );
+    }
+    assert!(!publisher.contains("gh release delete"));
+    assert!(!publisher.contains("--method DELETE"));
+    assert_eq!(
+        publisher
+            .matches("assert_repository_release_policy")
+            .count(),
+        5,
+        "the policy function plus preflight, protected-job entry, pre-tag, and pre-publication calls must remain present"
+    );
+
+    let protected_publish = publisher.split("publish_approved() {").nth(1).unwrap();
+    assert!(
+        protected_publish
+            .find("assert_repository_release_policy")
+            .unwrap()
+            < protected_publish.find("create_or_verify_tag").unwrap(),
+        "the protected job must prove immutable Releases and unbypassable tag protection before creating a tag"
+    );
+    let draft_publication = publisher
+        .split("create_or_recover_release() {")
+        .nth(1)
+        .unwrap()
+        .split("\n}\n\nverify_published_release()")
+        .next()
+        .unwrap();
+    assert!(
+        draft_publication
+            .rfind("assert_repository_release_policy")
+            .unwrap()
+            < draft_publication.find("gh api --method PATCH").unwrap(),
+        "repository release policy must be rechecked immediately before publishing a draft"
+    );
 
     assert!(
         verifier
@@ -1075,137 +1284,54 @@ fn release_gates_javascript_macos_and_published_provenance() {
     );
     assert!(verifier.contains("Release asset is missing, empty, linked, or not a regular file"));
     assert!(verifier.contains("Release directory contains an unexpected file set."));
-    assert!(verifier.contains("while IFS= read -r line || [[ -n \"$line\" ]]; do"));
-    assert!(verifier.contains("checksum_lines+=(\"$line\")"));
     assert!(verifier.contains("Checksum manifest must contain exactly four canonical lines."));
-    assert!(verifier.contains("[[ ! \"$hash\" =~ ^[0-9a-f]{64}$ ]]"));
-    assert!(verifier.contains("[[ \"${line:64:2}\" != \"  \" ]]"));
-    assert!(verifier.contains("[[ \"${line:66}\" != \"${expected_checksum_files[$index]}\" ]]"));
-    assert!(verifier.contains("cmp -s \"$canonical_checksum_manifest\" \"$checksum_manifest\""));
     assert!(verifier.contains("Checksum manifest bytes are not canonical LF-terminated ASCII."));
-    assert!(!verifier.contains("if [[ -f \"$checksum_manifest\" ]]"));
-
-    let immutable_gate = release
-        .find("Refuse publication unless release immutability is enabled")
-        .unwrap();
-    let exact_asset_gate = release
-        .find("bash scripts/verify-release-assets.sh \"$version\" dist")
-        .unwrap();
-    let publish = release.find("gh release create \"$RELEASE_TAG\"").unwrap();
-    assert!(immutable_gate < publish);
-    assert!(exact_asset_gate < publish);
-    assert_eq!(
-        release
-            .matches("(cd dist && sha256sum \"${assets[@]}\" > SHA256SUMS.txt)")
-            .count(),
-        1,
-        "the checksum manifest must be generated once in the frozen candidate, never rebuilt after acceptance"
-    );
-    let freeze = release
-        .find("Freeze the exact candidate for interactive acceptance")
-        .unwrap();
-    let approval = release.find("environment:\n      name: release").unwrap();
-    assert!(freeze < approval);
-    assert!(approval < publish);
-    let publish_draft = release.find("-F draft=false").unwrap();
-    let upload = release
-        .find("gh release upload \"$RELEASE_TAG\" dist/*")
-        .unwrap();
-    let draft_identity = release
-        .find("assert_release_identity \"$created_draft\" true false")
-        .unwrap();
-    let draft_asset_set = release
-        .find("assert_release_assets \"$created_draft\" exact")
-        .unwrap();
-    let draft_byte_comparison = release
-        .find("download_and_compare_release_assets \"$created_draft\"")
-        .unwrap();
-    assert!(publish < upload);
-    assert!(upload < draft_identity);
-    assert!(draft_identity < draft_asset_set);
-    assert!(draft_asset_set < draft_byte_comparison);
-    assert!(draft_byte_comparison < publish_draft);
-    let final_tag_recheck = release[..publish_draft].rfind("assert_remote_tag").unwrap();
-    let final_immutable_recheck = release[..publish_draft]
-        .rfind("\"repos/$GITHUB_REPOSITORY/immutable-releases\"")
-        .unwrap();
-    assert!(publish < final_tag_recheck);
-    assert!(final_tag_recheck < final_immutable_recheck);
-    assert!(final_immutable_recheck < publish_draft);
-    assert_eq!(
-        release
-            .matches("\"repos/$GITHUB_REPOSITORY/immutable-releases\"")
-            .count(),
-        2,
-        "release immutability must be checked both before approval and immediately before draft publication"
-    );
-    let final_publication_gate = &release[final_tag_recheck..publish_draft];
-    assert!(final_publication_gate.contains("X-GitHub-Api-Version: 2026-03-10"));
-    assert!(final_publication_gate.contains("--jq '.enabled')\" = true"));
-    let published_attestation = release
-        .find("release_verification=\"$(gh release verify")
-        .unwrap();
-    let tag_subject_check = release
-        .find("test \"$release_tag_sha\" = \"$VERIFIED_TAG_SHA\"")
-        .unwrap();
-    assert!(publish_draft < published_attestation);
-    assert!(published_attestation < tag_subject_check);
-    let published_verification_step = release
-        .split("- name: Re-download and verify the immutable published release")
-        .nth(1)
-        .unwrap()
-        .split("shell: bash")
-        .next()
-        .unwrap();
-    assert!(
-        published_verification_step
-            .contains("VERIFIED_TAG_SHA: ${{ needs.verify.outputs.tag_sha }}")
-    );
 }
 
 #[test]
-fn release_requires_canonical_schema_two_receipt_and_committed_evidence() {
-    let release = source(".github/workflows/deploy.yml");
+fn release_requires_canonical_schema_three_receipt_and_committed_evidence() {
+    let publication = source(".github/workflows/publish.yml");
     let verifier = source("scripts/verify-release-acceptance-evidence.sh");
-    let receipt_gate = release
-        .split("- name: Require exact candidate-bound committed acceptance evidence")
-        .nth(1)
-        .unwrap()
-        .split("- name: Recover a verified draft or publish immutable release assets")
-        .next()
-        .unwrap();
+    let publisher = source("scripts/publish-release.sh");
 
     for required in [
-        "actions: read # Re-downloads and raw-hashes the exact frozen workflow artifact.",
-        "LBB_RELEASE_ACCEPTANCE_V2: ${{ vars.LBB_RELEASE_ACCEPTANCE_V2 }}",
-        "test -n \"${LBB_RELEASE_ACCEPTANCE_V2:-}\"",
-        "test \"${#LBB_RELEASE_ACCEPTANCE_V2}\" -le 4096",
-        "printf '%s' \"$LBB_RELEASE_ACCEPTANCE_V2\" > \"$receipt_file\"",
-        "bash scripts/verify-release-acceptance-evidence.sh \"$receipt_file\" dist",
-        "acceptance_receipt_sha256=\"$(sha256sum \"$receipt_file\"",
-        "printf 'LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256=%s\\n'",
-        ">> \"$GITHUB_ENV\"",
-        "GH_TOKEN: ${{ github.token }}",
-        "VERIFIED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}",
-        "VERIFIED_TAG_SHA: ${{ needs.verify.outputs.tag_sha }}",
+        "acceptance_receipt:\n        description: Canonical one-line schema-3 acceptance receipt JSON",
+        "ACCEPTANCE_RECEIPT: ${{ inputs.acceptance_receipt }}",
+        "CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}",
+        "CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}",
+        "RELEASE_TAG: v${{ inputs.version }}",
+        "VERIFIED_SOURCE_SHA: ${{ inputs.source_sha }}",
+        "test \"$(jq -c . \"$receipt\")\" = \"$(<\"$receipt\")\"",
+        "jq -e '.schemaVersion == 3' \"$receipt\"",
+        "bash scripts/verify-release-acceptance-evidence.sh",
+        "bash scripts/publish-release.sh prepare",
+        "acceptance_receipt_sha256: ${{ steps.approval.outputs.acceptance_receipt_sha256 }}",
+        "EXPECTED_RECEIPT_SHA256: ${{ needs.preflight.outputs.acceptance_receipt_sha256 }}",
     ] {
         assert!(
-            release.contains(required),
-            "release acceptance evidence gate is missing {required}"
+            publication.contains(required),
+            "schema-3 publication gate is missing {required}"
         );
     }
-    assert!(
-        release.contains("run: bash scripts/verify-release-acceptance-evidence.sh --self-test")
-    );
-    assert!(!release.contains("LBB_RELEASE_ACCEPTANCE_V1"));
-    assert!(!release.contains("local-browser-bridge-release:v1"));
-    assert!(!receipt_gate.contains("secrets.LBB_RELEASE_ACCEPTANCE_V2"));
-
-    for key in [
-        "schemaVersion",
-        "tag",
-        "sourceSha",
+    for forbidden in [
+        "LBB_RELEASE_ACCEPTANCE_V1",
+        "LBB_RELEASE_ACCEPTANCE_V2",
+        "vars.LBB_RELEASE_ACCEPTANCE",
+        "secrets.LBB_RELEASE_ACCEPTANCE",
+        "VERIFIED_TAG_SHA",
         "tagObjectSha",
+    ] {
+        assert!(
+            !publication.contains(forbidden),
+            "publication still depends on obsolete or mutable receipt state: {forbidden}"
+        );
+    }
+
+    let canonical_keys = [
+        "schemaVersion",
+        "version",
+        "releaseTag",
+        "sourceSha",
         "workflowRunId",
         "workflowRunAttempt",
         "releaseCandidateArtifactId",
@@ -1222,18 +1348,19 @@ fn release_requires_canonical_schema_two_receipt_and_committed_evidence() {
         "stockChromePassed",
         "stockChrome",
         "stockChromeResultSha256",
-    ] {
+    ];
+    for key in canonical_keys {
         assert!(
             verifier.contains(&format!("\"{key}\"")),
-            "canonical schema-2 receipt omits {key}"
+            "canonical schema-3 receipt omits {key}"
         );
     }
     for required in [
         "keys_unsorted == [",
-        ".schemaVersion == 2",
-        ".tag == $tag",
+        ".schemaVersion == 3",
+        ".releaseTag == (\"v\" + .version)",
+        ".releaseTag == $release_tag",
         ".sourceSha == $source_sha",
-        ".tagObjectSha == $tag_object_sha",
         ".workflowRunId == $run_id",
         ".workflowRunAttempt == $run_attempt",
         ".checksumManifestSha256 == $manifest_sha256",
@@ -1247,46 +1374,29 @@ fn release_requires_canonical_schema_two_receipt_and_committed_evidence() {
         "macos/deliberate-concurrency/helper-results.json",
         "windows/computer/summary.json",
         "windows/browser/browser-acceptance.json",
+        "workflowEvent: \"workflow_dispatch\"",
+        "workflowRef: \"refs/heads/main\"",
+        "workflowPath: \".github/workflows/deploy.yml\"",
     ] {
         assert!(
             verifier.contains(required),
-            "schema-2 verifier is missing {required}"
+            "schema-3 verifier is missing {required}"
         );
     }
+    assert!(!verifier.contains("tagObjectSha"));
+    assert!(!verifier.contains("VERIFIED_TAG_SHA"));
 
-    let freeze = release
-        .find("Freeze the exact candidate for interactive acceptance")
-        .unwrap();
-    let receipt = release
-        .find("Require exact candidate-bound committed acceptance evidence")
-        .unwrap();
-    let release_mutation = release
-        .find("Recover a verified draft or publish immutable release assets")
-        .unwrap();
-    assert!(freeze < receipt);
-    assert!(receipt < release_mutation);
-    assert!(receipt < release.find("gh release create \"$RELEASE_TAG\"").unwrap());
-
-    let publication = &release[release_mutation..];
-    for required in [
-        "[[ \"${LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256:-}\" =~ ^[0-9a-f]{64}$ ]]",
-        "acceptance-receipt-sha256=$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256",
-        "Acceptance receipt SHA-256: \\`$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256\\`",
-        "cmp -s release-notes.md \"$release_body\"",
+    for receipt_binding in [
+        "acceptanceReceiptSha256",
+        "test \"$(sha256_file \"$directory/acceptance-receipt.json\")\" = \"$expected_receipt_sha\"",
+        "Canonical acceptance receipt SHA-256: \\`$receipt_sha256\\`",
+        "Candidate workflow: run \\`$CANDIDATE_RUN_ID\\`, attempt \\`$CANDIDATE_RUN_ATTEMPT\\`",
+        "Accepted source: [\\`$VERIFIED_SOURCE_SHA\\`]",
+        "assert_release_identity",
     ] {
         assert!(
-            publication.contains(required),
-            "published release does not bind the accepted receipt: {required}"
-        );
-    }
-    for forbidden in [
-        "release_acceptance_receipt_sha256()",
-        "existing_acceptance_receipt_sha256=\"$(release_acceptance_receipt_sha256",
-        "sed \"s/$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256/$expected_acceptance_receipt_sha256/g\"",
-    ] {
-        assert!(
-            !publication.contains(forbidden),
-            "release recovery must not trust a receipt hash embedded by an existing release: {forbidden}"
+            publisher.contains(receipt_binding),
+            "immutable publication does not preserve receipt/source binding: {receipt_binding}"
         );
     }
 }
@@ -1295,9 +1405,9 @@ fn release_requires_canonical_schema_two_receipt_and_committed_evidence() {
 fn release_evidence_verifier_fails_closed_on_artifact_or_commit_substitution() {
     let verifier = source("scripts/verify-release-acceptance-evidence.sh");
     for required in [
-        "actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT",
-        "actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100",
-        "actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100",
+        "actions/runs/$CANDIDATE_RUN_ID/attempts/$CANDIDATE_RUN_ATTEMPT",
+        "actions/runs/$CANDIDATE_RUN_ID/attempts/$CANDIDATE_RUN_ATTEMPT/jobs?per_page=100",
+        "actions/runs/$CANDIDATE_RUN_ID/artifacts?per_page=100",
         "actions/artifacts/$artifact_id/zip",
         "raw release-candidate artifact ZIP SHA-256 mismatch",
         "cmp -s \"$extracted/$asset\" \"$candidate_dir/$asset\"",
@@ -1505,113 +1615,112 @@ fn release_evidence_gate_requires_exact_current_attempt_and_complete_ui_proofs()
 }
 
 #[test]
-fn release_reruns_delete_only_a_candidate_bound_byte_exact_draft() {
-    let release = source(".github/workflows/deploy.yml");
-
+fn release_reruns_never_delete_and_recover_only_byte_exact_drafts() {
+    let publisher = source("scripts/publish-release.sh");
     for binding in [
-        "local-browser-bridge-release:v2",
-        "source-sha=$VERIFIED_SOURCE_SHA",
-        "tag-object-sha=$VERIFIED_TAG_SHA",
-        "manifest-sha256=$candidate_manifest_sha256",
-        "acceptance-receipt-sha256=$LBB_RELEASE_ACCEPTANCE_RECEIPT_SHA256",
-        "jq -ej '.body | select(type == \"string\")'",
-        "cmp -s release-notes.md \"$release_body\"",
+        "assert_release_identity \"$release_json\" \"$notes\"",
+        "assert_release_assets \"$release_json\" \"$approved\" true",
+        "assert_release_assets \"$release_json\" \"$approved\" false",
+        "validate_approval \"$approved\" \"$expected_receipt_sha\"",
+        "verify_release_assets_in_bundle \"$approved\"",
+        "verify_attestation \"$approved/$name\" \"$attestation\"",
+        "a release exists without the exact annotated tag",
+        "release is not an exact recoverable draft or immutable publication",
     ] {
         assert!(
-            release.contains(binding),
-            "recoverable draft ownership is missing {binding}"
+            publisher.contains(binding),
+            "recoverable publication ownership is missing {binding}"
         );
     }
-    assert!(!release.contains("jq -ejr '.body | select(type == \"string\")'"));
-    assert!(
-        release
-            .contains("https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id")
+    assert_eq!(
+        publisher
+            .matches("gh release upload \"$RELEASE_TAG\"")
+            .count(),
+        1
     );
-    assert!(release.contains("[[ \"$asset_id\" =~ ^[1-9][0-9]*$ ]]"));
-    assert!(!release.contains("((.id | type) == \"number\")"));
+    assert!(!publisher.contains("gh release delete"));
+    assert!(!publisher.contains("--method DELETE"));
+    assert!(!publisher.contains("--cleanup-tag"));
 
-    let draft_start = release
-        .find("if jq -e '.isDraft == true and .isImmutable == false'")
+    let recovery = publisher
+        .split("create_or_recover_release() {")
+        .nth(1)
+        .unwrap()
+        .split("\n}\n\nverify_published_release()")
+        .next()
         .unwrap();
-    let published_start = release
-        .find("elif jq -e '.isDraft == false and .isImmutable == true'")
+    let identity = recovery
+        .find("assert_release_identity \"$release_json\" \"$notes\"")
         .unwrap();
-    let draft = &release[draft_start..published_start];
-    let identity = draft
-        .find("assert_release_identity \"$existing_release\" true false")
+    let subset = recovery
+        .find("assert_release_assets \"$release_json\" \"$approved\" true")
         .unwrap();
-    let subset = draft
-        .find("assert_release_assets \"$existing_release\" subset")
+    let draft_gate = recovery
+        .find(".draft == true and .immutable == false")
         .unwrap();
-    let byte_comparison = draft
-        .find("download_and_compare_release_assets \"$existing_release\"")
+    let upload = recovery
+        .find("gh release upload \"$RELEASE_TAG\" \"$approved/$name\"")
         .unwrap();
-    let stable_identity = draft
-        .find("test \"$(release_fingerprint \"$refreshed_draft\")\" = \"$draft_fingerprint\"")
+    let exact = recovery[upload..]
+        .find("assert_release_assets \"$release_json\" \"$approved\" false")
+        .map(|offset| upload + offset)
         .unwrap();
-    let delete = draft.find("--method DELETE").unwrap();
-    let absent = draft.find("wait_for_release_absence").unwrap();
+    let publish = recovery
+        .find("'{\"draft\":false,\"make_latest\":\"true\"}'")
+        .unwrap();
     assert!(identity < subset);
-    assert!(subset < byte_comparison);
-    assert!(byte_comparison < stable_identity);
-    assert!(stable_identity < delete);
-    assert!(delete < absent);
-    assert!(draft.contains("repos/$GITHUB_REPOSITORY/releases/$draft_release_id"));
-    assert!(draft.matches("assert_remote_tag").count() >= 2);
-    assert_eq!(release.matches("--method DELETE").count(), 1);
-    assert!(!release.contains("gh release delete"));
-    assert!(!release.contains("--cleanup-tag"));
+    assert!(subset < draft_gate);
+    assert!(draft_gate < upload);
+    assert!(upload < exact);
+    assert!(exact < publish);
 }
 
 #[test]
 fn release_reruns_resume_only_an_exact_immutable_publication() {
-    let release = source(".github/workflows/deploy.yml");
-    let published_start = release
-        .find("elif jq -e '.isDraft == false and .isImmutable == true'")
-        .unwrap();
-    let rejected_start = release[published_start..]
-        .find("else\n              echo \"The existing release is neither")
-        .map(|offset| published_start + offset)
-        .unwrap();
-    let published = &release[published_start..rejected_start];
-
-    let identity = published
-        .find("assert_release_identity \"$existing_release\" false true")
-        .unwrap();
-    let exact_assets = published
-        .find("assert_release_assets \"$existing_release\" exact")
-        .unwrap();
-    let byte_comparison = published
-        .find("download_and_compare_release_assets \"$existing_release\"")
-        .unwrap();
-    let stable_identity = published
-        .find(
-            "test \"$(release_fingerprint \"$refreshed_published\")\" = \"$published_fingerprint\"",
-        )
-        .unwrap();
-    let resume = published.find("exit 0").unwrap();
-    assert!(identity < exact_assets);
-    assert!(exact_assets < byte_comparison);
-    assert!(byte_comparison < stable_identity);
-    assert!(stable_identity < resume);
-    assert!(published.contains("assert_remote_tag"));
-    assert!(!published.contains("gh release upload"));
-    assert!(!published.contains("--method DELETE"));
-
-    let rejected = &release[rejected_start..release.find("gh release create").unwrap()];
-    assert!(rejected.contains("neither a recoverable draft nor an immutable publication"));
-    assert!(rejected.contains("exit 1"));
-    assert!(release.contains("wait_for_release_absence()"));
-    assert!(release.contains("for attempt in 1 2 3 4 5 6 7 8 9 10; do"));
-    assert!(release.contains("publication_visible=false"));
-    assert!(release.contains("test \"$publication_visible\" = true"));
-
-    let published_verification = release
-        .split("- name: Re-download and verify the immutable published release")
+    let publisher = source("scripts/publish-release.sh");
+    let recovery = publisher
+        .split("create_or_recover_release() {")
         .nth(1)
+        .unwrap()
+        .split("\n}\n\nverify_published_release()")
+        .next()
         .unwrap();
-    assert!(published_verification.contains("bash scripts/verify-release-assets.sh"));
-    assert!(published_verification.contains("cmp -s \"$subject\" \"published/$asset\""));
+
+    let published_gate = recovery.find("if jq -e '.draft == false'").unwrap();
+    let draft_gate = recovery
+        .find(".draft == true and .immutable == false")
+        .unwrap();
+    let published = &recovery[published_gate..draft_gate];
+    assert!(published.contains(".immutable == true"));
+    assert!(published.contains("assert_release_assets \"$release_json\" \"$approved\" false"));
+    assert!(published.contains("return 0"));
+    assert!(!published.contains("gh release upload"));
+
+    let verification = publisher
+        .split("verify_published_release() {")
+        .nth(1)
+        .unwrap()
+        .split("\n}\n\ncheck_remote_state()")
+        .next()
+        .unwrap();
+    for required in [
+        ".draft == false and .prerelease == false and .immutable == true",
+        "assert_release_identity \"$release_json\" \"$notes\"",
+        "assert_release_assets \"$release_json\" \"$approved\" false",
+        "assert_tag",
+        "gh release download \"$RELEASE_TAG\"",
+        "cmp -s \"$approved/$name\" \"$scratch/downloads/$name\"",
+        "gh release verify-asset \"$RELEASE_TAG\"",
+        "verify_attestation \"$scratch/downloads/$name\" \"$attestation\"",
+        "bash scripts/verify-release-assets.sh \"$RELEASE_VERSION\" \"$scratch/downloads\" --static-only",
+        "gh release verify \"$RELEASE_TAG\"",
+        ".digest.sha1 == $tag_object_sha",
+    ] {
+        assert!(
+            verification.contains(required),
+            "immutable rerun verification is missing {required}"
+        );
+    }
 }
 
 #[test]
@@ -1913,7 +2022,11 @@ fn packaged_windows_helper_rejects_global_input_and_requires_target_route_apis()
 
 #[test]
 fn workflows_disable_persisted_credentials_and_automatic_package_caches() {
-    for path in [".github/workflows/ci.yml", ".github/workflows/deploy.yml"] {
+    for path in [
+        ".github/workflows/ci.yml",
+        ".github/workflows/deploy.yml",
+        ".github/workflows/publish.yml",
+    ] {
         let workflow = source(path);
         assert_eq!(
             workflow.matches("actions/checkout@").count(),
@@ -1927,16 +2040,22 @@ fn workflows_disable_persisted_credentials_and_automatic_package_caches() {
         );
     }
 
-    let release = source(".github/workflows/deploy.yml");
-    for forbidden in [
-        "--source-digest \"${{",
-        "= \"${{ needs.verify.outputs.tag_sha }}\"",
-        "= \"${{ needs.verify.outputs.version }}\"",
+    for path in [
+        ".github/workflows/deploy.yml",
+        ".github/workflows/publish.yml",
     ] {
-        assert!(
-            !release.contains(forbidden),
-            "release shell code contains direct template expansion: {forbidden}"
-        );
+        let release = source(path);
+        for forbidden in [
+            "--source-digest \"${{",
+            "= \"${{ needs.verify.outputs.tag_sha }}\"",
+            "= \"${{ needs.verify.outputs.version }}\"",
+            "VERIFIED_TAG_SHA",
+        ] {
+            assert!(
+                !release.contains(forbidden),
+                "release shell code in {path} contains obsolete or direct template expansion: {forbidden}"
+            );
+        }
     }
 }
 
@@ -2015,10 +2134,15 @@ fn windows_artifacts_are_self_contained_dpi_aware_and_inspected() {
     }
     assert!(ci.contains("runs-on: windows-latest"));
     assert!(ci.contains("cargo test --locked --target x86_64-pc-windows-msvc --all-targets"));
-    assert!(ci.contains("./scripts/verify-windows-artifacts.ps1 -Version $version"));
-    assert!(release.contains(
+    assert!(ci.contains(
+        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-artifacts.ps1 -Version 0.0.0 -SelfTest"
+    ));
+    assert!(ci.contains(
         "cargo clippy --locked --target x86_64-pc-windows-msvc --all-targets -- -D warnings"
     ));
+    assert!(
+        release.contains("cargo build --locked --release --bins --target x86_64-pc-windows-msvc")
+    );
     assert!(release.contains("./scripts/verify-windows-artifacts.ps1 -Version $version"));
     assert!(local.contains("x86_64-pc-windows-msvc"));
     assert!(!local.contains("x86_64-pc-windows-gnu"));

@@ -3,7 +3,6 @@
 param(
   [switch]$SelfTest,
   [string]$FinalSha,
-  [string]$TagObjectSha,
   [string]$WorkflowRunId,
   [string]$WorkflowRunAttempt,
   [string]$ReleaseCandidateArtifactId,
@@ -212,7 +211,7 @@ function Invoke-AttestationSelectionSelfTest {
   $TestRepository = "flrngel/local-browser-bridge"
   $TestRunId = "123456789"
   $TestWorkflow = ".github/workflows/deploy.yml"
-  $TestTagRef = "refs/tags/v0.0.0"
+  $TestTagRef = "refs/heads/main"
   $TestSource = "1111111111111111111111111111111111111111"
   $TestSubject = "fixture.bin"
   $TestSubjectSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -466,10 +465,15 @@ function Invoke-CoordinatorSelfTest {
 
     $LedgerDirectory = New-SelfTestExtractionDirectory "durable-ledger"
     $LedgerBinding = [ordered]@{
+      schemaVersion = 3
+      version = "0.12.30"
+      releaseTag = "v0.12.30"
       sourceSha = [String]::new([char]"1", 40)
-      tagObjectSha = [String]::new([char]"2", 40)
       workflowRunId = "123"
       workflowRunAttempt = "1"
+      workflowEvent = "workflow_dispatch"
+      workflowRef = "refs/heads/main"
+      workflowPath = ".github/workflows/deploy.yml"
       artifactId = "456"
       artifactZipSha256 = [String]::new([char]"3", 64)
     }
@@ -878,7 +882,7 @@ $CleanPowerShell = [IO.Path]::GetFullPath([IO.Path]::Combine(
 if ([String]::IsNullOrWhiteSpace($CleanCoordinatorNonce)) {
   if (-not $SelfTest) {
     foreach ($RequiredInput in @(
-      $FinalSha, $TagObjectSha, $WorkflowRunId, $WorkflowRunAttempt,
+      $FinalSha, $WorkflowRunId, $WorkflowRunAttempt,
       $ReleaseCandidateArtifactId, $ReleaseCandidateArtifactZipSha256,
       $ManifestSha, $Candidate, $CandidateBinding, $PrivateParent,
       $TrustedGit, $TrustedGh, $ExternalSurfacePreflightAttestation,
@@ -914,7 +918,6 @@ if ([String]::IsNullOrWhiteSpace($CleanCoordinatorNonce)) {
   $Info.EnvironmentVariables["LBB_COORDINATOR_SELF_TEST"] = $(if ($SelfTest) { "1" } else { "0" })
   if (-not $SelfTest) {
     $Info.EnvironmentVariables["LBB_COORDINATOR_FINAL_SHA"] = $FinalSha
-    $Info.EnvironmentVariables["LBB_COORDINATOR_TAG_OBJECT_SHA"] = $TagObjectSha
     $Info.EnvironmentVariables["LBB_COORDINATOR_WORKFLOW_RUN_ID"] = $WorkflowRunId
     $Info.EnvironmentVariables["LBB_COORDINATOR_WORKFLOW_RUN_ATTEMPT"] = $WorkflowRunAttempt
     $Info.EnvironmentVariables["LBB_COORDINATOR_ARTIFACT_ID"] = $ReleaseCandidateArtifactId
@@ -957,7 +960,6 @@ if ($CleanCoordinatorNonce -cnotmatch '^[0-9a-f]{32}$' -or
 $SelfTestRequested = [Environment]::GetEnvironmentVariable("LBB_COORDINATOR_SELF_TEST", "Process") -ceq "1"
 [Environment]::SetEnvironmentVariable("LBB_CLEAN_COORDINATOR_NONCE", $null, "Process")
 $FinalSha = [Environment]::GetEnvironmentVariable("LBB_COORDINATOR_FINAL_SHA", "Process")
-$TagObjectSha = [Environment]::GetEnvironmentVariable("LBB_COORDINATOR_TAG_OBJECT_SHA", "Process")
 $WorkflowRunId = [Environment]::GetEnvironmentVariable("LBB_COORDINATOR_WORKFLOW_RUN_ID", "Process")
 $WorkflowRunAttempt = [Environment]::GetEnvironmentVariable("LBB_COORDINATOR_WORKFLOW_RUN_ATTEMPT", "Process")
 $ReleaseCandidateArtifactId = [Environment]::GetEnvironmentVariable("LBB_COORDINATOR_ARTIFACT_ID", "Process")
@@ -979,7 +981,7 @@ $GitHubTokenPipeName = [Environment]::GetEnvironmentVariable(
 )
 foreach ($HandoffName in @(
   "LBB_COORDINATOR_SELF_TEST",
-  "LBB_COORDINATOR_FINAL_SHA", "LBB_COORDINATOR_TAG_OBJECT_SHA",
+  "LBB_COORDINATOR_FINAL_SHA",
   "LBB_COORDINATOR_WORKFLOW_RUN_ID", "LBB_COORDINATOR_WORKFLOW_RUN_ATTEMPT",
   "LBB_COORDINATOR_ARTIFACT_ID", "LBB_COORDINATOR_ARTIFACT_ZIP_SHA256",
   "LBB_COORDINATOR_MANIFEST_SHA256", "LBB_COORDINATOR_CANDIDATE",
@@ -1000,7 +1002,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$Version = "0.12.29"
+$Version = "0.12.30"
 $script:ReviewExchangeDirectory = $null
 $script:ReviewExchangeArtifacts = New-Object Collections.Generic.List[string]
 $script:ReviewResponseReservations = New-Object Collections.Generic.List[object]
@@ -1017,8 +1019,7 @@ $Origin = "https://github.com/flrngel/local-browser-bridge.git"
 $ExpectedInvocationUri = "https://github.com/flrngel/local-browser-bridge/actions/runs/$WorkflowRunId/attempts/$WorkflowRunAttempt"
 
 if (-not $SelfTestRequested) {
-  if ($Version -cne "0.12.29" -or $FinalSha -cnotmatch '^[0-9a-f]{40}$' -or
-      $TagObjectSha -cnotmatch '^[0-9a-f]{40}$' -or
+  if ($Version -cne "0.12.30" -or $FinalSha -cnotmatch '^[0-9a-f]{40}$' -or
       $WorkflowRunId -cnotmatch '^[1-9][0-9]*$' -or
       $WorkflowRunAttempt -cnotmatch '^[1-9][0-9]*$' -or
       $ReleaseCandidateArtifactId -cnotmatch '^[1-9][0-9]*$' -or
@@ -1797,7 +1798,8 @@ function New-DurableCandidateExecutionClaim(
     version = $Version
     candidateBindingSha256 = $CandidateKey
     sourceSha = [string]$ReleaseBinding.sourceSha
-    tagObjectSha = [string]$ReleaseBinding.tagObjectSha
+    releaseTag = [string]$ReleaseBinding.releaseTag
+    workflowRef = [string]$ReleaseBinding.workflowRef
     workflowRunId = [string]$ReleaseBinding.workflowRunId
     workflowRunAttempt = [string]$ReleaseBinding.workflowRunAttempt
     artifactId = [string]$ReleaseBinding.artifactId
@@ -2682,19 +2684,22 @@ try {
 finally { [Array]::Clear($BindingBytes, 0, $BindingBytes.Length) }
 $BindingProperties = @($Binding.PSObject.Properties.Name)
 $ExpectedBindingProperties = @(
-  "schemaVersion", "productVersion", "repository", "tag", "sourceSha",
-  "tagObjectSha", "workflowRunId", "workflowRunAttempt", "artifactId",
+  "schemaVersion", "version", "releaseTag", "repository", "sourceSha",
+  "workflowRunId", "workflowRunAttempt", "workflowEvent", "workflowRef", "workflowPath", "artifactId",
   "artifactName", "artifactZipBytes", "artifactZipSha256",
   "checksumManifestSha256", "attestationInvocationUri", "attestedAssetCount",
   "githubHostedRunner", "assets", "passed"
 )
 if (($BindingProperties -join "`n") -cne ($ExpectedBindingProperties -join "`n") -or
-    $Binding.schemaVersion -ne 1 -or $Binding.productVersion -cne $Version -or
+    $Binding.schemaVersion -ne 3 -or $Binding.version -cne $Version -or
+    $Binding.releaseTag -cne "v$Version" -or
     $Binding.repository -cne "flrngel/local-browser-bridge" -or
-    $Binding.tag -cne "v$Version" -or $Binding.sourceSha -cne $FinalSha -or
-    $Binding.tagObjectSha -cne $TagObjectSha -or
+    $Binding.sourceSha -cne $FinalSha -or
     [string]$Binding.workflowRunId -cne $WorkflowRunId -or
     [string]$Binding.workflowRunAttempt -cne $WorkflowRunAttempt -or
+    $Binding.workflowEvent -cne "workflow_dispatch" -or
+    $Binding.workflowRef -cne "refs/heads/main" -or
+    $Binding.workflowPath -cne ".github/workflows/deploy.yml" -or
     [string]$Binding.artifactId -cne $ReleaseCandidateArtifactId -or
     $Binding.artifactName -cne "release-candidate" -or
     $Binding.artifactZipBytes -isnot [ValueType] -or [int64]$Binding.artifactZipBytes -le 0 -or
@@ -2736,13 +2741,16 @@ $ExactReleaseAssets = @($StableBinding.assets | ForEach-Object {
   [ordered]@{ file = [string]$_.file; bytes = [int64]$_.bytes; sha256 = [string]$_.sha256 }
 })
 $ExactReleaseCandidateBinding = [ordered]@{
-  productVersion = [string]$StableBinding.productVersion
+  schemaVersion = 3
+  version = [string]$StableBinding.version
+  releaseTag = [string]$StableBinding.releaseTag
   repository = [string]$StableBinding.repository
-  tag = [string]$StableBinding.tag
   sourceSha = [string]$StableBinding.sourceSha
-  tagObjectSha = [string]$StableBinding.tagObjectSha
   workflowRunId = [string]$StableBinding.workflowRunId
   workflowRunAttempt = [string]$StableBinding.workflowRunAttempt
+  workflowEvent = [string]$StableBinding.workflowEvent
+  workflowRef = [string]$StableBinding.workflowRef
+  workflowPath = [string]$StableBinding.workflowPath
   artifactId = [string]$StableBinding.artifactId
   artifactName = [string]$StableBinding.artifactName
   artifactZipBytes = [int64]$StableBinding.artifactZipBytes
@@ -2816,7 +2824,7 @@ function Invoke-TrustedGhAttestation([string]$Name) {
     $Info = [Diagnostics.ProcessStartInfo]::new()
     $Info.FileName = $TrustedGh
     $Info.WorkingDirectory = $Candidate
-    $Info.Arguments = "attestation verify $Name --hostname github.com --repo flrngel/local-browser-bridge --signer-workflow flrngel/local-browser-bridge/.github/workflows/deploy.yml --source-ref refs/tags/v$Version --source-digest $FinalSha --deny-self-hosted-runners --format json"
+    $Info.Arguments = "attestation verify $Name --hostname github.com --repo flrngel/local-browser-bridge --signer-workflow flrngel/local-browser-bridge/.github/workflows/deploy.yml --source-ref refs/heads/main --source-digest $FinalSha --deny-self-hosted-runners --format json"
     $Info.UseShellExecute = $false
     $Info.CreateNoWindow = $true
     $Info.RedirectStandardOutput = $true
@@ -2848,7 +2856,7 @@ function Invoke-TrustedGhAttestation([string]$Name) {
       -WorkflowRunId $WorkflowRunId `
       -WorkflowPath ".github/workflows/deploy.yml" `
       -Repository "flrngel/local-browser-bridge" `
-      -TagRef "refs/tags/v$Version" `
+      -TagRef "refs/heads/main" `
       -SourceSha $FinalSha `
       -SubjectName $Name `
       -SubjectSha256 $ExpectedAssetSha
@@ -2878,15 +2886,12 @@ $GitCommon = @(
 if ($LASTEXITCODE -ne 0) { throw "Fixed-origin fresh clone failed." }
 & $TrustedGit @GitCommon -C $Repository config --local core.longpaths true
 if ($LASTEXITCODE -ne 0) { throw "Fresh clone could not persist long-path support." }
-& $TrustedGit @GitCommon -C $Repository fetch --force --tags origin
-if ($LASTEXITCODE -ne 0) { throw "Fresh clone could not fetch the exact annotated tag." }
+& $TrustedGit @GitCommon -C $Repository fetch --force origin $FinalSha
+if ($LASTEXITCODE -ne 0) { throw "Fresh clone could not fetch the exact source commit." }
 & $TrustedGit @GitCommon -C $Repository checkout --detach --force $FinalSha
 if ($LASTEXITCODE -ne 0) { throw "Exact detached checkout failed." }
 
 $ObservedHead = (& $TrustedGit @GitCommon -C $Repository rev-parse --verify HEAD).Trim()
-$ObservedTagObject = (& $TrustedGit @GitCommon -C $Repository rev-parse --verify "refs/tags/v$Version").Trim()
-$ObservedTagType = (& $TrustedGit @GitCommon -C $Repository cat-file -t $ObservedTagObject).Trim()
-$ObservedTagPeel = (& $TrustedGit @GitCommon -C $Repository rev-parse --verify "refs/tags/v$Version^{}").Trim()
 $SymbolicHead = @(& $TrustedGit @GitCommon -C $Repository symbolic-ref -q HEAD 2>$null)
 $SymbolicHeadExit = $LASTEXITCODE
 $Dirty = @(& $TrustedGit @GitCommon -C $Repository status --porcelain=v2 --untracked-files=all)
@@ -2894,10 +2899,6 @@ $Deleted = @(& $TrustedGit @GitCommon -C $Repository ls-files --deleted)
 $Others = @(& $TrustedGit @GitCommon -C $Repository ls-files --others --exclude-standard)
 $Ignored = @(& $TrustedGit @GitCommon -C $Repository ls-files --others --ignored --exclude-standard)
 if ($ObservedHead -cne $FinalSha) { throw "Repository HEAD does not equal FINAL_SHA." }
-if ($ObservedTagType -cne "tag" -or $ObservedTagObject -cne $TagObjectSha -or
-    $ObservedTagPeel -cne $FinalSha) {
-  throw "Repository annotated tag object or peel does not match the coordinator binding."
-}
 if ($SymbolicHeadExit -ne 1 -or $SymbolicHead.Count -ne 0) { throw "Repository HEAD must be detached." }
 if ($Dirty.Count -ne 0) { throw "Repository checkout must be clean, including untracked files." }
 if ($Deleted.Count -ne 0 -or $Others.Count -ne 0) {
@@ -2919,12 +2920,12 @@ $TrustedRelativeFiles = @(
   "scripts/record-computer-helper-chain.ps1",
   "scripts/sanitize-browser-evidence-screenshot.ps1",
   "scripts/write-stock-chrome-operator-response.ps1",
-  "evidence/v0.12.29/browser/operator-results.template.json",
-  "evidence/v0.12.29/browser/operator-results.schema.json",
-  "evidence/v0.12.29/browser/computer-helper-chain.schema.json",
-  "evidence/v0.12.29/browser/scoped-action-approval.schema.json",
-  "evidence/v0.12.29/browser/independent-visual-review.schema.json",
-  "evidence/v0.12.29/browser/external-surface-attestation.schema.json"
+  "evidence/v0.12.30/browser/operator-results.template.json",
+  "evidence/v0.12.30/browser/operator-results.schema.json",
+  "evidence/v0.12.30/browser/computer-helper-chain.schema.json",
+  "evidence/v0.12.30/browser/scoped-action-approval.schema.json",
+  "evidence/v0.12.30/browser/independent-visual-review.schema.json",
+  "evidence/v0.12.30/browser/external-surface-attestation.schema.json"
 )
 function Export-ExactTrustedBlob([string]$ObjectId, [string]$Relative) {
   if ($ObjectId -cnotmatch '^[0-9a-f]{40}$' -or $TrustedRelativeFiles -cnotcontains $Relative) {
@@ -3106,7 +3107,7 @@ $Captures = [ordered]@{
   "post-handback-resume" = "browser-06-post-handback-resume"
 }
 $RequiredVisibleStates = [ordered]@{
-  "extension-loaded" = "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.29 card with no load errors and Chrome's debugger-use indicator during the active bridge lease"
+  "extension-loaded" = "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.30 card with no load errors and Chrome's debugger-use indicator during the active bridge lease"
   "api-action-result" = "the loopback demo visibly shows Hello, Bridge Matrix. blue selected. after the browser API action"
   "computer-share-action" = "the exact shared Chrome window visibly shows the post-click demo state and synthetic session pointer from a fresh helper frame"
   "stop-paused" = "the trusted extension popup visibly shows the human pause and Resume remote control after the in-page Stop handback"
