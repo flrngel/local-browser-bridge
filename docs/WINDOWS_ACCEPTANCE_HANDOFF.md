@@ -199,7 +199,7 @@ From an elevated PowerShell used only for machine-level tool installation:
 winget source update
 winget install --exact --id Git.Git --source winget `
   --accept-package-agreements --accept-source-agreements
-winget install --exact --id Microsoft.VisualStudio.BuildTools --source winget `
+winget install --exact --id Microsoft.VisualStudio.2022.BuildTools --source winget `
   --accept-package-agreements --accept-source-agreements `
   --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 winget install --exact --id OpenJS.NodeJS.LTS --source winget `
