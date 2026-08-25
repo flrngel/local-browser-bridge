@@ -126,6 +126,39 @@ known source gate. The provisional source added:
 
 It was never promoted into a Windows pass or candidate.
 
+## Authoritative source binding
+
+The native source-gate proof is bound to the following immutable inputs:
+
+| Binding | Value |
+|---|---|
+| Implementation commit | `b316eeb8ec6ed460c161f4c8858ae7b31c551641` |
+| Coordinator SHA-256 | `c2a983109e450d85a1b17c4da1b19aa2158ed94eba516d887246365da567a6c2` |
+| Rust contract SHA-256 | `c03beec573706352fefe82eccae80757e28d3fd4814f9fe6266a432b459d04f8` |
+| Exact-head GitHub Actions run | [`32820442002`](https://github.com/flrngel/local-browser-bridge/actions/runs/32820442002) |
+| Windows host contract | Exact system Windows PowerShell 5.1 Desktop, 64-bit process |
+
+Run `32820442002` checked out the exact implementation commit and passed all
+five CI jobs. Its Windows job parsed and executed the coordinator through the
+exact system Windows PowerShell 5.1 host, accepted only exit code zero and the
+single exact success line shown below, and then passed the Windows compiler,
+test, and artifact-policy lane. The coordinator independently rejects a
+non-system or non-64-bit host before running the scenarios.
+
+This GitHub-hosted exact-head execution is the authoritative, source-bound
+native proof for removing the source-only `RELEASE_BLOCKED` marker. The earlier
+FLRngel19 execution informed the repair but is not being represented as a
+retained candidate or product-acceptance artifact. The hashes above cover the
+executable test source and its Rust contract; later documentation-only or CI
+hardening commits do not change those tested bytes. Pull-request and post-merge
+CI must still pass before this work is merged.
+
+The CI workflow now additionally rejects a dirty, partially materialized, or
+structurally invalid Windows checkout by checking porcelain status, staged and
+unstaged diffs, deleted and untracked inventories, every tracked path, and
+`git fsck --full`. This source-integrity check is a merge gate, not packaged
+candidate acceptance.
+
 ## Implemented state machine
 
 Version 0.12.29 removes the abandoned `CreateFreshJob` retry. The reviewed
