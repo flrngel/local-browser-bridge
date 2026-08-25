@@ -5,9 +5,10 @@ artifact: it is not a published GitHub Release, has no release attestation, and
 has not passed the repository's packaged acceptance gates. End users who want a
 stable, verified package should use the [installation guide](INSTALL.md).
 
-The application runtime is Rust-only. Node.js is never invoked by the server,
-helper, or extension. Node.js 24 is required only when running the complete
-developer contract suite.
+The product has no Node.js runtime dependency. Its primary implementation is
+Rust; macOS builds also compile and link the repository's locked Swift capture
+bridge. Node.js 24 is required only when running the complete developer
+contract suite.
 
 ## Build matrix
 
@@ -25,9 +26,21 @@ unlisted host does not make its computer helper a supported platform.
 
 For a native compile:
 
-- Git
-- `rustup`, Cargo, and Rust 1.88 or later
+- [Git](https://git-scm.com/downloads)
+- [`rustup`, Cargo, and Rust](https://rust-lang.org/tools/install/) 1.88 or later
 - the target platform's native SDK and linker
+
+Install `rustup` from the official Rust page before running the commands below.
+On macOS, the official installer command is:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+```
+
+On Windows, use the x64 `rustup-init.exe` linked from the official Rust page,
+then open a fresh PowerShell window. Do not install a separate system Cargo or
+Rust package alongside `rustup`.
 
 Install the minimum toolchain without changing the machine-wide default:
 
@@ -55,11 +68,18 @@ None of those test-only tools is packaged into the product.
 
 Use 64-bit Windows 11 and install:
 
-- Git for Windows;
+- [Git for Windows](https://git-scm.com/install/windows);
 - Visual Studio 2022 or Visual Studio 2022 Build Tools;
 - the **Desktop development with C++** workload, including MSVC v143 x64/x86
   build tools; and
-- a Windows 11 SDK.
+- Windows 11 SDK 10.0.26100 or a newer supported stable Windows 11 SDK.
+
+Microsoft's [Visual Studio 2022 Build Tools component
+guide](https://learn.microsoft.com/en-us/visualstudio/install/workload-component-id-vs-build-tools?view=vs-2022)
+lists the **Desktop development with C++** workload, MSVC v143 tools, and
+Windows SDK components. The full Visual Studio IDE is optional; the standalone
+Build Tools are sufficient. Install Rust with the official x64
+`rustup-init.exe` after the C++ workload is present.
 
 The SDK provides `mt.exe`; the Visual C++ tools provide `dumpbin.exe`. The
 repository's artifact verifier uses both. The Windows target embeds an
@@ -71,8 +91,14 @@ Install Rust's MSVC target:
 ```powershell
 rustup toolchain install 1.88.0-x86_64-pc-windows-msvc `
   --profile minimal --component rustfmt,clippy
-rustup target add --toolchain 1.88.0-x86_64-pc-windows-msvc `
-  x86_64-pc-windows-msvc
+```
+
+Confirm the command-line tools from a new PowerShell window:
+
+```powershell
+git --version
+rustup --version
+cargo +1.88.0-x86_64-pc-windows-msvc --version
 ```
 
 ### 2. Clone into a short, long-path-enabled checkout
@@ -182,19 +208,37 @@ The resulting package runs on macOS 13 or later, but the current locked Swift
 bridge names APIs introduced in the macOS 26 SDK at compile time. The build host
 therefore needs:
 
-- Xcode or Command Line Tools that provide macOS SDK 26 or later;
+- [Xcode or Command Line Tools](https://developer.apple.com/download/) that
+  provide macOS SDK 26 or later;
 - `xcrun`, Swift, `lipo`, `codesign`, `otool`, `nm`, and `strings`; and
 - Rust 1.88 or later.
 
+Apple documents both the full Xcode install and
+[`xcode-select --install`](https://developer.apple.com/documentation/xcode/installing-the-command-line-tools).
+The command-line prompt alone is not enough if it installs an older SDK: verify
+the SDK version below before building.
+
 Select the intended Xcode installation if more than one is installed, then
-verify the host contract:
+verify the SDK and deployment-target contract:
 
 ```bash
 xcrun --sdk macosx --show-sdk-version
 bash scripts/verify-macos-build-host.sh
 ```
 
-The second command must report SDK 26 or later and deployment target 13.0.
+The second command must report SDK 26 or later and deployment target 13.0. The
+build host must also run the Xcode or Command Line Tools release that supplies
+that SDK; consult Apple's current [Xcode system
+requirements](https://developer.apple.com/xcode/system-requirements/) for the
+required host macOS version.
+
+Confirm every packaging tool before a universal build:
+
+```bash
+for tool in xcrun swift lipo codesign otool nm strings zip unzip; do
+  command -v "$tool" >/dev/null || { echo "Missing required tool: $tool" >&2; exit 1; }
+done
+```
 
 Install the Rust toolchain and both macOS targets:
 
@@ -204,7 +248,26 @@ rustup target add --toolchain 1.88.0 \
   aarch64-apple-darwin x86_64-apple-darwin
 ```
 
-### 2. Build host-native development binaries
+Confirm the basic tools:
+
+```bash
+git --version
+rustup --version
+cargo +1.88.0 --version
+```
+
+### 2. Clone and verify the source
+
+```bash
+git clone https://github.com/flrngel/local-browser-bridge.git
+cd local-browser-bridge
+git status --porcelain=v2 --untracked-files=all
+git ls-files --deleted
+```
+
+The final two commands must produce no output.
+
+### 3. Build host-native development binaries
 
 ```bash
 cargo +1.88.0 build --locked --release \
@@ -233,7 +296,7 @@ Run the server with:
 For ordinary extension development, load the repository's `extension`
 directory directly in Chrome or Edge.
 
-### 3. Build the universal macOS package shape
+### 4. Build the universal macOS package shape
 
 The following commands reproduce the local package layout used by the release
 workflow. They do not create GitHub provenance or release acceptance evidence:
@@ -294,7 +357,7 @@ Both executable slices have a macOS 13 deployment target. The app bundle is
 ad-hoc signed, not Developer ID-signed or notarized, so local builds can require
 fresh privacy grants.
 
-### 4. Package the extension on macOS
+### 5. Package the extension on macOS
 
 macOS includes suitable `zip` and `unzip` commands:
 
@@ -325,8 +388,9 @@ cargo +1.88.0 test --locked --lib
 
 ### Complete source checks
 
-Install Node.js 24 first. On macOS and other Unix hosts, ensure `bash` and
-`python3` are also available. Then run:
+Install [Node.js 24](https://nodejs.org/en/download/archive/v24) first. Confirm
+that `node --version` reports `v24.x`; npm packages are not required. On macOS
+and other Unix hosts, ensure `bash` and `python3` are also available. Then run:
 
 ```bash
 cargo +1.88.0 fmt --all -- --check
