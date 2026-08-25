@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { deflateSync, inflateSync } from "node:zlib";
 
-const PRODUCT_VERSION = "0.12.28";
+const PRODUCT_VERSION = "0.12.29";
 const RESULT_SCHEMA_VERSION = 8;
 const AGGREGATE_SCHEMA_VERSION = 2;
 const APP_SHARE_MARKER_SCHEMA_VERSION = 2;

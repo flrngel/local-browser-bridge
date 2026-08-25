@@ -23,9 +23,15 @@ release decision must therefore begin with independently verified GitHub
 provenance and treats the candidate as trusted input. Do not use this harness to
 analyze an untrusted executable.
 
-The stronger named-Job recovery design is still a blocked v0.12.28 source
-target, not a shipped or Windows-validated property. See the
-[Windows acceptance handoff](WINDOWS_ACCEPTANCE_HANDOFF.md).
+Version 0.12.28 ended as a blocked source checkpoint. Version 0.12.29's
+stronger named-Job recovery is now Windows-native source-gate proven: one
+stable-mutex-protected monotonic deadline covers exact prior termination,
+zero-active observation, namespace disappearance, and one final fresh create;
+nonzero create status is closed and refused, and publication follows
+configuration and binding. This remains non-product SelfTest evidence, not a
+shipped or packaged-candidate Windows property. No 0.12.29 candidate, Chrome
+acceptance, tag, or Release exists. See the
+[Windows acceptance source-gate record](WINDOWS_ACCEPTANCE_HANDOFF.md).
 
 Coordinator records flush their file contents before an atomic create-once
 rename. That survives a dropped remote shell and ordinary process failure, but
@@ -220,7 +226,7 @@ Version 0.12.25 retained the authority refresh and made that watcher portable
 to exact system PowerShell 5.1 by passing marker paths as explicit callback
 arguments.
 
-Version 0.12.28 retains sealed route provenance, the v0.12.23 classifier
+Version 0.12.29 retains sealed route provenance, the v0.12.23 classifier
 separation, and conservative shared-pointer monitoring. After the app-share
 `ACTION` receipt it must obtain a strictly newer frame from the same share,
 target, and geometry within the reserved deadline before deriving click

@@ -806,7 +806,10 @@ mod tests {
         std::fs::write(&target, format!("{target_token}\n")).expect("write target");
         match symlink_file(&target, &path) {
             Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            Err(error)
+                if error.kind() == io::ErrorKind::PermissionDenied
+                    || error.raw_os_error() == Some(1314) =>
+            {
                 eprintln!("skipping Windows symlink runtime assertion: {error}");
                 return;
             }
@@ -1219,7 +1222,10 @@ mod tests {
         let linked_parent = directory.path().join("linked-parent");
         match symlink_dir(&target, &linked_parent) {
             Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            Err(error)
+                if error.kind() == io::ErrorKind::PermissionDenied
+                    || error.raw_os_error() == Some(1314) =>
+            {
                 eprintln!("skipping Windows directory symlink runtime assertion: {error}");
                 return;
             }
