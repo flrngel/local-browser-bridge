@@ -895,9 +895,9 @@ function Invoke-SelfTest {
             schemaVersion = 3; version = $script:Version; releaseTag = "v$($script:Version)"
             repository = "flrngel/local-browser-bridge"
             sourceSha = [String]::new([char]"b", 40)
-            workflowRunId = "123"; workflowRunAttempt = "1"; artifactId = "456"
-            workflowEvent = "workflow_dispatch"; workflowRef = "refs/heads/main"; workflowPath = ".github/workflows/deploy.yml"
-            artifactName = "release-candidate"; artifactZipBytes = 5000
+            workflowRunId = "123"; workflowRunAttempt = "1"; workflowEvent = "workflow_dispatch"
+            workflowRef = "refs/heads/main"; workflowPath = ".github/workflows/deploy.yml"
+            artifactId = "456"; artifactName = "release-candidate"; artifactZipBytes = 5000
             artifactZipSha256 = [String]::new([char]"d", 64)
             checksumManifestSha256 = [String]::new([char]"e", 64)
             attestationInvocationUri = "https://github.com/flrngel/local-browser-bridge/actions/runs/123/attempts/1"

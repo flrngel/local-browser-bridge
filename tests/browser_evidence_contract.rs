@@ -1612,6 +1612,15 @@ fn v01229_powershell_entrypoints_cannot_fall_through_legacy_gates() {
     assert!(finalizer.contains("@(\"0.12.2\", $script:OperatorV2Version)"));
     assert!(finalizer.contains("\"evidence\", \"v0.12.30\", \"browser\""));
 
+    let response_writer = source("scripts/write-stock-chrome-operator-response.ps1");
+    let response_run_fields = response_writer
+        .find("workflowRunId = \"123\"; workflowRunAttempt = \"1\"; workflowEvent = \"workflow_dispatch\"")
+        .expect("response-writer self-test must order workflow fields canonically");
+    let response_artifact_fields = response_writer[response_run_fields..]
+        .find("artifactId = \"456\"; artifactName = \"release-candidate\"")
+        .expect("response-writer self-test must place artifact fields after workflow fields");
+    assert!(response_artifact_fields > 0);
+
     let recorder = source("scripts/record-computer-helper-chain.ps1");
     assert!(recorder.contains("$script:Version = \"0.12.30\""));
 
