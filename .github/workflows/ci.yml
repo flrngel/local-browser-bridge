@@ -61,6 +61,48 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Verify clean, fully materialized source checkout
+        shell: pwsh
+        run: |
+          $status = @(git status --porcelain=v2 --untracked-files=all)
+          if ($LASTEXITCODE -ne 0 -or $status.Count -ne 0) {
+            throw "The Windows source checkout is not clean."
+          }
+          git diff --quiet HEAD --
+          if ($LASTEXITCODE -ne 0) {
+            throw "The Windows source checkout has unstaged changes."
+          }
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            throw "The Windows source checkout has staged changes."
+          }
+          $deleted = @(git ls-files --deleted)
+          if ($LASTEXITCODE -ne 0 -or $deleted.Count -ne 0) {
+            throw "The Windows source checkout has deleted tracked paths."
+          }
+          $untracked = @(git ls-files --others --exclude-standard)
+          if ($LASTEXITCODE -ne 0 -or $untracked.Count -ne 0) {
+            throw "The Windows source checkout has untracked paths."
+          }
+          $tracked = @(git ls-files)
+          if ($LASTEXITCODE -ne 0 -or $tracked.Count -eq 0) {
+            throw "The Windows source checkout has no readable tracked-path inventory."
+          }
+          $missing = @($tracked | Where-Object {
+            -not [IO.File]::Exists($_) -and -not [IO.Directory]::Exists($_)
+          })
+          if ($missing.Count -ne 0) {
+            throw "The Windows source checkout is missing tracked paths."
+          }
+          git fsck --full
+          if ($LASTEXITCODE -ne 0) {
+            throw "The Windows source checkout failed git fsck."
+          }
+          $sourceSha = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $sourceSha -notmatch '^[0-9a-f]{40}$') {
+            throw "The Windows source commit could not be resolved exactly."
+          }
+          Write-Output "Verified clean Windows source checkout at $sourceSha with $($tracked.Count) tracked paths."
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24
@@ -299,14 +341,14 @@ jobs:
           node scripts/finalize-macos-acceptance.mjs --self-test
       - name: Validate the macOS packaged-evidence harness
         run: |
-          node --check evidence/v0.12.28/computer/helper-evidence-rig.mjs
-          node evidence/v0.12.28/computer/helper-evidence-rig.mjs --self-test
-          xcrun swiftc -typecheck evidence/v0.12.28/computer/HelperEvidenceFixture.swift
-          xcrun swiftc -typecheck evidence/v0.12.28/computer/SystemProbe.swift
-          xcrun swiftc -typecheck evidence/v0.12.28/computer/AppShareHandoff.swift
-          xcrun swiftc evidence/v0.12.28/computer/AppShareHandoff.swift -o "$RUNNER_TEMP/lbb-app-share-handoff-self-test"
+          node --check evidence/v0.12.29/computer/helper-evidence-rig.mjs
+          node evidence/v0.12.29/computer/helper-evidence-rig.mjs --self-test
+          xcrun swiftc -typecheck evidence/v0.12.29/computer/HelperEvidenceFixture.swift
+          xcrun swiftc -typecheck evidence/v0.12.29/computer/SystemProbe.swift
+          xcrun swiftc -typecheck evidence/v0.12.29/computer/AppShareHandoff.swift
+          xcrun swiftc evidence/v0.12.29/computer/AppShareHandoff.swift -o "$RUNNER_TEMP/lbb-app-share-handoff-self-test"
           "$RUNNER_TEMP/lbb-app-share-handoff-self-test" --self-test
-          xcrun swiftc -typecheck evidence/v0.12.28/computer/PhysicalPointerHandoff.swift
+          xcrun swiftc -typecheck evidence/v0.12.29/computer/PhysicalPointerHandoff.swift
       - name: Install the minimum supported Rust toolchain
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy

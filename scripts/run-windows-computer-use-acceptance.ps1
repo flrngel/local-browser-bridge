@@ -30,7 +30,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
 $script:SchemaVersion = 1
-$script:ProductVersion = "0.12.28"
+$script:ProductVersion = "0.12.29"
 $script:ExpectedWindowTitle = "LBB Foreground Sentinel"
 $script:ExpectedActionButton = "CLICK TO ARM"
 $script:ExpectedArmedButton = "ARMED - DO NOT USE THIS SESSION"
@@ -1348,8 +1348,27 @@ function Test-ExceptionChainTypeName {
     return $false
 }
 
+function Test-Win32ErrorInChain {
+    param(
+        [Parameter(Mandatory = $true)][Exception]$Exception,
+        [Parameter(Mandatory = $true)][int]$NativeErrorCode
+    )
+    $current = $Exception
+    $depth = 0
+    while ($null -ne $current -and $depth -lt 16) {
+        if ($current -is [ComponentModel.Win32Exception] -and
+            $current.NativeErrorCode -eq $NativeErrorCode) {
+            return $true
+        }
+        $current = $current.InnerException
+        $depth++
+    }
+    return $false
+}
+
 function Get-WorkerLifetimeSupportSource {
-    return @'
+    param([switch]$IncludeSelfTestHooks)
+    $source = @'
 using System;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -1369,6 +1388,8 @@ namespace LbbCoordinator {
     private IntPtr handle;
     public bool IsBound { get { return handle != IntPtr.Zero; } }
     public bool RecoveredExistingJob { get; private set; }
+
+__LBB_WORKER_LIFETIME_SELF_TEST_FACTORY__
 
     [StructLayout(LayoutKind.Sequential)]
     private struct IO_COUNTERS {
@@ -1449,7 +1470,21 @@ namespace LbbCoordinator {
       bool allowChildBreakaway,
       string name,
       bool recoverExisting,
-      int recoveryTimeoutMilliseconds) {
+      int recoveryTimeoutMilliseconds)
+      : this(
+        allowChildBreakaway,
+        name,
+        recoverExisting,
+        recoveryTimeoutMilliseconds,
+        null) {
+    }
+
+    private WorkerLifetimeJob(
+      bool allowChildBreakaway,
+      string name,
+      bool recoverExisting,
+      int recoveryTimeoutMilliseconds,
+      Action beforeFreshCreateForSelfTest) {
       if (recoveryTimeoutMilliseconds < 1) {
         throw new ArgumentOutOfRangeException("recoveryTimeoutMilliseconds");
       }
@@ -1457,7 +1492,10 @@ namespace LbbCoordinator {
         throw new ArgumentException("A recovery Job must have a stable name", "name");
       }
 
-      Stopwatch recoveryDeadline = null;
+      Stopwatch recoveryDeadline = recoverExisting && !String.IsNullOrEmpty(name)
+        ? Stopwatch.StartNew()
+        : null;
+      bool recoveredExistingJob = false;
       if (!String.IsNullOrEmpty(name)) {
         IntPtr previous = OpenJobObject(
           JOB_OBJECT_QUERY | JOB_OBJECT_TERMINATE,
@@ -1468,17 +1506,15 @@ namespace LbbCoordinator {
             if (!recoverExisting) {
               throw new InvalidOperationException("The named coordinator lifetime Job already exists");
             }
-            recoveryDeadline = Stopwatch.StartNew();
             TerminateAndWaitForEmpty(previous, recoveryDeadline, recoveryTimeoutMilliseconds);
-            RecoveredExistingJob = true;
+            recoveredExistingJob = true;
           }
           finally {
-            if (!CloseHandle(previous)) {
-              throw new Win32Exception(
-                Marshal.GetLastWin32Error(),
-                "Could not close the inspected prior coordinator lifetime Job");
-            }
+            CloseJobHandleOnce(
+              previous,
+              "Could not close the inspected prior coordinator lifetime Job");
           }
+          WaitForJobNameToDisappear(name, recoveryDeadline, recoveryTimeoutMilliseconds);
         }
         else {
           int openError = Marshal.GetLastWin32Error();
@@ -1488,88 +1524,123 @@ namespace LbbCoordinator {
         }
       }
 
-      // CreateJobObject reports pre-existence through last-error even when it
-      // returns a valid handle. Clear stale thread state so the freshness check
-      // cannot be contaminated by the preceding Open/terminate/query calls.
-      handle = CreateFreshJob(
-        name,
-        RecoveredExistingJob,
+      EnsureRecoveryTimeRemaining(
         recoveryDeadline,
-        recoveryTimeoutMilliseconds);
-      if (recoveryDeadline != null) { recoveryDeadline.Stop(); }
-      JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
-      limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
-        (allowChildBreakaway ? JOB_OBJECT_LIMIT_BREAKAWAY_OK : 0);
-      int size = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
-      IntPtr buffer = Marshal.AllocHGlobal(size);
-      try {
-        Marshal.StructureToPtr(limits, buffer, false);
-        if (!SetInformationJobObject(handle, JobObjectExtendedLimitInformation, buffer, (uint)size)) {
-          throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not configure the coordinator lifetime job");
-        }
+        recoveryTimeoutMilliseconds,
+        "The coordinator lifetime Job recovery deadline expired before fresh creation");
+      if (beforeFreshCreateForSelfTest != null) {
+        beforeFreshCreateForSelfTest();
+        EnsureRecoveryTimeRemaining(
+          recoveryDeadline,
+          recoveryTimeoutMilliseconds,
+          "The coordinator lifetime Job recovery deadline expired before fresh creation");
       }
-      catch {
-        CloseHandle(handle);
-        handle = IntPtr.Zero;
-        throw;
+
+      // CreateJobObject reports pre-existence through last-error even when it
+      // returns a valid handle. Clear stale thread state, invoke it exactly
+      // once, and capture the status before any other native call.
+      IntPtr candidate = CreateFreshJobOnce(name);
+      try {
+        EnsureRecoveryTimeRemaining(
+          recoveryDeadline,
+          recoveryTimeoutMilliseconds,
+          "The coordinator lifetime Job recovery deadline expired during fresh creation");
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
+          (allowChildBreakaway ? JOB_OBJECT_LIMIT_BREAKAWAY_OK : 0);
+        int size = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
+        IntPtr buffer = IntPtr.Zero;
+        buffer = Marshal.AllocHGlobal(size);
+        try {
+          Marshal.StructureToPtr(limits, buffer, false);
+          if (!SetInformationJobObject(candidate, JobObjectExtendedLimitInformation, buffer, (uint)size)) {
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not configure the coordinator lifetime job");
+          }
+        }
+        finally {
+          Marshal.FreeHGlobal(buffer);
+        }
+        EnsureRecoveryTimeRemaining(
+          recoveryDeadline,
+          recoveryTimeoutMilliseconds,
+          "The coordinator lifetime Job recovery deadline expired during configuration");
+        if (!AssignProcessToJobObject(candidate, GetCurrentProcess())) {
+          int error = Marshal.GetLastWin32Error();
+          throw new Win32Exception(error, "Could not bind the coordinator worker to its lifetime job");
+        }
+        EnsureRecoveryTimeRemaining(
+          recoveryDeadline,
+          recoveryTimeoutMilliseconds,
+          "The coordinator lifetime Job recovery deadline expired during worker binding");
+        if (recoveryDeadline != null) { recoveryDeadline.Stop(); }
+        handle = candidate;
+        candidate = IntPtr.Zero;
+        RecoveredExistingJob = recoveredExistingJob;
       }
       finally {
-        Marshal.FreeHGlobal(buffer);
-      }
-      if (!AssignProcessToJobObject(handle, GetCurrentProcess())) {
-        int error = Marshal.GetLastWin32Error();
-        CloseHandle(handle);
-        handle = IntPtr.Zero;
-        throw new Win32Exception(error, "Could not bind the coordinator worker to its lifetime job");
+        if (candidate != IntPtr.Zero) {
+          CloseJobHandleOnce(
+            candidate,
+            "Could not close an unbound coordinator lifetime Job handle");
+        }
       }
     }
 
-    private static IntPtr CreateFreshJob(
+    private static IntPtr CreateFreshJobOnce(string name) {
+      SetLastError(0);
+      IntPtr candidate = CreateJobObject(IntPtr.Zero, name);
+      int createError = Marshal.GetLastWin32Error();
+      if (candidate == IntPtr.Zero) {
+        if (createError == 0) {
+          throw new InvalidOperationException(
+            "CreateJobObject returned a null handle without a failure status");
+        }
+        throw new Win32Exception(createError, "Could not create the coordinator lifetime job");
+      }
+      if (createError == 0) {
+        return candidate;
+      }
+
+      CloseJobHandleOnce(
+        candidate,
+        "Could not close an uninspected coordinator lifetime Job handle");
+      throw new Win32Exception(
+        createError,
+        createError == ERROR_ALREADY_EXISTS
+          ? "CreateJobObject returned an existing uninspected coordinator lifetime Job"
+          : "CreateJobObject returned a handle with a nonzero failure status");
+    }
+
+    private static void WaitForJobNameToDisappear(
       string name,
-      bool recoveredExistingJob,
       Stopwatch recoveryDeadline,
       int timeoutMilliseconds) {
-      bool retry = false;
       while (true) {
-        if (retry && recoveryDeadline.ElapsedMilliseconds >= timeoutMilliseconds) {
-          throw new TimeoutException(
-            "The prior coordinator lifetime Job name did not become available for a fresh object");
-        }
-        SetLastError(0);
-        IntPtr candidate = CreateJobObject(IntPtr.Zero, name);
-        if (candidate == IntPtr.Zero) {
+        EnsureRecoveryTimeRemaining(
+          recoveryDeadline,
+          timeoutMilliseconds,
+          "The prior coordinator lifetime Job name did not leave the namespace");
+        IntPtr observed = OpenJobObject(JOB_OBJECT_QUERY, false, name);
+        if (observed == IntPtr.Zero) {
+          int openError = Marshal.GetLastWin32Error();
+          if (openError == ERROR_FILE_NOT_FOUND) {
+            EnsureRecoveryTimeRemaining(
+              recoveryDeadline,
+              timeoutMilliseconds,
+              "The prior coordinator lifetime Job name did not leave the namespace");
+            return;
+          }
           throw new Win32Exception(
-            Marshal.GetLastWin32Error(),
-            "Could not create the coordinator lifetime job");
+            openError,
+            "Could not poll the prior coordinator lifetime Job namespace");
         }
-        int createError = Marshal.GetLastWin32Error();
-        if (createError == 0) {
-          return candidate;
-        }
-
-        if (!CloseHandle(candidate)) {
-          throw new Win32Exception(
-            Marshal.GetLastWin32Error(),
-            "Could not close a stale coordinator lifetime Job handle");
-        }
-        if (String.IsNullOrEmpty(name) || createError != ERROR_ALREADY_EXISTS) {
-          throw new Win32Exception(
-            createError,
-            "CreateJobObject returned an unexpected success status");
-        }
-
-        // ACTIVE_PROCESS_ZERO does not guarantee that the dying prior owner
-        // has closed its last Job handle yet. Never adopt that terminated Job:
-        // close every returned existing-object handle and retry only when this
-        // constructor itself inspected and terminated the prior named object.
-        if (!recoveredExistingJob || recoveryDeadline == null) {
-          throw new InvalidOperationException("The named coordinator lifetime Job already exists");
-        }
-        retry = true;
+        CloseJobHandleOnce(
+          observed,
+          "Could not close a polled coordinator lifetime Job handle");
         SleepForRecoveryPoll(
           recoveryDeadline,
           timeoutMilliseconds,
-          "The prior coordinator lifetime Job name did not become available for a fresh object");
+          "The prior coordinator lifetime Job name did not leave the namespace");
       }
     }
 
@@ -1577,12 +1648,20 @@ namespace LbbCoordinator {
       IntPtr job,
       Stopwatch recoveryDeadline,
       int timeoutMilliseconds) {
+      EnsureRecoveryTimeRemaining(
+        recoveryDeadline,
+        timeoutMilliseconds,
+        "The prior coordinator Job recovery deadline expired before termination");
       if (!TerminateJobObject(job, 1)) {
         throw new Win32Exception(
           Marshal.GetLastWin32Error(),
           "Could not terminate the prior coordinator lifetime Job");
       }
       while (true) {
+        EnsureRecoveryTimeRemaining(
+          recoveryDeadline,
+          timeoutMilliseconds,
+          "The prior coordinator Job did not reach ACTIVE_PROCESS_ZERO");
         JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting;
         if (!QueryInformationJobObject(
           job,
@@ -1594,7 +1673,13 @@ namespace LbbCoordinator {
             Marshal.GetLastWin32Error(),
             "Could not inspect prior coordinator Job teardown");
         }
-        if (accounting.ActiveProcesses == 0) { return; }
+        if (accounting.ActiveProcesses == 0) {
+          EnsureRecoveryTimeRemaining(
+            recoveryDeadline,
+            timeoutMilliseconds,
+            "The prior coordinator Job did not reach ACTIVE_PROCESS_ZERO");
+          return;
+        }
         SleepForRecoveryPoll(
           recoveryDeadline,
           timeoutMilliseconds,
@@ -1606,11 +1691,29 @@ namespace LbbCoordinator {
       Stopwatch recoveryDeadline,
       int timeoutMilliseconds,
       string timeoutMessage) {
-      long remaining = timeoutMilliseconds - recoveryDeadline.ElapsedMilliseconds;
-      if (remaining <= 0) {
+      double remaining = timeoutMilliseconds - recoveryDeadline.Elapsed.TotalMilliseconds;
+      if (remaining <= 0.0) {
         throw new TimeoutException(timeoutMessage);
       }
-      Thread.Sleep((int)Math.Min(25L, remaining));
+      int sleepMilliseconds = (int)Math.Min(25.0, Math.Floor(remaining));
+      Thread.Sleep(Math.Max(0, sleepMilliseconds));
+    }
+
+    private static void EnsureRecoveryTimeRemaining(
+      Stopwatch recoveryDeadline,
+      int timeoutMilliseconds,
+      string timeoutMessage) {
+      if (recoveryDeadline != null &&
+          recoveryDeadline.Elapsed.TotalMilliseconds >= timeoutMilliseconds) {
+        throw new TimeoutException(timeoutMessage);
+      }
+    }
+
+    private static void CloseJobHandleOnce(IntPtr value, string failureMessage) {
+      if (!CloseHandle(value)) {
+        int error = Marshal.GetLastWin32Error();
+        throw new Win32Exception(error, failureMessage);
+      }
     }
 
     // This handle deliberately has process lifetime. A finalizer could close
@@ -1620,6 +1723,44 @@ namespace LbbCoordinator {
   }
 }
 '@
+    $selfTestFactory = ""
+    if ($IncludeSelfTestHooks) {
+        $selfTestFactory = @'
+    public static WorkerLifetimeJob CreateForSelfTest(
+      bool allowChildBreakaway,
+      string name,
+      bool recoverExisting,
+      int recoveryTimeoutMilliseconds,
+      Action beforeFreshCreate) {
+      if (beforeFreshCreate == null) {
+        throw new ArgumentNullException("beforeFreshCreate");
+      }
+      return new WorkerLifetimeJob(
+        allowChildBreakaway,
+        name,
+        recoverExisting,
+        recoveryTimeoutMilliseconds,
+        beforeFreshCreate);
+    }
+
+    public static void WaitForNameAbsenceForSelfTest(
+      string name,
+      int timeoutMilliseconds) {
+      if (String.IsNullOrEmpty(name)) {
+        throw new ArgumentException("A self-test Job name is required", "name");
+      }
+      if (timeoutMilliseconds < 1) {
+        throw new ArgumentOutOfRangeException("timeoutMilliseconds");
+      }
+      Stopwatch deadline = Stopwatch.StartNew();
+      WaitForJobNameToDisappear(name, deadline, timeoutMilliseconds);
+    }
+'@
+    }
+    return $source.Replace(
+        "__LBB_WORKER_LIFETIME_SELF_TEST_FACTORY__",
+        $selfTestFactory
+    )
 }
 
 function New-WorkerLifetimeSupportAssembly {
@@ -1642,7 +1783,7 @@ function Initialize-WorkerLifetimeSupport {
     param([string]$AssemblyPath, [string]$AssemblySha256, [switch]$SelfTestCompile)
     if ("LbbCoordinator.WorkerLifetimeJob" -as [type]) { return }
     if ($SelfTestCompile) {
-        Add-Type -TypeDefinition (Get-WorkerLifetimeSupportSource)
+        Add-Type -TypeDefinition (Get-WorkerLifetimeSupportSource -IncludeSelfTestHooks)
         return
     }
     if ($AssemblySha256 -cnotmatch '^[0-9a-f]{64}$') {
@@ -1806,12 +1947,15 @@ function Test-BoundProcessAlive {
 
 function Assert-InteractiveInputDesktop {
     $current = [Diagnostics.Process]::GetCurrentProcess()
-    if ($current.SessionId -le 0 -or -not [Environment]::UserInteractive) {
+    try { $currentSessionId = $current.SessionId }
+    finally { $current.Dispose() }
+    if ($currentSessionId -le 0 -or -not [Environment]::UserInteractive) {
         throw "Start requires the signed-in interactive Windows session."
     }
     if (-not ("LbbCoordinator.NativeDesktopProbe" -as [type])) {
         Add-Type -TypeDefinition @'
 using System;
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 namespace LbbCoordinator {
   public static class NativeDesktopProbe {
@@ -1822,7 +1966,9 @@ namespace LbbCoordinator {
     public static bool IsAccessible() {
       IntPtr desktop = OpenInputDesktop(0, false, 0x0100);
       if (desktop == IntPtr.Zero) return false;
-      CloseDesktop(desktop);
+      if (!CloseDesktop(desktop)) {
+        throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not close the input desktop probe handle");
+      }
       return true;
     }
   }
@@ -2494,12 +2640,20 @@ function Invoke-CoordinatorWorker {
         [GC]::KeepAlive($workerLifetimeJob)
         throw
     }
+    $currentWorkerProcess = [Diagnostics.Process]::GetCurrentProcess()
+    try {
+        $currentWorkerPid = $currentWorkerProcess.Id
+        $currentWorkerStartedAtUtc = ConvertTo-CanonicalUtcString (
+            $currentWorkerProcess.StartTime.ToUniversalTime()
+        )
+    }
+    finally { $currentWorkerProcess.Dispose() }
     Write-CreateOnceJson $files.Worker ([ordered]@{
         schemaVersion = $script:SchemaVersion
         kind = "windows-acceptance-worker-started"
         status = "running"
-        workerPid = [Diagnostics.Process]::GetCurrentProcess().Id
-        workerStartedAtUtc = ConvertTo-CanonicalUtcString ([Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime())
+        workerPid = $currentWorkerPid
+        workerStartedAtUtc = $currentWorkerStartedAtUtc
         attemptState = "not-started"
         retryOnUnknownOutcome = $false
         pathsRecorded = $false
@@ -3534,14 +3688,94 @@ function Follow-Coordinator {
         -Phase "runner-starting-or-waiting-for-handoff"
 }
 
+function Remove-SelfTestStreamFiles {
+    param(
+        [Parameter(Mandatory = $true)][string]$TestRoot,
+        [Parameter(Mandatory = $true)][string[]]$Paths
+    )
+    $rootBoundary = [IO.Path]::GetFullPath($TestRoot).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar
+    ) + [IO.Path]::DirectorySeparatorChar
+    foreach ($path in $Paths) {
+        $fullPath = [IO.Path]::GetFullPath($path)
+        if (-not $fullPath.StartsWith($rootBoundary, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "A self-test stream path escaped its GUID-scoped root."
+        }
+        if (-not [IO.File]::Exists($fullPath)) { continue }
+        $exclusive = $null
+        try {
+            $exclusive = [IO.File]::Open(
+                $fullPath,
+                [IO.FileMode]::Open,
+                [IO.FileAccess]::ReadWrite,
+                [IO.FileShare]::None
+            )
+        }
+        finally {
+            if ($null -ne $exclusive) { $exclusive.Dispose() }
+        }
+        [IO.File]::Delete($fullPath)
+        if ([IO.File]::Exists($fullPath)) {
+            throw "A self-test stream file remained after exact cleanup."
+        }
+    }
+}
+
+function Complete-SelfTestCapturedProcess {
+    param(
+        [Parameter(Mandatory = $true)][object]$Capture,
+        [Parameter(Mandatory = $true)][string]$TestRoot,
+        [Parameter(Mandatory = $true)][string]$StdoutPath,
+        [Parameter(Mandatory = $true)][string]$StderrPath,
+        [switch]$Terminate
+    )
+    $exitCode = $null
+    try {
+        if ($Terminate -and -not $Capture.Process.HasExited) {
+            $Capture.Process.Kill()
+        }
+        $exitCode = Complete-CapturedProcess $Capture -TimeoutMilliseconds 10000
+    }
+    finally {
+        $Capture.Process.Dispose()
+        Remove-SelfTestStreamFiles $TestRoot @($StdoutPath, $StderrPath)
+    }
+    return $exitCode
+}
+
+function Wait-SelfTestStateFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][object]$Capture,
+        [ValidateRange(1, 60000)][int]$TimeoutMilliseconds = 10000
+    )
+    $deadline = [Diagnostics.Stopwatch]::StartNew()
+    while (-not [IO.File]::Exists($Path) -and
+        -not $Capture.Process.HasExited -and
+        $deadline.ElapsedMilliseconds -lt $TimeoutMilliseconds) {
+        $remaining = $TimeoutMilliseconds - $deadline.ElapsedMilliseconds
+        Start-Sleep -Milliseconds ([Math]::Min(25, [Math]::Max(1, $remaining)))
+    }
+    if (-not [IO.File]::Exists($Path)) {
+        throw "A named-Job self-test process did not publish its exact state."
+    }
+}
+
 function Invoke-SelfTest {
     $testRoot = [IO.Path]::Combine([IO.Path]::GetTempPath(), "lbb-coordinator-self-test-" + [Guid]::NewGuid().ToString("N"))
     [IO.Directory]::CreateDirectory($testRoot) | Out-Null
     $selfTestLifetimeJob = $null
+    $selfTestCleanLifetimeJob = $null
     $selfTestRecoveredLifetimeJob = $null
+    $selfTestDelayedHandleLifetimeJob = $null
+    $selfTestTimeoutCleanupLifetimeJob = $null
+    $selfTestPostRaceLifetimeJob = $null
+    $currentProcess = $null
     $originalSelfTestAttemptLedgerRoot = $script:SelfTestAttemptLedgerRoot
     $originalSelfTestCoordinatorParent = $script:SelfTestCoordinatorParent
     $originalSelfTestEvidenceParent = $script:SelfTestEvidenceParent
+    $selfTestSucceeded = $false
     try {
         $null = Resolve-OrdinaryPath $testRoot $false "Coordinator self-test root"
         Set-PrivateDirectoryAcl $testRoot
@@ -3553,6 +3787,35 @@ function Invoke-SelfTest {
         $script:SelfTestEvidenceParent = $selfTestEvidenceParent
         $script:SelfTestAttemptLedgerRoot = $selfTestLedgerRoot
         $selfTestLifetimeJob = New-WorkerLifetimeJob -AllowChildBreakaway
+        $cleanJobName = "Local\LBBWindowsAcceptanceCoordinatorLifetimeJobCleanSelfTest-" +
+            [Guid]::NewGuid().ToString("N")
+        $cleanMutexName = "Local\LBBWindowsAcceptanceCoordinatorLifetimeCleanSelfTest-" +
+            [Guid]::NewGuid().ToString("N")
+        if ($cleanJobName -ceq $script:WorkerLifetimeJobName -or
+            $cleanMutexName -ceq "Local\LBBWindowsAcceptanceCoordinator") {
+            throw "The clean-start self-test selected a production coordinator name."
+        }
+        $cleanMutex = [Threading.Mutex]::new($false, $cleanMutexName)
+        $cleanMutexHeld = $false
+        try {
+            $cleanMutexHeld = $cleanMutex.WaitOne(0)
+            if (-not $cleanMutexHeld) {
+                throw "The clean-start self-test could not acquire its isolated admission mutex."
+            }
+            $selfTestCleanLifetimeJob = New-WorkerLifetimeJob `
+                -AllowChildBreakaway `
+                -Name $cleanJobName `
+                -RecoverExisting `
+                -RecoveryTimeoutMilliseconds 2000
+            if (-not $selfTestCleanLifetimeJob.IsBound -or
+                $selfTestCleanLifetimeJob.RecoveredExistingJob) {
+                throw "The clean-start self-test did not bind a fresh named Job."
+            }
+        }
+        finally {
+            if ($cleanMutexHeld) { $cleanMutex.ReleaseMutex() }
+            $cleanMutex.Dispose()
+        }
         $quoted = @(
             @{ Value = ""; Expected = '""' },
             @{ Value = "plain"; Expected = "plain" },
@@ -3788,6 +4051,10 @@ exit 23
             throw "Coordinator self-test logs retained a token-shaped value."
         }
         $tokenForLeakCheck = $null
+        Remove-SelfTestStreamFiles $testRoot @(
+            [IO.Path]::Combine($testRoot, "out.log"),
+            [IO.Path]::Combine($testRoot, "err.log")
+        )
 
         $ownershipProbePath = [IO.Path]::Combine($testRoot, "coordinator-ownership-probe.exe")
         $ownershipStatePath = [IO.Path]::Combine($testRoot, "coordinator-ownership.state")
@@ -3843,13 +4110,18 @@ public static class CoordinatorOwnershipProbe {
   private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
   [DllImport("kernel32.dll")]
   private static extern IntPtr GetCurrentProcess();
+  [DllImport("kernel32.dll", SetLastError=true)]
+  private static extern bool CloseHandle(IntPtr handle);
 
   private static string Quote(string value) {
     return "\"" + value.Replace("\"", "\\\"") + "\"";
   }
 
   private static Process StartMode(string mode, string statePath) {
-    string executable = Process.GetCurrentProcess().MainModule.FileName;
+    string executable;
+    using (Process current = Process.GetCurrentProcess()) {
+      executable = current.MainModule.FileName;
+    }
     ProcessStartInfo info = new ProcessStartInfo();
     info.FileName = executable;
     info.Arguments = statePath == null ? mode : mode + " " + Quote(statePath);
@@ -3861,31 +4133,46 @@ public static class CoordinatorOwnershipProbe {
     info.RedirectStandardError = true;
     Process process = new Process();
     process.StartInfo = info;
-    if (!process.Start()) throw new InvalidOperationException("probe child did not start");
-    return process;
+    try {
+      if (!process.Start()) throw new InvalidOperationException("probe child did not start");
+      return process;
+    }
+    catch {
+      process.Dispose();
+      throw;
+    }
   }
 
   private static IntPtr BindCurrentProcessToKillOnCloseJob() {
     const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
     IntPtr job = CreateJobObject(IntPtr.Zero, null);
     if (job == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    int size = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
-    IntPtr buffer = Marshal.AllocHGlobal(size);
+    bool retained = false;
     try {
-      Marshal.StructureToPtr(limits, buffer, false);
-      if (!SetInformationJobObject(job, 9, buffer, (uint)size)) {
+      JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+      limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+      int size = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
+      IntPtr buffer = Marshal.AllocHGlobal(size);
+      try {
+        Marshal.StructureToPtr(limits, buffer, false);
+        if (!SetInformationJobObject(job, 9, buffer, (uint)size)) {
+          throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+      }
+      finally {
+        Marshal.FreeHGlobal(buffer);
+      }
+      if (!AssignProcessToJobObject(job, GetCurrentProcess())) {
+        throw new Win32Exception(Marshal.GetLastWin32Error());
+      }
+      retained = true;
+      return job;
+    }
+    finally {
+      if (!retained && !CloseHandle(job)) {
         throw new Win32Exception(Marshal.GetLastWin32Error());
       }
     }
-    finally {
-      Marshal.FreeHGlobal(buffer);
-    }
-    if (!AssignProcessToJobObject(job, GetCurrentProcess())) {
-      throw new Win32Exception(Marshal.GetLastWin32Error());
-    }
-    return job;
   }
 
   public static int Main(string[] args) {
@@ -3901,10 +4188,13 @@ public static class CoordinatorOwnershipProbe {
     if (args[0] == "worker" && args.Length == 2) {
       IntPtr lifetimeJob = BindCurrentProcessToKillOnCloseJob();
       using (Process sleeper = StartMode("sleeper", null)) {
-        string payload = Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture) + "|" +
-          Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture) + "|" +
-          sleeper.Id.ToString(CultureInfo.InvariantCulture) + "|" +
-          sleeper.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture);
+        string payload;
+        using (Process current = Process.GetCurrentProcess()) {
+          payload = current.Id.ToString(CultureInfo.InvariantCulture) + "|" +
+            current.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture) + "|" +
+            sleeper.Id.ToString(CultureInfo.InvariantCulture) + "|" +
+            sleeper.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture);
+        }
         string temporary = args[1] + "." + Guid.NewGuid().ToString("N") + ".tmp";
         File.WriteAllText(temporary, payload, new UTF8Encoding(false));
         File.Move(temporary, args[1]);
@@ -3932,11 +4222,16 @@ public static class CoordinatorOwnershipProbe {
         $controlCapture = $null
         $guardCloseStdoutPath = [IO.Path]::Combine($testRoot, "guard-close.stdout.log")
         $guardCloseStderrPath = [IO.Path]::Combine($testRoot, "guard-close.stderr.log")
+        $controlStdoutPath = [IO.Path]::Combine($testRoot, "ownership-control.stdout.log")
+        $controlStderrPath = [IO.Path]::Combine($testRoot, "ownership-control.stderr.log")
+        $ownershipStdoutPath = [IO.Path]::Combine($testRoot, "ownership-launcher.stdout.log")
+        $ownershipStderrPath = [IO.Path]::Combine($testRoot, "ownership-launcher.stderr.log")
         $guardCloseLauncherProcess = $null
         $guardCloseBoundProcess = $null
         $ownershipLauncherProcess = $null
         $boundWorkerProcess = $null
         $boundSleeperProcess = $null
+        $boundControlProcess = $null
         $controlStartedAt = $null
         $workerStartedAt = $null
         $sleeperStartedAt = $null
@@ -3995,16 +4290,20 @@ public static class CoordinatorOwnershipProbe {
             $controlInfo = New-ProcessStartInfo $ownershipProbePath @("control") $testRoot -Hidden
             $controlCapture = Start-CapturedProcess `
                 $controlInfo `
-                ([IO.Path]::Combine($testRoot, "ownership-control.stdout.log")) `
-                ([IO.Path]::Combine($testRoot, "ownership-control.stderr.log"))
+                $controlStdoutPath `
+                $controlStderrPath
             $controlStartedAt = $controlCapture.StartedAtUtc
+            $boundControlProcess = [LbbCoordinator.DetachedWorkerProcess]::OpenExact(
+                $controlCapture.Process.Id,
+                $controlStartedAt
+            )
 
             $ownershipLauncherProcess = Start-DetachedWorkerProcess `
                 -Executable $ownershipProbePath `
                 -Arguments (Join-NativeArguments @("worker", $ownershipStatePath)) `
                 -WorkingDirectory $testRoot `
-                -StdoutPath ([IO.Path]::Combine($testRoot, "ownership-launcher.stdout.log")) `
-                -StderrPath ([IO.Path]::Combine($testRoot, "ownership-launcher.stderr.log")) `
+                -StdoutPath $ownershipStdoutPath `
+                -StderrPath $ownershipStderrPath `
                 -Environment (Get-WhitelistedWorkerEnvironment)
             $ownershipDeadline = [DateTime]::UtcNow.AddSeconds(10)
             while (-not [IO.File]::Exists($ownershipStatePath) -and
@@ -4038,36 +4337,54 @@ public static class CoordinatorOwnershipProbe {
                 $sleeperPid,
                 $sleeperStartedAt
             )
+            if ($boundWorkerProcess.HasExited -or
+                $boundSleeperProcess.HasExited -or
+                $boundControlProcess.HasExited) {
+                throw "The transferred-guard fixture was not fully live before ownership transfer."
+            }
             $ownershipLauncherProcess.TransferGuardOwnership()
             if (-not $ownershipLauncherProcess.GuardOwnershipTransferred) {
                 throw "The ownership probe did not transfer its guard Job to the worker."
             }
             $ownershipLauncherProcess.Dispose()
             $ownershipLauncherProcess = $null
-            if (-not (Test-BoundProcessAlive $workerPid $workerStartedAt) -or
+            if ($boundWorkerProcess.HasExited -or
+                $boundSleeperProcess.HasExited -or
+                $boundControlProcess.HasExited -or
+                -not (Test-BoundProcessAlive $workerPid $workerStartedAt) -or
                 -not (Test-BoundProcessAlive $sleeperPid $sleeperStartedAt) -or
                 -not (Test-BoundProcessAlive $controlCapture.Process.Id $controlStartedAt)) {
                 throw "The launcher-exit durability probe did not retain only its intended processes."
+            }
+            if ($boundWorkerProcess.WaitForExit(250) -or
+                $boundWorkerProcess.HasExited -or
+                $boundSleeperProcess.HasExited -or
+                $boundControlProcess.HasExited) {
+                throw "The transferred worker did not survive a bounded launcher-disposal dwell."
             }
             $boundWorkerProcess.Kill()
             if (-not $boundWorkerProcess.WaitForExit(5000)) {
                 throw "The exact probe worker did not terminate."
             }
-            $descendantDeadline = [DateTime]::UtcNow.AddSeconds(10)
-            while ((Test-BoundProcessAlive $sleeperPid $sleeperStartedAt) -and
-                [DateTime]::UtcNow -lt $descendantDeadline) {
-                Start-Sleep -Milliseconds 50
-            }
-            if (Test-BoundProcessAlive $sleeperPid $sleeperStartedAt) {
+            if (-not $boundSleeperProcess.WaitForExit(10000) -or
+                -not $boundSleeperProcess.HasExited -or
+                (Test-BoundProcessAlive $sleeperPid $sleeperStartedAt)) {
                 throw "KILL_ON_JOB_CLOSE did not terminate the worker-owned descendant."
             }
-            if (-not (Test-BoundProcessAlive $controlCapture.Process.Id $controlStartedAt)) {
+            if ($boundControlProcess.HasExited -or
+                -not (Test-BoundProcessAlive $controlCapture.Process.Id $controlStartedAt)) {
                 throw "Worker termination affected the unrelated control process."
             }
-            $controlCapture.Process.Kill()
-            $null = Complete-CapturedProcess $controlCapture
-            $controlCapture.Process.Dispose()
+            $null = Complete-SelfTestCapturedProcess `
+                $controlCapture $testRoot $controlStdoutPath $controlStderrPath -Terminate
             $controlCapture = $null
+            if (-not $boundControlProcess.WaitForExit(5000) -or
+                -not $boundControlProcess.HasExited) {
+                throw "The exact unrelated control process did not terminate during self-test cleanup."
+            }
+            Remove-SelfTestStreamFiles `
+                $testRoot `
+                @($ownershipStdoutPath, $ownershipStderrPath)
         }
         finally {
             if ($null -ne $guardCloseLauncherProcess) {
@@ -4120,16 +4437,29 @@ public static class CoordinatorOwnershipProbe {
                 catch {}
                 $boundSleeperProcess.Dispose()
             }
-            if ($null -ne $controlCapture) {
+            if ($null -ne $boundControlProcess) {
                 try {
-                    if ((Test-BoundProcessAlive $controlCapture.Process.Id $controlStartedAt)) {
-                        $controlCapture.Process.Kill()
+                    if (-not $boundControlProcess.HasExited) {
+                        $boundControlProcess.Kill()
+                        $null = $boundControlProcess.WaitForExit(5000)
                     }
-                    $null = Complete-CapturedProcess $controlCapture
                 }
                 catch {}
-                $controlCapture.Process.Dispose()
+                $boundControlProcess.Dispose()
             }
+            if ($null -ne $controlCapture) {
+                try {
+                    $null = Complete-SelfTestCapturedProcess `
+                        $controlCapture $testRoot $controlStdoutPath $controlStderrPath -Terminate
+                }
+                catch {}
+            }
+            try {
+                Remove-SelfTestStreamFiles `
+                    $testRoot `
+                    @($ownershipStdoutPath, $ownershipStderrPath)
+            }
+            catch {}
         }
 
         $namedRecoverySourcePath = [IO.Path]::Combine($testRoot, "named-job-recovery-support.cs")
@@ -4150,7 +4480,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 Add-Type -TypeDefinition ([IO.File]::ReadAllText($SupportSourcePath))
 $job = [LbbCoordinator.WorkerLifetimeJob]::new($false, $JobName, $false, 10000)
-$selfPath = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+$selfProcess = [Diagnostics.Process]::GetCurrentProcess()
+try { $selfPath = $selfProcess.MainModule.FileName }
+finally { $selfProcess.Dispose() }
 $childInfo = [Diagnostics.ProcessStartInfo]::new()
 $childInfo.FileName = $selfPath
 $childInfo.Arguments = '-NoLogo -NoProfile -NonInteractive -Command "Start-Sleep -Seconds 120"'
@@ -4159,15 +4491,18 @@ $childInfo.UseShellExecute = $false
 $childInfo.CreateNoWindow = $true
 $child = [Diagnostics.Process]::new()
 $child.StartInfo = $childInfo
-if (-not $child.Start()) { throw "The named-Job recovery descendant did not start." }
 try {
+    if (-not $child.Start()) { throw "The named-Job recovery descendant did not start." }
     $owner = [Diagnostics.Process]::GetCurrentProcess()
-    $payload = @(
-        $owner.Id,
-        $owner.StartTime.ToUniversalTime().Ticks,
-        $child.Id,
-        $child.StartTime.ToUniversalTime().Ticks
-    ) -join '|'
+    try {
+        $payload = @(
+            $owner.Id,
+            $owner.StartTime.ToUniversalTime().Ticks,
+            $child.Id,
+            $child.StartTime.ToUniversalTime().Ticks
+        ) -join '|'
+    }
+    finally { $owner.Dispose() }
     $temporary = $StatePath + "." + [Guid]::NewGuid().ToString("N") + ".tmp"
     [IO.File]::WriteAllText($temporary, $payload, [Text.UTF8Encoding]::new($false))
     [IO.File]::Move($temporary, $StatePath)
@@ -4183,6 +4518,159 @@ finally {
             $namedRecoveryOwnerSource,
             $script:Utf8NoBom
         )
+        $namedHandleHolderPath = [IO.Path]::Combine($testRoot, "named-job-handle-holder.ps1")
+        $namedHandleHolderSource = @'
+param(
+    [Parameter(Mandatory = $true)][string]$JobName,
+    [Parameter(Mandatory = $true)][string]$StatePath,
+    [Parameter(Mandatory = $true)][int]$HoldMilliseconds
+)
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+$nativeSource = @"
+using System;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Threading;
+
+namespace LbbCoordinatorSelfTest {
+  public static class NamedJobHandleLease {
+    private const uint JOB_OBJECT_QUERY = 0x0004;
+    private const int JobObjectBasicAccountingInformation = 1;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JOBOBJECT_BASIC_ACCOUNTING_INFORMATION {
+      public long TotalUserTime;
+      public long TotalKernelTime;
+      public long ThisPeriodTotalUserTime;
+      public long ThisPeriodTotalKernelTime;
+      public uint TotalPageFaultCount;
+      public uint TotalProcesses;
+      public uint ActiveProcesses;
+      public uint TotalTerminatedProcesses;
+    }
+
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    private static extern IntPtr OpenJobObject(
+      uint desiredAccess,
+      [MarshalAs(UnmanagedType.Bool)] bool inheritHandle,
+      string name);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryInformationJobObject(
+      IntPtr job,
+      int infoClass,
+      out JOBOBJECT_BASIC_ACCOUNTING_INFORMATION information,
+      uint length,
+      IntPtr returnLength);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    public static IntPtr Open(string name) {
+      IntPtr handle = OpenJobObject(JOB_OBJECT_QUERY, false, name);
+      if (handle == IntPtr.Zero) {
+        throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not open the self-test named Job");
+      }
+      return handle;
+    }
+
+    public static void WaitForEmpty(IntPtr handle, int timeoutMilliseconds) {
+      Stopwatch deadline = Stopwatch.StartNew();
+      while (true) {
+        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting;
+        if (!QueryInformationJobObject(
+          handle,
+          JobObjectBasicAccountingInformation,
+          out accounting,
+          (uint)Marshal.SizeOf(typeof(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION)),
+          IntPtr.Zero)) {
+          throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not query the self-test named Job");
+        }
+        if (accounting.ActiveProcesses == 0) return;
+        if (deadline.ElapsedMilliseconds >= timeoutMilliseconds) {
+          throw new TimeoutException("The self-test named Job did not become empty");
+        }
+        Thread.Sleep(5);
+      }
+    }
+
+    public static void CloseOnce(IntPtr handle) {
+      if (!CloseHandle(handle)) {
+        throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not close the self-test named Job handle");
+      }
+    }
+  }
+}
+"@
+Add-Type -TypeDefinition $nativeSource
+$handle = [LbbCoordinatorSelfTest.NamedJobHandleLease]::Open($JobName)
+try {
+    $current = [Diagnostics.Process]::GetCurrentProcess()
+    try {
+        $payload = @($current.Id, $current.StartTime.ToUniversalTime().Ticks) -join '|'
+    }
+    finally { $current.Dispose() }
+    $temporary = $StatePath + "." + [Guid]::NewGuid().ToString("N") + ".tmp"
+    [IO.File]::WriteAllText($temporary, $payload, [Text.UTF8Encoding]::new($false))
+    [IO.File]::Move($temporary, $StatePath)
+    [LbbCoordinatorSelfTest.NamedJobHandleLease]::WaitForEmpty($handle, 30000)
+    [IO.File]::WriteAllText(
+        $StatePath + ".empty",
+        "active-processes-zero",
+        [Text.UTF8Encoding]::new($false)
+    )
+    Start-Sleep -Milliseconds $HoldMilliseconds
+}
+finally {
+    [LbbCoordinatorSelfTest.NamedJobHandleLease]::CloseOnce($handle)
+}
+'@
+        [IO.File]::WriteAllText(
+            $namedHandleHolderPath,
+            $namedHandleHolderSource,
+            $script:Utf8NoBom
+        )
+        $namedRaceOwnerPath = [IO.Path]::Combine($testRoot, "named-job-race-owner.ps1")
+        $namedRaceOwnerSource = @'
+param(
+    [Parameter(Mandatory = $true)][string]$SupportSourcePath,
+    [Parameter(Mandatory = $true)][string]$JobName,
+    [Parameter(Mandatory = $true)][string]$TriggerPath,
+    [Parameter(Mandatory = $true)][string]$StatePath
+)
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+$triggerDeadline = [Diagnostics.Stopwatch]::StartNew()
+while (-not [IO.File]::Exists($TriggerPath) -and $triggerDeadline.ElapsedMilliseconds -lt 30000) {
+    Start-Sleep -Milliseconds 5
+}
+if (-not [IO.File]::Exists($TriggerPath)) {
+    throw "The create-race owner did not receive its self-test trigger."
+}
+Add-Type -TypeDefinition ([IO.File]::ReadAllText($SupportSourcePath))
+$job = [LbbCoordinator.WorkerLifetimeJob]::new($false, $JobName, $false, 10000)
+try {
+    $current = [Diagnostics.Process]::GetCurrentProcess()
+    try {
+        $payload = @($current.Id, $current.StartTime.ToUniversalTime().Ticks) -join '|'
+    }
+    finally { $current.Dispose() }
+    $temporary = $StatePath + "." + [Guid]::NewGuid().ToString("N") + ".tmp"
+    [IO.File]::WriteAllText($temporary, $payload, [Text.UTF8Encoding]::new($false))
+    [IO.File]::Move($temporary, $StatePath)
+    while ($true) { Start-Sleep -Seconds 1 }
+}
+finally {
+    [GC]::KeepAlive($job)
+}
+'@
+        [IO.File]::WriteAllText(
+            $namedRaceOwnerPath,
+            $namedRaceOwnerSource,
+            $script:Utf8NoBom
+        )
         $namedRecoveryJobName = "Local\LBBWindowsAcceptanceCoordinatorLifetimeJobSelfTest-" +
             [Guid]::NewGuid().ToString("N")
         if ($namedRecoveryJobName -ceq $script:WorkerLifetimeJobName) {
@@ -4191,6 +4679,8 @@ finally {
         $namedRecoveryOwnerCapture = $null
         $namedRecoveryBoundOwner = $null
         $namedRecoveryBoundChild = $null
+        $namedRecoveryOut = [IO.Path]::Combine($testRoot, "named-job-recovery.stdout.log")
+        $namedRecoveryErr = [IO.Path]::Combine($testRoot, "named-job-recovery.stderr.log")
         $namedRecoveryMutex = $null
         $namedRecoveryMutexHeld = $false
         try {
@@ -4202,8 +4692,8 @@ finally {
             ) $testRoot -Hidden
             $namedRecoveryOwnerCapture = Start-CapturedProcess `
                 $namedRecoveryOwnerInfo `
-                ([IO.Path]::Combine($testRoot, "named-job-recovery.stdout.log")) `
-                ([IO.Path]::Combine($testRoot, "named-job-recovery.stderr.log"))
+                $namedRecoveryOut `
+                $namedRecoveryErr
             $namedRecoveryDeadline = [DateTime]::UtcNow.AddSeconds(30)
             while (-not [IO.File]::Exists($namedRecoveryStatePath) -and
                 -not $namedRecoveryOwnerCapture.Process.HasExited -and
@@ -4242,6 +4732,10 @@ finally {
                 $namedRecoveryChildPid,
                 $namedRecoveryChildStartedAt
             )
+            if ($namedRecoveryBoundOwner.HasExited -or
+                $namedRecoveryBoundChild.HasExited) {
+                throw "The exact prior named-Job owner tree was not live before recovery."
+            }
             $namedRecoveryMutexName = "Local\LBBWindowsAcceptanceCoordinatorLifetimeRecoverySelfTest-" +
                 [Guid]::NewGuid().ToString("N")
             $namedRecoveryMutex = [Threading.Mutex]::new($false, $namedRecoveryMutexName)
@@ -4259,24 +4753,23 @@ finally {
             }
             if (-not $namedRecoveryBoundOwner.WaitForExit(5000) -or
                 -not $namedRecoveryBoundChild.WaitForExit(5000) -or
+                -not $namedRecoveryBoundOwner.HasExited -or
+                -not $namedRecoveryBoundChild.HasExited -or
                 (Test-BoundProcessAlive $namedRecoveryOwnerPid $namedRecoveryOwnerStartedAt) -or
                 (Test-BoundProcessAlive $namedRecoveryChildPid $namedRecoveryChildStartedAt)) {
                 throw "Named-Job recovery returned before the prior tree reached ACTIVE_PROCESS_ZERO."
             }
-            $null = Complete-CapturedProcess $namedRecoveryOwnerCapture -TimeoutMilliseconds 10000
-            $namedRecoveryOwnerCapture.Process.Dispose()
+            $null = Complete-SelfTestCapturedProcess `
+                $namedRecoveryOwnerCapture $testRoot $namedRecoveryOut $namedRecoveryErr
             $namedRecoveryOwnerCapture = $null
         }
         finally {
             if ($null -ne $namedRecoveryOwnerCapture) {
                 try {
-                    if (-not $namedRecoveryOwnerCapture.Process.HasExited) {
-                        $namedRecoveryOwnerCapture.Process.Kill()
-                    }
-                    $null = Complete-CapturedProcess $namedRecoveryOwnerCapture -TimeoutMilliseconds 10000
+                    $null = Complete-SelfTestCapturedProcess `
+                        $namedRecoveryOwnerCapture $testRoot $namedRecoveryOut $namedRecoveryErr -Terminate
                 }
                 catch {}
-                $namedRecoveryOwnerCapture.Process.Dispose()
             }
             if ($null -ne $namedRecoveryBoundOwner) {
                 try {
@@ -4304,6 +4797,520 @@ finally {
             if ($null -ne $namedRecoveryMutex) { $namedRecoveryMutex.Dispose() }
         }
 
+        # A non-member process retains a query handle after the exact prior
+        # owner tree reaches zero. Recovery must wait for that handle to close
+        # and for the name to leave the namespace before one fresh create.
+        $delayedJobName = "Local\LBBWindowsAcceptanceCoordinatorLifetimeDelayedHandleSelfTest-" +
+            [Guid]::NewGuid().ToString("N")
+        $delayedMutexName = "Local\LBBWindowsAcceptanceCoordinatorLifetimeDelayedMutexSelfTest-" +
+            [Guid]::NewGuid().ToString("N")
+        if ($delayedJobName -ceq $script:WorkerLifetimeJobName -or
+            $delayedMutexName -ceq "Local\LBBWindowsAcceptanceCoordinator") {
+            throw "The delayed-handle self-test selected a production coordinator name."
+        }
+        $delayedOwnerStatePath = [IO.Path]::Combine($testRoot, "delayed-owner.state")
+        $delayedHolderStatePath = [IO.Path]::Combine($testRoot, "delayed-holder.state")
+        $delayedOwnerOut = [IO.Path]::Combine($testRoot, "delayed-owner.stdout.log")
+        $delayedOwnerErr = [IO.Path]::Combine($testRoot, "delayed-owner.stderr.log")
+        $delayedHolderOut = [IO.Path]::Combine($testRoot, "delayed-holder.stdout.log")
+        $delayedHolderErr = [IO.Path]::Combine($testRoot, "delayed-holder.stderr.log")
+        $delayedOwnerCapture = $null
+        $delayedHolderCapture = $null
+        $delayedBoundOwner = $null
+        $delayedBoundChild = $null
+        $delayedBoundHolder = $null
+        $delayedMutex = $null
+        $delayedMutexHeld = $false
+        try {
+            $delayedOwnerInfo = New-ProcessStartInfo $systemPowerShell @(
+                "-NoLogo", "-NoProfile", "-NonInteractive", "-File", $namedRecoveryOwnerPath,
+                "-SupportSourcePath", $namedRecoverySourcePath,
+                "-JobName", $delayedJobName,
+                "-StatePath", $delayedOwnerStatePath
+            ) $testRoot -Hidden
+            $delayedOwnerCapture = Start-CapturedProcess `
+                $delayedOwnerInfo `
+                $delayedOwnerOut `
+                $delayedOwnerErr
+            Wait-SelfTestStateFile $delayedOwnerStatePath $delayedOwnerCapture 30000
+            $delayedOwnerParts = [IO.File]::ReadAllText(
+                $delayedOwnerStatePath,
+                $script:Utf8NoBom
+            ).Split('|')
+            if ($delayedOwnerParts.Count -ne 4) {
+                throw "The delayed-handle owner state is malformed."
+            }
+            $delayedOwnerPid = [int]$delayedOwnerParts[0]
+            $delayedOwnerStartedAt = [DateTime]::new(
+                [Int64]$delayedOwnerParts[1],
+                [DateTimeKind]::Utc
+            )
+            $delayedChildPid = [int]$delayedOwnerParts[2]
+            $delayedChildStartedAt = [DateTime]::new(
+                [Int64]$delayedOwnerParts[3],
+                [DateTimeKind]::Utc
+            )
+            if ($delayedOwnerPid -ne $delayedOwnerCapture.Process.Id -or
+                $delayedOwnerStartedAt.Ticks -ne $delayedOwnerCapture.StartedAtUtc.Ticks) {
+                throw "The delayed-handle owner state is not bound to its exact captured process."
+            }
+            $delayedBoundOwner = [LbbCoordinator.DetachedWorkerProcess]::OpenExact(
+                $delayedOwnerPid,
+                $delayedOwnerStartedAt
+            )
+            $delayedBoundChild = [LbbCoordinator.DetachedWorkerProcess]::OpenExact(
+                $delayedChildPid,
+                $delayedChildStartedAt
+            )
+
+            $delayedHolderInfo = New-ProcessStartInfo $systemPowerShell @(
+                "-NoLogo", "-NoProfile", "-NonInteractive", "-File", $namedHandleHolderPath,
+                "-JobName", $delayedJobName,
+                "-StatePath", $delayedHolderStatePath,
+                "-HoldMilliseconds", "750"
+            ) $testRoot -Hidden
+            $delayedHolderCapture = Start-CapturedProcess `
+                $delayedHolderInfo `
+                $delayedHolderOut `
+                $delayedHolderErr
+            Wait-SelfTestStateFile $delayedHolderStatePath $delayedHolderCapture 30000
+            $delayedHolderParts = [IO.File]::ReadAllText(
+                $delayedHolderStatePath,
+                $script:Utf8NoBom
+            ).Split('|')
+            if ($delayedHolderParts.Count -ne 2) {
+                throw "The delayed-handle holder state is malformed."
+            }
+            $delayedHolderPid = [int]$delayedHolderParts[0]
+            $delayedHolderStartedAt = [DateTime]::new(
+                [Int64]$delayedHolderParts[1],
+                [DateTimeKind]::Utc
+            )
+            if ($delayedHolderPid -ne $delayedHolderCapture.Process.Id -or
+                $delayedHolderStartedAt.Ticks -ne $delayedHolderCapture.StartedAtUtc.Ticks) {
+                throw "The delayed handle is not bound to its exact non-member process."
+            }
+            $delayedBoundHolder = [LbbCoordinator.DetachedWorkerProcess]::OpenExact(
+                $delayedHolderPid,
+                $delayedHolderStartedAt
+            )
+            if ($delayedBoundOwner.HasExited -or
+                $delayedBoundChild.HasExited -or
+                $delayedBoundHolder.HasExited) {
+                throw "The delayed-handle fixture was not fully live before recovery."
+            }
+
+            $delayedMutex = [Threading.Mutex]::new($false, $delayedMutexName)
+            $delayedMutexHeld = $delayedMutex.WaitOne(0)
+            if (-not $delayedMutexHeld) {
+                throw "The delayed-handle self-test could not acquire its isolated admission mutex."
+            }
+            $delayedRecoveryClock = [Diagnostics.Stopwatch]::StartNew()
+            $selfTestDelayedHandleLifetimeJob = New-WorkerLifetimeJob `
+                -Name $delayedJobName `
+                -RecoverExisting `
+                -RecoveryTimeoutMilliseconds 5000
+            $delayedRecoveryClock.Stop()
+            if (-not $selfTestDelayedHandleLifetimeJob.IsBound -or
+                -not $selfTestDelayedHandleLifetimeJob.RecoveredExistingJob -or
+                -not [IO.File]::Exists($delayedHolderStatePath + ".empty") -or
+                $delayedRecoveryClock.ElapsedMilliseconds -lt 650 -or
+                $delayedRecoveryClock.ElapsedMilliseconds -ge 5000) {
+                throw "Recovery did not wait within bounds for delayed Job namespace disappearance."
+            }
+            if (-not $delayedBoundOwner.WaitForExit(5000) -or
+                -not $delayedBoundChild.WaitForExit(5000) -or
+                -not $delayedBoundHolder.WaitForExit(5000) -or
+                -not $delayedBoundOwner.HasExited -or
+                -not $delayedBoundChild.HasExited -or
+                -not $delayedBoundHolder.HasExited) {
+                throw "Delayed-handle recovery did not preserve exact process lifetime behavior."
+            }
+            $delayedHolderExit = Complete-SelfTestCapturedProcess `
+                $delayedHolderCapture $testRoot $delayedHolderOut $delayedHolderErr
+            $delayedHolderCapture = $null
+            if ($delayedHolderExit -ne 0) {
+                throw "The non-member delayed Job handle process did not exit cleanly."
+            }
+            $null = Complete-SelfTestCapturedProcess `
+                $delayedOwnerCapture $testRoot $delayedOwnerOut $delayedOwnerErr
+            $delayedOwnerCapture = $null
+        }
+        finally {
+            if ($null -ne $delayedOwnerCapture) {
+                try {
+                    $null = Complete-SelfTestCapturedProcess `
+                        $delayedOwnerCapture $testRoot $delayedOwnerOut $delayedOwnerErr -Terminate
+                }
+                catch {}
+            }
+            if ($null -ne $delayedHolderCapture) {
+                try {
+                    $null = Complete-SelfTestCapturedProcess `
+                        $delayedHolderCapture $testRoot $delayedHolderOut $delayedHolderErr -Terminate
+                }
+                catch {}
+            }
+            foreach ($delayedBoundProcess in @(
+                $delayedBoundOwner,
+                $delayedBoundChild,
+                $delayedBoundHolder
+            )) {
+                if ($null -ne $delayedBoundProcess) {
+                    try {
+                        if (-not $delayedBoundProcess.HasExited) {
+                            $delayedBoundProcess.Kill()
+                            $null = $delayedBoundProcess.WaitForExit(5000)
+                        }
+                    }
+                    catch {}
+                    $delayedBoundProcess.Dispose()
+                }
+            }
+            if ($delayedMutexHeld) {
+                try { $delayedMutex.ReleaseMutex() } catch {}
+            }
+            if ($null -ne $delayedMutex) { $delayedMutex.Dispose() }
+        }
+
+        # Retaining the non-member handle beyond a short shared deadline must
+        # fail closed without binding a Job. After exact fixture cleanup, a
+        # query-only absence proof and non-recovery create detect leaked poll
+        # or constructor handles.
+        $timeoutJobName = "Local\LBBWindowsAcceptanceCoordinatorLifetimeTimeoutSelfTest-" +
+            [Guid]::NewGuid().ToString("N")
+        $timeoutMutexName = "Local\LBBWindowsAcceptanceCoordinatorLifetimeTimeoutMutexSelfTest-" +
+            [Guid]::NewGuid().ToString("N")
+        if ($timeoutJobName -ceq $script:WorkerLifetimeJobName -or
+            $timeoutMutexName -ceq "Local\LBBWindowsAcceptanceCoordinator") {
+            throw "The external-handle timeout self-test selected a production coordinator name."
+        }
+        $timeoutOwnerStatePath = [IO.Path]::Combine($testRoot, "timeout-owner.state")
+        $timeoutHolderStatePath = [IO.Path]::Combine($testRoot, "timeout-holder.state")
+        $timeoutOwnerOut = [IO.Path]::Combine($testRoot, "timeout-owner.stdout.log")
+        $timeoutOwnerErr = [IO.Path]::Combine($testRoot, "timeout-owner.stderr.log")
+        $timeoutHolderOut = [IO.Path]::Combine($testRoot, "timeout-holder.stdout.log")
+        $timeoutHolderErr = [IO.Path]::Combine($testRoot, "timeout-holder.stderr.log")
+        $timeoutOwnerCapture = $null
+        $timeoutHolderCapture = $null
+        $timeoutBoundOwner = $null
+        $timeoutBoundChild = $null
+        $timeoutBoundHolder = $null
+        $timeoutMutex = $null
+        $timeoutMutexHeld = $false
+        try {
+            $timeoutOwnerInfo = New-ProcessStartInfo $systemPowerShell @(
+                "-NoLogo", "-NoProfile", "-NonInteractive", "-File", $namedRecoveryOwnerPath,
+                "-SupportSourcePath", $namedRecoverySourcePath,
+                "-JobName", $timeoutJobName,
+                "-StatePath", $timeoutOwnerStatePath
+            ) $testRoot -Hidden
+            $timeoutOwnerCapture = Start-CapturedProcess `
+                $timeoutOwnerInfo `
+                $timeoutOwnerOut `
+                $timeoutOwnerErr
+            Wait-SelfTestStateFile $timeoutOwnerStatePath $timeoutOwnerCapture 30000
+            $timeoutOwnerParts = [IO.File]::ReadAllText(
+                $timeoutOwnerStatePath,
+                $script:Utf8NoBom
+            ).Split('|')
+            if ($timeoutOwnerParts.Count -ne 4) {
+                throw "The external-handle timeout owner state is malformed."
+            }
+            $timeoutOwnerPid = [int]$timeoutOwnerParts[0]
+            $timeoutOwnerStartedAt = [DateTime]::new(
+                [Int64]$timeoutOwnerParts[1],
+                [DateTimeKind]::Utc
+            )
+            $timeoutChildPid = [int]$timeoutOwnerParts[2]
+            $timeoutChildStartedAt = [DateTime]::new(
+                [Int64]$timeoutOwnerParts[3],
+                [DateTimeKind]::Utc
+            )
+            if ($timeoutOwnerPid -ne $timeoutOwnerCapture.Process.Id -or
+                $timeoutOwnerStartedAt.Ticks -ne $timeoutOwnerCapture.StartedAtUtc.Ticks) {
+                throw "The external-handle timeout owner is not exact."
+            }
+            $timeoutBoundOwner = [LbbCoordinator.DetachedWorkerProcess]::OpenExact(
+                $timeoutOwnerPid,
+                $timeoutOwnerStartedAt
+            )
+            $timeoutBoundChild = [LbbCoordinator.DetachedWorkerProcess]::OpenExact(
+                $timeoutChildPid,
+                $timeoutChildStartedAt
+            )
+
+            $timeoutHolderInfo = New-ProcessStartInfo $systemPowerShell @(
+                "-NoLogo", "-NoProfile", "-NonInteractive", "-File", $namedHandleHolderPath,
+                "-JobName", $timeoutJobName,
+                "-StatePath", $timeoutHolderStatePath,
+                "-HoldMilliseconds", "10000"
+            ) $testRoot -Hidden
+            $timeoutHolderCapture = Start-CapturedProcess `
+                $timeoutHolderInfo `
+                $timeoutHolderOut `
+                $timeoutHolderErr
+            Wait-SelfTestStateFile $timeoutHolderStatePath $timeoutHolderCapture 30000
+            $timeoutHolderParts = [IO.File]::ReadAllText(
+                $timeoutHolderStatePath,
+                $script:Utf8NoBom
+            ).Split('|')
+            if ($timeoutHolderParts.Count -ne 2) {
+                throw "The external-handle timeout holder state is malformed."
+            }
+            $timeoutHolderPid = [int]$timeoutHolderParts[0]
+            $timeoutHolderStartedAt = [DateTime]::new(
+                [Int64]$timeoutHolderParts[1],
+                [DateTimeKind]::Utc
+            )
+            if ($timeoutHolderPid -ne $timeoutHolderCapture.Process.Id -or
+                $timeoutHolderStartedAt.Ticks -ne $timeoutHolderCapture.StartedAtUtc.Ticks) {
+                throw "The retained timeout handle is not bound to its exact non-member process."
+            }
+            $timeoutBoundHolder = [LbbCoordinator.DetachedWorkerProcess]::OpenExact(
+                $timeoutHolderPid,
+                $timeoutHolderStartedAt
+            )
+            if ($timeoutBoundOwner.HasExited -or
+                $timeoutBoundChild.HasExited -or
+                $timeoutBoundHolder.HasExited) {
+                throw "The external-handle timeout fixture was not fully live before recovery."
+            }
+
+            $timeoutMutex = [Threading.Mutex]::new($false, $timeoutMutexName)
+            $timeoutMutexHeld = $timeoutMutex.WaitOne(0)
+            if (-not $timeoutMutexHeld) {
+                throw "The external-handle timeout self-test could not acquire its isolated admission mutex."
+            }
+            $timeoutReturnedJob = $null
+            $timeoutRefused = $false
+            $timeoutHookState = [pscustomobject]@{ Invoked = $false }
+            $timeoutBeforeFreshCreate = [Action]{ $timeoutHookState.Invoked = $true }
+            $timeoutRecoveryClock = [Diagnostics.Stopwatch]::StartNew()
+            try {
+                $timeoutReturnedJob = [LbbCoordinator.WorkerLifetimeJob]::CreateForSelfTest(
+                    $false,
+                    $timeoutJobName,
+                    $true,
+                    2000,
+                    $timeoutBeforeFreshCreate
+                )
+            }
+            catch {
+                $timeoutRefused = Test-ExceptionChainTypeName `
+                    $_.Exception `
+                    "System.TimeoutException"
+            }
+            $timeoutRecoveryClock.Stop()
+            if (-not $timeoutRefused -or
+                $null -ne $timeoutReturnedJob -or
+                $timeoutHookState.Invoked -or
+                -not [IO.File]::Exists($timeoutHolderStatePath + ".empty") -or
+                $timeoutRecoveryClock.ElapsedMilliseconds -lt 1800 -or
+                $timeoutRecoveryClock.ElapsedMilliseconds -gt 4000) {
+                throw "The retained external Job handle did not cause a bounded fail-closed timeout."
+            }
+            if (-not $timeoutBoundOwner.WaitForExit(5000) -or
+                -not $timeoutBoundChild.WaitForExit(5000) -or
+                -not $timeoutBoundOwner.HasExited -or
+                -not $timeoutBoundChild.HasExited -or
+                $timeoutBoundHolder.HasExited) {
+                throw "The timeout path did not terminate only the inspected prior Job tree."
+            }
+
+            $null = Complete-SelfTestCapturedProcess `
+                $timeoutHolderCapture $testRoot $timeoutHolderOut $timeoutHolderErr -Terminate
+            $timeoutHolderCapture = $null
+            if (-not $timeoutBoundHolder.WaitForExit(5000) -or
+                -not $timeoutBoundHolder.HasExited) {
+                throw "The exact retained-handle process did not terminate during self-test cleanup."
+            }
+            $null = Complete-SelfTestCapturedProcess `
+                $timeoutOwnerCapture $testRoot $timeoutOwnerOut $timeoutOwnerErr
+            $timeoutOwnerCapture = $null
+
+            [LbbCoordinator.WorkerLifetimeJob]::WaitForNameAbsenceForSelfTest(
+                $timeoutJobName,
+                3000
+            )
+            $selfTestTimeoutCleanupLifetimeJob = New-WorkerLifetimeJob `
+                -Name $timeoutJobName `
+                -RecoveryTimeoutMilliseconds 2000
+            if (-not $selfTestTimeoutCleanupLifetimeJob.IsBound -or
+                $selfTestTimeoutCleanupLifetimeJob.RecoveredExistingJob) {
+                throw "The timeout path retained a native Job handle after exact cleanup."
+            }
+        }
+        finally {
+            if ($null -ne $timeoutOwnerCapture) {
+                try {
+                    $null = Complete-SelfTestCapturedProcess `
+                        $timeoutOwnerCapture $testRoot $timeoutOwnerOut $timeoutOwnerErr -Terminate
+                }
+                catch {}
+            }
+            if ($null -ne $timeoutHolderCapture) {
+                try {
+                    $null = Complete-SelfTestCapturedProcess `
+                        $timeoutHolderCapture $testRoot $timeoutHolderOut $timeoutHolderErr -Terminate
+                }
+                catch {}
+            }
+            foreach ($timeoutBoundProcess in @(
+                $timeoutBoundOwner,
+                $timeoutBoundChild,
+                $timeoutBoundHolder
+            )) {
+                if ($null -ne $timeoutBoundProcess) {
+                    try {
+                        if (-not $timeoutBoundProcess.HasExited) {
+                            $timeoutBoundProcess.Kill()
+                            $null = $timeoutBoundProcess.WaitForExit(5000)
+                        }
+                    }
+                    catch {}
+                    $timeoutBoundProcess.Dispose()
+                }
+            }
+            if ($timeoutMutexHeld) {
+                try { $timeoutMutex.ReleaseMutex() } catch {}
+            }
+            if ($null -ne $timeoutMutex) { $timeoutMutex.Dispose() }
+        }
+
+        # A separate exact process creates the same GUID-scoped Job after the
+        # coordinator has observed absence but before its single final create.
+        # The raced Job must remain live, the returned existing-object handle
+        # must be closed once, and the constructor must fail with error 183.
+        $raceJobName = "Local\LBBWindowsAcceptanceCoordinatorLifetimeCreateRaceSelfTest-" +
+            [Guid]::NewGuid().ToString("N")
+        $raceMutexName = "Local\LBBWindowsAcceptanceCoordinatorLifetimeCreateRaceMutexSelfTest-" +
+            [Guid]::NewGuid().ToString("N")
+        if ($raceJobName -ceq $script:WorkerLifetimeJobName -or
+            $raceMutexName -ceq "Local\LBBWindowsAcceptanceCoordinator") {
+            throw "The create-race self-test selected a production coordinator name."
+        }
+        $raceTriggerPath = [IO.Path]::Combine($testRoot, "create-race.trigger")
+        $raceStatePath = [IO.Path]::Combine($testRoot, "create-race.state")
+        $raceOut = [IO.Path]::Combine($testRoot, "create-race.stdout.log")
+        $raceErr = [IO.Path]::Combine($testRoot, "create-race.stderr.log")
+        $raceCapture = $null
+        $raceBoundOwner = $null
+        $raceMutex = $null
+        $raceMutexHeld = $false
+        try {
+            $raceInfo = New-ProcessStartInfo $systemPowerShell @(
+                "-NoLogo", "-NoProfile", "-NonInteractive", "-File", $namedRaceOwnerPath,
+                "-SupportSourcePath", $namedRecoverySourcePath,
+                "-JobName", $raceJobName,
+                "-TriggerPath", $raceTriggerPath,
+                "-StatePath", $raceStatePath
+            ) $testRoot -Hidden
+            $raceCapture = Start-CapturedProcess $raceInfo $raceOut $raceErr
+            $raceBoundOwner = [LbbCoordinator.DetachedWorkerProcess]::OpenExact(
+                $raceCapture.Process.Id,
+                $raceCapture.StartedAtUtc
+            )
+            if ($raceBoundOwner.HasExited -or $raceCapture.Process.HasExited) {
+                throw "The exact create-race owner was not live before the absence observation."
+            }
+
+            $raceMutex = [Threading.Mutex]::new($false, $raceMutexName)
+            $raceMutexHeld = $raceMutex.WaitOne(0)
+            if (-not $raceMutexHeld) {
+                throw "The create-race self-test could not acquire its isolated admission mutex."
+            }
+            $raceHookState = [pscustomobject]@{ Count = 0 }
+            $raceBeforeFreshCreate = [Action]{
+                $raceHookState.Count++
+                $triggerStream = [IO.File]::Open(
+                    $raceTriggerPath,
+                    [IO.FileMode]::CreateNew,
+                    [IO.FileAccess]::Write,
+                    [IO.FileShare]::None
+                )
+                try { $triggerStream.Flush($true) }
+                finally { $triggerStream.Dispose() }
+                Wait-SelfTestStateFile $raceStatePath $raceCapture 10000
+            }
+            $raceReturnedJob = $null
+            $raceRefused = $false
+            try {
+                $raceReturnedJob = [LbbCoordinator.WorkerLifetimeJob]::CreateForSelfTest(
+                    $false,
+                    $raceJobName,
+                    $true,
+                    15000,
+                    $raceBeforeFreshCreate
+                )
+            }
+            catch {
+                $raceRefused = Test-Win32ErrorInChain $_.Exception 183
+            }
+            if (-not $raceRefused -or
+                $null -ne $raceReturnedJob -or
+                $raceHookState.Count -ne 1) {
+                throw "The coordinator did not refuse the uninspected same-name create race."
+            }
+            $raceParts = [IO.File]::ReadAllText($raceStatePath, $script:Utf8NoBom).Split('|')
+            if ($raceParts.Count -ne 2) {
+                throw "The create-race owner state is malformed."
+            }
+            $raceOwnerPid = [int]$raceParts[0]
+            $raceOwnerStartedAt = [DateTime]::new(
+                [Int64]$raceParts[1],
+                [DateTimeKind]::Utc
+            )
+            if ($raceOwnerPid -ne $raceCapture.Process.Id -or
+                $raceOwnerStartedAt.Ticks -ne $raceCapture.StartedAtUtc.Ticks -or
+                $raceBoundOwner.HasExited -or
+                $raceCapture.Process.HasExited) {
+                throw "The refused create race adopted or terminated the exact raced Job owner."
+            }
+
+            $null = Complete-SelfTestCapturedProcess `
+                $raceCapture $testRoot $raceOut $raceErr -Terminate
+            $raceCapture = $null
+            if (-not $raceBoundOwner.WaitForExit(5000) -or
+                -not $raceBoundOwner.HasExited) {
+                throw "The exact create-race owner did not terminate during self-test cleanup."
+            }
+            [LbbCoordinator.WorkerLifetimeJob]::WaitForNameAbsenceForSelfTest(
+                $raceJobName,
+                3000
+            )
+            $selfTestPostRaceLifetimeJob = New-WorkerLifetimeJob `
+                -Name $raceJobName `
+                -RecoveryTimeoutMilliseconds 2000
+            if (-not $selfTestPostRaceLifetimeJob.IsBound -or
+                $selfTestPostRaceLifetimeJob.RecoveredExistingJob) {
+                throw "The refused create race retained an uninspected native Job handle."
+            }
+        }
+        finally {
+            if ($null -ne $raceCapture) {
+                try {
+                    $null = Complete-SelfTestCapturedProcess `
+                        $raceCapture $testRoot $raceOut $raceErr -Terminate
+                }
+                catch {}
+            }
+            if ($null -ne $raceBoundOwner) {
+                try {
+                    if (-not $raceBoundOwner.HasExited) {
+                        $raceBoundOwner.Kill()
+                        $null = $raceBoundOwner.WaitForExit(5000)
+                    }
+                }
+                catch {}
+                $raceBoundOwner.Dispose()
+            }
+            if ($raceMutexHeld) {
+                try { $raceMutex.ReleaseMutex() } catch {}
+            }
+            if ($null -ne $raceMutex) { $raceMutex.Dispose() }
+        }
+
         $currentProcess = [Diagnostics.Process]::GetCurrentProcess()
         $currentStartedAt = $currentProcess.StartTime.ToUniversalTime()
         if (-not (Test-BoundProcessAlive $currentProcess.Id $currentStartedAt) -or
@@ -4311,8 +5318,8 @@ finally {
             throw "Exact process identity self-test failed."
         }
         $selfTestInputs = New-PrivateChildDirectory $testRoot "follow-inputs" "Follow self-test inputs"
-        $inputServer = [IO.Path]::Combine($selfTestInputs, "local-browser-bridge-v0.12.28-windows-x86_64.exe")
-        $inputHelper = [IO.Path]::Combine($selfTestInputs, "local-computer-helper-v0.12.28-windows-x86_64.exe")
+        $inputServer = [IO.Path]::Combine($selfTestInputs, "local-browser-bridge-v0.12.29-windows-x86_64.exe")
+        $inputHelper = [IO.Path]::Combine($selfTestInputs, "local-computer-helper-v0.12.29-windows-x86_64.exe")
         $inputManifest = [IO.Path]::Combine($selfTestInputs, "SHA256SUMS.txt")
         $inputBinding = [IO.Path]::Combine($selfTestInputs, "candidate-binding.json")
         [IO.File]::WriteAllText($inputServer, "server-self-test", $script:Utf8NoBom)
@@ -4673,17 +5680,45 @@ finally {
         }
         finally { $CoordinatorDirectory = $originalCoordinatorDirectory }
         [GC]::KeepAlive($selfTestRecoveredLifetimeJob)
+        [GC]::KeepAlive($selfTestCleanLifetimeJob)
+        [GC]::KeepAlive($selfTestDelayedHandleLifetimeJob)
+        [GC]::KeepAlive($selfTestTimeoutCleanupLifetimeJob)
+        [GC]::KeepAlive($selfTestPostRaceLifetimeJob)
         [GC]::KeepAlive($selfTestLifetimeJob)
-        Write-Output $script:SuccessMessage
+        $selfTestSucceeded = $true
     }
     finally {
         $script:SelfTestAttemptLedgerRoot = $originalSelfTestAttemptLedgerRoot
         $script:SelfTestCoordinatorParent = $originalSelfTestCoordinatorParent
         $script:SelfTestEvidenceParent = $originalSelfTestEvidenceParent
+        if ($null -ne $currentProcess) { $currentProcess.Dispose() }
         if ([IO.Directory]::Exists($testRoot)) {
+            $resolvedTestRoot = [IO.Path]::GetFullPath($testRoot).TrimEnd(
+                [IO.Path]::DirectorySeparatorChar,
+                [IO.Path]::AltDirectorySeparatorChar
+            )
+            $resolvedTempRoot = [IO.Path]::GetFullPath(
+                [IO.Path]::GetTempPath()
+            ).TrimEnd(
+                [IO.Path]::DirectorySeparatorChar,
+                [IO.Path]::AltDirectorySeparatorChar
+            )
+            if ([IO.Path]::GetFileName($resolvedTestRoot) -cnotmatch
+                    '^lbb-coordinator-self-test-[0-9a-f]{32}$' -or
+                -not [String]::Equals(
+                    [IO.Path]::GetDirectoryName($resolvedTestRoot),
+                    $resolvedTempRoot,
+                    [StringComparison]::OrdinalIgnoreCase
+                )) {
+                throw "The coordinator self-test cleanup root is not its GUID-scoped directory."
+            }
             [IO.Directory]::Delete($testRoot, $true)
+            if ([IO.Directory]::Exists($testRoot)) {
+                throw "The coordinator self-test root remained after cleanup."
+            }
         }
     }
+    if ($selfTestSucceeded) { Write-Output $script:SuccessMessage }
 }
 
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
@@ -4691,7 +5726,9 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 }
 
 $systemPowerShellPath = Resolve-SystemWindowsPowerShell
-$currentExecutable = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+$currentHostProcess = [Diagnostics.Process]::GetCurrentProcess()
+try { $currentExecutable = $currentHostProcess.MainModule.FileName }
+finally { $currentHostProcess.Dispose() }
 $isExactSystemPowerShell = (
     $PSVersionTable.PSEdition -ceq "Desktop" -and
     $PSVersionTable.PSVersion.Major -eq 5 -and

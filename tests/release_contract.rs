@@ -345,20 +345,70 @@ fn windows_ci_and_release_gate_the_acceptance_coordinator_under_exact_ps51() {
 }
 
 #[test]
-fn v01228_release_is_blocked_until_the_windows_handoff_is_resolved() {
-    let blocker = source("RELEASE_BLOCKED");
-    let handoff = source("docs/WINDOWS_ACCEPTANCE_HANDOFF.md");
+fn v01229_source_is_unblocked_and_release_versions_are_aligned() {
+    match fs::symlink_metadata("RELEASE_BLOCKED") {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => panic!("could not inspect the release-blocker path: {error}"),
+        Ok(_) => {
+            panic!("the reviewed v0.12.29 source must not retain a release-blocker file or symlink")
+        }
+    }
+
+    for (path, required) in [
+        ("Cargo.toml", "version = \"0.12.29\""),
+        (
+            "Cargo.lock",
+            "name = \"local-browser-bridge\"\nversion = \"0.12.29\"",
+        ),
+        ("extension/manifest.json", "\"version\": \"0.12.29\""),
+        ("extension/lib.js", "export const VERSION = \"0.12.29\";"),
+        (
+            "scripts/run-windows-computer-use-acceptance.ps1",
+            "$script:ProductVersion = \"0.12.29\"",
+        ),
+        (
+            "scripts/finalize-macos-acceptance.mjs",
+            "const PRODUCT_VERSION = \"0.12.29\";",
+        ),
+        (
+            "scripts/record-computer-helper-chain.ps1",
+            "$script:Version = \"0.12.29\"",
+        ),
+        (
+            "scripts/test-windows-stock-chrome.ps1",
+            "$Version = \"0.12.29\"",
+        ),
+        (
+            "scripts/verify-release-acceptance-evidence.sh",
+            "readonly EVIDENCE_PRODUCT_VERSION=\"0.12.29\"",
+        ),
+        (
+            "scripts/verify-windows-release-candidate.ps1",
+            "$ProductVersion = \"0.12.29\"",
+        ),
+        (
+            "scripts/write-browser-evidence-record.ps1",
+            "$script:OperatorV2Version = \"0.12.29\"",
+        ),
+        (
+            "scripts/write-stock-chrome-operator-response.ps1",
+            "$script:Version = \"0.12.29\"",
+        ),
+    ] {
+        assert!(
+            source(path).contains(required),
+            "v0.12.29 version alignment is missing from {path}: {required}"
+        );
+    }
+
+    assert!(std::path::Path::new("evidence/v0.12.29/browser").is_dir());
+    assert!(std::path::Path::new("evidence/v0.12.29/computer").is_dir());
+}
+
+#[test]
+fn release_paths_retain_generic_fail_closed_blocker_enforcement() {
     let workflow = source(".github/workflows/deploy.yml");
     let local = source("scripts/deploy.sh");
-
-    assert_eq!(
-        blocker,
-        "version=0.12.28\nreason=windows-acceptance-source-gate\nhandoff=docs/WINDOWS_ACCEPTANCE_HANDOFF.md\n"
-    );
-    assert!(handoff.contains("Release status: **blocked;"));
-    assert!(handoff.contains(
-        "remove or\nreplace the temporary\n`v01228_release_is_blocked_until_the_windows_handoff_is_resolved` contract"
-    ));
 
     let workflow_condition = "[[ -e RELEASE_BLOCKED || -L RELEASE_BLOCKED ]]";
     assert_eq!(workflow.matches(workflow_condition).count(), 1);
@@ -368,7 +418,10 @@ fn v01228_release_is_blocked_until_the_windows_handoff_is_resolved() {
             .count(),
         1
     );
-    assert!(workflow.contains("Release is blocked; resolve docs/WINDOWS_ACCEPTANCE_HANDOFF.md"));
+    assert!(
+        workflow
+            .contains("Release is blocked by RELEASE_BLOCKED; resolve its recorded source gate")
+    );
     let workflow_gate = workflow.find(workflow_condition).unwrap();
     let workflow_setup = workflow.find("- uses: actions/setup-node@").unwrap();
     let workflow_build = workflow
@@ -391,7 +444,9 @@ fn v01228_release_is_blocked_until_the_windows_handoff_is_resolved() {
 
     let local_condition = "[[ -e \"$release_blocker\" || -L \"$release_blocker\" ]]";
     assert_eq!(local.matches(local_condition).count(), 1);
-    assert!(local.contains("Release is blocked; resolve docs/WINDOWS_ACCEPTANCE_HANDOFF.md"));
+    assert!(
+        local.contains("Release is blocked by RELEASE_BLOCKED; resolve its recorded source gate")
+    );
     let local_gate = local.find(local_condition).unwrap();
     for forbidden_before_gate in [
         "version=\"$(bash scripts/audit-versions.sh)\"",
@@ -542,8 +597,8 @@ fn windows_release_tooling_hashes_without_module_discovery() {
 fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_only() {
     let watcher = source("scripts/wait-macos-app-share-concurrency-handoff.mjs");
     let adversarial_watcher = source("scripts/wait-macos-pointer-concurrency-handoff.mjs");
-    let producer = source("evidence/v0.12.28/computer/helper-evidence-rig.mjs");
-    let playbook = source("evidence/v0.12.28/computer/README.md");
+    let producer = source("evidence/v0.12.29/computer/helper-evidence-rig.mjs");
+    let playbook = source("evidence/v0.12.29/computer/README.md");
     let finalizer = source("scripts/finalize-macos-acceptance.mjs");
     let verifier = source("scripts/verify-release-acceptance-evidence.sh");
     let ci = source(".github/workflows/ci.yml");
@@ -585,7 +640,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
             "the legacy pointer watcher must not gate or satisfy release"
         );
     }
-    assert!(adversarial_watcher.contains("const PRODUCT_VERSION = \"0.12.28\";"));
+    assert!(adversarial_watcher.contains("const PRODUCT_VERSION = \"0.12.29\";"));
     assert!(
         adversarial_watcher.contains("macOS pointer-concurrency handoff watcher self-test passed.")
     );
@@ -604,7 +659,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         }
     }
     for aggregate_contract in [
-        "const PRODUCT_VERSION = \"0.12.28\";",
+        "const PRODUCT_VERSION = \"0.12.29\";",
         "const RESULT_SCHEMA_VERSION = 8;",
         "const AGGREGATE_SCHEMA_VERSION = 2;",
         "const REQUEST_MARKER = \"operator/macos-app-share-concurrency-handoff-request.json\";",
@@ -621,7 +676,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
     }
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.28\";",
+        "const PRODUCT_VERSION = \"0.12.29\";",
         "const SCHEMA_VERSION = 2;",
         "const OPERATOR_DIRECTORY = \"operator\";",
         "const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;",
@@ -737,12 +792,12 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
 
     for integration in [&ci, &release, &local] {
         assert!(
-            integration.contains("node --check evidence/v0.12.28/computer/helper-evidence-rig.mjs"),
-            "release path does not syntax-check the exact v0.12.28 macOS evidence rig"
+            integration.contains("node --check evidence/v0.12.29/computer/helper-evidence-rig.mjs"),
+            "release path does not syntax-check the exact v0.12.29 macOS evidence rig"
         );
         assert!(
             integration
-                .contains("node evidence/v0.12.28/computer/helper-evidence-rig.mjs --self-test")
+                .contains("node evidence/v0.12.29/computer/helper-evidence-rig.mjs --self-test")
         );
         assert!(
             !integration.contains("evidence/v0.12.20/computer/"),
@@ -757,7 +812,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         ] {
             assert!(
                 integration.contains(&format!(
-                    "xcrun swiftc -typecheck evidence/v0.12.28/computer/{source}"
+                    "xcrun swiftc -typecheck evidence/v0.12.29/computer/{source}"
                 )),
                 "macOS workflow does not typecheck {source}"
             );
@@ -765,7 +820,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         assert!(integration.contains("lbb-app-share-handoff-self-test\" --self-test"));
     }
     assert!(ci.contains(
-        "xcrun swiftc -typecheck evidence/v0.12.28/computer/PhysicalPointerHandoff.swift"
+        "xcrun swiftc -typecheck evidence/v0.12.29/computer/PhysicalPointerHandoff.swift"
     ));
     for release_path in [&release, &local] {
         assert!(

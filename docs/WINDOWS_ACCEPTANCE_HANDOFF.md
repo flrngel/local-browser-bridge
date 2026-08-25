@@ -1,38 +1,38 @@
-# Windows acceptance handoff
+# Windows acceptance coordinator source-gate record
 
-- Status date: 2026-08-24
-- Source target: 0.12.28
-- Release status: **blocked; do not tag, execute a release candidate, open stock Chrome, or publish a Release**
+- Status date: 2026-08-25
+- Source target: 0.12.29
+- Source-gate status: **passed under exact 64-bit Windows PowerShell 5.1; independent review found no P0/P1 issue**
+- Release status: **no candidate, platform acceptance, tag, or Release has occurred**
 
-This document is the Windows-local engineering handoff for the acceptance
-coordinator. It describes a tooling defect, not an observed Local Browser
-Bridge product failure. The 0.12.28 product candidate has not been frozen or
-executed.
+This document records the Windows-local engineering resolution of the
+acceptance-coordinator tooling defect. It is non-product source evidence, not an
+observed Local Browser Bridge product failure and not candidate acceptance. The
+0.12.28 source checkpoint never became a candidate. No packaged 0.12.29
+candidate has been built, downloaded, or executed.
 
-## Stop boundary
+## Remaining release boundary
 
-Until every item in [Release-unblock criteria](#release-unblock-criteria) is
-satisfied:
+The coordinator source gate is complete, but every artifact- and UI-bearing
+release gate remains future work:
 
-- do not create or push a 0.12.28 tag;
-- do not download or execute a packaged 0.12.28 server or helper;
-- do not start the native helper acceptance runner;
-- do not load or mutate the extension in stock Chrome;
-- do not approve or publish a GitHub Release; and
+- no 0.12.29 tag has been created or pushed;
+- no packaged 0.12.29 server, helper, or extension has been built, downloaded,
+  or executed;
+- neither macOS packaged lane nor Windows packaged-helper acceptance has run;
+- stock-Chrome acceptance has not run and Chrome was not opened or mutated;
+- no candidate-bound evidence commit, approval, publication, or GitHub Release
+  has occurred; and
 - do not treat a coordinator marker, `Follow` result, or this handoff as user
   consent or action authority.
 
-The checked-in `RELEASE_BLOCKED` marker makes both the tag-triggered GitHub
-release workflow and local `scripts/deploy.sh` fail before building artifacts.
-Remove that marker only in the reviewed commit that satisfies every unblock
-criterion below.
-
-Coordinator self-tests are non-product tests and may be repeated. A packaged
-candidate attempt may not be repeated after a start or outcome-unknown launch.
+Coordinator self-tests are GUID-scoped non-product tests and may be repeated.
+Their pass does not freeze or authorize candidate bytes. Any future packaged
+candidate attempt remains one-shot after a start or outcome-unknown launch.
 
 ## Verified facts
 
-The repository changes before this handoff provide a checked-in
+The 0.12.29 source provides a checked-in
 `scripts/run-windows-computer-use-acceptance.ps1` coordinator with:
 
 - a clean exact-system-PowerShell bootstrap;
@@ -48,7 +48,11 @@ The repository changes before this handoff provide a checked-in
 - watcher startup only after the foreground-arm request exists; and
 - notification-only `Follow` output with `uiActionAllowed: false`.
 
-The following checks passed on macOS against the source in this handoff:
+It now also provides the reviewed fail-closed named-Job state machine described
+in [Implemented state machine](#implemented-state-machine).
+
+Before the Windows-local repair, the following source and non-Windows checks had
+passed against the historical 0.12.28 checkpoint:
 
 | Check | Result |
 |---|---:|
@@ -63,10 +67,10 @@ The following checks passed on macOS against the source in this handoff:
 | Candidate-attestation selection self-test | PASS |
 | Release-evidence verifier self-test | PASS |
 
-These are source and non-Windows checks. They do not replace Windows
-PowerShell 5.1 or native Job Object execution.
+Those historical checks did not replace Windows PowerShell 5.1 or native Job
+Object execution. The later 0.12.29 native result is recorded below.
 
-## Exact Windows result
+## Historical 0.12.28 Windows result
 
 One non-product self-test was run through the authorized Windows machine's
 actual 64-bit Windows PowerShell 5.1 host. The transferred script was 218,966
@@ -92,21 +96,26 @@ The exact transferred test files and their download temporaries were removed
 afterward. The temporary Mac HTTP server was stopped. No product process or
 loopback listener was started by this self-test.
 
-## Current provisional source
+## Historical provisional source
 
-The coordinator source present with this handoff has SHA-256:
+The abandoned 0.12.28 coordinator source had SHA-256:
 
 ```text
 d4f5b3edd13741f52613995a06bfaba85e1b8f42bb9ce2c897b24e31e61cc930
 ```
 
-Its Rust contract file has SHA-256:
+Its historical Rust contract file had SHA-256:
 
 ```text
 3117da52da6858c59992c77630e9ae105f36b1a5da2c315544bafa4983d1c45a
 ```
 
-This newer source was **not** executed on Windows. It adds:
+Before this Windows-local work, that source had **not** been executed on
+Windows. At the start of this task, its exact PowerShell 5.1 parser and then-
+incomplete SelfTest both passed, including the required one-line result. That
+baseline pass did not exercise delayed namespace disappearance, a retained
+extra handle, or the final same-name create race, so it did not resolve the
+known source gate. The provisional source added:
 
 - a shared monotonic recovery deadline;
 - bounded retries when `CreateJobObject` still reports
@@ -115,20 +124,45 @@ This newer source was **not** executed on Windows. It adds:
   closes the launcher's Job without transferring it, and requires bounded
   worker termination.
 
-Do not promote that static/local success into a Windows pass.
+It was never promoted into a Windows pass or candidate.
 
-## Remaining design issue
+## Authoritative source binding
 
-The provisional `CreateFreshJob` loop closes every handle returned with
-`ERROR_ALREADY_EXISTS`, but it retries merely because this constructor had
-previously inspected and terminated a same-name Job. An object observed after
-the inspected handle was closed is not provably the same object; it could be a
-newly raced same-name Job. Cooperative coordinators are serialized by the
-mutex, and hostile same-account code is outside the documented sandbox
-boundary, but release tooling should still fail closed instead of silently
-classifying an uninspected object as the prior one.
+The native source-gate proof is bound to the following immutable inputs:
 
-The recommended state machine is:
+| Binding | Value |
+|---|---|
+| Implementation commit | `b316eeb8ec6ed460c161f4c8858ae7b31c551641` |
+| Coordinator SHA-256 | `c2a983109e450d85a1b17c4da1b19aa2158ed94eba516d887246365da567a6c2` |
+| Rust contract SHA-256 | `c03beec573706352fefe82eccae80757e28d3fd4814f9fe6266a432b459d04f8` |
+| Exact-head GitHub Actions run | [`32820442002`](https://github.com/flrngel/local-browser-bridge/actions/runs/32820442002) |
+| Windows host contract | Exact system Windows PowerShell 5.1 Desktop, 64-bit process |
+
+Run `32820442002` checked out the exact implementation commit and passed all
+five CI jobs. Its Windows job parsed and executed the coordinator through the
+exact system Windows PowerShell 5.1 host, accepted only exit code zero and the
+single exact success line shown below, and then passed the Windows compiler,
+test, and artifact-policy lane. The coordinator independently rejects a
+non-system or non-64-bit host before running the scenarios.
+
+This GitHub-hosted exact-head execution is the authoritative, source-bound
+native proof for removing the source-only `RELEASE_BLOCKED` marker. The earlier
+FLRngel19 execution informed the repair but is not being represented as a
+retained candidate or product-acceptance artifact. The hashes above cover the
+executable test source and its Rust contract; later documentation-only or CI
+hardening commits do not change those tested bytes. Pull-request and post-merge
+CI must still pass before this work is merged.
+
+The CI workflow now additionally rejects a dirty, partially materialized, or
+structurally invalid Windows checkout by checking porcelain status, staged and
+unstaged diffs, deleted and untracked inventories, every tracked path, and
+`git fsck --full`. This source-integrity check is a merge gate, not packaged
+candidate acceptance.
+
+## Implemented state machine
+
+Version 0.12.29 removes the abandoned `CreateFreshJob` retry. The reviewed
+implementation is fail closed:
 
 1. Acquire the stable session admission mutex before all Job recovery work.
 2. Start one monotonic deadline for the entire recovery operation.
@@ -147,43 +181,40 @@ The recommended state machine is:
    lifetime field only in that branch.
 9. For a non-null handle with `ERROR_ALREADY_EXISTS` or any other nonzero last
    error, close it exactly once and fail closed. Never configure, assign,
-   retain, or retry that uninspected object.
+   retain, terminate, or retry that uninspected object.
 10. Configure `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, bind the worker, and only
     then publish Worker or Intent state.
 
-An alternative implementation is acceptable only if it supplies equivalent
-kernel-object identity proof and never adopts an existing Job as fresh. Keep
-the embedded C# compatible with Windows PowerShell 5.1 and .NET Framework: no
-newer C# syntax or runtime-only APIs.
+The embedded C# remains compatible with Windows PowerShell 5.1 and .NET
+Framework. Observations never renew the deadline, and every poll sleep is
+clipped to the remaining monotonic budget.
 
-## Required Windows-native self-tests
+## Windows-native self-test result
 
-Run these against the exact source bytes being proposed:
+The exact source was parsed and run through the exact 64-bit system Windows
+PowerShell 5.1 Desktop host. Its sole output was:
 
-1. **Normal clean start:** no prior Job; fresh Job creation and binding pass.
-2. **Live prior tree:** a prior owner plus descendant occupy the named Job;
-   recovery terminates both and returns only after both exact process handles
-   signal.
-3. **Delayed external handle:** a non-member process retains an extra handle
-   after the tree reaches zero, then releases it after a bounded delay;
-   recovery must wait for namespace absence and then create a fresh Job.
-4. **External-handle timeout:** retain that handle beyond a short test
-   deadline; recovery must throw within the one shared deadline and must not
-   return a bound Job.
-5. **Create race:** create another same-name Job between absence observation
-   and the final create; the coordinator must close and refuse the returned
-   existing handle, never adopt or terminate it as the new lifetime Job.
-6. **Pre-transfer guard close:** start a long-lived worker with no lifetime Job
-   of its own, retain an exact independent process handle, dispose the launcher
-   without `TransferGuardOwnership`, and prove bounded exact termination.
-7. **Transferred guard:** after transfer, launcher disposal must not terminate
-   the intended worker; worker exit must still terminate its Job-owned
-   descendant without affecting an unrelated control process.
-8. **Stream cleanup:** every failure path must leave stdout/stderr paths
-   unlockable and delete only self-test-owned files.
+```text
+Windows computer-use acceptance coordinator self-test passed.
+```
 
-The self-test must use unique GUID-scoped Job and mutex names. It must never
-touch the production coordinator name, start a product binary, or open UI.
+| GUID-scoped native scenario | Result | Proven behavior |
+|---|---:|---|
+| Normal clean start | PASS | No prior name; one fresh Job was configured and bound. |
+| Live prior tree | PASS | Exact prior owner and descendant handles signaled before recovery returned. |
+| Delayed external handle | PASS | Recovery waited through zero active members until the non-member handle closed and the namespace name disappeared. |
+| External-handle timeout | PASS | One shared deadline bounded a fail-closed timeout and returned no bound Job. |
+| Create race | PASS | A same-name object created after absence was closed and refused at the single final create; it was not adopted or terminated. |
+| Pre-transfer guard close | PASS | Closing the launcher's guard terminated the exact worker in bounds. |
+| Transferred guard | PASS | Launcher disposal did not terminate the worker; worker exit killed its Job-owned descendant and left the unrelated control process alive. |
+| Stream cleanup | PASS | Self-test stdout/stderr became exclusively openable and only self-test-owned paths were removed. |
+
+Every Job and mutex name used by these scenarios was unique and GUID-scoped.
+The tests did not touch the production coordinator names, start a product
+binary, open a browser, access a network listener, or open UI. Exact process
+handles were retained wherever PID reuse would make PID-only proof ambiguous.
+Independent review found no P0/P1 issue in native handle ownership, Job
+identity, deadline behavior, cleanup, publication ordering, or release gating.
 
 ## Base Windows development environment
 
@@ -259,19 +290,35 @@ Use a fresh short-path checkout on an NTFS or ReFS fixed local volume. Enable
 long paths for the checkout before materializing tracked evidence files. Start
 from a clean detached commit or a clean local branch and record its full SHA.
 
-First prove the exact system host:
+First prove the exact system host. Do not derive it from a Machine-scoped
+`SystemRoot`: that variable can be absent even when the native host is present.
+Resolve it from the runtime-provided system directory and validate the child
+identity:
 
 ```powershell
-$systemRoot = [Environment]::GetEnvironmentVariable("SystemRoot", "Machine")
+$ErrorActionPreference = "Stop"
+if (-not [Environment]::Is64BitProcess) {
+  throw "The validation launcher must be a native 64-bit Windows process."
+}
+$systemDirectory = [Environment]::SystemDirectory
+if ([String]::IsNullOrWhiteSpace($systemDirectory) -or
+    -not [IO.Path]::IsPathRooted($systemDirectory)) {
+  throw "The native Windows system directory is unavailable."
+}
 $ps51 = [IO.Path]::Combine(
-  $systemRoot,
-  "System32",
+  [IO.Path]::GetFullPath($systemDirectory),
   "WindowsPowerShell",
   "v1.0",
   "powershell.exe"
 )
-& $ps51 -NoLogo -NoProfile -NonInteractive -Command `
+if (-not [IO.File]::Exists($ps51)) {
+  throw "The exact system Windows PowerShell executable is unavailable."
+}
+$identity = & $ps51 -NoLogo -NoProfile -NonInteractive -Command `
   '"{0}.{1}|{2}|{3}" -f $PSVersionTable.PSVersion.Major, $PSVersionTable.PSVersion.Minor, $PSVersionTable.PSEdition, [Environment]::Is64BitProcess'
+if ($LASTEXITCODE -ne 0 -or $identity -cne "5.1|Desktop|True") {
+  throw "The exact 64-bit system Windows PowerShell 5.1 identity is unavailable."
+}
 ```
 
 The required result is exactly:
@@ -331,54 +378,38 @@ first internal error message and stack frame, cleanup state, and whether any
 product process or listener existed. Do not retain tokens, usernames, home
 paths, command-line secrets, signed URLs, or environment identifiers.
 
-## Release-unblock criteria
+## Completed source-unblock criteria
 
-All of the following are required before returning to candidate work:
+The reviewed 0.12.29 source satisfies the Windows-local unblock criteria:
 
-- the remaining Job-name race is resolved or rejected by an equally strict,
-  documented design;
-- the exact system PowerShell 5.1 parser passes;
-- the exact one-line coordinator self-test passes, including all eight native
-  scenarios above;
-- the checkout is clean and every required source file is materialized;
-- the full repository CI matrix passes on the same commit;
-- independent review reports no open P0 or P1 coordinator finding; and
-- documentation and static contracts describe the implemented behavior rather
-  than the abandoned retry design.
+- PASS: the uninspected same-name race is closed and refused after exactly one
+  final create;
+- PASS: the exact 64-bit system Windows PowerShell identity is
+  `5.1|Desktop|True` and the parser accepts the coordinator;
+- PASS: the exact one-line coordinator SelfTest passes all eight native
+  scenarios;
+- PASS: the focused 0.12.29 source-contract matrix passes 192/192;
+- PASS: self-test cleanup leaves no owned process, listener, or locked stream;
+- PASS: independent review reports no P0/P1 coordinator finding; and
+- PASS: documentation and static contracts describe the implemented state
+  machine rather than the abandoned retry.
 
-The same reviewed unblock commit must remove `RELEASE_BLOCKED`, remove or
-replace the temporary
-`v01228_release_is_blocked_until_the_windows_handoff_is_resolved` contract in
-`tests/release_contract.rs`, and revise every blocked/provisional status line.
-A tag whose source still contains the marker is expected to fail before
-artifact builds.
+## Future candidate and release work
 
-If the Windows-local fix becomes a separate completed packaging work item,
-advance every package, helper, extension, evidence-harness, workflow, and
-documentation version consistently to the next unused version before tagging.
-Do not reuse 0.12.28 evidence or candidate bytes for that version.
+The source pass permits later candidate preparation; it does not perform or
+approve it. The next release task must use version 0.12.29 consistently and
+must not reuse 0.12.28 candidate bytes or evidence. It must, in order:
 
-Only after those source gates pass may the normal release sequence resume:
-freeze one exact GitHub-attested five-file candidate, run both fresh macOS
-lanes, run one Windows native-helper attempt, run one stock-Chrome extension
-attempt, commit sanitized evidence and the canonical receipt, approve the
-protected publication, verify the immutable five-asset Release and updater,
-and atomically refresh `dist/`.
+1. freeze and independently verify one exact GitHub-attested five-file
+   candidate;
+2. run both fresh, non-mergeable macOS packaged lanes;
+3. run one Windows packaged native-helper acceptance attempt;
+4. run one stock-Chrome extension acceptance attempt;
+5. commit sanitized candidate-bound evidence and the canonical receipt;
+6. obtain protected publication approval;
+7. verify the immutable five-asset GitHub Release and updater; and
+8. atomically refresh `dist/` from downloaded published assets.
 
-## Copy-paste task for the Windows-local agent
-
-```text
-Set up the native Windows development environment in
-docs/WINDOWS_ACCEPTANCE_HANDOFF.md, then read the whole document. Work only on the Windows
-acceptance coordinator and its contracts. Do not tag, build, download, or run a
-product candidate; do not open or mutate Chrome. Reproduce the coordinator
-self-test under exact 64-bit system Windows PowerShell 5.1, replace the
-uninspected ERROR_ALREADY_EXISTS retry with a fail-closed fresh-name state
-machine, implement the required delayed-handle, timeout, create-race,
-pre-transfer guard-close, transferred-guard, and stream-cleanup native probes,
-and rerun until the exact one-line self-test passes. Keep one monotonic recovery
-deadline, close every native handle exactly once, publish no attempt state
-before a fresh Job is configured and bound, and preserve sanitized failure
-evidence. Report the full source SHA, coordinator SHA-256, exact test table, and
-cleanup state. Stop before any packaged candidate or Chrome action.
-```
+None of those steps occurred during this source-unblock task. No product
+process or listener remained after the non-product SelfTest, and no packaged
+candidate or Chrome action occurred.

@@ -1000,7 +1000,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$Version = "0.12.28"
+$Version = "0.12.29"
 $script:ReviewExchangeDirectory = $null
 $script:ReviewExchangeArtifacts = New-Object Collections.Generic.List[string]
 $script:ReviewResponseReservations = New-Object Collections.Generic.List[object]
@@ -1017,7 +1017,7 @@ $Origin = "https://github.com/flrngel/local-browser-bridge.git"
 $ExpectedInvocationUri = "https://github.com/flrngel/local-browser-bridge/actions/runs/$WorkflowRunId/attempts/$WorkflowRunAttempt"
 
 if (-not $SelfTestRequested) {
-  if ($Version -cne "0.12.28" -or $FinalSha -cnotmatch '^[0-9a-f]{40}$' -or
+  if ($Version -cne "0.12.29" -or $FinalSha -cnotmatch '^[0-9a-f]{40}$' -or
       $TagObjectSha -cnotmatch '^[0-9a-f]{40}$' -or
       $WorkflowRunId -cnotmatch '^[1-9][0-9]*$' -or
       $WorkflowRunAttempt -cnotmatch '^[1-9][0-9]*$' -or
@@ -2919,12 +2919,12 @@ $TrustedRelativeFiles = @(
   "scripts/record-computer-helper-chain.ps1",
   "scripts/sanitize-browser-evidence-screenshot.ps1",
   "scripts/write-stock-chrome-operator-response.ps1",
-  "evidence/v0.12.28/browser/operator-results.template.json",
-  "evidence/v0.12.28/browser/operator-results.schema.json",
-  "evidence/v0.12.28/browser/computer-helper-chain.schema.json",
-  "evidence/v0.12.28/browser/scoped-action-approval.schema.json",
-  "evidence/v0.12.28/browser/independent-visual-review.schema.json",
-  "evidence/v0.12.28/browser/external-surface-attestation.schema.json"
+  "evidence/v0.12.29/browser/operator-results.template.json",
+  "evidence/v0.12.29/browser/operator-results.schema.json",
+  "evidence/v0.12.29/browser/computer-helper-chain.schema.json",
+  "evidence/v0.12.29/browser/scoped-action-approval.schema.json",
+  "evidence/v0.12.29/browser/independent-visual-review.schema.json",
+  "evidence/v0.12.29/browser/external-surface-attestation.schema.json"
 )
 function Export-ExactTrustedBlob([string]$ObjectId, [string]$Relative) {
   if ($ObjectId -cnotmatch '^[0-9a-f]{40}$' -or $TrustedRelativeFiles -cnotcontains $Relative) {
@@ -3106,7 +3106,7 @@ $Captures = [ordered]@{
   "post-handback-resume" = "browser-06-post-handback-resume"
 }
 $RequiredVisibleStates = [ordered]@{
-  "extension-loaded" = "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.28 card with no load errors and Chrome's debugger-use indicator during the active bridge lease"
+  "extension-loaded" = "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.29 card with no load errors and Chrome's debugger-use indicator during the active bridge lease"
   "api-action-result" = "the loopback demo visibly shows Hello, Bridge Matrix. blue selected. after the browser API action"
   "computer-share-action" = "the exact shared Chrome window visibly shows the post-click demo state and synthetic session pointer from a fresh helper frame"
   "stop-paused" = "the trusted extension popup visibly shows the human pause and Resume remote control after the in-page Stop handback"

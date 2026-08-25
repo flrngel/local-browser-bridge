@@ -906,8 +906,8 @@ fn background_invariant_failures_use_stage_bound_closed_vocabulary() {
 
 #[test]
 fn macos_v0_12_27_pointer_evidence_is_bounded_corroboration_not_causal_attribution() {
-    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs").unwrap();
-    let probe = fs::read_to_string("evidence/v0.12.28/computer/SystemProbe.swift").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.29/computer/helper-evidence-rig.mjs").unwrap();
+    let probe = fs::read_to_string("evidence/v0.12.29/computer/SystemProbe.swift").unwrap();
     assert!(rig.contains("failureProbeBaseline"));
     assert!(rig.contains("collectFailureDiagnostics"));
     assert!(rig.contains("systemInvariants(failureProbeBaseline.system, after)"));
@@ -953,7 +953,7 @@ fn macos_v0_12_27_pointer_evidence_is_bounded_corroboration_not_causal_attributi
     ] {
         assert!(
             rig.contains(required),
-            "missing v0.12.28 pointer contract: {required}"
+            "missing v0.12.29 pointer contract: {required}"
         );
     }
     assert!(!rig.contains("cursorUnchanged"));
@@ -999,7 +999,7 @@ fn macos_v0_12_27_pointer_evidence_is_bounded_corroboration_not_causal_attributi
 
 #[test]
 fn macos_v0_12_27_action_pointer_classifier_matches_the_sealed_action_schema() {
-    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.29/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let server = fs::read_to_string("src/server.rs")
@@ -1122,10 +1122,10 @@ fn macos_v0_12_27_action_pointer_classifier_matches_the_sealed_action_schema() {
 
 #[test]
 fn macos_v0_12_14_quiet_lane_stabilizes_the_native_seat_before_candidate_execution() {
-    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.29/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.28/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.29/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1200,22 +1200,22 @@ fn macos_v0_12_14_quiet_lane_stabilizes_the_native_seat_before_candidate_executi
 
 #[test]
 fn macos_v0_12_27_app_share_handoff_is_exact_non_authoritative_and_fail_closed() {
-    let app = fs::read_to_string("evidence/v0.12.28/computer/AppShareHandoff.swift")
+    let app = fs::read_to_string("evidence/v0.12.29/computer/AppShareHandoff.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.28/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.29/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.29/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.28/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.29/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let normalized_readme = readme.split_whitespace().collect::<Vec<_>>().join(" ");
 
     for required in [
-        "private let productVersion = \"0.12.28\"",
+        "private let productVersion = \"0.12.29\"",
         "private let stableWindowTitle = \"LBB macOS Acceptance App Share\"",
         "private let readyButtonTitle = \"START APP-SHARE CHECK\"",
         "private final class NonactivatingHandoffPanel: NSPanel",
@@ -1453,7 +1453,7 @@ fn macos_v0_12_27_app_share_handoff_is_exact_non_authoritative_and_fail_closed()
 
 #[test]
 fn macos_v0_12_27_refreshes_post_handoff_share_action_authority_before_click() {
-    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.29/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let computer = fs::read_to_string("src/computer.rs")
@@ -1627,7 +1627,7 @@ fn macos_v0_12_27_refreshes_post_handoff_share_action_authority_before_click() {
 fn macos_pointer_arm_state_machine_execution_regressions_pass() {
     let output = match Command::new("node")
         .args([
-            "evidence/v0.12.28/computer/helper-evidence-rig.mjs",
+            "evidence/v0.12.29/computer/helper-evidence-rig.mjs",
             "--self-test",
         ])
         .output()
@@ -1656,7 +1656,7 @@ fn macos_pointer_arm_state_machine_execution_regressions_pass() {
 
 #[test]
 fn v0_12_27_marker_identity_is_exact_on_windows_and_posix() {
-    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.29/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -2619,7 +2619,7 @@ fn withdrawn_v0_12_9_macos_cursor_invariant_attempt_is_byte_exact_and_fail_close
 
 #[test]
 fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
-    let entries = fs::read_dir("evidence/v0.12.28/computer")
+    let entries = fs::read_dir("evidence/v0.12.29/computer")
         .unwrap()
         .map(Result::unwrap)
         .map(|entry| {
@@ -2644,12 +2644,12 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
         ])
     );
 
-    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.29/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let fixture =
-        fs::read_to_string("evidence/v0.12.28/computer/HelperEvidenceFixture.swift").unwrap();
-    let readme = fs::read_to_string("evidence/v0.12.28/computer/README.md").unwrap();
+        fs::read_to_string("evidence/v0.12.29/computer/HelperEvidenceFixture.swift").unwrap();
+    let readme = fs::read_to_string("evidence/v0.12.29/computer/README.md").unwrap();
 
     assert!(rig.contains(&format!("const EXPECTED_VERSION = \"{VERSION}\";")));
     assert!(rig.contains("const EXPECTED_ARCHIVE = `local-browser-bridge-v${EXPECTED_VERSION}-macos-universal.tar.gz`;"));
@@ -2673,10 +2673,10 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
     assert!(readme.contains(&format!(
         "local-browser-bridge-v{VERSION}-macos-universal.tar.gz"
     )));
-    assert!(!rig.replace("v0.12.28", "").contains("v0.12.1"));
-    assert!(!fixture.replace("v0.12.28", "").contains("v0.12.1"));
-    assert!(!rig.replace("v0.12.28", "").contains("v0.12.2"));
-    assert!(!fixture.replace("v0.12.28", "").contains("v0.12.2"));
+    assert!(!rig.replace("v0.12.29", "").contains("v0.12.1"));
+    assert!(!fixture.replace("v0.12.29", "").contains("v0.12.1"));
+    assert!(!rig.replace("v0.12.29", "").contains("v0.12.2"));
+    assert!(!fixture.replace("v0.12.29", "").contains("v0.12.2"));
     let current_readme = readme
         .split("## Withdrawn v0.12.10 exact-candidate result")
         .next()
@@ -2723,10 +2723,10 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
 
 #[test]
 fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
-    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.29/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.28/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.29/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let binder = fs::read_to_string("scripts/fetch-verify-release-candidate.sh")
@@ -2870,7 +2870,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
 
 #[test]
 fn macos_packaged_evidence_streams_one_exact_bounded_pax_free_archive() {
-    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.29/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -2974,7 +2974,7 @@ fn macos_package_preparer_accepts_only_the_canonical_bounded_ustar_package() {
     }
 
     let repository = std::env::current_dir().unwrap();
-    let rig = repository.join("evidence/v0.12.28/computer/helper-evidence-rig.mjs");
+    let rig = repository.join("evidence/v0.12.29/computer/helper-evidence-rig.mjs");
     let temporary = tempfile::tempdir().unwrap();
     set_mode(temporary.path(), 0o700);
     let generator = temporary.path().join("make-package.py");
@@ -3044,7 +3044,7 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
         let case_root = temporary.path().join(scenario);
         fs::create_dir(&case_root).unwrap();
         set_mode(&case_root, 0o700);
-        let archive = case_root.join("local-browser-bridge-v0.12.28-macos-universal.tar.gz");
+        let archive = case_root.join("local-browser-bridge-v0.12.29-macos-universal.tar.gz");
         let generated = Command::new("python3")
             .arg(&generator)
             .arg(scenario)
@@ -3060,10 +3060,10 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
         let archive_sha256 = file_sha256(archive.to_str().unwrap());
         let zero_hash = "0".repeat(64);
         let manifest_text = format!(
-            "{zero_hash}  local-browser-bridge-v0.12.28-windows-x86_64.exe\n\
-             {zero_hash}  local-computer-helper-v0.12.28-windows-x86_64.exe\n\
-             {archive_sha256}  local-browser-bridge-v0.12.28-macos-universal.tar.gz\n\
-             {zero_hash}  local-browser-bridge-extension-v0.12.28.zip\n"
+            "{zero_hash}  local-browser-bridge-v0.12.29-windows-x86_64.exe\n\
+             {zero_hash}  local-computer-helper-v0.12.29-windows-x86_64.exe\n\
+             {archive_sha256}  local-browser-bridge-v0.12.29-macos-universal.tar.gz\n\
+             {zero_hash}  local-browser-bridge-extension-v0.12.29.zip\n"
         );
         let manifest = case_root.join("SHA256SUMS.txt");
         fs::write(&manifest, &manifest_text).unwrap();
@@ -3191,7 +3191,7 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
 
 #[test]
 fn macos_packaged_evidence_uses_a_clean_tagged_harness_and_fresh_lane_outputs() {
-    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.29/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -3249,7 +3249,7 @@ fn macos_packaged_evidence_uses_a_clean_tagged_harness_and_fresh_lane_outputs() 
 
 #[test]
 fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
-    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.29/computer/helper-evidence-rig.mjs").unwrap();
     assert!(rig.contains("capturedFrameMatchesWindowGeometry"));
     assert!(rig.contains("share-resize-settled"));
     assert!(rig.contains("sample.sourceSequence > resizeTransition.sample.sourceSequence"));
@@ -3261,12 +3261,12 @@ fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
 
 #[test]
 fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.29/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     assert!(rig.contains("function childEnvironment(overrides = {})"));
     assert!(!rig.contains("...process.env"));
-    let fixture = fs::read_to_string("evidence/v0.12.28/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.29/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -3444,10 +3444,10 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
 
 #[test]
 fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.29/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.28/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.29/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let normalized_readme = readme.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -3579,21 +3579,21 @@ fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() 
 
 #[test]
 fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negative() {
-    let fixture = fs::read_to_string("evidence/v0.12.28/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.29/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.28/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.29/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.28/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.29/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.28/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.29/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
     for required in [
-        "private let siblingFixtureTitle = \"LBB v0.12.28 Same-PID Sibling Receiver\"",
+        "private let siblingFixtureTitle = \"LBB v0.12.29 Same-PID Sibling Receiver\"",
         "var primaryWindowId = 0",
         "var siblingWindowId = 0",
         "var siblingTextLength = 0",
@@ -4814,7 +4814,7 @@ fn windows_acceptance_coordinator_is_single_attempt_non_ui_and_fail_closed() {
         "function Copy-FileToPrivateStage {",
         "function New-WorkerLifetimeJob {",
         "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE",
-        "AssignProcessToJobObject(handle, GetCurrentProcess())",
+        "AssignProcessToJobObject(candidate, GetCurrentProcess())",
         "$runnerInfo.EnvironmentVariables[\"LBB_TOKEN\"] = $token",
         "$runnerInfo.EnvironmentVariables.Remove(\"LBB_TOKEN\")",
         "$token = $null",
@@ -4985,7 +4985,7 @@ fn windows_acceptance_coordinator_is_single_attempt_non_ui_and_fail_closed() {
         .split("function Follow-Coordinator {")
         .nth(1)
         .unwrap()
-        .split("function Invoke-SelfTest {")
+        .split("function Remove-SelfTestStreamFiles {")
         .next()
         .unwrap();
     let terminal_projection = coordinator
@@ -5238,20 +5238,27 @@ fn windows_acceptance_coordinator_owns_children_and_delays_watcher_until_marker(
         "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000",
         "limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE",
         "OpenJobObject(",
+        "JOB_OBJECT_QUERY | JOB_OBJECT_TERMINATE",
         "TerminateJobObject(job, 1)",
         "QueryInformationJobObject(",
         "accounting.ActiveProcesses == 0",
+        "WaitForJobNameToDisappear(",
+        "OpenJobObject(JOB_OBJECT_QUERY, false, name)",
         "ERROR_ALREADY_EXISTS = 183",
         "SetLastError(0)",
         "IntPtr candidate = CreateJobObject(IntPtr.Zero, name)",
+        "int createError = Marshal.GetLastWin32Error()",
+        "if (candidate == IntPtr.Zero)",
         "if (createError == 0)",
-        "CloseHandle(candidate)",
-        "if (!recoveredExistingJob || recoveryDeadline == null)",
-        "recoveryDeadline.ElapsedMilliseconds >= timeoutMilliseconds",
+        "CreateJobObject returned an existing uninspected coordinator lifetime Job",
+        "CloseJobHandleOnce(",
+        "EnsureRecoveryTimeRemaining(",
+        "recoveryDeadline.Elapsed.TotalMilliseconds >= timeoutMilliseconds",
         "SleepForRecoveryPoll(",
-        "SetInformationJobObject(handle, JobObjectExtendedLimitInformation, buffer, (uint)size)",
-        "AssignProcessToJobObject(handle, GetCurrentProcess())",
-        "CloseHandle(handle)",
+        "SetInformationJobObject(candidate, JobObjectExtendedLimitInformation, buffer, (uint)size)",
+        "AssignProcessToJobObject(candidate, GetCurrentProcess())",
+        "handle = candidate",
+        "candidate = IntPtr.Zero",
     ] {
         assert!(
             lifetime_job.contains(required),
@@ -5260,13 +5267,85 @@ fn windows_acceptance_coordinator_owns_children_and_delays_watcher_until_marker(
     }
     assert!(lifetime_job.contains("allowChildBreakaway ? JOB_OBJECT_LIMIT_BREAKAWAY_OK : 0"));
     assert!(!lifetime_job.contains("JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK"));
-    let fresh_job = lifetime_job
-        .split("private static IntPtr CreateFreshJob(")
+    let recovery = lifetime_job
+        .split("private WorkerLifetimeJob(")
+        .nth(1)
+        .unwrap()
+        .split("private static IntPtr CreateFreshJobOnce(")
+        .next()
+        .unwrap();
+    let deadline_start = recovery
+        .find("Stopwatch recoveryDeadline = recoverExisting")
+        .unwrap();
+    let inspect_prior = recovery.find("IntPtr previous = OpenJobObject(").unwrap();
+    let terminate_prior = recovery
+        .find("TerminateAndWaitForEmpty(previous, recoveryDeadline")
+        .unwrap();
+    let close_inspected = recovery
+        .find("CloseJobHandleOnce(\n              previous")
+        .unwrap();
+    let wait_for_absence = recovery
+        .find("WaitForJobNameToDisappear(name, recoveryDeadline")
+        .unwrap();
+    let create_once = recovery.find("CreateFreshJobOnce(name)").unwrap();
+    let check_after_create = recovery
+        .find("The coordinator lifetime Job recovery deadline expired during fresh creation")
+        .unwrap();
+    let stop_deadline = recovery.find("recoveryDeadline.Stop()").unwrap();
+    let configure = recovery.find("SetInformationJobObject(candidate").unwrap();
+    let check_after_configure = recovery
+        .find("The coordinator lifetime Job recovery deadline expired during configuration")
+        .unwrap();
+    let bind = recovery.find("AssignProcessToJobObject(candidate").unwrap();
+    let check_after_bind = recovery
+        .find("The coordinator lifetime Job recovery deadline expired during worker binding")
+        .unwrap();
+    let retain = recovery.find("handle = candidate").unwrap();
+    assert!(
+        deadline_start < inspect_prior
+            && inspect_prior < terminate_prior
+            && terminate_prior < close_inspected
+            && close_inspected < wait_for_absence
+            && wait_for_absence < create_once
+            && create_once < check_after_create
+            && check_after_create < configure
+            && configure < check_after_configure
+            && check_after_configure < bind
+            && bind < check_after_bind
+            && check_after_bind < stop_deadline
+            && stop_deadline < retain,
+        "one recovery deadline must cover inspection, exact teardown, namespace absence, single fresh creation, configuration, and binding"
+    );
+
+    let namespace_poll = lifetime_job
+        .split("private static void WaitForJobNameToDisappear(")
         .nth(1)
         .unwrap()
         .split("private static void TerminateAndWaitForEmpty(")
         .next()
         .unwrap();
+    let poll_open = namespace_poll
+        .find("OpenJobObject(JOB_OBJECT_QUERY, false, name)")
+        .unwrap();
+    let poll_close = namespace_poll.find("CloseJobHandleOnce(").unwrap();
+    let poll_sleep = namespace_poll.find("SleepForRecoveryPoll(").unwrap();
+    assert!(poll_open < poll_close && poll_close < poll_sleep);
+    assert!(namespace_poll.contains("openError == ERROR_FILE_NOT_FOUND"));
+
+    let fresh_job = lifetime_job
+        .split("private static IntPtr CreateFreshJobOnce(")
+        .nth(1)
+        .unwrap()
+        .split("private static void WaitForJobNameToDisappear(")
+        .next()
+        .unwrap();
+    assert_eq!(
+        fresh_job
+            .matches("CreateJobObject(IntPtr.Zero, name)")
+            .count(),
+        1
+    );
+    assert!(!fresh_job.contains("while (") && !fresh_job.contains("SleepForRecoveryPoll"));
     let create_candidate = fresh_job
         .find("IntPtr candidate = CreateJobObject(IntPtr.Zero, name)")
         .unwrap();
@@ -5274,25 +5353,74 @@ fn windows_acceptance_coordinator_owns_children_and_delays_watcher_until_marker(
         .find("int createError = Marshal.GetLastWin32Error()")
         .unwrap();
     let accept_fresh = fresh_job.find("if (createError == 0)").unwrap();
-    let close_existing = fresh_job.find("CloseHandle(candidate)").unwrap();
-    let inspected_gate = fresh_job
-        .find("if (!recoveredExistingJob || recoveryDeadline == null)")
-        .unwrap();
-    let retry_wait = fresh_job.find("SleepForRecoveryPoll(").unwrap();
+    let close_existing = fresh_job.find("CloseJobHandleOnce(").unwrap();
+    let reject_existing = fresh_job.rfind("throw new Win32Exception(").unwrap();
     assert!(
         create_candidate < capture_status
             && capture_status < accept_fresh
             && accept_fresh < close_existing
-            && close_existing < inspected_gate
-            && inspected_gate < retry_wait,
-        "fresh named-Job recovery must capture status, accept only a fresh create, close an existing handle, and retry only after inspected recovery"
+            && close_existing < reject_existing,
+        "fresh named-Job recovery must immediately capture status, accept only a fresh create, and close then reject every existing or nonzero-status handle"
     );
-    assert!(fresh_job.contains(
-        "The prior coordinator lifetime Job name did not become available for a fresh object"
-    ));
+    assert!(!lifetime_job.contains("private static IntPtr CreateFreshJob("));
     assert!(coordinator.contains(
         "WorkerLifetimeJobName = \"Local\\LBBWindowsAcceptanceCoordinatorLifetimeJob-v1\""
     ));
+    let self_test = coordinator
+        .split("function Invoke-SelfTest {")
+        .nth(1)
+        .unwrap()
+        .split("if ([Environment]::OSVersion.Platform")
+        .next()
+        .unwrap();
+    for required in [
+        "LifetimeJobCleanSelfTest-",
+        "The clean-start self-test did not bind a fresh named Job.",
+        "The exact prior named-Job owner tree was not live before recovery.",
+        "LifetimeDelayedHandleSelfTest-",
+        "NamedJobHandleLease]::WaitForEmpty($handle, 30000)",
+        "$delayedHolderStatePath + \".empty\"",
+        "$delayedBoundHolder.WaitForExit(5000)",
+        "LifetimeTimeoutSelfTest-",
+        "$timeoutHookState = [pscustomobject]@{ Invoked = $false }",
+        "$timeoutHookState.Invoked",
+        "\"System.TimeoutException\"",
+        "$timeoutHolderStatePath + \".empty\"",
+        "WaitForNameAbsenceForSelfTest(\n                $timeoutJobName",
+        "LifetimeCreateRaceSelfTest-",
+        "$raceHookState.Count -ne 1",
+        "Test-Win32ErrorInChain $_.Exception 183",
+        "The refused create race adopted or terminated the exact raced Job owner.",
+        "WaitForNameAbsenceForSelfTest(\n                $raceJobName",
+        "$boundWorkerProcess.WaitForExit(250)",
+        "$boundSleeperProcess.WaitForExit(10000)",
+        "$boundControlProcess.HasExited",
+        "function Complete-SelfTestCapturedProcess",
+        "function Remove-SelfTestStreamFiles",
+        "^lbb-coordinator-self-test-[0-9a-f]{32}$",
+        "if ($selfTestSucceeded) { Write-Output $script:SuccessMessage }",
+    ] {
+        assert!(
+            coordinator.contains(required),
+            "Windows native coordinator scenario proof is missing: {required}"
+        );
+    }
+    for forbidden in [
+        "$cleanJobName -ceq $script:WorkerLifetimeJobName",
+        "$delayedJobName -ceq $script:WorkerLifetimeJobName",
+        "$timeoutJobName -ceq $script:WorkerLifetimeJobName",
+        "$raceJobName -ceq $script:WorkerLifetimeJobName",
+    ] {
+        assert!(self_test.contains(forbidden));
+    }
+    let mark_success = self_test.find("$selfTestSucceeded = $true").unwrap();
+    let delete_root = self_test
+        .find("[IO.Directory]::Delete($testRoot, $true)")
+        .unwrap();
+    let emit_success = self_test
+        .find("if ($selfTestSucceeded) { Write-Output $script:SuccessMessage }")
+        .unwrap();
+    assert!(mark_success < delete_root && delete_root < emit_success);
     assert!(coordinator.contains("CREATE_BREAKAWAY_FROM_JOB"));
     assert!(coordinator.contains("PROC_THREAD_ATTRIBUTE_JOB_LIST"));
     assert!(coordinator.contains("$worker.TransferGuardOwnership()"));
@@ -5643,7 +5771,7 @@ fn windows_acceptance_follow_is_non_authoritative_and_summary_bound() {
         .split("function Follow-Coordinator {")
         .nth(1)
         .unwrap()
-        .split("function Invoke-SelfTest {")
+        .split("function Remove-SelfTestStreamFiles {")
         .next()
         .unwrap();
     let chain = coordinator
@@ -5771,7 +5899,7 @@ fn windows_foreground_arm_handoff_watcher_is_strict_read_only_and_non_authoritat
         .replace("\r\n", "\n");
 
     for required in [
-        "$script:ProductVersion = \"0.12.28\"",
+        "$script:ProductVersion = \"0.12.29\"",
         "$script:MarkerSchemaVersion = 2",
         "function Assert-ExactPropertyOrder {",
         "function Assert-ExactMarkerSchema {",
@@ -5916,7 +6044,7 @@ fn windows_foreground_arm_handoff_watcher_is_strict_read_only_and_non_authoritat
         "$markerReader = { return Read-AtomicRequestMarker $markerPath $operatorDirectory }.GetNewClosure()"
     ));
     assert!(runner.contains("-ProductVersion $Version"));
-    assert!(runner.contains("-ProductVersion \"0.12.28\""));
+    assert!(runner.contains("-ProductVersion \"0.12.29\""));
     assert!(runner.contains("maximumClickAttempts -ne 1"));
     assert!(runner.contains("maximumClickAttempts -ne 0"));
 }

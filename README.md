@@ -50,7 +50,7 @@ See [Capabilities](docs/CAPABILITIES.md) for the exact platform matrix and [Limi
 
 Download one version-matched set from [GitHub Releases](https://github.com/flrngel/local-browser-bridge/releases/latest):
 
-> Version 0.12.28 is the current source and release target. Its Windows source gate is still blocked; see the [Windows acceptance handoff](docs/WINDOWS_ACCEPTANCE_HANDOFF.md). Install it only if it appears on the Releases page—every public build must first pass fresh macOS, Windows, stock-Chrome, evidence, and immutable-publication gates. Product capabilities are unchanged in 0.12.28. See [Development](docs/DEVELOPMENT.md) and [the evidence index](evidence/) for the complete gate design and withdrawn-candidate history.
+> Version 0.12.29 is the current source and release target. Its Windows-native coordinator source gate passed under exact 64-bit system Windows PowerShell 5.1: the fail-closed named-Job state machine and all eight GUID-scoped non-product scenarios passed, and independent review found no P0/P1 issue. This is not packaged-candidate or release evidence. No 0.12.29 candidate has been built, downloaded, or executed; no macOS or Windows candidate acceptance, stock-Chrome acceptance, tag, or GitHub Release has occurred. Install 0.12.29 only if it later appears on the Releases page after every fresh artifact, platform, browser, evidence, and immutable-publication gate passes. Product capabilities are unchanged. See [Development](docs/DEVELOPMENT.md), the [Windows source-gate record](docs/WINDOWS_ACCEPTANCE_HANDOFF.md), and [the evidence index](evidence/) for the complete gate design and withdrawn-candidate history.
 
 Historical failed candidates and their exact negative evidence are documented in [Development](docs/DEVELOPMENT.md) and [the evidence index](evidence/). Their binaries, screenshots, approvals, and receipts never satisfy a later release.
 
@@ -142,7 +142,7 @@ See [Development](docs/DEVELOPMENT.md) for local testing, browser fixtures, rele
 - [Installation](docs/INSTALL.md) — downloads, checksums, permissions, and updates
 - [Security](SECURITY.md) — trust boundaries and sensitive-data handling
 - [Protocol](docs/PROTOCOL.md) — command and connector contracts
-- [Windows acceptance handoff](docs/WINDOWS_ACCEPTANCE_HANDOFF.md) — the current release-blocking Windows-local work
+- [Windows acceptance source-gate record](docs/WINDOWS_ACCEPTANCE_HANDOFF.md) — the completed non-product Windows coordinator proof and remaining release gates
 - [Browser research](docs/RESEARCH.md) and [computer-use research](docs/COMPUTER_USE_RESEARCH.md)
 - [SOTA audit](docs/SOTA_AUDIT.md) and [release evidence](evidence/)
 
