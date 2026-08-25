@@ -1599,6 +1599,13 @@ fn v01229_powershell_entrypoints_cannot_fall_through_legacy_gates() {
     let sanitizer = source("scripts/sanitize-browser-evidence-screenshot.ps1");
     assert!(sanitizer.contains("@(\"0.12.2\", \"0.12.30\")"));
     assert!(sanitizer.contains("$script:CandidateVersionFromPreflight -ceq \"0.12.30\""));
+    let run_fields = sanitizer
+        .find("workflowRunId = \"1\"; workflowRunAttempt = \"1\"; workflowEvent = \"workflow_dispatch\"")
+        .expect("sanitizer self-test must order workflow fields canonically");
+    let artifact_fields = sanitizer[run_fields..]
+        .find("artifactId = \"1\"; artifactName = \"release-candidate\"")
+        .expect("sanitizer self-test must place artifact fields after workflow fields");
+    assert!(artifact_fields > 0);
 
     let finalizer = source("scripts/write-browser-evidence-record.ps1");
     assert!(finalizer.contains("$script:OperatorV2Version = \"0.12.30\""));

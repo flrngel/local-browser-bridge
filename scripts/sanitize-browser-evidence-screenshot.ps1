@@ -1035,8 +1035,9 @@ function Invoke-SelfTest {
             releaseCandidateBinding = [ordered]@{
                 schemaVersion = 3; version = "0.12.30"; releaseTag = "v0.12.30"
                 repository = "flrngel/local-browser-bridge"; sourceSha = [String]::new([char]"0", 40)
-                workflowRunId = "1"; workflowRunAttempt = "1"; artifactId = "1"; artifactName = "release-candidate"
-                workflowEvent = "workflow_dispatch"; workflowRef = "refs/heads/main"; workflowPath = ".github/workflows/deploy.yml"
+                workflowRunId = "1"; workflowRunAttempt = "1"; workflowEvent = "workflow_dispatch"
+                workflowRef = "refs/heads/main"; workflowPath = ".github/workflows/deploy.yml"
+                artifactId = "1"; artifactName = "release-candidate"
                 artifactZipBytes = 1; artifactZipSha256 = $bindingHash; checksumManifestSha256 = $bindingHash
                 attestationInvocationUri = "https://github.com/flrngel/local-browser-bridge/actions/runs/1/attempts/1"
                 attestedAssetCount = 5; githubHostedRunner = $true
