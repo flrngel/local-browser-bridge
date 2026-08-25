@@ -137,7 +137,7 @@ jobs:
               "Rust, extension, and packaging",
               "Windows native validation",
               "macOS native validation"
-            ] | all(.[] as $required | any($response.check_runs[];
+          ] | all(. as $required | any($response.check_runs[];
               .name == $required
               and .head_sha == $source
               and .status == "completed"
