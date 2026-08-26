@@ -40,11 +40,14 @@ tagging, and publication did not run for either candidate. Version 0.12.32 then
 built one provenance-bound candidate, but its macOS gate failed before
 permission probes, quiet-seat stabilization, or candidate process launch when a
 source-only handoff self-test printed an extra line. Windows, stock Chrome,
-tagging, and publication again did not run. Version 0.12.33 is the current
-source and schema-3 release-pipeline target. It keeps the strict frame-authority
-checks, restores the handoff's exact one-line self-test contract, and requires
-fresh platform/browser acceptance before it can be called a Release. See the
-[Windows acceptance source-gate record](WINDOWS_ACCEPTANCE_HANDOFF.md).
+tagging, and publication again did not run. Version 0.12.33 fixed that output
+contract and passed both fresh macOS lanes, but its single Windows attempt
+failed closed while building the source-bound fixture under nested Jobs. It did
+not launch the candidate product, open Chrome, create a tag, or publish. Version
+0.12.34 is the current source and schema-3 release-pipeline target. It uses an
+explicit breakaway-enabled coordinator Job plus atomic private Job-list child
+creation and requires fresh platform/browser acceptance before it can be called
+a Release. See the [Windows acceptance source-gate record](WINDOWS_ACCEPTANCE_HANDOFF.md).
 
 Coordinator records flush their file contents before an atomic create-once
 rename. That survives a dropped remote shell and ordinary process failure, but
@@ -239,7 +242,7 @@ Version 0.12.25 retained the authority refresh and made that watcher portable
 to exact system PowerShell 5.1 by passing marker paths as explicit callback
 arguments.
 
-Version 0.12.33 retains sealed route provenance, the v0.12.23 classifier
+Version 0.12.34 retains sealed route provenance, the v0.12.23 classifier
 separation, and conservative shared-pointer monitoring. Its bounded, abortable
 post-`ACTION` authority refresh must obtain a strictly newer frame from the same
 share, target, and geometry within the reserved deadline before deriving click
