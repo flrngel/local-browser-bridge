@@ -271,7 +271,6 @@ fn windows_ci_validates_the_complete_browser_evidence_toolchain_before_candidate
             "./scripts/run-windows-computer-use-acceptance.ps1 -Mode SelfTest",
             "./scripts/sanitize-browser-evidence-screenshot.ps1 -Mode SelfTest",
             "./scripts/test-windows-browser-api.ps1 -SelfTest",
-            "./scripts/test-windows-computer-use.ps1 -SelfTest",
             "./scripts/verify-windows-artifacts.ps1 -Version 0.0.0 -SelfTest",
             "./scripts/wait-windows-foreground-arm-handoff.ps1 -Mode SelfTest",
             "./tests/fixtures/windows/WindowsComputerUseFixture.ps1 -SelfTest",
@@ -325,7 +324,6 @@ fn windows_ci_validates_the_complete_browser_evidence_toolchain_before_candidate
             "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-browser-api.ps1 -SelfTest",
             "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/write-browser-evidence-record.ps1 -Mode SelfTest",
             "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/write-stock-chrome-operator-response.ps1 -Mode SelfTest",
-            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-computer-use.ps1 -SelfTest",
             "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-artifacts.ps1 -Version 0.0.0 -SelfTest",
             "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-stock-chrome.ps1 -SelfTest",
             "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-release-candidate.ps1 -SelfTest",
@@ -382,6 +380,10 @@ fn windows_ci_gates_the_acceptance_coordinator_under_exact_ps51() {
             workflow.matches(success).count(),
             1,
             "{path} must require the exact coordinator success message once"
+        );
+        assert!(
+            !workflow.contains("test-windows-computer-use.ps1 -SelfTest"),
+            "{path} must not bypass the topology-aware coordinator with a direct Job-sensitive runner self-test"
         );
         let identity_gate = workflow
             .find("$ps51Identity[0] -cne \"5.1|Desktop\"")
@@ -608,7 +610,6 @@ fn ci_runs_every_browser_evidence_self_test_under_windows_powershell_51() {
         "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-browser-api.ps1 -SelfTest",
         "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/write-browser-evidence-record.ps1 -Mode SelfTest",
         "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/write-stock-chrome-operator-response.ps1 -Mode SelfTest",
-        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-computer-use.ps1 -SelfTest",
         "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-artifacts.ps1 -Version 0.0.0 -SelfTest",
         "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-stock-chrome.ps1 -SelfTest",
         "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-release-candidate.ps1 -SelfTest",

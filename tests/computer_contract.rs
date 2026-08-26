@@ -4036,10 +4036,13 @@ fn windows_helper_readiness_is_protocol_and_process_bound() {
         !deploy.contains("scripts/test-windows-computer-use.ps1"),
         "the candidate workflow must reuse reviewed CI instead of rerunning the native acceptance self-tests"
     );
-    assert!(ci.contains(
-        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-computer-use.ps1 -SelfTest"
-    ));
-    assert!(ci.contains("& ./scripts/test-windows-computer-use.ps1 -SelfTest"));
+    let coordinator_self_test = "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/run-windows-computer-use-acceptance.ps1 -Mode SelfTest";
+    assert!(ci.contains(coordinator_self_test));
+    assert_eq!(ci.matches(coordinator_self_test).count(), 1);
+    assert!(
+        !ci.contains("test-windows-computer-use.ps1 -SelfTest"),
+        "CI must exercise the Job-sensitive runner only through the topology-aware coordinator self-test"
+    );
     assert!(ci.contains(
         "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./tests/fixtures/windows/WindowsComputerUseFixture.ps1 -SelfTest"
     ));
