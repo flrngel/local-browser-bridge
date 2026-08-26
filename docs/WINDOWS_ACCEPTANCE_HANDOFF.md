@@ -11,6 +11,14 @@ observed Local Browser Bridge product failure and not candidate acceptance. The
 0.12.28 source checkpoint never became a candidate. No packaged 0.12.29
 candidate has been built, downloaded, or executed.
 
+> **Successor status:** the forward-looking v0.12.29 instructions below are
+> retained as historical source-gate context. A later v0.12.30 candidate passed
+> both macOS lanes, then failed closed before Windows runner launch because the
+> staged worker-support loader referenced an undefined hex helper; stock Chrome,
+> tagging, and publication did not run. Version 0.12.31 fixes that loader path
+> and requires fresh candidate and acceptance evidence. Do not reuse or relabel
+> v0.12.30 bytes or results.
+
 ## Remaining release boundary
 
 The coordinator source gate is complete, but every artifact- and UI-bearing
@@ -394,11 +402,13 @@ The reviewed 0.12.29 source satisfies the Windows-local unblock criteria:
 - PASS: documentation and static contracts describe the implemented state
   machine rather than the abandoned retry.
 
-## Future candidate and release work
+## Historical future-candidate checklist (superseded)
 
 The source pass permits later candidate preparation; it does not perform or
-approve it. The next release task must use version 0.12.29 consistently and
-must not reuse 0.12.28 candidate bytes or evidence. It must, in order:
+approve it. At this source-gate checkpoint, the next release task was required
+to use version 0.12.29 consistently and not reuse 0.12.28 candidate bytes or
+evidence. The successor-status note at the top now governs the current cycle;
+this historical checklist was, in order:
 
 1. freeze and independently verify one exact GitHub-attested five-file
    candidate;
