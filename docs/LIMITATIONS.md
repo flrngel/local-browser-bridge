@@ -32,12 +32,16 @@ configuration and binding. This remains non-product SelfTest evidence, not a
 shipped or packaged-candidate Windows property. No 0.12.29 candidate was built,
 and no acceptance, tag, or Release exists for it. The v0.12.30 candidate passed
 both macOS lanes, then failed closed before Windows runner launch because the
-staged worker-support loader referenced an undefined hex helper; stock Chrome,
-tagging, and publication did not run. Version 0.12.31 is the current source and
-schema-3 release-pipeline target. It fixes that loader dependency and adds a
-fresh-process regression self-test, but has no packaged candidate,
-platform/browser acceptance, tag, or public Release proof yet. See the
-[Windows acceptance source-gate record](WINDOWS_ACCEPTANCE_HANDOFF.md).
+staged worker-support loader referenced an undefined hex helper. Version
+0.12.31 fixed that loader and passed its quiet macOS lane, but its deliberate
+lane failed closed before product dispatch when the bounded post-`ACTION`
+fresh-share-frame refresh timed out. Windows candidate execution, stock Chrome,
+tagging, and publication did not run for either candidate. Version 0.12.32 is
+the current source and schema-3 release-pipeline target. It keeps the strict frame-authority
+checks and replaces that refresh with a larger bounded, abortable wait, but has
+no packaged candidate, platform/browser acceptance, tag, or public Release
+proof yet. See the [Windows acceptance source-gate
+record](WINDOWS_ACCEPTANCE_HANDOFF.md).
 
 Coordinator records flush their file contents before an atomic create-once
 rename. That survives a dropped remote shell and ordinary process failure, but
@@ -232,10 +236,10 @@ Version 0.12.25 retained the authority refresh and made that watcher portable
 to exact system PowerShell 5.1 by passing marker paths as explicit callback
 arguments.
 
-Version 0.12.31 retains sealed route provenance, the v0.12.23 classifier
-separation, and conservative shared-pointer monitoring. After the app-share
-`ACTION` receipt it must obtain a strictly newer frame from the same share,
-target, and geometry within the reserved deadline before deriving click
+Version 0.12.32 retains sealed route provenance, the v0.12.23 classifier
+separation, and conservative shared-pointer monitoring. Its bounded, abortable
+post-`ACTION` authority refresh must obtain a strictly newer frame from the same
+share, target, and geometry within the reserved deadline before deriving click
 authority. Before either lane invokes a candidate executable, fixture, server,
 or helper, a native SystemProbe gate requires a 30-second sampled quiet epoch
 with at least 60 stable transitions sampled every 500 ms. Pointer, cursor,

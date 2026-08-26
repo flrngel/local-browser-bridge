@@ -14,10 +14,14 @@ candidate has been built, downloaded, or executed.
 > **Successor status:** the forward-looking v0.12.29 instructions below are
 > retained as historical source-gate context. A later v0.12.30 candidate passed
 > both macOS lanes, then failed closed before Windows runner launch because the
-> staged worker-support loader referenced an undefined hex helper; stock Chrome,
-> tagging, and publication did not run. Version 0.12.31 fixes that loader path
-> and requires fresh candidate and acceptance evidence. Do not reuse or relabel
-> v0.12.30 bytes or results.
+> staged worker-support loader referenced an undefined hex helper. Version
+> 0.12.31 fixed that loader and passed its quiet macOS lane, but the deliberate
+> lane's two-second post-receipt fresh-frame window timed out before product
+> dispatch. Stock Chrome, tagging, and publication did not run for either
+> version. Version 0.12.32 keeps the strict frame-authority checks, gives the
+> native stream a robust bounded refresh window, and requires entirely fresh
+> candidate and acceptance evidence. Do not reuse or relabel v0.12.30 or
+> v0.12.31 bytes or results.
 
 ## Remaining release boundary
 
