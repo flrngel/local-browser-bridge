@@ -1,0 +1,96 @@
+2026-08-26T05:27:49.011Z PASS evidence output parent is an owner-private ordinary directory: the direct evidence parent is ordinary, owner-private, and current-user owned
+2026-08-26T05:27:49.014Z PASS evidence output directory is newly created and owner-private: the runner created one private lane output directory
+2026-08-26T05:27:49.739Z PASS pre-run harness source commit matches coordinator binding: exact source SHA matched
+2026-08-26T05:27:49.739Z PASS pre-run harness checkout is detached: detached HEAD
+2026-08-26T05:27:49.739Z PASS pre-run harness checkout is clean: tracked, staged, deleted, and untracked sets are empty
+2026-08-26T05:27:49.739Z PASS pre-run harness source repository passes git fsck: git fsck --full passed
+2026-08-26T05:27:49.739Z PASS pre-run harness files are exact tracked blobs: runner, native probes, and acceptance finalizer match HEAD blobs
+2026-08-26T05:27:49.742Z PASS macOS host: Darwin
+2026-08-26T05:27:49.748Z PASS expected checksum-manifest hash format: 64 lowercase hexadecimal characters
+2026-08-26T05:27:49.749Z PASS canonical checksum-manifest name: SHA256SUMS.txt
+2026-08-26T05:27:49.749Z PASS exact archive name: local-browser-bridge-v0.12.31-macos-universal.tar.gz
+2026-08-26T05:27:49.749Z PASS checksum manifest is one bounded current-user-owned ordinary file: ordinary, singly linked, owner-controlled, and within the manifest byte bound
+2026-08-26T05:27:49.749Z PASS checksum manifest stayed stable while it was bound: path and descriptor identity, size, links, and timestamps remained unchanged
+2026-08-26T05:27:49.749Z PASS out-of-band checksum-manifest hash matches: d8554f777947671abf0b0377f7134e1c30eda009a8060025034a97d5e7caa292
+2026-08-26T05:27:49.749Z PASS checksum manifest has the exact canonical four-entry set: local-browser-bridge-v0.12.31-windows-x86_64.exe,local-computer-helper-v0.12.31-windows-x86_64.exe,local-browser-bridge-v0.12.31-macos-universal.tar.gz,local-browser-bridge-extension-v0.12.31.zip
+2026-08-26T05:27:49.749Z PASS canonical manifest contains the macOS archive checksum: 467bbe1ba3619691af396b36837c3eb39cbbdf89383390d2403ee84ac4b0faf2
+2026-08-26T05:27:49.792Z PASS macOS archive bounded exact inventory: ten PAX-free regular-file/directory entries passed bounded streaming extraction
+2026-08-26T05:27:49.792Z PASS archive checksum is bound by the canonical manifest: 467bbe1ba3619691af396b36837c3eb39cbbdf89383390d2403ee84ac4b0faf2
+2026-08-26T05:27:49.797Z PASS supplied server is archive-exact: 6621fadaf2ce0f44463798028c5fd8a1e8e2175244f8e694f410bd1366856de1
+2026-08-26T05:27:49.799Z PASS supplied helper is archive-exact: f4f19efa5c355b06390040932277c5b0736d09be7f353446338d55fe4cb62b13
+2026-08-26T05:27:49.812Z PASS server universal architecture: arm64,x86_64
+2026-08-26T05:27:49.812Z PASS helper universal architecture: arm64,x86_64
+2026-08-26T05:27:49.812Z PASS helper uses packaged app layout: Local Computer Helper.app
+2026-08-26T05:27:49.835Z PASS strict code-signature verification: server, helper executable, and helper app bundle passed strict verification
+2026-08-26T05:27:49.840Z PASS helper bundle version: 0.12.31/0.12.31
+2026-08-26T05:27:51.196Z PASS optional physical-pointer adversarial prompt self-test: source-only optional adversarial prompt cannot satisfy either release lane
+2026-08-26T05:27:51.787Z PASS app-share handoff bundle identity: dev.flrngel.local-browser-bridge.acceptance.app-share
+2026-08-26T05:27:51.921Z PASS app-share handoff self-test: stable bundle/window/button vocabulary and create-once receipts
+2026-08-26T05:27:52.096Z PASS screen-capture permission preflight: preexisting permission; no request was made
+2026-08-26T05:27:52.096Z PASS accessibility permission preflight: preexisting permission; no request was made
+2026-08-26T05:27:52.096Z PASS active Space probe available: nonzero active Space identity
+2026-08-26T05:27:52.097Z PASS sandwiched foreground AX focus probe available: stable NSWorkspace/raw PSN plus exact AX focused/main-window identities are available
+2026-08-26T05:28:27.753Z PASS native quiet-seat stabilization completed before candidate execution: 35656 ms across 60 stable native transitions after 0 reset(s)
+2026-08-26T05:28:27.760Z PASS server version: 0.12.31
+2026-08-26T05:28:27.766Z PASS helper version: 0.12.31
+2026-08-26T05:28:28.173Z PASS fixture process identity: state belongs to the spawned fixture
+2026-08-26T05:28:28.366Z PASS startup same-PID sibling is the target app's remembered receiver: sibling-main-and-focused=true, fixture-background=true
+2026-08-26T05:28:28.802Z PASS packaged helper compatible: protocol-compatible helper 0.12.31
+2026-08-26T05:28:28.802Z PASS single helper spawn: 1 packaged helper process
+2026-08-26T05:28:28.802Z PASS acknowledged share advertised: computer.share.ack present
+2026-08-26T05:28:28.802Z PASS native stream advertised: computer.capture.native-stream.v1 present
+2026-08-26T05:28:28.802Z PASS input-delivery provenance advertised: computer.input-delivery-provenance.v1 present
+2026-08-26T05:28:28.802Z PASS pointer-activity monitor advertised: computer.pointer-activity-monitor.v1 present
+2026-08-26T05:28:29.083Z PASS helper status backend: background-window/ax+skylight+screencapturekit-stream
+2026-08-26T05:28:29.083Z PASS background shared-session mode: background-window/shared-user-session/target-routed
+2026-08-26T05:28:29.083Z PASS background input backend ready: target-routed input is ready
+2026-08-26T05:28:29.083Z PASS semantic backend ready: macos-accessibility is ready without prompting
+2026-08-26T05:28:29.083Z PASS fixture exact window discovered: 1 matching windows
+2026-08-26T05:28:29.083Z PASS genuine same-PID sibling window discovered: 1 sibling matches, distinct=true
+2026-08-26T05:28:29.083Z PASS fixture is a background target: neither same-PID fixture window owns the user's foreground process or front window
+2026-08-26T05:28:29.472Z PASS exact fixture window observed: 1209x826
+2026-08-26T05:28:29.473Z PASS semantic snapshot available: 4 elements
+2026-08-26T05:28:29.477Z PASS semantic value element discovered: AXTextField
+2026-08-26T05:28:30.546Z PASS semantic setValue confirmed: Confirmed/value-confirmed
+2026-08-26T05:28:30.546Z PASS semantic setValue route, helper-preservation, and shared-pointer invariants: {"cursorPositionUnchanged":true,"foregroundUnchanged":true,"hardwareCursorPreservedByHelper":true,"helperGlobalPointerPreservation":"confirmed","hidSystemPointerActivityObserved":false,"injectedPointerActivityObserved":false,"inputDelivery":{"dispatchAttemptRecorded":true,"exactTargetBound":true,"globalHidInputUsed":false,"hardwareCursorMutationRequested":false,"osAcceptanceObserved":true,"osAcceptanceSignalAvailable":true,"route":"macosAccessibility","sharedInputSeatUsed":false,"supportLevel":"publicDocumented"},"pointerActivityMonitorHealthy":true,"rawInputPointerActivityObserved":false,"sharedPointerActivityObserved":false,"sharedPointerActivityState":"quiet","sharedPointerBoundaryCorroborated":true,"sharedPointerBoundaryState":"corroborated","spaceUnchanged":true,"userFocusUnchanged":true}
+2026-08-26T05:28:30.803Z PASS semantic setValue screenshot changed: fresh exact-window pixels differ from the pre-action observation
+2026-08-26T05:28:30.803Z PASS semantic action element discovered: AXButton
+2026-08-26T05:28:31.794Z PASS semantic invoke target-side proof: fixture semantic counter advanced to 1
+2026-08-26T05:28:31.794Z PASS semantic invoke conservatively classified: Partial/element-state-changed
+2026-08-26T05:28:31.794Z PASS semantic invoke route, helper-preservation, and shared-pointer invariants: {"cursorPositionUnchanged":true,"foregroundUnchanged":true,"hardwareCursorPreservedByHelper":true,"helperGlobalPointerPreservation":"confirmed","hidSystemPointerActivityObserved":false,"injectedPointerActivityObserved":false,"inputDelivery":{"dispatchAttemptRecorded":true,"exactTargetBound":true,"globalHidInputUsed":false,"hardwareCursorMutationRequested":false,"osAcceptanceObserved":true,"osAcceptanceSignalAvailable":true,"route":"macosAccessibility","sharedInputSeatUsed":false,"supportLevel":"publicDocumented"},"pointerActivityMonitorHealthy":true,"rawInputPointerActivityObserved":false,"sharedPointerActivityObserved":false,"sharedPointerActivityState":"quiet","sharedPointerBoundaryCorroborated":true,"sharedPointerBoundaryState":"corroborated","spaceUnchanged":true,"userFocusUnchanged":true}
+2026-08-26T05:28:32.046Z PASS semantic invoke screenshot changed: fresh exact-window pixels differ from the setValue stage
+2026-08-26T05:28:32.814Z PASS persistent live share started: persistent-native-stream/exact-window
+2026-08-26T05:28:32.814Z PASS SCStream start metadata: macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window
+2026-08-26T05:28:32.814Z PASS live share ack pacing: latest-frame-wins, ackPaced=true
+2026-08-26T05:28:32.814Z PASS live share cursor policy: system cursor excluded; synthetic session pointer composited
+2026-08-26T05:28:33.127Z PASS persistent-share screenshot is fresh: sourceSequence=4
+2026-08-26T05:28:33.868Z PASS same-PID sibling is remembered before primary pixel dispatch: sibling-main-and-focused=true, sibling-state-clean=true
+2026-08-26T05:28:36.741Z PASS exact active target receiver observed during pixel lease: active-target=true, exact-main-and-focused=true, saved-user-owner=true
+2026-08-26T05:28:36.854Z PASS background pixel click targets only primary and restores sibling receiver: only the primary click counter advanced and the target app's prior sibling receiver was restored
+2026-08-26T05:28:36.854Z PASS pixel click conservatively classified: Unverifiable
+2026-08-26T05:28:36.854Z PASS pixel action bound to persistent share: share=true, source=9
+2026-08-26T05:28:36.854Z PASS live-share pixel click route, helper-preservation, and shared-pointer invariants: {"cursorPositionUnchanged":true,"foregroundUnchanged":true,"hardwareCursorPreservedByHelper":true,"helperGlobalPointerPreservation":"confirmed","hidSystemPointerActivityObserved":false,"injectedPointerActivityObserved":false,"inputDelivery":{"dispatchAttemptRecorded":true,"exactTargetBound":true,"globalHidInputUsed":false,"hardwareCursorMutationRequested":false,"osAcceptanceObserved":false,"osAcceptanceSignalAvailable":false,"route":"macosTargetedProcessEvent","sharedInputSeatUsed":false,"supportLevel":"privateUnsupported"},"pointerActivityMonitorHealthy":true,"rawInputPointerActivityObserved":false,"sharedPointerActivityObserved":false,"sharedPointerActivityState":"quiet","sharedPointerBoundaryCorroborated":true,"sharedPointerBoundaryState":"corroborated","spaceUnchanged":true,"userFocusUnchanged":true}
+2026-08-26T05:28:36.935Z PASS same-PID pixel routing independent foreground/focus/pointer/Space invariants: {"foregroundUnchanged":true,"userFocusUnchanged":true,"foregroundIdentitySandwichHeld":true,"rawForegroundIdentitySandwichHeld":true,"foregroundAxFocusUnchanged":true,"foregroundAxFrontmostHeld":true,"cursorPositionUnchanged":true,"sharedPointerActivityObserved":false,"hidSystemPointerActivityObserved":false,"rawInputPointerActivityObserved":false,"injectedPointerActivityObserved":false,"pointerActivityMonitorHealthy":true,"sharedPointerBoundaryCorroborated":true,"sharedPointerBoundaryState":"corroborated","sharedPointerActivityState":"quiet","hidSystemKeyboardActivityObserved":false,"keyboardActivityMonitorHealthy":true,"sharedKeyboardBoundaryCorroborated":true,"sharedKeyboardBoundaryState":"corroborated","sharedKeyboardActivityState":"quiet","sharedInputSeatActivityObserved":false,"spaceUnchanged":true}
+2026-08-26T05:28:37.143Z PASS native source remained live during input: source +34/drop +30; transport +4
+2026-08-26T05:28:37.143Z PASS settled synthetic pointer published: action=click
+2026-08-26T05:28:37.146Z PASS live-share action screenshot changed: fresh exact-window pixels include the action stage
+2026-08-26T05:28:38.275Z PASS persistent share survived exact-target resize: 720x492 -> 820x552
+2026-08-26T05:28:38.275Z PASS settled resize frame matches exact-window geometry: window=820x552, image=1218x820
+2026-08-26T05:28:38.277Z PASS resize screenshot dimensions match settled observation: 1218x820
+2026-08-26T05:28:38.277Z PASS resize screenshot geometry changed: 1209x826 -> 1218x820
+2026-08-26T05:28:39.192Z PASS app-share WAITING presentation independent foreground/focus/pointer/Space invariants: {"foregroundUnchanged":true,"userFocusUnchanged":true,"foregroundIdentitySandwichHeld":true,"rawForegroundIdentitySandwichHeld":true,"foregroundAxFocusUnchanged":true,"foregroundAxFrontmostHeld":true,"cursorPositionUnchanged":true,"sharedPointerActivityObserved":false,"hidSystemPointerActivityObserved":false,"rawInputPointerActivityObserved":false,"injectedPointerActivityObserved":false,"pointerActivityMonitorHealthy":true,"sharedPointerBoundaryCorroborated":true,"sharedPointerBoundaryState":"corroborated","sharedPointerActivityState":"quiet","hidSystemKeyboardActivityObserved":false,"keyboardActivityMonitorHealthy":true,"sharedKeyboardBoundaryCorroborated":true,"sharedKeyboardBoundaryState":"corroborated","sharedKeyboardActivityState":"quiet","sharedInputSeatActivityObserved":false,"spaceUnchanged":true}
+2026-08-26T05:28:39.192Z PASS app-share WAITING presentation remained quiet: the bound app appeared without shared-pointer or user-context activity
+2026-08-26T05:28:39.329Z PASS app-share READY presentation independent foreground/focus/pointer/Space invariants: {"foregroundUnchanged":true,"userFocusUnchanged":true,"foregroundIdentitySandwichHeld":true,"rawForegroundIdentitySandwichHeld":true,"foregroundAxFocusUnchanged":true,"foregroundAxFrontmostHeld":true,"cursorPositionUnchanged":true,"sharedPointerActivityObserved":false,"hidSystemPointerActivityObserved":false,"rawInputPointerActivityObserved":false,"injectedPointerActivityObserved":false,"pointerActivityMonitorHealthy":true,"sharedPointerBoundaryCorroborated":true,"sharedPointerBoundaryState":"corroborated","sharedPointerActivityState":"quiet","hidSystemKeyboardActivityObserved":false,"keyboardActivityMonitorHealthy":true,"sharedKeyboardBoundaryCorroborated":true,"sharedKeyboardBoundaryState":"corroborated","sharedKeyboardActivityState":"quiet","sharedInputSeatActivityObserved":false,"spaceUnchanged":true}
+2026-08-26T05:28:39.329Z PASS app-share READY transition preserved the shared input seat: foreground, focus, cursor, HID counters, and active Space stayed unchanged
+2026-08-26T05:28:39.329Z ACTION REQUIRED: through the separately authorized exact-app share for dev.flrngel.local-browser-bridge.acceptance.app-share, press START APP-SHARE CHECK exactly once. Do not use the shared desktop or retry.
+2026-08-26T05:31:40.659Z PASS exact-app-share action independent foreground/focus/pointer/Space invariants: {"foregroundUnchanged":true,"userFocusUnchanged":true,"foregroundIdentitySandwichHeld":true,"rawForegroundIdentitySandwichHeld":true,"foregroundAxFocusUnchanged":true,"foregroundAxFrontmostHeld":true,"cursorPositionUnchanged":true,"sharedPointerActivityObserved":false,"hidSystemPointerActivityObserved":false,"rawInputPointerActivityObserved":false,"injectedPointerActivityObserved":false,"pointerActivityMonitorHealthy":true,"sharedPointerBoundaryCorroborated":true,"sharedPointerBoundaryState":"corroborated","sharedPointerActivityState":"quiet","hidSystemKeyboardActivityObserved":false,"keyboardActivityMonitorHealthy":true,"sharedKeyboardBoundaryCorroborated":true,"sharedKeyboardBoundaryState":"corroborated","sharedKeyboardActivityState":"quiet","sharedInputSeatActivityObserved":false,"spaceUnchanged":true}
+2026-08-26T05:31:40.660Z PASS exact-app-share action did not use the shared input seat: foreground, focus, cursor, HID counters, and active Space stayed unchanged across the external app action
+2026-08-26T05:31:40.833Z PASS app-share ACTION transition independent foreground/focus/pointer/Space invariants: {"foregroundUnchanged":true,"userFocusUnchanged":true,"foregroundIdentitySandwichHeld":true,"rawForegroundIdentitySandwichHeld":true,"foregroundAxFocusUnchanged":true,"foregroundAxFrontmostHeld":true,"cursorPositionUnchanged":true,"sharedPointerActivityObserved":false,"hidSystemPointerActivityObserved":false,"rawInputPointerActivityObserved":false,"injectedPointerActivityObserved":false,"pointerActivityMonitorHealthy":true,"sharedPointerBoundaryCorroborated":true,"sharedPointerBoundaryState":"corroborated","sharedPointerActivityState":"quiet","hidSystemKeyboardActivityObserved":false,"keyboardActivityMonitorHealthy":true,"sharedKeyboardBoundaryCorroborated":true,"sharedKeyboardBoundaryState":"corroborated","sharedKeyboardActivityState":"quiet","sharedInputSeatActivityObserved":false,"spaceUnchanged":true}
+2026-08-26T05:31:40.833Z PASS app-share ACTION transition remained outside the shared input seat: the exact app remained bound while the product action window opened
+2026-08-26T05:31:40.835Z PASS app-share receipt retained the exact persistent share: target=true, share=true, source-bound=true, geometry=true
+2026-08-26T05:31:42.943Z FATAL share-after-app-share-action-authority share frame timed out
+2026-08-26T05:31:42.946Z pointer handoff prompt stopped
+2026-08-26T05:31:42.950Z helper stopped
+2026-08-26T05:31:42.952Z server stopped
+2026-08-26T05:31:42.956Z fixture stopped
+2026-08-26T05:31:42.958Z scratch directory removed
