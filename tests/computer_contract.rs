@@ -5458,7 +5458,7 @@ fn windows_acceptance_coordinator_owns_children_and_delays_watcher_until_marker(
         .unwrap();
     for required in [
         "$assemblyBytes = [IO.File]::ReadAllBytes($resolved)",
-        "$loadedAssemblySha256 = ConvertTo-LowerHex ($sha256.ComputeHash($assemblyBytes))",
+        "$loadedAssemblySha256 = ([BitConverter]::ToString(\n            $sha256.ComputeHash($assemblyBytes)\n        )).Replace(\"-\", \"\").ToLowerInvariant()",
         "$null = [Reflection.Assembly]::Load($assemblyBytes)",
     ] {
         assert!(
@@ -5467,6 +5467,74 @@ fn windows_acceptance_coordinator_owns_children_and_delays_watcher_until_marker(
         );
     }
     assert!(!support_loader.contains("Add-Type -Path"));
+    assert!(
+        !coordinator.contains("ConvertTo-LowerHex"),
+        "the production worker-support loader must not depend on an undefined hex helper"
+    );
+
+    let loader_self_test = coordinator
+        .split("function Invoke-WorkerSupportLoaderSelfTest {")
+        .nth(1)
+        .unwrap()
+        .split("function New-WorkerLifetimeJob {")
+        .next()
+        .unwrap();
+    for required in [
+        "LBB_COORDINATOR_WORKER_SUPPORT_SELF_TEST_NONCE",
+        "$environmentNonce -cne $Nonce",
+        "if (\"LbbCoordinator.WorkerLifetimeJob\" -as [type])",
+        "-AssemblySha256 $incorrectSha256",
+        "The worker lifetime support assembly hash does not match its private configuration.",
+        "Initialize-WorkerLifetimeSupport `\n        -AssemblyPath $AssemblyPath `\n        -AssemblySha256 $AssemblySha256",
+        "Local\\LBBWindowsAcceptanceCoordinatorLoaderSelfTest-$Nonce",
+        "if (-not $probeJob.IsBound -or $probeJob.RecoveredExistingJob)",
+        "[GC]::KeepAlive($probeJob)",
+        "Worker lifetime support staged-loader self-test passed.",
+    ] {
+        assert!(
+            loader_self_test.contains(required),
+            "fresh staged worker-support loader self-test is missing: {required}"
+        );
+    }
+    let self_test = coordinator
+        .split("function Invoke-SelfTest {")
+        .nth(1)
+        .unwrap()
+        .split("if ([Environment]::OSVersion.Platform")
+        .next()
+        .unwrap();
+    for required in [
+        "$workerSupportProbeScript = Copy-FileToPrivateStage",
+        "(Get-FileSha256 $workerSupportProbeScript) -cne",
+        "$workerSupportProbe = New-WorkerLifetimeSupportAssembly $workerSupportProbePath",
+        "\"-File\", $workerSupportProbeScript",
+        "\"-InternalWorkerSupportSelfTestPath\", $workerSupportProbe.Path",
+        "\"-InternalWorkerSupportSelfTestSha256\", $workerSupportProbe.Sha256",
+        "\"-InternalWorkerSupportSelfTestNonce\", $workerSupportProbeNonce",
+        "Set-ExactProcessEnvironment `\n            $workerSupportProbeInfo `\n            (Get-WhitelistedWorkerEnvironment)",
+        "$workerSupportProbeInfo.EnvironmentVariables[\n            \"LBB_COORDINATOR_WORKER_SUPPORT_SELF_TEST_NONCE\"\n        ] = $workerSupportProbeNonce",
+        "$workerSupportProbeExit = Complete-CapturedProcess",
+        "$workerSupportProbeFiles.Intent",
+        "$workerSupportProbeFiles.Runner",
+        "The staged loader self-test crossed a candidate execution boundary.",
+        "The fresh staged worker-support loader self-test failed.",
+        "WaitForNameAbsenceForSelfTest(\n            \"Local\\LBBWindowsAcceptanceCoordinatorLoaderSelfTest-$workerSupportProbeNonce\"",
+    ] {
+        assert!(
+            self_test.contains(required),
+            "coordinator self-test does not launch the fresh staged-loader probe: {required}"
+        );
+    }
+    let staged_probe = self_test
+        .find("$workerSupportProbe = New-WorkerLifetimeSupportAssembly")
+        .unwrap();
+    let in_memory_shortcut = self_test
+        .find("$selfTestLifetimeJob = New-WorkerLifetimeJob -AllowChildBreakaway")
+        .unwrap();
+    assert!(
+        staged_probe < in_memory_shortcut,
+        "the fresh staged-loader probe must run before the in-memory self-test type is compiled"
+    );
 
     let worker = coordinator
         .split("function Invoke-CoordinatorWorker {")

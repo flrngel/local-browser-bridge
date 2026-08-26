@@ -22,7 +22,10 @@ param(
     [int]$StartupTimeoutSeconds = 15,
 
     [string]$CleanCoordinatorNonce,
-    [string]$InternalWorkerNonce
+    [string]$InternalWorkerNonce,
+    [string]$InternalWorkerSupportSelfTestPath,
+    [string]$InternalWorkerSupportSelfTestSha256,
+    [string]$InternalWorkerSupportSelfTestNonce
 )
 
 Set-StrictMode -Version Latest
@@ -1795,7 +1798,11 @@ function Initialize-WorkerLifetimeSupport {
         throw "The worker lifetime support assembly size is invalid."
     }
     $sha256 = [Security.Cryptography.SHA256]::Create()
-    try { $loadedAssemblySha256 = ConvertTo-LowerHex ($sha256.ComputeHash($assemblyBytes)) }
+    try {
+        $loadedAssemblySha256 = ([BitConverter]::ToString(
+            $sha256.ComputeHash($assemblyBytes)
+        )).Replace("-", "").ToLowerInvariant()
+    }
     finally { $sha256.Dispose() }
     if ($loadedAssemblySha256 -cne $AssemblySha256) {
         throw "The worker lifetime support assembly hash does not match its private configuration."
@@ -1807,6 +1814,60 @@ function Initialize-WorkerLifetimeSupport {
     if (-not ("LbbCoordinator.WorkerLifetimeJob" -as [type])) {
         throw "The worker lifetime support assembly did not expose its expected type."
     }
+}
+
+function Invoke-WorkerSupportLoaderSelfTest {
+    param(
+        [Parameter(Mandatory = $true)][string]$AssemblyPath,
+        [Parameter(Mandatory = $true)][string]$AssemblySha256,
+        [Parameter(Mandatory = $true)][string]$Nonce
+    )
+    $environmentNonce = [Environment]::GetEnvironmentVariable(
+        "LBB_COORDINATOR_WORKER_SUPPORT_SELF_TEST_NONCE",
+        "Process"
+    )
+    [Environment]::SetEnvironmentVariable(
+        "LBB_COORDINATOR_WORKER_SUPPORT_SELF_TEST_NONCE",
+        $null,
+        "Process"
+    )
+    if ($Nonce -cnotmatch '^[0-9a-f]{32}$' -or $environmentNonce -cne $Nonce) {
+        throw "The staged worker-support loader self-test nonce is invalid."
+    }
+    if ("LbbCoordinator.WorkerLifetimeJob" -as [type]) {
+        throw "The staged worker-support loader self-test did not start in a fresh process."
+    }
+    $incorrectSha256 = if ($AssemblySha256 -cne ("0" * 64)) { "0" * 64 } else { "1" * 64 }
+    $incorrectHashRefused = $false
+    try {
+        Initialize-WorkerLifetimeSupport `
+            -AssemblyPath $AssemblyPath `
+            -AssemblySha256 $incorrectSha256
+    }
+    catch {
+        $incorrectHashRefused = $_.Exception.Message -ceq `
+            "The worker lifetime support assembly hash does not match its private configuration."
+    }
+    if (-not $incorrectHashRefused -or ("LbbCoordinator.WorkerLifetimeJob" -as [type])) {
+        throw "The staged worker-support loader did not reject an incorrect digest before loading."
+    }
+    Initialize-WorkerLifetimeSupport `
+        -AssemblyPath $AssemblyPath `
+        -AssemblySha256 $AssemblySha256
+    if (-not ("LbbCoordinator.WorkerLifetimeJob" -as [type])) {
+        throw "The staged worker-support loader self-test did not load its expected type."
+    }
+    $probeJob = [LbbCoordinator.WorkerLifetimeJob]::new(
+        $true,
+        "Local\LBBWindowsAcceptanceCoordinatorLoaderSelfTest-$Nonce",
+        $false,
+        2000
+    )
+    if (-not $probeJob.IsBound -or $probeJob.RecoveredExistingJob) {
+        throw "The staged worker-support loader self-test did not bind a fresh isolated Job."
+    }
+    [GC]::KeepAlive($probeJob)
+    Write-Output "Worker lifetime support staged-loader self-test passed."
 }
 
 function New-WorkerLifetimeJob {
@@ -3786,7 +3847,93 @@ function Invoke-SelfTest {
         $script:SelfTestCoordinatorParent = $selfTestCoordinatorParent
         $script:SelfTestEvidenceParent = $selfTestEvidenceParent
         $script:SelfTestAttemptLedgerRoot = $selfTestLedgerRoot
+        $workerSupportProbeScript = Copy-FileToPrivateStage `
+            (Resolve-OrdinaryPath $PSCommandPath $true "Coordinator self-test script") `
+            ([IO.Path]::Combine($testRoot, "worker-support-loader-coordinator.ps1")) `
+            "Worker support loader self-test coordinator"
+        if ((Get-FileSha256 $workerSupportProbeScript) -cne
+            (Get-FileSha256 (Resolve-OrdinaryPath `
+                $PSCommandPath `
+                $true `
+                "Coordinator self-test script"))) {
+            throw "The private staged loader self-test coordinator changed bytes."
+        }
+        $workerSupportProbePath = [IO.Path]::Combine(
+            $testRoot,
+            "worker-lifetime-support-loader-probe.dll"
+        )
+        $workerSupportProbe = New-WorkerLifetimeSupportAssembly $workerSupportProbePath
+        $workerSupportProbeNonce = [Guid]::NewGuid().ToString("N")
+        $workerSupportProbeOut = [IO.Path]::Combine(
+            $testRoot,
+            "worker-support-loader.stdout.log"
+        )
+        $workerSupportProbeErr = [IO.Path]::Combine(
+            $testRoot,
+            "worker-support-loader.stderr.log"
+        )
+        $workerSupportProbeInfo = New-ProcessStartInfo `
+            (Resolve-SystemWindowsPowerShell) `
+            @(
+                "-NoLogo", "-NoProfile", "-NonInteractive", "-File", $workerSupportProbeScript,
+                "-Mode", "SelfTest",
+                "-InternalWorkerSupportSelfTestPath", $workerSupportProbe.Path,
+                "-InternalWorkerSupportSelfTestSha256", $workerSupportProbe.Sha256,
+                "-InternalWorkerSupportSelfTestNonce", $workerSupportProbeNonce
+            ) `
+            $testRoot `
+            -Hidden
+        Set-ExactProcessEnvironment `
+            $workerSupportProbeInfo `
+            (Get-WhitelistedWorkerEnvironment)
+        $workerSupportProbeInfo.EnvironmentVariables[
+            "LBB_COORDINATOR_WORKER_SUPPORT_SELF_TEST_NONCE"
+        ] = $workerSupportProbeNonce
+        $workerSupportProbeCapture = Start-CapturedProcess `
+            $workerSupportProbeInfo `
+            $workerSupportProbeOut `
+            $workerSupportProbeErr
+        try {
+            $workerSupportProbeExit = Complete-CapturedProcess `
+                $workerSupportProbeCapture `
+                -TimeoutMilliseconds 120000
+            $workerSupportProbeStdout = [IO.File]::ReadAllText(
+                $workerSupportProbeOut,
+                $script:Utf8NoBom
+            ).TrimEnd([char[]]"`r`n")
+            $workerSupportProbeStderr = [IO.File]::ReadAllText(
+                $workerSupportProbeErr,
+                $script:Utf8NoBom
+            )
+            if ($workerSupportProbeExit -ne 0 -or
+                $workerSupportProbeStdout -cne
+                    "Worker lifetime support staged-loader self-test passed." -or
+                -not [String]::IsNullOrEmpty($workerSupportProbeStderr)) {
+                throw "The fresh staged worker-support loader self-test failed."
+            }
+            $workerSupportProbeFiles = Get-CoordinatorFiles $testRoot
+            foreach ($unexpectedCandidateBoundary in @(
+                $workerSupportProbeFiles.Start,
+                $workerSupportProbeFiles.Worker,
+                $workerSupportProbeFiles.Ownership,
+                $workerSupportProbeFiles.Intent,
+                $workerSupportProbeFiles.Runner,
+                $workerSupportProbeFiles.Watcher,
+                $workerSupportProbeFiles.Handoff,
+                $workerSupportProbeFiles.Final,
+                $workerSupportProbeFiles.Failure
+            )) {
+                if ([IO.File]::Exists($unexpectedCandidateBoundary)) {
+                    throw "The staged loader self-test crossed a candidate execution boundary."
+                }
+            }
+        }
+        finally { $workerSupportProbeCapture.Process.Dispose() }
         $selfTestLifetimeJob = New-WorkerLifetimeJob -AllowChildBreakaway
+        [LbbCoordinator.WorkerLifetimeJob]::WaitForNameAbsenceForSelfTest(
+            "Local\LBBWindowsAcceptanceCoordinatorLoaderSelfTest-$workerSupportProbeNonce",
+            3000
+        )
         $cleanJobName = "Local\LBBWindowsAcceptanceCoordinatorLifetimeJobCleanSelfTest-" +
             [Guid]::NewGuid().ToString("N")
         $cleanMutexName = "Local\LBBWindowsAcceptanceCoordinatorLifetimeCleanSelfTest-" +
@@ -5741,8 +5888,32 @@ $isExactSystemPowerShell = (
     )
 )
 
+$hasWorkerSupportSelfTestPath = -not [String]::IsNullOrWhiteSpace(
+    $InternalWorkerSupportSelfTestPath
+)
+$hasWorkerSupportSelfTestSha256 = -not [String]::IsNullOrWhiteSpace(
+    $InternalWorkerSupportSelfTestSha256
+)
+$hasWorkerSupportSelfTestNonce = -not [String]::IsNullOrWhiteSpace(
+    $InternalWorkerSupportSelfTestNonce
+)
+if ($hasWorkerSupportSelfTestPath -ne $hasWorkerSupportSelfTestSha256 -or
+    $hasWorkerSupportSelfTestPath -ne $hasWorkerSupportSelfTestNonce) {
+    throw "The internal staged worker-support loader self-test binding is incomplete."
+}
+$hasWorkerSupportSelfTest = $hasWorkerSupportSelfTestPath -and
+    $hasWorkerSupportSelfTestSha256 -and
+    $hasWorkerSupportSelfTestNonce
+if ($hasWorkerSupportSelfTest -and (
+    -not [String]::IsNullOrWhiteSpace($CleanCoordinatorNonce) -or
+    -not [String]::IsNullOrWhiteSpace($InternalWorkerNonce)
+)) {
+    throw "Internal coordinator entry points cannot be combined."
+}
+
 if ([String]::IsNullOrWhiteSpace($CleanCoordinatorNonce) -and
-    [String]::IsNullOrWhiteSpace($InternalWorkerNonce)) {
+    [String]::IsNullOrWhiteSpace($InternalWorkerNonce) -and
+    -not $hasWorkerSupportSelfTest) {
     Invoke-CleanBootstrap $systemPowerShellPath
 }
 
@@ -5770,6 +5941,17 @@ if (-not [String]::IsNullOrWhiteSpace($InternalWorkerNonce)) {
         throw "The internal worker can run only as exact system Windows PowerShell 5.1 in Start mode."
     }
     Invoke-CoordinatorWorker $InternalWorkerNonce
+    return
+}
+
+if ($hasWorkerSupportSelfTest) {
+    if (-not $isExactSystemPowerShell -or $Mode -cne "SelfTest") {
+        throw "The internal staged worker-support loader self-test can run only as exact system Windows PowerShell 5.1 in SelfTest mode."
+    }
+    Invoke-WorkerSupportLoaderSelfTest `
+        -AssemblyPath $InternalWorkerSupportSelfTestPath `
+        -AssemblySha256 $InternalWorkerSupportSelfTestSha256 `
+        -Nonce $InternalWorkerSupportSelfTestNonce
     return
 }
 
