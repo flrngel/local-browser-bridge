@@ -166,14 +166,14 @@ reused after 43.807 seconds; `computer.click` correctly refused it with HTTP 409
 `COMPUTER_STALE_FRAME` before dispatch. Version 0.12.24 therefore added a
 strictly newer frame with the same share, target, and geometry after the
 `ACTION` receipt and within the reserved deadline before deriving click
-authority; version 0.12.32 retains that boundary unchanged. The v0.12.20
+authority; version 0.12.33 retains that boundary unchanged. The v0.12.20
 physical-pointer lane is retained only as historical, optional adversarial
-coverage; its artifacts cannot satisfy the v0.12.32 release contract.
+coverage; its artifacts cannot satisfy the v0.12.33 release contract.
 
 ## Windows acceptance coordinator
 
 The Windows acceptance coordinator completed its source gate in v0.12.29 and is
-retained for v0.12.32 release acceptance. It is release tooling, not a product
+retained for v0.12.33 release acceptance. It is release tooling, not a product
 control surface. `Start` enters an exact clean system-PowerShell bootstrap,
 reserves one per-version attempt below a fixed owner-private LocalAppData root,
 then creates owner-private state with flush-before-move create-once publication
@@ -220,9 +220,10 @@ opening UI.
 
 The first v0.12.30 packaged attempt passed its trust/source gates and both
 macOS lanes, then stopped before the Windows runner launched because the
-production staged worker-support loader called an undefined hex helper. The
-v0.12.32 coordinator uses an inline PowerShell 5.1-compatible digest conversion
-and exercises that exact staged-loader branch in a fresh self-test process.
+production staged worker-support loader called an undefined hex helper. Since
+v0.12.31, the coordinator uses an inline PowerShell 5.1-compatible digest
+conversion and exercises that exact staged-loader branch in a fresh self-test
+process; v0.12.33 retains that repair unchanged.
 
 This tooling assumes the independently verified GitHub-attested candidate is
 trusted. The runner and candidate execute as the same Windows account that owns
@@ -257,7 +258,7 @@ PiP automation, virtual displays, VM orchestration, RDP loopback, and separate O
 The server performs a metadata-only check against the fixed public GitHub Releases API. It accepts only a canonical stable release marked immutable by GitHub and never downloads or installs an update. Release artifacts are built as a Windows server executable, Windows helper executable, macOS universal archive with helper app, matching extension ZIP, checksum manifest, and GitHub provenance. Project and locked dependency licenses are embedded in both executables; the macOS archive and extension package also carry their applicable notice files.
 
 Version 0.12.30 introduced the separation between immutable candidate
-construction and publication; version 0.12.32 retains it.
+construction and publication; version 0.12.33 retains it.
 The candidate workflow runs manually against one reviewed `main` source SHA,
 creates no tag or deployment, and emits a schema-3 binding for the exact
 five-file artifact set, source, workflow run, workflow attempt, manifest, and
@@ -267,9 +268,13 @@ receipt before its only protected-environment job can create the annotated tag,
 publish the exact assets, make the Release immutable, and redownload and verify
 the public bytes. The environment therefore represents publication approval,
 not every speculative candidate build. The v0.12.30 candidate passed both
-macOS lanes but failed closed before Windows product execution, so stock Chrome,
-tagging, and publication did not run. No v0.12.32 packaged candidate or public
-Release proof exists yet.
+macOS lanes but failed closed before Windows product execution. Version 0.12.31
+passed only its quiet macOS lane before a deliberate-lane fresh-frame timeout.
+Version 0.12.32 passed candidate trust and package inspection, then failed its
+source-compiled app-share self-test before permission probes, quiet-seat
+stabilization, or any candidate process launch. None reached stock Chrome,
+tagging, or publication. Version 0.12.33 restores the exact one-line self-test
+contract and still requires fresh platform, browser, and publication evidence.
 
 See [Security](../SECURITY.md) for trust details, [Protocol](PROTOCOL.md) for envelopes and commands, and [Limitations](LIMITATIONS.md) for platform-specific boundaries.
 

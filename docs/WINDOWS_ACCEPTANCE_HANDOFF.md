@@ -17,11 +17,14 @@ candidate has been built, downloaded, or executed.
 > staged worker-support loader referenced an undefined hex helper. Version
 > 0.12.31 fixed that loader and passed its quiet macOS lane, but the deliberate
 > lane's two-second post-receipt fresh-frame window timed out before product
-> dispatch. Stock Chrome, tagging, and publication did not run for either
-> version. Version 0.12.32 keeps the strict frame-authority checks, gives the
-> native stream a robust bounded refresh window, and requires entirely fresh
-> candidate and acceptance evidence. Do not reuse or relabel v0.12.30 or
-> v0.12.31 bytes or results.
+> dispatch. Version 0.12.32 enlarged that wait and built one trusted candidate,
+> but its source-compiled app-share self-test emitted an extra stdout line and
+> failed before permission probes, quiet-seat stabilization, or candidate
+> process launch. Stock Chrome, tagging, and publication did not run for any of
+> those versions. Version 0.12.33 keeps the strict frame-authority checks,
+> restores and enforces the exact self-test output contract, and requires
+> entirely fresh candidate and acceptance evidence. Do not reuse or relabel any
+> earlier bytes or results.
 
 ## Remaining release boundary
 
