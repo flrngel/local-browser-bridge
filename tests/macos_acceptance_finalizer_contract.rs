@@ -8,21 +8,21 @@ fn finalizer_source() -> String {
 #[test]
 fn macos_v0_12_27_result_and_aggregate_schemas_are_aligned_end_to_end() {
     let finalizer = finalizer_source().replace("\r\n", "\n");
-    let producer = fs::read_to_string("evidence/v0.12.35/computer/helper-evidence-rig.mjs")
+    let producer = fs::read_to_string("evidence/v0.12.36/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let documentation = fs::read_to_string("evidence/v0.12.35/computer/README.md")
+    let documentation = fs::read_to_string("evidence/v0.12.36/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let verifier = fs::read_to_string("scripts/verify-release-acceptance-evidence.sh")
         .unwrap()
         .replace("\r\n", "\n");
 
-    assert!(finalizer.contains("const PRODUCT_VERSION = \"0.12.35\";"));
-    assert!(finalizer.contains("const RESULT_SCHEMA_VERSION = 8;"));
+    assert!(finalizer.contains("const PRODUCT_VERSION = \"0.12.36\";"));
+    assert!(finalizer.contains("const RESULT_SCHEMA_VERSION = 9;"));
     assert!(finalizer.contains("const AGGREGATE_SCHEMA_VERSION = 3;"));
-    assert!(producer.matches("schemaVersion: 8,").count() >= 2);
-    assert!(documentation.contains("schema-8 result"));
+    assert!(producer.matches("schemaVersion: 9,").count() >= 2);
+    assert!(documentation.contains("schema-9 result"));
     assert!(documentation.contains("marker schema 2"));
     for producer_contract in [
         "passingResultSchemaVersion: RESULT_SCHEMA_VERSION",
@@ -35,7 +35,7 @@ fn macos_v0_12_27_result_and_aggregate_schemas_are_aligned_end_to_end() {
         );
     }
     for required in [
-        ".schemaVersion == 8",
+        ".schemaVersion == 9",
         ".schemaVersion == 3",
         "validate_mac_result_schema_binding()",
         "--argjson quiet_result_schema_version",
@@ -48,7 +48,7 @@ fn macos_v0_12_27_result_and_aggregate_schemas_are_aligned_end_to_end() {
     ] {
         assert!(
             verifier.contains(required),
-            "release evidence verifier is missing the v0.12.35 schema binding: {required}"
+            "release evidence verifier is missing the v0.12.36 schema binding: {required}"
         );
     }
 }
@@ -128,8 +128,8 @@ fn macos_v0_12_27_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
     }
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.35\";",
-        "const RESULT_SCHEMA_VERSION = 8;",
+        "const PRODUCT_VERSION = \"0.12.36\";",
+        "const RESULT_SCHEMA_VERSION = 9;",
         "const AGGREGATE_SCHEMA_VERSION = 3;",
         "const APP_SHARE_MARKER_SCHEMA_VERSION = 2;",
         "const OUTPUT_FILE = \"macos-acceptance.json\";",
@@ -143,6 +143,14 @@ fn macos_v0_12_27_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
         "const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;",
         "const QUIET_SEAT_SAMPLE_INTERVAL_MS = 500;",
         "const QUIET_SEAT_REQUIRED_STABLE_TRANSITIONS = 60;",
+        "const QUIET_SEAT_DIAGNOSTIC_SCHEMA_VERSION = 1;",
+        "const QUIET_SEAT_RESET_CAUSES = [",
+        "foreground-transition",
+        "hid-pointer-activity",
+        "hid-keyboard-activity",
+        "foreground-changed",
+        "focus-changed",
+        "active-space-changed",
         "const IS_WINDOWS = process.platform === \"win32\";",
         "const POSIX_PERMISSION_METADATA_AVAILABLE = !IS_WINDOWS && typeof process.getuid === \"function\";",
         "const SCREENSHOT_FILES = [",
@@ -174,6 +182,16 @@ fn macos_v0_12_27_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
         "validateQuietSeatStabilization",
         "completedBeforeCandidateExecution",
         "monitoringUnknown",
+        "diagnosticSchemaVersion",
+        "lastResetCause",
+        "lastUnknownCause",
+        "resetCauseCounts",
+        "probeFailureCategory",
+        "resetCauseCounts do not sum to resetCount",
+        "lastResetCause is not a counted fixed reset category",
+        "lastUnknownCause must be null for passing evidence",
+        "probeFailureCategory must be null for passing evidence",
+        "rawProbeOutput = \"forbidden\"",
         "walkLane",
         "exactArray(inventory.files, expectedFiles",
         "exactArray(inventory.directories, expectedDirectories",
