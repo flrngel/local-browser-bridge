@@ -2681,6 +2681,7 @@ function Invoke-CoordinatorWorker {
         # so no peer can enter that recovery boundary while this worker is live.
         $script:ProcessLifetimeCoordinatorMutex = $exclusiveMutex
         $workerLifetimeJob = New-WorkerLifetimeJob `
+            -AllowChildBreakaway `
             -Name $script:WorkerLifetimeJobName `
             -RecoverExisting `
             -RecoveryTimeoutMilliseconds $script:WorkerLifetimeRecoveryMilliseconds `
@@ -3934,6 +3935,78 @@ function Invoke-SelfTest {
             "Local\LBBWindowsAcceptanceCoordinatorLoaderSelfTest-$workerSupportProbeNonce",
             3000
         )
+        # Run the real acceptance-runner self-test while this coordinator is
+        # inside the same breakaway-enabled lifetime Job used in production.
+        # The runner then compiles and executes the source-bound fixture through
+        # its private atomic Job-list launcher, covering the full nested boundary
+        # without starting a candidate or claiming an attempt ledger.
+        $nestedRunnerSelfTestScript = Resolve-OrdinaryPath (
+            [IO.Path]::Combine($PSScriptRoot, "test-windows-computer-use.ps1")
+        ) $true "Nested acceptance-runner self-test script"
+        $nestedRunnerSelfTestOut = [IO.Path]::Combine(
+            $testRoot,
+            "nested-runner.stdout.log"
+        )
+        $nestedRunnerSelfTestErr = [IO.Path]::Combine(
+            $testRoot,
+            "nested-runner.stderr.log"
+        )
+        $nestedRunnerSelfTestInfo = New-ProcessStartInfo `
+            (Resolve-SystemWindowsPowerShell) `
+            @(
+                "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+                $nestedRunnerSelfTestScript, "-SelfTest"
+            ) `
+            ([IO.Path]::GetFullPath([IO.Path]::Combine($PSScriptRoot, ".."))) `
+            -Hidden
+        Set-ExactProcessEnvironment `
+            $nestedRunnerSelfTestInfo `
+            (Get-WhitelistedWorkerEnvironment)
+        $nestedRunnerSelfTestCapture = Start-CapturedProcess `
+            $nestedRunnerSelfTestInfo `
+            $nestedRunnerSelfTestOut `
+            $nestedRunnerSelfTestErr
+        try {
+            $nestedRunnerSelfTestExit = Complete-CapturedProcess `
+                $nestedRunnerSelfTestCapture `
+                -TimeoutMilliseconds 240000
+            $nestedRunnerSelfTestStdout = [IO.File]::ReadAllText(
+                $nestedRunnerSelfTestOut,
+                $script:Utf8NoBom
+            ).TrimEnd([char[]]"`r`n")
+            $nestedRunnerSelfTestStderr = [IO.File]::ReadAllText(
+                $nestedRunnerSelfTestErr,
+                $script:Utf8NoBom
+            )
+            if ($nestedRunnerSelfTestExit -ne 0 -or
+                $nestedRunnerSelfTestStdout -cne
+                    "Windows computer-use acceptance self-test passed." -or
+                -not [String]::IsNullOrEmpty($nestedRunnerSelfTestStderr)) {
+                throw "The nested Job-owned acceptance-runner self-test failed."
+            }
+            $nestedRunnerBoundaryFiles = Get-CoordinatorFiles $testRoot
+            foreach ($unexpectedCandidateBoundary in @(
+                $nestedRunnerBoundaryFiles.Start,
+                $nestedRunnerBoundaryFiles.Worker,
+                $nestedRunnerBoundaryFiles.Ownership,
+                $nestedRunnerBoundaryFiles.Intent,
+                $nestedRunnerBoundaryFiles.Runner,
+                $nestedRunnerBoundaryFiles.Watcher,
+                $nestedRunnerBoundaryFiles.Handoff,
+                $nestedRunnerBoundaryFiles.Final,
+                $nestedRunnerBoundaryFiles.Failure
+            )) {
+                if ([IO.File]::Exists($unexpectedCandidateBoundary)) {
+                    throw "The nested acceptance-runner self-test crossed a candidate execution boundary."
+                }
+            }
+        }
+        finally {
+            $nestedRunnerSelfTestCapture.Process.Dispose()
+            Remove-SelfTestStreamFiles `
+                $testRoot `
+                @($nestedRunnerSelfTestOut, $nestedRunnerSelfTestErr)
+        }
         $cleanJobName = "Local\LBBWindowsAcceptanceCoordinatorLifetimeJobCleanSelfTest-" +
             [Guid]::NewGuid().ToString("N")
         $cleanMutexName = "Local\LBBWindowsAcceptanceCoordinatorLifetimeCleanSelfTest-" +

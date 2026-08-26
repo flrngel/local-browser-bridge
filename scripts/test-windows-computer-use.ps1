@@ -848,10 +848,12 @@ namespace LbbWindowsAcceptance
         private const int JobObjectExtendedLimitInformation = 9;
         private const uint CREATE_SUSPENDED = 0x00000004;
         private const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
+        private const uint CREATE_BREAKAWAY_FROM_JOB = 0x01000000;
         private const uint CREATE_NO_WINDOW = 0x08000000;
         private const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
         private const uint STARTF_USESTDHANDLES = 0x00000100;
         private const uint PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002;
+        private const uint PROC_THREAD_ATTRIBUTE_JOB_LIST = 0x0002000D;
         private const uint GENERIC_READ = 0x80000000;
         private const uint GENERIC_WRITE = 0x40000000;
         private const uint FILE_SHARE_READ = 0x00000001;
@@ -975,7 +977,10 @@ namespace LbbWindowsAcceptance
 
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+        private static extern bool IsProcessInJob(
+            IntPtr process,
+            IntPtr job,
+            [MarshalAs(UnmanagedType.Bool)] out bool result);
 
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -1065,6 +1070,7 @@ namespace LbbWindowsAcceptance
             IntPtr environment = IntPtr.Zero;
             IntPtr nullHandle = IntPtr.Zero;
             IntPtr inheritedHandleList = IntPtr.Zero;
+            IntPtr inheritedJobList = IntPtr.Zero;
             IntPtr attributeList = IntPtr.Zero;
             bool attributeListInitialized = false;
             PROCESS_INFORMATION process = new PROCESS_INFORMATION();
@@ -1084,7 +1090,7 @@ namespace LbbWindowsAcceptance
                 }
 
                 UIntPtr attributeListSize = UIntPtr.Zero;
-                bool sizingUnexpectedlySucceeded = InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref attributeListSize);
+                bool sizingUnexpectedlySucceeded = InitializeProcThreadAttributeList(IntPtr.Zero, 2, 0, ref attributeListSize);
                 int sizingError = Marshal.GetLastWin32Error();
                 ulong attributeBytes = attributeListSize.ToUInt64();
                 if (sizingUnexpectedlySucceeded || sizingError != ERROR_INSUFFICIENT_BUFFER || attributeBytes == 0 || attributeBytes > Int32.MaxValue)
@@ -1092,7 +1098,7 @@ namespace LbbWindowsAcceptance
                     throw new Win32Exception(sizingError, "Could not size the restricted child handle list");
                 }
                 attributeList = Marshal.AllocHGlobal(checked((int)attributeBytes));
-                if (!InitializeProcThreadAttributeList(attributeList, 1, 0, ref attributeListSize))
+                if (!InitializeProcThreadAttributeList(attributeList, 2, 0, ref attributeListSize))
                 {
                     throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not initialize the restricted child handle list");
                 }
@@ -1112,6 +1118,20 @@ namespace LbbWindowsAcceptance
                     throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not restrict child handle inheritance to the null device");
                 }
 
+                inheritedJobList = Marshal.AllocHGlobal(IntPtr.Size);
+                Marshal.WriteIntPtr(inheritedJobList, handle);
+                if (!UpdateProcThreadAttribute(
+                    attributeList,
+                    0,
+                    new UIntPtr(PROC_THREAD_ATTRIBUTE_JOB_LIST),
+                    inheritedJobList,
+                    new UIntPtr((uint)IntPtr.Size),
+                    IntPtr.Zero,
+                    IntPtr.Zero))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not atomically bind the child to the private acceptance-test Job Object");
+                }
+
                 STARTUPINFOEX startup = new STARTUPINFOEX();
                 startup.StartupInfo.cb = Marshal.SizeOf(typeof(STARTUPINFOEX));
                 startup.StartupInfo.Flags = STARTF_USESTDHANDLES;
@@ -1127,7 +1147,8 @@ namespace LbbWindowsAcceptance
                     IntPtr.Zero,
                     IntPtr.Zero,
                     true,
-                    CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
+                    CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_BREAKAWAY_FROM_JOB |
+                        CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
                     environment,
                     currentDirectory,
                     ref startup,
@@ -1137,10 +1158,15 @@ namespace LbbWindowsAcceptance
                     throw new Win32Exception(Marshal.GetLastWin32Error(), "A required acceptance-test process did not start");
                 }
                 suspendedProcessNeedsTermination = true;
-                if (!AssignProcessToJobObject(handle, process.Process))
+                bool assignedToPrivateJob;
+                if (!IsProcessInJob(process.Process, handle, out assignedToPrivateJob))
                 {
                     int error = Marshal.GetLastWin32Error();
-                    throw new Win32Exception(error, "A child could not be assigned to the private acceptance-test Job Object");
+                    throw new Win32Exception(error, "The atomically Job-owned child could not be verified");
+                }
+                if (!assignedToPrivateJob)
+                {
+                    throw new InvalidOperationException("The suspended child was not atomically assigned to the private acceptance-test Job Object");
                 }
                 processAssignedToJob = true;
                 if (ResumeThread(process.Thread) == UInt32.MaxValue)
@@ -1168,6 +1194,7 @@ namespace LbbWindowsAcceptance
                 if (attributeListInitialized) { DeleteProcThreadAttributeList(attributeList); }
                 if (attributeList != IntPtr.Zero) { Marshal.FreeHGlobal(attributeList); }
                 if (inheritedHandleList != IntPtr.Zero) { Marshal.FreeHGlobal(inheritedHandleList); }
+                if (inheritedJobList != IntPtr.Zero) { Marshal.FreeHGlobal(inheritedJobList); }
                 if (nullHandle != IntPtr.Zero && nullHandle != InvalidHandle) { CloseHandle(nullHandle); }
                 if (environment != IntPtr.Zero) { Marshal.FreeHGlobal(environment); }
                 if (terminationFailure != null)
@@ -1917,6 +1944,114 @@ if ($SelfTest) {
             $selfTestChild.Dispose()
         }
         $selfTestJob.Dispose()
+    }
+
+    # Exercise the exact native launch boundary used by live acceptance. The
+    # fixture compiler starts a descendant compiler process, so a simple sleep
+    # probe cannot detect broken standard-handle inheritance at this boundary.
+    $fixtureBuildLaunchSelfTestRoot = [IO.Path]::Combine(
+        [IO.Path]::GetTempPath(),
+        "lbb-fixture-launch-self-test-" + [Guid]::NewGuid().ToString("N")
+    )
+    $fixtureBuildLaunchSelfTestSource = [IO.Path]::GetFullPath(
+        [IO.Path]::Combine(
+            $PSScriptRoot,
+            "..",
+            "tests",
+            "fixtures",
+            "windows",
+            "WindowsComputerUseFixture.ps1"
+        )
+    )
+    if (-not [IO.File]::Exists($fixtureBuildLaunchSelfTestSource)) {
+        throw "The source-bound fixture is unavailable for the Job launch self-test."
+    }
+    $fixtureBuildLaunchSelfTestExecutable = [IO.Path]::Combine(
+        $fixtureBuildLaunchSelfTestRoot,
+        "fixture.exe"
+    )
+    $fixtureBuildLaunchSelfTestJob = $script:ownedJobType::new()
+    $fixtureBuildLaunchSelfTestBuilder = $null
+    $fixtureBuildLaunchSelfTestExecutableProcess = $null
+    try {
+        [IO.Directory]::CreateDirectory($fixtureBuildLaunchSelfTestRoot) | Out-Null
+        $fixtureBuildLaunchSelfTestSha256 = Get-FileSha256 $fixtureBuildLaunchSelfTestSource
+        $fixtureBuildLaunchSelfTestCommandLine = (
+            '"' + $selfTestHostPath +
+            '" -NoLogo -NoProfile -NonInteractive -File "' +
+            $fixtureBuildLaunchSelfTestSource +
+            '" -BuildExecutablePath "' +
+            $fixtureBuildLaunchSelfTestExecutable +
+            '" -ExpectedSourceSha256 ' +
+            $fixtureBuildLaunchSelfTestSha256
+        )
+        $fixtureBuildLaunchSelfTestBuilderPid = $fixtureBuildLaunchSelfTestJob.StartProcess(
+            $selfTestHostPath,
+            $fixtureBuildLaunchSelfTestCommandLine,
+            [IO.Path]::GetDirectoryName($selfTestHostPath),
+            @{}
+        )
+        $fixtureBuildLaunchSelfTestBuilder = [Diagnostics.Process]::GetProcessById(
+            $fixtureBuildLaunchSelfTestBuilderPid
+        )
+        if (-not $fixtureBuildLaunchSelfTestBuilder.WaitForExit(120000)) {
+            throw "The Job-owned source-bound fixture build self-test timed out."
+        }
+        if ($fixtureBuildLaunchSelfTestBuilder.ExitCode -ne 0 -or
+            -not [IO.File]::Exists($fixtureBuildLaunchSelfTestExecutable) -or
+            ([IO.FileInfo]::new($fixtureBuildLaunchSelfTestExecutable)).Length -le 0) {
+            throw "The Job-owned source-bound fixture build self-test failed."
+        }
+
+        $fixtureBuildLaunchSelfTestExecutableCommandLine = (
+            '"' + $fixtureBuildLaunchSelfTestExecutable + '" --self-test'
+        )
+        $fixtureBuildLaunchSelfTestExecutablePid = $fixtureBuildLaunchSelfTestJob.StartProcess(
+            $fixtureBuildLaunchSelfTestExecutable,
+            $fixtureBuildLaunchSelfTestExecutableCommandLine,
+            $fixtureBuildLaunchSelfTestRoot,
+            @{}
+        )
+        $fixtureBuildLaunchSelfTestExecutableProcess = [Diagnostics.Process]::GetProcessById(
+            $fixtureBuildLaunchSelfTestExecutablePid
+        )
+        if (-not $fixtureBuildLaunchSelfTestExecutableProcess.WaitForExit(30000)) {
+            throw "The Job-owned dedicated fixture entry-point self-test timed out."
+        }
+        if ($fixtureBuildLaunchSelfTestExecutableProcess.ExitCode -ne 0) {
+            throw "The Job-owned dedicated fixture entry-point self-test failed."
+        }
+        $fixtureBuildLaunchSelfTestAccountingDeadline = [DateTime]::UtcNow.AddSeconds(2)
+        while ($fixtureBuildLaunchSelfTestJob.ActiveProcessCount -ne 0 -and
+            [DateTime]::UtcNow -lt $fixtureBuildLaunchSelfTestAccountingDeadline) {
+            Start-Sleep -Milliseconds 50
+        }
+        if ($fixtureBuildLaunchSelfTestJob.ActiveProcessCount -ne 0) {
+            throw "The fixture build launch self-test retained a Job-owned descendant."
+        }
+    }
+    finally {
+        try {
+            if ($fixtureBuildLaunchSelfTestJob.ActiveProcessCount -gt 0) {
+                $fixtureBuildLaunchSelfTestJob.Terminate()
+            }
+        }
+        catch {
+            # Dispose still closes the kill-on-close Job handle below.
+        }
+        if ($null -ne $fixtureBuildLaunchSelfTestExecutableProcess) {
+            $fixtureBuildLaunchSelfTestExecutableProcess.Dispose()
+        }
+        if ($null -ne $fixtureBuildLaunchSelfTestBuilder) {
+            $fixtureBuildLaunchSelfTestBuilder.Dispose()
+        }
+        $fixtureBuildLaunchSelfTestJob.Dispose()
+        if ([IO.Directory]::Exists($fixtureBuildLaunchSelfTestRoot) -or
+            [IO.File]::Exists($fixtureBuildLaunchSelfTestRoot)) {
+            Remove-OwnedFixtureBuildDirectory `
+                $fixtureBuildLaunchSelfTestRoot `
+                $fixtureBuildLaunchSelfTestExecutable
+        }
     }
 
     $fixtureWaitProbe = [ordered]@{

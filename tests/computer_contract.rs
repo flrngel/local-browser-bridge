@@ -4234,6 +4234,14 @@ fn windows_fixture_is_a_source_bound_dedicated_gui_process_with_exact_cleanup() 
         "$fixtureProcessBinding.entryPointSelfTestPassed = $true",
         "(Get-FileSha256 $fixtureExecutablePath) -ceq $fixtureProcessBinding.executableSha256",
         "The dedicated Windows fixture executable changed during its entry-point self-test.",
+        "private const uint CREATE_BREAKAWAY_FROM_JOB = 0x01000000;",
+        "private const uint PROC_THREAD_ATTRIBUTE_JOB_LIST = 0x0002000D;",
+        "Could not atomically bind the child to the private acceptance-test Job Object",
+        "The suspended child was not atomically assigned to the private acceptance-test Job Object",
+        "$fixtureBuildLaunchSelfTestJob = $script:ownedJobType::new()",
+        "$fixtureBuildLaunchSelfTestBuilderPid = $fixtureBuildLaunchSelfTestJob.StartProcess(",
+        "The Job-owned source-bound fixture build self-test failed.",
+        "The Job-owned dedicated fixture entry-point self-test failed.",
         "$fixtureArguments = @(\"--evidence-directory\", $fixtureEvidence)",
         "$fixtureArguments += \"--show-occluder\"",
         "$fixtureProcess = Start-IsolatedProcess $fixtureExecutablePath $fixtureArguments @{}",
@@ -4253,6 +4261,30 @@ fn windows_fixture_is_a_source_bound_dedicated_gui_process_with_exact_cleanup() 
             "dedicated Windows fixture runner contract is missing: {required}"
         );
     }
+    let owned_job = runner
+        .split("public sealed class OwnedProcessJob : IDisposable")
+        .nth(1)
+        .unwrap()
+        .split("$script:ownedJobType =")
+        .next()
+        .unwrap();
+    let handle_list = owned_job
+        .find("new UIntPtr(PROC_THREAD_ATTRIBUTE_HANDLE_LIST)")
+        .unwrap();
+    let job_list = owned_job
+        .find("new UIntPtr(PROC_THREAD_ATTRIBUTE_JOB_LIST)")
+        .unwrap();
+    let create = owned_job.find("bool created = CreateProcess(").unwrap();
+    let verify = owned_job
+        .find("IsProcessInJob(process.Process, handle, out assignedToPrivateJob)")
+        .unwrap();
+    let resume = owned_job.find("ResumeThread(process.Thread)").unwrap();
+    assert!(handle_list < job_list && job_list < create && create < verify && verify < resume);
+    assert!(
+        owned_job
+            .contains("CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_BREAKAWAY_FROM_JOB")
+    );
+    assert!(!owned_job.contains("AssignProcessToJobObject("));
     for required in [
         "public static int[] GetDirectChildProcessIds(int parentProcessId, string expectedImagePath)",
         "entry.ParentProcessId == (uint)parentProcessId",
@@ -5609,6 +5641,12 @@ fn windows_acceptance_coordinator_owns_children_and_delays_watcher_until_marker(
         "The staged loader self-test crossed a candidate execution boundary.",
         "The fresh staged worker-support loader self-test failed.",
         "WaitForNameAbsenceForSelfTest(\n            \"Local\\LBBWindowsAcceptanceCoordinatorLoaderSelfTest-$workerSupportProbeNonce\"",
+        "$nestedRunnerSelfTestScript = Resolve-OrdinaryPath (",
+        "\"test-windows-computer-use.ps1\"",
+        "$nestedRunnerSelfTestExit = Complete-CapturedProcess",
+        "\"Windows computer-use acceptance self-test passed.\"",
+        "The nested Job-owned acceptance-runner self-test failed.",
+        "The nested acceptance-runner self-test crossed a candidate execution boundary.",
     ] {
         assert!(
             self_test.contains(required),
@@ -5636,6 +5674,9 @@ fn windows_acceptance_coordinator_owns_children_and_delays_watcher_until_marker(
     let bind_job = worker
         .find("$workerLifetimeJob = New-WorkerLifetimeJob")
         .unwrap();
+    assert!(worker[bind_job..].starts_with(
+        "$workerLifetimeJob = New-WorkerLifetimeJob `\n            -AllowChildBreakaway `"
+    ));
     let acquire_mutex = worker.find("$exclusiveMutex.WaitOne(0)").unwrap();
     let worker_record = worker.find("Write-CreateOnceJson $files.Worker").unwrap();
     let ownership_record = worker.find("Assert-ExactOwnershipRecord").unwrap();
