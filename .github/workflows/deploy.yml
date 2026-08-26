@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Exact package version from Cargo.toml (for example, 0.12.32)
+        description: Exact package version from Cargo.toml (for example, 0.12.33)
         required: true
         type: string
       source_sha:
@@ -245,6 +245,7 @@ jobs:
         shell: bash
         run: |
           version="$(bash scripts/audit-versions.sh "$VERIFIED_VERSION")"
+          bash scripts/verify-macos-app-share-handoff-self-test.sh "$version"
           cargo build --locked --release --bins --target aarch64-apple-darwin
           cargo build --locked --release --bins --target x86_64-apple-darwin
           mkdir -p dist stage "stage/Local Computer Helper.app/Contents/MacOS"
