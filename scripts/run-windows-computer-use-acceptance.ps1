@@ -25,7 +25,8 @@ param(
     [string]$InternalWorkerNonce,
     [string]$InternalWorkerSupportSelfTestPath,
     [string]$InternalWorkerSupportSelfTestSha256,
-    [string]$InternalWorkerSupportSelfTestNonce
+    [string]$InternalWorkerSupportSelfTestNonce,
+    [string]$InternalNestedJobRunnerSelfTestNonce
 )
 
 Set-StrictMode -Version Latest
@@ -33,7 +34,7 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
 $script:SchemaVersion = 1
-$script:ProductVersion = "0.12.33"
+$script:ProductVersion = "0.12.34"
 $script:ExpectedWindowTitle = "LBB Foreground Sentinel"
 $script:ExpectedActionButton = "CLICK TO ARM"
 $script:ExpectedArmedButton = "ARMED - DO NOT USE THIS SESSION"
@@ -894,6 +895,7 @@ namespace LbbCoordinator {
     private const uint STARTF_USESTDHANDLES = 0x00000100;
     private const uint PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002;
     private const uint PROC_THREAD_ATTRIBUTE_JOB_LIST = 0x0002000D;
+    private const uint JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x00000800;
     private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
     private const uint GENERIC_READ = 0x80000000;
     private const uint GENERIC_WRITE = 0x40000000;
@@ -1260,7 +1262,8 @@ namespace LbbCoordinator {
       }
       JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits =
         new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
-      limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+      limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
+        JOB_OBJECT_LIMIT_BREAKAWAY_OK;
       int size = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
       IntPtr buffer = Marshal.AllocHGlobal(size);
       try {
@@ -2681,6 +2684,7 @@ function Invoke-CoordinatorWorker {
         # so no peer can enter that recovery boundary while this worker is live.
         $script:ProcessLifetimeCoordinatorMutex = $exclusiveMutex
         $workerLifetimeJob = New-WorkerLifetimeJob `
+            -AllowChildBreakaway `
             -Name $script:WorkerLifetimeJobName `
             -RecoverExisting `
             -RecoveryTimeoutMilliseconds $script:WorkerLifetimeRecoveryMilliseconds `
@@ -3823,6 +3827,85 @@ function Wait-SelfTestStateFile {
     }
 }
 
+function Invoke-NestedJobRunnerSelfTest {
+    param([Parameter(Mandatory = $true)][string]$Nonce)
+    $environmentNonce = [Environment]::GetEnvironmentVariable(
+        "LBB_WINDOWS_NESTED_JOB_RUNNER_SELF_TEST_NONCE",
+        "Process"
+    )
+    [Environment]::SetEnvironmentVariable(
+        "LBB_WINDOWS_NESTED_JOB_RUNNER_SELF_TEST_NONCE",
+        $null,
+        "Process"
+    )
+    if ($Nonce -cnotmatch '^[0-9a-f]{32}$' -or $environmentNonce -cne $Nonce) {
+        throw "The internal nested-Job runner self-test binding is invalid."
+    }
+
+    $testRoot = [IO.Path]::Combine(
+        [IO.Path]::GetTempPath(),
+        "lbb-nested-job-runner-self-test-$Nonce"
+    )
+    if ([IO.File]::Exists($testRoot) -or [IO.Directory]::Exists($testRoot)) {
+        throw "The internal nested-Job runner self-test root is not fresh."
+    }
+    [IO.Directory]::CreateDirectory($testRoot) | Out-Null
+    Set-PrivateDirectoryAcl $testRoot
+    Assert-PrivateDirectoryAcl $testRoot
+    $runnerCapture = $null
+    $runnerOut = [IO.Path]::Combine($testRoot, "runner.stdout.log")
+    $runnerErr = [IO.Path]::Combine($testRoot, "runner.stderr.log")
+    $lifetimeJobName = "Local\LBBWindowsAcceptanceNestedRunnerSelfTest-$Nonce"
+    try {
+        # The calling process was created through Start-DetachedWorkerProcess,
+        # so it already belongs to the production guard Job. Adding the same
+        # breakaway-enabled lifetime Job used by the real worker reproduces the
+        # exact two-Job parent chain before the real runner self-test launches.
+        $lifetimeJob = New-WorkerLifetimeJob `
+            -AllowChildBreakaway `
+            -Name $lifetimeJobName
+        if (-not $lifetimeJob.IsBound -or $lifetimeJob.RecoveredExistingJob) {
+            throw "The internal nested-Job runner self-test did not bind its fresh lifetime Job."
+        }
+
+        $runnerScript = Resolve-OrdinaryPath (
+            [IO.Path]::Combine($PSScriptRoot, "test-windows-computer-use.ps1")
+        ) $true "Nested acceptance-runner self-test script"
+        $runnerInfo = New-ProcessStartInfo `
+            (Resolve-SystemWindowsPowerShell) `
+            @(
+                "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+                $runnerScript, "-SelfTest"
+            ) `
+            ([IO.Path]::GetFullPath([IO.Path]::Combine($PSScriptRoot, ".."))) `
+            -Hidden
+        Set-ExactProcessEnvironment $runnerInfo (Get-WhitelistedWorkerEnvironment)
+        $runnerCapture = Start-CapturedProcess $runnerInfo $runnerOut $runnerErr
+        $runnerExit = Complete-CapturedProcess `
+            $runnerCapture `
+            -TimeoutMilliseconds 240000
+        $runnerStdout = [IO.File]::ReadAllText(
+            $runnerOut,
+            $script:Utf8NoBom
+        ).TrimEnd([char[]]"`r`n")
+        $runnerStderr = [IO.File]::ReadAllText($runnerErr, $script:Utf8NoBom)
+        if ($runnerExit -ne 0 -or
+            $runnerStdout -cne "Windows computer-use acceptance self-test passed." -or
+            -not [String]::IsNullOrEmpty($runnerStderr)) {
+            throw "The exact guard-plus-lifetime Job runner self-test failed."
+        }
+        [GC]::KeepAlive($lifetimeJob)
+    }
+    finally {
+        if ($null -ne $runnerCapture) { $runnerCapture.Process.Dispose() }
+        Remove-SelfTestStreamFiles $testRoot @($runnerOut, $runnerErr)
+        if ([IO.Directory]::Exists($testRoot)) {
+            [IO.Directory]::Delete($testRoot, $false)
+        }
+    }
+    Write-Output "Nested guard/lifetime Job runner self-test passed."
+}
+
 function Invoke-SelfTest {
     $testRoot = [IO.Path]::Combine([IO.Path]::GetTempPath(), "lbb-coordinator-self-test-" + [Guid]::NewGuid().ToString("N"))
     [IO.Directory]::CreateDirectory($testRoot) | Out-Null
@@ -3934,6 +4017,97 @@ function Invoke-SelfTest {
             "Local\LBBWindowsAcceptanceCoordinatorLoaderSelfTest-$workerSupportProbeNonce",
             3000
         )
+        # Reproduce the production worker topology, including both its atomic
+        # detached-worker guard Job and its named lifetime Job. The internal
+        # worker starts the real runner self-test, which compiles and executes
+        # the source-bound fixture through the private atomic Job-list launcher.
+        $nestedRunnerSelfTestNonce = [Guid]::NewGuid().ToString("N")
+        $nestedRunnerSelfTestOut = [IO.Path]::Combine(
+            $testRoot,
+            "nested-runner.stdout.log"
+        )
+        $nestedRunnerSelfTestErr = [IO.Path]::Combine(
+            $testRoot,
+            "nested-runner.stderr.log"
+        )
+        $nestedRunnerSelfTestEnvironment = Get-WhitelistedWorkerEnvironment
+        $nestedRunnerSelfTestEnvironment[
+            "LBB_WINDOWS_NESTED_JOB_RUNNER_SELF_TEST_NONCE"
+        ] = $nestedRunnerSelfTestNonce
+        $nestedRunnerSelfTestProcess = $null
+        try {
+            $nestedRunnerSelfTestResult = @(Start-DetachedWorkerProcess `
+                -Executable (Resolve-SystemWindowsPowerShell) `
+                -Arguments (Join-NativeArguments @(
+                    "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+                    (Resolve-OrdinaryPath $PSCommandPath $true "Coordinator self-test script"),
+                    "-Mode", "SelfTest",
+                    "-InternalNestedJobRunnerSelfTestNonce", $nestedRunnerSelfTestNonce
+                )) `
+                -WorkingDirectory ([IO.Path]::GetFullPath([IO.Path]::Combine($PSScriptRoot, ".."))) `
+                -StdoutPath $nestedRunnerSelfTestOut `
+                -StderrPath $nestedRunnerSelfTestErr `
+                -Environment $nestedRunnerSelfTestEnvironment)
+            if ($nestedRunnerSelfTestResult.Count -ne 1 -or
+                $nestedRunnerSelfTestResult[0] -isnot
+                    [LbbCoordinator.DetachedWorkerProcess]) {
+                throw "The nested-Job self-test launcher did not return exactly one worker."
+            }
+            $nestedRunnerSelfTestProcess = [LbbCoordinator.DetachedWorkerProcess](
+                $nestedRunnerSelfTestResult[0]
+            )
+            $nestedRunnerSelfTestProcess.TransferGuardOwnership()
+            if (-not $nestedRunnerSelfTestProcess.GuardOwnershipTransferred) {
+                throw "The nested-Job self-test worker did not own its guard Job."
+            }
+            if (-not $nestedRunnerSelfTestProcess.WaitForExit(300000)) {
+                $nestedRunnerSelfTestProcess.Kill()
+                throw "The exact guard-plus-lifetime Job runner self-test timed out."
+            }
+            $nestedRunnerSelfTestExit = [int]$nestedRunnerSelfTestProcess.ExitCode
+            $nestedRunnerSelfTestStdout = [IO.File]::ReadAllText(
+                $nestedRunnerSelfTestOut,
+                $script:Utf8NoBom
+            ).TrimEnd([char[]]"`r`n")
+            $nestedRunnerSelfTestStderr = [IO.File]::ReadAllText(
+                $nestedRunnerSelfTestErr,
+                $script:Utf8NoBom
+            )
+            if ($nestedRunnerSelfTestExit -ne 0 -or
+                $nestedRunnerSelfTestStdout -cne
+                    "Nested guard/lifetime Job runner self-test passed." -or
+                -not [String]::IsNullOrEmpty($nestedRunnerSelfTestStderr)) {
+                throw "The exact guard-plus-lifetime Job runner self-test failed."
+            }
+            [LbbCoordinator.WorkerLifetimeJob]::WaitForNameAbsenceForSelfTest(
+                "Local\LBBWindowsAcceptanceNestedRunnerSelfTest-$nestedRunnerSelfTestNonce",
+                3000
+            )
+            $nestedRunnerBoundaryFiles = Get-CoordinatorFiles $testRoot
+            foreach ($unexpectedCandidateBoundary in @(
+                $nestedRunnerBoundaryFiles.Start,
+                $nestedRunnerBoundaryFiles.Worker,
+                $nestedRunnerBoundaryFiles.Ownership,
+                $nestedRunnerBoundaryFiles.Intent,
+                $nestedRunnerBoundaryFiles.Runner,
+                $nestedRunnerBoundaryFiles.Watcher,
+                $nestedRunnerBoundaryFiles.Handoff,
+                $nestedRunnerBoundaryFiles.Final,
+                $nestedRunnerBoundaryFiles.Failure
+            )) {
+                if ([IO.File]::Exists($unexpectedCandidateBoundary)) {
+                    throw "The nested-Job runner self-test crossed a candidate execution boundary."
+                }
+            }
+        }
+        finally {
+            if ($null -ne $nestedRunnerSelfTestProcess) {
+                $nestedRunnerSelfTestProcess.Dispose()
+            }
+            Remove-SelfTestStreamFiles `
+                $testRoot `
+                @($nestedRunnerSelfTestOut, $nestedRunnerSelfTestErr)
+        }
         $cleanJobName = "Local\LBBWindowsAcceptanceCoordinatorLifetimeJobCleanSelfTest-" +
             [Guid]::NewGuid().ToString("N")
         $cleanMutexName = "Local\LBBWindowsAcceptanceCoordinatorLifetimeCleanSelfTest-" +
@@ -5465,8 +5639,8 @@ finally {
             throw "Exact process identity self-test failed."
         }
         $selfTestInputs = New-PrivateChildDirectory $testRoot "follow-inputs" "Follow self-test inputs"
-        $inputServer = [IO.Path]::Combine($selfTestInputs, "local-browser-bridge-v0.12.33-windows-x86_64.exe")
-        $inputHelper = [IO.Path]::Combine($selfTestInputs, "local-computer-helper-v0.12.33-windows-x86_64.exe")
+        $inputServer = [IO.Path]::Combine($selfTestInputs, "local-browser-bridge-v0.12.34-windows-x86_64.exe")
+        $inputHelper = [IO.Path]::Combine($selfTestInputs, "local-computer-helper-v0.12.34-windows-x86_64.exe")
         $inputManifest = [IO.Path]::Combine($selfTestInputs, "SHA256SUMS.txt")
         $inputBinding = [IO.Path]::Combine($selfTestInputs, "candidate-binding.json")
         [IO.File]::WriteAllText($inputServer, "server-self-test", $script:Utf8NoBom)
@@ -5904,7 +6078,17 @@ if ($hasWorkerSupportSelfTestPath -ne $hasWorkerSupportSelfTestSha256 -or
 $hasWorkerSupportSelfTest = $hasWorkerSupportSelfTestPath -and
     $hasWorkerSupportSelfTestSha256 -and
     $hasWorkerSupportSelfTestNonce
+$hasNestedJobRunnerSelfTest = -not [String]::IsNullOrWhiteSpace(
+    $InternalNestedJobRunnerSelfTestNonce
+)
 if ($hasWorkerSupportSelfTest -and (
+    -not [String]::IsNullOrWhiteSpace($CleanCoordinatorNonce) -or
+    -not [String]::IsNullOrWhiteSpace($InternalWorkerNonce) -or
+    $hasNestedJobRunnerSelfTest
+)) {
+    throw "Internal coordinator entry points cannot be combined."
+}
+if ($hasNestedJobRunnerSelfTest -and (
     -not [String]::IsNullOrWhiteSpace($CleanCoordinatorNonce) -or
     -not [String]::IsNullOrWhiteSpace($InternalWorkerNonce)
 )) {
@@ -5913,7 +6097,8 @@ if ($hasWorkerSupportSelfTest -and (
 
 if ([String]::IsNullOrWhiteSpace($CleanCoordinatorNonce) -and
     [String]::IsNullOrWhiteSpace($InternalWorkerNonce) -and
-    -not $hasWorkerSupportSelfTest) {
+    -not $hasWorkerSupportSelfTest -and
+    -not $hasNestedJobRunnerSelfTest) {
     Invoke-CleanBootstrap $systemPowerShellPath
 }
 
@@ -5952,6 +6137,14 @@ if ($hasWorkerSupportSelfTest) {
         -AssemblyPath $InternalWorkerSupportSelfTestPath `
         -AssemblySha256 $InternalWorkerSupportSelfTestSha256 `
         -Nonce $InternalWorkerSupportSelfTestNonce
+    return
+}
+
+if ($hasNestedJobRunnerSelfTest) {
+    if (-not $isExactSystemPowerShell -or $Mode -cne "SelfTest") {
+        throw "The internal nested-Job runner self-test can run only as exact system Windows PowerShell 5.1 in SelfTest mode."
+    }
+    Invoke-NestedJobRunnerSelfTest $InternalNestedJobRunnerSelfTestNonce
     return
 }
 

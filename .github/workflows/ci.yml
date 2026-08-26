@@ -220,6 +220,9 @@ jobs:
               $env:LBB_PS51_COORDINATOR_PARSE = $previousCoordinatorPathForPs51
             }
           }
+          # The coordinator owns the validated guard/lifetime Job topology. A
+          # direct runner self-test can inherit a hosted Job that forbids the
+          # standalone CREATE_BREAKAWAY_FROM_JOB launch it would require.
           $coordinatorSelfTestOutput = @(& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/run-windows-computer-use-acceptance.ps1 -Mode SelfTest)
           if ($LASTEXITCODE -ne 0 -or
               $coordinatorSelfTestOutput.Count -ne 1 -or
@@ -234,8 +237,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 browser evidence finalizer self-test failed." }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/write-stock-chrome-operator-response.ps1 -Mode SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 stock-Chrome response writer self-test failed." }
-          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-computer-use.ps1 -SelfTest
-          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 computer-use self-test failed." }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-artifacts.ps1 -Version 0.0.0 -SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 artifact verifier self-test failed." }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-release-candidate.ps1 -SelfTest
@@ -320,7 +321,6 @@ jobs:
               )
             }
           }
-          & ./scripts/test-windows-computer-use.ps1 -SelfTest
           & ./scripts/wait-windows-foreground-arm-handoff.ps1 -Mode SelfTest
           & ./scripts/write-browser-evidence-record.ps1 -Mode SelfTest
           & ./scripts/write-stock-chrome-operator-response.ps1 -Mode SelfTest
@@ -356,12 +356,12 @@ jobs:
           node scripts/finalize-macos-acceptance.mjs --self-test
       - name: Validate the macOS packaged-evidence harness
         run: |
-          node --check evidence/v0.12.33/computer/helper-evidence-rig.mjs
-          node evidence/v0.12.33/computer/helper-evidence-rig.mjs --self-test
-          xcrun swiftc -typecheck evidence/v0.12.33/computer/HelperEvidenceFixture.swift
-          xcrun swiftc -typecheck evidence/v0.12.33/computer/SystemProbe.swift
-          bash scripts/verify-macos-app-share-handoff-self-test.sh 0.12.33
-          xcrun swiftc -typecheck evidence/v0.12.33/computer/PhysicalPointerHandoff.swift
+          node --check evidence/v0.12.34/computer/helper-evidence-rig.mjs
+          node evidence/v0.12.34/computer/helper-evidence-rig.mjs --self-test
+          xcrun swiftc -typecheck evidence/v0.12.34/computer/HelperEvidenceFixture.swift
+          xcrun swiftc -typecheck evidence/v0.12.34/computer/SystemProbe.swift
+          bash scripts/verify-macos-app-share-handoff-self-test.sh 0.12.34
+          xcrun swiftc -typecheck evidence/v0.12.34/computer/PhysicalPointerHandoff.swift
       - name: Install the minimum supported Rust toolchain
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy

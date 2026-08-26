@@ -841,6 +841,140 @@ namespace LbbWindowsAcceptance
         }
     }
 
+    public sealed class OwnedProcessHandle : IDisposable
+    {
+        private const uint WAIT_OBJECT_0 = 0x00000000;
+        private const uint WAIT_TIMEOUT = 0x00000102;
+        private const uint WAIT_FAILED = 0xFFFFFFFF;
+        private const uint INFINITE = 0xFFFFFFFF;
+        private readonly object sync = new object();
+        private IntPtr handle;
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CloseHandle(IntPtr value);
+
+        internal OwnedProcessHandle(IntPtr processHandle, int processId)
+        {
+            if (processHandle == IntPtr.Zero)
+            {
+                throw new ArgumentException("An owned process handle cannot be null", "processHandle");
+            }
+            handle = processHandle;
+            Id = processId;
+        }
+
+        public int Id { get; private set; }
+
+        public bool HasExited
+        {
+            get
+            {
+                lock (sync)
+                {
+                    EnsureOpen();
+                    return ReadWaitResult(WaitForSingleObject(handle, 0));
+                }
+            }
+        }
+
+        public bool WaitForExit(int milliseconds)
+        {
+            if (milliseconds < -1)
+            {
+                throw new ArgumentOutOfRangeException("milliseconds");
+            }
+            uint timeout = milliseconds == -1 ? INFINITE : unchecked((uint)milliseconds);
+            lock (sync)
+            {
+                EnsureOpen();
+                return ReadWaitResult(WaitForSingleObject(handle, timeout));
+            }
+        }
+
+        public void Refresh()
+        {
+            // This wrapper never caches process state; retain Process-compatible
+            // call semantics while proving that the exact handle is still open.
+            lock (sync)
+            {
+                EnsureOpen();
+            }
+        }
+
+        public int ExitCode
+        {
+            get
+            {
+                lock (sync)
+                {
+                    EnsureOpen();
+                    if (!ReadWaitResult(WaitForSingleObject(handle, 0)))
+                    {
+                        throw new InvalidOperationException("The owned process has not exited");
+                    }
+                    uint exitCode;
+                    if (!GetExitCodeProcess(handle, out exitCode))
+                    {
+                        throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not read the owned process exit code");
+                    }
+                    return unchecked((int)exitCode);
+                }
+            }
+        }
+
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        ~OwnedProcessHandle()
+        {
+            Dispose(false);
+        }
+
+        private void Dispose(bool disposing)
+        {
+            IntPtr ownedHandle = IntPtr.Zero;
+            lock (sync)
+            {
+                if (handle != IntPtr.Zero)
+                {
+                    ownedHandle = handle;
+                    handle = IntPtr.Zero;
+                }
+            }
+            if (ownedHandle != IntPtr.Zero && !CloseHandle(ownedHandle) && disposing)
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not close the owned process handle");
+            }
+        }
+
+        private bool ReadWaitResult(uint result)
+        {
+            if (result == WAIT_OBJECT_0) { return true; }
+            if (result == WAIT_TIMEOUT) { return false; }
+            int error = result == WAIT_FAILED ? Marshal.GetLastWin32Error() : unchecked((int)result);
+            throw new Win32Exception(error, "Could not wait for the owned process");
+        }
+
+        private void EnsureOpen()
+        {
+            if (handle == IntPtr.Zero)
+            {
+                throw new ObjectDisposedException("OwnedProcessHandle");
+            }
+        }
+    }
+
     public sealed class OwnedProcessJob : IDisposable
     {
         private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
@@ -848,10 +982,12 @@ namespace LbbWindowsAcceptance
         private const int JobObjectExtendedLimitInformation = 9;
         private const uint CREATE_SUSPENDED = 0x00000004;
         private const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
+        private const uint CREATE_BREAKAWAY_FROM_JOB = 0x01000000;
         private const uint CREATE_NO_WINDOW = 0x08000000;
         private const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
         private const uint STARTF_USESTDHANDLES = 0x00000100;
         private const uint PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002;
+        private const uint PROC_THREAD_ATTRIBUTE_JOB_LIST = 0x0002000D;
         private const uint GENERIC_READ = 0x80000000;
         private const uint GENERIC_WRITE = 0x40000000;
         private const uint FILE_SHARE_READ = 0x00000001;
@@ -975,7 +1111,10 @@ namespace LbbWindowsAcceptance
 
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+        private static extern bool IsProcessInJob(
+            IntPtr process,
+            IntPtr job,
+            [MarshalAs(UnmanagedType.Bool)] out bool result);
 
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -1059,12 +1198,13 @@ namespace LbbWindowsAcceptance
             }
         }
 
-        public int StartProcess(string applicationName, string commandLine, string currentDirectory, IDictionary overrides)
+        public OwnedProcessHandle StartProcess(string applicationName, string commandLine, string currentDirectory, IDictionary overrides)
         {
             EnsureOpen();
             IntPtr environment = IntPtr.Zero;
             IntPtr nullHandle = IntPtr.Zero;
             IntPtr inheritedHandleList = IntPtr.Zero;
+            IntPtr inheritedJobList = IntPtr.Zero;
             IntPtr attributeList = IntPtr.Zero;
             bool attributeListInitialized = false;
             PROCESS_INFORMATION process = new PROCESS_INFORMATION();
@@ -1084,17 +1224,17 @@ namespace LbbWindowsAcceptance
                 }
 
                 UIntPtr attributeListSize = UIntPtr.Zero;
-                bool sizingUnexpectedlySucceeded = InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref attributeListSize);
+                bool sizingUnexpectedlySucceeded = InitializeProcThreadAttributeList(IntPtr.Zero, 2, 0, ref attributeListSize);
                 int sizingError = Marshal.GetLastWin32Error();
                 ulong attributeBytes = attributeListSize.ToUInt64();
                 if (sizingUnexpectedlySucceeded || sizingError != ERROR_INSUFFICIENT_BUFFER || attributeBytes == 0 || attributeBytes > Int32.MaxValue)
                 {
-                    throw new Win32Exception(sizingError, "Could not size the restricted child handle list");
+                    throw new Win32Exception(sizingError, "Could not size the restricted child attribute list");
                 }
                 attributeList = Marshal.AllocHGlobal(checked((int)attributeBytes));
-                if (!InitializeProcThreadAttributeList(attributeList, 1, 0, ref attributeListSize))
+                if (!InitializeProcThreadAttributeList(attributeList, 2, 0, ref attributeListSize))
                 {
-                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not initialize the restricted child handle list");
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not initialize the restricted child attribute list");
                 }
                 attributeListInitialized = true;
 
@@ -1112,6 +1252,20 @@ namespace LbbWindowsAcceptance
                     throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not restrict child handle inheritance to the null device");
                 }
 
+                inheritedJobList = Marshal.AllocHGlobal(IntPtr.Size);
+                Marshal.WriteIntPtr(inheritedJobList, handle);
+                if (!UpdateProcThreadAttribute(
+                    attributeList,
+                    0,
+                    new UIntPtr(PROC_THREAD_ATTRIBUTE_JOB_LIST),
+                    inheritedJobList,
+                    new UIntPtr((uint)IntPtr.Size),
+                    IntPtr.Zero,
+                    IntPtr.Zero))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not atomically bind the child to the private acceptance-test Job Object");
+                }
+
                 STARTUPINFOEX startup = new STARTUPINFOEX();
                 startup.StartupInfo.cb = Marshal.SizeOf(typeof(STARTUPINFOEX));
                 startup.StartupInfo.Flags = STARTF_USESTDHANDLES;
@@ -1127,7 +1281,8 @@ namespace LbbWindowsAcceptance
                     IntPtr.Zero,
                     IntPtr.Zero,
                     true,
-                    CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
+                    CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_BREAKAWAY_FROM_JOB |
+                        CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
                     environment,
                     currentDirectory,
                     ref startup,
@@ -1137,10 +1292,15 @@ namespace LbbWindowsAcceptance
                     throw new Win32Exception(Marshal.GetLastWin32Error(), "A required acceptance-test process did not start");
                 }
                 suspendedProcessNeedsTermination = true;
-                if (!AssignProcessToJobObject(handle, process.Process))
+                bool assignedToPrivateJob;
+                if (!IsProcessInJob(process.Process, handle, out assignedToPrivateJob))
                 {
                     int error = Marshal.GetLastWin32Error();
-                    throw new Win32Exception(error, "A child could not be assigned to the private acceptance-test Job Object");
+                    throw new Win32Exception(error, "The atomically Job-owned child could not be verified");
+                }
+                if (!assignedToPrivateJob)
+                {
+                    throw new InvalidOperationException("The suspended child was not atomically assigned to the private acceptance-test Job Object");
                 }
                 processAssignedToJob = true;
                 if (ResumeThread(process.Thread) == UInt32.MaxValue)
@@ -1148,8 +1308,10 @@ namespace LbbWindowsAcceptance
                     int error = Marshal.GetLastWin32Error();
                     throw new Win32Exception(error, "A Job-owned child could not be resumed");
                 }
+                OwnedProcessHandle ownedProcess = new OwnedProcessHandle(process.Process, process.ProcessId);
+                process.Process = IntPtr.Zero;
                 suspendedProcessNeedsTermination = false;
-                return process.ProcessId;
+                return ownedProcess;
             }
             catch (Exception error)
             {
@@ -1168,6 +1330,7 @@ namespace LbbWindowsAcceptance
                 if (attributeListInitialized) { DeleteProcThreadAttributeList(attributeList); }
                 if (attributeList != IntPtr.Zero) { Marshal.FreeHGlobal(attributeList); }
                 if (inheritedHandleList != IntPtr.Zero) { Marshal.FreeHGlobal(inheritedHandleList); }
+                if (inheritedJobList != IntPtr.Zero) { Marshal.FreeHGlobal(inheritedJobList); }
                 if (nullHandle != IntPtr.Zero && nullHandle != InvalidHandle) { CloseHandle(nullHandle); }
                 if (environment != IntPtr.Zero) { Marshal.FreeHGlobal(environment); }
                 if (terminationFailure != null)
@@ -1297,8 +1460,9 @@ $probeNamespace = "LbbWindowsAcceptance_" + [Guid]::NewGuid().ToString("N")
 $probeSource = $probeSource.Replace("namespace LbbWindowsAcceptance", "namespace $probeNamespace")
 Add-Type -TypeDefinition $probeSource -Language CSharp
 $script:nativeProbeType = ("$probeNamespace.NativeProbe" -as [type])
+$script:ownedProcessType = ("$probeNamespace.OwnedProcessHandle" -as [type])
 $script:ownedJobType = ("$probeNamespace.OwnedProcessJob" -as [type])
-if ($null -eq $script:nativeProbeType -or $null -eq $script:ownedJobType) {
+if ($null -eq $script:nativeProbeType -or $null -eq $script:ownedProcessType -or $null -eq $script:ownedJobType) {
     throw "The isolated Windows acceptance probe types did not load."
 }
 
@@ -1856,13 +2020,16 @@ if ($SelfTest) {
             throw "The new private Job unexpectedly owned a process before self-test launch."
         }
         $selfTestCommandLine = '"' + $selfTestHostPath + '" -NoLogo -NoProfile -NonInteractive -Command "Start-Sleep -Seconds 30"'
-        $selfTestChildPid = $selfTestJob.StartProcess(
+        $selfTestChild = $selfTestJob.StartProcess(
             $selfTestHostPath,
             $selfTestCommandLine,
             [IO.Path]::GetDirectoryName($selfTestHostPath),
             @{}
         )
-        $selfTestChild = [Diagnostics.Process]::GetProcessById($selfTestChildPid)
+        if ($selfTestChild.GetType() -ne $script:ownedProcessType) {
+            throw "The private Job did not return its exact owned process-handle wrapper."
+        }
+        $selfTestChildPid = $selfTestChild.Id
         $selfTestDeadline = [DateTime]::UtcNow.AddSeconds(5)
         $selfTestChildren = @()
         do {
@@ -1893,6 +2060,9 @@ if ($SelfTest) {
         if (-not $selfTestChild.WaitForExit(5000)) {
             throw "The private Job did not terminate its resumed self-test child."
         }
+        if ($selfTestChild.ExitCode -ne 1) {
+            throw "The retained exact process handle did not report the Job termination exit code."
+        }
         $selfTestAccountingDeadline = [DateTime]::UtcNow.AddSeconds(2)
         while ($selfTestJob.ActiveProcessCount -ne 0 -and [DateTime]::UtcNow -lt $selfTestAccountingDeadline) {
             Start-Sleep -Milliseconds 50
@@ -1917,6 +2087,117 @@ if ($SelfTest) {
             $selfTestChild.Dispose()
         }
         $selfTestJob.Dispose()
+    }
+
+    # Exercise the .NET Framework fixture compiler only under the exact Desktop
+    # host used by live acceptance. PowerShell Core remains a parser and
+    # runner-only self-test surface for this script.
+    $fixtureBuildLaunchSelfTestEnabled = (
+        $PSVersionTable.PSEdition -ceq "Desktop" -and
+        $PSVersionTable.PSVersion.Major -eq 5 -and
+        $PSVersionTable.PSVersion.Minor -ge 1
+    )
+    if ($fixtureBuildLaunchSelfTestEnabled) {
+    # The fixture compiler starts a descendant compiler process, so a simple
+    # sleep probe cannot detect broken launch inheritance at this boundary.
+    $fixtureBuildLaunchSelfTestRoot = [IO.Path]::Combine(
+        [IO.Path]::GetTempPath(),
+        "lbb-fixture-launch-self-test-" + [Guid]::NewGuid().ToString("N")
+    )
+    $fixtureBuildLaunchSelfTestSource = [IO.Path]::GetFullPath(
+        [IO.Path]::Combine(
+            $PSScriptRoot,
+            "..",
+            "tests",
+            "fixtures",
+            "windows",
+            "WindowsComputerUseFixture.ps1"
+        )
+    )
+    if (-not [IO.File]::Exists($fixtureBuildLaunchSelfTestSource)) {
+        throw "The source-bound fixture is unavailable for the Job launch self-test."
+    }
+    $fixtureBuildLaunchSelfTestExecutable = [IO.Path]::Combine(
+        $fixtureBuildLaunchSelfTestRoot,
+        "fixture.exe"
+    )
+    $fixtureBuildLaunchSelfTestJob = $script:ownedJobType::new()
+    $fixtureBuildLaunchSelfTestBuilder = $null
+    $fixtureBuildLaunchSelfTestExecutableProcess = $null
+    try {
+        [IO.Directory]::CreateDirectory($fixtureBuildLaunchSelfTestRoot) | Out-Null
+        $fixtureBuildLaunchSelfTestSha256 = Get-FileSha256 $fixtureBuildLaunchSelfTestSource
+        $fixtureBuildLaunchSelfTestCommandLine = (
+            '"' + $selfTestHostPath +
+            '" -NoLogo -NoProfile -NonInteractive -File "' +
+            $fixtureBuildLaunchSelfTestSource +
+            '" -BuildExecutablePath "' +
+            $fixtureBuildLaunchSelfTestExecutable +
+            '" -ExpectedSourceSha256 ' +
+            $fixtureBuildLaunchSelfTestSha256
+        )
+        $fixtureBuildLaunchSelfTestBuilder = $fixtureBuildLaunchSelfTestJob.StartProcess(
+            $selfTestHostPath,
+            $fixtureBuildLaunchSelfTestCommandLine,
+            [IO.Path]::GetDirectoryName($selfTestHostPath),
+            @{}
+        )
+        if (-not $fixtureBuildLaunchSelfTestBuilder.WaitForExit(120000)) {
+            throw "The Job-owned source-bound fixture build self-test timed out."
+        }
+        if ($fixtureBuildLaunchSelfTestBuilder.ExitCode -ne 0 -or
+            -not [IO.File]::Exists($fixtureBuildLaunchSelfTestExecutable) -or
+            ([IO.FileInfo]::new($fixtureBuildLaunchSelfTestExecutable)).Length -le 0) {
+            throw "The Job-owned source-bound fixture build self-test failed."
+        }
+
+        $fixtureBuildLaunchSelfTestExecutableCommandLine = (
+            '"' + $fixtureBuildLaunchSelfTestExecutable + '" --self-test'
+        )
+        $fixtureBuildLaunchSelfTestExecutableProcess = $fixtureBuildLaunchSelfTestJob.StartProcess(
+            $fixtureBuildLaunchSelfTestExecutable,
+            $fixtureBuildLaunchSelfTestExecutableCommandLine,
+            $fixtureBuildLaunchSelfTestRoot,
+            @{}
+        )
+        if (-not $fixtureBuildLaunchSelfTestExecutableProcess.WaitForExit(30000)) {
+            throw "The Job-owned dedicated fixture entry-point self-test timed out."
+        }
+        if ($fixtureBuildLaunchSelfTestExecutableProcess.ExitCode -ne 0) {
+            throw "The Job-owned dedicated fixture entry-point self-test failed."
+        }
+        $fixtureBuildLaunchSelfTestAccountingDeadline = [DateTime]::UtcNow.AddSeconds(2)
+        while ($fixtureBuildLaunchSelfTestJob.ActiveProcessCount -ne 0 -and
+            [DateTime]::UtcNow -lt $fixtureBuildLaunchSelfTestAccountingDeadline) {
+            Start-Sleep -Milliseconds 50
+        }
+        if ($fixtureBuildLaunchSelfTestJob.ActiveProcessCount -ne 0) {
+            throw "The fixture build launch self-test retained a Job-owned descendant."
+        }
+    }
+    finally {
+        try {
+            if ($fixtureBuildLaunchSelfTestJob.ActiveProcessCount -gt 0) {
+                $fixtureBuildLaunchSelfTestJob.Terminate()
+            }
+        }
+        catch {
+            # Dispose still closes the kill-on-close Job handle below.
+        }
+        if ($null -ne $fixtureBuildLaunchSelfTestExecutableProcess) {
+            $fixtureBuildLaunchSelfTestExecutableProcess.Dispose()
+        }
+        if ($null -ne $fixtureBuildLaunchSelfTestBuilder) {
+            $fixtureBuildLaunchSelfTestBuilder.Dispose()
+        }
+        $fixtureBuildLaunchSelfTestJob.Dispose()
+        if ([IO.Directory]::Exists($fixtureBuildLaunchSelfTestRoot) -or
+            [IO.File]::Exists($fixtureBuildLaunchSelfTestRoot)) {
+            Remove-OwnedFixtureBuildDirectory `
+                $fixtureBuildLaunchSelfTestRoot `
+                $fixtureBuildLaunchSelfTestExecutable
+        }
+    }
     }
 
     $fixtureWaitProbe = [ordered]@{
@@ -2139,7 +2420,7 @@ if ($SelfTest) {
     try {
         $operatorMarkerSelfTestRequestId = "0123456789abcdef0123456789abcdef"
         $operatorRequestMarker = New-ForegroundArmRequestMarker `
-            -ProductVersion "0.12.33" `
+            -ProductVersion "0.12.34" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -InputStateAtPublication "not-started" `
             -TimeoutSeconds 120 `
@@ -2166,7 +2447,7 @@ if ($SelfTest) {
         )
         if ((@($operatorRequestRecord.PSObject.Properties.Name) -join "|") -cne ($expectedRequestMarkerProperties -join "|") -or
             $operatorRequestRecord.schemaVersion -ne 2 -or
-            $operatorRequestRecord.productVersion -cne "0.12.33" -or
+            $operatorRequestRecord.productVersion -cne "0.12.34" -or
             $operatorRequestRecord.status -cne "action-required" -or
             $operatorRequestRecord.requestId -cne $operatorMarkerSelfTestRequestId -or
             $operatorRequestRecord.operatorActionRequired -ne $true -or
@@ -2212,7 +2493,7 @@ if ($SelfTest) {
         }
 
         $alreadyArmedMarker = New-ForegroundArmRequestMarker `
-            -ProductVersion "0.12.33" `
+            -ProductVersion "0.12.34" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -InputStateAtPublication "already-acknowledged" `
             -TimeoutSeconds 120 `
@@ -2247,7 +2528,7 @@ if ($SelfTest) {
             stableSamplesRequired = 3
         }
         $operatorReceivedMarker = New-ForegroundArmReceivedMarker `
-            -ProductVersion "0.12.33" `
+            -ProductVersion "0.12.34" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -Proof $operatorReceivedProof
         $operatorReceivedPath = Write-NewOperatorMarker `
@@ -2266,7 +2547,7 @@ if ($SelfTest) {
         if ((@($operatorReceivedRecord.PSObject.Properties.Name) -join "|") -cne ($expectedReceivedMarkerProperties -join "|") -or
             $operatorReceivedRecord.status -cne "received" -or
             $operatorReceivedRecord.schemaVersion -ne 2 -or
-            $operatorReceivedRecord.productVersion -cne "0.12.33" -or
+            $operatorReceivedRecord.productVersion -cne "0.12.34" -or
             $operatorReceivedRecord.requestId -cne $operatorRequestRecord.requestId -or
             $operatorReceivedRecord.exactClickCountsMatched -ne $true -or
             $operatorReceivedRecord.stableSamplesObserved -ne 3 -or
@@ -2278,7 +2559,7 @@ if ($SelfTest) {
         $incompleteReceivedMarkerFailure = $null
         try {
             $null = New-ForegroundArmReceivedMarker `
-                -ProductVersion "0.12.33" `
+                -ProductVersion "0.12.34" `
                 -RequestId $operatorMarkerSelfTestRequestId `
                 -Proof $operatorReceivedProof
         }
@@ -2309,10 +2590,10 @@ if ($SelfTest) {
         }
         $candidateBindingSelfTestPath = [IO.Path]::Combine($candidateBindingSelfTestRoot, "candidate-binding.json")
         $candidateBindingNames = @(
-            "local-browser-bridge-v0.12.33-windows-x86_64.exe",
-            "local-computer-helper-v0.12.33-windows-x86_64.exe",
-            "local-browser-bridge-v0.12.33-macos-universal.tar.gz",
-            "local-browser-bridge-extension-v0.12.33.zip"
+            "local-browser-bridge-v0.12.34-windows-x86_64.exe",
+            "local-computer-helper-v0.12.34-windows-x86_64.exe",
+            "local-browser-bridge-v0.12.34-macos-universal.tar.gz",
+            "local-browser-bridge-extension-v0.12.34.zip"
         )
         $candidateBindingChecksums = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
         for ($index = 0; $index -lt $candidateBindingNames.Count; $index++) {
@@ -2337,8 +2618,8 @@ if ($SelfTest) {
         })
         $candidateBindingSelfTestRecord = [ordered]@{
             schemaVersion = 3
-            version = "0.12.33"
-            releaseTag = "v0.12.33"
+            version = "0.12.34"
+            releaseTag = "v0.12.34"
             repository = "flrngel/local-browser-bridge"
             sourceSha = [String]::new([char]'b', 40)
             workflowRunId = "32650000000"
@@ -2364,7 +2645,7 @@ if ($SelfTest) {
         )
         $candidateBindingSelfTestResult = Read-ExactReleaseCandidateBinding `
             -Path $candidateBindingSelfTestPath `
-            -ExpectedVersion "0.12.33" `
+            -ExpectedVersion "0.12.34" `
             -ExpectedManifestSha256 $candidateBindingManifestSha `
             -ExpectedChecksums $candidateBindingChecksums `
             -ExpectedAssetNames $candidateBindingNames
@@ -2383,7 +2664,7 @@ if ($SelfTest) {
         try {
             $null = Read-ExactReleaseCandidateBinding `
                 -Path $candidateBindingSelfTestPath `
-                -ExpectedVersion "0.12.33" `
+                -ExpectedVersion "0.12.34" `
                 -ExpectedManifestSha256 $candidateBindingManifestSha `
                 -ExpectedChecksums $candidateBindingChecksums `
                 -ExpectedAssetNames $candidateBindingNames
@@ -2501,22 +2782,20 @@ function Start-IsolatedProcess {
     # before ResumeThread, so supervisors cannot race by spawning an unowned
     # worker. All standard handles point at NUL because server stdout contains
     # the bearer token and must never become evidence.
-    $processId = $script:ownedJob.StartProcess(
+    return $script:ownedJob.StartProcess(
         $Path,
         $commandLine,
         [IO.Path]::GetDirectoryName($Path),
         $Environment
     )
-    return [Diagnostics.Process]::GetProcessById($processId)
 }
 
 function Request-FixtureStop {
-    param([Diagnostics.Process]$Process)
+    param([object]$Process)
     if ($null -eq $Process) {
         return $true
     }
     try {
-        $Process.Refresh()
         if ($Process.HasExited) {
             return $true
         }
@@ -2531,8 +2810,8 @@ function Request-FixtureStop {
         }
         return $false
     }
-    catch [InvalidOperationException] {
-        # The exact process exited between Refresh and cleanup.
+    catch [ObjectDisposedException] {
+        # A previously completed cleanup already released the exact handle.
         return $true
     }
 }
@@ -3209,7 +3488,7 @@ function Record-HelperTopologyObservation {
 
 function Wait-ForDirectHelperWorker {
     param(
-        [Diagnostics.Process]$SupervisorProcess,
+        [object]$SupervisorProcess,
         [string]$ExpectedSessionId,
         [string]$Description
     )
@@ -3217,7 +3496,6 @@ function Wait-ForDirectHelperWorker {
     $stableIdentity = $null
     $stablePolls = 0
     do {
-        $SupervisorProcess.Refresh()
         $script:helperTopologyDiagnostic.supervisorPid = $SupervisorProcess.Id
         if ($SupervisorProcess.HasExited) {
             $script:helperTopologyDiagnostic.supervisorExited = $true
@@ -4487,6 +4765,24 @@ finally {
             $script:ownedJob.Dispose()
             $script:ownedJob = $null
         }
+    }
+    if ($null -ne $helperProcess) {
+        try {
+            $helperProcess.Dispose()
+        }
+        catch {
+            $cleanupIssues.Add("The helper supervisor process handle did not close cleanly.")
+        }
+        $helperProcess = $null
+    }
+    if ($null -ne $serverProcess) {
+        try {
+            $serverProcess.Dispose()
+        }
+        catch {
+            $cleanupIssues.Add("The loopback server process handle did not close cleanly.")
+        }
+        $serverProcess = $null
     }
     if ($null -ne $fixtureProcess) {
         try {

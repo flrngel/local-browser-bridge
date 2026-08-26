@@ -906,8 +906,8 @@ fn background_invariant_failures_use_stage_bound_closed_vocabulary() {
 
 #[test]
 fn macos_v0_12_27_pointer_evidence_is_bounded_corroboration_not_causal_attribution() {
-    let rig = fs::read_to_string("evidence/v0.12.33/computer/helper-evidence-rig.mjs").unwrap();
-    let probe = fs::read_to_string("evidence/v0.12.33/computer/SystemProbe.swift").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs").unwrap();
+    let probe = fs::read_to_string("evidence/v0.12.34/computer/SystemProbe.swift").unwrap();
     assert!(rig.contains("failureProbeBaseline"));
     assert!(rig.contains("collectFailureDiagnostics"));
     assert!(rig.contains("systemInvariants(failureProbeBaseline.system, after)"));
@@ -953,7 +953,7 @@ fn macos_v0_12_27_pointer_evidence_is_bounded_corroboration_not_causal_attributi
     ] {
         assert!(
             rig.contains(required),
-            "missing v0.12.33 pointer contract: {required}"
+            "missing v0.12.34 pointer contract: {required}"
         );
     }
     assert!(!rig.contains("cursorUnchanged"));
@@ -999,7 +999,7 @@ fn macos_v0_12_27_pointer_evidence_is_bounded_corroboration_not_causal_attributi
 
 #[test]
 fn macos_v0_12_27_action_pointer_classifier_matches_the_sealed_action_schema() {
-    let rig = fs::read_to_string("evidence/v0.12.33/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let server = fs::read_to_string("src/server.rs")
@@ -1122,10 +1122,10 @@ fn macos_v0_12_27_action_pointer_classifier_matches_the_sealed_action_schema() {
 
 #[test]
 fn macos_v0_12_14_quiet_lane_stabilizes_the_native_seat_before_candidate_execution() {
-    let rig = fs::read_to_string("evidence/v0.12.33/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.33/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.34/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1200,22 +1200,22 @@ fn macos_v0_12_14_quiet_lane_stabilizes_the_native_seat_before_candidate_executi
 
 #[test]
 fn macos_v0_12_27_app_share_handoff_is_exact_non_authoritative_and_fail_closed() {
-    let app = fs::read_to_string("evidence/v0.12.33/computer/AppShareHandoff.swift")
+    let app = fs::read_to_string("evidence/v0.12.34/computer/AppShareHandoff.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.33/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.34/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.33/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.33/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.34/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let normalized_readme = readme.split_whitespace().collect::<Vec<_>>().join(" ");
 
     for required in [
-        "private let productVersion = \"0.12.33\"",
+        "private let productVersion = \"0.12.34\"",
         "private let stableWindowTitle = \"LBB macOS Acceptance App Share\"",
         "private let readyButtonTitle = \"START APP-SHARE CHECK\"",
         "private let armWindowSeconds: TimeInterval = 300",
@@ -1524,7 +1524,7 @@ fn macos_v0_12_27_app_share_handoff_is_exact_non_authoritative_and_fail_closed()
 
 #[test]
 fn macos_v0_12_27_refreshes_post_handoff_share_action_authority_before_click() {
-    let rig = fs::read_to_string("evidence/v0.12.33/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let computer = fs::read_to_string("src/computer.rs")
@@ -1717,7 +1717,7 @@ fn macos_v0_12_27_refreshes_post_handoff_share_action_authority_before_click() {
 fn macos_pointer_arm_state_machine_execution_regressions_pass() {
     let output = match Command::new("node")
         .args([
-            "evidence/v0.12.33/computer/helper-evidence-rig.mjs",
+            "evidence/v0.12.34/computer/helper-evidence-rig.mjs",
             "--self-test",
         ])
         .output()
@@ -1746,7 +1746,7 @@ fn macos_pointer_arm_state_machine_execution_regressions_pass() {
 
 #[test]
 fn v0_12_27_marker_identity_is_exact_on_windows_and_posix() {
-    let rig = fs::read_to_string("evidence/v0.12.33/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -2709,7 +2709,7 @@ fn withdrawn_v0_12_9_macos_cursor_invariant_attempt_is_byte_exact_and_fail_close
 
 #[test]
 fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
-    let entries = fs::read_dir("evidence/v0.12.33/computer")
+    let entries = fs::read_dir("evidence/v0.12.34/computer")
         .unwrap()
         .map(Result::unwrap)
         .map(|entry| {
@@ -2734,12 +2734,12 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
         ])
     );
 
-    let rig = fs::read_to_string("evidence/v0.12.33/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let fixture =
-        fs::read_to_string("evidence/v0.12.33/computer/HelperEvidenceFixture.swift").unwrap();
-    let readme = fs::read_to_string("evidence/v0.12.33/computer/README.md").unwrap();
+        fs::read_to_string("evidence/v0.12.34/computer/HelperEvidenceFixture.swift").unwrap();
+    let readme = fs::read_to_string("evidence/v0.12.34/computer/README.md").unwrap();
 
     assert!(rig.contains(&format!("const EXPECTED_VERSION = \"{VERSION}\";")));
     assert!(rig.contains("const EXPECTED_ARCHIVE = `local-browser-bridge-v${EXPECTED_VERSION}-macos-universal.tar.gz`;"));
@@ -2763,10 +2763,10 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
     assert!(readme.contains(&format!(
         "local-browser-bridge-v{VERSION}-macos-universal.tar.gz"
     )));
-    assert!(!rig.replace("v0.12.33", "").contains("v0.12.1"));
-    assert!(!fixture.replace("v0.12.33", "").contains("v0.12.1"));
-    assert!(!rig.replace("v0.12.33", "").contains("v0.12.2"));
-    assert!(!fixture.replace("v0.12.33", "").contains("v0.12.2"));
+    assert!(!rig.replace("v0.12.34", "").contains("v0.12.1"));
+    assert!(!fixture.replace("v0.12.34", "").contains("v0.12.1"));
+    assert!(!rig.replace("v0.12.34", "").contains("v0.12.2"));
+    assert!(!fixture.replace("v0.12.34", "").contains("v0.12.2"));
     let current_readme = readme
         .split("## Withdrawn v0.12.10 exact-candidate result")
         .next()
@@ -2813,10 +2813,10 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
 
 #[test]
 fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
-    let rig = fs::read_to_string("evidence/v0.12.33/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.33/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.34/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let binder = fs::read_to_string("scripts/fetch-verify-release-candidate.sh")
@@ -2960,7 +2960,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
 
 #[test]
 fn macos_packaged_evidence_streams_one_exact_bounded_pax_free_archive() {
-    let rig = fs::read_to_string("evidence/v0.12.33/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -3064,7 +3064,7 @@ fn macos_package_preparer_accepts_only_the_canonical_bounded_ustar_package() {
     }
 
     let repository = std::env::current_dir().unwrap();
-    let rig = repository.join("evidence/v0.12.33/computer/helper-evidence-rig.mjs");
+    let rig = repository.join("evidence/v0.12.34/computer/helper-evidence-rig.mjs");
     let temporary = tempfile::tempdir().unwrap();
     set_mode(temporary.path(), 0o700);
     let generator = temporary.path().join("make-package.py");
@@ -3134,7 +3134,7 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
         let case_root = temporary.path().join(scenario);
         fs::create_dir(&case_root).unwrap();
         set_mode(&case_root, 0o700);
-        let archive = case_root.join("local-browser-bridge-v0.12.33-macos-universal.tar.gz");
+        let archive = case_root.join("local-browser-bridge-v0.12.34-macos-universal.tar.gz");
         let generated = Command::new("python3")
             .arg(&generator)
             .arg(scenario)
@@ -3150,10 +3150,10 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
         let archive_sha256 = file_sha256(archive.to_str().unwrap());
         let zero_hash = "0".repeat(64);
         let manifest_text = format!(
-            "{zero_hash}  local-browser-bridge-v0.12.33-windows-x86_64.exe\n\
-             {zero_hash}  local-computer-helper-v0.12.33-windows-x86_64.exe\n\
-             {archive_sha256}  local-browser-bridge-v0.12.33-macos-universal.tar.gz\n\
-             {zero_hash}  local-browser-bridge-extension-v0.12.33.zip\n"
+            "{zero_hash}  local-browser-bridge-v0.12.34-windows-x86_64.exe\n\
+             {zero_hash}  local-computer-helper-v0.12.34-windows-x86_64.exe\n\
+             {archive_sha256}  local-browser-bridge-v0.12.34-macos-universal.tar.gz\n\
+             {zero_hash}  local-browser-bridge-extension-v0.12.34.zip\n"
         );
         let manifest = case_root.join("SHA256SUMS.txt");
         fs::write(&manifest, &manifest_text).unwrap();
@@ -3281,7 +3281,7 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
 
 #[test]
 fn macos_packaged_evidence_uses_a_clean_source_harness_and_fresh_lane_outputs() {
-    let rig = fs::read_to_string("evidence/v0.12.33/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -3338,7 +3338,7 @@ fn macos_packaged_evidence_uses_a_clean_source_harness_and_fresh_lane_outputs() 
 
 #[test]
 fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
-    let rig = fs::read_to_string("evidence/v0.12.33/computer/helper-evidence-rig.mjs").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs").unwrap();
     assert!(rig.contains("capturedFrameMatchesWindowGeometry"));
     assert!(rig.contains("share-resize-settled"));
     assert!(rig.contains("sample.sourceSequence > resizeTransition.sample.sourceSequence"));
@@ -3350,12 +3350,12 @@ fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
 
 #[test]
 fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.33/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     assert!(rig.contains("function childEnvironment(overrides = {})"));
     assert!(!rig.contains("...process.env"));
-    let fixture = fs::read_to_string("evidence/v0.12.33/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.34/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -3533,10 +3533,10 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
 
 #[test]
 fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.33/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.33/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.34/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let normalized_readme = readme.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -3668,21 +3668,21 @@ fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() 
 
 #[test]
 fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negative() {
-    let fixture = fs::read_to_string("evidence/v0.12.33/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.34/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.33/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.34/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.33/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.33/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.34/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
     for required in [
-        "private let siblingFixtureTitle = \"LBB v0.12.33 Same-PID Sibling Receiver\"",
+        "private let siblingFixtureTitle = \"LBB v0.12.34 Same-PID Sibling Receiver\"",
         "var primaryWindowId = 0",
         "var siblingWindowId = 0",
         "var siblingTextLength = 0",
@@ -4036,10 +4036,13 @@ fn windows_helper_readiness_is_protocol_and_process_bound() {
         !deploy.contains("scripts/test-windows-computer-use.ps1"),
         "the candidate workflow must reuse reviewed CI instead of rerunning the native acceptance self-tests"
     );
-    assert!(ci.contains(
-        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-computer-use.ps1 -SelfTest"
-    ));
-    assert!(ci.contains("& ./scripts/test-windows-computer-use.ps1 -SelfTest"));
+    let coordinator_self_test = "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/run-windows-computer-use-acceptance.ps1 -Mode SelfTest";
+    assert!(ci.contains(coordinator_self_test));
+    assert_eq!(ci.matches(coordinator_self_test).count(), 1);
+    assert!(
+        !ci.contains("test-windows-computer-use.ps1 -SelfTest"),
+        "CI must exercise the Job-sensitive runner only through the topology-aware coordinator self-test"
+    );
     assert!(ci.contains(
         "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./tests/fixtures/windows/WindowsComputerUseFixture.ps1 -SelfTest"
     ));
@@ -4057,6 +4060,131 @@ fn windows_helper_readiness_is_protocol_and_process_bound() {
         assert!(
             runner.contains(required),
             "Windows acceptance self-test is missing: {required}"
+        );
+    }
+}
+
+#[test]
+fn windows_owned_process_retains_the_create_process_handle_without_pid_reopen() {
+    let runner = fs::read_to_string("scripts/test-windows-computer-use.ps1")
+        .unwrap()
+        .replace("\r\n", "\n");
+
+    let owned_handle = runner
+        .split("public sealed class OwnedProcessHandle : IDisposable")
+        .nth(1)
+        .unwrap()
+        .split("public sealed class OwnedProcessJob : IDisposable")
+        .next()
+        .unwrap();
+    for required in [
+        "internal OwnedProcessHandle(IntPtr processHandle, int processId)",
+        "public int Id { get; private set; }",
+        "public bool HasExited",
+        "public bool WaitForExit(int milliseconds)",
+        "public void Refresh()",
+        "public int ExitCode",
+        "GetExitCodeProcess(handle, out exitCode)",
+        "public void Dispose()",
+        "if (ownedHandle != IntPtr.Zero && !CloseHandle(ownedHandle) && disposing)",
+        "throw new ObjectDisposedException(\"OwnedProcessHandle\")",
+    ] {
+        assert!(
+            owned_handle.contains(required),
+            "the exact owned process-handle wrapper is missing: {required}"
+        );
+    }
+    assert!(
+        !owned_handle.contains("OpenProcess(") && !owned_handle.contains("GetProcessById"),
+        "the exact owned process wrapper must never reacquire a process by PID"
+    );
+
+    let owned_job = runner
+        .split("public sealed class OwnedProcessJob : IDisposable")
+        .nth(1)
+        .unwrap()
+        .split("$script:ownedProcessType =")
+        .next()
+        .unwrap();
+    for required in [
+        "public OwnedProcessHandle StartProcess(",
+        "OwnedProcessHandle ownedProcess = new OwnedProcessHandle(process.Process, process.ProcessId);",
+        "process.Process = IntPtr.Zero;",
+        "return ownedProcess;",
+        "if (process.Process != IntPtr.Zero) { CloseHandle(process.Process); }",
+    ] {
+        assert!(
+            owned_job.contains(required),
+            "the Job launcher exact-handle transfer is missing: {required}"
+        );
+    }
+    let resume = owned_job.find("ResumeThread(process.Thread)").unwrap();
+    let wrap = owned_job
+        .find("OwnedProcessHandle ownedProcess = new OwnedProcessHandle(")
+        .unwrap();
+    let transfer = owned_job.find("process.Process = IntPtr.Zero;").unwrap();
+    let resume_complete = transfer
+        + owned_job[transfer..]
+            .find("suspendedProcessNeedsTermination = false;")
+            .unwrap();
+    let returned = resume_complete
+        + owned_job[resume_complete..]
+            .find("return ownedProcess;")
+            .unwrap();
+    assert!(
+        resume < wrap
+            && wrap < transfer
+            && transfer < resume_complete
+            && resume_complete < returned
+    );
+    assert!(!owned_job.contains("return process.ProcessId;"));
+
+    let isolated_start = runner
+        .split("function Start-IsolatedProcess {")
+        .nth(1)
+        .unwrap()
+        .split("function Request-FixtureStop {")
+        .next()
+        .unwrap();
+    assert!(isolated_start.contains("return $script:ownedJob.StartProcess("));
+    assert!(!isolated_start.contains("GetProcessById"));
+    assert!(
+        !runner.contains("[Diagnostics.Process]::GetProcessById("),
+        "runner-owned processes must never be rebound through a PID lookup"
+    );
+
+    let self_test = runner
+        .split("if ($SelfTest) {")
+        .nth(1)
+        .unwrap()
+        .split("Write-Output \"Windows computer-use acceptance self-test passed.\"")
+        .next()
+        .unwrap();
+    for required in [
+        "$selfTestChild = $selfTestJob.StartProcess(",
+        "$selfTestChild.GetType() -ne $script:ownedProcessType",
+        "$selfTestChildPid = $selfTestChild.Id",
+        "$selfTestChild.WaitForExit(5000)",
+        "$selfTestChild.ExitCode -ne 1",
+        "$fixtureBuildLaunchSelfTestBuilder = $fixtureBuildLaunchSelfTestJob.StartProcess(",
+        "$fixtureBuildLaunchSelfTestExecutableProcess = $fixtureBuildLaunchSelfTestJob.StartProcess(",
+    ] {
+        assert!(
+            self_test.contains(required),
+            "the Windows exact-handle self-test is missing: {required}"
+        );
+    }
+
+    for required in [
+        "$helperProcess.Dispose()",
+        "$serverProcess.Dispose()",
+        "$fixtureProcess.Dispose()",
+        "$fixtureBuilderProcess.Dispose()",
+        "$fixtureExecutableSelfTestProcess.Dispose()",
+    ] {
+        assert!(
+            runner.contains(required),
+            "the runner does not release an exact owned process handle: {required}"
         );
     }
 }
@@ -4234,6 +4362,17 @@ fn windows_fixture_is_a_source_bound_dedicated_gui_process_with_exact_cleanup() 
         "$fixtureProcessBinding.entryPointSelfTestPassed = $true",
         "(Get-FileSha256 $fixtureExecutablePath) -ceq $fixtureProcessBinding.executableSha256",
         "The dedicated Windows fixture executable changed during its entry-point self-test.",
+        "private const uint CREATE_BREAKAWAY_FROM_JOB = 0x01000000;",
+        "private const uint PROC_THREAD_ATTRIBUTE_JOB_LIST = 0x0002000D;",
+        "Could not atomically bind the child to the private acceptance-test Job Object",
+        "The suspended child was not atomically assigned to the private acceptance-test Job Object",
+        "$fixtureBuildLaunchSelfTestJob = $script:ownedJobType::new()",
+        "$fixtureBuildLaunchSelfTestBuilder = $fixtureBuildLaunchSelfTestJob.StartProcess(",
+        "The Job-owned source-bound fixture build self-test failed.",
+        "The Job-owned dedicated fixture entry-point self-test failed.",
+        "$fixtureBuildLaunchSelfTestEnabled = (",
+        "$PSVersionTable.PSEdition -ceq \"Desktop\"",
+        "if ($fixtureBuildLaunchSelfTestEnabled) {",
         "$fixtureArguments = @(\"--evidence-directory\", $fixtureEvidence)",
         "$fixtureArguments += \"--show-occluder\"",
         "$fixtureProcess = Start-IsolatedProcess $fixtureExecutablePath $fixtureArguments @{}",
@@ -4253,6 +4392,42 @@ fn windows_fixture_is_a_source_bound_dedicated_gui_process_with_exact_cleanup() 
             "dedicated Windows fixture runner contract is missing: {required}"
         );
     }
+    let owned_job = runner
+        .split("public sealed class OwnedProcessJob : IDisposable")
+        .nth(1)
+        .unwrap()
+        .split("$script:ownedJobType =")
+        .next()
+        .unwrap();
+    let handle_list = owned_job
+        .find("new UIntPtr(PROC_THREAD_ATTRIBUTE_HANDLE_LIST)")
+        .unwrap();
+    let job_list = owned_job
+        .find("new UIntPtr(PROC_THREAD_ATTRIBUTE_JOB_LIST)")
+        .unwrap();
+    let create = owned_job.find("bool created = CreateProcess(").unwrap();
+    let verify = owned_job
+        .find("IsProcessInJob(process.Process, handle, out assignedToPrivateJob)")
+        .unwrap();
+    let resume = owned_job.find("ResumeThread(process.Thread)").unwrap();
+    assert!(handle_list < job_list && job_list < create && create < verify && verify < resume);
+    assert!(
+        owned_job
+            .contains("CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_BREAKAWAY_FROM_JOB")
+    );
+    assert!(!owned_job.contains("AssignProcessToJobObject("));
+    assert!(owned_job.contains("JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE"));
+    assert!(!owned_job.contains("JOB_OBJECT_LIMIT_BREAKAWAY_OK"));
+    assert!(!owned_job.contains("JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK"));
+    let desktop_fixture_probe = runner
+        .split("if ($fixtureBuildLaunchSelfTestEnabled) {")
+        .nth(1)
+        .unwrap()
+        .split("$fixtureWaitProbe = [ordered]@{")
+        .next()
+        .unwrap();
+    assert!(desktop_fixture_probe.contains("-BuildExecutablePath"));
+    assert!(desktop_fixture_probe.contains("$fixtureBuildLaunchSelfTestJob.StartProcess("));
     for required in [
         "public static int[] GetDirectChildProcessIds(int parentProcessId, string expectedImagePath)",
         "entry.ParentProcessId == (uint)parentProcessId",
@@ -4266,7 +4441,6 @@ fn windows_fixture_is_a_source_bound_dedicated_gui_process_with_exact_cleanup() 
             "native fixture process binding is missing: {required}"
         );
     }
-
     let build = runner
         .find("$script:runStage = \"build-dedicated-fixture\"")
         .unwrap();
@@ -5210,6 +5384,9 @@ fn windows_acceptance_coordinator_publication_and_detached_environment_are_close
         "SortedDictionary<string, string>",
         "PROC_THREAD_ATTRIBUTE_HANDLE_LIST",
         "PROC_THREAD_ATTRIBUTE_JOB_LIST",
+        "JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x00000800",
+        "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000",
+        "limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |\n        JOB_OBJECT_LIMIT_BREAKAWAY_OK",
         "CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_BREAKAWAY_FROM_JOB",
         "IsProcessInJob(nativeProcess.Process, guardJob, out guarded)",
         "ResumeThread(nativeProcess.Thread)",
@@ -5586,6 +5763,27 @@ fn windows_acceptance_coordinator_owns_children_and_delays_watcher_until_marker(
             "fresh staged worker-support loader self-test is missing: {required}"
         );
     }
+    let nested_job_runner_self_test = coordinator
+        .split("function Invoke-NestedJobRunnerSelfTest {")
+        .nth(1)
+        .unwrap()
+        .split("function Invoke-SelfTest {")
+        .next()
+        .unwrap();
+    for required in [
+        "LBB_WINDOWS_NESTED_JOB_RUNNER_SELF_TEST_NONCE",
+        "$lifetimeJob = New-WorkerLifetimeJob `\n            -AllowChildBreakaway `",
+        "test-windows-computer-use.ps1",
+        "$runnerCapture = Start-CapturedProcess $runnerInfo $runnerOut $runnerErr",
+        "$runnerExit = Complete-CapturedProcess",
+        "Windows computer-use acceptance self-test passed.",
+        "Nested guard/lifetime Job runner self-test passed.",
+    ] {
+        assert!(
+            nested_job_runner_self_test.contains(required),
+            "guard-plus-lifetime runner self-test is missing: {required}"
+        );
+    }
     let self_test = coordinator
         .split("function Invoke-SelfTest {")
         .nth(1)
@@ -5609,6 +5807,13 @@ fn windows_acceptance_coordinator_owns_children_and_delays_watcher_until_marker(
         "The staged loader self-test crossed a candidate execution boundary.",
         "The fresh staged worker-support loader self-test failed.",
         "WaitForNameAbsenceForSelfTest(\n            \"Local\\LBBWindowsAcceptanceCoordinatorLoaderSelfTest-$workerSupportProbeNonce\"",
+        "$nestedRunnerSelfTestNonce = [Guid]::NewGuid().ToString(\"N\")",
+        "$nestedRunnerSelfTestResult = @(Start-DetachedWorkerProcess",
+        "\"-InternalNestedJobRunnerSelfTestNonce\", $nestedRunnerSelfTestNonce",
+        "$nestedRunnerSelfTestProcess.TransferGuardOwnership()",
+        "\"Nested guard/lifetime Job runner self-test passed.\"",
+        "The exact guard-plus-lifetime Job runner self-test failed.",
+        "The nested-Job runner self-test crossed a candidate execution boundary.",
     ] {
         assert!(
             self_test.contains(required),
@@ -5636,6 +5841,9 @@ fn windows_acceptance_coordinator_owns_children_and_delays_watcher_until_marker(
     let bind_job = worker
         .find("$workerLifetimeJob = New-WorkerLifetimeJob")
         .unwrap();
+    assert!(worker[bind_job..].starts_with(
+        "$workerLifetimeJob = New-WorkerLifetimeJob `\n            -AllowChildBreakaway `"
+    ));
     let acquire_mutex = worker.find("$exclusiveMutex.WaitOne(0)").unwrap();
     let worker_record = worker.find("Write-CreateOnceJson $files.Worker").unwrap();
     let ownership_record = worker.find("Assert-ExactOwnershipRecord").unwrap();
@@ -6056,7 +6264,7 @@ fn windows_foreground_arm_handoff_watcher_is_strict_read_only_and_non_authoritat
         .replace("\r\n", "\n");
 
     for required in [
-        "$script:ProductVersion = \"0.12.33\"",
+        "$script:ProductVersion = \"0.12.34\"",
         "$script:MarkerSchemaVersion = 2",
         "function Assert-ExactPropertyOrder {",
         "function Assert-ExactMarkerSchema {",
@@ -6201,7 +6409,7 @@ fn windows_foreground_arm_handoff_watcher_is_strict_read_only_and_non_authoritat
         "$markerReader = { return Read-AtomicRequestMarker $markerPath $operatorDirectory }.GetNewClosure()"
     ));
     assert!(runner.contains("-ProductVersion $Version"));
-    assert!(runner.contains("-ProductVersion \"0.12.33\""));
+    assert!(runner.contains("-ProductVersion \"0.12.34\""));
     assert!(runner.contains("maximumClickAttempts -ne 1"));
     assert!(runner.contains("maximumClickAttempts -ne 0"));
 }

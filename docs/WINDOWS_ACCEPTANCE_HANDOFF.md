@@ -21,10 +21,18 @@ candidate has been built, downloaded, or executed.
 > but its source-compiled app-share self-test emitted an extra stdout line and
 > failed before permission probes, quiet-seat stabilization, or candidate
 > process launch. Stock Chrome, tagging, and publication did not run for any of
-> those versions. Version 0.12.33 keeps the strict frame-authority checks,
-> restores and enforces the exact self-test output contract, and requires
-> entirely fresh candidate and acceptance evidence. Do not reuse or relabel any
-> earlier bytes or results.
+> those versions. Version 0.12.33 restored and enforced the exact self-test
+> output contract and passed both fresh macOS lanes. Its single Windows attempt
+> then failed closed at `build-dedicated-fixture` before a fixture executable,
+> candidate product process, Chrome action, tag, or publication existed. The
+> sanitized terminal record is retained under
+> `evidence/v0.12.33/computer/attempts/withdrawn-81bda2a-windows-fixture-build-failure/`.
+> Version 0.12.34 keeps the strict frame-authority checks, permits only explicit
+> child breakaway from both the detached-worker guard Job and coordinator
+> lifetime Job, atomically creates each runner-owned child in its private
+> kill-on-close Job, and exercises the actual guard-plus-lifetime fixture build
+> in source-only self-tests. It requires entirely fresh candidate
+> and acceptance evidence. Do not reuse or relabel earlier bytes or results.
 
 ## Remaining release boundary
 

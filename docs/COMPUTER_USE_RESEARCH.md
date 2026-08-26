@@ -74,7 +74,7 @@ Chromium's Cancel path marks the detach reason `canceled_by_user`, fails pending
 
 Attaching only around a click and immediately detaching makes the warning flash or disappear and removes the person's reliable indication of ongoing authority. The bridge therefore holds the attachment for an explicit, expiring lease. Unexpected detach is a hard revocation; there is no synthetic DOM-click fallback.
 
-Debugger ownership is exclusive at the tab boundary. While Local Browser Bridge holds its lease, a second debugger-based controller cannot attach to that tab. The v0.12.33 acceptance protocol therefore releases every Chrome Computer Use surface before browser candidate execution and never uses Chrome MCP through independent review. The deliberate macOS lane is narrower: one separately authorized app share is bound only to the non-product acceptance app, and its single button action cannot inspect or control the product target. The exact candidate-bound helper uses only the authenticated loopback API for stock-Chrome UI, the native picker, the extension popup, exact-window sharing, native input, and retained screenshots; the Local Browser Bridge API executes the browser-method matrix. A separate reviewer reads only immutable digest-bound exported image files, and preflight/postflight records attest that no competing browser-control surface was used or resumed. A screenshot made by a competing debugger client is not valid active-lease evidence.
+Debugger ownership is exclusive at the tab boundary. While Local Browser Bridge holds its lease, a second debugger-based controller cannot attach to that tab. The v0.12.34 acceptance protocol therefore releases every Chrome Computer Use surface before browser candidate execution and never uses Chrome MCP through independent review. The deliberate macOS lane is narrower: one separately authorized app share is bound only to the non-product acceptance app, and its single button action cannot inspect or control the product target. The exact candidate-bound helper uses only the authenticated loopback API for stock-Chrome UI, the native picker, the extension popup, exact-window sharing, native input, and retained screenshots; the Local Browser Bridge API executes the browser-method matrix. A separate reviewer reads only immutable digest-bound exported image files, and preflight/postflight records attest that no competing browser-control surface was used or resumed. A screenshot made by a competing debugger client is not valid active-lease evidence.
 
 ### 2. The extension's page overlay
 
@@ -116,7 +116,7 @@ Local Browser Bridge applies the same class of invariant at narrower layers: Web
 
 Interceptor's current macOS source independently validates several implementation choices used here: AX before pixels, `CGEvent.postToPid` for background delivery, ScreenCaptureKit for native frames, an explicit wait for the first frame, and rejection of callbacks after stop. It also shows the limitation of stopping at the component level. Its continuous app mode selects the first window owned by a named application, caches a latest JPEG without a source sequence or dropped-frame proof, and routes synthetic input to a PID rather than proving the exact window receiver. Local Browser Bridge therefore keeps the exact `(PID, native window id)` capability, monotonic source sequence, bounded replacement accounting, receiver proof, and foreground/focus invariants instead of treating a successful per-PID post as an accepted exact-window action.
 
-OpenKosmos prioritizes a different product surface: a persistent click-through cursor on the physical desktop, one-time action confirmations, a fresh foreground-app allowlist check, cancellation checkpoints, and an audit trail. Those are strong visibility and consent references. Its actuator still uses the shared physical input seat and may focus the target, so adopting its overlay would not make its transport non-interrupting. Version 0.12.33 keeps returned-frame pointer evidence and target-routed input; a trusted native Stop/Esc surface and a physical-desktop overlay remain explicitly open deltas rather than inferred from capture.
+OpenKosmos prioritizes a different product surface: a persistent click-through cursor on the physical desktop, one-time action confirmations, a fresh foreground-app allowlist check, cancellation checkpoints, and an audit trail. Those are strong visibility and consent references. Its actuator still uses the shared physical input seat and may focus the target, so adopting its overlay would not make its transport non-interrupting. Version 0.12.34 keeps returned-frame pointer evidence and target-routed input; a trusted native Stop/Esc surface and a physical-desktop overlay remain explicitly open deltas rather than inferred from capture.
 
 ### Current real-profile browser relays: lifecycle recovery without durable handback
 
@@ -128,7 +128,7 @@ Browser Bridge 0.16.0 pushes the passive-observation side further. Its watch mod
 
 BackgroundComputerUse and DSH both prioritize semantic state plus application-owned rereads after action. BackgroundComputerUse adds a compact state token derived from window metadata, AX projection, focus/selection, and image dimensions; DSH makes every ref snapshot-scoped, rejects a stale snapshot, and returns a fresh bounded observation after exactly one action. DSH also combines AX with Vision OCR for semantic gaps and refuses a Stage Manager shelf-thumbnail geometry mismatch before asking ScreenCaptureKit to capture it.
 
-The useful adoption is the policy, not their code: stale state never authorizes a guess, each action produces or requires a successor observation, and visual-only state needs pixels because a semantic token can remain unchanged. Version 0.12.33 carries layered observation/share identities, exact receiver proof, application-owned semantic postconditions, persistent native source sequences, dropped-frame accounting, and route-versus-pointer attribution. It does not claim BackgroundComputerUse's or DSH's native click-through overlay, broader semantic inventory, or OCR fusion; unlike both reviewed one-shot capture paths, its live-share contract is a persistent SCStream/WGC stream. BackgroundComputerUse's reviewed random-port loopback server also exposes no bearer-authentication or exact-Host gate, so it is a component benchmark rather than a transport-security reference.
+The useful adoption is the policy, not their code: stale state never authorizes a guess, each action produces or requires a successor observation, and visual-only state needs pixels because a semantic token can remain unchanged. Version 0.12.34 carries layered observation/share identities, exact receiver proof, application-owned semantic postconditions, persistent native source sequences, dropped-frame accounting, and route-versus-pointer attribution. It does not claim BackgroundComputerUse's or DSH's native click-through overlay, broader semantic inventory, or OCR fusion; unlike both reviewed one-shot capture paths, its live-share contract is a persistent SCStream/WGC stream. BackgroundComputerUse's reviewed random-port loopback server also exposes no bearer-authentication or exact-Host gate, so it is a component benchmark rather than a transport-security reference.
 
 ### ParaDesk: a separate input seat is a different product mode
 
@@ -206,14 +206,14 @@ The helper opens no listening socket. It authenticates outbound to loopback and 
 - The v0.12.20 release-only deliberate-concurrency design used a separate
   runner-owned pointer prompt and sustained HID advances. That design is
   historical; its physical-pointer components now provide only optional
-  adversarial coverage and cannot satisfy v0.12.33 publication.
+  adversarial coverage and cannot satisfy v0.12.34 publication.
 - Version 0.12.22 replaced that dependency with a nonactivating acceptance app
   and one exact app-share button. Version 0.12.23 retained the surface while
   separating sealed action-pointer evidence from keyboard-aware independent
   system evidence. Version 0.12.24 added a strictly newer
   same-share/same-target/same-geometry frame after the app-share `ACTION` receipt
   and within the reserved deadline before deriving click authority; version
-  0.12.33 retains that boundary. The
+  0.12.34 retains that boundary. The
   create-once request/start/complete chain is orchestration evidence, not a
   notification-only signal and not product authority. Product authority and
   effect proof remain the authenticated bridge request, sealed exact-target
@@ -278,7 +278,7 @@ preserved on branch
 [`evidence/v0.12.23-macos-app-share-stale-frame-32746618027`](https://github.com/flrngel/local-browser-bridge/tree/4e4db75a4ede915d982d139a82dacac8a6c4772a/evidence/v0.12.23/computer/attempts/withdrawn-9e50811-macos-app-share-stale-frame),
 not relabelled as v0.12.24, v0.12.25, or v0.12.26 evidence. Version 0.12.24 added the
 bounded successor-frame wait; version 0.12.26 retained the classifier separation,
-and version 0.12.33 carries it forward unchanged while waiting within the
+and version 0.12.34 carries it forward unchanged while waiting within the
 reserved handoff deadline for a strictly newer streamed
 frame with the same share ID, exact target, and unchanged window/image geometry
 before deriving the product click from that successor.
@@ -390,11 +390,16 @@ product dispatch. Version 0.12.32 enlarged and made that refresh abortable; its
 one trusted candidate then failed a source-compiled app-share self-test on an
 extra stdout line before permissions, quiet-seat stabilization, or candidate
 process launch. Stock Chrome and publication did not run for any of these
-candidates. Version 0.12.33 removes the stray line and enforces the same exact
+candidates. Version 0.12.33 removed the stray line and enforced the same exact
 self-test stdout, empty stderr, and zero exit in CI, candidate construction, and
-the packaged acceptance rig.
+the packaged acceptance rig. Its two fresh macOS lanes passed, but its one
+Windows attempt failed before fixture construction completed because the
+compiler child remained nested in the coordinator Job chain. No product binary,
+Chrome action, tag, or publication followed. Version 0.12.34 uses the documented
+breakaway-plus-atomic-Job-list pattern and tests the exact nested fixture build
+before another candidate can be constructed.
 
-Version 0.12.33 requires two fresh, sequential, non-mergeable runs of one exact
+Version 0.12.34 requires two fresh, sequential, non-mergeable runs of one exact
 packaged macOS candidate. Before candidate execution in either lane, the source-bound
 native SystemProbe requires a 30-second sampled quiet epoch with at least 60
 stable 500 ms transitions. Pointer, foreground/focus/front-window, cursor, or
