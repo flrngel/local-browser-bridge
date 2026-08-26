@@ -841,12 +841,77 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         "MACOS_ACCEPTANCE_SHA256=",
         "complete Phase 1 visual review first",
         "complete Phase 2 visual review first",
+        "assert_quiet_readiness_record()",
+        "QUIET_READINESS_JSON=",
+        "DELIBERATE_READINESS_JSON=",
+        "--quiet-readiness",
+        ".kind == \"macos-quiet-seat-readiness\"",
+        ".status == \"ready\"",
+        ".acceptanceEvidence == false",
+        ".candidateInvocations == 0",
+        ".requiredStableMilliseconds == 30000",
+        ".maximumWaitMilliseconds == 1800000",
+        ".sampleIntervalMilliseconds == 500",
+        ".requiredStableTransitions == 60",
+        "(.stableDurationMilliseconds | type == \"number\" and . == floor",
+        "(.observedSamples | type == \"number\" and . == floor",
+        "(.stableTransitions | type == \"number\" and . == floor",
+        "(.resetCount | type == \"number\" and . == floor",
+        "all($counts[]; type == \"number\" and . == floor",
+        ".resetCauseCounts[.lastResetCause] >= 1",
+        ".monitoringUnknown == false",
+        ".probeFailureCategory == null",
+        ".rawProbeDataRetained == false",
     ] {
         assert!(
             playbook.contains(playbook_boundary),
             "macOS acceptance playbook is missing a review boundary: {playbook_boundary}"
         );
     }
+
+    let phase_1 = playbook
+        .split("### Phase 1: bind the candidate, run quiet, then stop for review")
+        .nth(1)
+        .unwrap()
+        .split("### Phase 2: require quiet review, run deliberate, then stop for review")
+        .next()
+        .unwrap();
+    let phase_1_readiness = phase_1.find("QUIET_READINESS_JSON=").unwrap();
+    let phase_1_assertion = phase_1
+        .find("assert_quiet_readiness_record \"$QUIET_READINESS_JSON\"")
+        .unwrap();
+    let phase_1_candidate = phase_1
+        .find("\"$SERVER\" \"$HELPER\" \"$QUIET_DIR\"")
+        .unwrap();
+    assert!(phase_1_readiness < phase_1_assertion && phase_1_assertion < phase_1_candidate);
+
+    let phase_2 = playbook
+        .split("### Phase 2: require quiet review, run deliberate, then stop for review")
+        .nth(1)
+        .unwrap()
+        .split("### Phase 3: require both reviews and finalize create-once")
+        .next()
+        .unwrap();
+    let phase_2_review = phase_2
+        .find(": \"${QUIET_REVIEWED_RESULT_SHA256:?complete Phase 1 visual review first}\"")
+        .unwrap();
+    let phase_2_readiness = phase_2.find("DELIBERATE_READINESS_JSON=").unwrap();
+    let phase_2_assertion = phase_2
+        .find("assert_quiet_readiness_record \"$DELIBERATE_READINESS_JSON\"")
+        .unwrap();
+    let phase_2_candidate = phase_2
+        .find("\"$SERVER\" \"$HELPER\" \"$DELIBERATE_DIR\"")
+        .unwrap();
+    assert!(
+        phase_2_review < phase_2_readiness
+            && phase_2_readiness < phase_2_assertion
+            && phase_2_assertion < phase_2_candidate
+    );
+    assert_eq!(
+        playbook.matches("--quiet-readiness").count(),
+        3,
+        "the generic readiness example plus exactly two fresh pre-lane calls are required"
+    );
 
     for integration in [&ci, &local] {
         assert!(

@@ -173,14 +173,14 @@ const GENERATED_OUTPUT_NAMES = [
 const bearerToken = randomBytes(32).toString("base64url");
 
 const rigArguments = process.argv.slice(2);
-if (rigArguments.length === 1 && rigArguments[0] === "--self-test") {
-  await runRigSelfTest();
-  process.exit(0);
-}
-if (rigArguments.length === 1 && rigArguments[0] === "--quiet-readiness") {
-  process.exit(await runQuietReadinessMode());
-}
-
+const selfTestMode = rigArguments.length === 1 && rigArguments[0] === "--self-test";
+const quietReadinessMode =
+  rigArguments.length === 1 && rigArguments[0] === "--quiet-readiness";
+const quietReadinessNonzeroSelfTestMode =
+  rigArguments.length === 1 &&
+  rigArguments[0] === "--quiet-readiness-self-test-nonzero";
+const standaloneMode =
+  selfTestMode || quietReadinessMode || quietReadinessNonzeroSelfTestMode;
 const preparePackageMode = rigArguments[0] === "--prepare-package";
 const preparePackageArguments = preparePackageMode ? rigArguments.slice(1) : [];
 if (preparePackageMode && preparePackageArguments.length !== 4) {
@@ -211,8 +211,8 @@ const [
   expectedArtifactId,
   expectedArtifactZipSha256,
   pointerEvidenceLane = "quiet",
-] = preparePackageMode ? [] : rigArguments;
-if (!preparePackageMode && (
+] = preparePackageMode || standaloneMode ? [] : rigArguments;
+if (!preparePackageMode && !standaloneMode && (
   !serverInput || !helperInput || !outputInput || !scratchParentInput ||
   !archiveInput || !sumsInput || !expectedManifestSha256 || !expectedSourceSha ||
   !expectedWorkflowRunId || !expectedWorkflowRunAttempt ||
@@ -223,7 +223,7 @@ if (!preparePackageMode && (
   );
   process.exit(2);
 }
-for (const [label, value, pattern] of preparePackageMode ? [] : [
+for (const [label, value, pattern] of preparePackageMode || standaloneMode ? [] : [
   ["manifest SHA-256", expectedManifestSha256, /^[0-9a-f]{64}$/],
   ["source SHA", expectedSourceSha, /^[0-9a-f]{40}$/],
   ["workflow run ID", expectedWorkflowRunId, /^[1-9][0-9]*$/],
@@ -236,17 +236,28 @@ for (const [label, value, pattern] of preparePackageMode ? [] : [
     process.exit(2);
   }
 }
-if (!preparePackageMode && !POINTER_EVIDENCE_LANES.has(pointerEvidenceLane)) {
+if (
+  !preparePackageMode && !standaloneMode &&
+  !POINTER_EVIDENCE_LANES.has(pointerEvidenceLane)
+) {
   console.error("Pointer evidence lane must be quiet or deliberate-concurrency.");
   process.exit(2);
 }
 
-const serverPath = preparePackageMode ? null : resolve(serverInput);
-const helperPath = preparePackageMode ? null : resolve(helperInput);
-const outputDir = resolve(preparePackageMode ? prepareOutputInput : outputInput);
-const scratchParent = preparePackageMode ? null : resolve(scratchParentInput);
-const archivePath = resolve(preparePackageMode ? prepareArchiveInput : archiveInput);
-const sumsPath = resolve(preparePackageMode ? prepareSumsInput : sumsInput);
+const serverPath = preparePackageMode || standaloneMode ? null : resolve(serverInput);
+const helperPath = preparePackageMode || standaloneMode ? null : resolve(helperInput);
+const outputDir = standaloneMode
+  ? ""
+  : resolve(preparePackageMode ? prepareOutputInput : outputInput);
+const scratchParent = preparePackageMode || standaloneMode
+  ? null
+  : resolve(scratchParentInput);
+const archivePath = standaloneMode
+  ? ""
+  : resolve(preparePackageMode ? prepareArchiveInput : archiveInput);
+const sumsPath = standaloneMode
+  ? ""
+  : resolve(preparePackageMode ? prepareSumsInput : sumsInput);
 const rigSourcePath = fileURLToPath(import.meta.url);
 const rigSourceDirectory = dirname(rigSourcePath);
 const fixtureSource = resolve(rigSourceDirectory, "HelperEvidenceFixture.swift");
@@ -439,6 +450,19 @@ function requireCheck(name, passed, detail) {
 }
 
 const delay = (milliseconds) => new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
+
+// Standalone modes dispatch only after every module-scoped binding they can
+// reach has been initialized. This keeps real CLI failures inside the bounded,
+// sanitized readiness taxonomy instead of turning them into a TDZ exception.
+if (selfTestMode) {
+  await runRigSelfTest();
+  process.exit(0);
+}
+if (quietReadinessMode || quietReadinessNonzeroSelfTestMode) {
+  process.exit(await runQuietReadinessMode({
+    forceProbeNonzero: quietReadinessNonzeroSelfTestMode,
+  }));
+}
 
 async function waitFor(description, predicate, timeoutMs = 15_000) {
   const deadline = Date.now() + timeoutMs;
@@ -1740,29 +1764,77 @@ function quietSeatSampleMonitoringState(sample) {
   if (typeof sample?.foregroundTransitionObserved !== "boolean") {
     return { kind: "unknown", cause: "foreground-transition-unreadable" };
   }
-  if (sample.foregroundTransitionObserved) {
-    return { kind: "changed", cause: "foreground-transition" };
-  }
   if (
-    sample?.foregroundIdentityStable !== true ||
-    sample?.rawForegroundIdentityStable !== true ||
-    !Number.isSafeInteger(sample?.foregroundPID) || sample.foregroundPID < 1 ||
-    !Number.isSafeInteger(sample?.rawForegroundPID) ||
-    sample.rawForegroundPID !== sample.foregroundPID ||
-    typeof sample?.rawForegroundPSN !== "string" || sample.rawForegroundPSN.length !== 16 ||
-    !Number.isSafeInteger(sample?.frontWindowID) || sample.frontWindowID < 1
+    typeof sample?.foregroundIdentityStable !== "boolean" ||
+    typeof sample?.rawForegroundIdentityStable !== "boolean"
+  ) {
+    return { kind: "unknown", cause: "foreground-identity-unreadable" };
+  }
+  const workspaceIdentityReadable =
+    Number.isSafeInteger(sample?.foregroundPID) && sample.foregroundPID > 0 &&
+    Number.isSafeInteger(sample?.frontWindowID) && sample.frontWindowID > 0;
+  const rawIdentityReadable =
+    Number.isSafeInteger(sample?.rawForegroundPID) &&
+    sample.rawForegroundPID === sample.foregroundPID &&
+    typeof sample?.rawForegroundPSN === "string" &&
+    /^[0-9a-f]{16}$/.test(sample.rawForegroundPSN);
+  const rawIdentityUnavailable =
+    sample?.rawForegroundPID === 0 && sample?.rawForegroundPSN === "";
+  const foregroundAXIdentityReadable =
+    Number.isSafeInteger(sample?.foregroundAXFocusedWindowID) &&
+    sample.foregroundAXFocusedWindowID > 0 &&
+    Number.isSafeInteger(sample?.foregroundAXMainWindowID) &&
+    sample.foregroundAXMainWindowID > 0 &&
+    sample.foregroundAXFocusedWindowID === sample.foregroundAXMainWindowID &&
+    sample?.foregroundAXFrontmost === true;
+  const foregroundAXUnavailable =
+    sample?.foregroundAXProbeHealthy === false &&
+    sample?.foregroundAXFocusedWindowID === 0 &&
+    sample?.foregroundAXMainWindowID === 0 &&
+    sample?.foregroundAXFrontmost === false;
+
+  if (sample.foregroundTransitionObserved) {
+    if (sample.foregroundIdentityStable === false) {
+      if (
+        sample.rawForegroundIdentityStable !== false ||
+        sample?.foregroundPID !== 0 ||
+        sample?.frontWindowID !== 0 ||
+        !rawIdentityUnavailable
+      ) {
+        return { kind: "unknown", cause: "foreground-identity-unreadable" };
+      }
+      if (!foregroundAXUnavailable) {
+        return { kind: "unknown", cause: "foreground-ax-identity-unreadable" };
+      }
+      return { kind: "changed", cause: "foreground-transition" };
+    }
+    if (sample.rawForegroundIdentityStable === false) {
+      if (!workspaceIdentityReadable || !rawIdentityUnavailable) {
+        return { kind: "unknown", cause: "foreground-identity-unreadable" };
+      }
+      if (sample?.foregroundAXProbeHealthy !== true) {
+        return { kind: "unknown", cause: "foreground-ax-probe-unhealthy" };
+      }
+      if (!foregroundAXIdentityReadable) {
+        return { kind: "unknown", cause: "foreground-ax-identity-unreadable" };
+      }
+      return { kind: "changed", cause: "foreground-transition" };
+    }
+    return { kind: "unknown", cause: "transition-unclassified" };
+  }
+
+  if (
+    sample.foregroundIdentityStable !== true ||
+    sample.rawForegroundIdentityStable !== true ||
+    !workspaceIdentityReadable ||
+    !rawIdentityReadable
   ) {
     return { kind: "unknown", cause: "foreground-identity-unreadable" };
   }
   if (sample?.foregroundAXProbeHealthy !== true) {
     return { kind: "unknown", cause: "foreground-ax-probe-unhealthy" };
   }
-  if (
-    !Number.isSafeInteger(sample?.foregroundAXFocusedWindowID) ||
-    sample.foregroundAXFocusedWindowID < 1 ||
-    sample.foregroundAXFocusedWindowID !== sample.foregroundAXMainWindowID ||
-    sample?.foregroundAXFrontmost !== true
-  ) {
+  if (!foregroundAXIdentityReadable) {
     return { kind: "unknown", cause: "foreground-ax-identity-unreadable" };
   }
   return { kind: "readable", cause: null };
@@ -1905,7 +1977,7 @@ function quietSeatProbeFailureSummary(error, probeFailureCategory = quietSeatPro
 
 async function executeQuietSeatReadiness({
   probe,
-  nowMilliseconds = () => Date.now(),
+  monotonicMilliseconds = () => performance.now(),
   pause = delay,
   requiredStableMilliseconds = QUIET_SEAT_REQUIRED_STABLE_MS,
   maximumWaitMilliseconds = QUIET_SEAT_MAXIMUM_WAIT_MS,
@@ -1915,7 +1987,7 @@ async function executeQuietSeatReadiness({
   let summary;
   try {
     const baseline = await probe(SYSTEM_PROBE_TIMEOUT_MS);
-    const startedAtMilliseconds = nowMilliseconds();
+    const startedAtMilliseconds = monotonicMilliseconds();
     const stabilized = await runNativeQuietSeatStabilization({
       baseline,
       waitDeadlineMilliseconds: startedAtMilliseconds + maximumWaitMilliseconds,
@@ -1923,7 +1995,7 @@ async function executeQuietSeatReadiness({
       maximumWaitMilliseconds,
       sampleIntervalMilliseconds,
       requiredStableTransitions,
-      nowMilliseconds,
+      monotonicMilliseconds,
       probe,
       pause,
       report: () => {},
@@ -1941,19 +2013,27 @@ async function executeQuietSeatReadiness({
   return quietSeatReadinessRecord(ready ? "ready" : "refused", summary);
 }
 
-async function runQuietReadinessMode() {
+async function runQuietReadinessMode({ forceProbeNonzero = false } = {}) {
   let readinessRoot = null;
   let record;
   try {
     readinessRoot = await mkdtemp(join(tmpdir(), "lbb-v01236-quiet-readiness-"));
     await chmod(readinessRoot, 0o700);
-    const sourcePath = resolve(dirname(fileURLToPath(import.meta.url)), "SystemProbe.swift");
-    const binaryPath = join(readinessRoot, "SystemProbe");
-    run("xcrun", ["swiftc", sourcePath, "-o", binaryPath]);
-    record = await executeQuietSeatReadiness({
-      probe: async (timeoutMilliseconds) =>
-        processProbe(binaryPath, null, null, timeoutMilliseconds),
-    });
+    if (forceProbeNonzero) {
+      record = await executeQuietSeatReadiness({
+        probe: async () => {
+          run(process.execPath, ["-e", "process.exit(7)"]);
+        },
+      });
+    } else {
+      const sourcePath = resolve(dirname(fileURLToPath(import.meta.url)), "SystemProbe.swift");
+      const binaryPath = join(readinessRoot, "SystemProbe");
+      run("xcrun", ["swiftc", sourcePath, "-o", binaryPath]);
+      record = await executeQuietSeatReadiness({
+        probe: async (timeoutMilliseconds) =>
+          processProbe(binaryPath, null, null, timeoutMilliseconds),
+      });
+    }
   } catch (error) {
     record = quietSeatReadinessRecord("refused", quietSeatProbeFailureSummary(error));
   }
@@ -1977,15 +2057,15 @@ async function runNativeQuietSeatStabilization({
   requiredStableMilliseconds = QUIET_SEAT_REQUIRED_STABLE_MS,
   sampleIntervalMilliseconds = QUIET_SEAT_SAMPLE_INTERVAL_MS,
   requiredStableTransitions = QUIET_SEAT_REQUIRED_STABLE_TRANSITIONS,
-  nowMilliseconds = () => Date.now(),
-  maximumWaitMilliseconds = waitDeadlineMilliseconds - nowMilliseconds(),
+  monotonicMilliseconds = () => performance.now(),
+  maximumWaitMilliseconds = waitDeadlineMilliseconds - monotonicMilliseconds(),
   probe,
   pause = delay,
   report = log,
   onSummary = () => {},
 }) {
   if (
-    !Number.isSafeInteger(waitDeadlineMilliseconds) ||
+    !Number.isFinite(waitDeadlineMilliseconds) ||
     !Number.isSafeInteger(requiredStableMilliseconds) || requiredStableMilliseconds < 1 ||
     !Number.isSafeInteger(sampleIntervalMilliseconds) || sampleIntervalMilliseconds < 1 ||
     !Number.isSafeInteger(requiredStableTransitions) || requiredStableTransitions < 1 ||
@@ -1994,11 +2074,11 @@ async function runNativeQuietSeatStabilization({
     throw new Error("the native quiet-seat stabilization policy is incomplete");
   }
 
-  const startedAtMilliseconds = nowMilliseconds();
+  const startedAtMilliseconds = monotonicMilliseconds();
   const remainingWaitMilliseconds = waitDeadlineMilliseconds - startedAtMilliseconds;
   if (
     !Number.isSafeInteger(maximumWaitMilliseconds) || maximumWaitMilliseconds < 1 ||
-    !Number.isSafeInteger(remainingWaitMilliseconds) || remainingWaitMilliseconds < 1 ||
+    !Number.isFinite(remainingWaitMilliseconds) || remainingWaitMilliseconds < 1 ||
     remainingWaitMilliseconds > maximumWaitMilliseconds
   ) {
     throw quietSeatTimeoutError();
@@ -2053,24 +2133,29 @@ async function runNativeQuietSeatStabilization({
   }
   publishSummary();
 
-  while (nowMilliseconds() < waitDeadlineMilliseconds) {
-    const remainingProbeBudgetMilliseconds = waitDeadlineMilliseconds - nowMilliseconds();
-    if (!Number.isSafeInteger(remainingProbeBudgetMilliseconds) || remainingProbeBudgetMilliseconds < 1) {
+  while (monotonicMilliseconds() < waitDeadlineMilliseconds) {
+    const remainingProbeBudgetMilliseconds =
+      waitDeadlineMilliseconds - monotonicMilliseconds();
+    if (!Number.isFinite(remainingProbeBudgetMilliseconds) || remainingProbeBudgetMilliseconds < 1) {
       break;
     }
     let sample;
     try {
-      sample = await probe(Math.min(SYSTEM_PROBE_TIMEOUT_MS, remainingProbeBudgetMilliseconds));
+      const probeTimeoutMilliseconds = Math.floor(
+        Math.min(SYSTEM_PROBE_TIMEOUT_MS, remainingProbeBudgetMilliseconds),
+      );
+      if (!Number.isSafeInteger(probeTimeoutMilliseconds) || probeTimeoutMilliseconds < 1) break;
+      sample = await probe(probeTimeoutMilliseconds);
     } catch (error) {
-      if (armProbeExpired(error, waitDeadlineMilliseconds, nowMilliseconds())) break;
+      if (armProbeExpired(error, waitDeadlineMilliseconds, monotonicMilliseconds())) break;
       failUnknown("probe-failure", quietSeatProbeFailureCategory(error));
     }
-    if (nowMilliseconds() >= waitDeadlineMilliseconds) break;
+    if (monotonicMilliseconds() >= waitDeadlineMilliseconds) break;
     summary.observedSamples += 1;
     const disposition = quietSeatTransitionDisposition(previous, sample);
     if (disposition.kind === "unknown") failUnknown(disposition.cause);
 
-    const observedAtMilliseconds = nowMilliseconds();
+    const observedAtMilliseconds = monotonicMilliseconds();
     if (disposition.kind === "reset") {
       recordReset(disposition.cause);
       summary.stableDurationMilliseconds = 0;
@@ -2081,12 +2166,13 @@ async function runNativeQuietSeatStabilization({
       );
     } else {
       summary.stableTransitions += 1;
-      summary.stableDurationMilliseconds = Math.max(
+      const stableDurationMilliseconds = Math.max(
         0,
         observedAtMilliseconds - stableEpochStartedAt,
       );
+      summary.stableDurationMilliseconds = Math.floor(stableDurationMilliseconds);
       if (
-        summary.stableDurationMilliseconds >= requiredStableMilliseconds &&
+        stableDurationMilliseconds >= requiredStableMilliseconds &&
         summary.stableTransitions >= requiredStableTransitions
       ) {
         summary.completed = true;
@@ -2097,7 +2183,8 @@ async function runNativeQuietSeatStabilization({
     }
     previous = sample;
     publishSummary();
-    const remainingPauseBudgetMilliseconds = waitDeadlineMilliseconds - nowMilliseconds();
+    const remainingPauseBudgetMilliseconds =
+      waitDeadlineMilliseconds - monotonicMilliseconds();
     if (remainingPauseBudgetMilliseconds < 1) break;
     await pause(Math.min(sampleIntervalMilliseconds, remainingPauseBudgetMilliseconds));
   }
@@ -2368,6 +2455,34 @@ function rigSelfTestPointerSample({
   };
 }
 
+function rigSelfTestWorkspaceForegroundTransitionSample() {
+  return {
+    ...rigSelfTestPointerSample(),
+    foregroundPID: 0,
+    foregroundTransitionObserved: true,
+    foregroundIdentityStable: false,
+    rawForegroundIdentityStable: false,
+    rawForegroundPID: 0,
+    rawForegroundPSN: "",
+    frontWindowID: 0,
+    foregroundAXFocusedWindowID: 0,
+    foregroundAXMainWindowID: 0,
+    foregroundAXFrontmost: false,
+    foregroundAXProbeHealthy: false,
+  };
+}
+
+function rigSelfTestRawForegroundTransitionSample() {
+  return {
+    ...rigSelfTestPointerSample(),
+    foregroundTransitionObserved: true,
+    foregroundIdentityStable: true,
+    rawForegroundIdentityStable: false,
+    rawForegroundPID: 0,
+    rawForegroundPSN: "",
+  };
+}
+
 function rigSelfTestAssert(condition, message) {
   if (!condition) throw new Error(message);
 }
@@ -2383,7 +2498,7 @@ async function runQuietSeatExecutionSelfTests() {
       requiredStableMilliseconds: 1_000,
       sampleIntervalMilliseconds: 500,
       requiredStableTransitions: 2,
-      nowMilliseconds: () => clock.value,
+      monotonicMilliseconds: () => clock.value,
       probe: async () => {
         const sample = samples.shift();
         rigSelfTestAssert(sample != null, `${expectedCause} reset test exhausted samples`);
@@ -2418,7 +2533,7 @@ async function runQuietSeatExecutionSelfTests() {
         requiredStableMilliseconds: 1_000,
         sampleIntervalMilliseconds: 500,
         requiredStableTransitions: 2,
-        nowMilliseconds: () => 0,
+        monotonicMilliseconds: () => 0,
         probe: async () => {
           if (error !== null) throw error;
           return sample;
@@ -2450,7 +2565,7 @@ async function runQuietSeatExecutionSelfTests() {
       requiredStableMilliseconds: 1_500,
       sampleIntervalMilliseconds: 500,
       requiredStableTransitions: 3,
-      nowMilliseconds: () => clock.value,
+      monotonicMilliseconds: () => clock.value,
       probe: async () => rigSelfTestPointerSample(),
       pause: async (milliseconds) => {
         clock.value += milliseconds;
@@ -2474,31 +2589,127 @@ async function runQuietSeatExecutionSelfTests() {
     );
   }
 
-  await runResetCause("hid-pointer-activity", rigSelfTestPointerSample({ mouseMoved: 1 }));
-  await runResetCause("hid-keyboard-activity", rigSelfTestPointerSample({ keyDown: 1 }));
   {
-    const clock = { value: 0 };
-    const readable = rigSelfTestPointerSample();
-    const samples = [readable, readable, readable];
+    const clock = { value: 0.125 };
+    const probeTimeouts = [];
     const result = await runNativeQuietSeatStabilization({
-      baseline: { ...readable, foregroundTransitionObserved: true },
-      waitDeadlineMilliseconds: 10_000,
+      baseline: rigSelfTestPointerSample(),
+      waitDeadlineMilliseconds: 1_200.125,
+      maximumWaitMilliseconds: 1_200,
       requiredStableMilliseconds: 1_000,
       sampleIntervalMilliseconds: 500,
       requiredStableTransitions: 2,
-      nowMilliseconds: () => clock.value,
-      probe: async () => samples.shift(),
+      monotonicMilliseconds: () => {
+        const value = clock.value;
+        clock.value += 0.125;
+        return value;
+      },
+      probe: async (timeoutMilliseconds) => {
+        probeTimeouts.push(timeoutMilliseconds);
+        return rigSelfTestPointerSample();
+      },
       pause: async (milliseconds) => {
         clock.value += milliseconds;
       },
       report: () => {},
     });
+    const persisted = JSON.parse(JSON.stringify(
+      quietSeatReadinessRecord("ready", result.summary),
+    ));
     rigSelfTestAssert(
-      result.summary.resetCount === 2 &&
-        result.summary.lastResetCause === "foreground-transition" &&
-        result.summary.resetCauseCounts["foreground-transition"] === 2,
-      "foreground-transition did not retain its bounded reset category",
+      persisted.stableDurationMilliseconds === 1_001 &&
+        Number.isSafeInteger(persisted.stableDurationMilliseconds) &&
+        probeTimeouts.length === 3 &&
+        probeTimeouts.every((timeout) => Number.isSafeInteger(timeout) && timeout >= 1),
+      "fractional monotonic samples did not persist a floored integer duration and integer probe timeouts",
     );
+  }
+
+  await runResetCause("hid-pointer-activity", rigSelfTestPointerSample({ mouseMoved: 1 }));
+  await runResetCause("hid-keyboard-activity", rigSelfTestPointerSample({ keyDown: 1 }));
+  {
+    const readable = rigSelfTestPointerSample();
+    const workspaceTransition = rigSelfTestWorkspaceForegroundTransitionSample();
+    const rawTransition = rigSelfTestRawForegroundTransitionSample();
+    for (const sample of [workspaceTransition, rawTransition]) {
+      const state = quietSeatSampleMonitoringState(sample);
+      rigSelfTestAssert(
+        state.kind === "changed" && state.cause === "foreground-transition",
+        "a real SystemProbe foreground transition shape was not classified as a reset",
+      );
+    }
+    const unreadableTransitionSamples = [
+      [workspaceTransition, { pointerActivityMonitorHealthy: false }, "pointer-monitor-unhealthy"],
+      [workspaceTransition, { cursorX: Number.NaN }, "cursor-unreadable"],
+      [workspaceTransition, { hidPointerCounters: null }, "pointer-counter-unreadable"],
+      [workspaceTransition, { hidKeyboardCounters: null }, "keyboard-counter-unreadable"],
+      [workspaceTransition, { activeSpaceProbeHealthy: false }, "active-space-probe-unhealthy"],
+      [workspaceTransition, { activeSpace: 0 }, "active-space-unreadable"],
+      [workspaceTransition, { foregroundProbeHealthy: false }, "foreground-probe-unhealthy"],
+      [workspaceTransition, { foregroundTransitionObserved: "true" }, "foreground-transition-unreadable"],
+      [workspaceTransition, { foregroundIdentityStable: null }, "foreground-identity-unreadable"],
+      [workspaceTransition, { rawForegroundIdentityStable: true }, "foreground-identity-unreadable"],
+      [workspaceTransition, { foregroundPID: 1 }, "foreground-identity-unreadable"],
+      [workspaceTransition, { frontWindowID: 1 }, "foreground-identity-unreadable"],
+      [workspaceTransition, { rawForegroundPID: 1 }, "foreground-identity-unreadable"],
+      [workspaceTransition, { rawForegroundPSN: "0000000000000001" }, "foreground-identity-unreadable"],
+      [workspaceTransition, { foregroundAXProbeHealthy: true }, "foreground-ax-identity-unreadable"],
+      [workspaceTransition, { foregroundAXFocusedWindowID: 1 }, "foreground-ax-identity-unreadable"],
+      [workspaceTransition, { foregroundAXMainWindowID: 1 }, "foreground-ax-identity-unreadable"],
+      [workspaceTransition, { foregroundAXFrontmost: true }, "foreground-ax-identity-unreadable"],
+      [rawTransition, { rawForegroundIdentityStable: true }, "transition-unclassified"],
+      [rawTransition, { foregroundPID: 0 }, "foreground-identity-unreadable"],
+      [rawTransition, { frontWindowID: 0 }, "foreground-identity-unreadable"],
+      [rawTransition, { rawForegroundPID: 1 }, "foreground-identity-unreadable"],
+      [rawTransition, { rawForegroundPSN: "0000000000000001" }, "foreground-identity-unreadable"],
+      [rawTransition, { foregroundAXProbeHealthy: false }, "foreground-ax-probe-unhealthy"],
+      [rawTransition, { foregroundAXFocusedWindowID: 0 }, "foreground-ax-identity-unreadable"],
+      [rawTransition, { foregroundAXMainWindowID: 0 }, "foreground-ax-identity-unreadable"],
+      [rawTransition, { foregroundAXMainWindowID: 999 }, "foreground-ax-identity-unreadable"],
+      [rawTransition, { foregroundAXFrontmost: false }, "foreground-ax-identity-unreadable"],
+      [readable, { foregroundTransitionObserved: true }, "transition-unclassified"],
+      [workspaceTransition, { foregroundTransitionObserved: false }, "foreground-identity-unreadable"],
+      [rawTransition, { foregroundTransitionObserved: false }, "foreground-identity-unreadable"],
+    ];
+    for (const [base, override, expectedCause] of unreadableTransitionSamples) {
+      const disposition = quietSeatTransitionDisposition(readable, {
+        ...base,
+        ...override,
+      });
+      rigSelfTestAssert(
+        disposition.kind === "unknown" && disposition.cause === expectedCause,
+        `foreground transition masked unreadable oracle category ${expectedCause}`,
+      );
+    }
+  }
+  {
+    const readable = rigSelfTestPointerSample();
+    for (const transitionSample of [
+      rigSelfTestWorkspaceForegroundTransitionSample(),
+      rigSelfTestRawForegroundTransitionSample(),
+    ]) {
+      const clock = { value: 0 };
+      const samples = [readable, readable, readable];
+      const result = await runNativeQuietSeatStabilization({
+        baseline: transitionSample,
+        waitDeadlineMilliseconds: 10_000,
+        requiredStableMilliseconds: 1_000,
+        sampleIntervalMilliseconds: 500,
+        requiredStableTransitions: 2,
+        monotonicMilliseconds: () => clock.value,
+        probe: async () => samples.shift(),
+        pause: async (milliseconds) => {
+          clock.value += milliseconds;
+        },
+        report: () => {},
+      });
+      rigSelfTestAssert(
+        result.summary.resetCount === 2 &&
+          result.summary.lastResetCause === "foreground-transition" &&
+          result.summary.resetCauseCounts["foreground-transition"] === 2,
+        "a real SystemProbe foreground transition did not retain its bounded reset category",
+      );
+    }
   }
   await runResetCause("foreground-changed", rigSelfTestPointerSample({ identity: 2 }));
   await runResetCause("focus-changed", {
@@ -2545,7 +2756,7 @@ async function runQuietSeatExecutionSelfTests() {
         requiredStableMilliseconds: 1_000,
         sampleIntervalMilliseconds: 500,
         requiredStableTransitions: 2,
-        nowMilliseconds: () => clock.value,
+        monotonicMilliseconds: () => clock.value,
         probe: async () => samples.shift(),
         pause: async (milliseconds) => {
           clock.value += milliseconds;
@@ -2569,43 +2780,81 @@ async function runQuietSeatExecutionSelfTests() {
   }
 
   {
-    const clock = { value: 0 };
-    let movement = 0;
-    let failure = null;
+    const originalDateNow = Date.now;
     try {
-      await runNativeQuietSeatStabilization({
-        baseline: rigSelfTestPointerSample(),
-        waitDeadlineMilliseconds: 1_000,
-        requiredStableMilliseconds: 5_000,
-        sampleIntervalMilliseconds: 500,
-        requiredStableTransitions: 10,
-        nowMilliseconds: () => clock.value,
-        probe: async () => rigSelfTestPointerSample({ mouseMoved: ++movement }),
-        pause: async (milliseconds) => {
-          clock.value += milliseconds;
-        },
-        report: () => {},
-      });
-    } catch (error) {
-      failure = error;
+      for (const wallJumpMilliseconds of [-24 * 60 * 60_000, 24 * 60 * 60_000]) {
+        const clock = { value: 0 };
+        const wallClock = { value: 1_800_000_000_000 };
+        const pauseIntervals = [];
+        Date.now = () => wallClock.value;
+        const stable = await runNativeQuietSeatStabilization({
+          baseline: rigSelfTestPointerSample(),
+          waitDeadlineMilliseconds: 10_000,
+          requiredStableMilliseconds: 1_000,
+          sampleIntervalMilliseconds: QUIET_SEAT_SAMPLE_INTERVAL_MS,
+          requiredStableTransitions: 2,
+          monotonicMilliseconds: () => clock.value,
+          probe: async () => rigSelfTestPointerSample(),
+          pause: async (milliseconds) => {
+            pauseIntervals.push(milliseconds);
+            clock.value += milliseconds;
+            wallClock.value += wallJumpMilliseconds;
+          },
+          report: () => {},
+        });
+        rigSelfTestAssert(
+          stable.summary.completed === true &&
+            stable.summary.stableDurationMilliseconds === 1_000 &&
+            pauseIntervals.join(",") === "500,500",
+          "a wall-clock jump changed the monotonic quiet-seat sample interval",
+        );
+
+        clock.value = 0;
+        wallClock.value = 1_800_000_000_000;
+        let movement = 0;
+        let failure = null;
+        try {
+          await runNativeQuietSeatStabilization({
+            baseline: rigSelfTestPointerSample(),
+            waitDeadlineMilliseconds: QUIET_SEAT_MAXIMUM_WAIT_MS,
+            requiredStableMilliseconds:
+              QUIET_SEAT_MAXIMUM_WAIT_MS + QUIET_SEAT_SAMPLE_INTERVAL_MS,
+            sampleIntervalMilliseconds: QUIET_SEAT_SAMPLE_INTERVAL_MS,
+            requiredStableTransitions:
+              QUIET_SEAT_MAXIMUM_WAIT_MS / QUIET_SEAT_SAMPLE_INTERVAL_MS + 1,
+            monotonicMilliseconds: () => clock.value,
+            probe: async () => rigSelfTestPointerSample({ mouseMoved: ++movement }),
+            pause: async (milliseconds) => {
+              clock.value += milliseconds;
+              wallClock.value += wallJumpMilliseconds;
+            },
+            report: () => {},
+          });
+        } catch (error) {
+          failure = error;
+        }
+        rigSelfTestAssert(
+          clock.value === QUIET_SEAT_MAXIMUM_WAIT_MS &&
+            movement ===
+              QUIET_SEAT_MAXIMUM_WAIT_MS / QUIET_SEAT_SAMPLE_INTERVAL_MS &&
+            failure?.message === quietSeatTimeoutError().message &&
+            failure?.quietSeatStabilization?.resetCount === movement &&
+            failure?.quietSeatStabilization?.lastResetCause === "hid-pointer-activity" &&
+            failure?.quietSeatStabilization?.probeFailureCategory === null &&
+            failure?.quietSeatStabilization?.completed === false,
+          "a wall-clock jump extended or shortened the immutable 30-minute monotonic deadline",
+        );
+      }
+    } finally {
+      Date.now = originalDateNow;
     }
-    rigSelfTestAssert(
-      clock.value === 1_000 &&
-        failure?.message === quietSeatTimeoutError().message &&
-        failure?.quietSeatStabilization?.resetCount === 2 &&
-        failure?.quietSeatStabilization?.lastResetCause === "hid-pointer-activity" &&
-        failure?.quietSeatStabilization?.resetCauseCounts?.["hid-pointer-activity"] === 2 &&
-        failure?.quietSeatStabilization?.probeFailureCategory === null &&
-        failure?.quietSeatStabilization?.completed === false,
-      "quiet-seat contamination extended or bypassed the immutable wait deadline",
-    );
   }
 
   {
     const clock = { value: 0 };
     const record = await executeQuietSeatReadiness({
       probe: async () => rigSelfTestPointerSample(),
-      nowMilliseconds: () => clock.value,
+      monotonicMilliseconds: () => clock.value,
       pause: async (milliseconds) => {
         clock.value += milliseconds;
       },
@@ -2636,7 +2885,7 @@ async function runQuietSeatExecutionSelfTests() {
     ];
     const record = await executeQuietSeatReadiness({
       probe: async () => samples.shift(),
-      nowMilliseconds: () => clock.value,
+      monotonicMilliseconds: () => clock.value,
       pause: async (milliseconds) => {
         clock.value += milliseconds;
       },
@@ -2658,7 +2907,7 @@ async function runQuietSeatExecutionSelfTests() {
     );
   }
   console.log(
-    "macOS quiet-seat execution regressions passed: stable completion, fixed reset causes, bounded unknown/probe refusal, reset-to-unknown refusal, immutable timeout, source-only readiness.",
+    "macOS quiet-seat execution regressions passed: stable completion, complete oracle classification, fixed reset causes, bounded unknown/probe refusal, reset-to-unknown refusal, monotonic interval/deadline, integer persisted duration/timeouts, source-only readiness.",
   );
 }
 
@@ -3101,6 +3350,44 @@ async function runRigSelfTest() {
     nonzeroSubprocessRejected = true;
   }
   rigSelfTestAssert(nonzeroSubprocessRejected, "nonzero subprocess exit was accepted");
+  const readinessNonzeroCli = spawnSync(
+    process.execPath,
+    [rigSourcePath, "--quiet-readiness-self-test-nonzero"],
+    {
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+      timeout: 10_000,
+      killSignal: "SIGKILL",
+    },
+  );
+  let readinessNonzeroRecord = null;
+  const readinessNonzeroLines = readinessNonzeroCli.stdout
+    ?.split("\n")
+    .filter((line) => line.length > 0) ?? [];
+  try {
+    if (readinessNonzeroLines.length === 1) {
+      readinessNonzeroRecord = JSON.parse(readinessNonzeroLines[0]);
+    }
+  } catch {
+    readinessNonzeroRecord = null;
+  }
+  rigSelfTestAssert(
+    readinessNonzeroCli.error == null &&
+      readinessNonzeroCli.signal == null &&
+      readinessNonzeroCli.status === 1 &&
+      readinessNonzeroCli.stderr === "" &&
+      readinessNonzeroRecord?.status === "refused" &&
+      readinessNonzeroRecord?.acceptanceEvidence === false &&
+      readinessNonzeroRecord?.candidateInvocations === 0 &&
+      readinessNonzeroRecord?.monitoringUnknown === true &&
+      readinessNonzeroRecord?.lastUnknownCause === "probe-failure" &&
+      readinessNonzeroRecord?.probeFailureCategory === "nonzero-exit" &&
+      readinessNonzeroRecord?.rawProbeDataRetained === false &&
+      !/(error|path|stdout|stderr|foregroundPID|rawForegroundPSN|cursorX)/.test(
+        JSON.stringify(readinessNonzeroRecord),
+      ),
+    "real quiet-readiness CLI did not classify a startup-order nonzero subprocess fail closed",
+  );
   let requestPublicationDeadlineRejected = false;
   try {
     remainingRequestPublicationTime(10_000, "self-test", 10_000);
@@ -5115,14 +5402,14 @@ async function main() {
     "stable NSWorkspace/raw PSN plus exact AX focused/main-window identities are available",
   );
 
-  const quietSeatStartedAtMilliseconds = Date.now();
+  const quietSeatStartedAtMonotonicMilliseconds = performance.now();
   try {
     const stabilized = await runNativeQuietSeatStabilization({
       baseline: permissionProbe,
       waitDeadlineMilliseconds:
-        quietSeatStartedAtMilliseconds + QUIET_SEAT_MAXIMUM_WAIT_MS,
+        quietSeatStartedAtMonotonicMilliseconds + QUIET_SEAT_MAXIMUM_WAIT_MS,
       maximumWaitMilliseconds: QUIET_SEAT_MAXIMUM_WAIT_MS,
-      nowMilliseconds: () => Date.now(),
+      monotonicMilliseconds: () => performance.now(),
       probe: async (timeoutMilliseconds) =>
         processProbe(systemProbeBinary, null, null, timeoutMilliseconds),
       onSummary: (summary) => {

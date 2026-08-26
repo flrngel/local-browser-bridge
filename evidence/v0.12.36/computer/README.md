@@ -554,6 +554,62 @@ cd "$SOURCE_ROOT"
 PRIVATE_PARENT="$(cd "$PRIVATE_PARENT" && pwd -P)"
 [[ "$(stat -f '%HT:%Lp:%u' "$PRIVATE_PARENT")" == "Directory:700:$(id -u)" ]]
 
+assert_quiet_readiness_record() {
+  jq -e '
+    (keys == [
+      "acceptanceEvidence", "candidateInvocations", "completed",
+      "diagnosticSchemaVersion", "kind", "lastResetCause",
+      "lastUnknownCause", "maximumWaitMilliseconds", "monitoringUnknown",
+      "observedSamples", "probeFailureCategory", "productVersion",
+      "rawProbeDataRetained", "requiredStableMilliseconds",
+      "requiredStableTransitions", "resetCauseCounts", "resetCount",
+      "sampleIntervalMilliseconds", "schemaVersion", "stableDurationMilliseconds",
+      "stableTransitions", "status"
+    ]) and
+    .schemaVersion == 1 and
+    .kind == "macos-quiet-seat-readiness" and
+    .productVersion == "0.12.36" and
+    .status == "ready" and
+    .acceptanceEvidence == false and
+    .candidateInvocations == 0 and
+    .requiredStableMilliseconds == 30000 and
+    .maximumWaitMilliseconds == 1800000 and
+    .sampleIntervalMilliseconds == 500 and
+    .requiredStableTransitions == 60 and
+    .completed == true and
+    (.stableDurationMilliseconds | type == "number" and . == floor and
+      . >= 30000 and . <= 1800000) and
+    (.observedSamples | type == "number" and . == floor and
+      . >= 61 and . <= 1000000) and
+    (.stableTransitions | type == "number" and . == floor and
+      . >= 60 and . <= 1000000) and
+    (.resetCount | type == "number" and . == floor and
+      . >= 0 and . <= 1000000) and
+    .monitoringUnknown == false and
+    .diagnosticSchemaVersion == 1 and
+    .lastUnknownCause == null and
+    .probeFailureCategory == null and
+    .rawProbeDataRetained == false and
+    (.resetCauseCounts as $counts |
+      ($counts | keys) == [
+        "active-space-changed", "focus-changed", "foreground-changed",
+        "foreground-transition", "hid-keyboard-activity", "hid-pointer-activity"
+      ] and
+      all($counts[]; type == "number" and . == floor and
+        . >= 0 and . <= 1000000) and
+      ([$counts[]] | add) == .resetCount) and
+    ((.resetCount == 0 and .lastResetCause == null) or
+      (.resetCount > 0 and (
+        .lastResetCause == "foreground-transition" or
+        .lastResetCause == "hid-pointer-activity" or
+        .lastResetCause == "hid-keyboard-activity" or
+        .lastResetCause == "foreground-changed" or
+        .lastResetCause == "focus-changed" or
+        .lastResetCause == "active-space-changed"
+      ) and .resetCauseCounts[.lastResetCause] >= 1))
+  ' <<<"$1" >/dev/null
+}
+
 RUN_NONCE="$(openssl rand -hex 16)"
 CANDIDATE_ROOT="$PRIVATE_PARENT/candidate-$RUN_NONCE"
 ATTEMPT_ROOT="$(mktemp -d "$PRIVATE_PARENT/lbb-v0.12.36-macos.XXXXXX")"
@@ -590,6 +646,14 @@ SERVER="$PACKAGE_ROOT/local-browser-bridge"
 HELPER="$PACKAGE_ROOT/Local Computer Helper.app/Contents/MacOS/local-computer-helper"
 QUIET_DIR="$ATTEMPT_ROOT/quiet"
 DELIBERATE_DIR="$ATTEMPT_ROOT/deliberate-concurrency"
+
+# This fresh source-only result is mandatory scheduling guidance immediately
+# before the one-shot quiet candidate lane. It is never acceptance evidence.
+QUIET_READINESS_JSON="$(
+  node evidence/v0.12.36/computer/helper-evidence-rig.mjs --quiet-readiness
+)"
+assert_quiet_readiness_record "$QUIET_READINESS_JSON"
+unset QUIET_READINESS_JSON
 
 node evidence/v0.12.36/computer/helper-evidence-rig.mjs \
   "$SERVER" "$HELPER" "$QUIET_DIR" "$SCRATCH_PARENT" \
@@ -706,6 +770,14 @@ export QUIET_REVIEWED_RESULT_SHA256
 (cd "$QUIET_DIR" && shasum -a 256 -c "$QUIET_REVIEW_MANIFEST")
 [[ "$QUIET_REVIEWED_RESULT_SHA256" == \
   "$(shasum -a 256 "$QUIET_DIR/helper-results.json" | awk '{ print $1 }')" ]]
+
+# Phase 1 readiness is not reusable. Require a second fresh source-only result
+# immediately before the one-shot deliberate-concurrency candidate lane.
+DELIBERATE_READINESS_JSON="$(
+  node evidence/v0.12.36/computer/helper-evidence-rig.mjs --quiet-readiness
+)"
+assert_quiet_readiness_record "$DELIBERATE_READINESS_JSON"
+unset DELIBERATE_READINESS_JSON
 
 node evidence/v0.12.36/computer/helper-evidence-rig.mjs \
   "$SERVER" "$HELPER" "$DELIBERATE_DIR" "$SCRATCH_PARENT" \

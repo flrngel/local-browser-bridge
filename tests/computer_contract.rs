@@ -1143,7 +1143,7 @@ fn macos_v0_12_14_quiet_lane_stabilizes_the_native_seat_before_candidate_executi
         "native quiet-seat monitoring became unknown or unhealthy before product execution",
         "summary.completedBeforeCandidateExecution = true",
         "rawPointerDataRetained: false",
-        "macOS quiet-seat execution regressions passed: stable completion, fixed reset causes, bounded unknown/probe refusal, reset-to-unknown refusal, immutable timeout, source-only readiness.",
+        "macOS quiet-seat execution regressions passed: stable completion, complete oracle classification, fixed reset causes, bounded unknown/probe refusal, reset-to-unknown refusal, monotonic interval/deadline, integer persisted duration/timeouts, source-only readiness.",
     ] {
         assert!(rig.contains(required), "quiet-seat rig omits {required}");
     }
@@ -1196,6 +1196,28 @@ fn macos_v0_12_14_quiet_lane_stabilizes_the_native_seat_before_candidate_executi
     assert!(whole_run > helper_start);
     assert!(rig.contains("requireActionInvariants"));
     assert!(rig.contains("requireIndependentInvariants"));
+
+    let stabilization = rig
+        .split("async function runNativeQuietSeatStabilization({")
+        .nth(1)
+        .unwrap()
+        .split("function preDispatchPointerTransitionDisposition")
+        .next()
+        .unwrap();
+    assert!(stabilization.contains("monotonicMilliseconds = () => performance.now()"));
+    assert!(!stabilization.contains("Date.now"));
+    let live_gate = rig
+        .split("const permissionProbe = processProbe(systemProbeBinary);")
+        .nth(1)
+        .unwrap()
+        .split("laneStartedAt = new Date().toISOString();")
+        .next()
+        .unwrap();
+    assert!(
+        live_gate.contains("const quietSeatStartedAtMonotonicMilliseconds = performance.now();")
+    );
+    assert!(live_gate.contains("monotonicMilliseconds: () => performance.now(),"));
+    assert!(!live_gate.contains("Date.now"));
 }
 
 #[test]
@@ -1203,10 +1225,19 @@ fn macos_v0_12_36_quiet_readiness_is_source_only_sanitized_and_non_evidence() {
     let rig = fs::read_to_string("evidence/v0.12.36/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
+    let finalizer = fs::read_to_string("scripts/finalize-macos-acceptance.mjs")
+        .unwrap()
+        .replace("\r\n", "\n");
+    let probe = fs::read_to_string("evidence/v0.12.36/computer/SystemProbe.swift")
+        .unwrap()
+        .replace("\r\n", "\n");
 
     for required in [
         "rigArguments.length === 1 && rigArguments[0] === \"--quiet-readiness\"",
-        "process.exit(await runQuietReadinessMode());",
+        "quietReadinessNonzeroSelfTestMode",
+        "--quiet-readiness-self-test-nonzero",
+        "process.exit(await runQuietReadinessMode({",
+        "forceProbeNonzero: quietReadinessNonzeroSelfTestMode",
         "const QUIET_SEAT_DIAGNOSTIC_SCHEMA_VERSION = 1;",
         "const QUIET_SEAT_RESET_CAUSES = [",
         "const QUIET_SEAT_UNKNOWN_CAUSES = [",
@@ -1221,8 +1252,10 @@ fn macos_v0_12_36_quiet_readiness_is_source_only_sanitized_and_non_evidence() {
         "candidateInvocations: 0",
         "rawProbeDataRetained: false",
         "async function executeQuietSeatReadiness({",
-        "async function runQuietReadinessMode()",
+        "monotonicMilliseconds = () => performance.now()",
+        "async function runQuietReadinessMode({ forceProbeNonzero = false } = {})",
         "run(\"xcrun\", [\"swiftc\", sourcePath, \"-o\", binaryPath]);",
+        "run(process.execPath, [\"-e\", \"process.exit(7)\"]);",
         "processProbe(binaryPath, null, null, timeoutMilliseconds)",
         "record.status === \"ready\" ? 0 : 1",
         "lastResetCause",
@@ -1236,6 +1269,14 @@ fn macos_v0_12_36_quiet_readiness_is_source_only_sanitized_and_non_evidence() {
         "SUBPROCESS_MALFORMED_OUTPUT",
         "source-only quiet readiness did not emit a sanitized non-evidence ready record",
         "source-only quiet readiness did not preserve bounded reset-to-unknown refusal",
+        "foreground transition masked unreadable oracle category",
+        "a wall-clock jump changed the monotonic quiet-seat sample interval",
+        "a wall-clock jump extended or shortened the immutable 30-minute monotonic deadline",
+        "summary.stableDurationMilliseconds = Math.floor(stableDurationMilliseconds);",
+        "const probeTimeoutMilliseconds = Math.floor(",
+        "sample = await probe(probeTimeoutMilliseconds);",
+        "fractional monotonic samples did not persist a floored integer duration and integer probe timeouts",
+        "real quiet-readiness CLI did not classify a startup-order nonzero subprocess fail closed",
     ] {
         assert!(rig.contains(required), "quiet readiness omits {required}");
     }
@@ -1266,7 +1307,7 @@ fn macos_v0_12_36_quiet_readiness_is_source_only_sanitized_and_non_evidence() {
     }
 
     let mode = rig
-        .split("async function runQuietReadinessMode()")
+        .split("async function runQuietReadinessMode({ forceProbeNonzero = false } = {})")
         .nth(1)
         .unwrap()
         .split("async function runNativeQuietSeatStabilization")
@@ -1285,6 +1326,86 @@ fn macos_v0_12_36_quiet_readiness_is_source_only_sanitized_and_non_evidence() {
             "quiet readiness inspects candidate material through {candidate_reference}"
         );
     }
+
+    let classifier = rig
+        .split("function quietSeatSampleMonitoringState(sample)")
+        .nth(1)
+        .unwrap()
+        .split("function quietSeatTransitionDisposition(before, after)")
+        .next()
+        .unwrap();
+    for classifier_contract in [
+        "typeof sample?.foregroundIdentityStable !== \"boolean\"",
+        "typeof sample?.rawForegroundIdentityStable !== \"boolean\"",
+        "const workspaceIdentityReadable =",
+        "const rawIdentityReadable =",
+        "const rawIdentityUnavailable =",
+        "const foregroundAXIdentityReadable =",
+        "const foregroundAXUnavailable =",
+        "if (sample.foregroundIdentityStable === false)",
+        "sample.rawForegroundIdentityStable !== false",
+        "sample?.foregroundPID !== 0",
+        "sample?.frontWindowID !== 0",
+        "if (sample.rawForegroundIdentityStable === false)",
+        "if (!workspaceIdentityReadable || !rawIdentityUnavailable)",
+        "if (!foregroundAXUnavailable)",
+        "if (!foregroundAXIdentityReadable)",
+        "return { kind: \"unknown\", cause: \"transition-unclassified\" };",
+    ] {
+        assert!(
+            classifier.contains(classifier_contract),
+            "quiet transition classifier is missing {classifier_contract}"
+        );
+    }
+    for source_contract in [
+        "let foregroundTransitionObserved = foregroundProbeHealthy &&\n    (!foregroundIdentityStable || !rawForegroundIdentityStable)",
+        "let foregroundAXProbeHealthy = foregroundIdentityStable &&",
+        "let foregroundPID = foregroundIdentityStable ? foregroundPIDBefore : 0",
+        "\"foregroundAXFocusedWindowID\": foregroundIdentityStable ? foregroundAXFocusedWindowID : 0",
+        "\"foregroundAXMainWindowID\": foregroundIdentityStable ? foregroundAXMainWindowID : 0",
+        "\"foregroundAXFrontmost\": foregroundIdentityStable && foregroundAXFrontmost",
+        "\"frontWindowID\": frontWindowIdentifier(for: foregroundPID)",
+        "\"rawForegroundPID\": rawForegroundIdentityStable ? rawForegroundBefore!.pid : 0",
+        "\"rawForegroundPSN\": rawForegroundIdentityStable\n        ? processSerialNumberHex(rawForegroundBefore!.processSerialNumber)\n        : \"\"",
+    ] {
+        assert!(
+            probe.contains(source_contract),
+            "SystemProbe transition emission changed without the JS classifier: {source_contract}"
+        );
+    }
+    for fixture_contract in [
+        "function rigSelfTestWorkspaceForegroundTransitionSample()",
+        "function rigSelfTestRawForegroundTransitionSample()",
+        "foregroundPID: 0,\n    foregroundTransitionObserved: true,\n    foregroundIdentityStable: false,\n    rawForegroundIdentityStable: false,",
+        "foregroundIdentityStable: true,\n    rawForegroundIdentityStable: false,\n    rawForegroundPID: 0,\n    rawForegroundPSN: \"\",",
+        "a real SystemProbe foreground transition shape was not classified as a reset",
+        "a real SystemProbe foreground transition did not retain its bounded reset category",
+    ] {
+        assert!(
+            rig.contains(fixture_contract),
+            "quiet transition fixture is missing {fixture_contract}"
+        );
+    }
+    assert!(!rig.contains("baseline: { ...readable, foregroundTransitionObserved: true }"));
+
+    let delay_initialization = rig.find("const delay = (milliseconds)").unwrap();
+    let standalone_dispatch = rig.find("if (selfTestMode) {").unwrap();
+    assert!(
+        delay_initialization < standalone_dispatch,
+        "standalone CLI dispatch precedes module-scoped dependency initialization"
+    );
+
+    let quiet_validation = finalizer
+        .split("function validateQuietSeatStabilization(value, lane, label)")
+        .nth(1)
+        .unwrap()
+        .split("function validateAssertions")
+        .next()
+        .unwrap();
+    assert!(quiet_validation.contains("exactInteger(\n    value.stableDurationMilliseconds,"));
+    assert!(quiet_validation.contains("exactInteger(\n    value.observedSamples,"));
+    assert!(quiet_validation.contains("exactInteger(\n    value.stableTransitions,"));
+    assert!(quiet_validation.contains("value.resetCauseCounts[value.lastResetCause] < 1"));
 }
 
 #[test]
