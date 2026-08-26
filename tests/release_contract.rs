@@ -398,64 +398,64 @@ fn windows_ci_gates_the_acceptance_coordinator_under_exact_ps51() {
 }
 
 #[test]
-fn v01230_source_is_unblocked_and_release_versions_are_aligned() {
+fn v01231_source_is_unblocked_and_release_versions_are_aligned() {
     match fs::symlink_metadata("RELEASE_BLOCKED") {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => panic!("could not inspect the release-blocker path: {error}"),
         Ok(_) => {
-            panic!("the reviewed v0.12.30 source must not retain a release-blocker file or symlink")
+            panic!("the reviewed v0.12.31 source must not retain a release-blocker file or symlink")
         }
     }
 
     for (path, required) in [
-        ("Cargo.toml", "version = \"0.12.30\""),
+        ("Cargo.toml", "version = \"0.12.31\""),
         (
             "Cargo.lock",
-            "name = \"local-browser-bridge\"\nversion = \"0.12.30\"",
+            "name = \"local-browser-bridge\"\nversion = \"0.12.31\"",
         ),
-        ("extension/manifest.json", "\"version\": \"0.12.30\""),
-        ("extension/lib.js", "export const VERSION = \"0.12.30\";"),
+        ("extension/manifest.json", "\"version\": \"0.12.31\""),
+        ("extension/lib.js", "export const VERSION = \"0.12.31\";"),
         (
             "scripts/run-windows-computer-use-acceptance.ps1",
-            "$script:ProductVersion = \"0.12.30\"",
+            "$script:ProductVersion = \"0.12.31\"",
         ),
         (
             "scripts/finalize-macos-acceptance.mjs",
-            "const PRODUCT_VERSION = \"0.12.30\";",
+            "const PRODUCT_VERSION = \"0.12.31\";",
         ),
         (
             "scripts/record-computer-helper-chain.ps1",
-            "$script:Version = \"0.12.30\"",
+            "$script:Version = \"0.12.31\"",
         ),
         (
             "scripts/test-windows-stock-chrome.ps1",
-            "$Version = \"0.12.30\"",
+            "$Version = \"0.12.31\"",
         ),
         (
             "scripts/verify-release-acceptance-evidence.sh",
-            "readonly EVIDENCE_PRODUCT_VERSION=\"0.12.30\"",
+            "readonly EVIDENCE_PRODUCT_VERSION=\"0.12.31\"",
         ),
         (
             "scripts/verify-windows-release-candidate.ps1",
-            "$ProductVersion = \"0.12.30\"",
+            "$ProductVersion = \"0.12.31\"",
         ),
         (
             "scripts/write-browser-evidence-record.ps1",
-            "$script:OperatorV2Version = \"0.12.30\"",
+            "$script:OperatorV2Version = \"0.12.31\"",
         ),
         (
             "scripts/write-stock-chrome-operator-response.ps1",
-            "$script:Version = \"0.12.30\"",
+            "$script:Version = \"0.12.31\"",
         ),
     ] {
         assert!(
             source(path).contains(required),
-            "v0.12.30 version alignment is missing from {path}: {required}"
+            "v0.12.31 version alignment is missing from {path}: {required}"
         );
     }
 
-    assert!(std::path::Path::new("evidence/v0.12.30/browser").is_dir());
-    assert!(std::path::Path::new("evidence/v0.12.30/computer").is_dir());
+    assert!(std::path::Path::new("evidence/v0.12.31/browser").is_dir());
+    assert!(std::path::Path::new("evidence/v0.12.31/computer").is_dir());
 }
 
 #[test]
@@ -653,8 +653,8 @@ fn windows_release_tooling_hashes_without_module_discovery() {
 fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_only() {
     let watcher = source("scripts/wait-macos-app-share-concurrency-handoff.mjs");
     let adversarial_watcher = source("scripts/wait-macos-pointer-concurrency-handoff.mjs");
-    let producer = source("evidence/v0.12.30/computer/helper-evidence-rig.mjs");
-    let playbook = source("evidence/v0.12.30/computer/README.md");
+    let producer = source("evidence/v0.12.31/computer/helper-evidence-rig.mjs");
+    let playbook = source("evidence/v0.12.31/computer/README.md");
     let finalizer = source("scripts/finalize-macos-acceptance.mjs");
     let verifier = source("scripts/verify-release-acceptance-evidence.sh");
     let ci = source(".github/workflows/ci.yml");
@@ -696,7 +696,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
             "the legacy pointer watcher must not gate or satisfy release"
         );
     }
-    assert!(adversarial_watcher.contains("const PRODUCT_VERSION = \"0.12.30\";"));
+    assert!(adversarial_watcher.contains("const PRODUCT_VERSION = \"0.12.31\";"));
     assert!(
         adversarial_watcher.contains("macOS pointer-concurrency handoff watcher self-test passed.")
     );
@@ -715,7 +715,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         }
     }
     for aggregate_contract in [
-        "const PRODUCT_VERSION = \"0.12.30\";",
+        "const PRODUCT_VERSION = \"0.12.31\";",
         "const RESULT_SCHEMA_VERSION = 8;",
         "const AGGREGATE_SCHEMA_VERSION = 3;",
         "const REQUEST_MARKER = \"operator/macos-app-share-concurrency-handoff-request.json\";",
@@ -732,7 +732,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
     }
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.30\";",
+        "const PRODUCT_VERSION = \"0.12.31\";",
         "const SCHEMA_VERSION = 2;",
         "const OPERATOR_DIRECTORY = \"operator\";",
         "const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;",
@@ -848,12 +848,12 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
 
     for integration in [&ci, &local] {
         assert!(
-            integration.contains("node --check evidence/v0.12.30/computer/helper-evidence-rig.mjs"),
-            "CI/local validation does not syntax-check the exact v0.12.30 macOS evidence rig"
+            integration.contains("node --check evidence/v0.12.31/computer/helper-evidence-rig.mjs"),
+            "CI/local validation does not syntax-check the exact v0.12.31 macOS evidence rig"
         );
         assert!(
             integration
-                .contains("node evidence/v0.12.30/computer/helper-evidence-rig.mjs --self-test")
+                .contains("node evidence/v0.12.31/computer/helper-evidence-rig.mjs --self-test")
         );
         assert!(
             !integration.contains("evidence/v0.12.20/computer/"),
@@ -868,7 +868,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         ] {
             assert!(
                 integration.contains(&format!(
-                    "xcrun swiftc -typecheck evidence/v0.12.30/computer/{source}"
+                    "xcrun swiftc -typecheck evidence/v0.12.31/computer/{source}"
                 )),
                 "macOS workflow does not typecheck {source}"
             );
@@ -877,7 +877,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
     assert!(ci.contains("\"$RUNNER_TEMP/lbb-app-share-handoff-self-test\" --self-test"));
     assert!(local.contains("\"$app_share_handoff_self_test\" --self-test"));
     assert!(ci.contains(
-        "xcrun swiftc -typecheck evidence/v0.12.30/computer/PhysicalPointerHandoff.swift"
+        "xcrun swiftc -typecheck evidence/v0.12.31/computer/PhysicalPointerHandoff.swift"
     ));
     for release_path in [&candidate, &local] {
         assert!(

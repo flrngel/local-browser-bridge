@@ -23,7 +23,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $script:Utf8 = [Text.UTF8Encoding]::new($false, $true)
-$script:Version = "0.12.30"
+$script:Version = "0.12.31"
 
 function ConvertFrom-JsonPreservingStrings {
     param([Parameter(Mandatory = $true, ValueFromPipeline = $true)][string]$Json)
