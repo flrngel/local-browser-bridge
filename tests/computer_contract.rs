@@ -906,8 +906,8 @@ fn background_invariant_failures_use_stage_bound_closed_vocabulary() {
 
 #[test]
 fn macos_v0_12_27_pointer_evidence_is_bounded_corroboration_not_causal_attribution() {
-    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs").unwrap();
-    let probe = fs::read_to_string("evidence/v0.12.34/computer/SystemProbe.swift").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.35/computer/helper-evidence-rig.mjs").unwrap();
+    let probe = fs::read_to_string("evidence/v0.12.35/computer/SystemProbe.swift").unwrap();
     assert!(rig.contains("failureProbeBaseline"));
     assert!(rig.contains("collectFailureDiagnostics"));
     assert!(rig.contains("systemInvariants(failureProbeBaseline.system, after)"));
@@ -953,7 +953,7 @@ fn macos_v0_12_27_pointer_evidence_is_bounded_corroboration_not_causal_attributi
     ] {
         assert!(
             rig.contains(required),
-            "missing v0.12.34 pointer contract: {required}"
+            "missing v0.12.35 pointer contract: {required}"
         );
     }
     assert!(!rig.contains("cursorUnchanged"));
@@ -999,7 +999,7 @@ fn macos_v0_12_27_pointer_evidence_is_bounded_corroboration_not_causal_attributi
 
 #[test]
 fn macos_v0_12_27_action_pointer_classifier_matches_the_sealed_action_schema() {
-    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.35/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let server = fs::read_to_string("src/server.rs")
@@ -1122,10 +1122,10 @@ fn macos_v0_12_27_action_pointer_classifier_matches_the_sealed_action_schema() {
 
 #[test]
 fn macos_v0_12_14_quiet_lane_stabilizes_the_native_seat_before_candidate_execution() {
-    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.35/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.34/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.35/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1200,22 +1200,22 @@ fn macos_v0_12_14_quiet_lane_stabilizes_the_native_seat_before_candidate_executi
 
 #[test]
 fn macos_v0_12_27_app_share_handoff_is_exact_non_authoritative_and_fail_closed() {
-    let app = fs::read_to_string("evidence/v0.12.34/computer/AppShareHandoff.swift")
+    let app = fs::read_to_string("evidence/v0.12.35/computer/AppShareHandoff.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.34/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.35/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.35/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.34/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.35/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let normalized_readme = readme.split_whitespace().collect::<Vec<_>>().join(" ");
 
     for required in [
-        "private let productVersion = \"0.12.34\"",
+        "private let productVersion = \"0.12.35\"",
         "private let stableWindowTitle = \"LBB macOS Acceptance App Share\"",
         "private let readyButtonTitle = \"START APP-SHARE CHECK\"",
         "private let armWindowSeconds: TimeInterval = 300",
@@ -1524,7 +1524,7 @@ fn macos_v0_12_27_app_share_handoff_is_exact_non_authoritative_and_fail_closed()
 
 #[test]
 fn macos_v0_12_27_refreshes_post_handoff_share_action_authority_before_click() {
-    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.35/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let computer = fs::read_to_string("src/computer.rs")
@@ -1717,7 +1717,7 @@ fn macos_v0_12_27_refreshes_post_handoff_share_action_authority_before_click() {
 fn macos_pointer_arm_state_machine_execution_regressions_pass() {
     let output = match Command::new("node")
         .args([
-            "evidence/v0.12.34/computer/helper-evidence-rig.mjs",
+            "evidence/v0.12.35/computer/helper-evidence-rig.mjs",
             "--self-test",
         ])
         .output()
@@ -1746,7 +1746,7 @@ fn macos_pointer_arm_state_machine_execution_regressions_pass() {
 
 #[test]
 fn v0_12_27_marker_identity_is_exact_on_windows_and_posix() {
-    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.35/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -2709,7 +2709,7 @@ fn withdrawn_v0_12_9_macos_cursor_invariant_attempt_is_byte_exact_and_fail_close
 
 #[test]
 fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
-    let entries = fs::read_dir("evidence/v0.12.34/computer")
+    let entries = fs::read_dir("evidence/v0.12.35/computer")
         .unwrap()
         .map(Result::unwrap)
         .map(|entry| {
@@ -2734,12 +2734,12 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
         ])
     );
 
-    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.35/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let fixture =
-        fs::read_to_string("evidence/v0.12.34/computer/HelperEvidenceFixture.swift").unwrap();
-    let readme = fs::read_to_string("evidence/v0.12.34/computer/README.md").unwrap();
+        fs::read_to_string("evidence/v0.12.35/computer/HelperEvidenceFixture.swift").unwrap();
+    let readme = fs::read_to_string("evidence/v0.12.35/computer/README.md").unwrap();
 
     assert!(rig.contains(&format!("const EXPECTED_VERSION = \"{VERSION}\";")));
     assert!(rig.contains("const EXPECTED_ARCHIVE = `local-browser-bridge-v${EXPECTED_VERSION}-macos-universal.tar.gz`;"));
@@ -2763,10 +2763,10 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
     assert!(readme.contains(&format!(
         "local-browser-bridge-v{VERSION}-macos-universal.tar.gz"
     )));
-    assert!(!rig.replace("v0.12.34", "").contains("v0.12.1"));
-    assert!(!fixture.replace("v0.12.34", "").contains("v0.12.1"));
-    assert!(!rig.replace("v0.12.34", "").contains("v0.12.2"));
-    assert!(!fixture.replace("v0.12.34", "").contains("v0.12.2"));
+    assert!(!rig.replace("v0.12.35", "").contains("v0.12.1"));
+    assert!(!fixture.replace("v0.12.35", "").contains("v0.12.1"));
+    assert!(!rig.replace("v0.12.35", "").contains("v0.12.2"));
+    assert!(!fixture.replace("v0.12.35", "").contains("v0.12.2"));
     let current_readme = readme
         .split("## Withdrawn v0.12.10 exact-candidate result")
         .next()
@@ -2813,10 +2813,10 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
 
 #[test]
 fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
-    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.35/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.34/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.35/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let binder = fs::read_to_string("scripts/fetch-verify-release-candidate.sh")
@@ -2960,7 +2960,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
 
 #[test]
 fn macos_packaged_evidence_streams_one_exact_bounded_pax_free_archive() {
-    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.35/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -3064,7 +3064,7 @@ fn macos_package_preparer_accepts_only_the_canonical_bounded_ustar_package() {
     }
 
     let repository = std::env::current_dir().unwrap();
-    let rig = repository.join("evidence/v0.12.34/computer/helper-evidence-rig.mjs");
+    let rig = repository.join("evidence/v0.12.35/computer/helper-evidence-rig.mjs");
     let temporary = tempfile::tempdir().unwrap();
     set_mode(temporary.path(), 0o700);
     let generator = temporary.path().join("make-package.py");
@@ -3134,7 +3134,7 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
         let case_root = temporary.path().join(scenario);
         fs::create_dir(&case_root).unwrap();
         set_mode(&case_root, 0o700);
-        let archive = case_root.join("local-browser-bridge-v0.12.34-macos-universal.tar.gz");
+        let archive = case_root.join("local-browser-bridge-v0.12.35-macos-universal.tar.gz");
         let generated = Command::new("python3")
             .arg(&generator)
             .arg(scenario)
@@ -3150,10 +3150,10 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
         let archive_sha256 = file_sha256(archive.to_str().unwrap());
         let zero_hash = "0".repeat(64);
         let manifest_text = format!(
-            "{zero_hash}  local-browser-bridge-v0.12.34-windows-x86_64.exe\n\
-             {zero_hash}  local-computer-helper-v0.12.34-windows-x86_64.exe\n\
-             {archive_sha256}  local-browser-bridge-v0.12.34-macos-universal.tar.gz\n\
-             {zero_hash}  local-browser-bridge-extension-v0.12.34.zip\n"
+            "{zero_hash}  local-browser-bridge-v0.12.35-windows-x86_64.exe\n\
+             {zero_hash}  local-computer-helper-v0.12.35-windows-x86_64.exe\n\
+             {archive_sha256}  local-browser-bridge-v0.12.35-macos-universal.tar.gz\n\
+             {zero_hash}  local-browser-bridge-extension-v0.12.35.zip\n"
         );
         let manifest = case_root.join("SHA256SUMS.txt");
         fs::write(&manifest, &manifest_text).unwrap();
@@ -3281,7 +3281,7 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
 
 #[test]
 fn macos_packaged_evidence_uses_a_clean_source_harness_and_fresh_lane_outputs() {
-    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.35/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -3338,7 +3338,7 @@ fn macos_packaged_evidence_uses_a_clean_source_harness_and_fresh_lane_outputs() 
 
 #[test]
 fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
-    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.35/computer/helper-evidence-rig.mjs").unwrap();
     assert!(rig.contains("capturedFrameMatchesWindowGeometry"));
     assert!(rig.contains("share-resize-settled"));
     assert!(rig.contains("sample.sourceSequence > resizeTransition.sample.sourceSequence"));
@@ -3350,12 +3350,12 @@ fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
 
 #[test]
 fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.35/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     assert!(rig.contains("function childEnvironment(overrides = {})"));
     assert!(!rig.contains("...process.env"));
-    let fixture = fs::read_to_string("evidence/v0.12.34/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.35/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -3533,10 +3533,10 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
 
 #[test]
 fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.35/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.34/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.35/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let normalized_readme = readme.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -3668,21 +3668,21 @@ fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() 
 
 #[test]
 fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negative() {
-    let fixture = fs::read_to_string("evidence/v0.12.34/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.35/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.34/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.35/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.35/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.34/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.35/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
     for required in [
-        "private let siblingFixtureTitle = \"LBB v0.12.34 Same-PID Sibling Receiver\"",
+        "private let siblingFixtureTitle = \"LBB v0.12.35 Same-PID Sibling Receiver\"",
         "var primaryWindowId = 0",
         "var siblingWindowId = 0",
         "var siblingTextLength = 0",
@@ -5047,6 +5047,7 @@ fn windows_acceptance_coordinator_is_single_attempt_non_ui_and_fail_closed() {
         "#requires -Version 5.1",
         "[ValidateSet(\"Start\", \"Follow\", \"SelfTest\")]",
         "$script:SuccessMessage = \"Windows computer-use acceptance coordinator self-test passed.\"",
+        "$script:AttemptReservationSchemaVersion = 2",
         "function Start-Coordinator {",
         "function Follow-Coordinator {",
         "function Invoke-SelfTest {",
@@ -5073,7 +5074,9 @@ fn windows_acceptance_coordinator_is_single_attempt_non_ui_and_fail_closed() {
         "[IO.File]::Move($temporaryPath, $Path)",
         "function Get-WhitelistedWorkerEnvironment {",
         "function Start-DetachedWorkerProcess {",
+        "function Get-CandidateAttemptReservationPath {",
         "function Reserve-CandidateAttempt {",
+        "function Get-AttemptReservationRelationship {",
         "function Copy-FileToPrivateStage {",
         "function New-WorkerLifetimeJob {",
         "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE",
@@ -5096,6 +5099,15 @@ fn windows_acceptance_coordinator_is_single_attempt_non_ui_and_fail_closed() {
         "\"runner-summary-failed\"",
         "consumerMustDeduplicateByRequestId = $true",
         "externalAuthorizationVerifiedByWatcher = $false",
+        "Candidate input changes minted a second per-version attempt key.",
+        "Follow accepted a post-boundary record without the persistent reservation.",
+        "Follow persistent-boundary-only self-test failed.",
+        "A refused duplicate changed the persistent attempt reservation bytes.",
+        "A post-boundary validation failure did not publish terminal state.",
+        "Follow confused another coordinator's reservation with its own.",
+        "Follow changed a foreign coordinator's local not-started failure.",
+        "Follow accepted local intent owned by a foreign reservation.",
+        "Follow accepted a not-started failure after its owned reservation.",
         "Write-Output $script:SuccessMessage",
     ] {
         assert!(
@@ -5131,6 +5143,25 @@ fn windows_acceptance_coordinator_is_single_attempt_non_ui_and_fail_closed() {
             "Windows acceptance coordinator contains a forbidden retry, shell, module-discovery, or UI-control primitive: {forbidden}"
         );
     }
+
+    let attempt_key = coordinator
+        .split("function Get-CandidateAttemptKey {")
+        .nth(1)
+        .unwrap()
+        .split("function Resolve-TrustedLocalAppData {")
+        .next()
+        .unwrap();
+    let attempt_identity = attempt_key
+        .split("$identity = ")
+        .nth(1)
+        .unwrap()
+        .split("\n")
+        .next()
+        .unwrap();
+    assert_eq!(
+        attempt_identity, "@($script:AttemptLedgerDomain, $CandidateVersion) -join \"`n\"",
+        "the irrevocable attempt key must remain version-only so rebuilt bytes cannot mint a retry"
+    );
 
     let worker = coordinator
         .split("function Invoke-CoordinatorWorker {")
@@ -5370,6 +5401,17 @@ fn windows_acceptance_coordinator_publication_and_detached_environment_are_close
     assert!(!allowlist.contains("GetEnvironmentVariables("));
     assert!(!allowlist.contains("\"PATH\""));
 
+    let reservation_writer = coordinator
+        .split("function Reserve-CandidateAttempt {")
+        .nth(1)
+        .unwrap()
+        .split("function ConvertTo-NativeArgument {")
+        .next()
+        .unwrap();
+    assert!(reservation_writer.contains(
+        "schemaVersion = $script:AttemptReservationSchemaVersion\n            kind = \"windows-acceptance-attempt-reservation\"\n            status = \"reserved-no-retry\"\n            productVersion = $CandidateVersion\n            attemptKey = $AttemptKey\n            checksumManifestSha256 = $ManifestSha256.ToLowerInvariant()\n            coordinatorInstanceId = $CoordinatorInstanceId\n            retryAllowed = $false"
+    ));
+
     let detached_launcher = coordinator
         .split("function Start-DetachedWorkerProcess {")
         .nth(1)
@@ -5432,6 +5474,44 @@ fn windows_acceptance_coordinator_publication_and_detached_environment_are_close
         .split("function Write-FollowFailureOutput {")
         .next()
         .unwrap();
+    let config_publish = start
+        .find("Write-CreateOnceJson $files.Config $config")
+        .unwrap();
+    let start_publish = start.find("Write-CreateOnceJson $files.Start").unwrap();
+    let pre_reservation_validation = start
+        .find("Assert-ExactConfiguration $validatedConfig -BeforeReservation")
+        .unwrap();
+    let worker_launch = start.find("$worker = Start-DetachedWorkerProcess").unwrap();
+    let coordinator_id = start
+        .find("$coordinatorInstanceId = [Guid]::NewGuid().ToString(\"N\")")
+        .unwrap();
+    let config_id = start
+        .find("coordinatorInstanceId = $coordinatorInstanceId")
+        .unwrap();
+    let start_id = start[start_publish..]
+        .find("coordinatorInstanceId = $coordinatorInstanceId")
+        .map(|position| start_publish + position)
+        .unwrap();
+    assert!(
+        coordinator_id < config_id
+            && config_id < config_publish
+            && config_publish < start_publish
+            && start_publish < start_id
+            && start_publish < pre_reservation_validation
+            && pre_reservation_validation < worker_launch,
+        "Start must bind one opaque coordinator ID through config and Start before launching the retained worker"
+    );
+    assert_eq!(
+        start
+            .matches("coordinatorInstanceId = $coordinatorInstanceId")
+            .count(),
+        2,
+        "Start must publish the opaque coordinator ID only in config and the Start record"
+    );
+    assert!(
+        !start.contains("Reserve-CandidateAttempt"),
+        "Start must not consume the persistent one-shot boundary before worker ownership"
+    );
     for required in [
         "$workerEnvironment = Get-WhitelistedWorkerEnvironment",
         "$workerEnvironment[\"LBB_WINDOWS_COORDINATOR_WORKER_NONCE\"] = $workerNonce",
@@ -5475,16 +5555,79 @@ fn windows_acceptance_coordinator_publication_and_detached_environment_are_close
         !launch_try.contains("Write-Output"),
         "a closed Start output pipeline must not re-enter launch cleanup and kill the worker"
     );
-    let start_catch = &start[catch..final_output];
-    let classify_runner = start_catch
-        .find("$attemptState = if ([IO.File]::Exists($files.Runner))")
+    let worker = coordinator
+        .split("function Invoke-CoordinatorWorker {")
+        .nth(1)
+        .unwrap()
+        .split("function Get-BootstrapFieldNames {")
+        .next()
         .unwrap();
-    let classify_unknown = start_catch
-        .find("elseif (-not $workerCleanupConfirmed -or [IO.File]::Exists($files.Intent))")
+    let ownership = worker.find("Assert-ExactOwnershipRecord `").unwrap();
+    let prepared_process = worker.find("$runnerInfo = New-ProcessStartInfo `").unwrap();
+    let fresh_pre_reservation_validation = worker[prepared_process..]
+        .find("Assert-ExactConfiguration $config -BeforeReservation")
+        .map(|position| prepared_process + position)
+        .unwrap();
+    let reservation = worker
+        .find("$reservedAttemptPath = Reserve-CandidateAttempt")
+        .unwrap();
+    let reservation_call = worker[reservation..]
+        .split("if ($reservedAttemptPath")
+        .next()
         .unwrap();
     assert!(
-        classify_runner < classify_unknown,
-        "a published runner record must outrank cleanup uncertainty when classifying terminal state"
+        reservation_call.contains("-CoordinatorInstanceId ([string]$config.coordinatorInstanceId)")
+    );
+    let post_reservation_validation = worker[reservation..]
+        .find("Assert-ExactConfiguration $config")
+        .map(|position| reservation + position)
+        .unwrap();
+    let intent = worker.find("Write-CreateOnceJson $files.Intent").unwrap();
+    let runner_launch = worker
+        .find("$runnerCapture = Start-CapturedProcess $runnerInfo")
+        .unwrap();
+    let runner_record = worker
+        .find("Write-CreateOnceJson $files.Runner $runnerRecord")
+        .unwrap();
+    assert!(
+        ownership < prepared_process
+            && prepared_process < fresh_pre_reservation_validation
+            && fresh_pre_reservation_validation < reservation
+            && reservation < post_reservation_validation
+            && post_reservation_validation < intent
+            && intent < runner_launch
+            && runner_launch < runner_record,
+        "worker ownership and runner preparation must precede the durable one-shot boundary, which must precede the sole runner launch and identity record"
+    );
+    assert_eq!(
+        worker.matches("Reserve-CandidateAttempt").count(),
+        1,
+        "the production worker must publish exactly one persistent attempt boundary"
+    );
+    assert!(
+        coordinator.contains("$relationship = Get-AttemptReservationRelationship $Config")
+            && coordinator
+                .contains("if ($relationship -ceq \"owned\" -or $relationship -ceq \"invalid\")")
+            && coordinator.contains(
+                "A post-boundary coordinator record has no persistent attempt reservation."
+            )
+            && coordinator
+                .contains("Follow confused another coordinator's reservation with its own."),
+        "ledger presence must classify an interrupted pre-runner boundary as outcome unknown"
+    );
+    for forbidden in [
+        "[IO.File]::Delete($AttemptLedgerPath)",
+        "[IO.File]::Delete([string]$Config.attemptLedgerPath)",
+        "Remove-Item $AttemptLedgerPath",
+    ] {
+        assert!(
+            !coordinator.contains(forbidden),
+            "production code must never remove a persistent attempt boundary: {forbidden}"
+        );
+    }
+    assert!(
+        start[catch..final_output].contains("Get-ObservedAttemptState $files $config"),
+        "Start cleanup must conservatively classify the authoritative ledger boundary"
     );
 }
 
@@ -5847,6 +5990,9 @@ fn windows_acceptance_coordinator_owns_children_and_delays_watcher_until_marker(
     let acquire_mutex = worker.find("$exclusiveMutex.WaitOne(0)").unwrap();
     let worker_record = worker.find("Write-CreateOnceJson $files.Worker").unwrap();
     let ownership_record = worker.find("Assert-ExactOwnershipRecord").unwrap();
+    let attempt_boundary = worker
+        .find("$reservedAttemptPath = Reserve-CandidateAttempt")
+        .unwrap();
     let launch_intent = worker.find("Write-CreateOnceJson $files.Intent").unwrap();
     let runner_launch = worker
         .find("$runnerCapture = Start-CapturedProcess $runnerInfo")
@@ -5858,7 +6004,8 @@ fn windows_acceptance_coordinator_owns_children_and_delays_watcher_until_marker(
         acquire_mutex < bind_job
             && bind_job < worker_record
             && worker_record < ownership_record
-            && ownership_record < launch_intent
+            && ownership_record < attempt_boundary
+            && attempt_boundary < launch_intent
             && launch_intent < runner_launch
             && runner_launch < runner_record_publish,
         "exclusive admission and old-Job recovery must complete before any candidate-attempt record or child"
@@ -5868,13 +6015,9 @@ fn windows_acceptance_coordinator_owns_children_and_delays_watcher_until_marker(
         "terminal attempt classification must come only from published state records"
     );
     let worker_catch = worker.rsplit("\n    catch {").next().unwrap();
-    let classify_runner = worker_catch
-        .find("if ([IO.File]::Exists($files.Runner))")
-        .unwrap();
-    let classify_intent = worker_catch
-        .find("elseif ([IO.File]::Exists($files.Intent))")
-        .unwrap();
-    assert!(classify_runner < classify_intent);
+    assert!(worker_catch.contains(
+        "$attemptState = Get-ObservedAttemptState `\n            $files `\n            $config"
+    ));
     for required in [
         "Local\\LBBWindowsAcceptanceCoordinator",
         "Write-TerminalFailure $files \"worker-exclusivity\" \"not-started\" \"another-coordinator-is-active\"",
@@ -6264,7 +6407,7 @@ fn windows_foreground_arm_handoff_watcher_is_strict_read_only_and_non_authoritat
         .replace("\r\n", "\n");
 
     for required in [
-        "$script:ProductVersion = \"0.12.34\"",
+        "$script:ProductVersion = \"0.12.35\"",
         "$script:MarkerSchemaVersion = 2",
         "function Assert-ExactPropertyOrder {",
         "function Assert-ExactMarkerSchema {",
@@ -6409,7 +6552,7 @@ fn windows_foreground_arm_handoff_watcher_is_strict_read_only_and_non_authoritat
         "$markerReader = { return Read-AtomicRequestMarker $markerPath $operatorDirectory }.GetNewClosure()"
     ));
     assert!(runner.contains("-ProductVersion $Version"));
-    assert!(runner.contains("-ProductVersion \"0.12.34\""));
+    assert!(runner.contains("-ProductVersion \"0.12.35\""));
     assert!(runner.contains("maximumClickAttempts -ne 1"));
     assert!(runner.contains("maximumClickAttempts -ne 0"));
 }

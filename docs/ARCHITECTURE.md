@@ -166,35 +166,46 @@ reused after 43.807 seconds; `computer.click` correctly refused it with HTTP 409
 `COMPUTER_STALE_FRAME` before dispatch. Version 0.12.24 therefore added a
 strictly newer frame with the same share, target, and geometry after the
 `ACTION` receipt and within the reserved deadline before deriving click
-authority; version 0.12.34 retains that boundary unchanged. The v0.12.20
+authority; version 0.12.35 retains that boundary unchanged. The v0.12.20
 physical-pointer lane is retained only as historical, optional adversarial
-coverage; its artifacts cannot satisfy the v0.12.34 release contract.
+coverage; its artifacts cannot satisfy the v0.12.35 release contract.
 
 ## Windows acceptance coordinator
 
 The Windows acceptance coordinator completed its source gate in v0.12.29 and is
-retained for v0.12.34 release acceptance. It is release tooling, not a product
+retained for v0.12.35 release acceptance. It is release tooling, not a product
 control surface. `Start` enters an exact clean system-PowerShell bootstrap,
-reserves one per-version attempt below a fixed owner-private LocalAppData root,
-then creates owner-private state with flush-before-move create-once publication
-and launches one retained worker from an explicit ordinary-environment
-allowlist. Before recovery it acquires the stable session-wide admission mutex
-and starts one monotonic deadline. It opens only the exact prior named Job with
-query/terminate rights, terminates and queries that handle until its active
-process count is zero, closes it once, and polls the namespace under the same
-deadline until the name is absent. It then clears last error, calls
+resolves only the prospective per-version ledger path, then creates and
+revalidates owner-private state, stages and hashes every bound input, and
+publishes exact configuration and Start records with flush-before-move
+create-once publication. It then launches one retained worker from an explicit
+ordinary-environment allowlist, completes the detached worker's Job binding and
+guard-ownership handoff, and lets that bound worker prepare the exact runner
+arguments, environment, and ephemeral token. Only after that preparation does
+the worker atomically create the schema-2 persistent reservation bound to the
+opaque `coordinatorInstanceId`. The reservation is immediately followed by the
+Intent record and the sole runner process launch.
+
+Before lifetime-Job recovery the worker acquires the stable session-wide
+admission mutex and starts one monotonic deadline. It opens only the exact prior
+named Job with query/terminate rights, terminates and queries that handle until
+its active process count is zero, closes it once, and polls the namespace under
+the same deadline until the name is absent. It then clears last error, calls
 `CreateJobObject` exactly once, and accepts only a non-null handle with last
 error zero. Any nonzero result, including `ERROR_ALREADY_EXISTS`, is closed and
 rejected without adoption, termination, configuration, retention, or retry.
 The atomic detached-worker guard Job and fresh named lifetime Job receive
-`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK`, and the
-worker is bound before either Worker or Intent state can be published. Those
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK`. Those
 outer Jobs contain the coordinator worker and its inherited runner and watcher,
 while permitting only explicit child breakaway. Each runner-owned fixture,
 server, or helper process is created suspended and atomically bound to the
-runner's private non-breakaway kill-on-close Job before resume. This source path
-passed its exact Windows
-PowerShell 5.1 native gate and independent no-P0/P1 review; see
+runner's private non-breakaway kill-on-close Job before resume. The earlier Job
+topology passed its Windows PowerShell 5.1 native gate and independent no-P0/P1
+review. The v0.12.35 reservation ordering and schema-2 instance binding also
+passed the exact system Windows PowerShell 5.1 self-test for coordinator
+SHA-256 `ff10beeedef51be23f9575ee99bb5c676646949fa8b5c5e2e5ed9d71fe4945e5`
+and an independent no-P0/P1 review. PR CI and packaged candidate acceptance
+remain mandatory before release. See
 [WINDOWS_ACCEPTANCE_HANDOFF.md](WINDOWS_ACCEPTANCE_HANDOFF.md).
 Separate worker, runner, and watcher output files survive an abandoned remote
 shell. The records do not claim sudden-power-loss durability; ambiguity after a
@@ -221,17 +232,18 @@ transferred-guard descendant cleanup with an unrelated control process, and
 stream unlocking/exact cleanup. It also covers exact process identity and
 liveness, complete predecessor chains, repeated handoff and request-ID
 deduplication, and terminal-failure precedence without starting a candidate or
-opening UI. The v0.12.34 regression additionally launches the actual guarded
+opening UI. The v0.12.34 topology regression additionally launches the actual guarded
 worker, adds the named lifetime Job, runs the real system-PowerShell 5.1 runner,
 and compiles and executes the source-bound fixture through the atomic private
-Job-list path.
+Job-list path. Version 0.12.35 retains that topology and adds reservation-order,
+owned/foreign coordinator-instance, and pre/post-boundary state regressions.
 
 The first v0.12.30 packaged attempt passed its trust/source gates and both
 macOS lanes, then stopped before the Windows runner launched because the
 production staged worker-support loader called an undefined hex helper. Since
 v0.12.31, the coordinator uses an inline PowerShell 5.1-compatible digest
 conversion and exercises that exact staged-loader branch in a fresh self-test
-process; v0.12.34 retains that repair unchanged.
+process; v0.12.35 retains that repair unchanged.
 
 This tooling assumes the independently verified GitHub-attested candidate is
 trusted. The runner and candidate execute as the same Windows account that owns
@@ -266,7 +278,7 @@ PiP automation, virtual displays, VM orchestration, RDP loopback, and separate O
 The server performs a metadata-only check against the fixed public GitHub Releases API. It accepts only a canonical stable release marked immutable by GitHub and never downloads or installs an update. Release artifacts are built as a Windows server executable, Windows helper executable, macOS universal archive with helper app, matching extension ZIP, checksum manifest, and GitHub provenance. Project and locked dependency licenses are embedded in both executables; the macOS archive and extension package also carry their applicable notice files.
 
 Version 0.12.30 introduced the separation between immutable candidate
-construction and publication; version 0.12.34 retains it.
+construction and publication; version 0.12.35 retains it.
 The candidate workflow runs manually against one reviewed `main` source SHA,
 creates no tag or deployment, and emits a schema-3 binding for the exact
 five-file artifact set, source, workflow run, workflow attempt, manifest, and
@@ -286,12 +298,16 @@ contract and passed both fresh macOS lanes, then its one Windows attempt failed
 closed at `build-dedicated-fixture`: the source-bound compiler child could not
 run correctly while nested inside the coordinator and runner Job hierarchy.
 No candidate product process, Chrome action, tag, or publication followed.
-Version 0.12.34 makes both the detached-worker guard Job and named lifetime Job
-explicitly breakaway-aware and creates each runner-owned child atomically in
+Version 0.12.34 made both the detached-worker guard Job and named lifetime Job
+explicitly breakaway-aware and created each runner-owned child atomically in
 its private kill-on-close Job before resuming it. A source-only self-test uses
 the actual guard-to-lifetime worker launcher, then compiles and executes the
-real fixture through that topology. Fresh platform, browser, and publication
-evidence is still required.
+real fixture through that topology. Its trust gate and both macOS lanes passed,
+but its persistent reservation was created before private coordinator state and
+made an interrupted Windows session non-retryable. Version 0.12.35 retains the
+Job topology and moves a schema-2 reservation bound to the opaque coordinator
+instance into the worker's last pre-intent boundary. Fresh platform, browser,
+and publication evidence is still required.
 
 See [Security](../SECURITY.md) for trust details, [Protocol](PROTOCOL.md) for envelopes and commands, and [Limitations](LIMITATIONS.md) for platform-specific boundaries.
 

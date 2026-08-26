@@ -115,15 +115,27 @@ retained the deadline assertions, restored the single success line, and made
 both CI and candidate packaging enforce the same stdout, stderr, and exit-status
 contract. Its fresh quiet and deliberate-concurrency macOS lanes passed. Its
 one Windows attempt then failed closed at `build-dedicated-fixture` before a
-fixture executable or candidate product process existed. Version 0.12.34 lets
+fixture executable or candidate product process existed. Version 0.12.34 let
 runner-owned children explicitly break away from both the detached-worker guard
-Job and named lifetime Job, then atomically binds each child to the runner's
-private Job at creation. Its source-only regression launches the actual guarded
-worker, adds the lifetime Job, and compiles and executes the fixture through
-that topology. It must use fresh source-bound artifacts and evidence; no earlier
-candidate result may be relabelled or reused.
+Job and named lifetime Job, then atomically bound each child to the runner's
+private Job at creation. Its exact trust gate and both fresh macOS lanes passed.
+The Windows coordinator then created its persistent no-retry reservation at
+`2026-08-26T11:05:46Z`, before any coordinator state existed, and the invoking
+session was interrupted. A bounded later observation found no v0.12.34
+coordinator directory, evidence directory, candidate process, listener on port
+17373, Computer Use action, or Chrome action. That absence is only a bounded
+observation; it cannot prove that an unobserved transient state never existed.
+The ledger therefore leaves the Windows attempt `not-started` but not retryable.
+Version 0.12.34 was withdrawn without a tag or GitHub Release.
 
-The v0.12.34 macOS harness defines two fresh, non-mergeable release lanes in [`evidence/v0.12.34/computer/README.md`](../evidence/v0.12.34/computer/README.md). Both require a healthy monitor, unchanged sampled cursor, no shared input activity, and `sharedPointerActivityState: quiet` for every evidence cell. The `deliberate-concurrency` compatibility lane adds a separately authorized exact-app-share button action and proves—through a target-owned request/start/complete chain plus independent bundle/window/button and shared-seat probes—that app-scoped orchestration spanned the real product action without using the shared desktop. It does not claim physical-human or cryptographic Computer Use provider identity. Never convert, merge, or substitute optional physical-pointer adversarial bytes into either release lane. An unknown monitor or boundary fails closed.
+Version 0.12.35 retains the nested-Job repair and moves the persistent attempt
+boundary to the final pre-launch sequence described below. Its source-only
+regression launches the actual guarded worker, adds the lifetime Job, and
+compiles and executes the fixture through that topology. It must use fresh
+source-bound artifacts and evidence; no earlier candidate result may be
+relabelled or reused.
+
+The v0.12.35 macOS harness defines two fresh, non-mergeable release lanes in [`evidence/v0.12.35/computer/README.md`](../evidence/v0.12.35/computer/README.md). Both require a healthy monitor, unchanged sampled cursor, no shared input activity, and `sharedPointerActivityState: quiet` for every evidence cell. The `deliberate-concurrency` compatibility lane adds a separately authorized exact-app-share button action and proves—through a target-owned request/start/complete chain plus independent bundle/window/button and shared-seat probes—that app-scoped orchestration spanned the real product action without using the shared desktop. It does not claim physical-human or cryptographic Computer Use provider identity. Never convert, merge, or substitute optional physical-pointer adversarial bytes into either release lane. An unknown monitor or boundary fails closed.
 
 Before either lane invokes a candidate binary—even with `--version`—the exact
 source-bound SystemProbe must complete a 30-second native quiet-seat epoch with at
@@ -135,7 +147,7 @@ fixture/server/helper after completion, and keeps every later per-action and
 whole-run proof unchanged. The deliberate lane uses this gate before its
 exact-app-share request; no shared-pointer movement is required or accepted.
 
-For the deliberate-concurrency lane, start the packaged evidence runner and then run `node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode watch --evidence-dir "$ABSOLUTE_EVIDENCE_DIRECTORY" --runner-pid "$RUNNER_PID"` in a separate terminal. The read-only watcher waits for the exact runner-created lane, opens only the request/start/complete records without following links, validates the v0.12.34 marker-schema-2 records, stable app surface, request hash, start-receipt hash, canonical timestamps, and process binding, and writes nothing. The candidate identity nested in the lane is the separate schema-3 binding. On `ACTION REQUIRED`, use the separately authorized exact-app share for bundle `dev.flrngel.local-browser-bridge.acceptance.app-share`, press `START APP-SHARE CHECK` exactly once, do not use the shared desktop or retry, and stop all UI use after `START RECEIVED`. The app independently verifies the request hash before writing its create-once start receipt and disabling the button. After that receipt, the runner uses a bounded, abortable authority refresh to obtain a strictly newer streamed frame from the same share, exact target, and unchanged geometry within the reserved handoff deadline; only that fresh frame may authorize the product click. It then proves unchanged foreground/focus/Space/cursor/HID state, dispatches the real bounded product action, requires the target postcondition and quiet product/independent boundaries, and completes the app-owned receipt chain. A copied, stale, changed, or missing record, duplicate action, unknown native boundary, dead runner/app, shared-seat activity, frame-refresh failure, or timeout fails closed. The marker chain and watcher are orchestration evidence, never product authority. Validate with `node --check scripts/wait-macos-app-share-concurrency-handoff.mjs`, `node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test`, `node --check evidence/v0.12.34/computer/helper-evidence-rig.mjs`, `node evidence/v0.12.34/computer/helper-evidence-rig.mjs --self-test`, and Swift typechecks for `AppShareHandoff.swift`, `PhysicalPointerHandoff.swift`, and `SystemProbe.swift`. The old pointer watcher and physical prompt remain optional adversarial tooling and cannot satisfy release.
+For the deliberate-concurrency lane, start the packaged evidence runner and then run `node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode watch --evidence-dir "$ABSOLUTE_EVIDENCE_DIRECTORY" --runner-pid "$RUNNER_PID"` in a separate terminal. The read-only watcher waits for the exact runner-created lane, opens only the request/start/complete records without following links, validates the v0.12.35 marker-schema-2 records, stable app surface, request hash, start-receipt hash, canonical timestamps, and process binding, and writes nothing. The candidate identity nested in the lane is the separate schema-3 binding. On `ACTION REQUIRED`, use the separately authorized exact-app share for bundle `dev.flrngel.local-browser-bridge.acceptance.app-share`, press `START APP-SHARE CHECK` exactly once, do not use the shared desktop or retry, and stop all UI use after `START RECEIVED`. The app independently verifies the request hash before writing its create-once start receipt and disabling the button. After that receipt, the runner uses a bounded, abortable authority refresh to obtain a strictly newer streamed frame from the same share, exact target, and unchanged geometry within the reserved handoff deadline; only that fresh frame may authorize the product click. It then proves unchanged foreground/focus/Space/cursor/HID state, dispatches the real bounded product action, requires the target postcondition and quiet product/independent boundaries, and completes the app-owned receipt chain. A copied, stale, changed, or missing record, duplicate action, unknown native boundary, dead runner/app, shared-seat activity, frame-refresh failure, or timeout fails closed. The marker chain and watcher are orchestration evidence, never product authority. Validate with `node --check scripts/wait-macos-app-share-concurrency-handoff.mjs`, `node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test`, `node --check evidence/v0.12.35/computer/helper-evidence-rig.mjs`, `node evidence/v0.12.35/computer/helper-evidence-rig.mjs --self-test`, and Swift typechecks for `AppShareHandoff.swift`, `PhysicalPointerHandoff.swift`, and `SystemProbe.swift`. The old pointer watcher and physical prompt remain optional adversarial tooling and cannot satisfy release.
 
 ### Deterministic Windows live acceptance
 
@@ -161,7 +173,7 @@ The checked-in coordinator runs `scripts/test-windows-computer-use.ps1` exactly 
 Live mode intentionally runs only under the system Windows PowerShell 5.1 Desktop host because compilation and the acceptance fixture use WinForms/.NET Framework. PowerShell 7 remains a parser and self-test surface. The checked-in coordinator resolves the native Windows system directory without depending on a Machine-scoped `SystemRoot`, re-enters its exact 64-bit Windows PowerShell host through a nonce-bound clean bootstrap, and requires identity `5.1|Desktop|True` before any candidate launch. The compiled GUI is nevertheless launched as its own Windows-application process, not as terminal-hosted PowerShell UI.
 
 ```powershell
-$version = "0.12.34"
+$version = "0.12.35"
 $server = (Resolve-Path ".\dist\local-browser-bridge-v$version-windows-x86_64.exe").Path
 $helper = (Resolve-Path ".\dist\local-computer-helper-v$version-windows-x86_64.exe").Path
 $manifest = (Resolve-Path .\dist\SHA256SUMS.txt).Path
@@ -222,13 +234,15 @@ Poll the same coordinator directory with the read-only `Follow` mode:
   -CoordinatorDirectory $coordinator
 ```
 
-Before `runner-launch-intent`, a launcher failure proves no runner attempt.
-Launch intent without a conclusive start result is terminal
-`candidate-execution-unknown`. A successful `Process.Start()` consumes the one
-candidate attempt even if the runner writes no product evidence. The coordinator
-itself creates and revalidates the empty evidence directory before worker launch,
-so directory existence proves neither candidate execution, liveness, nor
-acceptance. A watcher or runner failure is terminal and must never be retried. A
+Only a failure proved to precede the persistent schema-2 reservation is
+`not-started`. Once that reservation exists, even if `runner-launch-intent` is
+absent, the outcome is terminal `candidate-execution-unknown`. Launch intent
+without a conclusive start result is likewise outcome-unknown. A successful
+`Process.Start()` consumes the one candidate attempt even if the runner writes no
+product evidence. The coordinator itself creates and revalidates the empty
+evidence directory before worker launch, so directory existence proves neither
+candidate execution, liveness, nor acceptance. A watcher or runner failure is
+terminal and must never be retried. A
 started runner without a final summary, or with a missing/false summary pass bit,
 is also terminal; retain the private coordinator diagnostics for sanitized
 review. `Follow` prioritizes the first terminal failure record over a later final
@@ -236,7 +250,7 @@ record and refuses both waiting and handoff output unless the exact worker
 PID/start time is still live.
 
 The watcher reads only `operator/foreground-arm-request.json`. It requires the
-exact v0.12.34/schema-2 marker field set and order, a fresh non-expired publication,
+exact v0.12.35/schema-2 marker field set and order, a fresh non-expired publication,
 ordinary non-reparse paths, and the same live runner PID/start time both before
 and after parsing. It emits exactly one compact sanitized
 `foreground-arm-visual-handoff` JSON object or fails closed. It neither writes
@@ -285,12 +299,27 @@ boundary is exercised rather than inferred from a parser pass.
 The coordinator accepts new evidence and coordinator directories only as direct
 children of those two fixed owner-private LocalAppData parents on a local
 NTFS/ReFS volume. It rejects Temp paths, UNC paths, links, reparse traversal,
-and caller-selected alternate parents. The persistent per-version no-retry
-reservation is intentionally created before private staging begins, so an ACL,
-copy, compiler, or later setup failure consumes the version's Windows attempt
-even when no candidate byte was executed. It then stages and rehashes the exact
-scripts, fixture, manifest, binding, and candidate executables below that
-private root.
+and caller-selected alternate parents. Version 0.12.35 resolves the prospective
+ledger identity without creating it, then completes owner-private directory and
+ACL setup; stages and rehashes the exact scripts, fixture, manifest, binding,
+and candidate executables; publishes and verifies the private configuration and
+Start records; binds the detached worker to its fresh lifetime Job; transfers
+guard ownership; and prepares the exact runner process, arguments, environment,
+and ephemeral token. Only then does the worker atomically create the persistent
+per-version no-retry reservation. That create-once boundary immediately
+precedes the runner launch-intent record and process creation. A failure before
+the boundary may leave diagnosable private scratch state but does not consume
+the candidate attempt. Once the ledger exists, treat the candidate outcome as
+unknown unless later terminal evidence resolves it more narrowly: never delete
+the ledger or retry that product version. A coordinator result with
+`retryAllowed: false` forbids automatic retry and any replay or re-entry by the
+current coordinator; it does not, by itself, claim that every future
+coordinator is globally forbidden. A separately authorized fresh `Start` is
+possible only for a failure proved to be before the reservation boundary, after
+independent confirmation that the per-version ledger is absent and cleanup of
+all prior coordinator-owned runtime resources, including processes and
+listeners, is complete. Retained immutable diagnostics grant no retry
+authority. Any missing, invalid, or ambiguous proof fails closed.
 
 Also run the persistent coordinator's non-product self-test through exact system
 Windows PowerShell 5.1:
@@ -329,7 +358,7 @@ These create-once records survive a dropped SSH shell and ordinary coordinator
 process failure, but the script does not claim sudden-power-loss durability for
 the directory-entry rename. If storage or machine failure makes any reservation
 or terminal state ambiguous, treat candidate execution as outcome-unknown and
-do not retry those candidate bytes.
+do not retry that product version.
 
 The fixture increments a monotonic publication generation on every state write. Arm stability consumes three distinct advancing publications after the delivery receipt, the baseline consumes another, and every later invariant comparison requires a still-newer publication. Replaying one valid state file or stalling the fixture writer therefore cannot satisfy the acceptance oracle. The stable AUMID and app-share discovery outcome are intentionally absent from that oracle.
 
@@ -430,7 +459,7 @@ source tree, and neither `vVERSION` nor a Release with that name exists.
 
 ```bash
 REPOSITORY="flrngel/local-browser-bridge"
-VERSION="0.12.34"
+VERSION="0.12.35"
 SOURCE_SHA="EXACT_40_CHARACTER_GREEN_MAIN_SHA"
 
 gh workflow run deploy.yml \
@@ -476,10 +505,10 @@ screenshots, logs, operator markers, fixture records, sidecars, and independent
 review records. Never retain credentials, bearer tokens, personal paths,
 operator identity, raw browser/API data, or unrelated screen content.
 
-For v0.12.34, the canonical evidence branch is
-`evidence/v0.12.34-release-run-RUN_ID-attempt-RUN_ATTEMPT`, and its additions
+For v0.12.35, the canonical evidence branch is
+`evidence/v0.12.35-release-run-RUN_ID-attempt-RUN_ATTEMPT`, and its additions
 live below
-`evidence/v0.12.34/release/run-RUN_ID-attempt-RUN_ATTEMPT/`. The five primary
+`evidence/v0.12.35/release/run-RUN_ID-attempt-RUN_ATTEMPT/`. The five primary
 machine records are:
 
 - `macos/macos-acceptance.json`;
@@ -505,7 +534,7 @@ not contain credentials or personal data.
 
 ```bash
 REPOSITORY="flrngel/local-browser-bridge"
-VERSION="0.12.34"
+VERSION="0.12.35"
 SOURCE_SHA="EXACT_40_CHARACTER_GREEN_MAIN_SHA"
 CANDIDATE_RUN_ID="EXACT_GITHUB_RUN_ID"
 CANDIDATE_RUN_ATTEMPT="EXACT_GITHUB_RUN_ATTEMPT"
