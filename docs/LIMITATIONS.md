@@ -44,16 +44,35 @@ tagging, and publication again did not run. Version 0.12.33 fixed that output
 contract and passed both fresh macOS lanes, but its single Windows attempt
 failed closed while building the source-bound fixture under nested Jobs. It did
 not launch the candidate product, open Chrome, create a tag, or publish. Version
-0.12.34 is the current source and schema-3 release-pipeline target. It uses an
-explicit breakaway-enabled coordinator Job plus atomic private Job-list child
-creation and requires fresh platform/browser acceptance before it can be called
-a Release. See the [Windows acceptance source-gate record](WINDOWS_ACCEPTANCE_HANDOFF.md).
+0.12.34 repaired that nested-Job topology; its exact trust gate and both fresh
+macOS lanes passed. Its Windows coordinator nevertheless created the persistent
+no-retry reservation at `2026-08-26T11:05:46Z` before any coordinator state
+existed, and the invoking session was interrupted. A bounded later observation
+found no v0.12.34 coordinator directory, evidence directory, candidate process,
+listener on port 17373, Computer Use action, or Chrome action. This absence is
+not proof that an unobserved transient state never existed. The ledger records a
+`not-started` Windows attempt with retry disabled, so v0.12.34 was withdrawn and
+was never tagged or published. The bounded observation and its limitations are
+preserved in the immutable [v0.12.34 negative-evidence commit](https://github.com/flrngel/local-browser-bridge/tree/aef8fc68018cdb6181ad3d0886acf4e71fcda96d/evidence/v0.12.34/computer/attempts/withdrawn-2509567-windows-pre-coordinator-interruption).
+
+Version 0.12.35 is the current source and schema-3 release-pipeline target. It
+retains the breakaway-enabled coordinator Job and atomic private Job-list child
+creation, but delays the persistent boundary until private staging and
+configuration verification, detached-worker Job binding and guard-ownership
+transfer, and runner preparation are complete. The create-once reservation
+immediately precedes launch intent and process creation. Ledger presence is a
+conservative unknown-outcome boundary: never delete it or retry that product
+version. Fresh platform/browser acceptance is still required before
+publication; only the immutable
+[v0.12.35 GitHub Release](https://github.com/flrngel/local-browser-bridge/releases/tag/v0.12.35)
+and its bound evidence receipt can establish that the gate later passed. See
+the [Windows acceptance source-gate record](WINDOWS_ACCEPTANCE_HANDOFF.md).
 
 Coordinator records flush their file contents before an atomic create-once
 rename. That survives a dropped remote shell and ordinary process failure, but
 does not claim that Windows has committed the parent directory entry across a
 sudden machine or storage power loss. Any ambiguous post-crash state is
-outcome-unknown and those candidate bytes must not be retried.
+outcome-unknown and that product version must not be retried.
 
 ## Browser limits
 
@@ -242,7 +261,7 @@ Version 0.12.25 retained the authority refresh and made that watcher portable
 to exact system PowerShell 5.1 by passing marker paths as explicit callback
 arguments.
 
-Version 0.12.34 retains sealed route provenance, the v0.12.23 classifier
+Version 0.12.35 retains sealed route provenance, the v0.12.23 classifier
 separation, and conservative shared-pointer monitoring. Its bounded, abortable
 post-`ACTION` authority refresh must obtain a strictly newer frame from the same
 share, target, and geometry within the reserved deadline before deriving click

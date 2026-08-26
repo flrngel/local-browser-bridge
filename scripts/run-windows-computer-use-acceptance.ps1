@@ -34,7 +34,8 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
 $script:SchemaVersion = 1
-$script:ProductVersion = "0.12.34"
+$script:AttemptReservationSchemaVersion = 2
+$script:ProductVersion = "0.12.35"
 $script:ExpectedWindowTitle = "LBB Foreground Sentinel"
 $script:ExpectedActionButton = "CLICK TO ARM"
 $script:ExpectedArmedButton = "ARMED - DO NOT USE THIS SESSION"
@@ -450,28 +451,43 @@ function Copy-FileToPrivateStage {
     return Resolve-OrdinaryPath $resolvedDestination $true "$Description staged copy"
 }
 
+function Get-CandidateAttemptReservationPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$LedgerRoot,
+        [Parameter(Mandatory = $true)][string]$AttemptKey
+    )
+    if ($AttemptKey -cnotmatch '^[0-9a-f]{64}$') { throw "The candidate attempt key is invalid." }
+    $root = Resolve-OrdinaryPath $LedgerRoot $false "Acceptance-attempt ledger"
+    Assert-PrivateDirectoryAcl $root
+    return [IO.Path]::Combine($root, "attempt-$AttemptKey.json")
+}
+
 function Reserve-CandidateAttempt {
     param(
         [Parameter(Mandatory = $true)][string]$LedgerRoot,
         [Parameter(Mandatory = $true)][string]$AttemptKey,
         [Parameter(Mandatory = $true)][string]$CandidateVersion,
-        [Parameter(Mandatory = $true)][string]$ManifestSha256
+        [Parameter(Mandatory = $true)][string]$ManifestSha256,
+        [Parameter(Mandatory = $true)][string]$CoordinatorInstanceId
     )
-    if ($AttemptKey -cnotmatch '^[0-9a-f]{64}$') { throw "The candidate attempt key is invalid." }
-    $root = Resolve-OrdinaryPath $LedgerRoot $false "Acceptance-attempt ledger"
-    Assert-PrivateDirectoryAcl $root
-    $path = [IO.Path]::Combine($root, "attempt-$AttemptKey.json")
+    if ($CoordinatorInstanceId -cnotmatch '^[0-9a-f]{32}$') {
+        throw "The coordinator instance identifier is invalid."
+    }
+    $path = Get-CandidateAttemptReservationPath `
+        -LedgerRoot $LedgerRoot `
+        -AttemptKey $AttemptKey
     if ([IO.File]::Exists($path)) {
-        throw "This exact release candidate already has a persistent Windows acceptance attempt reservation."
+        throw "This product version already has a persistent Windows acceptance attempt reservation."
     }
     try {
         Write-CreateOnceJson $path ([ordered]@{
-            schemaVersion = $script:SchemaVersion
+            schemaVersion = $script:AttemptReservationSchemaVersion
             kind = "windows-acceptance-attempt-reservation"
             status = "reserved-no-retry"
             productVersion = $CandidateVersion
             attemptKey = $AttemptKey
             checksumManifestSha256 = $ManifestSha256.ToLowerInvariant()
+            coordinatorInstanceId = $CoordinatorInstanceId
             retryAllowed = $false
             reservedAtUtc = ConvertTo-CanonicalUtcString ([DateTime]::UtcNow)
             pathsRecorded = $false
@@ -480,7 +496,7 @@ function Reserve-CandidateAttempt {
     }
     catch [IO.IOException] {
         if ([IO.File]::Exists($path)) {
-            throw "This exact release candidate already has a persistent Windows acceptance attempt reservation."
+            throw "This product version already has a persistent Windows acceptance attempt reservation."
         }
         throw
     }
@@ -2083,13 +2099,20 @@ function Assert-ExactStringValue {
 }
 
 function Assert-ExactConfiguration {
-    param([Parameter(Mandatory = $true)][object]$Config)
+    param(
+        [Parameter(Mandatory = $true)][object]$Config,
+        [switch]$BeforeReservation,
+        [switch]$ForeignReservation
+    )
+    if ($BeforeReservation -and $ForeignReservation) {
+        throw "Configuration reservation validation modes are mutually exclusive."
+    }
     $fields = @(
         "schemaVersion", "version", "sourceDirectory", "coordinatorScript", "runnerScript",
         "watcherScript", "serverPath", "helperPath", "checksumManifest",
         "checksumManifestSha256", "candidateBindingPath", "fixturePath", "evidenceDirectory",
         "coordinatorDirectory", "foregroundArmTimeoutSeconds", "attemptKey",
-        "attemptLedgerPath", "workerSupportAssembly", "workerSupportSha256",
+        "attemptLedgerPath", "coordinatorInstanceId", "workerSupportAssembly", "workerSupportSha256",
         "coordinatorScriptSha256", "runnerScriptSha256", "watcherScriptSha256",
         "fixtureSha256", "serverSha256", "helperSha256", "candidateBindingSha256"
     )
@@ -2100,6 +2123,8 @@ function Assert-ExactConfiguration {
     if ($Config.checksumManifestSha256 -isnot [string] -or
         $Config.checksumManifestSha256 -cnotmatch '^[0-9a-f]{64}$' -or
         $Config.attemptKey -isnot [string] -or $Config.attemptKey -cnotmatch '^[0-9a-f]{64}$' -or
+        $Config.coordinatorInstanceId -isnot [string] -or
+        $Config.coordinatorInstanceId -cnotmatch '^[0-9a-f]{32}$' -or
         $Config.workerSupportSha256 -isnot [string] -or
         $Config.workerSupportSha256 -cnotmatch '^[0-9a-f]{64}$') {
         throw "The private coordinator hashes are invalid."
@@ -2125,7 +2150,17 @@ function Assert-ExactConfiguration {
     $evidence = Resolve-OrdinaryPath ([string]$Config.evidenceDirectory) $false "Configured evidence directory"
     $coordinator = Resolve-OrdinaryPath ([string]$Config.coordinatorDirectory) $false "Configured coordinator directory"
     $support = Resolve-OrdinaryPath ([string]$Config.workerSupportAssembly) $true "Configured worker support assembly"
-    $ledger = Resolve-OrdinaryPath ([string]$Config.attemptLedgerPath) $true "Configured attempt reservation"
+    $ledger = if ($BeforeReservation) {
+        Resolve-NewOrdinaryPath `
+            ([string]$Config.attemptLedgerPath) `
+            "Prospective configured attempt reservation"
+    }
+    else {
+        Resolve-OrdinaryPath `
+            ([string]$Config.attemptLedgerPath) `
+            $true `
+            "Configured attempt reservation"
+    }
     Assert-PrivateDirectoryAcl $evidence
     Assert-PrivateDirectoryAcl $coordinator
     Assert-PrivateDirectoryAcl $source
@@ -2183,23 +2218,149 @@ function Assert-ExactConfiguration {
         -Manifest $manifest `
         -Binding $binding
     if ($expectedAttemptKey -cne [string]$Config.attemptKey) {
-        throw "The persistent attempt key is not bound to the exact release candidate."
+        throw "The persistent attempt key is not bound to the configured product version."
     }
-    $reservation = Read-BoundedJson $ledger 16384 "Acceptance-attempt reservation"
-    Assert-ExactPropertyOrder $reservation @(
-        "schemaVersion", "kind", "status", "productVersion", "attemptKey",
-        "checksumManifestSha256", "retryAllowed", "reservedAtUtc", "pathsRecorded", "secretsRecorded"
-    ) "Acceptance-attempt reservation"
-    Assert-ExactIntegerRange $reservation.schemaVersion $script:SchemaVersion $script:SchemaVersion "reservation schemaVersion"
-    Assert-ExactStringValue $reservation.kind "windows-acceptance-attempt-reservation" "reservation kind"
-    Assert-ExactStringValue $reservation.status "reserved-no-retry" "reservation status"
-    Assert-ExactStringValue $reservation.productVersion ([string]$Config.version) "reservation productVersion"
-    Assert-ExactStringValue $reservation.attemptKey ([string]$Config.attemptKey) "reservation attemptKey"
-    Assert-ExactStringValue $reservation.checksumManifestSha256 ([string]$Config.checksumManifestSha256) "reservation manifest hash"
-    Assert-ExactBoolean $reservation.retryAllowed $false "reservation retryAllowed"
-    $null = ConvertFrom-CanonicalUtcString $reservation.reservedAtUtc "reservation reservedAtUtc"
-    Assert-ExactBoolean $reservation.pathsRecorded $false "reservation pathsRecorded"
-    Assert-ExactBoolean $reservation.secretsRecorded $false "reservation secretsRecorded"
+    if (-not $BeforeReservation) {
+        $reservation = Read-BoundedJson $ledger 16384 "Acceptance-attempt reservation"
+        Assert-ExactPropertyOrder $reservation @(
+            "schemaVersion", "kind", "status", "productVersion", "attemptKey",
+            "checksumManifestSha256", "coordinatorInstanceId", "retryAllowed",
+            "reservedAtUtc", "pathsRecorded", "secretsRecorded"
+        ) "Acceptance-attempt reservation"
+        Assert-ExactIntegerRange `
+            $reservation.schemaVersion `
+            $script:AttemptReservationSchemaVersion `
+            $script:AttemptReservationSchemaVersion `
+            "reservation schemaVersion"
+        Assert-ExactStringValue $reservation.kind "windows-acceptance-attempt-reservation" "reservation kind"
+        Assert-ExactStringValue $reservation.status "reserved-no-retry" "reservation status"
+        Assert-ExactStringValue $reservation.productVersion ([string]$Config.version) "reservation productVersion"
+        Assert-ExactStringValue $reservation.attemptKey ([string]$Config.attemptKey) "reservation attemptKey"
+        Assert-ExactStringValue $reservation.checksumManifestSha256 ([string]$Config.checksumManifestSha256) "reservation manifest hash"
+        if ($ForeignReservation) {
+            if ($reservation.coordinatorInstanceId -isnot [string] -or
+                $reservation.coordinatorInstanceId -cnotmatch '^[0-9a-f]{32}$' -or
+                $reservation.coordinatorInstanceId -ceq [string]$Config.coordinatorInstanceId) {
+                throw "The attempt reservation is not owned by a different coordinator."
+            }
+        }
+        else {
+            Assert-ExactStringValue `
+                $reservation.coordinatorInstanceId `
+                ([string]$Config.coordinatorInstanceId) `
+                "reservation coordinatorInstanceId"
+        }
+        Assert-ExactBoolean $reservation.retryAllowed $false "reservation retryAllowed"
+        $null = ConvertFrom-CanonicalUtcString $reservation.reservedAtUtc "reservation reservedAtUtc"
+        Assert-ExactBoolean $reservation.pathsRecorded $false "reservation pathsRecorded"
+        Assert-ExactBoolean $reservation.secretsRecorded $false "reservation secretsRecorded"
+    }
+}
+
+function Get-AttemptReservationRelationship {
+    param([Parameter(Mandatory = $true)][object]$Config)
+    $ledgerPath = [string]$Config.attemptLedgerPath
+    if ([IO.Directory]::Exists($ledgerPath)) { return "invalid" }
+    if (-not [IO.File]::Exists($ledgerPath)) { return "absent" }
+    try {
+        $reservation = Read-BoundedJson $ledgerPath 16384 "Acceptance-attempt reservation"
+        Assert-ExactPropertyOrder $reservation @(
+            "schemaVersion", "kind", "status", "productVersion", "attemptKey",
+            "checksumManifestSha256", "coordinatorInstanceId", "retryAllowed",
+            "reservedAtUtc", "pathsRecorded", "secretsRecorded"
+        ) "Acceptance-attempt reservation"
+        if ($reservation.schemaVersion -isnot [int] -or
+            [int]$reservation.schemaVersion -ne $script:AttemptReservationSchemaVersion -or
+            $reservation.kind -isnot [string] -or
+            [string]$reservation.kind -cne "windows-acceptance-attempt-reservation" -or
+            $reservation.status -isnot [string] -or
+            [string]$reservation.status -cne "reserved-no-retry" -or
+            $reservation.productVersion -isnot [string] -or
+            [string]$reservation.productVersion -cne [string]$Config.version -or
+            $reservation.attemptKey -isnot [string] -or
+            [string]$reservation.attemptKey -cne [string]$Config.attemptKey -or
+            $reservation.checksumManifestSha256 -isnot [string] -or
+            [string]$reservation.checksumManifestSha256 -cne
+                [string]$Config.checksumManifestSha256 -or
+            $reservation.coordinatorInstanceId -isnot [string] -or
+            [string]$reservation.coordinatorInstanceId -cnotmatch '^[0-9a-f]{32}$' -or
+            $reservation.retryAllowed -isnot [bool] -or $reservation.retryAllowed -ne $false -or
+            $reservation.pathsRecorded -isnot [bool] -or $reservation.pathsRecorded -ne $false -or
+            $reservation.secretsRecorded -isnot [bool] -or $reservation.secretsRecorded -ne $false) {
+            return "invalid"
+        }
+        $null = ConvertFrom-CanonicalUtcString `
+            $reservation.reservedAtUtc `
+            "reservation reservedAtUtc"
+        if ([string]$reservation.coordinatorInstanceId -ceq
+            [string]$Config.coordinatorInstanceId) {
+            return "owned"
+        }
+        return "foreign"
+    }
+    catch { return "invalid" }
+}
+
+function Assert-ExactConfigurationForCurrentReservationState {
+    param(
+        [Parameter(Mandatory = $true)][object]$Config,
+        [Parameter(Mandatory = $true)][Collections.IDictionary]$Files
+    )
+    $hasBoundaryDependentRecord = $false
+    foreach ($boundaryDependentRecord in @(
+        $Files.Intent,
+        $Files.Runner,
+        $Files.Watcher,
+        $Files.Handoff,
+        $Files.Final
+    )) {
+        if ([IO.File]::Exists($boundaryDependentRecord)) {
+            $hasBoundaryDependentRecord = $true
+            break
+        }
+    }
+    $relationship = Get-AttemptReservationRelationship $Config
+    if ($relationship -ceq "absent") {
+        try { Assert-ExactConfiguration $Config -BeforeReservation }
+        catch {
+            $relationship = Get-AttemptReservationRelationship $Config
+            if ($relationship -ceq "absent") { throw }
+        }
+        if ($relationship -ceq "absent") {
+            $relationship = Get-AttemptReservationRelationship $Config
+        }
+    }
+    switch ($relationship) {
+        "owned" { Assert-ExactConfiguration $Config }
+        "foreign" { Assert-ExactConfiguration $Config -ForeignReservation }
+        "absent" {
+            if ($hasBoundaryDependentRecord) {
+                throw "A post-boundary coordinator record has no persistent attempt reservation."
+            }
+        }
+        default { throw "The persistent attempt reservation is invalid." }
+    }
+    if ($relationship -ceq "foreign" -and $hasBoundaryDependentRecord) {
+        throw "A post-boundary coordinator record belongs to a different persistent reservation."
+    }
+}
+
+function Get-ObservedAttemptState {
+    param(
+        [Parameter(Mandatory = $true)][Collections.IDictionary]$Files,
+        [Parameter(Mandatory = $true)][object]$Config
+    )
+    if ([IO.File]::Exists($Files.Runner)) {
+        return "runner-started-terminal"
+    }
+    if ([IO.File]::Exists($Files.Intent)) {
+        return "candidate-execution-unknown"
+    }
+    $relationship = Get-AttemptReservationRelationship $Config
+    if ($relationship -ceq "owned" -or $relationship -ceq "invalid") {
+        return "candidate-execution-unknown"
+    }
+    return "not-started"
 }
 
 function Assert-WorkerSupportBinding {
@@ -2212,7 +2373,7 @@ function Assert-WorkerSupportBinding {
         "watcherScript", "serverPath", "helperPath", "checksumManifest",
         "checksumManifestSha256", "candidateBindingPath", "fixturePath", "evidenceDirectory",
         "coordinatorDirectory", "foregroundArmTimeoutSeconds", "attemptKey",
-        "attemptLedgerPath", "workerSupportAssembly", "workerSupportSha256",
+        "attemptLedgerPath", "coordinatorInstanceId", "workerSupportAssembly", "workerSupportSha256",
         "coordinatorScriptSha256", "runnerScriptSha256", "watcherScriptSha256",
         "fixtureSha256", "serverSha256", "helperSha256", "candidateBindingSha256"
     ) "Private coordinator configuration"
@@ -2221,6 +2382,8 @@ function Assert-WorkerSupportBinding {
     if ([string]$Config.coordinatorDirectory -cne $Root -or
         [IO.Path]::GetDirectoryName($Root) -cne (Get-PrivateAcceptanceParent "Coordinator") -or
         [string]$Config.workerSupportAssembly -cne [IO.Path]::Combine($Root, "worker-lifetime-support.dll") -or
+        $Config.coordinatorInstanceId -isnot [string] -or
+        $Config.coordinatorInstanceId -cnotmatch '^[0-9a-f]{32}$' -or
         $Config.workerSupportSha256 -isnot [string] -or
         $Config.workerSupportSha256 -cnotmatch '^[0-9a-f]{64}$') {
         throw "The worker support binding is not canonical."
@@ -2238,13 +2401,17 @@ function Assert-ExactStartRecord {
         [Parameter(Mandatory = $true)][object]$Config
     )
     Assert-ExactPropertyOrder $Record @(
-        "schemaVersion", "kind", "status", "version", "attemptState",
+        "schemaVersion", "kind", "status", "version", "coordinatorInstanceId", "attemptState",
         "retryOnUnknownOutcome", "recordedAtUtc", "pathsRecorded", "secretsRecorded"
     ) "Start request record"
     Assert-ExactIntegerRange $Record.schemaVersion 1 1 "start schemaVersion"
     Assert-ExactStringValue $Record.kind "windows-acceptance-start-request" "start kind"
     Assert-ExactStringValue $Record.status "accepted" "start status"
     Assert-ExactStringValue $Record.version ([string]$Config.version) "start version"
+    Assert-ExactStringValue `
+        $Record.coordinatorInstanceId `
+        ([string]$Config.coordinatorInstanceId) `
+        "start coordinatorInstanceId"
     Assert-ExactStringValue $Record.attemptState "not-started" "start attemptState"
     Assert-ExactBoolean $Record.retryOnUnknownOutcome $false "start retryOnUnknownOutcome"
     $null = ConvertFrom-CanonicalUtcString $Record.recordedAtUtc "start recordedAtUtc"
@@ -2666,7 +2833,7 @@ function Invoke-CoordinatorWorker {
     $exclusiveMutexHeld = $false
     try {
         Assert-WorkerSupportBinding $config $root
-        Assert-ExactConfiguration $config
+        Assert-ExactConfiguration $config -BeforeReservation
         $exclusiveMutex = [Threading.Mutex]::new(
             $false,
             "Local\LBBWindowsAcceptanceCoordinator"
@@ -2748,21 +2915,9 @@ function Invoke-CoordinatorWorker {
     $watcherCapture = $null
     $watcherAccepted = $false
     $handoffPublished = $false
+    $runnerInfo = $null
+    $token = $null
     try {
-        if ([IO.File]::Exists($files.Failure)) {
-            throw "The coordinator worker was canceled before candidate intent."
-        }
-        Write-CreateOnceJson $files.Intent ([ordered]@{
-            schemaVersion = $script:SchemaVersion
-            kind = "windows-acceptance-runner-launch-intent"
-            status = "terminal-attempt-boundary"
-            candidateExecutionState = "unknown-after-this-record"
-            retryOnUnknownOutcome = $false
-            recordedAtUtc = ConvertTo-CanonicalUtcString ([DateTime]::UtcNow)
-            pathsRecorded = $false
-            secretsRecorded = $false
-        })
-
         $systemPowerShell = Resolve-SystemWindowsPowerShell
         $runnerArguments = @(
             "-NoLogo", "-NoProfile", "-NonInteractive", "-File", [string]$config.runnerScript,
@@ -2777,10 +2932,41 @@ function Invoke-CoordinatorWorker {
             "-ForegroundArmTimeoutSeconds", [string]$config.foregroundArmTimeoutSeconds,
             "-Suite", "All", "-ShowOccluder"
         )
-        $runnerInfo = New-ProcessStartInfo $systemPowerShell $runnerArguments ([string]$config.sourceDirectory) -Hidden
+        $runnerInfo = New-ProcessStartInfo `
+            $systemPowerShell `
+            $runnerArguments `
+            ([string]$config.sourceDirectory) `
+            -Hidden
         Remove-SensitiveInheritedEnvironment $runnerInfo
         $token = New-BridgeToken
         $runnerInfo.EnvironmentVariables["LBB_TOKEN"] = $token
+        if ([IO.File]::Exists($files.Failure)) {
+            throw "The coordinator worker was canceled before candidate intent."
+        }
+        Assert-ExactConfiguration $config -BeforeReservation
+        $reservedAttemptPath = Reserve-CandidateAttempt `
+            -LedgerRoot ([IO.Path]::GetDirectoryName([string]$config.attemptLedgerPath)) `
+            -AttemptKey ([string]$config.attemptKey) `
+            -CandidateVersion ([string]$config.version) `
+            -ManifestSha256 ([string]$config.checksumManifestSha256) `
+            -CoordinatorInstanceId ([string]$config.coordinatorInstanceId)
+        if ($reservedAttemptPath -cne [string]$config.attemptLedgerPath) {
+            throw "The persistent attempt reservation changed identity."
+        }
+        Assert-ExactConfiguration $config
+        if ([IO.File]::Exists($files.Failure)) {
+            throw "The coordinator worker was canceled at the candidate boundary."
+        }
+        Write-CreateOnceJson $files.Intent ([ordered]@{
+            schemaVersion = $script:SchemaVersion
+            kind = "windows-acceptance-runner-launch-intent"
+            status = "terminal-attempt-boundary"
+            candidateExecutionState = "unknown-after-this-record"
+            retryOnUnknownOutcome = $false
+            recordedAtUtc = ConvertTo-CanonicalUtcString ([DateTime]::UtcNow)
+            pathsRecorded = $false
+            secretsRecorded = $false
+        })
         try {
             if ([IO.File]::Exists($files.Failure)) {
                 throw "The coordinator worker was canceled before candidate process creation."
@@ -2951,13 +3137,9 @@ function Invoke-CoordinatorWorker {
         Write-CreateOnceJson $files.Final $finalRecord
     }
     catch {
-        $attemptState = if ([IO.File]::Exists($files.Runner)) {
-            "runner-started-terminal"
-        }
-        elseif ([IO.File]::Exists($files.Intent)) {
-            "candidate-execution-unknown"
-        }
-        else { "not-started" }
+        $attemptState = Get-ObservedAttemptState `
+            $files `
+            $config
         Write-TerminalFailure $files "worker-exception" $attemptState "coordinator-exception"
         throw
     }
@@ -2978,6 +3160,10 @@ function Invoke-CoordinatorWorker {
             catch {}
             finally { $runnerCapture.Process.Dispose() }
         }
+        if ($null -ne $runnerInfo) {
+            $runnerInfo.EnvironmentVariables.Remove("LBB_TOKEN")
+        }
+        $token = $null
         [GC]::KeepAlive($script:ProcessLifetimeCoordinatorMutex)
         [GC]::KeepAlive($workerLifetimeJob)
     }
@@ -3104,11 +3290,14 @@ function Start-Coordinator {
         -Manifest $resolvedManifest `
         -Binding $resolvedBinding
     $attemptLedgerRoot = Get-AttemptLedgerRoot
-    $attemptLedgerPath = Reserve-CandidateAttempt `
+    # Resolve the final reservation identity before staging, but do not consume
+    # the one-shot version boundary until every private input and coordinator
+    # record is prepared. A pre-dispatch interruption can therefore leave
+    # diagnosable scratch state without needlessly withdrawing the version.
+    $attemptLedgerPath = Get-CandidateAttemptReservationPath `
         -LedgerRoot $attemptLedgerRoot `
-        -AttemptKey $attemptKey `
-        -CandidateVersion $Version `
-        -ManifestSha256 $ChecksumManifestSha256
+        -AttemptKey $attemptKey
+    $coordinatorInstanceId = [Guid]::NewGuid().ToString("N")
     [IO.Directory]::CreateDirectory($resolvedCoordinator) | Out-Null
     [IO.Directory]::CreateDirectory($resolvedEvidence) | Out-Null
     $resolvedCoordinatorAfterCreation = Resolve-OrdinaryPath $resolvedCoordinator $false "CoordinatorDirectory"
@@ -3180,6 +3369,7 @@ function Start-Coordinator {
         foregroundArmTimeoutSeconds = $ForegroundArmTimeoutSeconds
         attemptKey = $attemptKey
         attemptLedgerPath = $attemptLedgerPath
+        coordinatorInstanceId = $coordinatorInstanceId
         workerSupportAssembly = [string]$workerSupport.Path
         workerSupportSha256 = [string]$workerSupport.Sha256
         coordinatorScriptSha256 = Get-FileSha256 $stagedCoordinatorScript
@@ -3191,18 +3381,26 @@ function Start-Coordinator {
         candidateBindingSha256 = Get-FileSha256 $stagedBinding
     }
     Write-CreateOnceJson $files.Config $config
-    Assert-ExactConfiguration (Read-BoundedJson $files.Config 65536 "Private coordinator configuration")
     Write-CreateOnceJson $files.Start ([ordered]@{
         schemaVersion = $script:SchemaVersion
         kind = "windows-acceptance-start-request"
         status = "accepted"
         version = $Version
+        coordinatorInstanceId = $coordinatorInstanceId
         attemptState = "not-started"
         retryOnUnknownOutcome = $false
         recordedAtUtc = ConvertTo-CanonicalUtcString ([DateTime]::UtcNow)
         pathsRecorded = $false
         secretsRecorded = $false
     })
+    $validatedConfig = Read-BoundedJson `
+        $files.Config `
+        65536 `
+        "Private coordinator configuration"
+    Assert-ExactConfiguration $validatedConfig -BeforeReservation
+    Assert-ExactStartRecord `
+        (Read-BoundedJson $files.Start 16384 "Start request record") `
+        $validatedConfig
 
     $systemPowerShell = Resolve-SystemWindowsPowerShell
     $workerNonce = [Guid]::NewGuid().ToString("N")
@@ -3256,13 +3454,7 @@ function Start-Coordinator {
         )
         if (-not $workerIdentityMatched -or [IO.File]::Exists($files.Failure)) {
             Stop-DetachedWorkerProcessExact $worker "Retained coordinator worker"
-            $attemptState = if ([IO.File]::Exists($files.Runner)) {
-                "runner-started-terminal"
-            }
-            elseif ([IO.File]::Exists($files.Intent)) {
-                "candidate-execution-unknown"
-            }
-            else { "not-started" }
+            $attemptState = Get-ObservedAttemptState $files $config
             Write-TerminalFailure $files "worker-startup" $attemptState "worker-identity-or-terminal-state-invalid"
             throw "The retained coordinator worker identity or terminal state is invalid."
         }
@@ -3312,13 +3504,10 @@ function Start-Coordinator {
             catch { $workerCleanupConfirmed = $false }
         }
         if (-not $workerHandedOff -and -not [IO.File]::Exists($files.Failure)) {
-            $attemptState = if ([IO.File]::Exists($files.Runner)) {
-                "runner-started-terminal"
+            $attemptState = Get-ObservedAttemptState $files $config
+            if (-not $workerCleanupConfirmed -and $attemptState -ceq "not-started") {
+                $attemptState = "candidate-execution-unknown"
             }
-            elseif (-not $workerCleanupConfirmed -or [IO.File]::Exists($files.Intent)) {
-                "candidate-execution-unknown"
-            }
-            else { "not-started" }
             $reasonCode = if ($workerCleanupConfirmed) {
                 "worker-launch-failed"
             }
@@ -3392,9 +3581,12 @@ function Get-TerminalFollowOutput {
         $failure = Read-BoundedJson $Files.Failure 16384 "Terminal failure record"
         Assert-ExactFailureRecord $failure
         $failureChain = Get-ValidatedFollowChain $Files $Config -SkipFinal
+        $attemptReservationRelationship = Get-AttemptReservationRelationship $Config
         if ([string]$failure.attemptState -ceq "not-started" -and
-            ($null -ne $failureChain.Intent -or $null -ne $failureChain.Runner)) {
-            throw "A not-started terminal failure cannot follow an intent or runner record."
+            ($attemptReservationRelationship -ceq "owned" -or
+                $null -ne $failureChain.Intent -or
+                $null -ne $failureChain.Runner)) {
+            throw "A not-started terminal failure cannot follow a persistent boundary, intent, or runner record."
         }
         if ([string]$failure.attemptState -ceq "candidate-execution-unknown" -and
             $null -ne $failureChain.Runner) {
@@ -3489,7 +3681,7 @@ function Follow-Coordinator {
     Assert-PrivateDirectoryAcl $root
     $files = Get-CoordinatorFiles $root
     $config = Read-BoundedJson $files.Config 65536 "Private coordinator configuration"
-    Assert-ExactConfiguration $config
+    Assert-ExactConfigurationForCurrentReservationState $config $files
     if ([string]$config.coordinatorDirectory -cne $root) {
         throw "Follow is not bound to the configured private coordinator directory."
     }
@@ -3502,9 +3694,10 @@ function Follow-Coordinator {
     $followChain = Get-ValidatedFollowChain $files $config -SkipFinal
 
     if (-not [IO.File]::Exists($files.Worker)) {
+        $attemptState = Get-ObservedAttemptState $files $config
         Write-FollowFailureOutput `
             -Stage "worker-liveness" `
-            -AttemptState "not-started" `
+            -AttemptState $attemptState `
             -ReasonCode "worker-start-record-missing"
         return
     }
@@ -3515,15 +3708,16 @@ function Follow-Coordinator {
         "worker start time").UtcDateTime
     $workerAlive = Test-BoundProcessAlive ([int]$workerRecord.workerPid) $workerStartedAt
     if (-not [IO.File]::Exists($files.Ownership)) {
+        $attemptState = Get-ObservedAttemptState $files $config
         if ($workerAlive) {
             Write-FollowWaitingOutput `
-                -AttemptState "not-started" `
+                -AttemptState $attemptState `
                 -Phase "worker-guard-ownership-transfer"
         }
         else {
             Write-FollowFailureOutput `
                 -Stage "worker-ownership" `
-                -AttemptState "not-started" `
+                -AttemptState $attemptState `
                 -ReasonCode "guard-ownership-record-missing"
         }
         return
@@ -3538,13 +3732,9 @@ function Follow-Coordinator {
             Write-Output ([string]$terminalOutput[0])
             return
         }
-        $attemptState = if ([IO.File]::Exists($files.Runner)) {
-            "runner-started-terminal"
-        }
-        elseif ([IO.File]::Exists($files.Intent)) {
-            "candidate-execution-unknown"
-        }
-        else { "not-started" }
+        $attemptState = Get-ObservedAttemptState `
+            $files `
+            $config
         Write-FollowFailureOutput `
             -Stage "worker-liveness" `
             -AttemptState $attemptState `
@@ -3704,13 +3894,9 @@ function Follow-Coordinator {
     if ([IO.File]::Exists($files.Watcher)) {
         Assert-ExactWatcherRecord (Read-BoundedJson $files.Watcher 16384 "Watcher final record")
     }
-    $attemptState = if ([IO.File]::Exists($files.Runner)) {
-        "runner-started-terminal"
-    }
-    elseif ([IO.File]::Exists($files.Intent)) {
-        "candidate-execution-unknown"
-    }
-    else { "not-started" }
+    $attemptState = Get-ObservedAttemptState `
+        $files `
+        $config
     $terminalOutput = @(Get-TerminalFollowOutput $files $config)
     if ($terminalOutput.Count -gt 0) {
         if ($terminalOutput.Count -ne 1) { throw "Terminal Follow projection is not singular." }
@@ -5639,8 +5825,8 @@ finally {
             throw "Exact process identity self-test failed."
         }
         $selfTestInputs = New-PrivateChildDirectory $testRoot "follow-inputs" "Follow self-test inputs"
-        $inputServer = [IO.Path]::Combine($selfTestInputs, "local-browser-bridge-v0.12.34-windows-x86_64.exe")
-        $inputHelper = [IO.Path]::Combine($selfTestInputs, "local-computer-helper-v0.12.34-windows-x86_64.exe")
+        $inputServer = [IO.Path]::Combine($selfTestInputs, "local-browser-bridge-v0.12.35-windows-x86_64.exe")
+        $inputHelper = [IO.Path]::Combine($selfTestInputs, "local-computer-helper-v0.12.35-windows-x86_64.exe")
         $inputManifest = [IO.Path]::Combine($selfTestInputs, "SHA256SUMS.txt")
         $inputBinding = [IO.Path]::Combine($selfTestInputs, "candidate-binding.json")
         [IO.File]::WriteAllText($inputServer, "server-self-test", $script:Utf8NoBom)
@@ -5655,26 +5841,30 @@ finally {
             -Helper $inputHelper `
             -Manifest $inputManifest `
             -Binding $inputBinding
-        $selfTestAttemptPath = Reserve-CandidateAttempt `
-            -LedgerRoot $selfTestLedgerRoot `
-            -AttemptKey $selfTestAttemptKey `
+        $changedInputAttemptKey = Get-CandidateAttemptKey `
             -CandidateVersion $script:ProductVersion `
-            -ManifestSha256 $selfTestManifestSha256
-        $duplicateAttemptRefused = $false
-        try {
-            $null = Reserve-CandidateAttempt `
-                -LedgerRoot $selfTestLedgerRoot `
-                -AttemptKey $selfTestAttemptKey `
-                -CandidateVersion $script:ProductVersion `
-                -ManifestSha256 $selfTestManifestSha256
+            -ManifestSha256 ("f" * 64) `
+            -Server "changed-server" `
+            -Helper "changed-helper" `
+            -Manifest "changed-manifest" `
+            -Binding "changed-binding"
+        if ($changedInputAttemptKey -cne $selfTestAttemptKey) {
+            throw "Candidate input changes minted a second per-version attempt key."
         }
-        catch { $duplicateAttemptRefused = $true }
-        if (-not $duplicateAttemptRefused) {
-            throw "The persistent per-version attempt reservation self-test accepted a retry."
+        $prospectiveSelfTestAttemptPath = Get-CandidateAttemptReservationPath `
+            -LedgerRoot $selfTestLedgerRoot `
+            -AttemptKey $selfTestAttemptKey
+        if ([IO.File]::Exists($prospectiveSelfTestAttemptPath)) {
+            throw "Resolving a prospective attempt reservation consumed the one-shot boundary."
         }
+        $selfTestAttemptPath = $prospectiveSelfTestAttemptPath
+        $selfTestCoordinatorInstanceId = [Guid]::NewGuid().ToString("N")
 
         $newFollowFixture = {
-            param([string]$Name)
+            param([string]$Name, [string]$CoordinatorInstanceId)
+            if ([String]::IsNullOrWhiteSpace($CoordinatorInstanceId)) {
+                $CoordinatorInstanceId = $selfTestCoordinatorInstanceId
+            }
             $root = New-PrivateChildDirectory $selfTestCoordinatorParent $Name "Follow coordinator fixture"
             $evidence = New-PrivateChildDirectory $selfTestEvidenceParent $Name "Follow evidence fixture"
             $source = New-PrivateChildDirectory $root "staged-source" "Follow staged source"
@@ -5715,6 +5905,7 @@ finally {
                 foregroundArmTimeoutSeconds = 300
                 attemptKey = $selfTestAttemptKey
                 attemptLedgerPath = $selfTestAttemptPath
+                coordinatorInstanceId = $CoordinatorInstanceId
                 workerSupportAssembly = $files.WorkerSupport
                 workerSupportSha256 = Get-FileSha256 $files.WorkerSupport
                 coordinatorScriptSha256 = Get-FileSha256 $coordinatorScript
@@ -5730,6 +5921,7 @@ finally {
                 kind = "windows-acceptance-start-request"
                 status = "accepted"
                 version = $script:ProductVersion
+                coordinatorInstanceId = $CoordinatorInstanceId
                 attemptState = "not-started"
                 retryOnUnknownOutcome = $false
                 recordedAtUtc = ConvertTo-CanonicalUtcString ([DateTime]::UtcNow)
@@ -5788,6 +5980,21 @@ finally {
                 status = "terminal-attempt-boundary"
                 candidateExecutionState = "unknown-after-this-record"
                 retryOnUnknownOutcome = $false
+                recordedAtUtc = ConvertTo-CanonicalUtcString ([DateTime]::UtcNow)
+                pathsRecorded = $false
+                secretsRecorded = $false
+            }
+        }
+        $newFailureRecord = {
+            param([string]$AttemptState)
+            return [ordered]@{
+                schemaVersion = 1
+                kind = "windows-acceptance-coordinator-terminal"
+                status = "failed-closed"
+                stage = "self-test-stage"
+                attemptState = $AttemptState
+                reasonCode = "self-test-reason"
+                retryAllowed = $false
                 recordedAtUtc = ConvertTo-CanonicalUtcString ([DateTime]::UtcNow)
                 pathsRecorded = $false
                 secretsRecorded = $false
@@ -5857,6 +6064,172 @@ finally {
             if ($waiting.status -cne "waiting" -or $waiting.attemptState -cne "not-started" -or
                 $waiting.uiActionAllowed -ne $false) {
                 throw "Follow waiting-state self-test failed."
+            }
+
+            $missingBoundaryFixture = & $newFollowFixture "follow-missing-boundary"
+            Write-CreateOnceJson `
+                $missingBoundaryFixture.Files.Worker `
+                (& $newWorkerRecord $currentProcess.Id $currentStartedAt)
+            Write-CreateOnceJson `
+                $missingBoundaryFixture.Files.Ownership `
+                (& $newOwnershipRecord $currentProcess.Id $currentStartedAt)
+            Write-CreateOnceJson $missingBoundaryFixture.Files.Intent (& $newIntentRecord)
+            $CoordinatorDirectory = $missingBoundaryFixture.Root
+            $missingBoundaryRefused = $false
+            try { $null = Follow-Coordinator }
+            catch { $missingBoundaryRefused = $true }
+            if (-not $missingBoundaryRefused) {
+                throw "Follow accepted a post-boundary record without the persistent reservation."
+            }
+
+            $followReservationPath = Reserve-CandidateAttempt `
+                -LedgerRoot $selfTestLedgerRoot `
+                -AttemptKey $selfTestAttemptKey `
+                -CandidateVersion $script:ProductVersion `
+                -ManifestSha256 $selfTestManifestSha256 `
+                -CoordinatorInstanceId $selfTestCoordinatorInstanceId
+            if ($followReservationPath -cne $selfTestAttemptPath) {
+                throw "The Follow self-test reservation changed identity."
+            }
+            $reservationLengthBeforeDuplicate = [IO.FileInfo]::new(
+                $selfTestAttemptPath
+            ).Length
+            $reservationHashBeforeDuplicate = Get-FileSha256 $selfTestAttemptPath
+            $duplicateAttemptRefused = $false
+            try {
+                $null = Reserve-CandidateAttempt `
+                    -LedgerRoot $selfTestLedgerRoot `
+                    -AttemptKey $selfTestAttemptKey `
+                    -CandidateVersion $script:ProductVersion `
+                    -ManifestSha256 $selfTestManifestSha256 `
+                    -CoordinatorInstanceId $selfTestCoordinatorInstanceId
+            }
+            catch { $duplicateAttemptRefused = $true }
+            if (-not $duplicateAttemptRefused) {
+                throw "The persistent per-version attempt reservation self-test accepted a retry."
+            }
+            if ([IO.FileInfo]::new($selfTestAttemptPath).Length -ne
+                    $reservationLengthBeforeDuplicate -or
+                (Get-FileSha256 $selfTestAttemptPath) -cne
+                    $reservationHashBeforeDuplicate) {
+                throw "A refused duplicate changed the persistent attempt reservation bytes."
+            }
+            $CoordinatorDirectory = $waitingFixture.Root
+            $boundaryOnly = (Follow-Coordinator | ConvertFrom-Json)
+            if ($boundaryOnly.status -cne "waiting" -or
+                $boundaryOnly.attemptState -cne "candidate-execution-unknown" -or
+                $boundaryOnly.uiActionAllowed -ne $false) {
+                throw "Follow persistent-boundary-only self-test failed."
+            }
+
+            $foreignFixture = & $newFollowFixture `
+                "follow-foreign-boundary" `
+                ([Guid]::NewGuid().ToString("N"))
+            Write-CreateOnceJson `
+                $foreignFixture.Files.Worker `
+                (& $newWorkerRecord $currentProcess.Id $currentStartedAt)
+            Write-CreateOnceJson `
+                $foreignFixture.Files.Ownership `
+                (& $newOwnershipRecord $currentProcess.Id $currentStartedAt)
+            $CoordinatorDirectory = $foreignFixture.Root
+            $foreignBoundary = (Follow-Coordinator | ConvertFrom-Json)
+            if ($foreignBoundary.status -cne "waiting" -or
+                $foreignBoundary.attemptState -cne "not-started" -or
+                $foreignBoundary.uiActionAllowed -ne $false) {
+                throw "Follow confused another coordinator's reservation with its own."
+            }
+
+            $foreignFailureFixture = & $newFollowFixture `
+                "follow-foreign-not-started-failure" `
+                ([Guid]::NewGuid().ToString("N"))
+            Write-CreateOnceJson `
+                $foreignFailureFixture.Files.Worker `
+                (& $newWorkerRecord $currentProcess.Id $currentStartedAt)
+            Write-CreateOnceJson `
+                $foreignFailureFixture.Files.Ownership `
+                (& $newOwnershipRecord $currentProcess.Id $currentStartedAt)
+            Write-CreateOnceJson `
+                $foreignFailureFixture.Files.Failure `
+                (& $newFailureRecord "not-started")
+            $CoordinatorDirectory = $foreignFailureFixture.Root
+            $foreignFailure = (Follow-Coordinator | ConvertFrom-Json)
+            if ($foreignFailure.status -cne "failed-closed" -or
+                $foreignFailure.attemptState -cne "not-started" -or
+                $foreignFailure.reasonCode -cne "self-test-reason") {
+                throw "Follow changed a foreign coordinator's local not-started failure."
+            }
+
+            $foreignIntentFixture = & $newFollowFixture `
+                "follow-foreign-intent" `
+                ([Guid]::NewGuid().ToString("N"))
+            Write-CreateOnceJson `
+                $foreignIntentFixture.Files.Worker `
+                (& $newWorkerRecord $currentProcess.Id $currentStartedAt)
+            Write-CreateOnceJson `
+                $foreignIntentFixture.Files.Ownership `
+                (& $newOwnershipRecord $currentProcess.Id $currentStartedAt)
+            Write-CreateOnceJson $foreignIntentFixture.Files.Intent (& $newIntentRecord)
+            $CoordinatorDirectory = $foreignIntentFixture.Root
+            $foreignIntentRefused = $false
+            try { $null = Follow-Coordinator }
+            catch { $foreignIntentRefused = $true }
+            if (-not $foreignIntentRefused) {
+                throw "Follow accepted local intent owned by a foreign reservation."
+            }
+
+            $ownedNotStartedFailureFixture = & $newFollowFixture `
+                "follow-owned-not-started-failure"
+            Write-CreateOnceJson `
+                $ownedNotStartedFailureFixture.Files.Worker `
+                (& $newWorkerRecord $currentProcess.Id $currentStartedAt)
+            Write-CreateOnceJson `
+                $ownedNotStartedFailureFixture.Files.Ownership `
+                (& $newOwnershipRecord $currentProcess.Id $currentStartedAt)
+            Write-CreateOnceJson `
+                $ownedNotStartedFailureFixture.Files.Failure `
+                (& $newFailureRecord "not-started")
+            $CoordinatorDirectory = $ownedNotStartedFailureFixture.Root
+            $ownedNotStartedFailureRefused = $false
+            try { $null = Follow-Coordinator }
+            catch { $ownedNotStartedFailureRefused = $true }
+            if (-not $ownedNotStartedFailureRefused) {
+                throw "Follow accepted a not-started failure after its owned reservation."
+            }
+
+            $postValidationFixture = & $newFollowFixture "follow-post-boundary-validation"
+            $postValidationConfig = Read-BoundedJson `
+                $postValidationFixture.Files.Config `
+                65536 `
+                "Post-boundary validation self-test configuration"
+            [IO.File]::AppendAllText(
+                [string]$postValidationConfig.serverPath,
+                "-changed-after-boundary",
+                $script:Utf8NoBom
+            )
+            $postValidationFailed = $false
+            try { Assert-ExactConfiguration $postValidationConfig }
+            catch {
+                $postValidationFailed = $true
+                $postValidationState = Get-ObservedAttemptState `
+                    $postValidationFixture.Files `
+                    $postValidationConfig
+                Write-TerminalFailure `
+                    $postValidationFixture.Files `
+                    "worker-exception" `
+                    $postValidationState `
+                    "coordinator-exception"
+            }
+            if (-not $postValidationFailed -or
+                -not [IO.File]::Exists($postValidationFixture.Files.Failure)) {
+                throw "A post-boundary validation failure did not publish terminal state."
+            }
+            $postValidationFailure = Read-BoundedJson `
+                $postValidationFixture.Files.Failure `
+                16384 `
+                "Post-boundary terminal failure self-test record"
+            Assert-ExactFailureRecord $postValidationFailure
+            if ($postValidationFailure.attemptState -cne "candidate-execution-unknown") {
+                throw "A post-boundary validation failure was not classified outcome-unknown."
             }
 
             $handoffFixture = & $newFollowFixture "follow-handoff"

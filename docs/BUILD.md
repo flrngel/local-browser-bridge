@@ -226,9 +226,12 @@ xcrun --sdk macosx --show-sdk-version
 bash scripts/verify-macos-build-host.sh
 ```
 
-The second command must report SDK 26 or later and deployment target 13.0. The
-build host must also run the Xcode or Command Line Tools release that supplies
-that SDK; consult Apple's current [Xcode system
+The second command is a build-host preflight only: it checks Darwin, the active
+SDK, Swift availability, and the configured deployment target; it neither
+builds nor verifies an artifact. It must report SDK 26 or later and deployment
+target 13.0. The later `verify-macos-artifacts.sh` command validates the built
+server and helper slices. The build host must also run the Xcode or Command Line
+Tools release that supplies that SDK; consult Apple's current [Xcode system
 requirements](https://developer.apple.com/xcode/system-requirements/) for the
 required host macOS version.
 

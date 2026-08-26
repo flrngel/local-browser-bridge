@@ -27,20 +27,44 @@ candidate has been built, downloaded, or executed.
 > candidate product process, Chrome action, tag, or publication existed. The
 > sanitized terminal record is retained under
 > `evidence/v0.12.33/computer/attempts/withdrawn-81bda2a-windows-fixture-build-failure/`.
-> Version 0.12.34 keeps the strict frame-authority checks, permits only explicit
+> Version 0.12.34 kept the strict frame-authority checks, permitted only explicit
 > child breakaway from both the detached-worker guard Job and coordinator
-> lifetime Job, atomically creates each runner-owned child in its private
-> kill-on-close Job, and exercises the actual guard-plus-lifetime fixture build
-> in source-only self-tests. It requires entirely fresh candidate
-> and acceptance evidence. Do not reuse or relabel earlier bytes or results.
+> lifetime Job, atomically created each runner-owned child in its private
+> kill-on-close Job, and exercised the actual guard-plus-lifetime fixture build
+> in source-only self-tests. Its exact trust gate and both fresh macOS lanes
+> passed. At `2026-08-26T11:05:46Z`, however, the Windows coordinator created
+> its persistent no-retry reservation before any coordinator state existed, and
+> the invoking session was interrupted. A bounded later observation found no
+> v0.12.34 coordinator directory, evidence directory, candidate process,
+> listener on port 17373, Computer Use action, or Chrome action. That absence is
+> not proof that an unobserved transient state never existed. The persistent
+> ledger records the Windows attempt as `not-started` with retry disabled, so
+> v0.12.34 was withdrawn without a tag or GitHub Release.
+>
+> Version 0.12.35 retains the Job topology but resolves only the prospective
+> ledger path before staging. It completes and verifies owner-private staging,
+> configuration and Start records, detached-worker lifetime-Job binding and
+> guard-ownership transfer, and exact runner process/environment/token
+> preparation before atomically creating the schema-2 persistent reservation
+> bound to an opaque `coordinatorInstanceId`. That create-once boundary
+> immediately precedes runner launch intent and the sole process creation. A
+> pre-boundary failure may leave private diagnostic scratch state without
+> consuming the candidate. A foreign coordinator's reservation cannot rewrite
+> that local pre-boundary history. Once the owning ledger exists, the outcome
+> is conservative unknown: never delete it or retry that product version. A
+> same-version reservation whose manifest does not match the local coordinator
+> is intentionally classified as invalid rather than foreign; `Follow` then
+> refuses the ambiguous state instead of projecting a local not-started result.
+> Version 0.12.35 requires entirely fresh candidate and acceptance evidence. Do
+> not reuse or relabel earlier bytes or results.
 
-## Remaining release boundary
+## Source-freeze release boundary
 
-The coordinator source gate is complete, but every artifact- and UI-bearing
-release gate remains future work:
+At this handoff's source-freeze checkpoint, the coordinator source gate was
+complete but every artifact- and UI-bearing release gate remained future work:
 
-- no 0.12.29 tag has been created or pushed;
-- no packaged 0.12.29 server, helper, or extension has been built, downloaded,
+- no 0.12.35 tag has been created or pushed;
+- no packaged 0.12.35 server, helper, or extension has been built, downloaded,
   or executed;
 - neither macOS packaged lane nor Windows packaged-helper acceptance has run;
 - stock-Chrome acceptance has not run and Chrome was not opened or mutated;
@@ -49,17 +73,24 @@ release gate remains future work:
 - do not treat a coordinator marker, `Follow` result, or this handoff as user
   consent or action authority.
 
+The live publication status belongs to the immutable
+[v0.12.35 GitHub Release](https://github.com/flrngel/local-browser-bridge/releases/tag/v0.12.35)
+and its candidate-bound schema-3 evidence receipt, not to this source-checkpoint
+list.
+
 Coordinator self-tests are GUID-scoped non-product tests and may be repeated.
 Their pass does not freeze or authorize candidate bytes. Any future packaged
-candidate attempt remains one-shot after a start or outcome-unknown launch.
+candidate attempt remains one-shot after its schema-2 reservation or any
+outcome-unknown launch.
 
 ## Verified facts
 
-The 0.12.29 source provides a checked-in
+The active 0.12.35 source provides a checked-in
 `scripts/run-windows-computer-use-acceptance.ps1` coordinator with:
 
 - a clean exact-system-PowerShell bootstrap;
-- fixed, owner-private LocalAppData roots and per-version attempt reservation;
+- fixed, owner-private LocalAppData roots and a schema-2 per-version attempt
+  reservation bound to an opaque coordinator-instance identifier;
 - exact source, candidate, manifest, and helper bindings;
 - an explicit worker environment allowlist with an in-memory token handoff;
 - atomic create-once Start, ownership, intent, runner, watcher, handoff,

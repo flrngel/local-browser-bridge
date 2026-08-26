@@ -8,17 +8,17 @@ fn finalizer_source() -> String {
 #[test]
 fn macos_v0_12_27_result_and_aggregate_schemas_are_aligned_end_to_end() {
     let finalizer = finalizer_source().replace("\r\n", "\n");
-    let producer = fs::read_to_string("evidence/v0.12.34/computer/helper-evidence-rig.mjs")
+    let producer = fs::read_to_string("evidence/v0.12.35/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let documentation = fs::read_to_string("evidence/v0.12.34/computer/README.md")
+    let documentation = fs::read_to_string("evidence/v0.12.35/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let verifier = fs::read_to_string("scripts/verify-release-acceptance-evidence.sh")
         .unwrap()
         .replace("\r\n", "\n");
 
-    assert!(finalizer.contains("const PRODUCT_VERSION = \"0.12.34\";"));
+    assert!(finalizer.contains("const PRODUCT_VERSION = \"0.12.35\";"));
     assert!(finalizer.contains("const RESULT_SCHEMA_VERSION = 8;"));
     assert!(finalizer.contains("const AGGREGATE_SCHEMA_VERSION = 3;"));
     assert!(producer.matches("schemaVersion: 8,").count() >= 2);
@@ -48,7 +48,7 @@ fn macos_v0_12_27_result_and_aggregate_schemas_are_aligned_end_to_end() {
     ] {
         assert!(
             verifier.contains(required),
-            "release evidence verifier is missing the v0.12.34 schema binding: {required}"
+            "release evidence verifier is missing the v0.12.35 schema binding: {required}"
         );
     }
 }
@@ -128,7 +128,7 @@ fn macos_v0_12_27_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
     }
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.34\";",
+        "const PRODUCT_VERSION = \"0.12.35\";",
         "const RESULT_SCHEMA_VERSION = 8;",
         "const AGGREGATE_SCHEMA_VERSION = 3;",
         "const APP_SHARE_MARKER_SCHEMA_VERSION = 2;",
