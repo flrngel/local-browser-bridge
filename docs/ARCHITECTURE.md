@@ -166,14 +166,14 @@ reused after 43.807 seconds; `computer.click` correctly refused it with HTTP 409
 `COMPUTER_STALE_FRAME` before dispatch. Version 0.12.24 therefore added a
 strictly newer frame with the same share, target, and geometry after the
 `ACTION` receipt and within the reserved deadline before deriving click
-authority; version 0.12.35 retains that boundary unchanged. The v0.12.20
+authority; version 0.12.36 retains that boundary unchanged. The v0.12.20
 physical-pointer lane is retained only as historical, optional adversarial
-coverage; its artifacts cannot satisfy the v0.12.35 release contract.
+coverage; its artifacts cannot satisfy the v0.12.36 release contract.
 
 ## Windows acceptance coordinator
 
 The Windows acceptance coordinator completed its source gate in v0.12.29 and is
-retained for v0.12.35 release acceptance. It is release tooling, not a product
+retained for v0.12.36 release acceptance. It is release tooling, not a product
 control surface. `Start` enters an exact clean system-PowerShell bootstrap,
 resolves only the prospective per-version ledger path, then creates and
 revalidates owner-private state, stages and hashes every bound input, and
@@ -201,7 +201,7 @@ while permitting only explicit child breakaway. Each runner-owned fixture,
 server, or helper process is created suspended and atomically bound to the
 runner's private non-breakaway kill-on-close Job before resume. The earlier Job
 topology passed its Windows PowerShell 5.1 native gate and independent no-P0/P1
-review. The v0.12.35 reservation ordering and schema-2 instance binding also
+review. The v0.12.36 reservation ordering and schema-2 instance binding also
 passed the exact system Windows PowerShell 5.1 self-test for coordinator
 SHA-256 `ff10beeedef51be23f9575ee99bb5c676646949fa8b5c5e2e5ed9d71fe4945e5`
 and an independent no-P0/P1 review. PR CI and packaged candidate acceptance
@@ -235,7 +235,7 @@ deduplication, and terminal-failure precedence without starting a candidate or
 opening UI. The v0.12.34 topology regression additionally launches the actual guarded
 worker, adds the named lifetime Job, runs the real system-PowerShell 5.1 runner,
 and compiles and executes the source-bound fixture through the atomic private
-Job-list path. Version 0.12.35 retains that topology and adds reservation-order,
+Job-list path. Version 0.12.36 retains that topology and adds reservation-order,
 owned/foreign coordinator-instance, and pre/post-boundary state regressions.
 
 The first v0.12.30 packaged attempt passed its trust/source gates and both
@@ -243,7 +243,7 @@ macOS lanes, then stopped before the Windows runner launched because the
 production staged worker-support loader called an undefined hex helper. Since
 v0.12.31, the coordinator uses an inline PowerShell 5.1-compatible digest
 conversion and exercises that exact staged-loader branch in a fresh self-test
-process; v0.12.35 retains that repair unchanged.
+process; v0.12.36 retains that repair unchanged.
 
 This tooling assumes the independently verified GitHub-attested candidate is
 trusted. The runner and candidate execute as the same Windows account that owns
@@ -278,7 +278,7 @@ PiP automation, virtual displays, VM orchestration, RDP loopback, and separate O
 The server performs a metadata-only check against the fixed public GitHub Releases API. It accepts only a canonical stable release marked immutable by GitHub and never downloads or installs an update. Release artifacts are built as a Windows server executable, Windows helper executable, macOS universal archive with helper app, matching extension ZIP, checksum manifest, and GitHub provenance. Project and locked dependency licenses are embedded in both executables; the macOS archive and extension package also carry their applicable notice files.
 
 Version 0.12.30 introduced the separation between immutable candidate
-construction and publication; version 0.12.35 retains it.
+construction and publication; version 0.12.36 retains it.
 The candidate workflow runs manually against one reviewed `main` source SHA,
 creates no tag or deployment, and emits a schema-3 binding for the exact
 five-file artifact set, source, workflow run, workflow attempt, manifest, and
@@ -304,7 +304,7 @@ its private kill-on-close Job before resuming it. A source-only self-test uses
 the actual guard-to-lifetime worker launcher, then compiles and executes the
 real fixture through that topology. Its trust gate and both macOS lanes passed,
 but its persistent reservation was created before private coordinator state and
-made an interrupted Windows session non-retryable. Version 0.12.35 retains the
+made an interrupted Windows session non-retryable. Version 0.12.36 retains the
 Job topology and moves a schema-2 reservation bound to the opaque coordinator
 instance into the worker's last pre-intent boundary. Fresh platform, browser,
 and publication evidence is still required.

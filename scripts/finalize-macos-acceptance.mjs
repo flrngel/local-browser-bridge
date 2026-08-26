@@ -22,8 +22,8 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { deflateSync, inflateSync } from "node:zlib";
 
-const PRODUCT_VERSION = "0.12.35";
-const RESULT_SCHEMA_VERSION = 8;
+const PRODUCT_VERSION = "0.12.36";
+const RESULT_SCHEMA_VERSION = 9;
 const AGGREGATE_SCHEMA_VERSION = 3;
 const APP_SHARE_MARKER_SCHEMA_VERSION = 2;
 const OUTPUT_FILE = "macos-acceptance.json";
@@ -41,6 +41,15 @@ const QUIET_SEAT_REQUIRED_STABLE_MS = 30_000;
 const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;
 const QUIET_SEAT_SAMPLE_INTERVAL_MS = 500;
 const QUIET_SEAT_REQUIRED_STABLE_TRANSITIONS = 60;
+const QUIET_SEAT_DIAGNOSTIC_SCHEMA_VERSION = 1;
+const QUIET_SEAT_RESET_CAUSES = [
+  "foreground-transition",
+  "hid-pointer-activity",
+  "hid-keyboard-activity",
+  "foreground-changed",
+  "focus-changed",
+  "active-space-changed",
+];
 const MAX_LANE_DURATION_MS = 2 * 60 * 60 * 1_000;
 const MAX_DELIBERATE_REVIEW_DELAY_MS = 30 * 60 * 1_000;
 const MAX_PID = 2_147_483_647;
@@ -237,6 +246,11 @@ const QUIET_SEAT_FIELDS = [
   "stableTransitions",
   "resetCount",
   "monitoringUnknown",
+  "diagnosticSchemaVersion",
+  "lastResetCause",
+  "lastUnknownCause",
+  "resetCauseCounts",
+  "probeFailureCategory",
   "completedBeforeCandidateExecution",
   "rawPointerDataRetained",
 ];
@@ -983,6 +997,42 @@ function validateQuietSeatStabilization(value, lane, label) {
   );
   exactInteger(value.resetCount, 0, required ? 1_000_000 : 0, `${label} resetCount`);
   exactBoolean(value.monitoringUnknown, false, `${label} monitoringUnknown`);
+  exactInteger(
+    value.diagnosticSchemaVersion,
+    QUIET_SEAT_DIAGNOSTIC_SCHEMA_VERSION,
+    QUIET_SEAT_DIAGNOSTIC_SCHEMA_VERSION,
+    `${label} diagnosticSchemaVersion`,
+  );
+  if (value.lastUnknownCause !== null) {
+    fail(`${label} lastUnknownCause must be null for passing evidence.`);
+  }
+  if (value.probeFailureCategory !== null) {
+    fail(`${label} probeFailureCategory must be null for passing evidence.`);
+  }
+  exactKeys(value.resetCauseCounts, QUIET_SEAT_RESET_CAUSES, `${label} resetCauseCounts`);
+  let categorizedResetCount = 0;
+  for (const cause of QUIET_SEAT_RESET_CAUSES) {
+    categorizedResetCount += exactInteger(
+      value.resetCauseCounts[cause],
+      0,
+      required ? 1_000_000 : 0,
+      `${label} resetCauseCounts ${cause}`,
+    );
+  }
+  if (categorizedResetCount !== value.resetCount) {
+    fail(`${label} resetCauseCounts do not sum to resetCount.`);
+  }
+  if (value.resetCount === 0) {
+    if (value.lastResetCause !== null) {
+      fail(`${label} lastResetCause must be null when no reset occurred.`);
+    }
+  } else if (
+    typeof value.lastResetCause !== "string" ||
+    !QUIET_SEAT_RESET_CAUSES.includes(value.lastResetCause) ||
+    value.resetCauseCounts[value.lastResetCause] < 1
+  ) {
+    fail(`${label} lastResetCause is not a counted fixed reset category.`);
+  }
   exactBoolean(
     value.completedBeforeCandidateExecution,
     required,
@@ -1764,6 +1814,11 @@ function selfTestQuietSeatStabilization(lane) {
     stableTransitions: required ? QUIET_SEAT_REQUIRED_STABLE_TRANSITIONS : 0,
     resetCount: 0,
     monitoringUnknown: false,
+    diagnosticSchemaVersion: QUIET_SEAT_DIAGNOSTIC_SCHEMA_VERSION,
+    lastResetCause: null,
+    lastUnknownCause: null,
+    resetCauseCounts: Object.fromEntries(QUIET_SEAT_RESET_CAUSES.map((cause) => [cause, 0])),
+    probeFailureCategory: null,
     completedBeforeCandidateExecution: required,
     rawPointerDataRetained: false,
   };
@@ -2130,6 +2185,53 @@ async function runSelfTest() {
     await expectSelfTestFailure(
       () => finalize(unknownGateQuiet, unknownGateDeliberate, unknownGateOutput),
       "quietSeatStabilization monitoringUnknown",
+    );
+
+    const uncategorizedResetQuiet = await createSelfTestLane(
+      root,
+      "uncategorized-reset-quiet",
+      "quiet",
+      (result) => {
+        result.quietSeatStabilization.resetCount = 1;
+        result.quietSeatStabilization.resetCauseCounts["hid-pointer-activity"] = 1;
+        result.quietSeatStabilization.lastResetCause = "unbounded-detail";
+      },
+    );
+    const uncategorizedResetDeliberate = await createSelfTestLane(
+      root,
+      "uncategorized-reset-deliberate",
+      "deliberate-concurrency",
+    );
+    const uncategorizedResetOutput = await freshSelfTestOutput(
+      root,
+      "uncategorized-reset-output",
+    );
+    await expectSelfTestFailure(
+      () => finalize(
+        uncategorizedResetQuiet,
+        uncategorizedResetDeliberate,
+        uncategorizedResetOutput,
+      ),
+      "lastResetCause is not a counted fixed reset category",
+    );
+
+    const rawDiagnosticQuiet = await createSelfTestLane(
+      root,
+      "raw-diagnostic-quiet",
+      "quiet",
+      (result) => {
+        result.quietSeatStabilization.rawProbeOutput = "forbidden";
+      },
+    );
+    const rawDiagnosticDeliberate = await createSelfTestLane(
+      root,
+      "raw-diagnostic-deliberate",
+      "deliberate-concurrency",
+    );
+    const rawDiagnosticOutput = await freshSelfTestOutput(root, "raw-diagnostic-output");
+    await expectSelfTestFailure(
+      () => finalize(rawDiagnosticQuiet, rawDiagnosticDeliberate, rawDiagnosticOutput),
+      "quietSeatStabilization fields are not in exact canonical order",
     );
 
     const missingGateQuiet = await createSelfTestLane(

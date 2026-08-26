@@ -41,7 +41,7 @@ candidate has been built, downloaded, or executed.
 > ledger records the Windows attempt as `not-started` with retry disabled, so
 > v0.12.34 was withdrawn without a tag or GitHub Release.
 >
-> Version 0.12.35 retains the Job topology but resolves only the prospective
+> Version 0.12.36 retains the Job topology but resolves only the prospective
 > ledger path before staging. It completes and verifies owner-private staging,
 > configuration and Start records, detached-worker lifetime-Job binding and
 > guard-ownership transfer, and exact runner process/environment/token
@@ -55,7 +55,7 @@ candidate has been built, downloaded, or executed.
 > same-version reservation whose manifest does not match the local coordinator
 > is intentionally classified as invalid rather than foreign; `Follow` then
 > refuses the ambiguous state instead of projecting a local not-started result.
-> Version 0.12.35 requires entirely fresh candidate and acceptance evidence. Do
+> Version 0.12.36 requires entirely fresh candidate and acceptance evidence. Do
 > not reuse or relabel earlier bytes or results.
 
 ## Source-freeze release boundary
@@ -63,8 +63,8 @@ candidate has been built, downloaded, or executed.
 At this handoff's source-freeze checkpoint, the coordinator source gate was
 complete but every artifact- and UI-bearing release gate remained future work:
 
-- no 0.12.35 tag has been created or pushed;
-- no packaged 0.12.35 server, helper, or extension has been built, downloaded,
+- no 0.12.36 tag has been created or pushed;
+- no packaged 0.12.36 server, helper, or extension has been built, downloaded,
   or executed;
 - neither macOS packaged lane nor Windows packaged-helper acceptance has run;
 - stock-Chrome acceptance has not run and Chrome was not opened or mutated;
@@ -74,7 +74,7 @@ complete but every artifact- and UI-bearing release gate remained future work:
   consent or action authority.
 
 The live publication status belongs to the immutable
-[v0.12.35 GitHub Release](https://github.com/flrngel/local-browser-bridge/releases/tag/v0.12.35)
+[v0.12.36 GitHub Release](https://github.com/flrngel/local-browser-bridge/releases/tag/v0.12.36)
 and its candidate-bound schema-3 evidence receipt, not to this source-checkpoint
 list.
 
@@ -85,7 +85,7 @@ outcome-unknown launch.
 
 ## Verified facts
 
-The active 0.12.35 source provides a checked-in
+The active 0.12.36 source provides a checked-in
 `scripts/run-windows-computer-use-acceptance.ps1` coordinator with:
 
 - a clean exact-system-PowerShell bootstrap;
