@@ -1,0 +1,201 @@
+2026-08-26T22:02:41.959Z PASS evidence output parent is an owner-private ordinary directory: the direct evidence parent is ordinary, owner-private, and current-user owned
+2026-08-26T22:02:41.962Z PASS evidence output directory is newly created and owner-private: the runner created one private lane output directory
+2026-08-26T22:02:42.881Z PASS pre-run harness source commit matches coordinator binding: exact source SHA matched
+2026-08-26T22:02:42.881Z PASS pre-run harness checkout is detached: detached HEAD
+2026-08-26T22:02:42.882Z PASS pre-run harness checkout is clean: tracked, staged, deleted, and untracked sets are empty
+2026-08-26T22:02:42.882Z PASS pre-run harness source repository passes git fsck: git fsck --full passed
+2026-08-26T22:02:42.882Z PASS pre-run harness files are exact tracked blobs: runner, native probes, and acceptance finalizer match HEAD blobs
+2026-08-26T22:02:42.884Z PASS macOS host: Darwin
+2026-08-26T22:02:42.891Z PASS expected checksum-manifest hash format: 64 lowercase hexadecimal characters
+2026-08-26T22:02:42.891Z PASS canonical checksum-manifest name: SHA256SUMS.txt
+2026-08-26T22:02:42.891Z PASS exact archive name: local-browser-bridge-v0.12.35-macos-universal.tar.gz
+2026-08-26T22:02:42.891Z PASS checksum manifest is one bounded current-user-owned ordinary file: ordinary, singly linked, owner-controlled, and within the manifest byte bound
+2026-08-26T22:02:42.891Z PASS checksum manifest stayed stable while it was bound: path and descriptor identity, size, links, and timestamps remained unchanged
+2026-08-26T22:02:42.891Z PASS out-of-band checksum-manifest hash matches: 9c143c912b979c594fe78db7b4b6237776dd38c31152a5c8c0ce91b6135a7b20
+2026-08-26T22:02:42.891Z PASS checksum manifest has the exact canonical four-entry set: local-browser-bridge-v0.12.35-windows-x86_64.exe,local-computer-helper-v0.12.35-windows-x86_64.exe,local-browser-bridge-v0.12.35-macos-universal.tar.gz,local-browser-bridge-extension-v0.12.35.zip
+2026-08-26T22:02:42.891Z PASS canonical manifest contains the macOS archive checksum: addc2c7e6f6f028c91466aa9e0dea53239a8338166bcddbb6fd1eff4c556445b
+2026-08-26T22:02:42.941Z PASS macOS archive bounded exact inventory: ten PAX-free regular-file/directory entries passed bounded streaming extraction
+2026-08-26T22:02:42.941Z PASS archive checksum is bound by the canonical manifest: addc2c7e6f6f028c91466aa9e0dea53239a8338166bcddbb6fd1eff4c556445b
+2026-08-26T22:02:42.946Z PASS supplied server is archive-exact: 221a860392c9a36a3a9e1b06e23fe8a525e29e113ec19bd76f728de176730c13
+2026-08-26T22:02:42.948Z PASS supplied helper is archive-exact: 133bc788285c2722e4d73e419ec1aaef3a0b0909b585c0aaf04584dd994bad34
+2026-08-26T22:02:42.963Z PASS server universal architecture: arm64,x86_64
+2026-08-26T22:02:42.963Z PASS helper universal architecture: arm64,x86_64
+2026-08-26T22:02:42.963Z PASS helper uses packaged app layout: Local Computer Helper.app
+2026-08-26T22:02:42.988Z PASS strict code-signature verification: server, helper executable, and helper app bundle passed strict verification
+2026-08-26T22:02:42.995Z PASS helper bundle version: 0.12.35/0.12.35
+2026-08-26T22:02:44.569Z PASS optional physical-pointer adversarial prompt self-test: source-only optional adversarial prompt cannot satisfy either release lane
+2026-08-26T22:02:45.162Z PASS app-share handoff bundle identity: dev.flrngel.local-browser-bridge.acceptance.app-share
+2026-08-26T22:02:45.427Z PASS app-share handoff self-test: stable bundle/window/button vocabulary and create-once receipts
+2026-08-26T22:02:45.789Z PASS screen-capture permission preflight: preexisting permission; no request was made
+2026-08-26T22:02:45.789Z PASS accessibility permission preflight: preexisting permission; no request was made
+2026-08-26T22:02:45.789Z PASS active Space probe available: nonzero active Space identity
+2026-08-26T22:02:45.789Z PASS sandwiched foreground AX focus probe available: stable NSWorkspace/raw PSN plus exact AX focused/main-window identities are available
+2026-08-26T22:02:53.452Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:02:54.088Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:02:54.732Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:02:55.324Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:02:55.946Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:02:56.557Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:02:57.191Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:02:57.823Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:02:58.470Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:02:59.103Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:02.156Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:02.785Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:03.446Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:04.096Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:04.700Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:05.296Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:05.940Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:06.555Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:07.190Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:07.816Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:08.429Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:09.050Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:09.673Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:10.306Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:10.922Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:11.559Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:12.183Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:12.810Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:13.439Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:14.065Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:14.681Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:15.316Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:15.934Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:16.555Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:20.308Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:20.926Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:21.584Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:22.223Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:22.861Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:23.481Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:24.109Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:24.722Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:25.360Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:25.992Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:26.639Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:27.262Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:27.891Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:28.514Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:29.130Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:29.763Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:30.389Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:31.041Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:31.662Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:32.922Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:33.586Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:34.222Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:34.839Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:35.469Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:36.094Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:36.722Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:37.370Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:37.985Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:38.590Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:39.214Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:39.830Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:44.144Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:44.765Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:45.374Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:46.023Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:46.622Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:47.261Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:47.900Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:51.616Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:52.228Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:55.955Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:56.568Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:57.208Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:57.833Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:58.439Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:59.048Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:03:59.677Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:00.306Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:00.933Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:01.563Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:02.186Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:02.813Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:04.056Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:04.685Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:05.322Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:05.965Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:06.585Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:07.194Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:07.813Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:08.437Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:09.074Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:09.709Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:10.323Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:10.950Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:13.396Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:14.027Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:14.641Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:15.269Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:15.876Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:31.581Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:32.222Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:32.840Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:33.453Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:34.083Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:34.734Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:35.378Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:35.980Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:36.604Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:49.815Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:50.435Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:51.036Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:56.075Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:56.686Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:04:59.835Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:00.456Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:01.060Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:01.705Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:02.328Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:30.012Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:30.654Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:31.288Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:31.924Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:32.516Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:35.068Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:35.682Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:36.319Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:36.937Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:38.181Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:40.622Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:41.223Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:41.831Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:42.435Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:43.031Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:43.631Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:44.227Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:44.811Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:45.421Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:46.041Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:46.691Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:47.322Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:47.961Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:48.584Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:51.715Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:52.352Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:53.578Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:54.191Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:54.819Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:55.445Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:56.083Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:56.710Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:57.346Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:57.976Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:05:58.598Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:06:00.452Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:06:01.715Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:06:02.350Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:06:03.599Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:06:05.489Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:06:06.127Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:06:06.750Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:06:09.281Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:06:09.906Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:06:13.090Z Pointer, foreground, focus, or Space activity reset the native quiet-seat epoch; no candidate process has started.
+2026-08-26T22:06:13.718Z FATAL native quiet-seat monitoring became unknown or unhealthy before product execution
+2026-08-26T22:06:13.719Z scratch directory removed

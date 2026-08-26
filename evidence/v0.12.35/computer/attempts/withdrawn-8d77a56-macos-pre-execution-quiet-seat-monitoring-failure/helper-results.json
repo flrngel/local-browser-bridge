@@ -1,0 +1,291 @@
+{
+  "schemaVersion": 8,
+  "productVersion": "0.12.35",
+  "status": "failed-release-candidate",
+  "evidenceClass": "release-candidate-negative-result",
+  "startedAt": null,
+  "capturedAt": "2026-08-26T22:06:13.717Z",
+  "fatal": "native quiet-seat monitoring became unknown or unhealthy before product execution",
+  "helperSpawnCount": 0,
+  "packageBinding": {
+    "file": "SHA256SUMS.txt",
+    "expectedSha256": "9c143c912b979c594fe78db7b4b6237776dd38c31152a5c8c0ce91b6135a7b20",
+    "actualSha256": "9c143c912b979c594fe78db7b4b6237776dd38c31152a5c8c0ce91b6135a7b20",
+    "expectedSha256Matched": true,
+    "exactCanonicalAssetSet": true,
+    "canonicalEntryCount": 4,
+    "archiveFile": "local-browser-bridge-v0.12.35-macos-universal.tar.gz",
+    "archiveSha256": "addc2c7e6f6f028c91466aa9e0dea53239a8338166bcddbb6fd1eff4c556445b",
+    "archiveEntryMatched": true
+  },
+  "releaseCandidateBinding": {
+    "schemaVersion": 3,
+    "version": "0.12.35",
+    "releaseTag": "v0.12.35",
+    "repository": "flrngel/local-browser-bridge",
+    "sourceSha": "8d77a56edfc2c137a0707f758f8f52cf51ec15d6",
+    "workflowRunId": "33017242074",
+    "workflowRunAttempt": "1",
+    "workflowEvent": "workflow_dispatch",
+    "workflowRef": "refs/heads/main",
+    "workflowPath": ".github/workflows/deploy.yml",
+    "artifactId": "9625279339",
+    "artifactZipSha256": "82ba2dbd7bd0daafdb41e11f9dfdb66a2e39246d746393e5ad0e0cdc4390f9a8",
+    "checksumManifestSha256": "9c143c912b979c594fe78db7b4b6237776dd38c31152a5c8c0ce91b6135a7b20"
+  },
+  "harnessSourceBinding": {
+    "sourceSha": "8d77a56edfc2c137a0707f758f8f52cf51ec15d6",
+    "detachedHead": true,
+    "cleanTrackedAndUntracked": true,
+    "fsckPassed": true,
+    "exactTrackedHarnessBlobs": true
+  },
+  "capabilityBinding": {
+    "inputDeliveryProvenanceV1": false,
+    "pointerActivityMonitorV1": false
+  },
+  "quietSeatStabilization": {
+    "required": true,
+    "completed": false,
+    "requiredStableMilliseconds": 30000,
+    "maximumWaitMilliseconds": 1800000,
+    "sampleIntervalMilliseconds": 500,
+    "requiredStableTransitions": 60,
+    "stableDurationMilliseconds": 0,
+    "observedSamples": 334,
+    "stableTransitions": 0,
+    "resetCount": 167,
+    "monitoringUnknown": true,
+    "completedBeforeCandidateExecution": false,
+    "rawPointerDataRetained": false
+  },
+  "screenshots": [],
+  "pointerEvidence": {
+    "requestedLane": "quiet",
+    "quietObserved": false,
+    "concurrentSharedSeatActivityObserved": false,
+    "unknownObserved": false,
+    "rawCursorPositionsRetained": false,
+    "rawPlatformActivityCountersRetained": false,
+    "rawHidSystemCountersRetained": false,
+    "hidSystemActivityClaimedAsPhysical": false
+  },
+  "appShareHandoff": {
+    "requested": false,
+    "requestPublicationAcknowledged": false,
+    "startReceiptAcknowledged": false,
+    "completePublicationAcknowledged": false,
+    "promptClosed": false,
+    "exactAppBundleObserved": false,
+    "exactWindowObserved": false,
+    "exactButtonObserved": false,
+    "buttonDisabledAfterAction": false,
+    "acceptanceButtonActionObserved": false,
+    "appShareSurfaceObservedAtProductBoundaries": false,
+    "sharedHidInputObserved": null,
+    "sampledSharedContextUnchanged": false,
+    "authorityRefreshedAfterReceipt": false,
+    "authorityFreshAtDispatch": false,
+    "actionDispatched": false,
+    "targetPostconditionObserved": false,
+    "productBoundaryQuiet": false,
+    "independentBoundaryQuiet": false,
+    "physicalHumanProvenanceClaimed": false,
+    "cryptographicToolIdentityClaimed": false,
+    "orchestrationNotProductControl": true,
+    "markerNotificationOnly": false,
+    "markerAcceptedAsProductAuthority": false,
+    "rawAppIdentityRetainedInResult": false,
+    "rawPointerDataRetained": false
+  },
+  "failureDiagnostics": {
+    "stage": "notReached",
+    "actionDispatched": false,
+    "systemProbe": {
+      "baselineCaptured": false,
+      "afterCaptured": false,
+      "equality": null
+    },
+    "fixtureCounters": {
+      "baselineCaptured": false,
+      "afterCaptured": false,
+      "before": null,
+      "after": null
+    },
+    "targetSiblingReceiver": {
+      "targetKnown": false,
+      "expectedFocusedAfter": false,
+      "afterCaptured": false,
+      "focusedAfter": null,
+      "mainAfter": null,
+      "expectationMet": null
+    }
+  },
+  "assertions": {
+    "passed": 32,
+    "failed": 0,
+    "total": 32,
+    "details": [
+      {
+        "name": "evidence output parent is an owner-private ordinary directory",
+        "passed": true,
+        "detail": "the direct evidence parent is ordinary, owner-private, and current-user owned"
+      },
+      {
+        "name": "evidence output directory is newly created and owner-private",
+        "passed": true,
+        "detail": "the runner created one private lane output directory"
+      },
+      {
+        "name": "pre-run harness source commit matches coordinator binding",
+        "passed": true,
+        "detail": "exact source SHA matched"
+      },
+      {
+        "name": "pre-run harness checkout is detached",
+        "passed": true,
+        "detail": "detached HEAD"
+      },
+      {
+        "name": "pre-run harness checkout is clean",
+        "passed": true,
+        "detail": "tracked, staged, deleted, and untracked sets are empty"
+      },
+      {
+        "name": "pre-run harness source repository passes git fsck",
+        "passed": true,
+        "detail": "git fsck --full passed"
+      },
+      {
+        "name": "pre-run harness files are exact tracked blobs",
+        "passed": true,
+        "detail": "runner, native probes, and acceptance finalizer match HEAD blobs"
+      },
+      {
+        "name": "macOS host",
+        "passed": true,
+        "detail": "Darwin"
+      },
+      {
+        "name": "expected checksum-manifest hash format",
+        "passed": true,
+        "detail": "64 lowercase hexadecimal characters"
+      },
+      {
+        "name": "canonical checksum-manifest name",
+        "passed": true,
+        "detail": "SHA256SUMS.txt"
+      },
+      {
+        "name": "exact archive name",
+        "passed": true,
+        "detail": "local-browser-bridge-v0.12.35-macos-universal.tar.gz"
+      },
+      {
+        "name": "checksum manifest is one bounded current-user-owned ordinary file",
+        "passed": true,
+        "detail": "ordinary, singly linked, owner-controlled, and within the manifest byte bound"
+      },
+      {
+        "name": "checksum manifest stayed stable while it was bound",
+        "passed": true,
+        "detail": "path and descriptor identity, size, links, and timestamps remained unchanged"
+      },
+      {
+        "name": "out-of-band checksum-manifest hash matches",
+        "passed": true,
+        "detail": "9c143c912b979c594fe78db7b4b6237776dd38c31152a5c8c0ce91b6135a7b20"
+      },
+      {
+        "name": "checksum manifest has the exact canonical four-entry set",
+        "passed": true,
+        "detail": "local-browser-bridge-v0.12.35-windows-x86_64.exe,local-computer-helper-v0.12.35-windows-x86_64.exe,local-browser-bridge-v0.12.35-macos-universal.tar.gz,local-browser-bridge-extension-v0.12.35.zip"
+      },
+      {
+        "name": "canonical manifest contains the macOS archive checksum",
+        "passed": true,
+        "detail": "addc2c7e6f6f028c91466aa9e0dea53239a8338166bcddbb6fd1eff4c556445b"
+      },
+      {
+        "name": "macOS archive bounded exact inventory",
+        "passed": true,
+        "detail": "ten PAX-free regular-file/directory entries passed bounded streaming extraction"
+      },
+      {
+        "name": "archive checksum is bound by the canonical manifest",
+        "passed": true,
+        "detail": "addc2c7e6f6f028c91466aa9e0dea53239a8338166bcddbb6fd1eff4c556445b"
+      },
+      {
+        "name": "supplied server is archive-exact",
+        "passed": true,
+        "detail": "221a860392c9a36a3a9e1b06e23fe8a525e29e113ec19bd76f728de176730c13"
+      },
+      {
+        "name": "supplied helper is archive-exact",
+        "passed": true,
+        "detail": "133bc788285c2722e4d73e419ec1aaef3a0b0909b585c0aaf04584dd994bad34"
+      },
+      {
+        "name": "server universal architecture",
+        "passed": true,
+        "detail": "arm64,x86_64"
+      },
+      {
+        "name": "helper universal architecture",
+        "passed": true,
+        "detail": "arm64,x86_64"
+      },
+      {
+        "name": "helper uses packaged app layout",
+        "passed": true,
+        "detail": "Local Computer Helper.app"
+      },
+      {
+        "name": "strict code-signature verification",
+        "passed": true,
+        "detail": "server, helper executable, and helper app bundle passed strict verification"
+      },
+      {
+        "name": "helper bundle version",
+        "passed": true,
+        "detail": "0.12.35/0.12.35"
+      },
+      {
+        "name": "optional physical-pointer adversarial prompt self-test",
+        "passed": true,
+        "detail": "source-only optional adversarial prompt cannot satisfy either release lane"
+      },
+      {
+        "name": "app-share handoff bundle identity",
+        "passed": true,
+        "detail": "dev.flrngel.local-browser-bridge.acceptance.app-share"
+      },
+      {
+        "name": "app-share handoff self-test",
+        "passed": true,
+        "detail": "stable bundle/window/button vocabulary and create-once receipts"
+      },
+      {
+        "name": "screen-capture permission preflight",
+        "passed": true,
+        "detail": "preexisting permission; no request was made"
+      },
+      {
+        "name": "accessibility permission preflight",
+        "passed": true,
+        "detail": "preexisting permission; no request was made"
+      },
+      {
+        "name": "active Space probe available",
+        "passed": true,
+        "detail": "nonzero active Space identity"
+      },
+      {
+        "name": "sandwiched foreground AX focus probe available",
+        "passed": true,
+        "detail": "stable NSWorkspace/raw PSN plus exact AX focused/main-window identities are available"
+      }
+    ]
+  }
+}
