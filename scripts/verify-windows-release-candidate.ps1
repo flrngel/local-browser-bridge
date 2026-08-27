@@ -160,7 +160,7 @@ $ProgressPreference = "SilentlyContinue"
 $Repository = "flrngel/local-browser-bridge"
 $Origin = "https://github.com/$Repository.git"
 $WorkflowPath = ".github/workflows/deploy.yml"
-$ProductVersion = "0.12.36"
+$ProductVersion = "0.12.37"
 $WorkflowRef = "refs/heads/main"
 $MaximumCandidateBytes = [int64]536870912
 
@@ -874,11 +874,138 @@ function Invoke-AttestationSelectionSelfTest {
   }
 }
 
+function Get-DirectoryAccessControlPortable([string]$Path) {
+  $Sections = [Security.AccessControl.AccessControlSections]::Access -bor
+    [Security.AccessControl.AccessControlSections]::Owner
+  if ($PSVersionTable.PSEdition -ceq "Core") {
+    return [IO.FileSystemAclExtensions]::GetAccessControl(
+      [IO.DirectoryInfo]::new($Path), $Sections
+    )
+  }
+  return [IO.Directory]::GetAccessControl($Path, $Sections)
+}
+
+function Assert-PrivateDirectoryAcl([string]$Path) {
+  $Identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+  try {
+    if ($null -eq $Identity.User) { throw "The current Windows identity has no SID." }
+    $Observed = Get-DirectoryAccessControlPortable $Path
+    $Owner = $Observed.GetOwner([Security.Principal.SecurityIdentifier])
+    $Rules = @($Observed.GetAccessRules(
+      $true,
+      $true,
+      [Security.Principal.SecurityIdentifier]
+    ))
+    $ExpectedInheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+      [Security.AccessControl.InheritanceFlags]::ObjectInherit
+    $OwnerRule = @($Rules | Where-Object {
+      -not $_.IsInherited -and
+      $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+      $_.IdentityReference.Value -ceq $Identity.User.Value -and
+      $_.FileSystemRights -eq [Security.AccessControl.FileSystemRights]::FullControl -and
+      $_.InheritanceFlags -eq $ExpectedInheritance -and
+      $_.PropagationFlags -eq [Security.AccessControl.PropagationFlags]::None
+    })
+    if ($Owner.Value -cne $Identity.User.Value -or
+        -not $Observed.AreAccessRulesProtected -or
+        -not $Observed.AreAccessRulesCanonical -or
+        $Rules.Count -ne 1 -or $OwnerRule.Count -ne 1) {
+      throw "Fresh destination ACL is not protected and private to the current user."
+    }
+  }
+  finally { $Identity.Dispose() }
+}
+
+function New-PrivateDirectory([string]$Path) {
+  if ([IO.File]::Exists($Path) -or [IO.Directory]::Exists($Path)) {
+    throw "Private directory creation requires a fresh path."
+  }
+  $Identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+  try {
+    if ($null -eq $Identity.User) { throw "The current Windows identity has no SID." }
+    $Security = [Security.AccessControl.DirectorySecurity]::new()
+    $Security.SetOwner($Identity.User)
+    $Security.SetAccessRuleProtection($true, $false)
+    $Inheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+      [Security.AccessControl.InheritanceFlags]::ObjectInherit
+    $Rule = [Security.AccessControl.FileSystemAccessRule]::new(
+      $Identity.User,
+      [Security.AccessControl.FileSystemRights]::FullControl,
+      $Inheritance,
+      [Security.AccessControl.PropagationFlags]::None,
+      [Security.AccessControl.AccessControlType]::Allow
+    )
+    [void]$Security.AddAccessRule($Rule)
+
+    # Apply the protected owner-only DACL as part of directory creation. A
+    # create-then-rewrite sequence briefly inherits the parent DACL and can
+    # require a separate WRITE_OWNER operation on otherwise valid hosts.
+    if ($PSVersionTable.PSEdition -ceq "Core") {
+      [IO.FileSystemAclExtensions]::Create(
+        [IO.DirectoryInfo]::new($Path), $Security
+      )
+    }
+    else {
+      [IO.Directory]::CreateDirectory($Path, $Security) | Out-Null
+    }
+  }
+  finally { $Identity.Dispose() }
+  Assert-PrivateDirectoryAcl $Path
+}
+
 function Invoke-TrustSelfTest {
   $Root = [IO.Path]::Combine([IO.Path]::GetTempPath(), "lbb-win-trust-self-test-" + [Guid]::NewGuid().ToString("N"))
   $AllowedSelfTestFiles = @("fixture.exe", "SHA256SUMS.txt", "create-once.json")
-  [IO.Directory]::CreateDirectory($Root) | Out-Null
+  New-PrivateDirectory $Root
   try {
+    Assert-PrivateDirectoryAcl $Root
+    $BeforeCollision = (Get-DirectoryAccessControlPortable $Root).GetSecurityDescriptorSddlForm(
+      [Security.AccessControl.AccessControlSections]::Access -bor
+        [Security.AccessControl.AccessControlSections]::Owner
+    )
+    $CollisionRefused = $false
+    try { New-PrivateDirectory $Root }
+    catch {
+      if ($_.Exception.Message -cne "Private directory creation requires a fresh path.") {
+        throw
+      }
+      $CollisionRefused = $true
+    }
+    $AfterCollision = (Get-DirectoryAccessControlPortable $Root).GetSecurityDescriptorSddlForm(
+      [Security.AccessControl.AccessControlSections]::Access -bor
+        [Security.AccessControl.AccessControlSections]::Owner
+    )
+    if (-not $CollisionRefused -or $AfterCollision -cne $BeforeCollision) {
+      throw "Private directory collision self-test failed."
+    }
+
+    $InheritedChild = Join-Path $Root "inherited-child"
+    [IO.Directory]::CreateDirectory($InheritedChild) | Out-Null
+    try {
+      $InheritedRefused = $false
+      try { Assert-PrivateDirectoryAcl $InheritedChild }
+      catch {
+        if ($_.Exception.Message -cne
+            "Fresh destination ACL is not protected and private to the current user.") {
+          throw
+        }
+        $InheritedRefused = $true
+      }
+      if (-not $InheritedRefused) {
+        throw "Inherited directory ACL self-test failed."
+      }
+    }
+    finally {
+      if ([IO.Directory]::Exists($InheritedChild)) {
+        $InheritedInfo = [IO.DirectoryInfo]::new($InheritedChild)
+        if (($InheritedInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+            $InheritedInfo.GetFileSystemInfos().Count -ne 0) {
+          throw "Inherited directory ACL self-test cleanup refused an unexpected target."
+        }
+        [IO.Directory]::Delete($InheritedChild, $false)
+      }
+    }
+
     $Exe = Join-Path $Root "fixture.exe"
     $Pe = New-Object byte[] 512
     $Pe[0] = 0x4d; $Pe[1] = 0x5a; $Pe[0x3c] = 0x80
@@ -950,7 +1077,7 @@ if ($Version -cne $ProductVersion -or $Version -cnotmatch '^[0-9]+\.[0-9]+\.[0-9
     $WorkflowRunAttempt -cnotmatch '^[1-9][0-9]*$' -or
     $ArtifactId -cnotmatch '^[1-9][0-9]*$' -or
     $SourceSha -cnotmatch '^[0-9a-f]{40}$') {
-  throw "Candidate identifiers are not canonical v0.12.36 identifiers."
+  throw "Candidate identifiers are not canonical v0.12.37 identifiers."
 }
 $Tag = "v$Version"
 $ExpectedInvocationUri = "https://github.com/$Repository/actions/runs/$WorkflowRunId/attempts/$WorkflowRunAttempt"
@@ -971,58 +1098,7 @@ if ($Destination.Length -gt 90 -or [IO.File]::Exists($Destination) -or [IO.Direc
 $DestinationParent = [IO.Path]::GetDirectoryName($Destination)
 $null = Assert-OrdinaryAbsolutePath $DestinationParent $false "Destination parent"
 
-function Get-DirectoryAccessControlPortable([string]$Path) {
-  $Sections = [Security.AccessControl.AccessControlSections]::Access -bor
-    [Security.AccessControl.AccessControlSections]::Owner
-  if ($PSVersionTable.PSEdition -ceq "Core") {
-    return [IO.FileSystemAclExtensions]::GetAccessControl(
-      [IO.DirectoryInfo]::new($Path), $Sections
-    )
-  }
-  return [IO.Directory]::GetAccessControl($Path, $Sections)
-}
-
-function Set-DirectoryAccessControlPortable(
-  [string]$Path,
-  [Security.AccessControl.DirectorySecurity]$Security
-) {
-  if ($PSVersionTable.PSEdition -ceq "Core") {
-    [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($Path), $Security)
-  }
-  else {
-    [IO.Directory]::SetAccessControl($Path, $Security)
-  }
-}
-
-function Set-PrivateDirectoryAcl([string]$Path) {
-  $Identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-  $Security = [Security.AccessControl.DirectorySecurity]::new()
-  $Security.SetOwner($Identity.User)
-  $Security.SetAccessRuleProtection($true, $false)
-  $Inheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
-    [Security.AccessControl.InheritanceFlags]::ObjectInherit
-  $Rule = [Security.AccessControl.FileSystemAccessRule]::new(
-    $Identity.User,
-    [Security.AccessControl.FileSystemRights]::FullControl,
-    $Inheritance,
-    [Security.AccessControl.PropagationFlags]::None,
-    [Security.AccessControl.AccessControlType]::Allow
-  )
-  [void]$Security.AddAccessRule($Rule)
-  Set-DirectoryAccessControlPortable $Path $Security
-  $Observed = Get-DirectoryAccessControlPortable $Path
-  $Rules = @($Observed.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
-  if (-not $Observed.AreAccessRulesProtected -or
-      @($Rules | Where-Object {
-        $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
-        $_.IdentityReference.Value -cne $Identity.User.Value
-      }).Count -ne 0) {
-    throw "Fresh destination ACL is not private to the current user."
-  }
-}
-
-[IO.Directory]::CreateDirectory($Destination) | Out-Null
-Set-PrivateDirectoryAcl $Destination
+New-PrivateDirectory $Destination
 $DestinationInfo = [IO.DirectoryInfo]::new($Destination)
 if (($DestinationInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
     $DestinationInfo.GetFileSystemInfos().Count -ne 0) {

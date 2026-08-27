@@ -55,7 +55,7 @@ not proof that an unobserved transient state never existed. The ledger records a
 was never tagged or published. The bounded observation and its limitations are
 preserved in the immutable [v0.12.34 negative-evidence commit](https://github.com/flrngel/local-browser-bridge/tree/aef8fc68018cdb6181ad3d0886acf4e71fcda96d/evidence/v0.12.34/computer/attempts/withdrawn-2509567-windows-pre-coordinator-interruption).
 
-Version 0.12.36 is the current source and schema-3 release-pipeline target. It
+Version 0.12.37 is the current source and schema-3 release-pipeline target. It
 retains the breakaway-enabled coordinator Job and atomic private Job-list child
 creation, but delays the persistent boundary until private staging and
 configuration verification, detached-worker Job binding and guard-ownership
@@ -64,7 +64,7 @@ immediately precedes launch intent and process creation. Ledger presence is a
 conservative unknown-outcome boundary: never delete it or retry that product
 version. Fresh platform/browser acceptance is still required before
 publication; only the immutable
-[v0.12.36 GitHub Release](https://github.com/flrngel/local-browser-bridge/releases/tag/v0.12.36)
+[v0.12.37 GitHub Release](https://github.com/flrngel/local-browser-bridge/releases/tag/v0.12.37)
 and its bound evidence receipt can establish that the gate later passed. See
 the [Windows acceptance source-gate record](WINDOWS_ACCEPTANCE_HANDOFF.md).
 
@@ -261,7 +261,7 @@ Version 0.12.25 retained the authority refresh and made that watcher portable
 to exact system PowerShell 5.1 by passing marker paths as explicit callback
 arguments.
 
-Version 0.12.36 retains sealed route provenance, the v0.12.23 classifier
+Version 0.12.37 retains sealed route provenance, the v0.12.23 classifier
 separation, and conservative shared-pointer monitoring. Its bounded, abortable
 post-`ACTION` authority refresh must obtain a strictly newer frame from the same
 share, target, and geometry within the reserved deadline before deriving click
