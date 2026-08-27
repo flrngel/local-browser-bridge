@@ -898,7 +898,7 @@ fn actual_websocket_handlers_do_not_resume_after_transport_retirement() {
       const functions = ["retireProtocolSocket", "protocolSocketAdmitted", "exactObjectKeys", "connectNow"]
         .map((name) => extractFunction(source, name)).join("\n");
       const bridge = new Function("deferred", `
-        const VERSION = "0.12.37";
+        const VERSION = "0.12.38";
         const PROTOCOL_VERSION = 1;
         const AUTH_NEGOTIATION_TIMEOUT_MS = 3000;
         const AUTH_MAX_INBOUND_FRAMES = 4;

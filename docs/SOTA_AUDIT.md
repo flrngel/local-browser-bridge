@@ -43,8 +43,8 @@ them to name the current attempt. Its exact
 was preserved and the attempt was canceled. Neither attempt reached Windows,
 stock Chrome, or a public Release.
 
-Audit date: 2026-08-26. Implementation target: version 0.12.37.
-**Current-behavior scope:** this document describes the 0.12.37 source and
+Audit date: 2026-08-26. Implementation target: version 0.12.38.
+**Current-behavior scope:** this document describes the 0.12.38 source and
 schema-3 release pipeline, and labels release or live evidence separately; it
 does not promote source contracts, workflow structure, or non-product Windows
 SelfTest results into a packaged-platform claim. The evidence chain includes
@@ -92,7 +92,9 @@ checkpoint it was the current pipeline target and still required fresh macOS,
 interactive-Windows, stock-Chrome, evidence-publication, tag, and
 immutable-Release gates. The authoritative live result belongs to the immutable
 [v0.12.37 GitHub Release](https://github.com/flrngel/local-browser-bridge/releases/tag/v0.12.37)
-and its bound schema-3 evidence receipt.
+and its bound schema-3 evidence receipt. Version 0.12.38 carries those product
+boundaries forward and adds verified one-command per-user installation; it
+requires fresh version-bound acceptance before it can be published.
 
 **0.12.27 SOTA marker:** product, protocol, and platform behavior were unchanged from v0.12.26. Release-candidate attestation selection required every returned statement to be well formed and bind the same run, source, tag, workflow, GitHub-hosted runner, and exact subject, with exactly one statement bound to the current attempt. Local deployment also became atomic over one exact five-file set.
 
@@ -162,7 +164,14 @@ runner process creation. Pre-boundary failure can remain conclusively
 unknown-outcome boundary and never authorizes deletion or retry. Fresh candidate
 and platform/browser evidence remain mandatory.
 
-Earlier audits stay in this document rather than being replaced, so a row's history is readable in one place. The 2026-08-18 audit (version 0.9.0) is the baseline; the 2026-08-19 audit (version 0.10.0) revised the rows marked with a `0.10:` prefix; this audit adds or revises the rows marked `0.11:`, `0.11.1:`, `0.11.2:`, `0.12.1:`, `0.12.2:`, `0.12.3:`, `0.12.4:`, `0.12.5:`, `0.12.6:`, `0.12.7:`, `0.12.8:`, `0.12.9:`, `0.12.10:`, `0.12.11:`, `0.12.12:`, `0.12.20:`, `0.12.22:`, `0.12.23:`, `0.12.24:`, `0.12.25:`, `0.12.26:`, `0.12.27:`, `0.12.28:`, `0.12.29:`, `0.12.30:`, `0.12.31:`, `0.12.32:`, `0.12.33:`, `0.12.34:`, `0.12.35:`, and `0.12.37:`. An unmarked row describes the 0.9 baseline carried forward unless a later entry says otherwise.
+**0.12.38 SOTA marker:** Windows and macOS now have per-user one-command
+installers that accept only the canonical immutable stable release, require the
+exact five-asset inventory, verify GitHub and manifest SHA-256 values before
+installation, preserve OS security controls, start only the loopback server at
+login, and keep native desktop authority opt-in. Chromium's explicit unpacked
+extension confirmation remains a browser-owned boundary.
+
+Earlier audits stay in this document rather than being replaced, so a row's history is readable in one place. The 2026-08-18 audit (version 0.9.0) is the baseline; the 2026-08-19 audit (version 0.10.0) revised the rows marked with a `0.10:` prefix; this audit adds or revises the rows marked `0.11:`, `0.11.1:`, `0.11.2:`, `0.12.1:`, `0.12.2:`, `0.12.3:`, `0.12.4:`, `0.12.5:`, `0.12.6:`, `0.12.7:`, `0.12.8:`, `0.12.9:`, `0.12.10:`, `0.12.11:`, `0.12.12:`, `0.12.20:`, `0.12.22:`, `0.12.23:`, `0.12.24:`, `0.12.25:`, `0.12.26:`, `0.12.27:`, `0.12.28:`, `0.12.29:`, `0.12.30:`, `0.12.31:`, `0.12.32:`, `0.12.33:`, `0.12.34:`, `0.12.35:`, `0.12.37:`, and `0.12.38:`. An unmarked row describes the 0.9 baseline carried forward unless a later entry says otherwise.
 
 Version 0.11 covers two bodies of work:
 
