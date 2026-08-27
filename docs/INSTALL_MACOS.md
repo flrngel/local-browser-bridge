@@ -37,12 +37,14 @@ silently install an unpacked extension. Complete this one browser step:
 
 Reload tabs that were already open. Browser control is then ready.
 
-The install folder also contains three double-click launchers:
+The install folder also contains four double-click launchers:
 
 - **Open Local Browser Bridge.command** starts the server if needed and opens
   the authenticated dashboard;
 - **Finish Browser Extension Setup.command** repeats the extension setup; and
-- **Start Computer Helper.command** opens optional desktop control.
+- **Start Computer Helper.command** opens optional desktop control; and
+- **Uninstall Local Browser Bridge.command** runs the version-matched safe
+  uninstaller.
 
 ## Local shell access (optional)
 
@@ -86,8 +88,58 @@ extension card.
 To install a specific stable version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-macos.sh | bash -s -- --version 0.12.37
+curl -fsSL https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-macos.sh | bash -s -- --version 0.12.41
 ```
+
+## One-command uninstall
+
+Close any work you are controlling, then run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/uninstall-macos.sh | bash
+```
+
+You can also double-click **Uninstall Local Browser Bridge.command** in the
+install folder. That launcher fetches the uninstaller from the same immutable
+release tag that installed it.
+
+The default removal:
+
+- unloads the exact current-user LaunchAgent;
+- stops only processes whose command starts inside the exact install folder;
+- removes only the installer-owned server, helper app, extension directory,
+  manifest, and launchers;
+- removes the saved bridge token and the helper's exact macOS privacy grants;
+  and
+- opens installed Chrome and Edge extension pages for the final browser-owned
+  **Remove** click.
+
+It does not edit a browser profile, delete an unfamiliar file, follow a
+symlink, remove a system service, or touch unrelated developer/recovery tools.
+If the install directory contains an unknown file, that file, the ownership
+marker, and the directory are retained and reported.
+
+Preview without changing anything:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/uninstall-macos.sh | bash -s -- --dry-run
+```
+
+Optional retention switches:
+
+```bash
+# Keep the saved bridge token.
+curl -fsSL https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/uninstall-macos.sh | bash -s -- --keep-token
+
+# Keep the helper's Screen Recording/Accessibility grants.
+curl -fsSL https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/uninstall-macos.sh | bash -s -- --keep-permissions
+
+# Do not open browser extension pages or show the final dialog.
+curl -fsSL https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/uninstall-macos.sh | bash -s -- --no-browser
+```
+
+For a custom installation, pass the same absolute `--install-root`. Custom
+roots require the installer's ownership marker and are never inferred.
 
 ## Options
 
@@ -100,8 +152,6 @@ bash "$installer" --no-startup
 bash "$installer" --no-launch
 bash "$installer" --enable-shell
 bash "$installer" --install-root "$HOME/My Apps/LBB"
-bash "$installer" --uninstall
-bash "$installer" --uninstall --reset-token
 rm -f "$installer"
 ```
 

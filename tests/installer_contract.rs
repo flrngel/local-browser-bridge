@@ -81,11 +81,92 @@ fn user_docs_lead_with_one_command_installation() {
 }
 
 #[test]
+fn uninstallers_are_one_command_owned_and_fail_closed() {
+    let windows = source("scripts/uninstall-windows.ps1");
+    let macos = source("scripts/uninstall-macos.sh");
+    let readme = source("README.md");
+    let install = source("docs/INSTALL.md");
+
+    for required in [
+        "[switch]$DryRun",
+        "[switch]$KeepToken",
+        "[switch]$NoBrowser",
+        ".lbb-install-owner",
+        "local-browser-bridge-install-v1",
+        "Test-AllowlistedInstallName",
+        "Refusing a product tree containing a reparse point",
+        "Browser profiles were not edited",
+        "Windows one-command uninstaller self-test passed.",
+    ] {
+        assert!(
+            windows.contains(required),
+            "Windows uninstaller is missing `{required}`"
+        );
+    }
+    for required in [
+        "--dry-run",
+        "--keep-token",
+        "--keep-permissions",
+        "--no-browser",
+        ".lbb-install-owner",
+        "local-browser-bridge-install-v1",
+        "is_allowlisted_top_level_name",
+        "Refusing a product tree containing a symlink",
+        "Browser profiles were not edited",
+        "macOS one-command uninstaller self-test passed.",
+    ] {
+        assert!(
+            macos.contains(required),
+            "macOS uninstaller is missing `{required}`"
+        );
+    }
+    assert!(readme.contains("## Uninstall in one command"));
+    assert!(readme.contains("scripts/uninstall-windows.ps1"));
+    assert!(readme.contains("scripts/uninstall-macos.sh | bash"));
+    assert!(install.contains("There is no Linux package"));
+    assert!(windows.contains("Browser profile files were intentionally left untouched"));
+    assert!(macos.contains("Browser profile files were intentionally left untouched"));
+    assert!(!windows.contains("Preferences"));
+    assert!(!macos.contains("Library/Application Support/Google/Chrome"));
+}
+
+#[test]
+fn installers_create_owned_version_matched_uninstall_launchers() {
+    let windows = source("scripts/install-windows.ps1");
+    let macos = source("scripts/install-macos.sh");
+    for required in [
+        ".lbb-install-owner",
+        "local-browser-bridge-install-v1",
+        "Uninstall Local Browser Bridge.cmd",
+        "/v$resolved/scripts/uninstall-windows.ps1",
+    ] {
+        assert!(
+            windows.contains(required),
+            "Windows installer is missing `{required}`"
+        );
+    }
+    for required in [
+        ".lbb-install-owner",
+        "local-browser-bridge-install-v1",
+        "Uninstall Local Browser Bridge.command",
+        "/v$resolved/scripts/uninstall-macos.sh",
+    ] {
+        assert!(
+            macos.contains(required),
+            "macOS installer is missing `{required}`"
+        );
+    }
+}
+
+#[test]
 fn existing_ci_jobs_self_test_the_installers() {
     let ci = source(".github/workflows/ci.yml");
     assert!(ci.contains("bash scripts/install-macos.sh --self-test"));
+    assert!(ci.contains("bash scripts/uninstall-macos.sh --self-test"));
     assert!(ci.contains("\"scripts/install-windows.ps1\""));
+    assert!(ci.contains("\"scripts/uninstall-windows.ps1\""));
     assert!(ci.contains("-File ./scripts/install-windows.ps1 -SelfTest"));
+    assert!(ci.contains("-File ./scripts/uninstall-windows.ps1 -SelfTest"));
 }
 
 #[test]
@@ -123,7 +204,7 @@ fn installers_make_extension_setup_and_later_launch_discoverable() {
         );
     }
     assert!(windows_docs.contains("Start menu"));
-    assert!(macos_docs.contains("three double-click launchers"));
+    assert!(macos_docs.contains("four double-click launchers"));
 }
 
 #[test]

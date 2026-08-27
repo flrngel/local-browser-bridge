@@ -39,6 +39,7 @@ jobs:
           python3 -m json.tool extension/manifest.json >/dev/null
           bash -n scripts/*.sh
           bash scripts/install-macos.sh --self-test
+          bash scripts/uninstall-macos.sh --self-test
           bash scripts/publish-release.sh --self-test
       - name: Validate the read-only macOS app-share handoff watcher
         run: |
@@ -171,6 +172,7 @@ jobs:
           }
           $scripts = @(
             "scripts/install-windows.ps1",
+            "scripts/uninstall-windows.ps1",
             "scripts/browser-evidence-candidate.ps1",
             "scripts/record-computer-helper-chain.ps1",
             "scripts/run-windows-computer-use-acceptance.ps1",
@@ -199,6 +201,7 @@ jobs:
           }
           & ./scripts/browser-evidence-candidate.ps1 -Mode SelfTest
           & ./scripts/install-windows.ps1 -SelfTest
+          & ./scripts/uninstall-windows.ps1 -SelfTest
           & ./scripts/record-computer-helper-chain.ps1 -Mode SelfTest
           & ./scripts/sanitize-browser-evidence-screenshot.ps1 -Mode SelfTest
           & ./scripts/write-stock-chrome-operator-response.ps1 -Mode SelfTest
@@ -207,6 +210,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 candidate binder self-test failed." }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/install-windows.ps1 -SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 one-command installer self-test failed." }
+          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/uninstall-windows.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 one-command uninstaller self-test failed." }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/record-computer-helper-chain.ps1 -Mode SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 computer-helper recorder self-test failed." }
           $coordinatorPathForPs51 = (Resolve-Path ./scripts/run-windows-computer-use-acceptance.ps1).Path
@@ -361,12 +366,12 @@ jobs:
           node scripts/finalize-macos-acceptance.mjs --self-test
       - name: Validate the macOS packaged-evidence harness
         run: |
-          node --check evidence/v0.12.40/computer/helper-evidence-rig.mjs
-          node evidence/v0.12.40/computer/helper-evidence-rig.mjs --self-test
-          xcrun swiftc -typecheck evidence/v0.12.40/computer/HelperEvidenceFixture.swift
-          xcrun swiftc -typecheck evidence/v0.12.40/computer/SystemProbe.swift
-          bash scripts/verify-macos-app-share-handoff-self-test.sh 0.12.40
-          xcrun swiftc -typecheck evidence/v0.12.40/computer/PhysicalPointerHandoff.swift
+          node --check evidence/v0.12.41/computer/helper-evidence-rig.mjs
+          node evidence/v0.12.41/computer/helper-evidence-rig.mjs --self-test
+          xcrun swiftc -typecheck evidence/v0.12.41/computer/HelperEvidenceFixture.swift
+          xcrun swiftc -typecheck evidence/v0.12.41/computer/SystemProbe.swift
+          bash scripts/verify-macos-app-share-handoff-self-test.sh 0.12.41
+          xcrun swiftc -typecheck evidence/v0.12.41/computer/PhysicalPointerHandoff.swift
       - name: Install the minimum supported Rust toolchain
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy

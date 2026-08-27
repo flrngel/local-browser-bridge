@@ -16,6 +16,8 @@ Set-StrictMode -Version 2.0
 $script:Repository = "flrngel/local-browser-bridge"
 $script:StartupName = "Local Browser Bridge.cmd"
 $script:StartMenuName = "Local Browser Bridge"
+$script:OwnerMarker = ".lbb-install-owner"
+$script:OwnerMarkerValue = "local-browser-bridge-install-v1"
 
 function Get-Sha256([string]$Path) {
     $stream = [IO.File]::OpenRead($Path)
@@ -44,10 +46,19 @@ function Assert-SafeInstallRoot([string]$Path) {
     $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
     $root = [IO.Path]::GetPathRoot($full).TrimEnd('\')
     if ($full -ieq $root) { throw "Refusing a filesystem-root install path." }
-    foreach ($blocked in @($env:USERPROFILE, $env:LOCALAPPDATA, $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+    foreach ($blocked in @($env:USERPROFILE, $env:LOCALAPPDATA, $env:APPDATA, $env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:SystemRoot)) {
         if ($blocked -and $full -ieq [IO.Path]::GetFullPath($blocked).TrimEnd('\')) {
             throw "Refusing a broad install path."
         }
+    }
+    $cursor = $full
+    while (-not [string]::IsNullOrWhiteSpace($cursor)) {
+        if ([IO.Directory]::Exists($cursor)) { Assert-OrdinaryDirectory $cursor }
+        elseif ([IO.File]::Exists($cursor)) { throw "An install-root ancestor is a file: $cursor" }
+        if ($cursor -ieq $root) { break }
+        $parent = [IO.Directory]::GetParent($cursor)
+        if ($null -eq $parent) { break }
+        $cursor = $parent.FullName.TrimEnd('\')
     }
 }
 
@@ -117,6 +128,114 @@ function Stop-InstalledProcesses([string]$Root) {
     }
 }
 
+function Assert-OrdinaryFile([string]$Path, [switch]$AllowMissing) {
+    if (-not [IO.File]::Exists($Path)) {
+        if ($AllowMissing -and -not [IO.Directory]::Exists($Path)) { return }
+        throw "Required file does not exist: $Path"
+    }
+    if (([IO.File]::GetAttributes($Path) -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Refusing a reparse-point product file: $Path"
+    }
+}
+
+function Assert-OrdinaryTree([string]$Path, [switch]$AllowMissing) {
+    if (-not [IO.Directory]::Exists($Path)) {
+        if ($AllowMissing -and -not [IO.File]::Exists($Path)) { return }
+        throw "Required directory does not exist: $Path"
+    }
+    Assert-OrdinaryDirectory $Path
+    $pending = New-Object 'Collections.Generic.Stack[string]'
+    $pending.Push($Path)
+    while ($pending.Count -gt 0) {
+        $directory = $pending.Pop()
+        foreach ($entry in [IO.Directory]::EnumerateFileSystemEntries($directory)) {
+            $attributes = [IO.File]::GetAttributes($entry)
+            if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "Refusing a product tree containing a reparse point: $entry"
+            }
+            if (($attributes -band [IO.FileAttributes]::Directory) -ne 0) { $pending.Push($entry) }
+        }
+    }
+}
+
+function Test-AllowlistedInstallName([string]$Name) {
+    if ($Name -in @(
+        "extension",
+        "SHA256SUMS.txt",
+        "Start Local Browser Bridge.cmd",
+        "Open Local Browser Bridge.cmd",
+        "Finish Browser Extension Setup.cmd",
+        "Start Computer Helper.cmd",
+        "Uninstall Local Browser Bridge.cmd",
+        $script:OwnerMarker
+    )) { return $true }
+    return $Name -cmatch '^local-(browser-bridge|computer-helper)-v[0-9]+\.[0-9]+\.[0-9]+-windows-x86_64\.exe$'
+}
+
+function Test-InstallerOwnedRoot([string]$Root) {
+    $marker = Join-Path $Root $script:OwnerMarker
+    if ([IO.File]::Exists($marker) -or [IO.Directory]::Exists($marker)) {
+        Assert-OrdinaryFile $marker
+        return [IO.File]::ReadAllText($marker, [Text.Encoding]::UTF8).TrimEnd([char[]]"`r`n") -ceq $script:OwnerMarkerValue
+    }
+    $defaultRoot = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA "Programs\Local Browser Bridge")).TrimEnd('\')
+    if ([IO.Path]::GetFullPath($Root).TrimEnd('\') -ine $defaultRoot) { return $false }
+    $server = @([IO.Directory]::EnumerateFiles($Root, "local-browser-bridge-v*-windows-x86_64.exe", [IO.SearchOption]::TopDirectoryOnly))
+    return $server.Count -ge 1 -and [IO.File]::Exists((Join-Path $Root "extension\manifest.json"))
+}
+
+function Assert-InstallerOwnedRoot([string]$Root) {
+    if (-not [IO.Directory]::Exists($Root) -and -not [IO.File]::Exists($Root)) { return }
+    Assert-OrdinaryDirectory $Root
+    if (-not (Test-InstallerOwnedRoot $Root)) {
+        throw "The directory is not a recognized installer-owned Local Browser Bridge installation: $Root"
+    }
+}
+
+function Assert-AllowlistedInstallEntries([string]$Root) {
+    foreach ($file in @([IO.Directory]::EnumerateFiles($Root, "*", [IO.SearchOption]::TopDirectoryOnly) | Where-Object {
+        Test-AllowlistedInstallName ([IO.Path]::GetFileName($_))
+    })) {
+        Assert-OrdinaryFile $file
+    }
+    Assert-OrdinaryTree (Join-Path $Root "extension") -AllowMissing
+}
+
+function Remove-AllowlistedInstall([string]$Root) {
+    if (-not [IO.Directory]::Exists($Root) -and -not [IO.File]::Exists($Root)) { return }
+    Assert-InstallerOwnedRoot $Root
+    Assert-AllowlistedInstallEntries $Root
+    $files = @([IO.Directory]::EnumerateFiles($Root, "*", [IO.SearchOption]::TopDirectoryOnly) | Where-Object {
+        Test-AllowlistedInstallName ([IO.Path]::GetFileName($_))
+    })
+    Stop-InstalledProcesses $Root
+    Start-Sleep -Milliseconds 250
+    foreach ($file in @($files | Where-Object { [IO.Path]::GetFileName($_) -cne $script:OwnerMarker })) {
+        [IO.File]::Delete($file)
+    }
+    $extension = Join-Path $Root "extension"
+    if ([IO.Directory]::Exists($extension)) { [IO.Directory]::Delete($extension, $true) }
+    $unknown = @([IO.Directory]::EnumerateFileSystemEntries($Root) | Where-Object {
+        -not (Test-AllowlistedInstallName ([IO.Path]::GetFileName($_)))
+    })
+    if ($unknown.Count -ne 0) {
+        Write-Warning "Retained the install directory because it contains files not owned by the installer: $Root"
+    }
+    else {
+        $marker = Join-Path $Root $script:OwnerMarker
+        if ([IO.File]::Exists($marker)) { [IO.File]::Delete($marker) }
+        try { [IO.Directory]::Delete($Root, $false) } catch { }
+    }
+}
+
+function Test-OwnedLauncher([string]$Path, [string]$Root) {
+    if (-not [IO.File]::Exists($Path)) { return $false }
+    Assert-OrdinaryFile $Path
+    $content = [IO.File]::ReadAllText($Path)
+    return $content.Contains("Local Browser Bridge") -and
+        ($content.Contains($Root) -or $content.Contains("flrngel/local-browser-bridge"))
+}
+
 function Open-ExtensionsPage {
     $candidates = @(
         (Join-Path ${env:ProgramFiles} "Google\Chrome\Application\chrome.exe"),
@@ -174,23 +293,49 @@ Complete steps 1-4, then choose OK. The installer will copy the bridge token nex
 }
 
 function Remove-Install {
-    $startup = Join-Path ([Environment]::GetFolderPath("Startup")) $script:StartupName
-    if ([IO.File]::Exists($startup)) { [IO.File]::Delete($startup) }
+    if ([IO.Directory]::Exists($InstallRoot)) {
+        Assert-InstallerOwnedRoot $InstallRoot
+        Assert-AllowlistedInstallEntries $InstallRoot
+    }
+    $startupDirectory = [Environment]::GetFolderPath("Startup")
+    Assert-OrdinaryDirectory $startupDirectory
+    $startup = Join-Path $startupDirectory $script:StartupName
+    if ([IO.File]::Exists($startup)) {
+        if (Test-OwnedLauncher $startup $InstallRoot) { [IO.File]::Delete($startup) }
+        else { Write-Warning "Retained an unrecognized same-named Startup item: $startup" }
+    }
     $startMenu = Join-Path ([Environment]::GetFolderPath("Programs")) $script:StartMenuName
     if ([IO.Directory]::Exists($startMenu)) {
         Assert-OrdinaryDirectory $startMenu
-        [IO.Directory]::Delete($startMenu, $true)
+        foreach ($name in @(
+            "Open Local Browser Bridge.cmd",
+            "Finish Browser Extension Setup.cmd",
+            "Start Computer Helper.cmd",
+            "Uninstall Local Browser Bridge.cmd"
+        )) {
+            $path = Join-Path $startMenu $name
+            if ([IO.File]::Exists($path)) {
+                if (Test-OwnedLauncher $path $InstallRoot) { [IO.File]::Delete($path) }
+                else { Write-Warning "Retained an unrecognized Start-menu file: $path" }
+            }
+        }
+        if (@([IO.Directory]::EnumerateFileSystemEntries($startMenu)).Count -eq 0) {
+            [IO.Directory]::Delete($startMenu, $false)
+        }
     }
-    if ([IO.Directory]::Exists($InstallRoot)) {
-        Assert-OrdinaryDirectory $InstallRoot
-        Stop-InstalledProcesses $InstallRoot
-        Start-Sleep -Milliseconds 250
-        [IO.Directory]::Delete($InstallRoot, $true)
-    }
+    Remove-AllowlistedInstall $InstallRoot
     if ($ResetToken) {
         $token = Join-Path $env:USERPROFILE ".local-browser-bridge\token"
-        if ([IO.File]::Exists($token)) { [IO.File]::Delete($token) }
+        $tokenDirectory = Split-Path -Parent $token
+        if ([IO.Directory]::Exists($tokenDirectory)) { Assert-OrdinaryDirectory $tokenDirectory }
+        if ([IO.File]::Exists($token)) { Assert-OrdinaryFile $token; [IO.File]::Delete($token) }
     }
+    $null = Open-ExtensionsPage
+    try {
+        Add-Type -AssemblyName PresentationFramework
+        [System.Windows.MessageBox]::Show("The unpacked extension files are gone. If a Local Browser Bridge card remains, click Remove once. Browser profile files were intentionally left untouched.", "Finish Local Browser Bridge Removal") | Out-Null
+    }
+    catch { }
     Write-Output "Local Browser Bridge was removed for the current user."
 }
 
@@ -220,6 +365,7 @@ if ([string]::IsNullOrWhiteSpace($InstallRoot)) {
     if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { throw "LOCALAPPDATA is unavailable." }
     $InstallRoot = Join-Path $env:LOCALAPPDATA "Programs\Local Browser Bridge"
 }
+$InstallRoot = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
 Assert-SafeInstallRoot $InstallRoot
 if ($Uninstall) { Remove-Install; exit 0 }
 if (-not [Environment]::Is64BitOperatingSystem) { throw "64-bit Windows is required." }
@@ -257,16 +403,21 @@ try {
     $installParent = Split-Path -Parent $InstallRoot
     if (-not [IO.Directory]::Exists($installParent)) { [IO.Directory]::CreateDirectory($installParent) | Out-Null }
     Assert-OrdinaryDirectory $installParent
+    if ([IO.Directory]::Exists($InstallRoot)) {
+        Assert-OrdinaryDirectory $InstallRoot
+        if (@([IO.Directory]::EnumerateFileSystemEntries($InstallRoot)).Count -ne 0) {
+            Remove-AllowlistedInstall $InstallRoot
+        }
+    }
     if (-not [IO.Directory]::Exists($InstallRoot)) { [IO.Directory]::CreateDirectory($InstallRoot) | Out-Null }
     Assert-OrdinaryDirectory $InstallRoot
-    Stop-InstalledProcesses $InstallRoot
-    foreach ($old in @([IO.Directory]::GetFiles($InstallRoot, "*.exe"))) { [IO.File]::Delete($old) }
     [IO.File]::Copy((Join-Path $stage $serverName), (Join-Path $InstallRoot $serverName), $true)
     [IO.File]::Copy((Join-Path $stage $helperName), (Join-Path $InstallRoot $helperName), $true)
     [IO.File]::Copy((Join-Path $stage "SHA256SUMS.txt"), (Join-Path $InstallRoot "SHA256SUMS.txt"), $true)
     $extensionRoot = Join-Path $InstallRoot "extension"
     if ([IO.Directory]::Exists($extensionRoot)) { Assert-OrdinaryDirectory $extensionRoot; [IO.Directory]::Delete($extensionRoot, $true) }
     [IO.Directory]::Move($extensionStage, $extensionRoot)
+    [IO.File]::WriteAllText((Join-Path $InstallRoot $script:OwnerMarker), $script:OwnerMarkerValue + "`n", (New-Object Text.UTF8Encoding($false)))
 
     $serverPath = Join-Path $InstallRoot $serverName
     $helperPath = Join-Path $InstallRoot $helperName
@@ -282,10 +433,14 @@ try {
     [IO.File]::WriteAllText($setupLauncher, $setupCommand, [Text.ASCIIEncoding]::new())
     $helperLauncher = Join-Path $InstallRoot "Start Computer Helper.cmd"
     [IO.File]::WriteAllText($helperLauncher, "@echo off`r`nstart `"Local Computer Helper`" /min `"$helperPath`"`r`n", [Text.ASCIIEncoding]::new())
+    $uninstallLauncher = Join-Path $InstallRoot "Uninstall Local Browser Bridge.cmd"
+    $uninstallerUrl = "https://raw.githubusercontent.com/$($script:Repository)/v$resolved/scripts/uninstall-windows.ps1"
+    $uninstallCommand = "@echo off`r`nrem Local Browser Bridge safe uninstaller`r`npowershell.exe -NoLogo -NoProfile -Command `"& ([scriptblock]::Create((Invoke-RestMethod '$uninstallerUrl')))`"`r`npause`r`n"
+    [IO.File]::WriteAllText($uninstallLauncher, $uninstallCommand, [Text.ASCIIEncoding]::new())
     $startMenu = Join-Path ([Environment]::GetFolderPath("Programs")) $script:StartMenuName
     if (-not [IO.Directory]::Exists($startMenu)) { [IO.Directory]::CreateDirectory($startMenu) | Out-Null }
     Assert-OrdinaryDirectory $startMenu
-    foreach ($shortcut in @($dashboardLauncher, $setupLauncher, $helperLauncher)) {
+    foreach ($shortcut in @($dashboardLauncher, $setupLauncher, $helperLauncher, $uninstallLauncher)) {
         [IO.File]::Copy($shortcut, (Join-Path $startMenu ([IO.Path]::GetFileName($shortcut))), $true)
     }
     if (-not $NoStartup) {

@@ -25,7 +25,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 
-const EXPECTED_VERSION = "0.12.40";
+const EXPECTED_VERSION = "0.12.41";
 const EXPECTED_ARCHIVE = `local-browser-bridge-v${EXPECTED_VERSION}-macos-universal.tar.gz`;
 const CANONICAL_RELEASE_ASSETS = [
   `local-browser-bridge-v${EXPECTED_VERSION}-windows-x86_64.exe`,
@@ -48,9 +48,9 @@ const EXPECTED_MACOS_ARCHIVE_ENTRIES = [
   { name: "LICENSE", kind: "file", mode: 0o644, maximumBytes: 1024 * 1024 },
   { name: "THIRD_PARTY_LICENSES.txt", kind: "file", mode: 0o644, maximumBytes: 16 * 1024 * 1024 },
 ];
-const FIXTURE_TITLE = "LBB v0.12.40 Persistent SCStream Evidence";
-const SIBLING_FIXTURE_TITLE = "LBB v0.12.40 Same-PID Sibling Receiver";
-const SEMANTIC_VALUE = "v0.12.40-semantic-value";
+const FIXTURE_TITLE = "LBB v0.12.41 Persistent SCStream Evidence";
+const SIBLING_FIXTURE_TITLE = "LBB v0.12.41 Same-PID Sibling Receiver";
+const SEMANTIC_VALUE = "v0.12.41-semantic-value";
 const STATUS_BACKEND = "background-window/ax+skylight+screencapturekit-stream";
 const CAPTURE_BACKEND = "macos-screencapturekit-scstream";
 const SELECTION_MODE = "programmatic-exact-window";
@@ -5262,7 +5262,7 @@ async function main() {
     "the runner created one private lane output directory");
   verifyHarnessSourceBinding("pre-run");
   await access(scratchParent, fsConstants.W_OK);
-  scratchDir = await mkdtemp(join(scratchParent, "lbb-v0.12.40-scstream-"));
+  scratchDir = await mkdtemp(join(scratchParent, "lbb-v0.12.41-scstream-"));
   const fixtureBinary = join(scratchDir, "helper-evidence-fixture");
   systemProbeBinary = join(scratchDir, "system-probe");
   const physicalPointerHandoffBinary = join(scratchDir, "physical-pointer-handoff");
@@ -6824,7 +6824,7 @@ async function main() {
     evidenceClass: "exact-release-candidate-package-live-observation",
     startedAt: laneStartedAt,
     capturedAt: new Date().toISOString(),
-    candidateNotice: "This becomes release evidence only after the supplied checksum manifest and archive are published immutably for v0.12.40.",
+    candidateNotice: "This becomes release evidence only after the supplied checksum manifest and archive are published immutably for v0.12.41.",
     releaseCandidateBinding: { ...releaseCandidateBinding },
     harnessSourceBinding: { ...harnessSourceBinding },
     capabilityBinding: { ...capabilityBinding },
@@ -7236,7 +7236,7 @@ async function main() {
       details: checks,
     },
     limitations: [
-      "This run proves the supplied v0.12.40 macOS release-candidate archive, not an immutable GitHub release until those exact checksums are published.",
+      "This run proves the supplied v0.12.41 macOS release-candidate archive, not an immutable GitHub release until those exact checksums are published.",
       "Each lane starts candidate execution only after a 30-second, 60-transition native SystemProbe epoch with cumulative pointer and keyboard HID counters plus sampled foreground, focus, cursor, and active-Space equality. The gate reduces pre-existing shared-seat contamination but cannot reserve the active login seat; all unchanged per-action and whole-run proofs still fail closed on later observed activity.",
       "The app-share chain proves an exact acceptance app/window/button action and sampled foreground, focus, Space, pointer, and keyboard-HID boundaries. It does not identify the controller/provider, continuously prove zero transient programmatic changes, grant product authority, or establish a separate input seat.",
       "Create-once marker filesystem steps are deadline-checked before and after each operation and use nonblocking/no-follow opens, but user-space JavaScript cannot preempt an operating-system filesystem call already in progress. A stalled local filesystem can delay fail-closed termination; it cannot produce a passing result after the deadline.",
@@ -7309,7 +7309,7 @@ if (preparePackageMode) {
     await terminate(helperProcess, "helper");
     await terminate(serverProcess, "server");
     await terminate(fixtureProcess, "fixture");
-    if (scratchDir?.startsWith(`${scratchParent}/lbb-v0.12.40-scstream-`)) {
+    if (scratchDir?.startsWith(`${scratchParent}/lbb-v0.12.41-scstream-`)) {
       await rm(scratchDir, { recursive: true, force: true });
       log("scratch directory removed");
     }
