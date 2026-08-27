@@ -1,8 +1,8 @@
 import AppKit
 import Foundation
 
-private let fixtureTitle = "LBB v0.12.39 Persistent SCStream Evidence"
-private let siblingFixtureTitle = "LBB v0.12.39 Same-PID Sibling Receiver"
+private let fixtureTitle = "LBB v0.12.40 Persistent SCStream Evidence"
+private let siblingFixtureTitle = "LBB v0.12.40 Same-PID Sibling Receiver"
 
 private struct FixtureState: Codable {
     var pid: Int32
@@ -159,7 +159,7 @@ private final class FixtureView: NSView, NSTextFieldDelegate {
             .font: NSFont.monospacedSystemFont(ofSize: 20, weight: .medium),
             .foregroundColor: NSColor.white,
         ]
-        "Local Browser Bridge — v0.12.39 persistent SCStream".draw(
+        "Local Browser Bridge — v0.12.40 persistent SCStream".draw(
             at: NSPoint(x: 28, y: bounds.height - 58),
             withAttributes: attributes
         )

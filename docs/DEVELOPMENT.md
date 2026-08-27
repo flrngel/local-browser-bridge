@@ -128,14 +128,14 @@ observation; it cannot prove that an unobserved transient state never existed.
 The ledger therefore leaves the Windows attempt `not-started` but not retryable.
 Version 0.12.34 was withdrawn without a tag or GitHub Release.
 
-Version 0.12.39 retains the nested-Job repair and moves the persistent attempt
+Version 0.12.40 retains the nested-Job repair and moves the persistent attempt
 boundary to the final pre-launch sequence described below. Its source-only
 regression launches the actual guarded worker, adds the lifetime Job, and
 compiles and executes the fixture through that topology. It must use fresh
 source-bound artifacts and evidence; no earlier candidate result may be
 relabelled or reused.
 
-The v0.12.39 macOS harness defines two fresh, non-mergeable release lanes in [`evidence/v0.12.39/computer/README.md`](../evidence/v0.12.39/computer/README.md). Both require a healthy monitor, unchanged sampled cursor, no shared input activity, and `sharedPointerActivityState: quiet` for every evidence cell. The `deliberate-concurrency` compatibility lane adds a separately authorized exact-app-share button action and proves—through a target-owned request/start/complete chain plus independent bundle/window/button and shared-seat probes—that app-scoped orchestration spanned the real product action without using the shared desktop. It does not claim physical-human or cryptographic Computer Use provider identity. Never convert, merge, or substitute optional physical-pointer adversarial bytes into either release lane. An unknown monitor or boundary fails closed.
+The v0.12.40 macOS harness defines two fresh, non-mergeable release lanes in [`evidence/v0.12.40/computer/README.md`](../evidence/v0.12.40/computer/README.md). Both require a healthy monitor, unchanged sampled cursor, no shared input activity, and `sharedPointerActivityState: quiet` for every evidence cell. The `deliberate-concurrency` compatibility lane adds a separately authorized exact-app-share button action and proves—through a target-owned request/start/complete chain plus independent bundle/window/button and shared-seat probes—that app-scoped orchestration spanned the real product action without using the shared desktop. It does not claim physical-human or cryptographic Computer Use provider identity. Never convert, merge, or substitute optional physical-pointer adversarial bytes into either release lane. An unknown monitor or boundary fails closed.
 
 Before either lane invokes a candidate binary—even with `--version`—the exact
 source-bound SystemProbe must complete a 30-second native quiet-seat epoch with at
@@ -150,12 +150,12 @@ exact-app-share request; no shared-pointer movement is required or accepted.
 The sole v0.12.35 candidate reached this macOS gate and failed closed before
 candidate process execution after repeated shared-seat resets and an unknown
 native-monitor sample. No Windows, stock-Chrome, tag, or Release followed; its
-immutable sanitized negative record is linked from the v0.12.39 harness
-README. Version 0.12.39 does not relax that gate. It adds fixed reset/unknown
+immutable sanitized negative record is linked from the v0.12.40 harness
+README. Version 0.12.40 does not relax that gate. It adds fixed reset/unknown
 cause categories and a source-only scheduling check:
 
 ```bash
-node evidence/v0.12.39/computer/helper-evidence-rig.mjs --quiet-readiness
+node evidence/v0.12.40/computer/helper-evidence-rig.mjs --quiet-readiness
 ```
 
 That command accepts no candidate paths, emits one sanitized JSON record, and
@@ -163,7 +163,7 @@ always reports `candidateInvocations: 0` and `acceptanceEvidence: false`. A
 ready exit is not release evidence and cannot satisfy or replace either
 candidate-bound lane.
 
-For the deliberate-concurrency lane, start the packaged evidence runner and then run `node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode watch --evidence-dir "$ABSOLUTE_EVIDENCE_DIRECTORY" --runner-pid "$RUNNER_PID"` in a separate terminal. The read-only watcher waits for the exact runner-created lane, opens only the request/start/complete records without following links, validates the v0.12.39 marker-schema-2 records, stable app surface, request hash, start-receipt hash, canonical timestamps, and process binding, and writes nothing. The candidate identity nested in the lane is the separate schema-3 binding. On `ACTION REQUIRED`, use the separately authorized exact-app share for bundle `dev.flrngel.local-browser-bridge.acceptance.app-share`, press `START APP-SHARE CHECK` exactly once, do not use the shared desktop or retry, and stop all UI use after `START RECEIVED`. The app independently verifies the request hash before writing its create-once start receipt and disabling the button. After that receipt, the runner uses a bounded, abortable authority refresh to obtain a strictly newer streamed frame from the same share, exact target, and unchanged geometry within the reserved handoff deadline; only that fresh frame may authorize the product click. It then proves unchanged foreground/focus/Space/cursor/HID state, dispatches the real bounded product action, requires the target postcondition and quiet product/independent boundaries, and completes the app-owned receipt chain. A copied, stale, changed, or missing record, duplicate action, unknown native boundary, dead runner/app, shared-seat activity, frame-refresh failure, or timeout fails closed. The marker chain and watcher are orchestration evidence, never product authority. Validate with `node --check scripts/wait-macos-app-share-concurrency-handoff.mjs`, `node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test`, `node --check evidence/v0.12.39/computer/helper-evidence-rig.mjs`, `node evidence/v0.12.39/computer/helper-evidence-rig.mjs --self-test`, and Swift typechecks for `AppShareHandoff.swift`, `PhysicalPointerHandoff.swift`, and `SystemProbe.swift`. The old pointer watcher and physical prompt remain optional adversarial tooling and cannot satisfy release.
+For the deliberate-concurrency lane, start the packaged evidence runner and then run `node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode watch --evidence-dir "$ABSOLUTE_EVIDENCE_DIRECTORY" --runner-pid "$RUNNER_PID"` in a separate terminal. The read-only watcher waits for the exact runner-created lane, opens only the request/start/complete records without following links, validates the v0.12.40 marker-schema-2 records, stable app surface, request hash, start-receipt hash, canonical timestamps, and process binding, and writes nothing. The candidate identity nested in the lane is the separate schema-3 binding. On `ACTION REQUIRED`, use the separately authorized exact-app share for bundle `dev.flrngel.local-browser-bridge.acceptance.app-share`, press `START APP-SHARE CHECK` exactly once, do not use the shared desktop or retry, and stop all UI use after `START RECEIVED`. The app independently verifies the request hash before writing its create-once start receipt and disabling the button. After that receipt, the runner uses a bounded, abortable authority refresh to obtain a strictly newer streamed frame from the same share, exact target, and unchanged geometry within the reserved handoff deadline; only that fresh frame may authorize the product click. It then proves unchanged foreground/focus/Space/cursor/HID state, dispatches the real bounded product action, requires the target postcondition and quiet product/independent boundaries, and completes the app-owned receipt chain. A copied, stale, changed, or missing record, duplicate action, unknown native boundary, dead runner/app, shared-seat activity, frame-refresh failure, or timeout fails closed. The marker chain and watcher are orchestration evidence, never product authority. Validate with `node --check scripts/wait-macos-app-share-concurrency-handoff.mjs`, `node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test`, `node --check evidence/v0.12.40/computer/helper-evidence-rig.mjs`, `node evidence/v0.12.40/computer/helper-evidence-rig.mjs --self-test`, and Swift typechecks for `AppShareHandoff.swift`, `PhysicalPointerHandoff.swift`, and `SystemProbe.swift`. The old pointer watcher and physical prompt remain optional adversarial tooling and cannot satisfy release.
 
 ### Deterministic Windows live acceptance
 
@@ -189,7 +189,7 @@ The checked-in coordinator runs `scripts/test-windows-computer-use.ps1` exactly 
 Live mode intentionally runs only under the system Windows PowerShell 5.1 Desktop host because compilation and the acceptance fixture use WinForms/.NET Framework. PowerShell 7 remains a parser and self-test surface. The checked-in coordinator resolves the native Windows system directory without depending on a Machine-scoped `SystemRoot`, re-enters its exact 64-bit Windows PowerShell host through a nonce-bound clean bootstrap, and requires identity `5.1|Desktop|True` before any candidate launch. The compiled GUI is nevertheless launched as its own Windows-application process, not as terminal-hosted PowerShell UI.
 
 ```powershell
-$version = "0.12.39"
+$version = "0.12.40"
 $server = (Resolve-Path ".\dist\local-browser-bridge-v$version-windows-x86_64.exe").Path
 $helper = (Resolve-Path ".\dist\local-computer-helper-v$version-windows-x86_64.exe").Path
 $manifest = (Resolve-Path .\dist\SHA256SUMS.txt).Path
@@ -266,7 +266,7 @@ record and refuses both waiting and handoff output unless the exact worker
 PID/start time is still live.
 
 The watcher reads only `operator/foreground-arm-request.json`. It requires the
-exact v0.12.39/schema-2 marker field set and order, a fresh non-expired publication,
+exact v0.12.40/schema-2 marker field set and order, a fresh non-expired publication,
 ordinary non-reparse paths, and the same live runner PID/start time both before
 and after parsing. It emits exactly one compact sanitized
 `foreground-arm-visual-handoff` JSON object or fails closed. It neither writes
@@ -315,7 +315,7 @@ boundary is exercised rather than inferred from a parser pass.
 The coordinator accepts new evidence and coordinator directories only as direct
 children of those two fixed owner-private LocalAppData parents on a local
 NTFS/ReFS volume. It rejects Temp paths, UNC paths, links, reparse traversal,
-and caller-selected alternate parents. Version 0.12.39 resolves the prospective
+and caller-selected alternate parents. Version 0.12.40 resolves the prospective
 ledger identity without creating it, then completes owner-private directory and
 ACL setup; stages and rehashes the exact scripts, fixture, manifest, binding,
 and candidate executables; publishes and verifies the private configuration and
@@ -475,7 +475,7 @@ source tree, and neither `vVERSION` nor a Release with that name exists.
 
 ```bash
 REPOSITORY="flrngel/local-browser-bridge"
-VERSION="0.12.39"
+VERSION="0.12.40"
 SOURCE_SHA="EXACT_40_CHARACTER_GREEN_MAIN_SHA"
 
 gh workflow run deploy.yml \
@@ -521,10 +521,10 @@ screenshots, logs, operator markers, fixture records, sidecars, and independent
 review records. Never retain credentials, bearer tokens, personal paths,
 operator identity, raw browser/API data, or unrelated screen content.
 
-For v0.12.39, the canonical evidence branch is
-`evidence/v0.12.39-release-run-RUN_ID-attempt-RUN_ATTEMPT`, and its additions
+For v0.12.40, the canonical evidence branch is
+`evidence/v0.12.40-release-run-RUN_ID-attempt-RUN_ATTEMPT`, and its additions
 live below
-`evidence/v0.12.39/release/run-RUN_ID-attempt-RUN_ATTEMPT/`. The five primary
+`evidence/v0.12.40/release/run-RUN_ID-attempt-RUN_ATTEMPT/`. The five primary
 machine records are:
 
 - `macos/macos-acceptance.json`;
@@ -550,7 +550,7 @@ not contain credentials or personal data.
 
 ```bash
 REPOSITORY="flrngel/local-browser-bridge"
-VERSION="0.12.39"
+VERSION="0.12.40"
 SOURCE_SHA="EXACT_40_CHARACTER_GREEN_MAIN_SHA"
 CANDIDATE_RUN_ID="EXACT_GITHUB_RUN_ID"
 CANDIDATE_RUN_ATTEMPT="EXACT_GITHUB_RUN_ATTEMPT"
