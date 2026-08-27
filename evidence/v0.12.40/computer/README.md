@@ -1,9 +1,9 @@
-# macOS v0.12.39 persistent-share evidence candidate
+# macOS v0.12.40 persistent-share evidence candidate
 
 This directory defines a fresh deterministic evidence harness for the packaged
-macOS v0.12.39 server and helper candidate. It is protocol infrastructure, not
+macOS v0.12.40 server and helper candidate. It is protocol infrastructure, not
 passing evidence. Any passing packaged result must be read from the immutable
-[v0.12.39 GitHub Release](https://github.com/flrngel/local-browser-bridge/releases/tag/v0.12.39)
+[v0.12.40 GitHub Release](https://github.com/flrngel/local-browser-bridge/releases/tag/v0.12.40)
 and the exact evidence commit bound by its schema-3 acceptance receipt.
 
 The immutable v0.12.26 candidate was withdrawn in two separate workflow
@@ -27,7 +27,7 @@ appeared. The runner probes both packaged executables before creating that
 directory, so candidate-byte execution could neither be proved nor excluded.
 The attempt was terminal outcome-unknown and v0.12.27 was withdrawn without a
 Computer Use action, stock-Chrome run, evidence commit, approval, or public
-Release. Version 0.12.39 retains the exact-attempt trust rules and completes the
+Release. Version 0.12.40 retains the exact-attempt trust rules and completes the
 checked-in Windows coordinator's source-only nested-Job ownership boundary. The
 coordinator acquires the stable admission mutex before recovery, uses one
 monotonic deadline, opens and drains only the exact previous named Job, waits
@@ -74,7 +74,7 @@ no completion receipt, Windows run, stock-Chrome run, publication, or Release
 followed. Its exact ten-file negative record is retained on
 `evidence/v0.12.23-macos-app-share-stale-frame-32746618027` under
 `evidence/v0.12.23/computer/attempts/withdrawn-9e50811-macos-app-share-stale-frame/`.
-This v0.12.39 harness reuses none of those evidence bytes.
+This v0.12.40 harness reuses none of those evidence bytes.
 
 The exact v0.12.31 candidate passed its 206-check quiet macOS lane. In the
 deliberate lane, the separately authorized exact app/window/button action and
@@ -107,7 +107,7 @@ lanes passed. The Windows session was then interrupted after the old coordinator
 created its persistent reservation but before any coordinator directory,
 evidence directory, product process, listener, UI action, or Chrome action was
 observed. Because that reservation was already irreversible, v0.12.34 was
-withdrawn without a retry, tag, or Release. Version 0.12.39 retains the 1,000 ms
+withdrawn without a retry, tag, or Release. Version 0.12.40 retains the 1,000 ms
 authority-age limit, exact share, target, and geometry checks, ban on one-shot
 observation, larger abortable wait, and v0.12.34 Job topology. It moves the
 schema-2 reservation to the worker's last pre-intent boundary after staging,
@@ -122,7 +122,7 @@ failed closed without screenshots; Windows, stock Chrome, tagging, and
 publication did not follow. Its exact two-file sanitized negative record is
 frozen at commit
 [`19f312c8a6c50e81691873951c8d1ee64f7e3d6e`](https://github.com/flrngel/local-browser-bridge/tree/19f312c8a6c50e81691873951c8d1ee64f7e3d6e/evidence/v0.12.35/computer/attempts/withdrawn-8d77a56-macos-pre-execution-quiet-seat-monitoring-failure).
-Version 0.12.39 keeps the same thresholds and refusal behavior, adds only a
+Version 0.12.40 keeps the same thresholds and refusal behavior, adds only a
 fixed diagnostic vocabulary and source-only readiness probe, and reuses none
 of those candidate or evidence bytes.
 
@@ -135,7 +135,7 @@ executing candidate bytes, reserving a Windows attempt, starting Computer Use,
 or touching Chrome. The exact internal exception was not retained and is not
 claimed. Its four-file sanitized terminal record is frozen at commit
 [`e79db0397333543a4e4d6435868c26f4ff524ce5`](https://github.com/flrngel/local-browser-bridge/tree/e79db0397333543a4e4d6435868c26f4ff524ce5/evidence/v0.12.36/computer/attempts/withdrawn-be22679-windows-trust-private-acl-failure).
-Version 0.12.39 creates the destination and protected owner-only DACL in one
+Version 0.12.40 creates the destination and protected owner-only DACL in one
 operation, verifies the exact persisted owner and single explicit rule, and
 runs that live ACL boundary in the Windows PowerShell 5.1 self-test before any
 candidate path or network operation. It reuses no v0.12.36 candidate or
@@ -170,7 +170,7 @@ unchanged whole-run SystemProbe boundary correctly reported unrelated
 `mouseMoved`/cursor activity on the shared login seat. That contamination was
 not attributed to the helper, the lane was not relabeled, deliberate macOS,
 Windows, and stock-Chrome acceptance never started, and publication was
-canceled. Version 0.12.39 does not reuse or relabel any prior binary,
+canceled. Version 0.12.40 does not reuse or relabel any prior binary,
 screenshot, result, marker, notification, log, or other generated evidence
 byte. The negative record is retained only on branch
 `evidence/v0.12.13-macos-quiet-pointer-contamination-32695400912` at commit
@@ -182,7 +182,7 @@ found that the macOS producer emitted lane-result schema 6 while the publication
 verifier still required aggregate schema metadata 5. Protected-tag workflow
 `32718436613` was canceled before frozen candidate assembly or execution; no
 macOS, Windows, or stock-Chrome candidate lane ran and no Release exists. Its
-tag remains protected historical metadata. Version 0.12.39 does not reuse any
+tag remains protected historical metadata. Version 0.12.40 does not reuse any
 v0.12.18 candidate or evidence byte.
 
 The harness talks to the real loopback server API and launches the supplied
@@ -206,9 +206,14 @@ and active-Space oracles, both evidence lanes wait for one 30-second sampled
 quiet-seat epoch before invoking either candidate even with `--version`. The
 gate samples every 500 ms and requires at least 60 stable
 native transitions. Any pointer counter or cursor activity, foreground or AX
-focus change, WindowServer front-row change, or active-Space change discards
-the entire epoch and starts a new one under the original immutable 30-minute
-deadline. An unavailable or unhealthy oracle fails immediately. The gate runs
+focus change, foreground AX-focused on-screen WindowServer identity change, or
+active-Space change discards the entire epoch and starts a new one under the
+original immutable 30-minute deadline. The probe cross-checks the AX
+focused/main window against that foreground process's visible layer-zero
+WindowServer inventory. This prevents a read-only app-share provider auxiliary
+window from being misclassified as user-focus movement while still refusing a
+focused window that is absent, off-screen, transparent, or owned by another
+process. An unavailable or unhealthy oracle fails immediately. The gate runs
 before the fixture, server, or helper starts and retains no raw pointer data.
 
 ## Pre-candidate quiet readiness (not acceptance evidence)
@@ -217,7 +222,7 @@ Before spending a one-shot candidate attempt, run this from the exact reviewed
 source checkout while leaving the shared macOS login seat untouched:
 
 ```bash
-node evidence/v0.12.39/computer/helper-evidence-rig.mjs --quiet-readiness
+node evidence/v0.12.40/computer/helper-evidence-rig.mjs --quiet-readiness
 ```
 
 The mode accepts no candidate paths and does not inspect or execute candidate
@@ -245,11 +250,11 @@ bytes as programs.
   quiet-seat epoch. This reduces ambient pre-run contamination; it does not
   reserve the shared login seat, so every existing per-action and whole-run
   non-interruption boundary remains mandatory and fail-closed.
-- The server and helper report exactly v0.12.39, are universal
+- The server and helper report exactly v0.12.40, are universal
   `arm64`/`x86_64` binaries, and pass strict code-signature checks.
 - The supplied executables are byte-for-byte identical to the copies inside
-  `local-browser-bridge-v0.12.39-macos-universal.tar.gz`. The archive must be
-  bound by a canonical `SHA256SUMS.txt` containing exactly the four v0.12.39
+  `local-browser-bridge-v0.12.40-macos-universal.tar.gz`. The archive must be
+  bound by a canonical `SHA256SUMS.txt` containing exactly the four v0.12.40
   release assets, and that manifest must match a mandatory SHA-256 supplied
   out of band; a locally rebuilt archive plus a substituted manifest is
   refused. No supplied server or helper code executes before all of those
@@ -394,7 +399,10 @@ nonactivating window is titled `LBB macOS Acceptance App Share`; its single
 button has accessibility identifier `lbb-app-share-start`. SystemProbe binds
 the exact bundle, one window, exact button title and enabled state in `READY`,
 then the disabled button in `ARMED`, `ACTION`, and `COMPLETE`. It retains only
-bounded booleans, not raw unrelated application identities.
+bounded booleans, not raw unrelated application identities. Its separately
+self-tested foreground-window selector anchors user focus to the foreground
+app's matching AX focused/main on-screen layer-zero window, not whichever
+same-process auxiliary window happens to be first in compositor order.
 
 The runner publishes a canonical create-once request, then enables
 `START APP-SHARE CHECK`. Through the separately authorized exact-app share,
@@ -553,14 +561,14 @@ SOURCE_ROOT="$(cd "$SOURCE_ROOT" && pwd -P)"
 cd "$SOURCE_ROOT"
 [[ "$(pwd -P)" == "$SOURCE_ROOT" ]]
 
-: "${VERSION:=0.12.39}"
+: "${VERSION:=0.12.40}"
 : "${WORKFLOW_RUN_ID:?set the exact candidate-workflow run ID}"
 : "${WORKFLOW_RUN_ATTEMPT:?set the exact run attempt}"
 : "${RELEASE_CANDIDATE_ARTIFACT_ID:?set the exact artifact ID}"
 : "${EXPECTED_SOURCE_SHA:?set the exact main source commit}"
 : "${PRIVATE_PARENT:?set an existing owner-private ordinary directory}"
 
-[[ "$VERSION" == "0.12.39" ]]
+[[ "$VERSION" == "0.12.40" ]]
 [[ "$WORKFLOW_RUN_ID" =~ ^[1-9][0-9]*$ ]]
 [[ "$WORKFLOW_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
 [[ "$RELEASE_CANDIDATE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
@@ -583,7 +591,7 @@ assert_quiet_readiness_record() {
     ]) and
     .schemaVersion == 1 and
     .kind == "macos-quiet-seat-readiness" and
-    .productVersion == "0.12.39" and
+    .productVersion == "0.12.40" and
     .status == "ready" and
     .acceptanceEvidence == false and
     .candidateInvocations == 0 and
@@ -627,9 +635,9 @@ assert_quiet_readiness_record() {
 
 RUN_NONCE="$(openssl rand -hex 16)"
 CANDIDATE_ROOT="$PRIVATE_PARENT/candidate-$RUN_NONCE"
-ATTEMPT_ROOT="$(mktemp -d "$PRIVATE_PARENT/lbb-v0.12.39-macos.XXXXXX")"
-SCRATCH_PARENT="$(mktemp -d "$PRIVATE_PARENT/lbb-v0.12.39-scratch.XXXXXX")"
-PACKAGE_ROOT="$PRIVATE_PARENT/lbb-v0.12.39-package-$RUN_NONCE"
+ATTEMPT_ROOT="$(mktemp -d "$PRIVATE_PARENT/lbb-v0.12.40-macos.XXXXXX")"
+SCRATCH_PARENT="$(mktemp -d "$PRIVATE_PARENT/lbb-v0.12.40-scratch.XXXXXX")"
+PACKAGE_ROOT="$PRIVATE_PARENT/lbb-v0.12.40-package-$RUN_NONCE"
 
 bash scripts/fetch-verify-release-candidate.sh \
   "$VERSION" \
@@ -649,10 +657,10 @@ RELEASE_CANDIDATE_ARTIFACT_ZIP_SHA256="$(
 )"
 [[ "$(jq -er '.passed' "$CANDIDATE_BINDING")" == "true" ]]
 
-ARCHIVE="$RELEASE_CANDIDATE_DIR/local-browser-bridge-v0.12.39-macos-universal.tar.gz"
+ARCHIVE="$RELEASE_CANDIDATE_DIR/local-browser-bridge-v0.12.40-macos-universal.tar.gz"
 MANIFEST="$RELEASE_CANDIDATE_DIR/SHA256SUMS.txt"
 [[ ! -e "$PACKAGE_ROOT" && ! -L "$PACKAGE_ROOT" ]]
-node evidence/v0.12.39/computer/helper-evidence-rig.mjs \
+node evidence/v0.12.40/computer/helper-evidence-rig.mjs \
   --prepare-package \
   "$ARCHIVE" "$MANIFEST" "$EXPECTED_SHA256SUMS_SHA256" \
   "$PACKAGE_ROOT"
@@ -665,12 +673,12 @@ DELIBERATE_DIR="$ATTEMPT_ROOT/deliberate-concurrency"
 # This fresh source-only result is mandatory scheduling guidance immediately
 # before the one-shot quiet candidate lane. It is never acceptance evidence.
 QUIET_READINESS_JSON="$(
-  node evidence/v0.12.39/computer/helper-evidence-rig.mjs --quiet-readiness
+  node evidence/v0.12.40/computer/helper-evidence-rig.mjs --quiet-readiness
 )"
 assert_quiet_readiness_record "$QUIET_READINESS_JSON"
 unset QUIET_READINESS_JSON
 
-node evidence/v0.12.39/computer/helper-evidence-rig.mjs \
+node evidence/v0.12.40/computer/helper-evidence-rig.mjs \
   "$SERVER" "$HELPER" "$QUIET_DIR" "$SCRATCH_PARENT" \
   "$ARCHIVE" "$MANIFEST" "$EXPECTED_SHA256SUMS_SHA256" \
   "$EXPECTED_SOURCE_SHA" \
@@ -682,7 +690,7 @@ node evidence/v0.12.39/computer/helper-evidence-rig.mjs \
 QUIET_RESULT="$QUIET_DIR/helper-results.json"
 jq -e '
   .schemaVersion == 9 and
-  .productVersion == "0.12.39" and
+  .productVersion == "0.12.40" and
   .status == "passed-release-candidate" and
   .assertions.failed == 0 and
   .assertions.total > 0 and
@@ -764,7 +772,7 @@ printf 'Quiet result SHA-256: %s\n' "$QUIET_RESULT_SHA256"
 
 Open and inspect the six exact quiet-lane PNGs. Every image must show only the
 primary fixture with `evidence-lane=quiet`, never its sibling or unrelated
-pixels. In order, verify: ready with empty/zero counters; the v0.12.39 semantic
+pixels. In order, verify: ready with empty/zero counters; the v0.12.40 semantic
 value; semantic action 1/complete; persistent stream; click count 1 with
 `last=click`; and settled `last=resize` at 820x520. Stop permanently if any
 image is wrong, sensitive, stale, or cropped. Only after accepting all six,
@@ -789,12 +797,12 @@ export QUIET_REVIEWED_RESULT_SHA256
 # Phase 1 readiness is not reusable. Require a second fresh source-only result
 # immediately before the one-shot deliberate-concurrency candidate lane.
 DELIBERATE_READINESS_JSON="$(
-  node evidence/v0.12.39/computer/helper-evidence-rig.mjs --quiet-readiness
+  node evidence/v0.12.40/computer/helper-evidence-rig.mjs --quiet-readiness
 )"
 assert_quiet_readiness_record "$DELIBERATE_READINESS_JSON"
 unset DELIBERATE_READINESS_JSON
 
-node evidence/v0.12.39/computer/helper-evidence-rig.mjs \
+node evidence/v0.12.40/computer/helper-evidence-rig.mjs \
   "$SERVER" "$HELPER" "$DELIBERATE_DIR" "$SCRATCH_PARENT" \
   "$ARCHIVE" "$MANIFEST" "$EXPECTED_SHA256SUMS_SHA256" \
   "$EXPECTED_SOURCE_SHA" \
@@ -817,7 +825,7 @@ wait "$RUNNER_PID" || RUNNER_STATUS=$?
 DELIBERATE_RESULT="$DELIBERATE_DIR/helper-results.json"
 jq -e '
   .schemaVersion == 9 and
-  .productVersion == "0.12.39" and
+  .productVersion == "0.12.40" and
   .status == "passed-release-candidate" and
   .assertions.failed == 0 and
   .assertions.total > 0 and
@@ -908,7 +916,7 @@ printf 'Deliberate result SHA-256: %s\n' "$DELIBERATE_RESULT_SHA256"
 Open and inspect the six exact deliberate-lane PNGs. Every image must show only
 the primary fixture with `evidence-lane=deliberate-concurrency`, never its
 sibling or unrelated pixels. In order, verify: ready with empty/zero counters;
-the v0.12.39 semantic value; semantic action 1/complete; persistent stream;
+the v0.12.40 semantic value; semantic action 1/complete; persistent stream;
 click count 1 with `last=click`; and settled `last=resize` at 820x520. Stop
 permanently if any image is wrong, sensitive, stale, or cropped. Only after
 accepting all six, enter the printed digest in the same shell. This review and
@@ -937,7 +945,7 @@ export DELIBERATE_REVIEWED_RESULT_SHA256
 
 QUIET_CANONICAL="$(cd "$QUIET_DIR" && pwd -P)"
 DELIBERATE_CANONICAL="$(cd "$DELIBERATE_DIR" && pwd -P)"
-AGGREGATE_DIR="$(mktemp -d "$PRIVATE_PARENT/lbb-v0.12.39-aggregate.XXXXXX")"
+AGGREGATE_DIR="$(mktemp -d "$PRIVATE_PARENT/lbb-v0.12.40-aggregate.XXXXXX")"
 AGGREGATE_CANONICAL="$(cd "$AGGREGATE_DIR" && pwd -P)"
 
 node scripts/finalize-macos-acceptance.mjs \
@@ -953,7 +961,7 @@ jq -e \
   --arg quiet_sha256 "$QUIET_REVIEWED_RESULT_SHA256" \
   --arg deliberate_sha256 "$DELIBERATE_REVIEWED_RESULT_SHA256" '
     .schemaVersion == 3 and
-    .productVersion == "0.12.39" and
+    .productVersion == "0.12.40" and
     .status == "passed-release-candidate" and
     .lanes.quiet.resultSha256 == $quiet_sha256 and
     .lanes.deliberateConcurrency.resultSha256 == $deliberate_sha256 and
@@ -995,8 +1003,8 @@ the repository.
 
 The retained macOS subtree is exactly 20 files: one aggregate, eight quiet-lane
 files, and eleven deliberate-lane files. Store it at
-`evidence/v0.12.39/release/run-RUN_ID-attempt-ATTEMPT/macos/` on
-`evidence/v0.12.39-release-run-RUN_ID-attempt-ATTEMPT`; its single commit parent
+`evidence/v0.12.40/release/run-RUN_ID-attempt-ATTEMPT/macos/` on
+`evidence/v0.12.40-release-run-RUN_ID-attempt-ATTEMPT`; its single commit parent
 must be the candidate source and every retained file must be an ordinary `100644`
 blob. The aggregate's `inventoryFileCount: 19` counts both lane inventories and
 intentionally excludes `macos-acceptance.json` itself. Never retain the
@@ -1074,7 +1082,7 @@ but no click reached the fixture and no received marker was created. It timed
 out at `wait-foreground-arm` before the invariant baseline or any product
 action. Stock-Chrome acceptance was not started, the protected publish job was
 canceled, and no v0.12.8 Release was created. These records are diagnostic
-history, not v0.12.39 evidence:
+history, not v0.12.40 evidence:
 
 - [`v0.12.8 macOS exact-candidate pass`](../../v0.12.8/computer/README.md)
 - [`withdrawn-532d603-windows-foreground-arm-timeout`](../../v0.12.8/computer/attempts/withdrawn-532d603-windows-foreground-arm-timeout/README.md)
@@ -1088,7 +1096,7 @@ scripted click occurred. It timed out with zero mouse-down, mouse-up, and
 acknowledgement counts before the invariant baseline or any product action.
 Chrome acceptance was not started, the protected publish job was canceled, and
 no v0.12.7 Release was created. These records are diagnostic history, not
-v0.12.39 evidence:
+v0.12.40 evidence:
 
 - [`v0.12.7 macOS exact-candidate pass`](../../v0.12.7/computer/README.md)
 - [`withdrawn-0749953-windows-foreground-arm-timeout`](../../v0.12.7/computer/attempts/withdrawn-0749953-windows-foreground-arm-timeout/README.md)
@@ -1100,7 +1108,7 @@ reviewed screenshots. The same frozen candidate then failed closed on Windows
 after protocol-bound helper readiness and before observation, capture, sharing,
 input, or any screenshot because its shown WinForms sentinel did not own the
 global foreground. The publish job was canceled and no v0.12.6 Release was
-created. These records are diagnostic history, not v0.12.39 evidence:
+created. These records are diagnostic history, not v0.12.40 evidence:
 
 - [`v0.12.6 macOS exact-candidate pass`](../../v0.12.6/computer/README.md)
 - [`withdrawn-397e4b6-windows-foreground-sentinel-timeout`](../../v0.12.6/computer/attempts/withdrawn-397e4b6-windows-foreground-sentinel-timeout/README.md)
@@ -1108,7 +1116,7 @@ created. These records are diagnostic history, not v0.12.39 evidence:
 ## Historical v0.12.5 negative attempt
 
 The exact v0.12.5 candidate run is retained as failed-candidate evidence, not
-as a v0.12.39 result:
+as a v0.12.40 result:
 
 - [`withdrawn-badda8e-macos-native-text-restore-stale-frame`](../../v0.12.5/computer/attempts/withdrawn-badda8e-macos-native-text-restore-stale-frame/README.md)
   records 82 successful assertions followed by a fail-closed
@@ -1120,7 +1128,7 @@ as a v0.12.39 result:
 
 ## Historical v0.12.2 negative attempt
 
-The v0.12.2 candidate run is preserved byte-for-byte and is not v0.12.39
+The v0.12.2 candidate run is preserved byte-for-byte and is not v0.12.40
 evidence:
 
 - [`withdrawn-a52d761-post-cancel-fresh-share-refusal`](../../v0.12.2/computer/attempts/withdrawn-a52d761-post-cancel-fresh-share-refusal/README.md)
@@ -1132,7 +1140,7 @@ evidence:
 ## Historical v0.12.1 negative attempts
 
 The prior attempts remain byte-for-byte in the v0.12.1 evidence directory.
-They are linked for diagnostic history only and are not v0.12.39 results:
+They are linked for diagnostic history only and are not v0.12.40 results:
 
 - [`withdrawn-98ff6f0-macos-invariant-refusal`](../../v0.12.1/computer/attempts/withdrawn-98ff6f0-macos-invariant-refusal/README.md)
   preserves the first fail-closed run. It is diagnostic history, not release

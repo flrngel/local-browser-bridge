@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/flrngel/local-browser-bridge/evidence/v0.12.39/browser/scoped-action-approval.schema.json",
-  "title": "Local Browser Bridge v0.12.39 stock Chrome scoped action approval",
+  "$id": "https://github.com/flrngel/local-browser-bridge/evidence/v0.12.40/browser/scoped-action-approval.schema.json",
+  "title": "Local Browser Bridge v0.12.40 stock Chrome scoped action approval",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -137,8 +137,8 @@
       ],
       "properties": {
         "schemaVersion": { "const": 3 },
-        "version": { "const": "0.12.39" },
-        "releaseTag": { "const": "v0.12.39" },
+        "version": { "const": "0.12.40" },
+        "releaseTag": { "const": "v0.12.40" },
         "repository": { "const": "flrngel/local-browser-bridge" },
         "sourceSha": { "$ref": "#/$defs/sha1" },
         "workflowRunId": { "type": "string", "pattern": "^[1-9][0-9]*$" },

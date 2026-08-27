@@ -137,7 +137,7 @@
   },
   "extension": {
     "cardCount": 0,
-    "version": "0.12.39",
+    "version": "0.12.40",
     "enabled": false,
     "loadErrors": 1,
     "loadedVia": "chrome://extensions-load-unpacked",
@@ -243,7 +243,7 @@
       "purpose": "extension-loaded",
       "image": "browser-01-extension-loaded.png",
       "captureSurface": "REPLACE_WITH_PRODUCT_SURFACE",
-      "requiredVisibleState": "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.39 card with no load errors and Chrome's debugger-use indicator during the active bridge lease"
+      "requiredVisibleState": "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.40 card with no load errors and Chrome's debugger-use indicator during the active bridge lease"
     },
     {
       "purpose": "api-action-result",

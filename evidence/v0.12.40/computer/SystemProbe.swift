@@ -73,7 +73,35 @@ private func processSerialNumberHex(_ value: [UInt8]) -> String {
     value.map { String(format: "%02x", $0) }.joined()
 }
 
-private func frontWindowIdentifier(for pid: pid_t) -> UInt32 {
+private struct ForegroundWindowSample {
+    let ownerPID: pid_t
+    let layer: Int
+    let alpha: Double
+    let identifier: UInt32
+}
+
+private func selectedForegroundWindowIdentifier(
+    for pid: pid_t,
+    preferredFocusedWindowID: UInt32,
+    from windows: [ForegroundWindowSample]
+) -> UInt32 {
+    let visibleApplicationWindows = windows.filter {
+        $0.ownerPID == pid && $0.layer == 0 && $0.alpha > 0 && $0.identifier > 0
+    }
+    if preferredFocusedWindowID > 0,
+       visibleApplicationWindows.contains(where: {
+           $0.identifier == preferredFocusedWindowID
+       })
+    {
+        return preferredFocusedWindowID
+    }
+    return visibleApplicationWindows.first?.identifier ?? 0
+}
+
+private func frontWindowIdentifier(
+    for pid: pid_t,
+    preferredFocusedWindowID: UInt32
+) -> UInt32 {
     guard
         pid > 0,
         let rawWindows = CGWindowListCopyWindowInfo(
@@ -82,14 +110,19 @@ private func frontWindowIdentifier(for pid: pid_t) -> UInt32 {
         ) as? [[String: Any]]
     else { return 0 }
 
-    for window in rawWindows {
-        let ownerPID = (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value ?? 0
-        let layer = (window[kCGWindowLayer as String] as? NSNumber)?.intValue ?? -1
-        let alpha = (window[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 0
-        guard ownerPID == pid, layer == 0, alpha > 0 else { continue }
-        return (window[kCGWindowNumber as String] as? NSNumber)?.uint32Value ?? 0
+    let windows = rawWindows.map {
+        ForegroundWindowSample(
+            ownerPID: ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value ?? 0,
+            layer: ($0[kCGWindowLayer as String] as? NSNumber)?.intValue ?? -1,
+            alpha: ($0[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 0,
+            identifier: ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value ?? 0
+        )
     }
-    return 0
+    return selectedForegroundWindowIdentifier(
+        for: pid,
+        preferredFocusedWindowID: preferredFocusedWindowID,
+        from: windows
+    )
 }
 
 private enum AppSharePromptState: String {
@@ -449,7 +482,62 @@ private func pointerSample() -> PointerSample {
     }
 }
 
+private func runSelfTest() {
+    let foregroundPID: pid_t = 42
+    let focusedWindowID: UInt32 = 200
+    let appShareAuxiliaryWindowID: UInt32 = 201
+    let samples = [
+        ForegroundWindowSample(
+            ownerPID: foregroundPID,
+            layer: 0,
+            alpha: 1,
+            identifier: appShareAuxiliaryWindowID
+        ),
+        ForegroundWindowSample(
+            ownerPID: foregroundPID,
+            layer: 0,
+            alpha: 1,
+            identifier: focusedWindowID
+        ),
+        ForegroundWindowSample(
+            ownerPID: 99,
+            layer: 0,
+            alpha: 1,
+            identifier: 300
+        ),
+    ]
+    precondition(
+        selectedForegroundWindowIdentifier(
+            for: foregroundPID,
+            preferredFocusedWindowID: focusedWindowID,
+            from: samples
+        ) == focusedWindowID,
+        "a same-process app-share auxiliary window must not replace the AX-focused window"
+    )
+    precondition(
+        selectedForegroundWindowIdentifier(
+            for: foregroundPID,
+            preferredFocusedWindowID: 0,
+            from: samples
+        ) == appShareAuxiliaryWindowID,
+        "the compositor-order fallback must remain available when AX focus is unavailable"
+    )
+    precondition(
+        selectedForegroundWindowIdentifier(
+            for: foregroundPID,
+            preferredFocusedWindowID: 999,
+            from: samples
+        ) == appShareAuxiliaryWindowID,
+        "an off-screen or foreign preferred identity must not be trusted"
+    )
+    print("macOS system probe foreground-window self-test passed")
+}
+
 let arguments = Array(CommandLine.arguments.dropFirst())
+if arguments == ["--self-test"] {
+    runSelfTest()
+    exit(0)
+}
 let targetPID = arguments.first.flatMap(Int32.init) ?? 0
 let expectedActiveTargetWindowID = arguments.dropFirst().first.flatMap(UInt32.init) ?? 0
 let requestedWaitMilliseconds = arguments.dropFirst(2).first.flatMap(UInt64.init) ?? 0
@@ -541,7 +629,12 @@ let probe: [String: Any] = [
     "foregroundAXMainWindowID": foregroundIdentityStable ? foregroundAXMainWindowID : 0,
     "foregroundAXFrontmost": foregroundIdentityStable && foregroundAXFrontmost,
     "foregroundAXProbeHealthy": foregroundAXProbeHealthy,
-    "frontWindowID": frontWindowIdentifier(for: foregroundPID),
+    "frontWindowID": frontWindowIdentifier(
+        for: foregroundPID,
+        preferredFocusedWindowID: foregroundAXFocusedWindowID == foregroundAXMainWindowID
+            ? foregroundAXFocusedWindowID
+            : 0
+    ),
     "rawForegroundPID": rawForegroundIdentityStable ? rawForegroundBefore!.pid : 0,
     "rawForegroundPSN": rawForegroundIdentityStable
         ? processSerialNumberHex(rawForegroundBefore!.processSerialNumber)

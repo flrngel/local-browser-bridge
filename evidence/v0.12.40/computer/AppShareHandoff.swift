@@ -3,7 +3,7 @@ import CryptoKit
 import Darwin
 import Foundation
 
-private let productVersion = "0.12.39"
+private let productVersion = "0.12.40"
 private let stableWindowTitle = "LBB macOS Acceptance App Share"
 private let readyButtonTitle = "START APP-SHARE CHECK"
 private let armedButtonTitle = "APP-SHARE CHECK ARMED"
