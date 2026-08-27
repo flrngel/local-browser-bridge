@@ -24,7 +24,7 @@ Every installation needs two matching components and can use a third:
 
 | Component | Required | Purpose |
 |---|---:|---|
-| Local Browser Bridge server | Yes | Hosts the authenticated control page and loopback connector |
+| Local Browser Bridge Desktop Host | Yes | Provides the tray/menu-bar UI and hosts the authenticated control page and loopback connector |
 | Chrome/Edge extension | Yes | Connects real browser tabs to the server |
 | Local Computer Helper | No | Observes and operates one selected desktop application window |
 
@@ -41,11 +41,13 @@ local-browser-bridge-extension-vVERSION.zip
 SHA256SUMS.txt
 ```
 
-The macOS archive contains both the server and `Local Computer Helper.app`.
-Windows provides the server and helper as separate executables.
+The macOS archive contains `Local Browser Bridge.app`, the raw console server,
+and `Local Computer Helper.app`. The standard Windows bridge executable is the
+GUI-subsystem Desktop Host; the helper remains a separate executable. The
+source build still produces a separate console server for headless development.
 
 The one-command installer creates only a current-user startup entry for the
-server. There is no system service, browser-store package, or silent updater.
+Desktop Host. There is no system service, browser-store package, or silent updater.
 The helper stays opt-in and opens no listening socket; it connects outbound to
 the server on loopback.
 
@@ -129,7 +131,7 @@ pauses the connector and deliberately keeps the token.
 
 Before giving an agent control, verify all of the following:
 
-- the server reports the expected version with `--version`;
+- the Desktop Host reports the expected version with `--version`;
 - the extension popup shows that same version and reports connected;
 - exactly one Local Browser Bridge card exists on the extensions page;
 - the control page reports the intended browser tab connector;

@@ -124,6 +124,7 @@ remove_known_install() {
     assert_safe_product_file "$install_root/$name"
   done
   assert_safe_product_tree "$install_root/Local Computer Helper.app"
+  assert_safe_product_tree "$install_root/Local Browser Bridge.app"
   assert_safe_product_tree "$install_root/extension"
   stop_installed_processes
   for name in \
@@ -134,7 +135,7 @@ remove_known_install() {
     "Uninstall Local Browser Bridge.command"; do
     /bin/rm -f -- "$install_root/$name"
   done
-  /bin/rm -rf -- "$install_root/Local Computer Helper.app" "$install_root/extension"
+  /bin/rm -rf -- "$install_root/Local Browser Bridge.app" "$install_root/Local Computer Helper.app" "$install_root/extension"
   local unknown=0 entry base
   while IFS= read -r entry; do
     base="${entry##*/}"
@@ -188,6 +189,8 @@ function run(args) {
   }
   $(lines.join('\n') + '\n').writeToFileAtomicallyEncodingError(args[1], true, $.NSUTF8StringEncoding, null);
 }
+JXA
+}
 
 open_extensions_page() {
   if [[ -d '/Applications/Google Chrome.app' ]]; then
@@ -221,8 +224,6 @@ APPLESCRIPT
     /usr/bin/osascript -e 'display dialog "The server token is not ready yet. Double-click Open Local Browser Bridge, then run Finish Browser Extension Setup again." with title "Connect Local Browser Bridge" buttons {"OK"} default button "OK" with icon caution' || true
   fi
 }
-JXA
-}
 
 label="dev.flrngel.local-browser-bridge"
 plist="$HOME/Library/LaunchAgents/$label.plist"
@@ -252,6 +253,7 @@ if ((uninstall)); then
       assert_safe_product_file "$install_root/$local_name"
     done
     assert_safe_product_tree "$install_root/Local Computer Helper.app"
+    assert_safe_product_tree "$install_root/Local Browser Bridge.app"
     assert_safe_product_tree "$install_root/extension"
   fi
   if [[ -e "$plist" || -L "$plist" ]]; then
@@ -311,7 +313,7 @@ done
 
 /usr/bin/tar -xzf "$stage/$archive" -C "$stage"
 /usr/bin/ditto -x -k "$stage/$extension_zip" "$stage/extension"
-[[ -x "$stage/local-browser-bridge" && -d "$stage/Local Computer Helper.app" && -f "$stage/extension/manifest.json" ]] || { echo "A package has an unexpected layout." >&2; exit 1; }
+[[ -x "$stage/local-browser-bridge" && -d "$stage/Local Browser Bridge.app" && -d "$stage/Local Computer Helper.app" && -f "$stage/extension/manifest.json" ]] || { echo "A package has an unexpected layout." >&2; exit 1; }
 
 parent="$(/usr/bin/dirname "$install_root")"
 /bin/mkdir -p -- "$parent"
@@ -324,6 +326,7 @@ if [[ -e "$install_root" || -L "$install_root" ]]; then
 fi
 /bin/mkdir -p -- "$install_root"
 /bin/cp "$stage/local-browser-bridge" "$install_root/local-browser-bridge"
+/usr/bin/ditto "$stage/Local Browser Bridge.app" "$install_root/Local Browser Bridge.app"
 /usr/bin/ditto "$stage/Local Computer Helper.app" "$install_root/Local Computer Helper.app"
 /usr/bin/ditto "$stage/extension" "$install_root/extension"
 /bin/cp "$stage/SHA256SUMS.txt" "$install_root/SHA256SUMS.txt"
@@ -336,7 +339,7 @@ if ((startup)); then
   else
     /bin/mkdir -- "$HOME/Library/LaunchAgents"
   fi
-  escaped_root="$(printf '%s' "$install_root/local-browser-bridge" | /usr/bin/sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
+  escaped_root="$(printf '%s' "$install_root/Local Browser Bridge.app/Contents/MacOS/local-browser-bridge-desktop" | /usr/bin/sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
   shell_plist_argument=''
   ((enable_shell)) && shell_plist_argument='<string>--enable-shell</string>'
   /bin/cat > "$stage/launchagent.plist" <<EOF
@@ -345,19 +348,22 @@ if ((startup)); then
 <plist version="1.0"><dict>
 <key>Label</key><string>$label</string>
 <key>ProgramArguments</key><array><string>$escaped_root</string>$shell_plist_argument</array>
-<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+<key>RunAtLoad</key><true/>
+<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
 </dict></plist>
 EOF
   /usr/bin/plutil -lint "$stage/launchagent.plist" >/dev/null
   /bin/launchctl bootout "gui/$(/usr/bin/id -u)/$label" >/dev/null 2>&1 || true
   /bin/cp "$stage/launchagent.plist" "$plist"
-  /bin/launchctl bootstrap "gui/$(/usr/bin/id -u)" "$plist"
+  if ((launch)); then
+    /bin/launchctl bootstrap "gui/$(/usr/bin/id -u)" "$plist"
+  fi
 else
   /bin/launchctl bootout "gui/$(/usr/bin/id -u)/$label" >/dev/null 2>&1 || true
   /bin/rm -f -- "$plist"
 fi
 
-quoted_server="$(printf '%q' "$install_root/local-browser-bridge")"
+quoted_desktop="$(printf '%q' "$install_root/Local Browser Bridge.app")"
 quoted_helper="$(printf '%q' "$install_root/Local Computer Helper.app")"
 quoted_extension="$(printf '%q' "$install_root/extension")"
 uninstaller_url="https://raw.githubusercontent.com/$repository/v$resolved/scripts/uninstall-macos.sh"
@@ -365,16 +371,7 @@ shell_argument=''
 ((enable_shell)) && shell_argument=' --enable-shell'
 /bin/cat > "$install_root/Open Local Browser Bridge.command" <<EOF
 #!/bin/bash
-if ! /usr/bin/curl --fail --silent --max-time 1 http://127.0.0.1:17373/health >/dev/null 2>&1; then
-  $quoted_server$shell_argument >/dev/null 2>&1 &
-fi
-for _ in {1..100}; do [[ -f "\$HOME/.local-browser-bridge/token" ]] && break; /bin/sleep 0.1; done
-if [[ -f "\$HOME/.local-browser-bridge/token" ]]; then
-  token="\$(/bin/cat "\$HOME/.local-browser-bridge/token")"
-  /usr/bin/open "http://127.0.0.1:17373/#token=\$token"
-else
-  /usr/bin/open "http://127.0.0.1:17373/"
-fi
+/usr/bin/open $quoted_desktop --args$shell_argument
 EOF
 /bin/cat > "$install_root/Finish Browser Extension Setup.command" <<EOF
 #!/bin/bash
@@ -408,13 +405,12 @@ EOF
 
 if ((launch)); then
   if ((!startup)); then
-    if ((enable_shell)); then
-      "$install_root/local-browser-bridge" --enable-shell >/dev/null 2>&1 &
-    else
-      "$install_root/local-browser-bridge" >/dev/null 2>&1 &
-    fi
+    desktop_launch_arguments=()
+    ((enable_shell)) && desktop_launch_arguments+=(--enable-shell)
+    ((start_helper)) && desktop_launch_arguments+=(--start-helper)
+    /usr/bin/open "$install_root/Local Browser Bridge.app" --args "${desktop_launch_arguments[@]}"
   fi
-  if ((start_helper)); then /usr/bin/open "$install_root/Local Computer Helper.app"; fi
+  if ((startup && start_helper)); then /usr/bin/open "$install_root/Local Computer Helper.app"; fi
   token_path="$HOME/.local-browser-bridge/token"
   for _ in {1..100}; do [[ -f "$token_path" ]] && break; /bin/sleep 0.1; done
   token=''
@@ -428,7 +424,7 @@ fi
 echo "Installed Local Browser Bridge $resolved for the current user."
 echo "Extension folder: $install_root/extension"
 echo "Finish setup: double-click $install_root/Finish Browser Extension Setup.command"
-echo "Open later: double-click $install_root/Open Local Browser Bridge.command"
+echo "Open later: open $install_root/Local Browser Bridge.app"
 if ((enable_shell)); then
   echo "WARNING: Full current-user shell access is enabled for authenticated local API clients." >&2
 else

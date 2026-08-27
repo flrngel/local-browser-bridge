@@ -55,6 +55,8 @@ const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x0000_2000;
 #[cfg(target_os = "windows")]
 const CREATE_SUSPENDED: u32 = 0x0000_0004;
 #[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+#[cfg(target_os = "windows")]
 const WAIT_OBJECT_0: u32 = 0;
 #[cfg(target_os = "windows")]
 const WAIT_TIMEOUT: u32 = 258;
@@ -185,6 +187,8 @@ struct Cli {
     benchmark: bool,
     #[cfg(target_os = "windows")]
     worker: bool,
+    #[cfg(target_os = "windows")]
+    controller_process_id: Option<u32>,
 }
 
 #[tokio::main]
@@ -231,10 +235,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    run_worker(controller).await
+    #[cfg(target_os = "windows")]
+    let controller_process_id = cli.controller_process_id.unwrap_or_else(std::process::id);
+    #[cfg(not(target_os = "windows"))]
+    let controller_process_id = std::process::id();
+
+    run_worker(controller, controller_process_id).await
 }
 
-async fn run_worker(controller: ComputerController) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_worker(
+    controller: ComputerController,
+    controller_process_id: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
     let port = parse_port(env::var("LBB_PORT").ok().as_deref())?;
     let token = match env::var("LBB_TOKEN").ok() {
         Some(token) if !token.trim().is_empty() => token.trim().to_owned(),
@@ -264,7 +276,7 @@ async fn run_worker(controller: ComputerController) -> Result<(), Box<dyn std::e
             println!("Stopping...");
             terminate_worker(0);
         }
-        result = run_session(port, &token, Arc::clone(&controller)) => {
+        result = run_session(port, &token, Arc::clone(&controller), controller_process_id) => {
             match result {
                 Ok(()) => eprintln!("Bridge connection closed; restarting the disposable worker."),
                 Err(error) => eprintln!("Bridge session ended: {error}; restarting the disposable worker."),
@@ -283,7 +295,7 @@ async fn run_worker(controller: ComputerController) -> Result<(), Box<dyn std::e
             println!("Stopping...");
             terminate_worker(0);
         }
-        result = run_session(port, &token, Arc::clone(&controller)) => {
+        result = run_session(port, &token, Arc::clone(&controller), controller_process_id) => {
             match result {
                 Ok(()) => eprintln!("Bridge connection closed; terminating the disposable helper."),
                 Err(error) => eprintln!("Bridge session ended: {error}; terminating the disposable helper."),
@@ -303,7 +315,7 @@ async fn run_worker(controller: ComputerController) -> Result<(), Box<dyn std::e
                     println!("Stopping...");
                     break;
                 }
-                result = run_session(port, &token, Arc::clone(&controller)) => {
+                result = run_session(port, &token, Arc::clone(&controller), controller_process_id) => {
                     match result {
                         Ok(()) => {
                             backoff = Duration::from_millis(250);
@@ -565,10 +577,13 @@ impl SuspendedWorkerProcess {
 
         let mut application_name = executable_wide.clone();
         application_name.push(0);
-        let mut command_line = Vec::with_capacity(executable_wide.len() + 13);
+        let worker_arguments =
+            format!("\" --worker --controller-process-id={}", std::process::id());
+        let mut command_line =
+            Vec::with_capacity(executable_wide.len() + worker_arguments.len() + 2);
         command_line.push(u16::from(b'"'));
         command_line.extend(executable_wide);
-        command_line.extend("\" --worker".encode_utf16());
+        command_line.extend(worker_arguments.encode_utf16());
         command_line.push(0);
 
         let mut startup: StartupInfoW = unsafe { std::mem::zeroed() };
@@ -582,7 +597,7 @@ impl SuspendedWorkerProcess {
                 std::ptr::null(),
                 std::ptr::null(),
                 0,
-                CREATE_SUSPENDED,
+                CREATE_SUSPENDED | CREATE_NO_WINDOW,
                 std::ptr::null(),
                 std::ptr::null(),
                 &startup,
@@ -680,6 +695,7 @@ async fn run_session(
     port: u16,
     token: &str,
     controller: Arc<Mutex<ComputerController>>,
+    controller_process_id: u32,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut request = format!("ws://127.0.0.1:{port}/computer").into_client_request()?;
     request
@@ -701,6 +717,10 @@ async fn run_session(
         object.insert("protocolVersion".to_owned(), json!(PROTOCOL_VERSION));
         object.insert("sessionId".to_owned(), json!(session_id));
         object.insert("processId".to_owned(), json!(std::process::id()));
+        object.insert(
+            "controllerProcessId".to_owned(),
+            json!(controller_process_id),
+        );
     }
     socket.send(Message::Text(hello.to_string().into())).await?;
     let hello_deadline = tokio::time::Instant::now() + AUTH_TIMEOUT;
@@ -1588,12 +1608,27 @@ fn parse_args(arguments: impl Iterator<Item = String>) -> Result<Cli, String> {
             "--benchmark" => cli.benchmark = true,
             #[cfg(target_os = "windows")]
             "--worker" => cli.worker = true,
+            #[cfg(target_os = "windows")]
+            value if value.starts_with("--controller-process-id=") => {
+                let process_id = value
+                    .strip_prefix("--controller-process-id=")
+                    .and_then(|value| value.parse::<u32>().ok())
+                    .filter(|value| *value != 0)
+                    .ok_or_else(|| {
+                        "--controller-process-id must contain a nonzero process ID".to_owned()
+                    })?;
+                cli.controller_process_id = Some(process_id);
+            }
             _ => {
                 return Err(format!(
                     "Unknown argument: {argument}. Use --help for usage."
                 ));
             }
         }
+    }
+    #[cfg(target_os = "windows")]
+    if cli.controller_process_id.is_some() && !cli.worker {
+        return Err("--controller-process-id is reserved for the hidden worker".to_owned());
     }
     Ok(cli)
 }
@@ -2034,7 +2069,9 @@ mod tests {
         });
 
         let controller = Arc::new(Mutex::new(ComputerController::new()));
-        let error = run_session(port, &token, controller).await.unwrap_err();
+        let error = run_session(port, &token, controller, std::process::id())
+            .await
+            .unwrap_err();
         assert!(error.to_string().contains("server proof did not verify"));
         rogue.await.unwrap();
     }

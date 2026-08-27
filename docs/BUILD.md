@@ -14,9 +14,9 @@ contract suite.
 
 | Target | Build host | Result |
 |---|---|---|
-| Windows x86_64 | 64-bit Windows with MSVC and Windows SDK | Server and helper `.exe` files |
-| macOS host architecture | macOS with SDK 26+ | Raw development server and helper binaries |
-| macOS universal | macOS with SDK 26+ | Universal server and `Local Computer Helper.app` archive |
+| Windows x86_64 | 64-bit Windows with MSVC and Windows SDK | Tray Desktop Host, console server, and helper `.exe` files |
+| macOS host architecture | macOS with SDK 26+ | Menu-bar Desktop Host, raw development server, and helper binaries |
+| macOS universal | macOS with SDK 26+ | Universal menu-bar app, console server, and `Local Computer Helper.app` archive |
 | Chromium extension | Any host for direct unpacked use; Bash plus `zip`/`unzip` for the deterministic ZIP | Manifest V3 unpacked directory or ZIP |
 
 The project distributes Windows and macOS packages. A successful compile on an
@@ -126,11 +126,12 @@ git ls-files --deleted
 
 Both commands must produce no output.
 
-### 3. Build the two product executables
+### 3. Build the three product executables
 
 ```powershell
 cargo +1.88.0-x86_64-pc-windows-msvc build --locked --release `
   --target x86_64-pc-windows-msvc `
+  --bin local-browser-bridge-desktop `
   --bin local-browser-bridge `
   --bin local-computer-helper
 ```
@@ -139,6 +140,7 @@ Outputs:
 
 ```text
 target/x86_64-pc-windows-msvc/release/local-browser-bridge.exe
+target/x86_64-pc-windows-msvc/release/local-browser-bridge-desktop.exe
 target/x86_64-pc-windows-msvc/release/local-computer-helper.exe
 ```
 
@@ -149,12 +151,12 @@ The `mock-extension` binary is development tooling and is not a release asset.
 ```powershell
 $version = (Select-String -Path Cargo.toml `
   -Pattern '^version = "([^"]+)"$').Matches[0].Groups[1].Value
-$server = "target/x86_64-pc-windows-msvc/release/local-browser-bridge.exe"
+$desktop = "target/x86_64-pc-windows-msvc/release/local-browser-bridge-desktop.exe"
 $helper = "target/x86_64-pc-windows-msvc/release/local-computer-helper.exe"
 
 & .\scripts\verify-windows-artifacts.ps1 `
   -Version $version `
-  -ServerPath $server `
+  -ServerPath $desktop `
   -HelperPath $helper
 ```
 
@@ -165,16 +167,17 @@ flags.
 
 ### 5. Run the development build
 
-First PowerShell window:
+Run the normal tray application:
+
+```powershell
+& .\target\x86_64-pc-windows-msvc\release\local-browser-bridge-desktop.exe
+```
+
+Use **Start Computer Helper** from the tray menu only when desktop control is
+needed. For headless server development, run the separate console binary:
 
 ```powershell
 & .\target\x86_64-pc-windows-msvc\release\local-browser-bridge.exe
-```
-
-Second PowerShell window, only when desktop control is needed:
-
-```powershell
-& .\target\x86_64-pc-windows-msvc\release\local-computer-helper.exe
 ```
 
 Load the repository's `extension` directory directly from
@@ -311,11 +314,14 @@ stage="$(mktemp -d)"
 trap 'rm -rf -- "$stage"' EXIT
 
 cargo +1.88.0 build --locked --release --bin local-browser-bridge \
-  --bin local-computer-helper --target aarch64-apple-darwin
+  --bin local-browser-bridge-desktop --bin local-computer-helper \
+  --target aarch64-apple-darwin
 cargo +1.88.0 build --locked --release --bin local-browser-bridge \
-  --bin local-computer-helper --target x86_64-apple-darwin
+  --bin local-browser-bridge-desktop --bin local-computer-helper \
+  --target x86_64-apple-darwin
 
-mkdir -p "$stage/Local Computer Helper.app/Contents/MacOS" dist
+mkdir -p "$stage/Local Browser Bridge.app/Contents/MacOS" \
+  "$stage/Local Computer Helper.app/Contents/MacOS" dist
 cp LICENSE THIRD_PARTY_LICENSES.txt "$stage/"
 chmod 644 "$stage/LICENSE" "$stage/THIRD_PARTY_LICENSES.txt"
 
@@ -324,29 +330,39 @@ lipo -create \
   target/x86_64-apple-darwin/release/local-browser-bridge \
   -output "$stage/local-browser-bridge"
 lipo -create \
+  target/aarch64-apple-darwin/release/local-browser-bridge-desktop \
+  target/x86_64-apple-darwin/release/local-browser-bridge-desktop \
+  -output "$stage/Local Browser Bridge.app/Contents/MacOS/local-browser-bridge-desktop"
+lipo -create \
   target/aarch64-apple-darwin/release/local-computer-helper \
   target/x86_64-apple-darwin/release/local-computer-helper \
   -output "$stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"
 
 sed "s/@VERSION@/$version/g" packaging/macos/Info.plist.in \
   > "$stage/Local Computer Helper.app/Contents/Info.plist"
+sed "s/@VERSION@/$version/g" packaging/macos/DesktopInfo.plist.in \
+  > "$stage/Local Browser Bridge.app/Contents/Info.plist"
 chmod 755 "$stage/local-browser-bridge" \
+  "$stage/Local Browser Bridge.app/Contents/MacOS/local-browser-bridge-desktop" \
   "$stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"
 
 codesign --force --sign - "$stage/local-browser-bridge"
 codesign --verify --strict "$stage/local-browser-bridge"
+codesign --force --deep --sign - "$stage/Local Browser Bridge.app"
+codesign --verify --deep --strict "$stage/Local Browser Bridge.app"
 codesign --force --deep --sign - "$stage/Local Computer Helper.app"
 codesign --verify --deep --strict "$stage/Local Computer Helper.app"
 
 bash scripts/verify-macos-artifacts.sh \
   "$version" \
   "$stage/local-browser-bridge" \
-  "$stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"
+  "$stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper" \
+  "$stage/Local Browser Bridge.app/Contents/MacOS/local-browser-bridge-desktop"
 
 COPYFILE_DISABLE=1 tar --format ustar --no-xattrs -czf \
   "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" \
   -C "$stage" \
-  local-browser-bridge "Local Computer Helper.app" \
+  local-browser-bridge "Local Browser Bridge.app" "Local Computer Helper.app" \
   LICENSE THIRD_PARTY_LICENSES.txt
 ```
 
@@ -356,7 +372,7 @@ Output:
 dist/local-browser-bridge-vVERSION-macos-universal.tar.gz
 ```
 
-Both executable slices have a macOS 13 deployment target. The app bundle is
+All executable slices have a macOS 13 deployment target. Both app bundles are
 ad-hoc signed, not Developer ID-signed or notarized, so local builds can require
 fresh privacy grants.
 
@@ -385,7 +401,8 @@ These commands do not execute the Node-backed integration contracts:
 
 ```bash
 cargo +1.88.0 build --locked --release \
-  --bin local-browser-bridge --bin local-computer-helper
+  --bin local-browser-bridge-desktop --bin local-browser-bridge \
+  --bin local-computer-helper
 cargo +1.88.0 test --locked --lib
 ```
 

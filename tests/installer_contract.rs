@@ -19,6 +19,8 @@ fn installers_fail_closed_and_keep_desktop_authority_opt_in() {
         "Assert-SafeInstallRoot",
         "[switch]$StartHelper",
         "if ($StartHelper)",
+        "$startupArguments = if ($EnableShell)",
+        "New-OwnedShortcut $startup $desktopPath $startupArguments",
     ] {
         assert!(
             windows.contains(required),
@@ -34,7 +36,7 @@ fn installers_fail_closed_and_keep_desktop_authority_opt_in() {
         "Refusing a symlink install path",
         "assert_safe_install_root",
         "start_helper=0",
-        "if ((start_helper))",
+        "((start_helper)) && desktop_launch_arguments+=(--start-helper)",
     ] {
         assert!(
             macos.contains(required),
@@ -43,6 +45,7 @@ fn installers_fail_closed_and_keep_desktop_authority_opt_in() {
     }
     assert!(!windows.contains("Set-MpPreference"));
     assert!(!windows.contains("ExecutionPolicy Bypass"));
+    assert!(!windows.contains("New-OwnedShortcut $startup $desktopPath $launchArgumentText"));
     assert!(!macos.contains("spctl --master-disable"));
     assert!(!macos.contains("xattr -dr com.apple.quarantine"));
 }
@@ -137,7 +140,7 @@ fn installers_create_owned_version_matched_uninstall_launchers() {
     for required in [
         ".lbb-install-owner",
         "local-browser-bridge-install-v1",
-        "Uninstall Local Browser Bridge.cmd",
+        "Uninstall Local Browser Bridge.lnk",
         "/v$resolved/scripts/uninstall-windows.ps1",
     ] {
         assert!(
@@ -180,9 +183,9 @@ fn installers_make_extension_setup_and_later_launch_discoverable() {
         "Show-ExtensionSetup",
         "System32\\clip.exe",
         "Finish Local Browser Bridge Setup",
-        "Finish Browser Extension Setup.cmd",
-        "Open Local Browser Bridge.cmd",
-        "Start Computer Helper.cmd",
+        "Finish Browser Extension Setup.lnk",
+        "Local Browser Bridge.lnk",
+        "--extension-setup",
         "[Environment]::GetFolderPath(\"Programs\")",
     ] {
         assert!(
@@ -204,7 +207,7 @@ fn installers_make_extension_setup_and_later_launch_discoverable() {
         );
     }
     assert!(windows_docs.contains("Start menu"));
-    assert!(macos_docs.contains("four double-click launchers"));
+    assert!(macos_docs.contains("four maintenance launchers"));
 }
 
 #[test]
@@ -212,9 +215,31 @@ fn shell_startup_authority_is_explicit_and_reversible() {
     let windows = source("scripts/install-windows.ps1");
     let macos = source("scripts/install-macos.sh");
     assert!(windows.contains("[switch]$EnableShell"));
-    assert!(windows.contains("if ($EnableShell) { \" --enable-shell\" } else { \"\" }"));
+    assert!(windows.contains("$startupArguments = if ($EnableShell)"));
+    assert!(windows.contains("if ($EnableShell) { $launchArguments += \"--enable-shell\" }"));
     assert!(windows.contains("Shell access is off"));
     assert!(macos.contains("enable_shell=0"));
     assert!(macos.contains("--enable-shell) enable_shell=1"));
     assert!(macos.contains("Shell access is off"));
+}
+
+#[test]
+fn normal_startup_uses_the_desktop_host_without_a_console_window() {
+    let desktop = source("src/bin/local-browser-bridge-desktop.rs");
+    let windows = source("scripts/install-windows.ps1");
+    let macos = source("scripts/install-macos.sh");
+    let desktop_plist = source("packaging/macos/DesktopInfo.plist.in");
+
+    assert!(desktop.contains("windows_subsystem = \"windows\""));
+    assert!(desktop.contains("CREATE_NO_WINDOW"));
+    assert!(windows.contains("$desktopPath = Join-Path $InstallRoot $serverName"));
+    assert!(windows.contains("New-OwnedShortcut $startup $desktopPath"));
+    assert!(!windows.contains("Start-Process -FilePath $serverPath -WindowStyle Minimized"));
+    assert!(macos.contains("Local Browser Bridge.app/Contents/MacOS/local-browser-bridge-desktop"));
+    assert!(macos.contains("<key>SuccessfulExit</key><false/>"));
+    assert!(desktop_plist.contains("<key>LSUIElement</key>"));
+    assert!(desktop_plist.contains("<true/>"));
+    let helper = source("src/bin/local-computer-helper.rs");
+    assert!(helper.contains("CREATE_SUSPENDED | CREATE_NO_WINDOW"));
+    assert!(helper.contains("controllerProcessId"));
 }

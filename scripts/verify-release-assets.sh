@@ -159,12 +159,23 @@ expected_modes = {
     "Local Computer Helper.app/Contents/MacOS/local-computer-helper": 0o755,
     "Local Computer Helper.app/Contents/_CodeSignature": 0o755,
     "Local Computer Helper.app/Contents/_CodeSignature/CodeResources": 0o644,
+    "Local Browser Bridge.app": 0o755,
+    "Local Browser Bridge.app/Contents": 0o755,
+    "Local Browser Bridge.app/Contents/Info.plist": 0o644,
+    "Local Browser Bridge.app/Contents/MacOS": 0o755,
+    "Local Browser Bridge.app/Contents/MacOS/local-browser-bridge-desktop": 0o755,
+    "Local Browser Bridge.app/Contents/_CodeSignature": 0o755,
+    "Local Browser Bridge.app/Contents/_CodeSignature/CodeResources": 0o644,
 }
 expected_directories = {
     "Local Computer Helper.app",
     "Local Computer Helper.app/Contents",
     "Local Computer Helper.app/Contents/MacOS",
     "Local Computer Helper.app/Contents/_CodeSignature",
+    "Local Browser Bridge.app",
+    "Local Browser Bridge.app/Contents",
+    "Local Browser Bridge.app/Contents/MacOS",
+    "Local Browser Bridge.app/Contents/_CodeSignature",
 }
 expected_files = set(expected_modes) - expected_directories
 maximum_member_bytes = 128 * 1024 * 1024
@@ -224,7 +235,8 @@ test "$(shasum -a 256 "$macos_archive" | awk '{ print $1 }')" = "$macos_archive_
   || { echo "macOS archive changed while it was inspected." >&2; exit 1; }
 mac_server="$mac_stage/local-browser-bridge"
 mac_helper="$mac_stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"
-for executable in "$mac_server" "$mac_helper"; do
+mac_desktop="$mac_stage/Local Browser Bridge.app/Contents/MacOS/local-browser-bridge-desktop"
+for executable in "$mac_server" "$mac_helper" "$mac_desktop"; do
   if [[ ! -f "$executable" || -L "$executable" || ! -x "$executable" ]]; then
     echo "macOS binary is not executable: $executable" >&2
     exit 1
@@ -236,8 +248,13 @@ for executable in "$mac_server" "$mac_helper"; do
   fi
 done
 plist="$mac_stage/Local Computer Helper.app/Contents/Info.plist"
+desktop_plist="$mac_stage/Local Browser Bridge.app/Contents/Info.plist"
 if [[ ! -f "$plist" || -L "$plist" ]]; then
   echo "macOS helper metadata is not a regular file." >&2
+  exit 1
+fi
+if [[ ! -f "$desktop_plist" || -L "$desktop_plist" ]]; then
+  echo "macOS Desktop Host metadata is not a regular file." >&2
   exit 1
 fi
 for notice in LICENSE THIRD_PARTY_LICENSES.txt; do
@@ -251,9 +268,16 @@ if [[ "$(grep -Fc "<string>$version</string>" "$plist")" -lt 2 ]]; then
   echo "macOS helper metadata does not contain version $version." >&2
   exit 1
 fi
+if [[ "$(grep -Fc "<string>$version</string>" "$desktop_plist")" -lt 2 ]] \
+  || ! grep -Fq '<string>dev.flrngel.local-browser-bridge.desktop</string>' "$desktop_plist" \
+  || ! grep -Fq '<key>LSUIElement</key>' "$desktop_plist" \
+  || ! grep -Fq '<true/>' "$desktop_plist"; then
+  echo "macOS Desktop Host metadata is missing its version, bundle identity, or menu-bar policy." >&2
+  exit 1
+fi
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
-  macos_verifier_arguments=("$version" "$mac_server" "$mac_helper")
+  macos_verifier_arguments=("$version" "$mac_server" "$mac_helper" "$mac_desktop")
   if [[ "$verification_mode" == "static-only" ]]; then
     macos_verifier_arguments+=("--static-only")
   fi

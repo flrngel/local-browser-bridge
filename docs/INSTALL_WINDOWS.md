@@ -16,10 +16,12 @@ The installer:
 - accepts only an immutable stable GitHub Release with the exact expected asset
   inventory;
 - verifies GitHub's SHA-256 digest and `SHA256SUMS.txt` before running a binary;
-- installs the server, optional helper, and extension under
+- installs the tray-based Desktop Host, optional helper, and extension under
   `%LOCALAPPDATA%\Programs\Local Browser Bridge`;
-- starts the loopback-only server and opens its authenticated dashboard;
-- starts the server at future sign-ins using the current user's Startup folder;
+- starts the loopback-only server inside the Desktop Host and opens its
+  authenticated dashboard;
+- starts the Desktop Host at future sign-ins using a `.lnk` shortcut in the
+  current user's Startup folder without opening a Command Prompt window;
   and
 - opens the browser extensions page and extension folder, copies the exact
   folder path, and shows a numbered setup dialog that cannot be missed.
@@ -41,13 +43,15 @@ Reload tabs that were already open. Browser control is then ready.
 After installation, use the **Local Browser Bridge** folder in the Windows
 Start menu:
 
-- **Open Local Browser Bridge** starts the server if needed and opens the
-  authenticated dashboard;
+- **Local Browser Bridge** starts the tray app if needed, or opens the
+  authenticated dashboard when it is already running;
 - **Finish Browser Extension Setup** reopens the extension page, folder, and
-  instructions; and
-- **Start Computer Helper** enables optional exact-window desktop control for
-  the current session; and
+  copied folder path; and
 - **Uninstall Local Browser Bridge** runs the version-matched safe uninstaller.
+
+Use the notification-area icon for day-to-day control. Its menu reports live
+server, extension, helper, shell, and update state and provides dashboard,
+setup, token, helper, logs, update, and quit actions.
 
 ## Local shell access (optional)
 
@@ -63,12 +67,9 @@ back off at startup.
 
 ## Desktop control (optional)
 
-The installer keeps desktop authority off by default. Start it only when you
-want one selected native app window to be controllable:
-
-```powershell
-Get-ChildItem "$env:LOCALAPPDATA\Programs\Local Browser Bridge\local-computer-helper-*.exe" | Select-Object -First 1 | ForEach-Object { Start-Process $_.FullName }
-```
+The installer keeps desktop authority off by default. Select **Start Computer
+Helper** from the tray menu only when you want one selected native app window
+to be controllable. The Desktop Host launches it without a console window.
 
 Or install/update and launch the helper in one operation:
 
@@ -167,6 +168,8 @@ them into logs, screenshots, issue reports, or untrusted pages.
 - **Extension does not connect:** confirm the server and popup versions match,
   paste the current token again, and reload the target tab.
 - **Port 17373 is busy:** stop the other listener before rerunning the installer.
+- **No tray icon appears:** confirm that the standard release executable is the
+  Desktop Host and that an older console-server Startup item was removed.
 - **Helper cannot control an elevated app:** keep the bridge non-elevated and
   use a non-elevated target; Windows integrity boundaries are intentional.
 - **Need the manual procedure:** use [Manual and independent verification](INSTALL.md).

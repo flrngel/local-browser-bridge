@@ -19,8 +19,8 @@ observe or operate one selected desktop application window.
 
 | What you want to control | What you install | Start here |
 |---|---|---|
-| Chrome or Edge tabs | Server + unpacked extension | [Windows](docs/INSTALL_WINDOWS.md) or [macOS](docs/INSTALL_MACOS.md) |
-| Browser tabs and one desktop app window | Server + unpacked extension + optional helper | [Windows](docs/INSTALL_WINDOWS.md) or [macOS](docs/INSTALL_MACOS.md) |
+| Chrome or Edge tabs | Desktop Host + unpacked extension | [Windows](docs/INSTALL_WINDOWS.md) or [macOS](docs/INSTALL_MACOS.md) |
+| Browser tabs and one desktop app window | Desktop Host + unpacked extension + optional helper | [Windows](docs/INSTALL_WINDOWS.md) or [macOS](docs/INSTALL_MACOS.md) |
 | Current development source | Rust toolchain + native platform SDK | [Windows and macOS build guide](docs/BUILD.md) |
 
 Published packages do not need Node.js, Rust, administrator access, or a
@@ -28,6 +28,20 @@ package manager. The one-command per-user installer downloads and verifies the
 complete release, starts the server at login, and prepares the extension.
 Chrome or Edge still requires one explicit **Load unpacked** selection because
 ordinary programs cannot silently install a local extension.
+
+## How it runs on each operating system
+
+| System | Normal user experience | Sign-in startup | Headless/developer path |
+|---|---|---|---|
+| Windows 11 x86_64 | A notification-area tray icon; the standard release executable is linked as a Windows GUI application and does not create a Command Prompt window | A `.lnk` shortcut starts the Desktop Host from the current user's Startup folder | Build and run the separate `local-browser-bridge.exe` console binary |
+| macOS 13+ | `Local Browser Bridge.app` appears only in the menu bar because its bundle declares `LSUIElement` | A current-user LaunchAgent starts the app and restarts it only after abnormal exit | Run the raw `local-browser-bridge` binary from Terminal |
+| Linux and other systems | No packaged Desktop Host | Not supported | The Rust server may compile, but browser/desktop packages are unsupported |
+
+The tray or menu-bar menu shows server, browser, desktop-helper, shell, and
+update state. It can open the authenticated dashboard, repeat extension setup,
+copy the bridge token, start or stop the optional helper, open logs, and quit.
+Quitting is a deliberate clean exit and does not trigger the macOS crash-restart
+policy.
 
 ## Is it a good fit?
 
@@ -100,8 +114,8 @@ opens the authenticated dashboard, and prepares a stable extension folder.
 
 The installer opens the browser extensions page and extension folder, copies
 the folder path, and shows the remaining **Developer mode** / **Load unpacked**
-steps in a visible dialog. It also installs an **Open Local Browser Bridge**
-launcher and a repeatable **Finish Browser Extension Setup** guide. Desktop
+steps in a visible dialog. It also installs a **Local Browser Bridge** launcher
+and a repeatable **Finish Browser Extension Setup** guide. Desktop
 control and shell access stay off until explicitly enabled.
 
 ## Uninstall in one command
@@ -170,8 +184,8 @@ Enable Full Access only for a client you trust with the selected tabs.
 
 ## What a healthy connection looks like
 
-- The server prints its version, loopback address, token source, and a complete
-  authenticated dashboard URL.
+- The tray or menu-bar icon reports **Server: Running** and opens the
+  authenticated dashboard without exposing its credential in a console.
 - The extension popup shows the same version and reports **Connected**.
 - The dashboard lists the intended browser connector and tabs.
 - Starting control shows **Local Browser Bridge is using this tab** on the
@@ -206,7 +220,7 @@ authority can be released independently.
 |---|---|
 | Browser control | Chrome or Edge satisfying the selected release's declared minimum version |
 | Windows helper | 64-bit Windows 11 in the signed-in interactive user session |
-| macOS server and helper | macOS 13 or later; Screen Recording and Accessibility permissions are helper-only requirements |
+| macOS Desktop Host, server, and helper | macOS 13 or later; Screen Recording and Accessibility permissions are helper-only requirements |
 
 On macOS, focus-capable input can briefly borrow and restore app focus through
 an Accessibility focus lease. The project verifies foreground state before and

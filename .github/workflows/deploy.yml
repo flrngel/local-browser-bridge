@@ -204,7 +204,7 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           $server = "dist/local-browser-bridge-v${version}-windows-x86_64.exe"
           $helper = "dist/local-computer-helper-v${version}-windows-x86_64.exe"
-          Copy-Item target/x86_64-pc-windows-msvc/release/local-browser-bridge.exe $server
+          Copy-Item target/x86_64-pc-windows-msvc/release/local-browser-bridge-desktop.exe $server
           Copy-Item target/x86_64-pc-windows-msvc/release/local-computer-helper.exe $helper
           ./scripts/verify-windows-artifacts.ps1 -Version $version -ServerPath $server -HelperPath $helper
       - name: Attest Windows build provenance
@@ -248,7 +248,9 @@ jobs:
           bash scripts/verify-macos-app-share-handoff-self-test.sh "$version"
           cargo build --locked --release --bins --target aarch64-apple-darwin
           cargo build --locked --release --bins --target x86_64-apple-darwin
-          mkdir -p dist stage "stage/Local Computer Helper.app/Contents/MacOS"
+          mkdir -p dist stage \
+            "stage/Local Browser Bridge.app/Contents/MacOS" \
+            "stage/Local Computer Helper.app/Contents/MacOS"
           cp LICENSE THIRD_PARTY_LICENSES.txt stage/
           chmod 644 stage/LICENSE stage/THIRD_PARTY_LICENSES.txt
           lipo -create \
@@ -256,24 +258,35 @@ jobs:
             target/x86_64-apple-darwin/release/local-browser-bridge \
             -output stage/local-browser-bridge
           lipo -create \
+            target/aarch64-apple-darwin/release/local-browser-bridge-desktop \
+            target/x86_64-apple-darwin/release/local-browser-bridge-desktop \
+            -output "stage/Local Browser Bridge.app/Contents/MacOS/local-browser-bridge-desktop"
+          lipo -create \
             target/aarch64-apple-darwin/release/local-computer-helper \
             target/x86_64-apple-darwin/release/local-computer-helper \
             -output "stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"
           sed "s/@VERSION@/$version/g" packaging/macos/Info.plist.in > "stage/Local Computer Helper.app/Contents/Info.plist"
-          chmod 755 stage/local-browser-bridge "stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"
+          sed "s/@VERSION@/$version/g" packaging/macos/DesktopInfo.plist.in > "stage/Local Browser Bridge.app/Contents/Info.plist"
+          chmod 755 \
+            stage/local-browser-bridge \
+            "stage/Local Browser Bridge.app/Contents/MacOS/local-browser-bridge-desktop" \
+            "stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"
           codesign --force --sign - stage/local-browser-bridge
           codesign --verify --strict stage/local-browser-bridge
+          codesign --force --deep --sign - "stage/Local Browser Bridge.app"
+          codesign --verify --deep --strict "stage/Local Browser Bridge.app"
           codesign --force --deep --sign - "stage/Local Computer Helper.app"
           codesign --verify --deep --strict "stage/Local Computer Helper.app"
           bash scripts/verify-macos-artifacts.sh \
             "$version" \
             stage/local-browser-bridge \
-            "stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"
+            "stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper" \
+            "stage/Local Browser Bridge.app/Contents/MacOS/local-browser-bridge-desktop"
           COPYFILE_DISABLE=1 tar --format ustar --no-xattrs -czf \
             "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" \
-            -C stage local-browser-bridge "Local Computer Helper.app" LICENSE THIRD_PARTY_LICENSES.txt
+            -C stage local-browser-bridge "Local Browser Bridge.app" "Local Computer Helper.app" LICENSE THIRD_PARTY_LICENSES.txt
           tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | LC_ALL=C sort > archive.txt
-          test "$(wc -l < archive.txt | tr -d ' ')" = 10
+          test "$(wc -l < archive.txt | tr -d ' ')" = 17
       - name: Attest macOS build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

@@ -4,18 +4,19 @@ set -euo pipefail
 version="${1:-}"
 server_path="${2:-}"
 helper_path="${3:-}"
+desktop_path="${4:-}"
 verification_mode="runtime"
-if (( $# != 3 && $# != 4 )); then
-  echo "Usage: $0 VERSION SERVER_PATH HELPER_PATH [--static-only]" >&2
+if (( $# != 4 && $# != 5 )); then
+  echo "Usage: $0 VERSION SERVER_PATH HELPER_PATH DESKTOP_PATH [--static-only]" >&2
   exit 1
-elif (( $# == 4 )) && [[ "$4" == "--static-only" ]]; then
+elif (( $# == 5 )) && [[ "$5" == "--static-only" ]]; then
   verification_mode="static-only"
-elif (( $# == 4 )); then
-  echo "Usage: $0 VERSION SERVER_PATH HELPER_PATH [--static-only]" >&2
+elif (( $# == 5 )); then
+  echo "Usage: $0 VERSION SERVER_PATH HELPER_PATH DESKTOP_PATH [--static-only]" >&2
   exit 1
 fi
-if [[ -z "$version" || -z "$server_path" || -z "$helper_path" ]]; then
-  echo "Usage: $0 VERSION SERVER_PATH HELPER_PATH [--static-only]" >&2
+if [[ -z "$version" || -z "$server_path" || -z "$helper_path" || -z "$desktop_path" ]]; then
+  echo "Usage: $0 VERSION SERVER_PATH HELPER_PATH DESKTOP_PATH [--static-only]" >&2
   exit 1
 fi
 version="${version#v}"
@@ -135,7 +136,7 @@ deployment_target_for_slice() {
   '
 }
 
-for executable in "$server_path" "$helper_path"; do
+for executable in "$server_path" "$helper_path" "$desktop_path"; do
   if [[ ! -f "$executable" || -L "$executable" || ! -x "$executable" ]]; then
     echo "macOS executable is missing, linked, or not executable: $executable" >&2
     exit 1
@@ -175,8 +176,12 @@ if [[ "$verification_mode" == "runtime" ]]; then
     echo "macOS helper version does not match $version." >&2
     exit 1
   fi
+  if [[ "$("$desktop_path" --version)" != "local-browser-bridge-desktop $version" ]]; then
+    echo "macOS Desktop Host version does not match $version." >&2
+    exit 1
+  fi
 
-  for executable in "$server_path" "$helper_path"; do
+  for executable in "$server_path" "$helper_path" "$desktop_path"; do
     license_report="$("$executable" --licenses)"
     grep -Fq 'Local Browser Bridge third-party licenses' <<<"$license_report"
     grep -Fq 'MIT License' <<<"$license_report"

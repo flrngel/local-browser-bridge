@@ -1,12 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if (( $# != 1 )); then
-  echo "Usage: scripts/verify-macos-app-share-handoff-self-test.sh VERSION" >&2
+if (( $# < 1 || $# > 2 )); then
+  echo "Usage: scripts/verify-macos-app-share-handoff-self-test.sh VERSION [--historical-source]" >&2
   exit 2
 fi
 
 version="$1"
+historical_source=0
+if (( $# == 2 )); then
+  if [[ "$2" != "--historical-source" ]]; then
+    echo "Usage: scripts/verify-macos-app-share-handoff-self-test.sh VERSION [--historical-source]" >&2
+    exit 2
+  fi
+  historical_source=1
+fi
 if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "The app-share handoff self-test requires a canonical package version." >&2
   exit 2
@@ -14,7 +22,9 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
-test "$(bash scripts/audit-versions.sh "$version")" = "$version"
+if (( historical_source == 0 )); then
+  test "$(bash scripts/audit-versions.sh "$version")" = "$version"
+fi
 
 source_path="evidence/v${version}/computer/AppShareHandoff.swift"
 if [[ ! -f "$source_path" || -L "$source_path" ]]; then

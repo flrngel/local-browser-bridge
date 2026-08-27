@@ -129,6 +129,12 @@ fn release_workflow_and_local_builder_package_both_processes() {
     assert!(handoff_self_test.contains("scratch=\"$(mktemp -d"));
     assert!(!handoff_self_test.contains("release_stage"));
     assert!(
+        source(".github/workflows/ci.yml")
+            .contains("verify-macos-app-share-handoff-self-test.sh 0.12.41 --historical-source")
+    );
+    assert!(!source(".github/workflows/deploy.yml").contains("--historical-source"));
+    assert!(!local.contains("--historical-source"));
+    assert!(
         local.contains("bash scripts/verify-release-assets.sh \"$version\" \"$release_stage\"")
     );
     assert!(local.contains("cp \"$release_stage/$asset\" \"$publish_stage/$asset\""));
@@ -400,23 +406,23 @@ fn windows_ci_gates_the_acceptance_coordinator_under_exact_ps51() {
 }
 
 #[test]
-fn v01238_source_is_unblocked_and_release_versions_are_aligned() {
+fn current_source_is_unblocked_and_package_versions_are_aligned() {
     match fs::symlink_metadata("RELEASE_BLOCKED") {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => panic!("could not inspect the release-blocker path: {error}"),
         Ok(_) => {
-            panic!("the reviewed v0.12.41 source must not retain a release-blocker file or symlink")
+            panic!("the reviewed source must not retain a release-blocker file or symlink")
         }
     }
 
     for (path, required) in [
-        ("Cargo.toml", "version = \"0.12.41\""),
+        ("Cargo.toml", "version = \"0.12.42\""),
         (
             "Cargo.lock",
-            "name = \"local-browser-bridge\"\nversion = \"0.12.41\"",
+            "name = \"local-browser-bridge\"\nversion = \"0.12.42\"",
         ),
-        ("extension/manifest.json", "\"version\": \"0.12.41\""),
-        ("extension/lib.js", "export const VERSION = \"0.12.41\";"),
+        ("extension/manifest.json", "\"version\": \"0.12.42\""),
+        ("extension/lib.js", "export const VERSION = \"0.12.42\";"),
         (
             "scripts/run-windows-computer-use-acceptance.ps1",
             "$script:ProductVersion = \"0.12.41\"",
@@ -452,9 +458,14 @@ fn v01238_source_is_unblocked_and_release_versions_are_aligned() {
     ] {
         assert!(
             source(path).contains(required),
-            "v0.12.41 version alignment is missing from {path}: {required}"
+            "source or retained release-evidence version alignment is missing from {path}: {required}"
         );
     }
+
+    assert!(
+        source("evidence/v0.12.42/computer/AppShareHandoff.swift")
+            .contains("private let productVersion = \"0.12.42\"")
+    );
 
     assert!(std::path::Path::new("evidence/v0.12.41/browser").is_dir());
     assert!(std::path::Path::new("evidence/v0.12.41/computer").is_dir());
@@ -1047,7 +1058,7 @@ fn release_license_inventory_is_locked_sanitized_and_shipped() {
     let macos_verifier = source("scripts/verify-macos-artifacts.sh");
 
     assert!(!cargo.contains("dirs ="));
-    assert!(!lockfile.contains("name = \"option-ext\""));
+    assert!(lockfile.contains("name = \"tray-icon\""));
     assert!(about.contains("ignore-build-dependencies = true"));
     assert!(about.contains("ignore-dev-dependencies = true"));
     assert!(checker.contains("cargo about generate about.hbs --locked --fail"));
@@ -1862,7 +1873,7 @@ fn macos_candidate_binding_is_static_only_while_default_verification_executes_ru
 
     for required in [
         "verification_mode=\"runtime\"",
-        "macos_verifier_arguments=(\"$version\" \"$mac_server\" \"$mac_helper\")",
+        "macos_verifier_arguments=(\"$version\" \"$mac_server\" \"$mac_helper\" \"$mac_desktop\")",
         "if [[ \"$verification_mode\" == \"static-only\" ]]; then",
         "macos_verifier_arguments+=(\"--static-only\")",
         "bash scripts/verify-macos-artifacts.sh \"${macos_verifier_arguments[@]}\"",
@@ -1874,7 +1885,7 @@ fn macos_candidate_binding_is_static_only_while_default_verification_executes_ru
     }
     for required in [
         "verification_mode=\"runtime\"",
-        "elif (( $# == 4 )) && [[ \"$4\" == \"--static-only\" ]]; then",
+        "elif (( $# == 5 )) && [[ \"$5\" == \"--static-only\" ]]; then",
         "if [[ \"$verification_mode\" == \"runtime\" ]]; then",
         "\"$(\"$server_path\" --version)\"",
         "\"$(\"$helper_path\" --version)\"",
@@ -1888,7 +1899,7 @@ fn macos_candidate_binding_is_static_only_while_default_verification_executes_ru
     }
 
     let static_structure = macos
-        .find("for executable in \"$server_path\" \"$helper_path\"; do")
+        .find("for executable in \"$server_path\" \"$helper_path\" \"$desktop_path\"; do")
         .unwrap();
     let api_audit = macos
         .find("  audit_helper_api_slice \"$architecture\"")

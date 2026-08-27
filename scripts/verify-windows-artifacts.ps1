@@ -77,6 +77,25 @@ function Assert-PeX64 {
     }
 }
 
+function Assert-PeSubsystem {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][uint16]$ExpectedSubsystem
+    )
+
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
+    $optionalHeader = $peOffset + 24
+    if ($optionalHeader + 70 -gt $bytes.Length -or
+        [BitConverter]::ToUInt16($bytes, $optionalHeader) -ne 0x20b) {
+        throw "$Path does not contain a valid PE32+ optional header."
+    }
+    $actual = [BitConverter]::ToUInt16($bytes, $optionalHeader + 68)
+    if ($actual -ne $ExpectedSubsystem) {
+        throw "$Path uses PE subsystem $actual, expected $ExpectedSubsystem."
+    }
+}
+
 function Get-FileSha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -318,25 +337,29 @@ $mt = Resolve-WindowsSdkTool -Name 'mt.exe'
 $dumpbin = Resolve-DumpBin
 $resolvedHelperPath = (Resolve-Path -LiteralPath $HelperPath).Path
 Assert-PeX64 -Path $resolvedHelperPath
+Assert-PeSubsystem -Path $resolvedHelperPath -ExpectedSubsystem 3
 Assert-HelperInputSurface -Path $resolvedHelperPath -DumpBinPath $dumpbin
 $artifacts = @(
     [pscustomobject]@{
         Path = $ServerPath
-        ExpectedVersion = "local-browser-bridge $Version"
-        Description = 'Local Browser Bridge Server'
-        OriginalFilename = 'local-browser-bridge.exe'
+        ExpectedVersion = "local-browser-bridge-desktop $Version"
+        Description = 'Local Browser Bridge Desktop Host'
+        OriginalFilename = 'local-browser-bridge-desktop.exe'
+        Subsystem = 2
     },
     [pscustomobject]@{
         Path = $HelperPath
         ExpectedVersion = "local-computer-helper $Version"
         Description = 'Local Browser Bridge Computer Helper'
         OriginalFilename = 'local-computer-helper.exe'
+        Subsystem = 3
     }
 )
 
 $results = foreach ($artifact in $artifacts) {
     $resolved = (Resolve-Path -LiteralPath $artifact.Path).Path
     Assert-PeX64 -Path $resolved
+    Assert-PeSubsystem -Path $resolved -ExpectedSubsystem $artifact.Subsystem
     $reportedVersion = (& $resolved --version | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $reportedVersion -ne $artifact.ExpectedVersion) {
         throw "$resolved reported an unexpected version: $reportedVersion"

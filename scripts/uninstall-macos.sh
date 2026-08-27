@@ -136,13 +136,14 @@ preflight_install_entries() {
     assert_ordinary_file_or_missing "$install_root/$name"
   done
   assert_ordinary_tree_or_missing "$install_root/Local Computer Helper.app"
+  assert_ordinary_tree_or_missing "$install_root/Local Browser Bridge.app"
   assert_ordinary_tree_or_missing "$install_root/extension"
 }
 
 is_allowlisted_top_level_name() {
   case "$1" in
     local-browser-bridge|SHA256SUMS.txt|\
-    'Local Computer Helper.app'|extension|\
+    'Local Browser Bridge.app'|'Local Computer Helper.app'|extension|\
     'Open Local Browser Bridge.command'|\
     'Finish Browser Extension Setup.command'|\
     'Start Computer Helper.command'|\
@@ -238,6 +239,7 @@ remove_install_root() {
     remove_file "$install_root/$name"
   done
   remove_tree "$install_root/Local Computer Helper.app"
+  remove_tree "$install_root/Local Browser Bridge.app"
   remove_tree "$install_root/extension"
 
   if install_root_has_unknown_entries; then
