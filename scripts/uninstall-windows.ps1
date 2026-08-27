@@ -68,6 +68,7 @@ function Assert-SafeInstallRoot([string]$Path) {
         elseif ([IO.File]::Exists($cursor)) {
             throw "An install-root ancestor is a file: $cursor"
         }
+        if ($cursor -ieq $volumeRoot) { break }
         $parent = [IO.Directory]::GetParent($cursor)
         if ($null -eq $parent) { break }
         $cursor = $parent.FullName.TrimEnd('\')

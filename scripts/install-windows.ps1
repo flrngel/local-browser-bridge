@@ -55,6 +55,7 @@ function Assert-SafeInstallRoot([string]$Path) {
     while (-not [string]::IsNullOrWhiteSpace($cursor)) {
         if ([IO.Directory]::Exists($cursor)) { Assert-OrdinaryDirectory $cursor }
         elseif ([IO.File]::Exists($cursor)) { throw "An install-root ancestor is a file: $cursor" }
+        if ($cursor -ieq $root) { break }
         $parent = [IO.Directory]::GetParent($cursor)
         if ($null -eq $parent) { break }
         $cursor = $parent.FullName.TrimEnd('\')
