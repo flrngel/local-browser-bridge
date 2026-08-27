@@ -4,6 +4,9 @@ set -euo pipefail
 repository="flrngel/local-browser-bridge"
 version="latest"
 install_root="$HOME/Applications/Local Browser Bridge"
+default_install_root="$install_root"
+owner_marker=".lbb-install-owner"
+owner_marker_value="local-browser-bridge-install-v1"
 startup=1
 start_helper=0
 enable_shell=0
@@ -45,6 +48,10 @@ assert_ordinary_dir() {
 
 assert_safe_install_root() {
   case "$install_root" in
+    *$'\n'*|*'/../'*|*/..|*'/./'*|*/.|*'//'*) echo "Install root is not lexically canonical." >&2; exit 1 ;;
+  esac
+  install_root="${install_root%/}"
+  case "$install_root" in
     "$HOME"/*) ;;
     *) echo "Install root must be a child of the current user's home directory." >&2; exit 1 ;;
   esac
@@ -55,6 +62,90 @@ assert_safe_install_root() {
     if [[ -e "$cursor" ]]; then assert_ordinary_dir "$cursor"; fi
     cursor="$(/usr/bin/dirname "$cursor")"
   done
+}
+
+has_owned_install_layout() {
+  local marker="$install_root/$owner_marker"
+  if [[ -e "$marker" || -L "$marker" ]]; then
+    [[ -f "$marker" && ! -L "$marker" ]] || return 1
+    [[ "$(/bin/cat "$marker")" == "$owner_marker_value" ]]
+    return
+  fi
+  [[ "$install_root" == "$default_install_root" &&
+     -f "$install_root/local-browser-bridge" &&
+     -f "$install_root/extension/manifest.json" &&
+     ! -L "$install_root/extension" ]]
+}
+
+assert_safe_product_tree() {
+  local path=$1
+  [[ -e "$path" || -L "$path" ]] || return 0
+  [[ -d "$path" && ! -L "$path" ]] || { echo "Refusing a linked or non-directory product path: $path" >&2; exit 1; }
+  local linked
+  linked="$(/usr/bin/find "$path" -type l -print -quit 2>/dev/null || true)"
+  [[ -z "$linked" ]] || { echo "Refusing a product tree containing a symlink: $linked" >&2; exit 1; }
+}
+
+assert_safe_product_file() {
+  local path=$1
+  [[ -e "$path" || -L "$path" ]] || return 0
+  [[ -f "$path" && ! -L "$path" ]] || { echo "Refusing a linked or non-file product path: $path" >&2; exit 1; }
+}
+
+stop_installed_processes() {
+  local pid command
+  while read -r pid command; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    case "$command" in
+      "$install_root/"*) /bin/kill -TERM "$pid" 2>/dev/null || true ;;
+    esac
+  done < <(/bin/ps -axo pid=,command=)
+  /bin/sleep 0.25
+  while read -r pid command; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    case "$command" in
+      "$install_root/"*) /bin/kill -KILL "$pid" 2>/dev/null || true ;;
+    esac
+  done < <(/bin/ps -axo pid=,command=)
+}
+
+remove_known_install() {
+  [[ -e "$install_root" || -L "$install_root" ]] || return 0
+  assert_ordinary_dir "$install_root"
+  has_owned_install_layout || { echo "The install directory is not recognized as installer-owned; nothing was removed." >&2; exit 1; }
+  local name
+  for name in \
+    local-browser-bridge SHA256SUMS.txt \
+    "Open Local Browser Bridge.command" \
+    "Finish Browser Extension Setup.command" \
+    "Start Computer Helper.command" \
+    "Uninstall Local Browser Bridge.command" \
+    "$owner_marker"; do
+    assert_safe_product_file "$install_root/$name"
+  done
+  assert_safe_product_tree "$install_root/Local Computer Helper.app"
+  assert_safe_product_tree "$install_root/extension"
+  stop_installed_processes
+  for name in \
+    local-browser-bridge SHA256SUMS.txt \
+    "Open Local Browser Bridge.command" \
+    "Finish Browser Extension Setup.command" \
+    "Start Computer Helper.command" \
+    "Uninstall Local Browser Bridge.command"; do
+    /bin/rm -f -- "$install_root/$name"
+  done
+  /bin/rm -rf -- "$install_root/Local Computer Helper.app" "$install_root/extension"
+  local unknown=0 entry base
+  while IFS= read -r entry; do
+    base="${entry##*/}"
+    [[ "$base" == "$owner_marker" ]] || unknown=1
+  done < <(/usr/bin/find "$install_root" -mindepth 1 -maxdepth 1 -print 2>/dev/null)
+  if ((unknown)); then
+    echo "Retained the install directory because it contains files not owned by the installer: $install_root" >&2
+  else
+    /bin/rm -f -- "$install_root/$owner_marker"
+    /bin/rmdir -- "$install_root" 2>/dev/null || true
+  fi
 }
 
 manifest_value() {
@@ -147,14 +238,44 @@ if ((self_test)); then
 fi
 
 if ((uninstall)); then
-  /bin/launchctl bootout "gui/$(/usr/bin/id -u)/$label" >/dev/null 2>&1 || true
-  [[ ! -e "$plist" || -f "$plist" ]] || { echo "Refusing a non-file LaunchAgent path." >&2; exit 1; }
-  /bin/rm -f -- "$plist"
-  if [[ -e "$install_root" ]]; then
+  if [[ -e "$install_root" || -L "$install_root" ]]; then
     assert_ordinary_dir "$install_root"
-    /bin/rm -rf -- "$install_root"
+    has_owned_install_layout || { echo "The install directory is not recognized as installer-owned; nothing was removed." >&2; exit 1; }
+    local_name=''
+    for local_name in \
+      local-browser-bridge SHA256SUMS.txt \
+      "Open Local Browser Bridge.command" \
+      "Finish Browser Extension Setup.command" \
+      "Start Computer Helper.command" \
+      "Uninstall Local Browser Bridge.command" \
+      "$owner_marker"; do
+      assert_safe_product_file "$install_root/$local_name"
+    done
+    assert_safe_product_tree "$install_root/Local Computer Helper.app"
+    assert_safe_product_tree "$install_root/extension"
   fi
-  ((reset_token)) && /bin/rm -f -- "$HOME/.local-browser-bridge/token"
+  if [[ -e "$plist" || -L "$plist" ]]; then
+    assert_ordinary_dir "$HOME/Library"
+    assert_ordinary_dir "$HOME/Library/LaunchAgents"
+    [[ -f "$plist" && ! -L "$plist" ]] || { echo "Refusing a linked or non-file LaunchAgent path." >&2; exit 1; }
+    /usr/bin/grep -Fq "<string>$label</string>" "$plist" && /usr/bin/grep -Fq 'local-browser-bridge' "$plist" || {
+      echo "The LaunchAgent is not recognized as product-owned; nothing was removed from it." >&2; exit 1;
+    }
+    /bin/launchctl bootout "gui/$(/usr/bin/id -u)/$label" >/dev/null 2>&1 || true
+    /bin/rm -f -- "$plist"
+  fi
+  remove_known_install
+  if ((reset_token)); then
+    token_directory="$HOME/.local-browser-bridge"
+    if [[ -e "$token_directory" || -L "$token_directory" ]]; then assert_ordinary_dir "$token_directory"; fi
+    assert_safe_product_file "$token_directory/token"
+    /bin/rm -f -- "$token_directory/token"
+  fi
+  for service in ScreenCapture Accessibility ListenEvent; do
+    /usr/bin/tccutil reset "$service" dev.flrngel.local-browser-bridge.computer-helper >/dev/null 2>&1 || true
+  done
+  open_extensions_page || true
+  /usr/bin/osascript -e 'display dialog "The unpacked extension files are gone. If a Local Browser Bridge card remains, click Remove once. Browser profile files were intentionally left untouched." with title "Finish Local Browser Bridge Removal" buttons {"OK"} default button "OK" with icon note' || true
   echo "Local Browser Bridge was removed for the current user."
   exit 0
 fi
@@ -195,15 +316,26 @@ done
 parent="$(/usr/bin/dirname "$install_root")"
 /bin/mkdir -p -- "$parent"
 assert_ordinary_dir "$parent"
-if [[ -e "$install_root" ]]; then assert_ordinary_dir "$install_root"; /bin/rm -rf -- "$install_root"; fi
+if [[ -e "$install_root" || -L "$install_root" ]]; then
+  assert_ordinary_dir "$install_root"
+  if [[ -n "$(/usr/bin/find "$install_root" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
+    remove_known_install
+  fi
+fi
 /bin/mkdir -p -- "$install_root"
 /bin/cp "$stage/local-browser-bridge" "$install_root/local-browser-bridge"
 /usr/bin/ditto "$stage/Local Computer Helper.app" "$install_root/Local Computer Helper.app"
 /usr/bin/ditto "$stage/extension" "$install_root/extension"
 /bin/cp "$stage/SHA256SUMS.txt" "$install_root/SHA256SUMS.txt"
+printf '%s\n' "$owner_marker_value" > "$install_root/$owner_marker"
 
 if ((startup)); then
-  /bin/mkdir -p -- "$HOME/Library/LaunchAgents"
+  assert_ordinary_dir "$HOME/Library"
+  if [[ -e "$HOME/Library/LaunchAgents" || -L "$HOME/Library/LaunchAgents" ]]; then
+    assert_ordinary_dir "$HOME/Library/LaunchAgents"
+  else
+    /bin/mkdir -- "$HOME/Library/LaunchAgents"
+  fi
   escaped_root="$(printf '%s' "$install_root/local-browser-bridge" | /usr/bin/sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
   shell_plist_argument=''
   ((enable_shell)) && shell_plist_argument='<string>--enable-shell</string>'
@@ -228,6 +360,7 @@ fi
 quoted_server="$(printf '%q' "$install_root/local-browser-bridge")"
 quoted_helper="$(printf '%q' "$install_root/Local Computer Helper.app")"
 quoted_extension="$(printf '%q' "$install_root/extension")"
+uninstaller_url="https://raw.githubusercontent.com/$repository/v$resolved/scripts/uninstall-macos.sh"
 shell_argument=''
 ((enable_shell)) && shell_argument=' --enable-shell'
 /bin/cat > "$install_root/Open Local Browser Bridge.command" <<EOF
@@ -264,7 +397,14 @@ EOF
 #!/bin/bash
 /usr/bin/open $quoted_helper
 EOF
-/bin/chmod 700 "$install_root/Open Local Browser Bridge.command" "$install_root/Finish Browser Extension Setup.command" "$install_root/Start Computer Helper.command"
+/bin/cat > "$install_root/Uninstall Local Browser Bridge.command" <<EOF
+#!/bin/bash
+script="\$(/usr/bin/mktemp \"\${TMPDIR:-/tmp}/lbb-uninstall.XXXXXX\")" || exit 1
+trap '/bin/rm -f -- "\$script"' EXIT
+/usr/bin/curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 '$uninstaller_url' --output "\$script" || exit 1
+/bin/bash "\$script"
+EOF
+/bin/chmod 700 "$install_root/Open Local Browser Bridge.command" "$install_root/Finish Browser Extension Setup.command" "$install_root/Start Computer Helper.command" "$install_root/Uninstall Local Browser Bridge.command"
 
 if ((launch)); then
   if ((!startup)); then

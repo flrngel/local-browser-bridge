@@ -1,6 +1,6 @@
-# Windows v0.12.40 stock-Chrome acceptance
+# Windows v0.12.41 stock-Chrome acceptance
 
-This directory defines the release gate for the v0.12.40 browser extension and
+This directory defines the release gate for the v0.12.41 browser extension and
 packaged Windows helper. It is protocol infrastructure, not passing evidence.
 Passing evidence exists only when the checked-in coordinator creates one fresh,
 candidate-bound `browser-acceptance.json` from a completed run.
@@ -24,7 +24,7 @@ appeared. Because the runner probes both packaged executables before creating
 that directory, candidate-byte execution could neither be proved nor excluded.
 The attempt was therefore terminal outcome-unknown and the version was
 withdrawn without a Computer Use action, stock-Chrome run, evidence commit,
-approval, or public Release. Version 0.12.40 retains the exact-attempt trust
+approval, or public Release. Version 0.12.41 retains the exact-attempt trust
 rules and the checked-in coordinator's source-only nested-Job ownership
 boundary. Version 0.12.34 introduced explicit breakaway for the detached-worker
 guard and named lifetime Jobs plus atomic private Job-list creation for each
@@ -32,7 +32,7 @@ runner-owned child. Its trust gate and both fresh macOS lanes passed, but the
 Windows session was interrupted after its old pre-coordinator reservation and
 before any observable coordinator directory, product process, UI action, or
 Chrome action; the version was withdrawn without retry or publication. Version
-0.12.40 retains that Job topology and moves the schema-2 reservation to the
+0.12.41 retains that Job topology and moves the schema-2 reservation to the
 worker's last pre-intent boundary after staging, guard ownership, and runner
 preparation. The reservation is bound to an opaque coordinator instance, so a
 later coordinator cannot rewrite an earlier coordinator's local pre-boundary
@@ -60,7 +60,7 @@ pointer-only sealed action record. The action itself was Confirmed and its
 route, focus, pointer, and Space fields were safe. Deliberate macOS, Windows,
 and stock-Chrome never started; publication was canceled and no v0.12.22
 Release exists. No v0.12.22 binary, screenshot, result, or approval may be
-reused for this v0.12.40 run.
+reused for this v0.12.41 run.
 
 The exact v0.12.23 candidate then passed its packaged quiet macOS lane and
 reached the deliberate lane's exact app-share start receipt, but its runner
@@ -68,7 +68,7 @@ reused a stream frame older than the three-second product-authority lease. The
 helper correctly refused `computer.click` with `COMPUTER_STALE_FRAME` before
 dispatch. Windows and stock-Chrome never started, publication was canceled,
 and no v0.12.23 Release exists. Its retained negative record cannot satisfy or
-be reused by v0.12.40.
+be reused by v0.12.41.
 
 The exact v0.12.31 candidate never reached Windows or stock-Chrome acceptance.
 Its quiet macOS lane passed, but its deliberate lane failed closed before
@@ -76,7 +76,7 @@ product dispatch when the post-receipt fresh-frame gate timed out. No aggregate,
 approval, evidence commit for a release, tag, or GitHub Release followed. Its
 withdrawn 20-file record is frozen at commit
 [`d33a66c65522380d7bdc310e532f5db6575f5f32`](https://github.com/flrngel/local-browser-bridge/commit/d33a66c65522380d7bdc310e532f5db6575f5f32)
-and cannot satisfy any v0.12.40 browser gate.
+and cannot satisfy any v0.12.41 browser gate.
 
 The exact v0.12.32 candidate passed trust and package inspection, then its
 source-compiled macOS app-share self-test failed on an extra stdout line before
@@ -84,19 +84,19 @@ permission probes, quiet-seat stabilization, or any candidate process launch.
 No screenshot, operator marker, aggregate, Windows run, Chrome run, tag, or
 Release followed. Its two generated files are frozen at commit
 [`9bece01635e4296fbb3ff0f3651100245c5d7729`](https://github.com/flrngel/local-browser-bridge/tree/9bece01635e4296fbb3ff0f3651100245c5d7729/evidence/v0.12.32/computer/attempts/withdrawn-05c565c-macos-app-share-handoff-self-test-failure)
-and cannot satisfy or be reused by any v0.12.40 browser gate.
+and cannot satisfy or be reused by any v0.12.41 browser gate.
 
 The exact v0.12.33 candidate passed both fresh packaged macOS lanes. Its one
 Windows attempt then failed closed at `build-dedicated-fixture` before a fixture
 executable, candidate product process, Chrome action, tag, or Release existed.
 The sanitized terminal record is retained at
 [`withdrawn-81bda2a-windows-fixture-build-failure`](../../v0.12.33/computer/attempts/withdrawn-81bda2a-windows-fixture-build-failure/README.md).
-No v0.12.33 byte, result, screenshot, or marker can satisfy v0.12.40.
+No v0.12.33 byte, result, screenshot, or marker can satisfy v0.12.41.
 
 Versions v0.12.11 through v0.12.13 were withdrawn before Windows stock-Chrome
 acceptance completed. Their candidate bytes, screenshots, approvals, operator
-messages, and evidence cannot be reused for v0.12.40. An interrupted or failed
-v0.12.40 attempt is preserved only as sanitized negative metadata and is never
+messages, and evidence cannot be reused for v0.12.41. An interrupted or failed
+v0.12.41 attempt is preserved only as sanitized negative metadata and is never
 resumed or rerun against the same frozen candidate.
 
 ## Test boundary
@@ -290,7 +290,7 @@ passing verdict.
 
 The six required views are:
 
-1. the installed v0.12.40 extension and Chrome's debugger-use indicator;
+1. the installed v0.12.41 extension and Chrome's debugger-use indicator;
 2. the browser API result;
 3. the exact-window computer-share action and synthetic session pointer;
 4. the fail-closed paused state after visible **Stop**;
@@ -320,7 +320,7 @@ the trust wrapper once:
 ```powershell
 $trustDestination = Join-Path ([IO.Path]::GetTempPath()) ("lbb-1235-" + [Guid]::NewGuid().ToString("N"))
 & .\scripts\verify-windows-release-candidate.ps1 `
-  -Version 0.12.40 `
+  -Version 0.12.41 `
   -WorkflowRunId EXACT_RUN_ID `
   -WorkflowRunAttempt EXACT_RUN_ATTEMPT `
   -ArtifactId EXACT_ARTIFACT_ID `
@@ -475,7 +475,7 @@ After trust and source gates pass, the coordinator and executor:
 3. perform only required conditional toggles and load the verified directory
    with the native picker, then capture Full Access and token state before either
    is changed;
-4. verify exactly one new test-owned card, version 0.12.40, no load errors, and
+4. verify exactly one new test-owned card, version 0.12.41, no load errors, and
    popup state **Not configured** before saving the ephemeral credential;
 5. run the browser API matrix, start exact-window sharing, and verify Chrome's
    native debugger-use notice;

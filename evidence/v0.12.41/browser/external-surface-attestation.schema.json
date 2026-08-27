@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/flrngel/local-browser-bridge/evidence/v0.12.40/browser/external-surface-attestation.schema.json",
-  "title": "Local Browser Bridge v0.12.40 stock Chrome external-surface attestation",
+  "$id": "https://github.com/flrngel/local-browser-bridge/evidence/v0.12.41/browser/external-surface-attestation.schema.json",
+  "title": "Local Browser Bridge v0.12.41 stock Chrome external-surface attestation",
   "type": "object",
   "additionalProperties": false,
   "required": [

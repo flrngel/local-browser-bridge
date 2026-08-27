@@ -104,6 +104,29 @@ steps in a visible dialog. It also installs an **Open Local Browser Bridge**
 launcher and a repeatable **Finish Browser Extension Setup** guide. Desktop
 control and shell access stay off until explicitly enabled.
 
+## Uninstall in one command
+
+The uninstaller stops only programs launched from the product folder, removes
+the current-user startup entry, deletes installer-owned files, and invalidates
+the saved bridge token. It never edits Chrome or Edge profile files.
+
+Windows PowerShell:
+
+```powershell
+& ([scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/uninstall-windows.ps1')))
+```
+
+macOS Terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/uninstall-macos.sh | bash
+```
+
+The extensions page opens at the end. If the browser still shows the unpacked
+Local Browser Bridge card, click **Remove** once. This last browser-owned click
+is intentional: the uninstaller does not rewrite browser profile databases.
+Use the platform guides for dry-run and keep-token options.
+
 ## Connect an agent with only Web Fetch
 
 Open the dashboard and copy its private **Agent Fetch base URL**. A client that
@@ -197,9 +220,12 @@ verify, and replace all components together. Then select **Reload** on the
 existing unpacked extension card. Disable the metadata-only startup check with
 `--no-update-check` or `LBB_DISABLE_UPDATE_CHECK=1`.
 
-The platform installer can also remove the app, current-user startup entry, and
-optionally the saved token. See the [Windows](docs/INSTALL_WINDOWS.md#options)
-or [macOS](docs/INSTALL_MACOS.md#options) commands.
+Use the one-command uninstaller above for a complete current-user removal. A
+matching **Uninstall Local Browser Bridge** launcher is also installed in the
+Windows Start menu and macOS install folder. See the
+[Windows](docs/INSTALL_WINDOWS.md#one-command-uninstall) or
+[macOS](docs/INSTALL_MACOS.md#one-command-uninstall) guide for dry-run,
+credential-retention, and browser-page options.
 
 ## Build from source
 

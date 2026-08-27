@@ -46,7 +46,8 @@ Start menu:
 - **Finish Browser Extension Setup** reopens the extension page, folder, and
   instructions; and
 - **Start Computer Helper** enables optional exact-window desktop control for
-  the current session.
+  the current session; and
+- **Uninstall Local Browser Bridge** runs the version-matched safe uninstaller.
 
 ## Local shell access (optional)
 
@@ -88,8 +89,56 @@ In `chrome://extensions`, select **Reload** on the existing extension card.
 To install a specific stable version:
 
 ```powershell
-$installer = [scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-windows.ps1')); & $installer -Version 0.12.37
+$installer = [scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-windows.ps1')); & $installer -Version 0.12.41
 ```
+
+## One-command uninstall
+
+Close any work you are controlling, then run this from Windows PowerShell as
+your normal signed-in user:
+
+```powershell
+& ([scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/uninstall-windows.ps1')))
+```
+
+You can also open **Start > Local Browser Bridge > Uninstall Local Browser
+Bridge**. That launcher fetches the uninstaller from the same immutable release
+tag that installed it.
+
+The default removal:
+
+- stops only executables running from the exact install directory;
+- removes the exact current-user Startup item and known Start-menu launchers;
+- removes only version-matched product executables, the extension directory,
+  manifest, launchers, and ownership marker;
+- removes the saved bridge token; and
+- opens installed Chrome and Edge extension pages for the final browser-owned
+  **Remove** click.
+
+It does not edit a browser profile, delete an unfamiliar file, traverse a
+reparse point, remove a service or scheduled task, change the firewall, or
+touch unrelated developer/recovery tools. If the install directory contains an
+unknown file, that file, the ownership marker, and the directory are retained
+and reported.
+
+Preview without changing anything:
+
+```powershell
+& ([scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/uninstall-windows.ps1'))) -DryRun
+```
+
+Optional retention switches:
+
+```powershell
+# Keep the saved bridge token.
+& ([scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/uninstall-windows.ps1'))) -KeepToken
+
+# Do not open browser extension pages or show the final dialog.
+& ([scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/uninstall-windows.ps1'))) -NoBrowser
+```
+
+For a custom installation, pass the same absolute `-InstallRoot`. Custom roots
+require the installer's ownership marker and are never inferred.
 
 ## Options
 
@@ -98,8 +147,6 @@ $installer = [scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercon
 & $installer -NoLaunch
 & $installer -EnableShell
 & $installer -InstallRoot 'D:\Apps\Local Browser Bridge'
-& $installer -Uninstall
-& $installer -Uninstall -ResetToken
 ```
 
 If `$installer` is not defined, run the assignment shown above first.

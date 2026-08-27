@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/flrngel/local-browser-bridge/evidence/v0.12.40/browser/computer-helper-chain.schema.json",
-  "title": "Local Browser Bridge v0.12.40 packaged computer-helper chain evidence",
+  "$id": "https://github.com/flrngel/local-browser-bridge/evidence/v0.12.41/browser/computer-helper-chain.schema.json",
+  "title": "Local Browser Bridge v0.12.41 packaged computer-helper chain evidence",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -13,7 +13,7 @@
   "properties": {
     "schemaVersion": { "const": 2 },
     "evidenceType": { "const": "stock-user-chrome-computer-helper-chain" },
-    "version": { "const": "0.12.40" },
+    "version": { "const": "0.12.41" },
     "releaseCandidateBinding": { "$ref": "#/$defs/releaseCandidateBinding" },
     "candidateBinding": { "$ref": "#/$defs/candidateBinding" },
     "passed": { "const": true },
@@ -95,7 +95,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["executableName", "sha256", "processRef", "soleListener", "updateCheckDisabled"],
       "properties": {
-        "executableName": { "const": "local-browser-bridge-v0.12.40-windows-x86_64.exe" },
+        "executableName": { "const": "local-browser-bridge-v0.12.41-windows-x86_64.exe" },
         "sha256": { "$ref": "#/$defs/sha256" },
         "processRef": { "$ref": "#/$defs/sha256" },
         "soleListener": { "const": "127.0.0.1:17373" },
@@ -109,7 +109,7 @@
         "processRef", "sessionBindingSha256", "rawSessionIdentifierRetained", "topology"
       ],
       "properties": {
-        "executableName": { "const": "local-computer-helper-v0.12.40-windows-x86_64.exe" },
+        "executableName": { "const": "local-computer-helper-v0.12.41-windows-x86_64.exe" },
         "sha256": { "$ref": "#/$defs/sha256" },
         "connectedThroughLoopbackServer": { "const": true },
         "serverApiOnly": { "const": true },
@@ -336,8 +336,8 @@
       ],
       "properties": {
         "schemaVersion": { "const": 3 },
-        "version": { "const": "0.12.40" },
-        "releaseTag": { "const": "v0.12.40" },
+        "version": { "const": "0.12.41" },
+        "releaseTag": { "const": "v0.12.41" },
         "repository": { "const": "flrngel/local-browser-bridge" },
         "sourceSha": { "$ref": "#/$defs/sha1" },
         "workflowRunId": { "type": "string", "pattern": "^[1-9][0-9]*$" },

@@ -12,6 +12,8 @@ source](BUILD.md) instead.
 
 - [One-command Windows install](INSTALL_WINDOWS.md#one-command-install)
 - [One-command macOS install](INSTALL_MACOS.md#one-command-install)
+- [One-command Windows uninstall](INSTALL_WINDOWS.md#one-command-uninstall)
+- [One-command macOS uninstall](INSTALL_MACOS.md#one-command-uninstall)
 
 Most users should stop there. This document keeps the manual procedure for
 audits, restricted environments, and independent provenance checks.
@@ -172,21 +174,21 @@ leave an old connector active.
 
 ## Uninstall or reset
 
-1. Release browser and computer control.
-2. Stop the helper and server.
-3. Use **Clear saved token** in the extension popup, then remove the extension
-   card from `chrome://extensions` or `edge://extensions`.
-4. Delete the downloaded executable/archive folders.
-5. If you also want to invalidate the saved bridge credential, remove the token
-   file only after both programs have stopped:
-   - Windows: `%USERPROFILE%\.local-browser-bridge\token`
-   - macOS: `$HOME/.local-browser-bridge/token`
+Use the platform's one-command uninstaller. It validates the install ownership
+marker, rejects symlink/reparse traversal, stops only product-folder processes,
+removes only allowlisted current-user files and startup entries, and removes
+the token by default. `--dry-run`/`-DryRun` previews the plan, while
+`--keep-token`/`-KeepToken` preserves the credential.
 
-Removing the token causes the next server start to generate a new one, so any
-remaining extension configuration will no longer connect. The one-command
-installer removes its current-user Startup entry or LaunchAgent when invoked
-with `-Uninstall` or `--uninstall`. It creates no system service, scheduled
-task, or system-wide uninstaller.
+Chrome and Edge own their extension registration. The uninstaller deletes the
+unpacked extension directory and opens the browser extensions page, but it
+never rewrites browser profile files. Click **Remove** once if a stale Local
+Browser Bridge card remains.
+
+The official packages support Windows and macOS. There is no Linux package,
+Linux startup integration, or installer-owned Linux state, so the project does
+not publish a broad Linux cleanup script. A source build on Linux can be
+removed by deleting only the build directory the developer chose.
 
 ## Authority and limitations
 

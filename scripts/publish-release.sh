@@ -102,6 +102,7 @@ write_release_notes() {
 
 - [Windows installation guide](https://github.com/$REPOSITORY/blob/$RELEASE_TAG/docs/INSTALL_WINDOWS.md)
 - [macOS installation guide](https://github.com/$REPOSITORY/blob/$RELEASE_TAG/docs/INSTALL_MACOS.md)
+- [Safe one-command uninstall](https://github.com/$REPOSITORY/blob/$RELEASE_TAG/README.md#uninstall-in-one-command)
 - [Build from source](https://github.com/$REPOSITORY/blob/$RELEASE_TAG/docs/BUILD.md)
 
 Download the server and computer helper for your platform plus the Chromium extension ZIP. Verify every download with \`SHA256SUMS.txt\` before running it.
