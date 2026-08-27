@@ -1,0 +1,73 @@
+2026-08-27T08:23:12.927Z PASS evidence output parent is an owner-private ordinary directory: the direct evidence parent is ordinary, owner-private, and current-user owned
+2026-08-27T08:23:12.930Z PASS evidence output directory is newly created and owner-private: the runner created one private lane output directory
+2026-08-27T08:23:13.746Z PASS pre-run harness source commit matches coordinator binding: exact source SHA matched
+2026-08-27T08:23:13.746Z PASS pre-run harness checkout is detached: detached HEAD
+2026-08-27T08:23:13.746Z PASS pre-run harness checkout is clean: tracked, staged, deleted, and untracked sets are empty
+2026-08-27T08:23:13.746Z PASS pre-run harness source repository passes git fsck: git fsck --full passed
+2026-08-27T08:23:13.746Z PASS pre-run harness files are exact tracked blobs: runner, native probes, and acceptance finalizer match HEAD blobs
+2026-08-27T08:23:13.749Z PASS macOS host: Darwin
+2026-08-27T08:23:13.756Z PASS expected checksum-manifest hash format: 64 lowercase hexadecimal characters
+2026-08-27T08:23:13.756Z PASS canonical checksum-manifest name: SHA256SUMS.txt
+2026-08-27T08:23:13.756Z PASS exact archive name: local-browser-bridge-v0.12.39-macos-universal.tar.gz
+2026-08-27T08:23:13.756Z PASS checksum manifest is one bounded current-user-owned ordinary file: ordinary, singly linked, owner-controlled, and within the manifest byte bound
+2026-08-27T08:23:13.757Z PASS checksum manifest stayed stable while it was bound: path and descriptor identity, size, links, and timestamps remained unchanged
+2026-08-27T08:23:13.757Z PASS out-of-band checksum-manifest hash matches: 48faded3894941446f82575332b79bfbe869eab9b4fd001a1c7055fb0e6697cf
+2026-08-27T08:23:13.757Z PASS checksum manifest has the exact canonical four-entry set: local-browser-bridge-v0.12.39-windows-x86_64.exe,local-computer-helper-v0.12.39-windows-x86_64.exe,local-browser-bridge-v0.12.39-macos-universal.tar.gz,local-browser-bridge-extension-v0.12.39.zip
+2026-08-27T08:23:13.757Z PASS canonical manifest contains the macOS archive checksum: 87530dc2b8beffb5cdb50c8f9cecc7fad26403e30fe0bdccadcfe38e1702fd55
+2026-08-27T08:23:13.800Z PASS macOS archive bounded exact inventory: ten PAX-free regular-file/directory entries passed bounded streaming extraction
+2026-08-27T08:23:13.800Z PASS archive checksum is bound by the canonical manifest: 87530dc2b8beffb5cdb50c8f9cecc7fad26403e30fe0bdccadcfe38e1702fd55
+2026-08-27T08:23:13.804Z PASS supplied server is archive-exact: e4974bab12d7992bd56d3d6b1fdde41bcab29207e4376bc14521e1f4fe577ff2
+2026-08-27T08:23:13.806Z PASS supplied helper is archive-exact: c3e87ad87b724727d44cd564c49449be3baec2acb4e5fb750c4a3fd5040b19ca
+2026-08-27T08:23:13.823Z PASS server universal architecture: arm64,x86_64
+2026-08-27T08:23:13.824Z PASS helper universal architecture: arm64,x86_64
+2026-08-27T08:23:13.824Z PASS helper uses packaged app layout: Local Computer Helper.app
+2026-08-27T08:23:13.857Z PASS strict code-signature verification: server, helper executable, and helper app bundle passed strict verification
+2026-08-27T08:23:13.863Z PASS helper bundle version: 0.12.39/0.12.39
+2026-08-27T08:23:15.152Z PASS optional physical-pointer adversarial prompt self-test: source-only optional adversarial prompt cannot satisfy either release lane
+2026-08-27T08:23:15.739Z PASS app-share handoff bundle identity: dev.flrngel.local-browser-bridge.acceptance.app-share
+2026-08-27T08:23:15.888Z PASS app-share handoff self-test: stable bundle/window/button vocabulary and create-once receipts
+2026-08-27T08:23:16.087Z PASS screen-capture permission preflight: preexisting permission; no request was made
+2026-08-27T08:23:16.087Z PASS accessibility permission preflight: preexisting permission; no request was made
+2026-08-27T08:23:16.087Z PASS active Space probe available: nonzero active Space identity
+2026-08-27T08:23:16.087Z PASS sandwiched foreground AX focus probe available: stable NSWorkspace/raw PSN plus exact AX focused/main-window identities are available
+2026-08-27T08:23:16.792Z Observed hid-keyboard-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:23:17.415Z Observed hid-keyboard-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:23:18.033Z Observed hid-keyboard-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:23:19.281Z Observed hid-keyboard-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:23:19.887Z Observed hid-keyboard-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:23:50.527Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:23:51.131Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:23:51.737Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:23:52.335Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:23:52.948Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:23:53.587Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:23:54.208Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:23:54.816Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:23:55.432Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:23:56.049Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:23:57.272Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:23:57.867Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:23:58.468Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:23:59.683Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:24:07.005Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:24:08.820Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:24:09.426Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:24:10.052Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:24:10.657Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:24:11.287Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:24:11.920Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:24:12.528Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:24:17.466Z Observed focus-changed; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:24:18.715Z Observed focus-changed; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:24:21.141Z Observed focus-changed; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:24:22.351Z Observed focus-changed; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:24:32.151Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:24:32.754Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:24:35.820Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:24:36.414Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:24:37.034Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:24:39.482Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:24:40.087Z Observed hid-pointer-activity; reset the native quiet-seat epoch before candidate execution.
+2026-08-27T08:24:40.824Z Native quiet-seat monitoring failed closed (foreground-ax-identity-unreadable).
+2026-08-27T08:24:40.825Z FATAL native quiet-seat monitoring became unknown or unhealthy before product execution
+2026-08-27T08:24:40.828Z scratch directory removed
