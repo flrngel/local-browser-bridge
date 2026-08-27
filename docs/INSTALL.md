@@ -1,4 +1,4 @@
-# Installation and update guide
+# Manual installation and independent verification
 
 This guide is for published stable releases. The source tree can be newer than
 the latest release, so do not infer that the version in `Cargo.toml` is
@@ -8,12 +8,13 @@ public [GitHub Releases page](https://github.com/flrngel/local-browser-bridge/re
 For a development build from the current source, use [Building from
 source](BUILD.md) instead.
 
-## Choose a platform
+## Recommended path
 
-- [Install on Windows 11](INSTALL_WINDOWS.md)
-- [Install on macOS 13 or later](INSTALL_MACOS.md)
+- [One-command Windows install](INSTALL_WINDOWS.md#one-command-install)
+- [One-command macOS install](INSTALL_MACOS.md#one-command-install)
 
-Both installations use the same unpacked Chromium extension procedure below.
+Most users should stop there. This document keeps the manual procedure for
+audits, restricted environments, and independent provenance checks.
 
 ## Components
 
@@ -41,11 +42,12 @@ SHA256SUMS.txt
 The macOS archive contains both the server and `Local Computer Helper.app`.
 Windows provides the server and helper as separate executables.
 
-There is no installer, service, login item, browser store package, or silent
-updater. The programs run only while you launch them. The helper opens no
-listening socket; it connects outbound to the server on loopback.
+The one-command installer creates only a current-user startup entry for the
+server. There is no system service, browser-store package, or silent updater.
+The helper stays opt-in and opens no listening socket; it connects outbound to
+the server on loopback.
 
-## Verify a published release
+## Independent provenance check
 
 Download `SHA256SUMS.txt` with the platform assets. Compare each local SHA-256
 digest before running an executable. The platform guides include native hash
@@ -181,8 +183,10 @@ leave an old connector active.
    - macOS: `$HOME/.local-browser-bridge/token`
 
 Removing the token causes the next server start to generate a new one, so any
-remaining extension configuration will no longer connect. The application
-creates no service, scheduled task, login item, or system-wide uninstaller.
+remaining extension configuration will no longer connect. The one-command
+installer removes its current-user Startup entry or LaunchAgent when invoked
+with `-Uninstall` or `--uninstall`. It creates no system service, scheduled
+task, or system-wide uninstaller.
 
 ## Authority and limitations
 

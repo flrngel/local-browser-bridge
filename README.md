@@ -4,9 +4,9 @@ Use the Chrome or Edge session already open on your computer from a local AI
 control surface. Add the optional computer helper when the agent also needs to
 observe or operate one selected desktop application window.
 
-[Download the latest verified release](https://github.com/flrngel/local-browser-bridge/releases/latest)
-· [Install on Windows](docs/INSTALL_WINDOWS.md)
+[Install on Windows](docs/INSTALL_WINDOWS.md)
 · [Install on macOS](docs/INSTALL_MACOS.md)
+· [Latest verified release](https://github.com/flrngel/local-browser-bridge/releases/latest)
 · [Build from source](docs/BUILD.md)
 
 > **Know the boundary first:** this repository provides the local bridge,
@@ -24,9 +24,10 @@ observe or operate one selected desktop application window.
 | Current development source | Rust toolchain + native platform SDK | [Windows and macOS build guide](docs/BUILD.md) |
 
 Published packages do not need Node.js, Rust, administrator access, or a
-package manager. There is currently no installer or browser-store package, so
-the extension is loaded once through `chrome://extensions` or
-`edge://extensions`.
+package manager. The one-command per-user installer downloads and verifies the
+complete release, starts the server at login, and prepares the extension.
+Chrome or Edge still requires one explicit **Load unpacked** selection because
+ordinary programs cannot silently install a local extension.
 
 ## Is it a good fit?
 
@@ -74,33 +75,20 @@ The helper does not offer shell, filesystem, clipboard, download,
 process-launch, or telemetry commands. Desktop control still shares the
 signed-in user's session: it is cooperative, not an isolated desktop.
 
-## Install a published release
+## Install in one command
 
-Use only a version shown on the public
-[Releases page](https://github.com/flrngel/local-browser-bridge/releases/latest).
-The `main` branch and workflow candidates can be newer than the latest public
-release; they are development artifacts, not installable releases.
-
-1. Download one version-matched set:
-   - Windows: server `.exe`, optional helper `.exe`, extension ZIP, and
-     `SHA256SUMS.txt`.
-   - macOS: universal server/helper archive, extension ZIP, and
-     `SHA256SUMS.txt`.
-2. Verify the downloaded SHA-256 values before running anything.
-3. Start the server and open the complete authenticated URL it prints.
-4. Extract the extension ZIP. Open `chrome://extensions` or
-   `edge://extensions`, enable **Developer mode**, select **Load unpacked**, and
-   choose the extracted folder containing `manifest.json`.
-5. Open the extension popup, confirm its version matches the server, enter the
-   printed token, and reload any already-open target tab.
-6. Start the optional helper only if you need desktop application control.
-
-Use the platform guide for copy-and-paste commands, permissions, verification,
-updates, troubleshooting, and removal:
+Use the platform guide and paste its first command. The installer accepts only
+an immutable stable GitHub Release, verifies both GitHub and manifest SHA-256
+digests, installs without administrator access, starts the loopback server,
+opens the authenticated dashboard, and prepares a stable extension folder.
 
 - [Windows 11 installation](docs/INSTALL_WINDOWS.md)
 - [macOS 13 or later installation](docs/INSTALL_MACOS.md)
-- [Shared verification and update policy](docs/INSTALL.md)
+- [Manual and independent provenance verification](docs/INSTALL.md)
+
+The only remaining browser step is enabling **Developer mode**, choosing
+**Load unpacked**, and selecting the folder printed by the installer. Desktop
+control stays off until you explicitly launch the optional helper.
 
 Windows executables are not yet Microsoft publisher-signed. The macOS package
 is ad-hoc signed but not Developer ID-signed or notarized. Keep SmartScreen and
@@ -171,14 +159,15 @@ after the action; it does not claim that no transient focus change occurred.
 
 ## Updates and removal
 
-The server's update check reads metadata only from the fixed public GitHub
-Releases API. It never downloads or installs an update. Disable the startup
-check with `--no-update-check` or `LBB_DISABLE_UPDATE_CHECK=1`.
+The server's startup check reports a newer immutable stable release but never
+changes files by itself. Rerun the same platform install command to download,
+verify, and replace all components together. Then select **Reload** on the
+existing unpacked extension card. Disable the metadata-only startup check with
+`--no-update-check` or `LBB_DISABLE_UPDATE_CHECK=1`.
 
-The unpacked extension does not update automatically. Stop control, then
-replace the server, helper, and extension together with verified files from one
-release. Never mix component versions. The platform guides include safe update,
-credential reset, and uninstall steps.
+The platform installer can also remove the app, current-user startup entry, and
+optionally the saved token. See the [Windows](docs/INSTALL_WINDOWS.md#options)
+or [macOS](docs/INSTALL_MACOS.md#options) commands.
 
 ## Build from source
 
