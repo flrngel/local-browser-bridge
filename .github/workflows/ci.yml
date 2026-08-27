@@ -356,12 +356,12 @@ jobs:
           node scripts/finalize-macos-acceptance.mjs --self-test
       - name: Validate the macOS packaged-evidence harness
         run: |
-          node --check evidence/v0.12.36/computer/helper-evidence-rig.mjs
-          node evidence/v0.12.36/computer/helper-evidence-rig.mjs --self-test
-          xcrun swiftc -typecheck evidence/v0.12.36/computer/HelperEvidenceFixture.swift
-          xcrun swiftc -typecheck evidence/v0.12.36/computer/SystemProbe.swift
-          bash scripts/verify-macos-app-share-handoff-self-test.sh 0.12.36
-          xcrun swiftc -typecheck evidence/v0.12.36/computer/PhysicalPointerHandoff.swift
+          node --check evidence/v0.12.37/computer/helper-evidence-rig.mjs
+          node evidence/v0.12.37/computer/helper-evidence-rig.mjs --self-test
+          xcrun swiftc -typecheck evidence/v0.12.37/computer/HelperEvidenceFixture.swift
+          xcrun swiftc -typecheck evidence/v0.12.37/computer/SystemProbe.swift
+          bash scripts/verify-macos-app-share-handoff-self-test.sh 0.12.37
+          xcrun swiftc -typecheck evidence/v0.12.37/computer/PhysicalPointerHandoff.swift
       - name: Install the minimum supported Rust toolchain
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy

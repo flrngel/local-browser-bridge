@@ -41,7 +41,18 @@ candidate has been built, downloaded, or executed.
 > ledger records the Windows attempt as `not-started` with retry disabled, so
 > v0.12.34 was withdrawn without a tag or GitHub Release.
 >
-> Version 0.12.36 retains the Job topology but resolves only the prospective
+> The v0.12.35 candidate later stopped at the source-only macOS quiet-seat gate
+> without executing candidate bytes. The v0.12.36 candidate passed both fresh
+> macOS lanes, then its Windows trust verifier failed closed while establishing
+> the fresh destination's protected owner-only ACL. Read-only post-failure
+> inspection found an ordinary empty destination with its inherited ACL still
+> intact. No trust subdirectory, source clone, artifact download, Windows
+> reservation, candidate process, Computer Use action, Chrome action, tag, or
+> Release followed. The exact internal exception was not retained and is not
+> claimed. The sanitized record is frozen at commit
+> [`e79db0397333543a4e4d6435868c26f4ff524ce5`](https://github.com/flrngel/local-browser-bridge/tree/e79db0397333543a4e4d6435868c26f4ff524ce5/evidence/v0.12.36/computer/attempts/withdrawn-be22679-windows-trust-private-acl-failure).
+>
+> Version 0.12.37 retains the Job topology but resolves only the prospective
 > ledger path before staging. It completes and verifies owner-private staging,
 > configuration and Start records, detached-worker lifetime-Job binding and
 > guard-ownership transfer, and exact runner process/environment/token
@@ -55,7 +66,10 @@ candidate has been built, downloaded, or executed.
 > same-version reservation whose manifest does not match the local coordinator
 > is intentionally classified as invalid rather than foreign; `Follow` then
 > refuses the ambiguous state instead of projecting a local not-started result.
-> Version 0.12.36 requires entirely fresh candidate and acceptance evidence. Do
+> Its trust verifier also creates the fresh destination and protected owner-only
+> DACL in one operation, verifies the exact persisted owner and single explicit
+> rule, and exercises that boundary in its Windows PowerShell 5.1 self-test.
+> Version 0.12.37 requires entirely fresh candidate and acceptance evidence. Do
 > not reuse or relabel earlier bytes or results.
 
 ## Source-freeze release boundary
@@ -63,8 +77,8 @@ candidate has been built, downloaded, or executed.
 At this handoff's source-freeze checkpoint, the coordinator source gate was
 complete but every artifact- and UI-bearing release gate remained future work:
 
-- no 0.12.36 tag has been created or pushed;
-- no packaged 0.12.36 server, helper, or extension has been built, downloaded,
+- no 0.12.37 tag has been created or pushed;
+- no packaged 0.12.37 server, helper, or extension has been built, downloaded,
   or executed;
 - neither macOS packaged lane nor Windows packaged-helper acceptance has run;
 - stock-Chrome acceptance has not run and Chrome was not opened or mutated;
@@ -74,7 +88,7 @@ complete but every artifact- and UI-bearing release gate remained future work:
   consent or action authority.
 
 The live publication status belongs to the immutable
-[v0.12.36 GitHub Release](https://github.com/flrngel/local-browser-bridge/releases/tag/v0.12.36)
+[v0.12.37 GitHub Release](https://github.com/flrngel/local-browser-bridge/releases/tag/v0.12.37)
 and its candidate-bound schema-3 evidence receipt, not to this source-checkpoint
 list.
 
@@ -85,7 +99,7 @@ outcome-unknown launch.
 
 ## Verified facts
 
-The active 0.12.36 source provides a checked-in
+The active 0.12.37 source provides a checked-in
 `scripts/run-windows-computer-use-acceptance.ps1` coordinator with:
 
 - a clean exact-system-PowerShell bootstrap;

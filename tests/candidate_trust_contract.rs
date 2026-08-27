@@ -33,8 +33,18 @@ fn windows_candidate_binder_is_a_clean_child_binary_safe_fail_closed_gate() {
         "Self-test cleanup refused an unexpected or linked inventory.",
         "Self-test stops here: no candidate path, network client, token, archive, or",
         "Destination must be a fresh short path",
+        "function Assert-PrivateDirectoryAcl([string]$Path)",
+        "function New-PrivateDirectory([string]$Path)",
+        "$Security.SetOwner($Identity.User)",
         "SetAccessRuleProtection($true, $false)",
-        "Fresh destination ACL is not private to the current user.",
+        "[IO.FileSystemAclExtensions]::Create(",
+        "[IO.Directory]::CreateDirectory($Path, $Security)",
+        "New-PrivateDirectory $Root",
+        "New-PrivateDirectory $Destination",
+        "AreAccessRulesCanonical",
+        "Private directory collision self-test failed.",
+        "Inherited directory ACL self-test failed.",
+        "Fresh destination ACL is not protected and private to the current user.",
         "BaseStream.CopyToAsync($Output)",
         "Raw artifact ZIP size mismatch.",
         "Raw artifact ZIP SHA-256 mismatch.",
@@ -97,6 +107,8 @@ fn windows_candidate_binder_is_a_clean_child_binary_safe_fail_closed_gate() {
     }
 
     let self_test_stop = script.find("if ($SelfTestRequested)").unwrap();
+    let self_test_private_directory = script.find("New-PrivateDirectory $Root").unwrap();
+    let live_private_directory = script.rfind("New-PrivateDirectory $Destination").unwrap();
     let token_read = script.find("$InheritedToken =").unwrap();
     let source_clone = script.find("Fixed-origin fresh source clone").unwrap();
     let token_prompt = script
@@ -116,6 +128,8 @@ fn windows_candidate_binder_is_a_clean_child_binary_safe_fail_closed_gate() {
     let binding = script
         .rfind("Write-CreateOnceUtf8Json $BindingPath")
         .unwrap();
+    assert!(self_test_private_directory < self_test_stop);
+    assert!(self_test_stop < live_private_directory);
     assert!(self_test_stop < token_read);
     assert!(token_read < source_clone);
     assert!(source_clone < token_prompt);
@@ -136,6 +150,7 @@ fn windows_candidate_binder_is_a_clean_child_binary_safe_fail_closed_gate() {
     );
     assert!(script.contains("foreach ($Name in $ExpectedFiles)"));
     assert!(script.contains("foreach ($Attestation in $Attestations)"));
+    assert!(!script.contains("Set-DirectoryAccessControlPortable"));
     assert!(script.contains("$ExpectedArtifactBytes = [int64]$DirectArtifact.size_in_bytes"));
     assert!(
         script.contains("$ExpectedArtifactSha256 = ([string]$DirectArtifact.digest).Substring(7)")
