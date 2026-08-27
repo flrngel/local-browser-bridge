@@ -86,6 +86,153 @@ async fn start_server(token: &str) -> (String, oneshot::Sender<()>, JoinHandle<(
     )
 }
 
+async fn start_shell_server(
+    token: &str,
+    shell_enabled: bool,
+) -> (String, String, oneshot::Sender<()>, JoinHandle<()>) {
+    let mut config = ServerConfig::new(0, token);
+    config.call_timeout = Duration::from_secs(1);
+    config.check_for_updates = false;
+    config.shell_enabled = shell_enabled;
+    let server = BridgeServer::bind(config).await.unwrap();
+    let address = server.local_addr().unwrap();
+    let fetch_base_url = server.agent_fetch_base_url();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let handle = tokio::spawn(async move {
+        server
+            .serve(async move {
+                let _ = shutdown_rx.await;
+            })
+            .await
+            .unwrap();
+    });
+    (
+        format!("http://127.0.0.1:{}", address.port()),
+        fetch_base_url,
+        shutdown_tx,
+        handle,
+    )
+}
+
+#[tokio::test]
+async fn agent_fetch_uses_a_separate_capability_and_requires_call_ids_for_actions() {
+    let token = create_token();
+    let (base_url, fetch_base_url, shutdown, handle) = start_shell_server(&token, false).await;
+    let client = Client::new();
+    assert!(!fetch_base_url.contains(&token));
+
+    let status = client
+        .get(format!("{fetch_base_url}/status"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(status.status(), 503);
+    let status: Value = status.json().await.unwrap();
+    assert_eq!(status["error"]["code"], "EXTENSION_HANDSHAKE_PENDING");
+
+    let wrong_key = client
+        .get(format!("{base_url}/api/v1/fetch/wrong/status"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong_key.status(), 401);
+
+    let cross_site = client
+        .get(format!("{fetch_base_url}/shell.status"))
+        .header("Sec-Fetch-Site", "cross-site")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cross_site.status(), 403);
+
+    let missing_call_id = client
+        .get(format!("{fetch_base_url}/tabs.activate?tabId=7"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing_call_id.status(), 400);
+    let missing_call_id: Value = missing_call_id.json().await.unwrap();
+    assert!(
+        missing_call_id["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("callId is required")
+    );
+
+    shutdown.send(()).unwrap();
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn agent_fetch_runs_and_replays_an_opt_in_native_shell_command() {
+    let token = create_token();
+    let (_base_url, fetch_base_url, shutdown, handle) = start_shell_server(&token, true).await;
+    let client = Client::new();
+    let command = if cfg!(windows) {
+        "[Console]::Write('fetch-shell-ok')"
+    } else {
+        "printf fetch-shell-ok"
+    };
+
+    let response = client
+        .get(format!("{fetch_base_url}/shell.run"))
+        .query(&[
+            ("callId", "shell-get-contract-1"),
+            (
+                "params",
+                &json!({ "command": command, "timeoutMs": 5000 }).to_string(),
+            ),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let response: Value = response.json().await.unwrap();
+    assert_eq!(response["result"]["stdout"], "fetch-shell-ok");
+    assert_eq!(response["result"]["exitCode"], 0);
+
+    let replay = client
+        .get(format!("{fetch_base_url}/shell.run"))
+        .query(&[
+            ("callId", "shell-get-contract-1"),
+            (
+                "params",
+                &json!({ "command": command, "timeoutMs": 5000 }).to_string(),
+            ),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), 200);
+    let replay: Value = replay.json().await.unwrap();
+    assert_eq!(replay["replayed"], true);
+    assert_eq!(replay["result"]["stdout"], "fetch-shell-ok");
+
+    shutdown.send(()).unwrap();
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn shell_run_stays_disabled_without_explicit_server_authority() {
+    let token = create_token();
+    let (_base_url, fetch_base_url, shutdown, handle) = start_shell_server(&token, false).await;
+    let response = Client::new()
+        .get(format!("{fetch_base_url}/shell.run"))
+        .query(&[
+            ("callId", "shell-disabled-contract"),
+            ("command", "echo should-not-run"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 403);
+    let response: Value = response.json().await.unwrap();
+    assert_eq!(response["error"]["code"], "SHELL_DISABLED");
+
+    shutdown.send(()).unwrap();
+    handle.await.unwrap();
+}
+
 async fn connect_fake_extension(
     base_url: &str,
     token: &str,

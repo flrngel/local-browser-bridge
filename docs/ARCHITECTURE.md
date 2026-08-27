@@ -28,6 +28,19 @@ Each connector transport has a bounded 64-message data queue plus a separate lat
 
 The authenticated control URL uses a fragment-held master token that is exchanged for a port-specific dashboard session capability. State-changing dashboard requests also require same-origin and CSRF checks. The server rejects non-loopback Host headers and exposes no CORS permission.
 
+The server also derives a domain-separated Agent Fetch capability from the
+master token. A GET route carrying that capability reaches the same command
+admission/replay layer as bearer POST, with `callId` mandatory for action-like
+methods. This supports headerless Web Fetch clients without weakening the
+connector protocols or placing the master token itself in a query string.
+
+Optional shell execution is server-local rather than a computer-helper method.
+It is disabled unless explicitly granted at server start, uses the platform's
+native non-interactive shell, serializes with browser and computer actions, and
+bounds command size, runtime, and retained output. This separation preserves
+the helper's exact-window command allowlist but does not sandbox the shell: an
+enabled caller has the current user's ordinary command authority.
+
 Persisted-token access is a capability-bound transaction. Default storage requires an absolute current-user profile path and never falls back to the working directory. Unix retains the validated parent directory descriptor and performs nonblocking child opens, atomic replacement, verification, and cleanup with descriptor-relative operations. Windows requests explicit traversal access on one validated no-follow final-parent handle and uses it as `NtCreateFile.RootDirectory` for every exact-case child open/create. A private temporary-file capability records that parent identity and retains delete authority from creation through write and flush; native `NtSetInformationFile(FileRenameInformation)` commits its relative atomic replacement through the same retained parent, and `FileDispositionInfo` cleans that exact internally created handle on every pre-commit failure. The renamed handle, destination identity, private DACL, and stable parent path are then checked without making the pathname the operation's authority. Ambiguous Win32 child names, a reparse-point final parent, and reparse children fail closed. Opening the profile path can traverse an ancestor junction, which is tolerated only because the final ordinary parent's identity is rechecked. Custom token parents are validation-only; only the exact computed default directory is managed or hardened.
 
 Windows namespace-swap tests prebuild two test-owned local NTFS mount-point junctions, verify their no-follow tags and resolved target identities, then hand the public path from the original to the decoy using only junction-entry renames. This preserves the adversarial path redirect while open token child handles correctly keep their target directory trees from being renamed.

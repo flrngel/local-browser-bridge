@@ -7,6 +7,7 @@ const ui = Object.fromEntries(
     "coordinates-form", "coordinate-x", "coordinate-y", "type-text-form", "type-text", "custom-key-form", "custom-key",
     "evaluate-form", "expression", "evaluation-result",
     "release-panel", "current-version", "update-status", "update-detail", "check-update", "update-link",
+    "agent-fetch-url", "copy-agent-fetch-url", "shell-status",
     "browser-control-panel", "browser-control-summary", "browser-control-badge", "browser-control-details",
     "browser-control-form", "browser-control-ttl", "browser-control-start", "browser-control-status", "browser-control-stop",
     "computer-connection", "computer-connection-text", "computer-meta", "computer-status", "computer-observe", "computer-window",
@@ -726,6 +727,14 @@ function renderUpdate(state) {
   ui["update-link"].href = update.releaseUrl || "https://github.com/flrngel/local-browser-bridge/releases";
 }
 
+function renderAgentAccess(state) {
+  ui["agent-fetch-url"].value = state.agentFetch?.baseUrl ?? "";
+  const shell = state.shell ?? {};
+  ui["shell-status"].textContent = shell.enabled
+    ? `Shell enabled · ${shell.defaultShell} · full current-user command access`
+    : "Shell disabled · restart or reinstall with --enable-shell only when you intend to grant full current-user command access";
+}
+
 function renderTabs(state) {
   const signature = JSON.stringify({ connected: state.connected, targetTabId: state.targetTabId, tabs: state.tabs });
   if (signature === lastTabsSignature) return;
@@ -855,6 +864,7 @@ function render(state) {
   renderBrowserControl(state);
   renderComputer(state);
   renderUpdate(state);
+  renderAgentAccess(state);
   renderTabs(state);
   renderObservation(state);
   renderActivity(state);
@@ -1110,6 +1120,12 @@ ui["evaluate-form"].addEventListener("submit", async (event) => {
   if (!result) return;
   ui["evaluation-result"].textContent = JSON.stringify(result, null, 2);
   ui["evaluation-result"].hidden = false;
+});
+ui["copy-agent-fetch-url"].addEventListener("click", async () => {
+  const value = ui["agent-fetch-url"].value;
+  if (!value) return;
+  await navigator.clipboard.writeText(value);
+  showToast("Private Agent Fetch base URL copied.");
 });
 
 async function streamEvents(onEvent) {

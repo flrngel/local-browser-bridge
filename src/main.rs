@@ -14,6 +14,7 @@ struct Cli {
     show_licenses: bool,
     check_updates: bool,
     no_update_check: bool,
+    enable_shell: bool,
 }
 
 #[tokio::main]
@@ -63,8 +64,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = ServerConfig::new(port, token.clone());
     config.call_timeout = Duration::from_secs(15);
     config.check_for_updates = !cli.no_update_check && !update_check_disabled_from_env()?;
+    config.shell_enabled = cli.enable_shell || shell_enabled_from_env()?;
     let server = BridgeServer::bind(config).await?;
     let address = server.local_addr()?;
+    let fetch_base_url = server.agent_fetch_base_url();
 
     println!("Local Browser Bridge {VERSION}");
     println!(
@@ -72,11 +75,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         address.port()
     );
     println!("Extension token: {token}");
+    println!("Agent Fetch base URL: {fetch_base_url}");
     match token_path {
         Some(path) => println!("Token file: {}", path.display()),
         None => println!("Token source: LBB_TOKEN"),
     }
     println!("Standalone Rust server; Node.js is not required. Press Ctrl+C to stop.");
+    if cli.enable_shell || shell_enabled_from_env()? {
+        println!("Local shell: ENABLED (full current-user command access).");
+    } else {
+        println!("Local shell: disabled; restart with --enable-shell to grant access.");
+    }
     if cli.no_update_check || update_check_disabled_from_env()? {
         println!("Update check: disabled; no GitHub request was made.");
     } else {
@@ -101,6 +110,7 @@ fn parse_args(arguments: impl Iterator<Item = String>) -> Result<Cli, String> {
             "--licenses" => cli.show_licenses = true,
             "--check-updates" => cli.check_updates = true,
             "--no-update-check" => cli.no_update_check = true,
+            "--enable-shell" => cli.enable_shell = true,
             _ => {
                 return Err(format!(
                     "Unknown argument: {argument}. Use --help for usage."
@@ -118,6 +128,7 @@ Usage: local-browser-bridge [OPTIONS]\n\n\
 Options:\n\
   --check-updates     Check official GitHub release metadata and exit\n\
   --no-update-check   Start without the one-time background metadata check\n\
+  --enable-shell      Grant API clients full current-user native shell access\n\
   --licenses          Print project and third-party license notices, then exit\n\
   -V, --version       Print the installed version and exit\n\
   -h, --help          Print this help\n\n\
@@ -133,6 +144,17 @@ fn update_check_disabled_from_env() -> Result<bool, String> {
         "1" | "true" | "yes" | "on" => Ok(true),
         "0" | "false" | "no" | "off" | "" => Ok(false),
         _ => Err("LBB_DISABLE_UPDATE_CHECK must be true/false or 1/0".to_owned()),
+    }
+}
+
+fn shell_enabled_from_env() -> Result<bool, String> {
+    let Some(value) = env::var("LBB_ENABLE_SHELL").ok() else {
+        return Ok(false);
+    };
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" | "" => Ok(false),
+        _ => Err("LBB_ENABLE_SHELL must be true/false or 1/0".to_owned()),
     }
 }
 
@@ -166,6 +188,12 @@ mod tests {
                 .unwrap();
         assert!(cli.check_updates);
         assert!(cli.no_update_check);
+        assert!(!cli.enable_shell);
+        assert!(
+            parse_args(["--enable-shell".to_owned()].into_iter())
+                .unwrap()
+                .enable_shell
+        );
         assert!(
             parse_args(["--licenses".to_owned()].into_iter())
                 .unwrap()

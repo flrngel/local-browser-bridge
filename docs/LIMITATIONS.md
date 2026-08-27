@@ -8,6 +8,25 @@ Setup requirements such as browser loading, matching versions, macOS permissions
 
 The persisted bearer token is protected against accidental cross-user exposure, not against software already running as the same account, an administrator that takes ownership, or kernel compromise. Inside Chrome, extension storage is restricted to `TRUSTED_CONTEXTS`, which excludes content scripts but does not protect against a compromised extension service worker or popup. The bridge creates or hardens only the exact computed default `.local-browser-bridge` parent under the current user's absolute profile path; missing or non-absolute profile metadata fails closed instead of selecting the working directory, and a matching directory name elsewhere does not establish ownership. It never recursively creates missing ancestors and never rewrites an existing custom parent's permissions. Any custom `LBB_TOKEN_PATH` parent—including the process working directory for a bare relative path—must already be an ordinary, non-link private directory or startup fails before a token is created. Unix requires current-user ownership with exact mode `0700`, creates token files with mode `0600`, opens persisted tokens without following symlinks or blocking on special entries, and rejects multiply linked entries without replacing either name. The complete Unix read, temporary-file, replacement, verification, and cleanup lifecycle remains relative to the same validated directory descriptor, so renaming or substituting the parent path cannot redirect it. A managed Unix directory can have group/other access removed, but missing owner permissions are never added. Windows requires a protected TokenUser-only DACL, rejects a reparse-point final parent, reparse or multiply linked token files, and filesystems that cannot retain that security descriptor. Parent path opening can still traverse an ancestor profile junction; the bridge tolerates that redirection but rechecks the final ordinary parent's stable identity and DACL. All exact-case child opens and creates use the retained parent handle as `NtCreateFile.RootDirectory`; replacement and cleanup use retained file handles. A private typed capability keeps the exact internally created temporary handle open from creation through write, flush, and atomic rename, and every pre-rename failure deletes that handle rather than reopening its old name. Parent-path identity checks detect relocation before a success is reported, but they are not relied on to select a child. This does not defend the secret against another process already running as that same TokenUser.
 
+## Agent Fetch and shell limits
+
+The Agent Fetch protocol makes command invocation possible through a plain GET,
+but the private capability and every query value are part of a URL. The bridge
+does not log requests and sends no-store/no-referrer headers, yet the calling
+agent, browser history, proxy, security product, or screenshot tool can retain
+that URL. Use POST with an Authorization header when available, never put
+secrets in GET parameters, and rotate the master token if the capability leaks.
+
+Shell support is intentionally disabled by default. Enabling it grants an
+authenticated local client all command authority of the signed-in user; shell
+commands are not confined to the selected browser tab or native app window.
+The server bounds command length, runtime, and retained output, uses null stdin,
+and terminates the observed process tree on timeout. A command can still make
+persistent system changes, start detached processes before completing, consume
+resources within the timeout, or access any data the user can access. There is
+no per-command prompt, filesystem allowlist, container, virtual machine, or
+privilege reduction.
+
 ## Acceptance-tool security boundary
 
 The Windows acceptance coordinator is crash-resistant release tooling, not a
@@ -55,7 +74,7 @@ not proof that an unobserved transient state never existed. The ledger records a
 was never tagged or published. The bounded observation and its limitations are
 preserved in the immutable [v0.12.34 negative-evidence commit](https://github.com/flrngel/local-browser-bridge/tree/aef8fc68018cdb6181ad3d0886acf4e71fcda96d/evidence/v0.12.34/computer/attempts/withdrawn-2509567-windows-pre-coordinator-interruption).
 
-Version 0.12.38 is the current source and schema-3 release-pipeline target. It
+Version 0.12.39 is the current source and schema-3 release-pipeline target. It
 retains the breakaway-enabled coordinator Job and atomic private Job-list child
 creation, but delays the persistent boundary until private staging and
 configuration verification, detached-worker Job binding and guard-ownership

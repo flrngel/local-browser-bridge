@@ -9,6 +9,7 @@ mod home;
 pub mod hub;
 mod licenses;
 pub mod server;
+pub mod shell;
 pub mod token;
 pub mod update;
 pub mod ws_auth;

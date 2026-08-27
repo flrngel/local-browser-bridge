@@ -33,6 +33,21 @@ Canceling one bearer API command stops only that command context and preserves t
 
 Every primary browser command and follow-up tab list or page observation is bound to the exact extension-session UUID selected before dispatch. A replacement extension never receives work that belonged to the old session.
 
+## Agent and shell access
+
+| Capability | Status | Requirement or boundary |
+|---|---|---|
+| Bearer JSON command API | Available | Loopback plus master token; POST body |
+| Agent Fetch GET-only API | Available | Private derived capability URL; stable `callId` required for actions |
+| Native shell status | Available | No shell authority required |
+| Windows PowerShell and cmd | Available, opt-in | Server started with `--enable-shell` or `LBB_ENABLE_SHELL=1` |
+| macOS zsh and sh | Available, opt-in | Same explicit shell grant |
+
+Agent Fetch shares the POST command dispatcher, replay cache, cancellation,
+and fail-closed unknown-outcome rules. Shell commands are non-interactive and
+bounded, but the capability is full current-user code execution and is not
+confined by the browser or exact-window control model.
+
 ## Native application control
 
 The optional helper is a separate Rust process. It connects outbound to the loopback server and exposes a fixed computer-use command set; it does not expose shell, filesystem, clipboard, process-launch, download, or telemetry methods.
@@ -70,7 +85,7 @@ These are setup conditions, not product limitations:
 
 - Every installed component must use the same release version.
 - Browser control requires an unpacked Manifest V3 extension loaded from `chrome://extensions` or `edge://extensions`.
-- Browser control requires Chromium 140+. Cross-origin child-session routing first appeared in Chromium 125, but version 0.12.38 retains the overall floor so persisted extension storage can be restricted to trusted contexts.
+- Browser control requires Chromium 140+. Cross-origin child-session routing first appeared in Chromium 125, but version 0.12.39 retains the overall floor so persisted extension storage can be restricted to trusted contexts.
 - The complete macOS archive requires macOS 13+. Live sharing additionally requires Screen Recording permission for the packaged helper application.
 - macOS semantic control and supported input routes require Accessibility permission.
 - Windows native control must run in the signed-in interactive session, not Session 0 or a service.

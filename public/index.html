@@ -54,6 +54,22 @@
         </div>
       </section>
 
+      <section class="agent-access-panel panel" aria-labelledby="agent-access-title">
+        <div>
+          <p class="eyebrow">BASIC WEB FETCH ACCESS</p>
+          <h2 id="agent-access-title">One-URL agent protocol</h2>
+          <p class="update-detail">Copy this private capability URL into an agent that can only make ordinary GET requests. Keep it secret: anyone who can fetch it from this computer can use the bridge.</p>
+        </div>
+        <div class="agent-access-controls">
+          <label for="agent-fetch-url">Agent Fetch base URL</label>
+          <div class="agent-url-row">
+            <input id="agent-fetch-url" type="password" readonly autocomplete="off" spellcheck="false" aria-label="Private Agent Fetch base URL">
+            <button id="copy-agent-fetch-url" type="button" class="button primary">Copy URL</button>
+          </div>
+          <p id="shell-status" class="target-meta" role="status" aria-live="polite">Checking local shell access…</p>
+        </div>
+      </section>
+
       <section id="browser-control-panel" class="control-panel panel" aria-labelledby="browser-control-title">
         <div class="section-heading control-heading">
           <div>

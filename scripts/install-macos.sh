@@ -6,6 +6,7 @@ version="latest"
 install_root="$HOME/Applications/Local Browser Bridge"
 startup=1
 start_helper=0
+enable_shell=0
 launch=1
 uninstall=0
 reset_token=0
@@ -14,7 +15,7 @@ self_test=0
 usage() {
   cat <<'EOF'
 Usage: install-macos.sh [--version latest|VERSION] [--install-root PATH]
-                        [--no-startup] [--start-helper] [--no-launch]
+                        [--no-startup] [--start-helper] [--enable-shell] [--no-launch]
                         [--uninstall] [--reset-token] [--self-test]
 EOF
 }
@@ -25,6 +26,7 @@ while (($#)); do
     --install-root) install_root="${2:?missing install root}"; shift 2 ;;
     --no-startup) startup=0; shift ;;
     --start-helper) start_helper=1; shift ;;
+    --enable-shell) enable_shell=1; shift ;;
     --no-launch) launch=0; shift ;;
     --uninstall) uninstall=1; shift ;;
     --reset-token) reset_token=1; shift ;;
@@ -94,6 +96,39 @@ function run(args) {
     lines.push(`${name}\t${matches[0].digest.slice(7)}\t${matches[0].browser_download_url}`);
   }
   $(lines.join('\n') + '\n').writeToFileAtomicallyEncodingError(args[1], true, $.NSUTF8StringEncoding, null);
+}
+
+open_extensions_page() {
+  if [[ -d '/Applications/Google Chrome.app' ]]; then
+    /usr/bin/open -a 'Google Chrome' 'chrome://extensions'
+    return 0
+  elif [[ -d '/Applications/Microsoft Edge.app' ]]; then
+    /usr/bin/open -a 'Microsoft Edge' 'edge://extensions'
+    return 0
+  fi
+  return 1
+}
+
+show_extension_setup() {
+  local extension_root=$1 token=$2 browser_step
+  printf '%s' "$extension_root" | /usr/bin/pbcopy || true
+  /usr/bin/open "$extension_root"
+  if open_extensions_page; then
+    browser_step='The browser extensions page and the extension folder are open.'
+  else
+    browser_step='Open chrome://extensions or edge://extensions in your browser.'
+  fi
+  /usr/bin/osascript - "$browser_step" <<'APPLESCRIPT' || true
+on run argv
+  display dialog "Finish browser setup now:\n\n1. " & item 1 of argv & "\n2. Turn on Developer mode.\n3. Click Load unpacked.\n4. Paste the extension folder path already copied to the clipboard and select it.\n\nComplete steps 1-4, then choose OK. The installer will copy the bridge token next." with title "Finish Local Browser Bridge Setup" buttons {"OK"} default button "OK" with icon note
+end run
+APPLESCRIPT
+  if [[ "$token" =~ ^[A-Za-z0-9_-]{32,}$ ]]; then
+    printf '%s' "$token" | /usr/bin/pbcopy
+    /usr/bin/osascript -e 'display dialog "The bridge token is now copied. Open Local Browser Bridge, paste it, and choose Save and connect.\n\nYou can repeat this guide by double-clicking Finish Browser Extension Setup.command in the install folder." with title "Connect Local Browser Bridge" buttons {"OK"} default button "OK" with icon note' || true
+  else
+    /usr/bin/osascript -e 'display dialog "The server token is not ready yet. Double-click Open Local Browser Bridge, then run Finish Browser Extension Setup again." with title "Connect Local Browser Bridge" buttons {"OK"} default button "OK" with icon caution' || true
+  fi
 }
 JXA
 }
@@ -170,12 +205,14 @@ if [[ -e "$install_root" ]]; then assert_ordinary_dir "$install_root"; /bin/rm -
 if ((startup)); then
   /bin/mkdir -p -- "$HOME/Library/LaunchAgents"
   escaped_root="$(printf '%s' "$install_root/local-browser-bridge" | /usr/bin/sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
+  shell_plist_argument=''
+  ((enable_shell)) && shell_plist_argument='<string>--enable-shell</string>'
   /bin/cat > "$stage/launchagent.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>$label</string>
-<key>ProgramArguments</key><array><string>$escaped_root</string></array>
+<key>ProgramArguments</key><array><string>$escaped_root</string>$shell_plist_argument</array>
 <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
 </dict></plist>
 EOF
@@ -188,23 +225,73 @@ else
   /bin/rm -f -- "$plist"
 fi
 
+quoted_server="$(printf '%q' "$install_root/local-browser-bridge")"
+quoted_helper="$(printf '%q' "$install_root/Local Computer Helper.app")"
+quoted_extension="$(printf '%q' "$install_root/extension")"
+shell_argument=''
+((enable_shell)) && shell_argument=' --enable-shell'
+/bin/cat > "$install_root/Open Local Browser Bridge.command" <<EOF
+#!/bin/bash
+if ! /usr/bin/curl --fail --silent --max-time 1 http://127.0.0.1:17373/health >/dev/null 2>&1; then
+  $quoted_server$shell_argument >/dev/null 2>&1 &
+fi
+for _ in {1..100}; do [[ -f "\$HOME/.local-browser-bridge/token" ]] && break; /bin/sleep 0.1; done
+if [[ -f "\$HOME/.local-browser-bridge/token" ]]; then
+  token="\$(/bin/cat "\$HOME/.local-browser-bridge/token")"
+  /usr/bin/open "http://127.0.0.1:17373/#token=\$token"
+else
+  /usr/bin/open "http://127.0.0.1:17373/"
+fi
+EOF
+/bin/cat > "$install_root/Finish Browser Extension Setup.command" <<EOF
+#!/bin/bash
+extension_root=$quoted_extension
+printf '%s' "\$extension_root" | /usr/bin/pbcopy || true
+/usr/bin/open "\$extension_root"
+if [[ -d '/Applications/Google Chrome.app' ]]; then
+  /usr/bin/open -a 'Google Chrome' 'chrome://extensions'
+elif [[ -d '/Applications/Microsoft Edge.app' ]]; then
+  /usr/bin/open -a 'Microsoft Edge' 'edge://extensions'
+fi
+/usr/bin/osascript -e 'display dialog "Turn on Developer mode, click Load unpacked, and paste the extension folder path already copied to your clipboard." with title "Finish Local Browser Bridge Setup" buttons {"OK"} default button "OK" with icon note'
+if [[ -f "\$HOME/.local-browser-bridge/token" ]]; then
+  token="\$(/bin/cat "\$HOME/.local-browser-bridge/token")"
+  printf '%s' "\$token" | /usr/bin/pbcopy
+  /usr/bin/osascript -e 'display dialog "The bridge token is now copied. Open Local Browser Bridge, paste it, and choose Save and connect." with title "Connect Local Browser Bridge" buttons {"OK"} default button "OK" with icon note'
+fi
+EOF
+/bin/cat > "$install_root/Start Computer Helper.command" <<EOF
+#!/bin/bash
+/usr/bin/open $quoted_helper
+EOF
+/bin/chmod 700 "$install_root/Open Local Browser Bridge.command" "$install_root/Finish Browser Extension Setup.command" "$install_root/Start Computer Helper.command"
+
 if ((launch)); then
-  if ((!startup)); then "$install_root/local-browser-bridge" >/dev/null 2>&1 & fi
+  if ((!startup)); then
+    if ((enable_shell)); then
+      "$install_root/local-browser-bridge" --enable-shell >/dev/null 2>&1 &
+    else
+      "$install_root/local-browser-bridge" >/dev/null 2>&1 &
+    fi
+  fi
   if ((start_helper)); then /usr/bin/open "$install_root/Local Computer Helper.app"; fi
   token_path="$HOME/.local-browser-bridge/token"
   for _ in {1..100}; do [[ -f "$token_path" ]] && break; /bin/sleep 0.1; done
+  token=''
   if [[ -f "$token_path" ]]; then
     token="$(/bin/cat "$token_path")"
     [[ "$token" =~ ^[A-Za-z0-9_-]{32,}$ ]] && /usr/bin/open "http://127.0.0.1:17373/#token=$token"
   fi
-  if [[ -d '/Applications/Google Chrome.app' ]]; then
-    /usr/bin/open -a 'Google Chrome' 'chrome://extensions'
-  elif [[ -d '/Applications/Microsoft Edge.app' ]]; then
-    /usr/bin/open -a 'Microsoft Edge' 'edge://extensions'
-  fi
+  show_extension_setup "$install_root/extension" "$token"
 fi
 
 echo "Installed Local Browser Bridge $resolved for the current user."
 echo "Extension folder: $install_root/extension"
-echo "In chrome://extensions, enable Developer mode, choose Load unpacked, and select that folder."
+echo "Finish setup: double-click $install_root/Finish Browser Extension Setup.command"
+echo "Open later: double-click $install_root/Open Local Browser Bridge.command"
+if ((enable_shell)); then
+  echo "WARNING: Full current-user shell access is enabled for authenticated local API clients." >&2
+else
+  echo "Shell access is off. Re-run this installer with --enable-shell only if you intend to grant it."
+fi
 ((start_helper)) || echo "Desktop control remains off. Open Local Computer Helper.app only when you want it."
