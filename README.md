@@ -75,6 +75,18 @@ The helper does not offer shell, filesystem, clipboard, download,
 process-launch, or telemetry commands. Desktop control still shares the
 signed-in user's session: it is cooperative, not an isolated desktop.
 
+### Optional local shell
+
+- Run PowerShell or `cmd.exe` on Windows and `zsh` or `/bin/sh` on macOS
+- Return bounded stdout, stderr, exit status, duration, and timeout state
+- Stay off by default until the server is installed or started with explicit
+  shell authority
+- Use the same authenticated POST API or the basic GET-only Agent Fetch API
+
+Shell access is intentionally separate from the computer helper and is full
+current-user command access, not a sandbox. Enable it only for a local agent you
+trust with every file and program available to your signed-in account.
+
 ## Install in one command
 
 Use the platform guide and paste its first command. The installer accepts only
@@ -86,9 +98,29 @@ opens the authenticated dashboard, and prepares a stable extension folder.
 - [macOS 13 or later installation](docs/INSTALL_MACOS.md)
 - [Manual and independent provenance verification](docs/INSTALL.md)
 
-The only remaining browser step is enabling **Developer mode**, choosing
-**Load unpacked**, and selecting the folder printed by the installer. Desktop
-control stays off until you explicitly launch the optional helper.
+The installer opens the browser extensions page and extension folder, copies
+the folder path, and shows the remaining **Developer mode** / **Load unpacked**
+steps in a visible dialog. It also installs an **Open Local Browser Bridge**
+launcher and a repeatable **Finish Browser Extension Setup** guide. Desktop
+control and shell access stay off until explicitly enabled.
+
+## Connect an agent with only Web Fetch
+
+Open the dashboard and copy its private **Agent Fetch base URL**. A client that
+can only perform a plain GET can append a method and query parameters:
+
+```text
+GET {AGENT_FETCH_BASE_URL}/status
+GET {AGENT_FETCH_BASE_URL}/tabs.list
+GET {AGENT_FETCH_BASE_URL}/tabs.activate?callId=choose-tab-1&tabId=7
+```
+
+All action-like GETs require a stable `callId`; a network retry then replays the
+recorded result instead of running the action twice. Nested or type-sensitive
+parameters can be supplied as URL-encoded JSON in `params`. The URL is a
+credential derived separately from the master bridge token, so do not paste it
+into issues, analytics-enabled pages, or shared logs. See the
+[Agent Fetch protocol](docs/PROTOCOL.md#agent-fetch-get-only-api).
 
 Windows executables are not yet Microsoft publisher-signed. The macOS package
 is ad-hoc signed but not Developer ID-signed or notarized. Keep SmartScreen and

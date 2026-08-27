@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use axum::body::{Body, Bytes};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Query, Request, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::header::{
     AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_SECURITY_POLICY, CONTENT_TYPE, HOST,
     ORIGIN, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
@@ -26,6 +26,7 @@ use include_dir::{Dir, include_dir};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
+use subtle::ConstantTimeEq as _;
 use time::OffsetDateTime;
 use tokio::net::TcpListener;
 use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore, broadcast, oneshot};
@@ -39,6 +40,7 @@ use crate::computer::{
 };
 use crate::error_taxonomy::{TaxonomyCode, classify};
 use crate::hub::{ExtensionHub, HubError};
+use crate::shell::{self, SHELL_METHODS, ShellError};
 use crate::token::{create_token, token_is_valid, tokens_equal};
 use crate::update::{UpdateState, UpdateStatus, check_for_update};
 use crate::ws_auth::{
@@ -115,6 +117,7 @@ pub struct ServerConfig {
     pub token: String,
     pub call_timeout: Duration,
     pub check_for_updates: bool,
+    pub shell_enabled: bool,
 }
 
 impl ServerConfig {
@@ -124,6 +127,7 @@ impl ServerConfig {
             token: token.into(),
             call_timeout: Duration::from_secs(15),
             check_for_updates: true,
+            shell_enabled: false,
         }
     }
 }
@@ -149,6 +153,7 @@ impl BridgeServer {
             bound_port,
             config.call_timeout,
             config.check_for_updates,
+            config.shell_enabled,
         );
         let router = build_router(state.clone());
         if config.check_for_updates {
@@ -166,6 +171,13 @@ impl BridgeServer {
 
     pub fn local_addr(&self) -> Result<SocketAddr, std::io::Error> {
         self.listener.local_addr()
+    }
+
+    pub fn agent_fetch_base_url(&self) -> String {
+        format!(
+            "http://127.0.0.1:{}/api/v1/fetch/{}",
+            self.state.bound_port, self.state.fetch_key
+        )
     }
 
     pub async fn serve<F>(self, shutdown: F) -> Result<(), std::io::Error>
@@ -196,6 +208,8 @@ impl BridgeServer {
 #[derive(Clone)]
 struct AppState {
     token: Arc<String>,
+    fetch_key: Arc<String>,
+    shell_enabled: bool,
     bound_port: u16,
     hub: ExtensionHub,
     computer_hub: ExtensionHub,
@@ -274,6 +288,7 @@ impl AppState {
         bound_port: u16,
         call_timeout: Duration,
         check_for_updates: bool,
+        shell_enabled: bool,
     ) -> Self {
         let (events, _) = broadcast::channel(256);
         let mut data = StateData::default();
@@ -282,8 +297,17 @@ impl AppState {
         } else {
             UpdateStatus::disabled()
         };
+        data.public.shell = shell::status(shell_enabled);
+        let fetch_key = derive_fetch_key(&token);
+        data.public.agent_fetch = json!({
+            "enabled": true,
+            "baseUrl": format!("http://127.0.0.1:{bound_port}/api/v1/fetch/{fetch_key}"),
+            "requiresCallIdForActions": true,
+        });
         Self {
             token: Arc::new(token),
+            fetch_key: Arc::new(fetch_key),
+            shell_enabled,
             bound_port,
             hub: ExtensionHub::new(call_timeout),
             computer_hub: ExtensionHub::computer(call_timeout),
@@ -621,6 +645,34 @@ impl AppState {
         }
         assert_command_origin(headers)?;
         assert_json_content_type(headers)
+    }
+
+    fn assert_fetch_api_boundary(
+        &self,
+        supplied_key: &str,
+        headers: &HeaderMap,
+    ) -> Result<(), ApiError> {
+        if supplied_key.len() != self.fetch_key.len()
+            || !bool::from(supplied_key.as_bytes().ct_eq(self.fetch_key.as_bytes()))
+        {
+            return Err(ApiError::new(
+                StatusCode::UNAUTHORIZED,
+                "UNAUTHORIZED",
+                "A valid Agent Fetch capability URL is required",
+            ));
+        }
+        assert_command_origin(headers)?;
+        if headers
+            .get("sec-fetch-site")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.eq_ignore_ascii_case("cross-site"))
+        {
+            return Err(ApiError::forbidden(
+                "ORIGIN_REJECTED",
+                "Cross-site browser fetch rejected",
+            ));
+        }
+        Ok(())
     }
 
     async fn refresh_update(&self) -> UpdateStatus {
@@ -1140,6 +1192,8 @@ struct PublicState {
     computer_observation: Option<ComputerObservation>,
     activity: VecDeque<Activity>,
     update: UpdateStatus,
+    shell: Value,
+    agent_fetch: Value,
 }
 
 #[derive(Clone, Serialize)]
@@ -1510,6 +1564,25 @@ impl ApiError {
                 "prose": taxonomy.prose,
             },
         })
+    }
+}
+
+fn shell_api_error(error: ShellError) -> ApiError {
+    match error {
+        ShellError::BadRequest(message) => ApiError::bad_request(message),
+        ShellError::Unsupported(message) => {
+            ApiError::new(StatusCode::BAD_REQUEST, "SHELL_UNSUPPORTED", message)
+        }
+        ShellError::Spawn(message) => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "SHELL_UNAVAILABLE",
+            format!("The native shell could not be started: {message}"),
+        ),
+        ShellError::Wait(message) => ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "SHELL_FAILED",
+            format!("The native shell result could not be collected: {message}"),
+        ),
     }
 }
 
@@ -2092,6 +2165,13 @@ fn command_fingerprint(method: &str, params: &Value) -> String {
     sha256_hex(format!("{method}\n{params}").as_bytes())
 }
 
+fn derive_fetch_key(token: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"local-browser-bridge.agent-fetch.v1\0");
+    hasher.update(token.as_bytes());
+    URL_SAFE_NO_PAD.encode(hasher.finalize())
+}
+
 /// The synthetic cached outcome for an admitted callId whose handler future
 /// was dropped (client disconnect, panic) before the real outcome was
 /// recorded: the dispatched action may still execute, so the caller must
@@ -2224,6 +2304,8 @@ fn build_router(state: AppState) -> Router {
         .route("/api/update/check", post(api_update_check))
         .route("/api/v1/command", post(api_command))
         .route("/api/v1/command/cancel", post(api_command_cancel))
+        .route("/api/v1/fetch/{key}/cancel", get(api_fetch_cancel))
+        .route("/api/v1/fetch/{key}/{method}", get(api_fetch_command))
         .route("/bridge", get(websocket_upgrade))
         .route("/computer", get(computer_websocket_upgrade))
         .fallback(get(static_asset))
@@ -2284,6 +2366,7 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
         "ok": true,
         "extensionConnected": state.hub.connected(),
         "computerConnected": state.computer_hub.connected(),
+        "shellEnabled": state.shell_enabled,
         "version": VERSION,
     }))
 }
@@ -2465,6 +2548,40 @@ async fn api_command(
     let method = required_string(body.get("method"), "method", 80)?;
     let params = body.get("params").cloned().unwrap_or_else(|| json!({}));
     let call_id = optional_call_id(body.get("callId"))?;
+    execute_command(state, method, params, call_id).await
+}
+
+async fn api_fetch_command(
+    State(state): State<AppState>,
+    Path((key, method)): Path<(String, String)>,
+    headers: HeaderMap,
+    Query(mut query): Query<HashMap<String, String>>,
+) -> Result<Response, ApiError> {
+    state.assert_fetch_api_boundary(&key, &headers)?;
+    if method.is_empty() || method.len() > 80 {
+        return Err(ApiError::bad_request(
+            "method must be between 1 and 80 characters",
+        ));
+    }
+    let call_id = match query.remove("callId") {
+        Some(value) => Some(required_call_id(Some(&Value::String(value)))?),
+        None => None,
+    };
+    if fetch_requires_call_id(&method) && call_id.is_none() {
+        return Err(ApiError::bad_request(
+            "callId is required for Agent Fetch actions so a retried GET cannot execute twice",
+        ));
+    }
+    let params = parse_fetch_params(query)?;
+    execute_command(state, method, params, call_id).await
+}
+
+async fn execute_command(
+    state: AppState,
+    method: String,
+    params: Value,
+    call_id: Option<String>,
+) -> Result<Response, ApiError> {
     let mut canceled = None;
 
     if let Some(call_id) = call_id.as_deref() {
@@ -2573,6 +2690,29 @@ async fn api_command_cancel(
     state.assert_command_api_boundary(&headers)?;
     let body = parse_json_body(&body)?;
     let call_id = required_call_id(body.get("callId"))?;
+    cancel_command(state, call_id).await
+}
+
+async fn api_fetch_cancel(
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+    Query(mut query): Query<HashMap<String, String>>,
+) -> Result<Response, ApiError> {
+    state.assert_fetch_api_boundary(&key, &headers)?;
+    let call_id = query
+        .remove("callId")
+        .ok_or_else(|| ApiError::bad_request("callId is required"))?;
+    if !query.is_empty() {
+        return Err(ApiError::bad_request(
+            "cancel accepts only the callId query parameter",
+        ));
+    }
+    let call_id = required_call_id(Some(&Value::String(call_id)))?;
+    cancel_command(state, call_id).await
+}
+
+async fn cancel_command(state: AppState, call_id: String) -> Result<Response, ApiError> {
     let Some(cancellation) = state.request_command_cancellation(&call_id) else {
         let (status, body) = error_response_for_call(
             ApiError::new(
@@ -2621,6 +2761,58 @@ async fn api_command_cancel(
         })),
     )
         .into_response())
+}
+
+fn fetch_requires_call_id(method: &str) -> bool {
+    !matches!(
+        method,
+        "status"
+            | "tabs.list"
+            | "browser.control.status"
+            | "page.waitFor"
+            | "computer.status"
+            | "computer.share.status"
+            | "shell.status"
+    )
+}
+
+fn parse_fetch_params(mut query: HashMap<String, String>) -> Result<Value, ApiError> {
+    if let Some(encoded) = query.remove("params") {
+        if !query.is_empty() {
+            return Err(ApiError::bad_request(
+                "params JSON cannot be combined with direct parameter keys",
+            ));
+        }
+        let params: Value = serde_json::from_str(&encoded)
+            .map_err(|_| ApiError::bad_request("params must be a valid JSON object"))?;
+        if !params.is_object() {
+            return Err(ApiError::bad_request("params must be a JSON object"));
+        }
+        return Ok(params);
+    }
+
+    let mut params = Map::new();
+    for (key, value) in query {
+        if key.is_empty() || key.len() > 80 {
+            return Err(ApiError::bad_request(
+                "parameter names must be between 1 and 80 characters",
+            ));
+        }
+        let parsed = if let Some(value) = value.strip_prefix("str:") {
+            Value::String(value.to_owned())
+        } else if let Some(value) = value.strip_prefix("json:") {
+            serde_json::from_str(value)
+                .map_err(|_| ApiError::bad_request(format!("{key} has invalid json: value")))?
+        } else if matches!(value.as_str(), "true" | "false" | "null")
+            || value.parse::<f64>().is_ok()
+        {
+            serde_json::from_str(&value).unwrap_or(Value::String(value))
+        } else {
+            Value::String(value)
+        };
+        params.insert(key, parsed);
+    }
+    Ok(Value::Object(params))
 }
 
 fn optional_call_id(value: Option<&Value>) -> Result<Option<String>, ApiError> {
@@ -4066,6 +4258,42 @@ impl AppState {
         call_id: Option<&str>,
         request_owners: SharedRequestCommandOwners,
     ) -> Result<Value, ApiError> {
+        if SHELL_METHODS.contains(&method) {
+            if method == "shell.status" {
+                return Ok(shell::status(self.shell_enabled));
+            }
+            if !self.shell_enabled {
+                return Err(ApiError::forbidden(
+                    "SHELL_DISABLED",
+                    "Local shell access is disabled; restart the server with --enable-shell to grant it",
+                ));
+            }
+            let request = shell::parse_request(&raw_params).map_err(shell_api_error)?;
+            let _guard = self.action_lock.lock().await;
+            let output = shell::run(request).await.map_err(shell_api_error)?;
+            self.log(
+                "shell.run",
+                if output.timed_out || output.exit_code != Some(0) {
+                    "warning"
+                } else {
+                    "ok"
+                },
+                if output.timed_out {
+                    "Native shell command timed out; its process tree was terminated"
+                } else {
+                    "Native shell command finished"
+                },
+            )
+            .await;
+            self.bump("shell").await;
+            return serde_json::to_value(output).map_err(|error| {
+                ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "INTERNAL_ERROR",
+                    error.to_string(),
+                )
+            });
+        }
         if COMPUTER_METHODS.contains(&method) {
             return self
                 .perform_computer_action(method, raw_params, call_id, request_owners)
@@ -9339,7 +9567,7 @@ mod tests {
 
     #[test]
     fn expired_dashboard_session_cannot_mutate_even_with_its_old_csrf_token() {
-        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false);
+        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false, false);
         let session_id = create_token();
         state.sessions.lock().unwrap().insert(
             session_id.clone(),
@@ -9665,7 +9893,7 @@ mod tests {
         // action task is still asleep. Waking it can release action_lock on a
         // different runtime thread, so doing these steps in the opposite
         // order would create a stale-authority admission window.
-        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false);
+        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false, false);
         state.latch_browser_freshness_recovery(&owner);
         assert!(
             state
@@ -9751,7 +9979,7 @@ mod tests {
     #[tokio::test]
     async fn old_browser_owner_cannot_clear_replacement_observation() {
         const PIXEL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
-        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false);
+        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false, false);
         let observation = Observation {
             tab_id: 7,
             captured_at: "2026-08-21T00:00:00Z".to_owned(),
@@ -9834,7 +10062,7 @@ mod tests {
     #[tokio::test]
     async fn old_owner_cancellation_cannot_clear_replacement_computer_authority() {
         const PIXEL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
-        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false);
+        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false, false);
         let observation = sanitize_computer_observation(Some(&json!({
             "id": "replacement-frame",
             "capturedAt": "2026-08-21T00:00:00Z",
@@ -9938,7 +10166,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_native_result_from_old_connection_cannot_revoke_replacement_helper() {
-        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false);
+        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false, false);
         let old_connection = Uuid::new_v4();
         let (_old_id, _old_receiver, _old_shutdown) =
             state.computer_hub.attach_with_id(old_connection);
@@ -9989,7 +10217,7 @@ mod tests {
     #[test]
     fn dropped_ownerless_in_flight_guard_caches_unknown_immediately() {
         let now = Instant::now();
-        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false);
+        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false, false);
         let replay = state.command_replay.clone();
         assert!(matches!(
             replay.lock().unwrap().admit("call-1", "fp-1", now),
@@ -10049,7 +10277,7 @@ mod tests {
 
     #[tokio::test]
     async fn dropped_no_call_id_handler_latches_gate_before_action_lock_wakes_fresh_waiter() {
-        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false);
+        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false, false);
 
         let action_state = state.clone();
         let guard_state = state.clone();
@@ -10097,7 +10325,7 @@ mod tests {
 
     #[tokio::test]
     async fn dropped_unregistered_computer_owner_fences_mid_action_and_post_action_waiters() {
-        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false);
+        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false, false);
         {
             let mut data = state.data.write().await;
             data.public.computer = Some(ComputerInfo {
@@ -10261,7 +10489,7 @@ mod tests {
     #[test]
     fn owner_bound_guard_without_a_live_runtime_stays_fail_closed_in_flight() {
         let now = Instant::now();
-        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false);
+        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false, false);
         assert!(matches!(
             state
                 .command_replay
@@ -10331,7 +10559,7 @@ mod tests {
     #[tokio::test]
     async fn aborting_owner_fences_fresh_computer_waiter_across_action_and_replay_boundary() {
         let now = Instant::now();
-        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false);
+        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false, false);
         {
             let mut data = state.data.write().await;
             data.public.computer = Some(ComputerInfo {

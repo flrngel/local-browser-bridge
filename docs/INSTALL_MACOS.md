@@ -20,19 +20,41 @@ The installer:
   `$HOME/Applications/Local Browser Bridge`;
 - creates a current-user LaunchAgent and starts the loopback-only server;
 - opens its authenticated dashboard; and
-- opens the browser extensions page and prints the exact unpacked-extension
-  folder.
+- opens the browser extensions page and extension folder, copies the exact
+  folder path, and shows a numbered setup dialog that cannot be missed.
 
 Chrome and Edge deliberately do not allow an ordinary downloaded program to
 silently install an unpacked extension. Complete this one browser step:
 
-1. Enable **Developer mode**.
+1. In the browser page opened by the installer, enable **Developer mode**.
 2. Select **Load unpacked**.
-3. Choose the printed `~/Applications/Local Browser Bridge/extension` folder.
-4. Open the extension popup, paste the token shown by the server, and select
-   **Save and connect**.
+3. Paste the folder path already copied by the installer and choose the
+   `~/Applications/Local Browser Bridge/extension` folder.
+4. Return to the installer's guide and choose **OK**. It now copies the bridge
+   token without printing it.
+5. Open the extension popup, paste the copied token, and select **Save and
+   connect**.
 
 Reload tabs that were already open. Browser control is then ready.
+
+The install folder also contains three double-click launchers:
+
+- **Open Local Browser Bridge.command** starts the server if needed and opens
+  the authenticated dashboard;
+- **Finish Browser Extension Setup.command** repeats the extension setup; and
+- **Start Computer Helper.command** opens optional desktop control.
+
+## Local shell access (optional)
+
+Shell access is full command access as your macOS user and is off by default.
+Enable persistent `zsh` and `/bin/sh` support only for a trusted local agent:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-macos.sh | bash -s -- --enable-shell
+```
+
+Rerun the normal install command without `--enable-shell` to turn shell access
+back off in the LaunchAgent.
 
 ## Desktop control (optional)
 
@@ -76,6 +98,7 @@ installer="$(mktemp)"
 curl -fsSL https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-macos.sh -o "$installer"
 bash "$installer" --no-startup
 bash "$installer" --no-launch
+bash "$installer" --enable-shell
 bash "$installer" --install-root "$HOME/My Apps/LBB"
 bash "$installer" --uninstall
 bash "$installer" --uninstall --reset-token

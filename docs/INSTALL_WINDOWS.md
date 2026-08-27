@@ -21,19 +21,44 @@ The installer:
 - starts the loopback-only server and opens its authenticated dashboard;
 - starts the server at future sign-ins using the current user's Startup folder;
   and
-- opens the browser extensions page and prints the exact unpacked-extension
-  folder.
+- opens the browser extensions page and extension folder, copies the exact
+  folder path, and shows a numbered setup dialog that cannot be missed.
 
 Chrome and Edge deliberately do not allow an ordinary downloaded program to
 silently install an unpacked extension. Complete this one browser step:
 
-1. Enable **Developer mode**.
+1. In the browser page opened by the installer, enable **Developer mode**.
 2. Select **Load unpacked**.
-3. Choose the printed `...\Local Browser Bridge\extension` folder.
-4. Open the extension popup, paste the token shown by the server, and select
-   **Save and connect**.
+3. Paste the folder path already copied by the installer and choose the
+   `...\Local Browser Bridge\extension` folder.
+4. Return to the installer's guide and choose **OK**. It now copies the bridge
+   token without printing it.
+5. Open the extension popup, paste the copied token, and select **Save and
+   connect**.
 
 Reload tabs that were already open. Browser control is then ready.
+
+After installation, use the **Local Browser Bridge** folder in the Windows
+Start menu:
+
+- **Open Local Browser Bridge** starts the server if needed and opens the
+  authenticated dashboard;
+- **Finish Browser Extension Setup** reopens the extension page, folder, and
+  instructions; and
+- **Start Computer Helper** enables optional exact-window desktop control for
+  the current session.
+
+## Local shell access (optional)
+
+Shell access is full command access as your Windows user and is off by default.
+Enable persistent PowerShell/`cmd.exe` support only for a trusted local agent:
+
+```powershell
+& ([scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-windows.ps1'))) -EnableShell
+```
+
+Rerun the normal install command without `-EnableShell` to turn shell access
+back off at startup.
 
 ## Desktop control (optional)
 
@@ -71,6 +96,7 @@ $installer = [scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercon
 ```powershell
 & $installer -NoStartup
 & $installer -NoLaunch
+& $installer -EnableShell
 & $installer -InstallRoot 'D:\Apps\Local Browser Bridge'
 & $installer -Uninstall
 & $installer -Uninstall -ResetToken

@@ -1,6 +1,6 @@
 # Bridge protocol
 
-Protocol version: `1`. Package version examples below use `0.12.38`.
+Protocol version: `1`. Package version examples below use `0.12.39`.
 
 ## Transport and trust boundary
 
@@ -88,7 +88,7 @@ After mutual authentication succeeds, the server sends the normal welcome for th
   "type": "welcome",
   "protocolVersion": 1,
   "sessionId": "82b6b311-f71d-4a88-ae07-0b5e7a897815",
-  "serverVersion": "0.12.38",
+  "serverVersion": "0.12.39",
   "connector": "browser-extension"
 }
 ```
@@ -104,7 +104,7 @@ The connector must validate `protocolVersion`, `serverVersion`, `sessionId`, and
   "controllerSequence": 81,
   "controllerId": "38a72d1f-d124-4335-8f1e-9cb85777df14",
   "connectionId": "2f9ad9af-5bb7-42b3-a77d-a0c83a625792",
-  "version": "0.12.38",
+  "version": "0.12.39",
   "browser": "Google Chrome",
   "mode": "full-access",
   "capabilities": ["tabs.list", "page.observe", "browser.control.start"]
@@ -120,7 +120,7 @@ The computer helper uses the same negotiated envelope and reports its bounded na
   "type": "hello",
   "protocolVersion": 1,
   "sessionId": "d559c7b3-56fb-49e6-b661-801cfcb8807f",
-  "version": "0.12.38",
+  "version": "0.12.39",
   "processId": 4242,
   "platform": "macos",
   "architecture": "aarch64",
@@ -407,7 +407,7 @@ element       ::= "e" [1-9][0-9]{0,3}         ; e1 .. e9999
 
 The exact published 0.11.1 boundary run added a live top-level `same_process_frame` skip and a live `FRAME_ACTION_UNSUPPORTED` refusal, but failed 2 of 19 checks because the root-only auto-attach did not discover a depth-two OOPIF. Version 0.11.2 recursively arms each verified child session and handles child-originated target lifecycle events. A packaged local candidate then passed 22 of 22 checks: two OOPIF levels merged with accumulated offsets and a depth-two click landed with `event.isTrusted === true` ([../evidence/v0.11.1/README.md](../evidence/v0.11.1/README.md)). That candidate is developer-build evidence, not immutable release proof. Isolated-world survival across a frame's own same-document navigation and nested in-process-frame reporting remain harness-only or deferred.
 
-The first command to every child remains a discriminating routing probe: it must return that child's own frame ID. If a browser or intermediary strips `sessionId` and returns the root tree, frame support is disabled for the lease with `reason: "session_routing_unverified"`, every attached record is dropped, and the observation stays top-document-only. The checked-in negative run is an explicitly labelled fault injection; no released Chrome version is known to accept and silently ignore that field. Chrome 118–124 did not expose child-session routing in the extension API schema and rejected the child command, while Chrome 125 added the routed form. Version 0.12.38 declares Chrome 140 as its minimum because that line also supports restricting persisted local extension storage to trusted contexts, so every supported browser has the routed form.
+The first command to every child remains a discriminating routing probe: it must return that child's own frame ID. If a browser or intermediary strips `sessionId` and returns the root tree, frame support is disabled for the lease with `reason: "session_routing_unverified"`, every attached record is dropped, and the observation stays top-document-only. The checked-in negative run is an explicitly labelled fault injection; no released Chrome version is known to accept and silently ignore that field. Chrome 118–124 did not expose child-session routing in the extension API schema and rejected the child command, while Chrome 125 added the routed form. Version 0.12.39 declares Chrome 140 as its minimum because that line also supports restricting persisted local extension storage to trusted contexts, so every supported browser has the routed form.
 
 ### Condition waits
 
@@ -553,7 +553,7 @@ On macOS, either intentional server shutdown or unexpected transport loss termin
 
 To avoid a live-share render/action race, the helper keeps a bounded recent-frame lease: a rendered `frameId` remains usable for at most three seconds only while the current share ID, PID, native window ID, and complete window geometry still match. Everything else is stale. A native exact-window stream still shares the user's login and input environment; it is not an OS virtual display, remote-desktop session, VM, sandbox, or independent input seat.
 
-The exact v0.12.23 deliberate-concurrency run demonstrated this refusal boundary without weakening it: its app-share start receipt and 89/89 completed assertions passed, but the harness reused a pre-handoff frame after 43.807 seconds and the helper returned HTTP 409 `COMPUTER_STALE_FRAME` before dispatch. Version 0.12.24 retained the three-second helper lease and added a release-harness wait, within the already reserved handoff deadline, for a strictly newer streamed frame whose share ID, exact target, and complete window/image geometry match the pre-refresh authority; only that successor may derive the product click. Version 0.12.38 retains that contract. A timeout or mismatch fails closed; there is no retry with the stale frame and no relaxed helper freshness limit.
+The exact v0.12.23 deliberate-concurrency run demonstrated this refusal boundary without weakening it: its app-share start receipt and 89/89 completed assertions passed, but the harness reused a pre-handoff frame after 43.807 seconds and the helper returned HTTP 409 `COMPUTER_STALE_FRAME` before dispatch. Version 0.12.24 retained the three-second helper lease and added a release-harness wait, within the already reserved handoff deadline, for a strictly newer streamed frame whose share ID, exact target, and complete window/image geometry match the pre-refresh authority; only that successor may derive the product click. Version 0.12.39 retains that contract. A timeout or mismatch fails closed; there is no retry with the stale frame and no relaxed helper freshness limit.
 
 The helper re-enumerates the exact `(pid, native window id)` target before input and returns `COMPUTER_STALE_FRAME` if identity or geometry changed. macOS keyboard eligibility uses an independent all-window inventory, requires a known on-screen exact owner/layer/geometry row and a non-minimized AX top-level mapping, and does not treat same-PID sibling count as receiver authority. ScreenCaptureKit can add a same-PID layer-0 `AXDialog` for its title-bar indicator, so dispatch instead requires the app's exact `AXFocusedWindow`; text also requires the focused element to resolve to that window.
 
@@ -615,6 +615,75 @@ Legacy `displayId` and display-shaped aliases identify the selected window, not 
 ## REST API
 
 `POST /api/v1/command` exposes the same allowlisted methods. Bearer-token clients receive server-sanitized results; they never speak the connector WebSocket envelope directly. The localhost UI exchanges the master bridge token for an expiring random `Session` authorization capability and CSRF value. The capability is kept in the exact port origin's `sessionStorage`, not a host-wide localhost cookie. `/api/state`, `/api/events`, `/api/screenshot`, and `/api/computer/screenshot` require that session or a bearer token; mutations additionally require same-origin and CSRF proof.
+
+### Agent Fetch GET-only API
+
+`GET /api/v1/fetch/{capability}/{method}` exposes the same command dispatcher
+for agents whose only local networking primitive is a basic Web Fetch GET. The
+dashboard and server startup output provide the complete private Agent Fetch
+base URL. Its capability is a domain-separated SHA-256 derivation of the master
+bridge token: disclosing it does not disclose the master token, rotating the
+master token revokes it, and it is compared in constant time. It is still a
+credential with command authority and must be protected like the master token.
+
+Top-level query keys become method parameters. Canonical numbers, `true`,
+`false`, and `null` become JSON scalars; other values remain strings. Prefix a
+value with `str:` to force a numeric-looking string or `json:` for one explicit
+JSON value. Alternatively, put one URL-encoded JSON object in `params`; it
+cannot be mixed with direct keys.
+
+```text
+GET {AGENT_FETCH_BASE_URL}/status
+GET {AGENT_FETCH_BASE_URL}/tabs.list
+GET {AGENT_FETCH_BASE_URL}/page.navigate?callId=navigate-1&url=https%3A%2F%2Fexample.com
+GET {AGENT_FETCH_BASE_URL}/page.click?callId=click-1&params=%7B%22ref%22%3A%22g4.e2%22%2C%22generation%22%3A%22g4%22%7D
+```
+
+Every method except `status`, `tabs.list`, `browser.control.status`,
+`page.waitFor`, `computer.status`, `computer.share.status`, and `shell.status`
+requires `callId`. The GET transport uses the same atomic admission, cached
+result, outcome-unknown fencing, and replay namespace as POST, so retrying the
+exact URL cannot dispatch the action twice. Reusing its `callId` with different
+parameters returns `CALL_ID_REUSED`. Cancel an in-flight GET with
+`GET {AGENT_FETCH_BASE_URL}/cancel?callId=...`.
+
+The server sends `Cache-Control: no-store` and `Referrer-Policy: no-referrer`,
+keeps request logging disabled, rejects a browser-declared cross-site fetch,
+and still accepts only the exact loopback Host. The URL can nevertheless be
+retained by the calling agent, browser history, proxies, screenshots, or
+diagnostics outside the bridge. Do not place secrets in query parameters and
+prefer the bearer POST API when the client supports headers and request bodies.
+
+### Local shell methods
+
+`shell.status` reports whether shell authority is enabled and the native shell
+set. `shell.run` is accepted only when the server was started with
+`--enable-shell` or `LBB_ENABLE_SHELL=1`.
+
+```json
+{
+  "method": "shell.run",
+  "callId": "shell-42",
+  "params": {
+    "command": "pwd",
+    "shell": "default",
+    "cwd": "/path/to/worktree",
+    "timeoutMs": 30000
+  }
+}
+```
+
+Windows supports `powershell` (the default) and `cmd`; macOS supports `zsh`
+(the default) and `sh`. The command is non-interactive with null stdin. Each
+stream is retained up to 1 MiB while excess bytes are drained and marked
+truncated; commands are limited to 16 KiB and 120 seconds. Timeout terminates
+the process tree and returns `timedOut: true`. A nonzero exit is a completed
+command result, not a transport error. The activity log records only completion
+status, never the command, working directory, stdout, or stderr.
+
+Shell authority is full current-user code execution. It is not part of the
+computer helper, does not inherit exact-window restrictions, and is not a
+sandbox or approval system.
 
 ### Idempotent command replay
 

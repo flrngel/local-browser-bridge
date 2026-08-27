@@ -335,6 +335,7 @@ pub fn classify(legacy_code: &str) -> Taxonomy {
         | "ORIGIN_REJECTED"
         | "HOST_REJECTED"
         | "LEGACY_WEBSOCKET_CREDENTIAL_REJECTED" => TaxonomyCode::BlockedByPolicy,
+        "SHELL_DISABLED" => TaxonomyCode::BlockedByPolicy,
         "SENSITIVE_FIELD" | "COMPUTER_SENSITIVE_ELEMENT" => TaxonomyCode::SensitiveField,
         "BLOCKED_BY_DIALOG" => TaxonomyCode::BlockedByDialog,
         "COMMAND_CANCELED" | "COMPUTER_CANCELED" | "COMPUTER_POSTCONDITION_FAILED" => {
@@ -356,6 +357,7 @@ pub fn classify(legacy_code: &str) -> Taxonomy {
         | "COMPUTER_SHARE_SESSION_EXHAUSTED"
         | "NO_SCREENSHOT"
         | "NO_COMPUTER_SCREENSHOT" => TaxonomyCode::Unavailable,
+        "SHELL_UNAVAILABLE" => TaxonomyCode::Unavailable,
         "FRAME_ACTION_UNSUPPORTED"
         | "FRAME_REF_MISROUTED"
         | "BAD_REQUEST"
@@ -377,6 +379,8 @@ pub fn classify(legacy_code: &str) -> Taxonomy {
         | "COMPUTER_UNSUPPORTED_ACTION"
         | "COMPUTER_INVALID_ACTION_RECORD"
         | "INVALID_SANITIZER_STATE" => TaxonomyCode::InvalidRequest,
+        "SHELL_UNSUPPORTED" => TaxonomyCode::InvalidRequest,
+        "SHELL_FAILED" => TaxonomyCode::Unknown,
         code if code.ends_with("_OUTCOME_UNKNOWN") => TaxonomyCode::OutcomeUnknown,
         code if code.ends_with("_TIMEOUT") => TaxonomyCode::Timeout,
         code if code.ends_with("_OVERLOADED") => TaxonomyCode::Overloaded,
@@ -459,6 +463,7 @@ pub(crate) const LEGACY_CODES: &[(&str, TaxonomyCode)] = &[
         "LEGACY_WEBSOCKET_CREDENTIAL_REJECTED",
         TaxonomyCode::BlockedByPolicy,
     ),
+    ("SHELL_DISABLED", TaxonomyCode::BlockedByPolicy),
     ("SENSITIVE_FIELD", TaxonomyCode::SensitiveField),
     ("COMPUTER_SENSITIVE_ELEMENT", TaxonomyCode::SensitiveField),
     // The pending-dialog gate: mutations fail fast while a JavaScript
@@ -530,6 +535,7 @@ pub(crate) const LEGACY_CODES: &[(&str, TaxonomyCode)] = &[
     ),
     ("NO_SCREENSHOT", TaxonomyCode::Unavailable),
     ("NO_COMPUTER_SCREENSHOT", TaxonomyCode::Unavailable),
+    ("SHELL_UNAVAILABLE", TaxonomyCode::Unavailable),
     // Stale server-side observation prerequisites (coordinate contract).
     ("COMPUTER_STALE_FRAME", TaxonomyCode::StaleSnapshot),
     ("COMPUTER_STALE_POINTER", TaxonomyCode::StaleSnapshot),
@@ -564,12 +570,14 @@ pub(crate) const LEGACY_CODES: &[(&str, TaxonomyCode)] = &[
         TaxonomyCode::InvalidRequest,
     ),
     ("INVALID_SANITIZER_STATE", TaxonomyCode::InvalidRequest),
+    ("SHELL_UNSUPPORTED", TaxonomyCode::InvalidRequest),
     // Failure classes with no better information than the message.
     ("COMMAND_FAILED", TaxonomyCode::Unknown),
     ("CONTENT_COMMAND_FAILED", TaxonomyCode::Unknown),
     ("EVALUATION_FAILED", TaxonomyCode::Unknown),
     ("EXTENSION_ERROR", TaxonomyCode::Unknown),
     ("COMPUTER_ERROR", TaxonomyCode::Unknown),
+    ("SHELL_FAILED", TaxonomyCode::Unknown),
     ("COMPUTER_HELPER_FAILED", TaxonomyCode::Unknown),
     ("COMPUTER_INPUT_FAILED", TaxonomyCode::Unknown),
     ("COMPUTER_CAPTURE_FAILED", TaxonomyCode::Unknown),

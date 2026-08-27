@@ -92,6 +92,13 @@ main { width: min(1680px, 100%); margin: 0 auto; padding: 26px clamp(16px, 3vw, 
 .update-detail { margin-bottom: 0; color: var(--muted); font-size: 0.78rem; line-height: 1.45; }
 .release-actions { display: flex; gap: 9px; flex: 0 0 auto; }
 .release-link { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+.agent-access-panel { display: grid; grid-template-columns: minmax(240px, 0.72fr) minmax(360px, 1.28fr); gap: 24px; margin-bottom: 20px; border-left: 4px solid var(--accent); }
+.agent-access-panel h2 { margin-bottom: 7px; }
+.agent-access-controls { display: grid; gap: 8px; align-content: center; }
+.agent-access-controls label { color: var(--muted); font-size: 0.76rem; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; }
+.agent-url-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 9px; }
+.agent-url-row input { min-width: 0; }
+.agent-access-controls .target-meta { margin: 4px 0 0; }
 .control-panel { margin-bottom: 20px; border-left: 4px solid var(--warning); }
 .control-panel.control-active { border-left-color: var(--accent); box-shadow: 0 18px 48px rgba(0, 0, 0, 0.18), inset 0 0 40px rgba(184, 245, 93, 0.025); }
 .control-heading { align-items: center; }
@@ -253,6 +260,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 420px; overflo
   .guide { grid-template-columns: 1fr; }
   .boundary { grid-column: auto; }
   .release-panel { align-items: flex-start; flex-direction: column; }
+  .agent-access-panel { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 560px) {
@@ -260,6 +268,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 420px; overflo
   .activity-item { grid-template-columns: 1fr; gap: 3px; }
   .button-row { grid-template-columns: 1fr; }
   .release-actions { width: 100%; flex-direction: column; }
+  .agent-url-row { grid-template-columns: 1fr; }
   .connection-stack { justify-items: start; }
   .computer-heading { align-items: flex-start; }
   .computer-actions { width: 100%; flex-direction: column; }

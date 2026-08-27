@@ -4,6 +4,7 @@ param(
     [string]$InstallRoot = "",
     [switch]$NoStartup,
     [switch]$StartHelper,
+    [switch]$EnableShell,
     [switch]$NoLaunch,
     [switch]$Uninstall,
     [switch]$ResetToken,
@@ -14,6 +15,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 2.0
 $script:Repository = "flrngel/local-browser-bridge"
 $script:StartupName = "Local Browser Bridge.cmd"
+$script:StartMenuName = "Local Browser Bridge"
 
 function Get-Sha256([string]$Path) {
     $stream = [IO.File]::OpenRead($Path)
@@ -127,14 +129,58 @@ function Open-ExtensionsPage {
         if ($candidate -and [IO.File]::Exists($candidate)) {
             $url = if ([IO.Path]::GetFileName($candidate) -ieq "msedge.exe") { "edge://extensions" } else { "chrome://extensions" }
             Start-Process -FilePath $candidate -ArgumentList $url
-            return
+            return $true
         }
+    }
+    return $false
+}
+
+function Show-ExtensionSetup([string]$ExtensionRoot, [string]$Token) {
+    try { $ExtensionRoot | & (Join-Path $env:SystemRoot "System32\clip.exe") }
+    catch { }
+    Start-Process -FilePath $ExtensionRoot
+    $opened = Open-ExtensionsPage
+    $browserStep = if ($opened) {
+        "The browser extensions page is open."
+    }
+    else {
+        "Open chrome://extensions or edge://extensions in your browser."
+    }
+    $message = @"
+Finish browser setup now:
+
+1. $browserStep
+2. Turn on Developer mode.
+3. Click Load unpacked.
+4. Paste the extension folder path (already copied) and select it:
+   $ExtensionRoot
+Complete steps 1-4, then choose OK. The installer will copy the bridge token next.
+"@
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        $null = $shell.Popup($message, 0, "Finish Local Browser Bridge Setup", 64)
+        if ($Token -match '^[A-Za-z0-9_-]{32,}$') {
+            try { $Token | & (Join-Path $env:SystemRoot "System32\clip.exe") }
+            catch { }
+            $null = $shell.Popup("The bridge token is now copied. Open the Local Browser Bridge extension, paste it, and choose Save and connect.`n`nYou can repeat this guide from Start > Local Browser Bridge > Finish Browser Extension Setup.", 0, "Connect Local Browser Bridge", 64)
+        }
+        else {
+            $null = $shell.Popup("The server token is not ready yet. Open Local Browser Bridge from the Start menu, then run Finish Browser Extension Setup again.", 0, "Connect Local Browser Bridge", 48)
+        }
+    }
+    catch {
+        Write-Output $message
     }
 }
 
 function Remove-Install {
     $startup = Join-Path ([Environment]::GetFolderPath("Startup")) $script:StartupName
     if ([IO.File]::Exists($startup)) { [IO.File]::Delete($startup) }
+    $startMenu = Join-Path ([Environment]::GetFolderPath("Programs")) $script:StartMenuName
+    if ([IO.Directory]::Exists($startMenu)) {
+        Assert-OrdinaryDirectory $startMenu
+        [IO.Directory]::Delete($startMenu, $true)
+    }
     if ([IO.Directory]::Exists($InstallRoot)) {
         Assert-OrdinaryDirectory $InstallRoot
         Stop-InstalledProcesses $InstallRoot
@@ -224,8 +270,24 @@ try {
 
     $serverPath = Join-Path $InstallRoot $serverName
     $helperPath = Join-Path $InstallRoot $helperName
+    $serverArguments = if ($EnableShell) { " --enable-shell" } else { "" }
     $launcher = Join-Path $InstallRoot "Start Local Browser Bridge.cmd"
-    [IO.File]::WriteAllText($launcher, "@echo off`r`nstart `"Local Browser Bridge`" /min `"$serverPath`"`r`n", [Text.ASCIIEncoding]::new())
+    [IO.File]::WriteAllText($launcher, "@echo off`r`nstart `"Local Browser Bridge`" /min `"$serverPath`"$serverArguments`r`n", [Text.ASCIIEncoding]::new())
+    $dashboardLauncher = Join-Path $InstallRoot "Open Local Browser Bridge.cmd"
+    $tokenPath = Join-Path $env:USERPROFILE ".local-browser-bridge\token"
+    $dashboardCommand = "@echo off`r`nstart `"Local Browser Bridge`" /min `"$serverPath`"$serverArguments`r`npowershell.exe -NoLogo -NoProfile -NonInteractive -Command `"for (`$i=0; `$i -lt 100 -and -not (Test-Path -LiteralPath '$tokenPath'); `$i++) { Start-Sleep -Milliseconds 100 }; if (Test-Path -LiteralPath '$tokenPath') { `$t=[IO.File]::ReadAllText('$tokenPath').Trim(); Start-Process ('http://127.0.0.1:17373/#token=' + `$t) } else { Start-Process 'http://127.0.0.1:17373/' }`"`r`n"
+    [IO.File]::WriteAllText($dashboardLauncher, $dashboardCommand, [Text.ASCIIEncoding]::new())
+    $setupLauncher = Join-Path $InstallRoot "Finish Browser Extension Setup.cmd"
+    $setupCommand = "@echo off`r`nstart `"Extension folder`" explorer.exe `"$extensionRoot`"`r`nstart `"Extensions`" chrome.exe chrome://extensions 2>nul || start `"Extensions`" msedge.exe edge://extensions`r`npowershell.exe -NoLogo -NoProfile -Command `"`$p='$extensionRoot'; `$tp='$tokenPath'; try { `$p | clip.exe } catch {}; Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show('Turn on Developer mode, click Load unpacked, and paste the extension folder path already copied to your clipboard: ' + `$p + '. Choose OK after loading it.', 'Finish Local Browser Bridge Setup') | Out-Null; if (Test-Path -LiteralPath `$tp) { `$t=[IO.File]::ReadAllText(`$tp).Trim(); try { `$t | clip.exe } catch {}; [System.Windows.MessageBox]::Show('The bridge token is now copied. Open Local Browser Bridge, paste it, and choose Save and connect.', 'Connect Local Browser Bridge') | Out-Null }`"`r`n"
+    [IO.File]::WriteAllText($setupLauncher, $setupCommand, [Text.ASCIIEncoding]::new())
+    $helperLauncher = Join-Path $InstallRoot "Start Computer Helper.cmd"
+    [IO.File]::WriteAllText($helperLauncher, "@echo off`r`nstart `"Local Computer Helper`" /min `"$helperPath`"`r`n", [Text.ASCIIEncoding]::new())
+    $startMenu = Join-Path ([Environment]::GetFolderPath("Programs")) $script:StartMenuName
+    if (-not [IO.Directory]::Exists($startMenu)) { [IO.Directory]::CreateDirectory($startMenu) | Out-Null }
+    Assert-OrdinaryDirectory $startMenu
+    foreach ($shortcut in @($dashboardLauncher, $setupLauncher, $helperLauncher)) {
+        [IO.File]::Copy($shortcut, (Join-Path $startMenu ([IO.Path]::GetFileName($shortcut))), $true)
+    }
     if (-not $NoStartup) {
         $startup = Join-Path ([Environment]::GetFolderPath("Startup")) $script:StartupName
         [IO.File]::Copy($launcher, $startup, $true)
@@ -236,21 +298,35 @@ try {
     }
 
     if (-not $NoLaunch) {
-        Start-Process -FilePath $serverPath -WindowStyle Minimized
+        if ($EnableShell) {
+            Start-Process -FilePath $serverPath -ArgumentList "--enable-shell" -WindowStyle Minimized
+        }
+        else {
+            Start-Process -FilePath $serverPath -WindowStyle Minimized
+        }
         if ($StartHelper) { Start-Process -FilePath $helperPath -WindowStyle Minimized }
-        $tokenPath = Join-Path $env:USERPROFILE ".local-browser-bridge\token"
         $deadline = [DateTime]::UtcNow.AddSeconds(10)
         while (-not [IO.File]::Exists($tokenPath) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
         if ([IO.File]::Exists($tokenPath)) {
             $token = [IO.File]::ReadAllText($tokenPath).Trim()
             if ($token -match '^[A-Za-z0-9_-]{32,}$') { Start-Process "http://127.0.0.1:17373/#token=$token" }
         }
-        Open-ExtensionsPage
+        else {
+            $token = ""
+        }
+        Show-ExtensionSetup $extensionRoot $token
     }
 
     Write-Output "Installed Local Browser Bridge $resolved for the current user."
     Write-Output "Extension folder: $extensionRoot"
-    Write-Output "In chrome://extensions, enable Developer mode, choose Load unpacked, and select that folder."
+    Write-Output "Finish setup: open Start > Local Browser Bridge > Finish Browser Extension Setup."
+    Write-Output "Open later: Start > Local Browser Bridge > Open Local Browser Bridge."
+    if ($EnableShell) {
+        Write-Warning "Full current-user shell access is enabled for authenticated local API clients."
+    }
+    else {
+        Write-Output "Shell access is off. Re-run this installer with -EnableShell only if you intend to grant it."
+    }
     if (-not $StartHelper) { Write-Output "Desktop control remains off. Run '$helperPath' only when you want it." }
 }
 finally {
