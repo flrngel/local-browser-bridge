@@ -16,9 +16,11 @@ The installer:
 - accepts only an immutable stable GitHub Release with the exact expected asset
   inventory;
 - verifies GitHub's SHA-256 digest and `SHA256SUMS.txt` before running a binary;
-- installs the universal server, optional helper app, and extension under
+- installs the menu-bar Desktop Host, universal console server, optional helper
+  app, and extension under
   `$HOME/Applications/Local Browser Bridge`;
-- creates a current-user LaunchAgent and starts the loopback-only server;
+- creates a current-user LaunchAgent and starts the menu-bar app, which owns the
+  loopback-only server in-process and restarts only after an abnormal exit;
 - opens its authenticated dashboard; and
 - opens the browser extensions page and extension folder, copies the exact
   folder path, and shows a numbered setup dialog that cannot be missed.
@@ -37,10 +39,14 @@ silently install an unpacked extension. Complete this one browser step:
 
 Reload tabs that were already open. Browser control is then ready.
 
-The install folder also contains four double-click launchers:
+The install folder contains **Local Browser Bridge.app**. It is an
+`LSUIElement` app, so it appears in the menu bar without a Dock icon or Terminal
+window. Its menu reports live server, extension, helper, shell, and update state
+and provides dashboard, setup, token, helper, logs, update, and quit actions.
 
-- **Open Local Browser Bridge.command** starts the server if needed and opens
-  the authenticated dashboard;
+The folder also contains four maintenance launchers:
+
+- **Open Local Browser Bridge.command** opens the menu-bar app;
 - **Finish Browser Extension Setup.command** repeats the extension setup; and
 - **Start Computer Helper.command** opens optional desktop control; and
 - **Uninstall Local Browser Bridge.command** runs the version-matched safe
@@ -60,12 +66,9 @@ back off in the LaunchAgent.
 
 ## Desktop control (optional)
 
-The installer keeps desktop authority off by default. Open the helper only
-when you want one selected app window to be controllable:
-
-```bash
-open "$HOME/Applications/Local Browser Bridge/Local Computer Helper.app"
-```
+The installer keeps desktop authority off by default. Select **Start Computer
+Helper** from the menu-bar menu only when you want one selected app window to
+be controllable.
 
 On first use, macOS asks for **Screen & System Audio Recording** and
 **Accessibility** access for `Local Computer Helper`. Grant only the
@@ -107,8 +110,8 @@ The default removal:
 
 - unloads the exact current-user LaunchAgent;
 - stops only processes whose command starts inside the exact install folder;
-- removes only the installer-owned server, helper app, extension directory,
-  manifest, and launchers;
+- removes only the installer-owned Desktop Host app, server, helper app,
+  extension directory, manifest, and launchers;
 - removes the saved bridge token and the helper's exact macOS privacy grants;
   and
 - opens installed Chrome and Edge extension pages for the final browser-owned
@@ -174,4 +177,6 @@ them into logs, screenshots, issue reports, or untrusted pages.
 - **Helper exits or lacks capture/input:** start the server first, confirm the
   two privacy grants, and reopen the helper.
 - **Port 17373 is busy:** stop the other listener before rerunning the installer.
+- **No menu-bar icon appears:** open `Local Browser Bridge.app` from the install
+  folder and inspect **Open Logs** from its menu if startup failed.
 - **Need the manual procedure:** use [Manual and independent verification](INSTALL.md).

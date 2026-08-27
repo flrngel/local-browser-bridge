@@ -138,6 +138,58 @@ pub struct BridgeServer {
     state: AppState,
 }
 
+/// A credential-free status projection for the first-party desktop host.
+///
+/// This deliberately contains only the same coarse booleans and process
+/// identity already exposed by the loopback health/public-state surfaces. It
+/// never carries the bridge token, authenticated URLs, observations, window
+/// titles, or activity contents across the desktop event-loop boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BridgeStatusSnapshot {
+    pub extension_connected: bool,
+    pub computer_connected: bool,
+    pub computer_controller_process_id: Option<u32>,
+    pub browser_control_active: bool,
+    pub computer_share_active: bool,
+    pub shell_enabled: bool,
+    pub update_state: UpdateState,
+    pub latest_version: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct BridgeStatusMonitor {
+    state: AppState,
+}
+
+impl BridgeStatusMonitor {
+    pub async fn snapshot(&self) -> BridgeStatusSnapshot {
+        let data = self.state.data.read().await;
+        let computer = data.public.computer.as_ref();
+        let computer_connected = self.state.computer_hub.connected();
+        BridgeStatusSnapshot {
+            extension_connected: self.state.hub.connected(),
+            computer_connected,
+            computer_controller_process_id: computer_connected
+                .then(|| computer.map(|computer| computer.controller_process_id))
+                .flatten()
+                .filter(|process_id| *process_id != 0),
+            browser_control_active: data
+                .public
+                .browser_control
+                .get("active")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            computer_share_active: computer
+                .and_then(|computer| computer.share.get("active"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            shell_enabled: self.state.shell_enabled,
+            update_state: data.public.update.status.clone(),
+            latest_version: data.public.update.latest_version.clone(),
+        }
+    }
+}
+
 impl BridgeServer {
     pub async fn bind(config: ServerConfig) -> Result<Self, std::io::Error> {
         if !token_is_valid(&config.token) {
@@ -178,6 +230,12 @@ impl BridgeServer {
             "http://127.0.0.1:{}/api/v1/fetch/{}",
             self.state.bound_port, self.state.fetch_key
         )
+    }
+
+    pub fn status_monitor(&self) -> BridgeStatusMonitor {
+        BridgeStatusMonitor {
+            state: self.state.clone(),
+        }
     }
 
     pub async fn serve<F>(self, shutdown: F) -> Result<(), std::io::Error>
@@ -1218,6 +1276,7 @@ struct ComputerInfo {
     protocol_version: u64,
     session_id: String,
     process_id: u32,
+    controller_process_id: u32,
     compatible: bool,
     platform: String,
     architecture: String,
@@ -3379,10 +3438,17 @@ async fn handle_computer_hello(state: &AppState, connection_id: Uuid, message: &
         .and_then(Value::as_u64)
         .and_then(|value| u32::try_from(value).ok())
         .filter(|value| *value != 0);
+    let controller_process_id = message
+        .get("controllerProcessId")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| *value != 0)
+        .or(process_id);
     let envelope_compatible = version == VERSION
         && protocol_version == PROTOCOL_VERSION
         && session_id == connection_id.to_string()
-        && process_id.is_some();
+        && process_id.is_some()
+        && controller_process_id.is_some();
     let advertised_capabilities: Vec<String> = message
         .get("capabilities")
         .and_then(Value::as_array)
@@ -3436,6 +3502,7 @@ async fn handle_computer_hello(state: &AppState, connection_id: Uuid, message: &
         protocol_version,
         session_id: session_id.clone(),
         process_id: process_id.unwrap_or(0),
+        controller_process_id: controller_process_id.unwrap_or(0),
         compatible,
         platform,
         architecture: bounded(
@@ -10114,6 +10181,7 @@ mod tests {
                 protocol_version: PROTOCOL_VERSION,
                 session_id: "replacement-session".to_owned(),
                 process_id: 4242,
+                controller_process_id: 4242,
                 compatible: true,
                 platform: "test-os".to_owned(),
                 architecture: "test-arch".to_owned(),
@@ -10184,6 +10252,7 @@ mod tests {
                 protocol_version: PROTOCOL_VERSION,
                 session_id: replacement_connection.to_string(),
                 process_id: 4242,
+                controller_process_id: 4242,
                 compatible: true,
                 platform: "test-os".to_owned(),
                 architecture: "test-arch".to_owned(),
@@ -10333,6 +10402,7 @@ mod tests {
                 protocol_version: PROTOCOL_VERSION,
                 session_id: TEST_COMPUTER_SESSION_ID.to_owned(),
                 process_id: 4242,
+                controller_process_id: 4242,
                 compatible: true,
                 platform: "test-os".to_owned(),
                 architecture: "test-arch".to_owned(),
@@ -10567,6 +10637,7 @@ mod tests {
                 protocol_version: PROTOCOL_VERSION,
                 session_id: TEST_COMPUTER_SESSION_ID.to_owned(),
                 process_id: 4242,
+                controller_process_id: 4242,
                 compatible: true,
                 platform: "test-os".to_owned(),
                 architecture: "test-arch".to_owned(),

@@ -11,7 +11,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 2.0
 $script:OwnerMarker = ".lbb-install-owner"
 $script:OwnerMarkerValue = "local-browser-bridge-install-v1"
-$script:StartupName = "Local Browser Bridge.cmd"
+$script:StartupName = "Local Browser Bridge.lnk"
 $script:StartMenuName = "Local Browser Bridge"
 $script:RemovedInstall = $false
 
@@ -144,7 +144,7 @@ function Test-AllowlistedInstallName([string]$Name) {
         "Uninstall Local Browser Bridge.cmd",
         $script:OwnerMarker
     )) { return $true }
-    return $Name -cmatch '^local-(browser-bridge|computer-helper)-v[0-9]+\.[0-9]+\.[0-9]+-windows-x86_64\.exe$'
+    return $Name -cmatch '^local-(browser-bridge(?:-desktop)?|computer-helper)-v[0-9]+\.[0-9]+\.[0-9]+-windows-x86_64\.exe$'
 }
 
 function Get-AllowlistedProductFiles([string]$Root) {
@@ -229,19 +229,39 @@ function Test-OwnedLauncher([string]$Path, [string]$Root) {
         ($content.Contains($Root) -or $content.Contains("flrngel/local-browser-bridge"))
 }
 
+function Test-OwnedShortcut([string]$Path, [string]$Root) {
+    if (-not [IO.File]::Exists($Path)) { return $false }
+    Assert-OrdinaryFileOrMissing $Path
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($Path)
+        return ([string]$shortcut.TargetPath).Contains($Root) -or
+            ([string]$shortcut.Arguments).Contains($Root) -or
+            ([string]$shortcut.WorkingDirectory).Contains($Root) -or
+            ([string]$shortcut.Arguments).Contains("flrngel/local-browser-bridge")
+    }
+    catch { return $false }
+}
+
 function Remove-StartupAndStartMenu([string]$Root) {
     $startupDirectory = [Environment]::GetFolderPath("Startup")
     Assert-OrdinaryDirectory $startupDirectory
-    $startup = Join-Path $startupDirectory $script:StartupName
-    if ([IO.File]::Exists($startup)) {
-        if (Test-OwnedLauncher $startup $Root) { Remove-OrdinaryFile $startup }
-        else { Write-Warning "Retained a same-named Startup item that was not recognized as product-owned: $startup" }
+    foreach ($startupName in @($script:StartupName, "Local Browser Bridge.cmd")) {
+        $startup = Join-Path $startupDirectory $startupName
+        if ([IO.File]::Exists($startup)) {
+            $owned = if ($startup.EndsWith(".lnk")) { Test-OwnedShortcut $startup $Root } else { Test-OwnedLauncher $startup $Root }
+            if ($owned) { Remove-OrdinaryFile $startup }
+            else { Write-Warning "Retained a same-named Startup item that was not recognized as product-owned: $startup" }
+        }
     }
 
     $startMenu = Join-Path ([Environment]::GetFolderPath("Programs")) $script:StartMenuName
     if (-not [IO.Directory]::Exists($startMenu)) { return }
     Assert-OrdinaryDirectory $startMenu
     foreach ($name in @(
+        "Local Browser Bridge.lnk",
+        "Finish Browser Extension Setup.lnk",
+        "Uninstall Local Browser Bridge.lnk",
         "Open Local Browser Bridge.cmd",
         "Finish Browser Extension Setup.cmd",
         "Start Computer Helper.cmd",
@@ -249,7 +269,8 @@ function Remove-StartupAndStartMenu([string]$Root) {
     )) {
         $path = Join-Path $startMenu $name
         if ([IO.File]::Exists($path)) {
-            if (Test-OwnedLauncher $path $Root) { Remove-OrdinaryFile $path }
+            $owned = if ($path.EndsWith(".lnk")) { Test-OwnedShortcut $path $Root } else { Test-OwnedLauncher $path $Root }
+            if ($owned) { Remove-OrdinaryFile $path }
             else { Write-Warning "Retained an unrecognized Start-menu file: $path" }
         }
     }

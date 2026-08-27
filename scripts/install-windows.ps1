@@ -14,7 +14,7 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 2.0
 $script:Repository = "flrngel/local-browser-bridge"
-$script:StartupName = "Local Browser Bridge.cmd"
+$script:StartupName = "Local Browser Bridge.lnk"
 $script:StartMenuName = "Local Browser Bridge"
 $script:OwnerMarker = ".lbb-install-owner"
 $script:OwnerMarkerValue = "local-browser-bridge-install-v1"
@@ -169,7 +169,7 @@ function Test-AllowlistedInstallName([string]$Name) {
         "Uninstall Local Browser Bridge.cmd",
         $script:OwnerMarker
     )) { return $true }
-    return $Name -cmatch '^local-(browser-bridge|computer-helper)-v[0-9]+\.[0-9]+\.[0-9]+-windows-x86_64\.exe$'
+    return $Name -cmatch '^local-(browser-bridge(?:-desktop)?|computer-helper)-v[0-9]+\.[0-9]+\.[0-9]+-windows-x86_64\.exe$'
 }
 
 function Test-InstallerOwnedRoot([string]$Root) {
@@ -236,6 +236,37 @@ function Test-OwnedLauncher([string]$Path, [string]$Root) {
         ($content.Contains($Root) -or $content.Contains("flrngel/local-browser-bridge"))
 }
 
+function New-OwnedShortcut(
+    [string]$Path,
+    [string]$TargetPath,
+    [string]$Arguments,
+    [string]$WorkingDirectory,
+    [string]$Description
+) {
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut($Path)
+    $shortcut.TargetPath = $TargetPath
+    $shortcut.Arguments = $Arguments
+    $shortcut.WorkingDirectory = $WorkingDirectory
+    $shortcut.Description = $Description
+    $shortcut.WindowStyle = 1
+    $shortcut.Save()
+}
+
+function Test-OwnedShortcut([string]$Path, [string]$Root) {
+    if (-not [IO.File]::Exists($Path)) { return $false }
+    Assert-OrdinaryFile $Path
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($Path)
+        return ([string]$shortcut.TargetPath).Contains($Root) -or
+            ([string]$shortcut.Arguments).Contains($Root) -or
+            ([string]$shortcut.WorkingDirectory).Contains($Root) -or
+            ([string]$shortcut.Arguments).Contains("flrngel/local-browser-bridge")
+    }
+    catch { return $false }
+}
+
 function Open-ExtensionsPage {
     $candidates = @(
         (Join-Path ${env:ProgramFiles} "Google\Chrome\Application\chrome.exe"),
@@ -299,15 +330,21 @@ function Remove-Install {
     }
     $startupDirectory = [Environment]::GetFolderPath("Startup")
     Assert-OrdinaryDirectory $startupDirectory
-    $startup = Join-Path $startupDirectory $script:StartupName
-    if ([IO.File]::Exists($startup)) {
-        if (Test-OwnedLauncher $startup $InstallRoot) { [IO.File]::Delete($startup) }
-        else { Write-Warning "Retained an unrecognized same-named Startup item: $startup" }
+    foreach ($startupName in @($script:StartupName, "Local Browser Bridge.cmd")) {
+        $startup = Join-Path $startupDirectory $startupName
+        if ([IO.File]::Exists($startup)) {
+            $owned = if ($startup.EndsWith(".lnk")) { Test-OwnedShortcut $startup $InstallRoot } else { Test-OwnedLauncher $startup $InstallRoot }
+            if ($owned) { [IO.File]::Delete($startup) }
+            else { Write-Warning "Retained an unrecognized same-named Startup item: $startup" }
+        }
     }
     $startMenu = Join-Path ([Environment]::GetFolderPath("Programs")) $script:StartMenuName
     if ([IO.Directory]::Exists($startMenu)) {
         Assert-OrdinaryDirectory $startMenu
         foreach ($name in @(
+            "Local Browser Bridge.lnk",
+            "Finish Browser Extension Setup.lnk",
+            "Uninstall Local Browser Bridge.lnk",
             "Open Local Browser Bridge.cmd",
             "Finish Browser Extension Setup.cmd",
             "Start Computer Helper.cmd",
@@ -315,7 +352,8 @@ function Remove-Install {
         )) {
             $path = Join-Path $startMenu $name
             if ([IO.File]::Exists($path)) {
-                if (Test-OwnedLauncher $path $InstallRoot) { [IO.File]::Delete($path) }
+                $owned = if ($path.EndsWith(".lnk")) { Test-OwnedShortcut $path $InstallRoot } else { Test-OwnedLauncher $path $InstallRoot }
+                if ($owned) { [IO.File]::Delete($path) }
                 else { Write-Warning "Retained an unrecognized Start-menu file: $path" }
             }
         }
@@ -419,47 +457,61 @@ try {
     [IO.Directory]::Move($extensionStage, $extensionRoot)
     [IO.File]::WriteAllText((Join-Path $InstallRoot $script:OwnerMarker), $script:OwnerMarkerValue + "`n", (New-Object Text.UTF8Encoding($false)))
 
-    $serverPath = Join-Path $InstallRoot $serverName
-    $helperPath = Join-Path $InstallRoot $helperName
-    $serverArguments = if ($EnableShell) { " --enable-shell" } else { "" }
-    $launcher = Join-Path $InstallRoot "Start Local Browser Bridge.cmd"
-    [IO.File]::WriteAllText($launcher, "@echo off`r`nstart `"Local Browser Bridge`" /min `"$serverPath`"$serverArguments`r`n", [Text.ASCIIEncoding]::new())
-    $dashboardLauncher = Join-Path $InstallRoot "Open Local Browser Bridge.cmd"
+    $desktopPath = Join-Path $InstallRoot $serverName
+    $startupArguments = if ($EnableShell) { "--enable-shell" } else { "" }
+    $launchArguments = @()
+    if ($EnableShell) { $launchArguments += "--enable-shell" }
+    if ($StartHelper) { $launchArguments += "--start-helper" }
+    $launchArgumentText = $launchArguments -join " "
     $tokenPath = Join-Path $env:USERPROFILE ".local-browser-bridge\token"
-    $dashboardCommand = "@echo off`r`nstart `"Local Browser Bridge`" /min `"$serverPath`"$serverArguments`r`npowershell.exe -NoLogo -NoProfile -NonInteractive -Command `"for (`$i=0; `$i -lt 100 -and -not (Test-Path -LiteralPath '$tokenPath'); `$i++) { Start-Sleep -Milliseconds 100 }; if (Test-Path -LiteralPath '$tokenPath') { `$t=[IO.File]::ReadAllText('$tokenPath').Trim(); Start-Process ('http://127.0.0.1:17373/#token=' + `$t) } else { Start-Process 'http://127.0.0.1:17373/' }`"`r`n"
-    [IO.File]::WriteAllText($dashboardLauncher, $dashboardCommand, [Text.ASCIIEncoding]::new())
-    $setupLauncher = Join-Path $InstallRoot "Finish Browser Extension Setup.cmd"
-    $setupCommand = "@echo off`r`nstart `"Extension folder`" explorer.exe `"$extensionRoot`"`r`nstart `"Extensions`" chrome.exe chrome://extensions 2>nul || start `"Extensions`" msedge.exe edge://extensions`r`npowershell.exe -NoLogo -NoProfile -Command `"`$p='$extensionRoot'; `$tp='$tokenPath'; try { `$p | clip.exe } catch {}; Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show('Turn on Developer mode, click Load unpacked, and paste the extension folder path already copied to your clipboard: ' + `$p + '. Choose OK after loading it.', 'Finish Local Browser Bridge Setup') | Out-Null; if (Test-Path -LiteralPath `$tp) { `$t=[IO.File]::ReadAllText(`$tp).Trim(); try { `$t | clip.exe } catch {}; [System.Windows.MessageBox]::Show('The bridge token is now copied. Open Local Browser Bridge, paste it, and choose Save and connect.', 'Connect Local Browser Bridge') | Out-Null }`"`r`n"
-    [IO.File]::WriteAllText($setupLauncher, $setupCommand, [Text.ASCIIEncoding]::new())
-    $helperLauncher = Join-Path $InstallRoot "Start Computer Helper.cmd"
-    [IO.File]::WriteAllText($helperLauncher, "@echo off`r`nstart `"Local Computer Helper`" /min `"$helperPath`"`r`n", [Text.ASCIIEncoding]::new())
-    $uninstallLauncher = Join-Path $InstallRoot "Uninstall Local Browser Bridge.cmd"
     $uninstallerUrl = "https://raw.githubusercontent.com/$($script:Repository)/v$resolved/scripts/uninstall-windows.ps1"
-    $uninstallCommand = "@echo off`r`nrem Local Browser Bridge safe uninstaller`r`npowershell.exe -NoLogo -NoProfile -Command `"& ([scriptblock]::Create((Invoke-RestMethod '$uninstallerUrl')))`"`r`npause`r`n"
-    [IO.File]::WriteAllText($uninstallLauncher, $uninstallCommand, [Text.ASCIIEncoding]::new())
+    $startupDirectory = [Environment]::GetFolderPath("Startup")
+    Assert-OrdinaryDirectory $startupDirectory
+    $legacyStartup = Join-Path $startupDirectory "Local Browser Bridge.cmd"
+    if ([IO.File]::Exists($legacyStartup) -and (Test-OwnedLauncher $legacyStartup $InstallRoot)) {
+        [IO.File]::Delete($legacyStartup)
+    }
     $startMenu = Join-Path ([Environment]::GetFolderPath("Programs")) $script:StartMenuName
     if (-not [IO.Directory]::Exists($startMenu)) { [IO.Directory]::CreateDirectory($startMenu) | Out-Null }
     Assert-OrdinaryDirectory $startMenu
-    foreach ($shortcut in @($dashboardLauncher, $setupLauncher, $helperLauncher, $uninstallLauncher)) {
-        [IO.File]::Copy($shortcut, (Join-Path $startMenu ([IO.Path]::GetFileName($shortcut))), $true)
+    foreach ($legacyName in @(
+        "Open Local Browser Bridge.cmd",
+        "Finish Browser Extension Setup.cmd",
+        "Start Computer Helper.cmd",
+        "Uninstall Local Browser Bridge.cmd"
+    )) {
+        $legacyPath = Join-Path $startMenu $legacyName
+        if ([IO.File]::Exists($legacyPath) -and (Test-OwnedLauncher $legacyPath $InstallRoot)) {
+            [IO.File]::Delete($legacyPath)
+        }
     }
+    New-OwnedShortcut `
+        (Join-Path $startMenu "Local Browser Bridge.lnk") `
+        $desktopPath "" $InstallRoot "Open Local Browser Bridge"
+    New-OwnedShortcut `
+        (Join-Path $startMenu "Finish Browser Extension Setup.lnk") `
+        $desktopPath "--extension-setup" $InstallRoot "Finish Local Browser Bridge extension setup"
+    $powershellPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    $uninstallArguments = "-NoLogo -NoProfile -WindowStyle Hidden -Command `"& ([scriptblock]::Create((Invoke-RestMethod '$uninstallerUrl')))`""
+    New-OwnedShortcut `
+        (Join-Path $startMenu "Uninstall Local Browser Bridge.lnk") `
+        $powershellPath $uninstallArguments $InstallRoot "Uninstall Local Browser Bridge"
     if (-not $NoStartup) {
-        $startup = Join-Path ([Environment]::GetFolderPath("Startup")) $script:StartupName
-        [IO.File]::Copy($launcher, $startup, $true)
+        $startup = Join-Path $startupDirectory $script:StartupName
+        New-OwnedShortcut $startup $desktopPath $startupArguments $InstallRoot "Start Local Browser Bridge at sign-in"
     }
     else {
-        $startup = Join-Path ([Environment]::GetFolderPath("Startup")) $script:StartupName
+        $startup = Join-Path $startupDirectory $script:StartupName
         if ([IO.File]::Exists($startup)) { [IO.File]::Delete($startup) }
     }
 
     if (-not $NoLaunch) {
-        if ($EnableShell) {
-            Start-Process -FilePath $serverPath -ArgumentList "--enable-shell" -WindowStyle Minimized
+        if ([string]::IsNullOrWhiteSpace($launchArgumentText)) {
+            Start-Process -FilePath $desktopPath
         }
         else {
-            Start-Process -FilePath $serverPath -WindowStyle Minimized
+            Start-Process -FilePath $desktopPath -ArgumentList $launchArgumentText
         }
-        if ($StartHelper) { Start-Process -FilePath $helperPath -WindowStyle Minimized }
         $deadline = [DateTime]::UtcNow.AddSeconds(10)
         while (-not [IO.File]::Exists($tokenPath) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
         if ([IO.File]::Exists($tokenPath)) {
@@ -475,14 +527,14 @@ try {
     Write-Output "Installed Local Browser Bridge $resolved for the current user."
     Write-Output "Extension folder: $extensionRoot"
     Write-Output "Finish setup: open Start > Local Browser Bridge > Finish Browser Extension Setup."
-    Write-Output "Open later: Start > Local Browser Bridge > Open Local Browser Bridge."
+    Write-Output "Open later: Start > Local Browser Bridge > Local Browser Bridge."
     if ($EnableShell) {
         Write-Warning "Full current-user shell access is enabled for authenticated local API clients."
     }
     else {
         Write-Output "Shell access is off. Re-run this installer with -EnableShell only if you intend to grant it."
     }
-    if (-not $StartHelper) { Write-Output "Desktop control remains off. Run '$helperPath' only when you want it." }
+    if (-not $StartHelper) { Write-Output "Desktop control remains off. Start it from the tray menu only when you want it." }
 }
 finally {
     if ([IO.Directory]::Exists($stage)) { [IO.Directory]::Delete($stage, $true) }

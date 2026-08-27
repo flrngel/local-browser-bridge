@@ -183,15 +183,15 @@ if [[ "$(uname -s)" == "Darwin" ]] && command -v brew >/dev/null 2>&1; then
   export PATH
 fi
 
-windows_server_exe=""
+windows_desktop_exe=""
 windows_helper_exe=""
 if [[ "${OS:-}" == "Windows_NT" ]]; then
   cargo build --locked --release --bins --target x86_64-pc-windows-msvc
-  windows_server_exe="target/x86_64-pc-windows-msvc/release/local-browser-bridge.exe"
+  windows_desktop_exe="target/x86_64-pc-windows-msvc/release/local-browser-bridge-desktop.exe"
   windows_helper_exe="target/x86_64-pc-windows-msvc/release/local-computer-helper.exe"
 elif command -v cargo-xwin >/dev/null 2>&1 || cargo xwin --version >/dev/null 2>&1; then
   cargo xwin build --locked --release --bins --target x86_64-pc-windows-msvc
-  windows_server_exe="target/x86_64-pc-windows-msvc/release/local-browser-bridge.exe"
+  windows_desktop_exe="target/x86_64-pc-windows-msvc/release/local-browser-bridge-desktop.exe"
   windows_helper_exe="target/x86_64-pc-windows-msvc/release/local-computer-helper.exe"
 else
   echo "Official Windows artifacts require the x86_64-pc-windows-msvc target. Use the tagged GitHub release workflow or install cargo-xwin." >&2
@@ -200,7 +200,7 @@ fi
 
 windows_output="$release_stage/local-browser-bridge-v${version}-windows-x86_64.exe"
 windows_helper_output="$release_stage/local-computer-helper-v${version}-windows-x86_64.exe"
-cp "$windows_server_exe" "$windows_output"
+cp "$windows_desktop_exe" "$windows_output"
 cp "$windows_helper_exe" "$windows_helper_output"
 for output in "$windows_output" "$windows_helper_output"; do
   if [[ "$(od -An -tx1 -N2 "$output" | tr -d ' \n')" != "4d5a" ]]; then
@@ -219,7 +219,7 @@ else
     exit 1
   fi
   for output in "$windows_output" "$windows_helper_output"; do
-    pe_report="$(llvm-readobj --coff-imports --coff-resources "$output")"
+    pe_report="$(llvm-readobj --file-headers --coff-imports --coff-resources "$output")"
     if grep -Eqi 'VCRUNTIME|MSVCP|api-ms-win-crt' <<<"$pe_report"; then
       echo "Windows executable still imports a separately distributed Visual C++ runtime: $output" >&2
       exit 1
@@ -229,6 +229,8 @@ else
       exit 1
     fi
   done
+  llvm-readobj --file-headers "$windows_output" | grep -Fq 'IMAGE_SUBSYSTEM_WINDOWS_GUI' \
+    || { echo "Windows Desktop Host is not linked as a GUI-subsystem executable." >&2; exit 1; }
 fi
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -243,7 +245,9 @@ rustup target add aarch64-apple-darwin x86_64-apple-darwin
 cargo build --locked --release --bins --target aarch64-apple-darwin
 cargo build --locked --release --bins --target x86_64-apple-darwin
 mac_stage="$(mktemp -d)"
-mkdir -p "$mac_stage/Local Computer Helper.app/Contents/MacOS"
+mkdir -p \
+  "$mac_stage/Local Browser Bridge.app/Contents/MacOS" \
+  "$mac_stage/Local Computer Helper.app/Contents/MacOS"
 cp LICENSE THIRD_PARTY_LICENSES.txt "$mac_stage/"
 chmod 644 "$mac_stage/LICENSE" "$mac_stage/THIRD_PARTY_LICENSES.txt"
 lipo -create \
@@ -251,12 +255,23 @@ lipo -create \
   target/x86_64-apple-darwin/release/local-browser-bridge \
   -output "$mac_stage/local-browser-bridge"
 lipo -create \
+  target/aarch64-apple-darwin/release/local-browser-bridge-desktop \
+  target/x86_64-apple-darwin/release/local-browser-bridge-desktop \
+  -output "$mac_stage/Local Browser Bridge.app/Contents/MacOS/local-browser-bridge-desktop"
+lipo -create \
   target/aarch64-apple-darwin/release/local-computer-helper \
   target/x86_64-apple-darwin/release/local-computer-helper \
   -output "$mac_stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"
 sed "s/@VERSION@/$version/g" packaging/macos/Info.plist.in > "$mac_stage/Local Computer Helper.app/Contents/Info.plist"
-chmod 755 "$mac_stage/local-browser-bridge" "$mac_stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"
-for executable in "$mac_stage/local-browser-bridge" "$mac_stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"; do
+sed "s/@VERSION@/$version/g" packaging/macos/DesktopInfo.plist.in > "$mac_stage/Local Browser Bridge.app/Contents/Info.plist"
+chmod 755 \
+  "$mac_stage/local-browser-bridge" \
+  "$mac_stage/Local Browser Bridge.app/Contents/MacOS/local-browser-bridge-desktop" \
+  "$mac_stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"
+for executable in \
+  "$mac_stage/local-browser-bridge" \
+  "$mac_stage/Local Browser Bridge.app/Contents/MacOS/local-browser-bridge-desktop" \
+  "$mac_stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"; do
   architectures="$(lipo -archs "$executable")"
   if [[ "$architectures" != *"arm64"* || "$architectures" != *"x86_64"* ]]; then
     echo "macOS universal binary verification failed for $executable: $architectures" >&2
@@ -264,8 +279,12 @@ for executable in "$mac_stage/local-browser-bridge" "$mac_stage/Local Computer H
   fi
 done
 test "$("$mac_stage/local-browser-bridge" --version)" = "local-browser-bridge $version"
+test "$("$mac_stage/Local Browser Bridge.app/Contents/MacOS/local-browser-bridge-desktop" --version)" = "local-browser-bridge-desktop $version"
 test "$("$mac_stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper" --version)" = "local-computer-helper $version"
-for executable in "$mac_stage/local-browser-bridge" "$mac_stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"; do
+for executable in \
+  "$mac_stage/local-browser-bridge" \
+  "$mac_stage/Local Browser Bridge.app/Contents/MacOS/local-browser-bridge-desktop" \
+  "$mac_stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"; do
   license_report="$("$executable" --licenses)"
   grep -Fq 'Local Browser Bridge third-party licenses' <<<"$license_report"
   grep -Fq 'MIT License' <<<"$license_report"
@@ -273,14 +292,17 @@ for executable in "$mac_stage/local-browser-bridge" "$mac_stage/Local Computer H
 done
 codesign --force --sign - "$mac_stage/local-browser-bridge"
 codesign --verify --strict "$mac_stage/local-browser-bridge"
+codesign --force --deep --sign - "$mac_stage/Local Browser Bridge.app"
+codesign --verify --deep --strict "$mac_stage/Local Browser Bridge.app"
 codesign --force --deep --sign - "$mac_stage/Local Computer Helper.app"
 codesign --verify --deep --strict "$mac_stage/Local Computer Helper.app"
 bash scripts/verify-macos-artifacts.sh \
   "$version" \
   "$mac_stage/local-browser-bridge" \
-  "$mac_stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper"
+  "$mac_stage/Local Computer Helper.app/Contents/MacOS/local-computer-helper" \
+  "$mac_stage/Local Browser Bridge.app/Contents/MacOS/local-browser-bridge-desktop"
 mac_output="$release_stage/local-browser-bridge-v${version}-macos-universal.tar.gz"
-COPYFILE_DISABLE=1 tar --format ustar --no-xattrs -czf "$mac_output" -C "$mac_stage" local-browser-bridge "Local Computer Helper.app" LICENSE THIRD_PARTY_LICENSES.txt
+COPYFILE_DISABLE=1 tar --format ustar --no-xattrs -czf "$mac_output" -C "$mac_stage" local-browser-bridge "Local Browser Bridge.app" "Local Computer Helper.app" LICENSE THIRD_PARTY_LICENSES.txt
 
 checksum_output="$release_stage/SHA256SUMS.txt"
 assets=("$(basename "$windows_output")" "$(basename "$windows_helper_output")" "$(basename "$mac_output")" "$(basename "$extension_output")")
@@ -293,6 +315,7 @@ else
 fi
 unzip -tq "$extension_output" >/dev/null
 tar -tzf "$mac_output" | grep -Fxq local-browser-bridge
+tar -tzf "$mac_output" | grep -Fxq "Local Browser Bridge.app/Contents/MacOS/local-browser-bridge-desktop"
 tar -tzf "$mac_output" | grep -Fxq "Local Computer Helper.app/Contents/MacOS/local-computer-helper"
 bash scripts/verify-release-assets.sh "$version" "$release_stage"
 

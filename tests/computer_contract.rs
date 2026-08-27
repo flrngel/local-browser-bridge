@@ -2918,7 +2918,7 @@ fn withdrawn_v0_12_9_macos_cursor_invariant_attempt_is_byte_exact_and_fail_close
 }
 
 #[test]
-fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
+fn latest_macos_candidate_evidence_remains_version_bound_and_reduced() {
     let entries = fs::read_dir("evidence/v0.12.41/computer")
         .unwrap()
         .map(Result::unwrap)
@@ -2951,12 +2951,12 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
         fs::read_to_string("evidence/v0.12.41/computer/HelperEvidenceFixture.swift").unwrap();
     let readme = fs::read_to_string("evidence/v0.12.41/computer/README.md").unwrap();
 
-    assert!(rig.contains(&format!("const EXPECTED_VERSION = \"{VERSION}\";")));
+    assert!(rig.contains("const EXPECTED_VERSION = \"0.12.41\";"));
     assert!(rig.contains("const EXPECTED_ARCHIVE = `local-browser-bridge-v${EXPECTED_VERSION}-macos-universal.tar.gz`;"));
     assert!(rig.contains("status: \"passed-release-candidate\""));
     assert!(rig.contains("evidenceClass: \"exact-release-candidate-package-live-observation\""));
     assert!(rig.contains("candidateNotice:"));
-    assert!(fixture.contains(&format!("LBB v{VERSION} Persistent SCStream Evidence")));
+    assert!(fixture.contains("LBB v0.12.41 Persistent SCStream Evidence"));
     assert!(fixture.contains("var evidenceLane = \"\""));
     assert!(fixture.contains("\"evidence-lane=\\(evidenceLane)\".draw("));
     assert!(fixture.contains("environment[\"LBB_FIXTURE_EVIDENCE_LANE\"]"));
@@ -2969,10 +2969,8 @@ fn macos_candidate_evidence_targets_current_version_and_only_reduced_outputs() {
     assert!(readme.contains("`evidence-lane=quiet`"));
     assert!(readme.contains("all twelve lane screenshots to have distinct file SHA-256"));
     assert!(readme.contains("distinct canonical decoded-RGBA pixel SHA-256 digests"));
-    assert!(readme.contains(&format!("macOS v{VERSION} server and helper")));
-    assert!(readme.contains(&format!(
-        "local-browser-bridge-v{VERSION}-macos-universal.tar.gz"
-    )));
+    assert!(readme.contains("macOS v0.12.41 server and helper"));
+    assert!(readme.contains("local-browser-bridge-v0.12.41-macos-universal.tar.gz"));
     assert!(!rig.replace("v0.12.41", "").contains("v0.12.1"));
     assert!(!fixture.replace("v0.12.41", "").contains("v0.12.1"));
     assert!(!rig.replace("v0.12.41", "").contains("v0.12.2"));

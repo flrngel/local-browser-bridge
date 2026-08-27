@@ -49,6 +49,11 @@ fn embed_windows_resources() {
             description: "Local Browser Bridge Computer Helper",
             original_filename: "local-computer-helper.exe",
         },
+        WindowsVersionResource {
+            bin: "local-browser-bridge-desktop",
+            description: "Local Browser Bridge Desktop Host",
+            original_filename: "local-browser-bridge-desktop.exe",
+        },
     ] {
         let resource_path = out_dir.join(format!("{}-version.rc", resource.bin));
         fs::write(
