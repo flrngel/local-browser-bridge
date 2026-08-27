@@ -128,6 +128,11 @@ fn release_workflow_and_local_builder_package_both_processes() {
     let handoff_self_test = source("scripts/verify-macos-app-share-handoff-self-test.sh");
     assert!(handoff_self_test.contains("scratch=\"$(mktemp -d"));
     assert!(!handoff_self_test.contains("release_stage"));
+    assert!(source(".github/workflows/ci.yml").contains(
+        "verify-macos-app-share-handoff-self-test.sh 0.12.41 --historical-source"
+    ));
+    assert!(!source(".github/workflows/deploy.yml").contains("--historical-source"));
+    assert!(!local.contains("--historical-source"));
     assert!(
         local.contains("bash scripts/verify-release-assets.sh \"$version\" \"$release_stage\"")
     );
@@ -455,6 +460,9 @@ fn current_source_is_unblocked_and_package_versions_are_aligned() {
             "source or retained release-evidence version alignment is missing from {path}: {required}"
         );
     }
+
+    assert!(source("evidence/v0.12.42/computer/AppShareHandoff.swift")
+        .contains("private let productVersion = \"0.12.42\""));
 
     assert!(std::path::Path::new("evidence/v0.12.41/browser").is_dir());
     assert!(std::path::Path::new("evidence/v0.12.41/computer").is_dir());
