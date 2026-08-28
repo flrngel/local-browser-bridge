@@ -1,0 +1,74 @@
+2026-08-28T22:19:52.642Z PASS evidence output parent is an owner-private ordinary directory: the direct evidence parent is ordinary, owner-private, and current-user owned
+2026-08-28T22:19:52.645Z PASS evidence output directory is newly created and owner-private: the runner created one private lane output directory
+2026-08-28T22:19:55.526Z PASS pre-run harness source commit matches coordinator binding: exact source SHA matched
+2026-08-28T22:19:55.526Z PASS pre-run harness checkout is detached: detached HEAD
+2026-08-28T22:19:55.526Z PASS pre-run harness checkout is clean: tracked, staged, deleted, and untracked sets are empty
+2026-08-28T22:19:55.526Z PASS pre-run harness source repository passes git fsck: git fsck --full passed
+2026-08-28T22:19:55.526Z PASS pre-run harness files are exact tracked blobs: runner, native probes, and acceptance finalizer match HEAD blobs
+2026-08-28T22:19:55.529Z PASS macOS host: Darwin
+2026-08-28T22:19:55.538Z PASS expected checksum-manifest hash format: 64 lowercase hexadecimal characters
+2026-08-28T22:19:55.538Z PASS canonical checksum-manifest name: SHA256SUMS.txt
+2026-08-28T22:19:55.538Z PASS exact archive name: local-browser-bridge-v0.12.46-macos-universal.tar.gz
+2026-08-28T22:19:55.539Z PASS checksum manifest is one bounded current-user-owned ordinary file: ordinary, singly linked, owner-controlled, and within the manifest byte bound
+2026-08-28T22:19:55.539Z PASS checksum manifest stayed stable while it was bound: path and descriptor identity, size, links, and timestamps remained unchanged
+2026-08-28T22:19:55.539Z PASS out-of-band checksum-manifest hash matches: acb27bd2330aa0940f338a5692c98a2972e9e6e9fabe7d16d127ad41bd2bfe8f
+2026-08-28T22:19:55.539Z PASS checksum manifest has the exact canonical four-entry set: local-browser-bridge-v0.12.46-windows-x86_64.exe,local-computer-helper-v0.12.46-windows-x86_64.exe,local-browser-bridge-v0.12.46-macos-universal.tar.gz,local-browser-bridge-extension-v0.12.46.zip
+2026-08-28T22:19:55.540Z PASS canonical manifest contains the macOS archive checksum: 2dafa606f57ef5f6bfe57447ef594437793a3d44b6cf650460fb6dafd72113c1
+2026-08-28T22:19:55.630Z PASS macOS archive bounded exact inventory: seventeen PAX-free regular-file/directory entries passed bounded streaming extraction
+2026-08-28T22:19:55.630Z PASS archive checksum is bound by the canonical manifest: 2dafa606f57ef5f6bfe57447ef594437793a3d44b6cf650460fb6dafd72113c1
+2026-08-28T22:19:55.635Z PASS supplied server is archive-exact: 77f5edf221c7dee90e3af23834f86a5ce2728074288ac19753cfcaad1f1aa721
+2026-08-28T22:19:55.637Z PASS supplied helper is archive-exact: c4d1b5434d2576367cfee95d313ff6bb6348a9687cc9caae8cf7ba2e140c20ef
+2026-08-28T22:19:55.653Z PASS server universal architecture: arm64,x86_64
+2026-08-28T22:19:55.653Z PASS helper universal architecture: arm64,x86_64
+2026-08-28T22:19:55.653Z PASS helper uses packaged app layout: Local Computer Helper.app
+2026-08-28T22:19:55.684Z PASS strict code-signature verification: server, helper executable, and helper app bundle passed strict verification
+2026-08-28T22:19:55.692Z PASS helper bundle version: 0.12.46/0.12.46
+2026-08-28T22:19:56.878Z PASS system probe foreground-window self-test: AX-focused/main identity wins over same-process app-share auxiliary compositor order
+2026-08-28T22:19:57.616Z PASS optional physical-pointer adversarial prompt self-test: source-only optional adversarial prompt cannot satisfy either release lane
+2026-08-28T22:19:58.373Z PASS app-share handoff bundle identity: dev.flrngel.local-browser-bridge.acceptance.app-share
+2026-08-28T22:19:58.584Z PASS app-share handoff self-test: stable bundle/window/button vocabulary and create-once receipts
+2026-08-28T22:19:58.702Z PASS screen-capture permission preflight: preexisting permission; no request was made
+2026-08-28T22:19:58.702Z PASS accessibility permission preflight: preexisting permission; no request was made
+2026-08-28T22:19:58.702Z PASS active Space probe available: nonzero active Space identity
+2026-08-28T22:19:58.702Z PASS sandwiched foreground AX focus probe available: stable NSWorkspace/raw PSN plus exact AX focused/main-window identities are available
+2026-08-28T22:20:34.968Z PASS native quiet-seat stabilization completed before candidate execution: 36265 ms across 60 stable native transitions after 0 reset(s)
+2026-08-28T22:20:35.361Z PASS server version: 0.12.46
+2026-08-28T22:20:35.581Z PASS helper version: 0.12.46
+2026-08-28T22:20:36.190Z PASS fixture process identity: state belongs to the spawned fixture
+2026-08-28T22:20:36.430Z PASS startup same-PID sibling is the target app's remembered receiver: sibling-main-and-focused=true, fixture-background=true
+2026-08-28T22:20:37.068Z PASS packaged helper compatible: protocol-compatible helper 0.12.46
+2026-08-28T22:20:37.068Z PASS single helper spawn: 1 packaged helper process
+2026-08-28T22:20:37.068Z PASS acknowledged share advertised: computer.share.ack present
+2026-08-28T22:20:37.068Z PASS native stream advertised: computer.capture.native-stream.v1 present
+2026-08-28T22:20:37.068Z PASS input-delivery provenance advertised: computer.input-delivery-provenance.v1 present
+2026-08-28T22:20:37.068Z PASS pointer-activity monitor advertised: computer.pointer-activity-monitor.v1 present
+2026-08-28T22:20:37.633Z PASS helper status backend: background-window/ax+skylight+screencapturekit-stream
+2026-08-28T22:20:37.633Z PASS background shared-session mode: background-window/shared-user-session/target-routed
+2026-08-28T22:20:37.633Z PASS background input backend ready: target-routed input is ready
+2026-08-28T22:20:37.633Z PASS semantic backend ready: macos-accessibility is ready without prompting
+2026-08-28T22:20:37.633Z PASS fixture exact window discovered: 1 matching windows
+2026-08-28T22:20:37.633Z PASS genuine same-PID sibling window discovered: 1 sibling matches, distinct=true
+2026-08-28T22:20:37.633Z PASS fixture is a background target: neither same-PID fixture window owns the user's foreground process or front window
+2026-08-28T22:20:38.432Z PASS exact fixture window observed: 1209x826
+2026-08-28T22:20:38.432Z PASS semantic snapshot available: 4 elements
+2026-08-28T22:20:38.436Z PASS semantic value element discovered: AXTextField
+2026-08-28T22:20:40.182Z PASS semantic setValue confirmed: Confirmed/value-confirmed
+2026-08-28T22:20:40.182Z PASS semantic setValue route, helper-preservation, and shared-pointer invariants: {"cursorPositionUnchanged":true,"foregroundUnchanged":true,"hardwareCursorPreservedByHelper":true,"helperGlobalPointerPreservation":"confirmed","hidSystemPointerActivityObserved":false,"injectedPointerActivityObserved":false,"inputDelivery":{"dispatchAttemptRecorded":true,"exactTargetBound":true,"globalHidInputUsed":false,"hardwareCursorMutationRequested":false,"osAcceptanceObserved":true,"osAcceptanceSignalAvailable":true,"route":"macosAccessibility","sharedInputSeatUsed":false,"supportLevel":"publicDocumented"},"pointerActivityMonitorHealthy":true,"rawInputPointerActivityObserved":false,"sharedPointerActivityObserved":false,"sharedPointerActivityState":"quiet","sharedPointerBoundaryCorroborated":true,"sharedPointerBoundaryState":"corroborated","spaceUnchanged":true,"userFocusUnchanged":true}
+2026-08-28T22:20:40.809Z PASS semantic setValue screenshot changed: fresh exact-window pixels differ from the pre-action observation
+2026-08-28T22:20:40.809Z PASS semantic action element discovered: AXButton
+2026-08-28T22:20:42.608Z PASS semantic invoke target-side proof: fixture semantic counter advanced to 1
+2026-08-28T22:20:42.608Z PASS semantic invoke conservatively classified: Partial/element-state-changed
+2026-08-28T22:20:42.608Z PASS semantic invoke route, helper-preservation, and shared-pointer invariants: {"cursorPositionUnchanged":true,"foregroundUnchanged":true,"hardwareCursorPreservedByHelper":true,"helperGlobalPointerPreservation":"confirmed","hidSystemPointerActivityObserved":false,"injectedPointerActivityObserved":false,"inputDelivery":{"dispatchAttemptRecorded":true,"exactTargetBound":true,"globalHidInputUsed":false,"hardwareCursorMutationRequested":false,"osAcceptanceObserved":true,"osAcceptanceSignalAvailable":true,"route":"macosAccessibility","sharedInputSeatUsed":false,"supportLevel":"publicDocumented"},"pointerActivityMonitorHealthy":true,"rawInputPointerActivityObserved":false,"sharedPointerActivityObserved":false,"sharedPointerActivityState":"quiet","sharedPointerBoundaryCorroborated":true,"sharedPointerBoundaryState":"corroborated","spaceUnchanged":true,"userFocusUnchanged":true}
+2026-08-28T22:20:43.243Z PASS semantic invoke screenshot changed: fresh exact-window pixels differ from the setValue stage
+2026-08-28T22:20:44.924Z PASS persistent live share started: persistent-native-stream/exact-window
+2026-08-28T22:20:44.924Z PASS SCStream start metadata: macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window
+2026-08-28T22:20:44.924Z PASS live share ack pacing: latest-frame-wins, ackPaced=true
+2026-08-28T22:20:44.924Z PASS live share cursor policy: system cursor excluded; synthetic session pointer composited
+2026-08-28T22:20:45.753Z PASS persistent-share screenshot is fresh: sourceSequence=8
+2026-08-28T22:20:49.080Z PASS same-PID sibling is remembered before primary pixel dispatch: sibling-main-and-focused=true, sibling-state-clean=true
+2026-08-28T22:20:57.215Z FAIL exact active target receiver observed during pixel lease: active-target=false, exact-main-and-focused=false, saved-user-owner=true
+2026-08-28T22:20:57.496Z FATAL exact active target receiver observed during pixel lease: active-target=false, exact-main-and-focused=false, saved-user-owner=true
+2026-08-28T22:20:57.499Z helper stopped
+2026-08-28T22:20:57.500Z server stopped
+2026-08-28T22:20:57.504Z fixture stopped
+2026-08-28T22:20:57.507Z scratch directory removed
