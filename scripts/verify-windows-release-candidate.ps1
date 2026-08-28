@@ -160,7 +160,7 @@ $ProgressPreference = "SilentlyContinue"
 $Repository = "flrngel/local-browser-bridge"
 $Origin = "https://github.com/$Repository.git"
 $WorkflowPath = ".github/workflows/deploy.yml"
-$ProductVersion = "0.12.44"
+$ProductVersion = "0.12.45"
 $WorkflowRef = "refs/heads/main"
 $MaximumCandidateBytes = [int64]536870912
 
@@ -513,18 +513,30 @@ function Assert-MacosArchive(
   [string]$SourceRoot,
   [int64]$MaximumBytes
 ) {
-  $ExpectedEntries = @(
-    "local-browser-bridge",
-    "Local Computer Helper.app",
-    "Local Computer Helper.app/Contents",
-    "Local Computer Helper.app/Contents/Info.plist",
-    "Local Computer Helper.app/Contents/MacOS",
-    "Local Computer Helper.app/Contents/MacOS/local-computer-helper",
-    "Local Computer Helper.app/Contents/_CodeSignature",
-    "Local Computer Helper.app/Contents/_CodeSignature/CodeResources",
-    "LICENSE", "THIRD_PARTY_LICENSES.txt"
-  )
+  $InventoryPath = Join-Path $SourceRoot "packaging/macos/release-archive-inventory.txt"
+  $InventoryBytes = [IO.File]::ReadAllBytes($InventoryPath)
+  if ($InventoryBytes.Length -lt 1 -or $InventoryBytes.Length -gt 4096) {
+    throw "Canonical macOS archive inventory has an invalid bounded size."
+  }
+  try { $InventoryText = [Text.UTF8Encoding]::new($false, $true).GetString($InventoryBytes) }
+  catch { throw "Canonical macOS archive inventory is not valid UTF-8." }
+  if ($InventoryText.Contains("`r") -or -not $InventoryText.EndsWith("`n", [StringComparison]::Ordinal) -or
+      $InventoryText.EndsWith("`n`n", [StringComparison]::Ordinal)) {
+    throw "Canonical macOS archive inventory is not exact LF-terminated text."
+  }
+  $ExpectedEntries = @($InventoryText.Substring(0, $InventoryText.Length - 1).Split("`n"))
+  if ($ExpectedEntries.Count -ne 17 -or
+      @($ExpectedEntries | Select-Object -Unique).Count -ne $ExpectedEntries.Count -or
+      @($ExpectedEntries | Where-Object {
+        [String]::IsNullOrWhiteSpace($_) -or $_.StartsWith("/", [StringComparison]::Ordinal) -or
+        $_.EndsWith("/", [StringComparison]::Ordinal) -or $_.Contains("\") -or $_.Contains("..")
+      }).Count -ne 0) {
+    throw "Canonical macOS archive inventory is malformed or duplicated."
+  }
   $ExpectedDirectories = @(
+    "Local Browser Bridge.app", "Local Browser Bridge.app/Contents",
+    "Local Browser Bridge.app/Contents/MacOS",
+    "Local Browser Bridge.app/Contents/_CodeSignature",
     "Local Computer Helper.app", "Local Computer Helper.app/Contents",
     "Local Computer Helper.app/Contents/MacOS",
     "Local Computer Helper.app/Contents/_CodeSignature"
@@ -597,10 +609,18 @@ function Assert-MacosArchive(
           (-not $IsDirectory -and ($Type -ne [char]0x30 -or $Name.EndsWith("/")))) {
         throw "macOS tar logical entry type does not match its exact path."
       }
-      $Capture = $NormalizedName -in @("LICENSE", "THIRD_PARTY_LICENSES.txt", "Local Computer Helper.app/Contents/Info.plist")
+      $Capture = $NormalizedName -in @(
+        "LICENSE", "THIRD_PARTY_LICENSES.txt",
+        "Local Browser Bridge.app/Contents/Info.plist",
+        "Local Computer Helper.app/Contents/Info.plist"
+      )
       $Data = Read-TarEntryData $Gzip $Size $Capture
       if ($Capture) { $Captured[$NormalizedName] = $Data.bytes }
-      if ($NormalizedName -in @("local-browser-bridge", "Local Computer Helper.app/Contents/MacOS/local-computer-helper")) {
+      if ($NormalizedName -in @(
+        "local-browser-bridge",
+        "Local Browser Bridge.app/Contents/MacOS/local-browser-bridge-desktop",
+        "Local Computer Helper.app/Contents/MacOS/local-computer-helper"
+      )) {
         $Magic = ([BitConverter]::ToString($Data.firstFour)).Replace("-", "").ToLowerInvariant()
         if ($Data.firstCount -ne 4 -or $Magic -notin @("cafebabe", "cafebabf") -or ($Mode -band 0x49) -eq 0) {
           throw "macOS tar executable is not an executable universal Mach-O."
@@ -627,10 +647,15 @@ function Assert-MacosArchive(
       throw "macOS tar notice differs from the exact source notice."
     }
   }
-  try { $PlistText = [Text.UTF8Encoding]::new($false, $true).GetString($Captured["Local Computer Helper.app/Contents/Info.plist"]) }
-  catch { throw "macOS helper Info.plist is not valid UTF-8." }
-  if ([regex]::Matches($PlistText, [regex]::Escape("<string>$ExpectedVersion</string>")).Count -lt 2) {
-    throw "macOS helper Info.plist does not bind the release version twice."
+  foreach ($Bundle in @(
+    [pscustomobject]@{ path = "Local Browser Bridge.app/Contents/Info.plist"; label = "desktop" },
+    [pscustomobject]@{ path = "Local Computer Helper.app/Contents/Info.plist"; label = "helper" }
+  )) {
+    try { $PlistText = [Text.UTF8Encoding]::new($false, $true).GetString($Captured[$Bundle.path]) }
+    catch { throw "macOS $($Bundle.label) Info.plist is not valid UTF-8." }
+    if ([regex]::Matches($PlistText, [regex]::Escape("<string>$ExpectedVersion</string>")).Count -lt 2) {
+      throw "macOS $($Bundle.label) Info.plist does not bind the release version twice."
+    }
   }
 }
 
@@ -1077,7 +1102,7 @@ if ($Version -cne $ProductVersion -or $Version -cnotmatch '^[0-9]+\.[0-9]+\.[0-9
     $WorkflowRunAttempt -cnotmatch '^[1-9][0-9]*$' -or
     $ArtifactId -cnotmatch '^[1-9][0-9]*$' -or
     $SourceSha -cnotmatch '^[0-9a-f]{40}$') {
-  throw "Candidate identifiers are not canonical v0.12.44 identifiers."
+  throw "Candidate identifiers are not canonical v0.12.45 identifiers."
 }
 $Tag = "v$Version"
 $ExpectedInvocationUri = "https://github.com/$Repository/actions/runs/$WorkflowRunId/attempts/$WorkflowRunAttempt"
@@ -1326,7 +1351,8 @@ $null = Invoke-SourceGit @("fsck", "--full") "Source object-database inspection"
 $TrustedRelativeFiles = @(
   "scripts/verify-windows-release-candidate.ps1",
   "scripts/test-windows-computer-use.ps1",
-  "tests/fixtures/windows/WindowsComputerUseFixture.ps1"
+  "tests/fixtures/windows/WindowsComputerUseFixture.ps1",
+  "packaging/macos/release-archive-inventory.txt"
 )
 foreach ($Relative in $TrustedRelativeFiles) {
   $Materialized = [IO.Path]::GetFullPath((Join-Path $SourceDirectory $Relative))

@@ -4,7 +4,7 @@ import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 
-const PRODUCT_VERSION = "0.12.44";
+const PRODUCT_VERSION = "0.12.45";
 const SCHEMA_VERSION = 1;
 const OPERATOR_DIRECTORY = "operator";
 const REQUEST_FILE = "macos-pointer-concurrency-handoff-request.json";
