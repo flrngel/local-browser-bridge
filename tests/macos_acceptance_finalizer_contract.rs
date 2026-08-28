@@ -5,20 +5,51 @@ fn finalizer_source() -> String {
     fs::read_to_string("scripts/finalize-macos-acceptance.mjs").unwrap()
 }
 
+fn finalizer_wrapper_source() -> String {
+    fs::read_to_string("scripts/finalize-macos-acceptance.sh").unwrap()
+}
+
+#[test]
+fn macos_finalizer_wrapper_owns_dependent_aggregate_path_creation() {
+    let wrapper = finalizer_wrapper_source().replace("\r\n", "\n");
+    let documentation = fs::read_to_string("evidence/v0.12.48/computer/README.md")
+        .unwrap()
+        .replace("\r\n", "\n");
+
+    for required in [
+        "set -euo pipefail",
+        "create_aggregate_directory()",
+        "aggregate_directory=\"$(",
+        "aggregate_canonical=\"$(cd \"$aggregate_directory\" && pwd -P)\"",
+        "node \"$FINALIZER\"",
+        "\"$AGGREGATE_CANONICAL\" >&2",
+        "printf '%s\\n' \"$AGGREGATE_CANONICAL\"",
+        "macOS acceptance finalizer wrapper self-test passed.",
+    ] {
+        assert!(
+            wrapper.contains(required),
+            "macOS finalizer wrapper is missing the sequential path contract: {required}"
+        );
+    }
+    assert!(documentation.contains("bash scripts/finalize-macos-acceptance.sh"));
+    assert!(documentation.contains("callers never combine dependent shell assignments"));
+    assert!(!documentation.contains("AGGREGATE_DIR=\"$(mktemp"));
+}
+
 #[test]
 fn macos_v0_12_27_result_and_aggregate_schemas_are_aligned_end_to_end() {
     let finalizer = finalizer_source().replace("\r\n", "\n");
-    let producer = fs::read_to_string("evidence/v0.12.47/computer/helper-evidence-rig.mjs")
+    let producer = fs::read_to_string("evidence/v0.12.48/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let documentation = fs::read_to_string("evidence/v0.12.47/computer/README.md")
+    let documentation = fs::read_to_string("evidence/v0.12.48/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let verifier = fs::read_to_string("scripts/verify-release-acceptance-evidence.sh")
         .unwrap()
         .replace("\r\n", "\n");
 
-    assert!(finalizer.contains("const PRODUCT_VERSION = \"0.12.47\";"));
+    assert!(finalizer.contains("const PRODUCT_VERSION = \"0.12.48\";"));
     assert!(finalizer.contains("const RESULT_SCHEMA_VERSION = 9;"));
     assert!(finalizer.contains("const AGGREGATE_SCHEMA_VERSION = 3;"));
     assert!(producer.matches("schemaVersion: 9,").count() >= 2);
@@ -48,7 +79,7 @@ fn macos_v0_12_27_result_and_aggregate_schemas_are_aligned_end_to_end() {
     ] {
         assert!(
             verifier.contains(required),
-            "release evidence verifier is missing the v0.12.47 schema binding: {required}"
+            "release evidence verifier is missing the v0.12.48 schema binding: {required}"
         );
     }
 }
@@ -128,7 +159,7 @@ fn macos_v0_12_27_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
     }
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.47\";",
+        "const PRODUCT_VERSION = \"0.12.48\";",
         "const RESULT_SCHEMA_VERSION = 9;",
         "const AGGREGATE_SCHEMA_VERSION = 3;",
         "const APP_SHARE_MARKER_SCHEMA_VERSION = 2;",

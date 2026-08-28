@@ -74,7 +74,7 @@ not proof that an unobserved transient state never existed. The ledger records a
 was never tagged or published. The bounded observation and its limitations are
 preserved in the immutable [v0.12.34 negative-evidence commit](https://github.com/flrngel/local-browser-bridge/tree/aef8fc68018cdb6181ad3d0886acf4e71fcda96d/evidence/v0.12.34/computer/attempts/withdrawn-2509567-windows-pre-coordinator-interruption).
 
-Version 0.12.47 is the current source and schema-3 release-pipeline target. It
+Version 0.12.48 is the current source and schema-3 release-pipeline target. It
 retains the breakaway-enabled coordinator Job and atomic private Job-list child
 creation, but delays the persistent boundary until private staging and
 configuration verification, detached-worker Job binding and guard-ownership
@@ -86,6 +86,13 @@ publication; only the immutable
 [v0.12.37 GitHub Release](https://github.com/flrngel/local-browser-bridge/releases/tag/v0.12.37)
 and its bound evidence receipt can establish that the gate later passed. See
 the [Windows acceptance source-gate record](WINDOWS_ACCEPTANCE_HANDOFF.md).
+
+The exact v0.12.47 candidate passed both packaged macOS lanes and mandatory
+visual review, but its coordinator supplied an empty aggregate output path
+after combining dependent shell assignments. The finalizer failed closed, so
+Windows, stock Chrome, publication, and Release did not run. Version 0.12.48
+adds a checked-in wrapper that owns aggregate-directory creation; no v0.12.47
+candidate or evidence byte is reusable.
 
 Coordinator records flush their file contents before an atomic create-once
 rename. That survives a dropped remote shell and ordinary process failure, but

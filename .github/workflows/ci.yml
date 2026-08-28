@@ -366,15 +366,17 @@ jobs:
           node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test
           node --check scripts/finalize-macos-acceptance.mjs
           node scripts/finalize-macos-acceptance.mjs --self-test
+          bash -n scripts/finalize-macos-acceptance.sh
+          bash scripts/finalize-macos-acceptance.sh --self-test
       - name: Validate the macOS packaged-evidence harness
         run: |
-          node --check evidence/v0.12.47/computer/helper-evidence-rig.mjs
-          node evidence/v0.12.47/computer/helper-evidence-rig.mjs --self-test
-          xcrun swiftc -typecheck evidence/v0.12.47/computer/HelperEvidenceFixture.swift
-          xcrun swiftc -typecheck evidence/v0.12.47/computer/SystemProbe.swift
+          node --check evidence/v0.12.48/computer/helper-evidence-rig.mjs
+          node evidence/v0.12.48/computer/helper-evidence-rig.mjs --self-test
+          xcrun swiftc -typecheck evidence/v0.12.48/computer/HelperEvidenceFixture.swift
+          xcrun swiftc -typecheck evidence/v0.12.48/computer/SystemProbe.swift
           bash scripts/verify-macos-app-share-handoff-self-test.sh 0.12.41 --historical-source
-          bash scripts/verify-macos-app-share-handoff-self-test.sh 0.12.47
-          xcrun swiftc -typecheck evidence/v0.12.47/computer/PhysicalPointerHandoff.swift
+          bash scripts/verify-macos-app-share-handoff-self-test.sh 0.12.48
+          xcrun swiftc -typecheck evidence/v0.12.48/computer/PhysicalPointerHandoff.swift
       - name: Install the minimum supported Rust toolchain
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
