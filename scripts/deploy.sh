@@ -161,8 +161,8 @@ node --check scripts/wait-macos-app-share-concurrency-handoff.mjs
 node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test
 node --check scripts/finalize-macos-acceptance.mjs
 node scripts/finalize-macos-acceptance.mjs --self-test
-node --check evidence/v0.12.44/computer/helper-evidence-rig.mjs
-node evidence/v0.12.44/computer/helper-evidence-rig.mjs --self-test
+node --check evidence/v0.12.45/computer/helper-evidence-rig.mjs
+node evidence/v0.12.45/computer/helper-evidence-rig.mjs --self-test
 bash -n scripts/fetch-verify-release-candidate.sh
 bash scripts/fetch-verify-release-candidate.sh --self-test
 cargo fmt --all -- --check
@@ -238,8 +238,8 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 bash scripts/verify-macos-build-host.sh
-xcrun swiftc -typecheck evidence/v0.12.44/computer/HelperEvidenceFixture.swift
-xcrun swiftc -typecheck evidence/v0.12.44/computer/SystemProbe.swift
+xcrun swiftc -typecheck evidence/v0.12.45/computer/HelperEvidenceFixture.swift
+xcrun swiftc -typecheck evidence/v0.12.45/computer/SystemProbe.swift
 bash scripts/verify-macos-app-share-handoff-self-test.sh "$version"
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 cargo build --locked --release --bins --target aarch64-apple-darwin
@@ -303,6 +303,9 @@ bash scripts/verify-macos-artifacts.sh \
   "$mac_stage/Local Browser Bridge.app/Contents/MacOS/local-browser-bridge-desktop"
 mac_output="$release_stage/local-browser-bridge-v${version}-macos-universal.tar.gz"
 COPYFILE_DISABLE=1 tar --format ustar --no-xattrs -czf "$mac_output" -C "$mac_stage" local-browser-bridge "Local Browser Bridge.app" "Local Computer Helper.app" LICENSE THIRD_PARTY_LICENSES.txt
+tar -tzf "$mac_output" | sed 's:/$::' | LC_ALL=C sort > "$validation_stage/macos-archive.txt"
+LC_ALL=C sort packaging/macos/release-archive-inventory.txt > "$validation_stage/expected-macos-archive.txt"
+cmp -s "$validation_stage/macos-archive.txt" "$validation_stage/expected-macos-archive.txt"
 
 checksum_output="$release_stage/SHA256SUMS.txt"
 assets=("$(basename "$windows_output")" "$(basename "$windows_helper_output")" "$(basename "$mac_output")" "$(basename "$extension_output")")

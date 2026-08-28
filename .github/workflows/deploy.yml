@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Exact package version from Cargo.toml (for example, 0.12.44)
+        description: Exact package version from Cargo.toml (for example, 0.12.45)
         required: true
         type: string
       source_sha:
@@ -285,8 +285,10 @@ jobs:
           COPYFILE_DISABLE=1 tar --format ustar --no-xattrs -czf \
             "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" \
             -C stage local-browser-bridge "Local Browser Bridge.app" "Local Computer Helper.app" LICENSE THIRD_PARTY_LICENSES.txt
-          tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" | LC_ALL=C sort > archive.txt
-          test "$(wc -l < archive.txt | tr -d ' ')" = 17
+          tar -tzf "dist/local-browser-bridge-v${version}-macos-universal.tar.gz" \
+            | sed 's:/$::' | LC_ALL=C sort > archive.txt
+          LC_ALL=C sort packaging/macos/release-archive-inventory.txt > expected-archive.txt
+          cmp -s archive.txt expected-archive.txt
       - name: Attest macOS build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

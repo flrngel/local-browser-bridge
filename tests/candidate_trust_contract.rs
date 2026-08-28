@@ -5,6 +5,52 @@ fn normalized_source(path: &str) -> String {
 }
 
 #[test]
+fn macos_release_archive_inventory_is_canonical_and_shared_by_all_producers_and_consumers() {
+    let expected = [
+        "LICENSE",
+        "Local Browser Bridge.app",
+        "Local Browser Bridge.app/Contents",
+        "Local Browser Bridge.app/Contents/Info.plist",
+        "Local Browser Bridge.app/Contents/MacOS",
+        "Local Browser Bridge.app/Contents/MacOS/local-browser-bridge-desktop",
+        "Local Browser Bridge.app/Contents/_CodeSignature",
+        "Local Browser Bridge.app/Contents/_CodeSignature/CodeResources",
+        "Local Computer Helper.app",
+        "Local Computer Helper.app/Contents",
+        "Local Computer Helper.app/Contents/Info.plist",
+        "Local Computer Helper.app/Contents/MacOS",
+        "Local Computer Helper.app/Contents/MacOS/local-computer-helper",
+        "Local Computer Helper.app/Contents/_CodeSignature",
+        "Local Computer Helper.app/Contents/_CodeSignature/CodeResources",
+        "THIRD_PARTY_LICENSES.txt",
+        "local-browser-bridge",
+    ];
+    let inventory = normalized_source("packaging/macos/release-archive-inventory.txt");
+    assert_eq!(inventory, expected.join("\n") + "\n");
+
+    let windows = normalized_source("scripts/verify-windows-release-candidate.ps1");
+    assert!(windows.contains(
+        "$InventoryPath = Join-Path $SourceRoot \"packaging/macos/release-archive-inventory.txt\""
+    ));
+    assert!(windows.contains("$ExpectedEntries.Count -ne 17"));
+    assert!(
+        windows
+            .contains("\"Local Browser Bridge.app/Contents/MacOS/local-browser-bridge-desktop\"")
+    );
+    assert!(windows.contains(
+        "[pscustomobject]@{ path = \"Local Browser Bridge.app/Contents/Info.plist\"; label = \"desktop\" }"
+    ));
+
+    for producer in [
+        normalized_source(".github/workflows/deploy.yml"),
+        normalized_source("scripts/deploy.sh"),
+    ] {
+        assert!(producer.contains("packaging/macos/release-archive-inventory.txt"));
+        assert!(producer.contains("sed 's:/$::' | LC_ALL=C sort"));
+    }
+}
+
+#[test]
 fn windows_candidate_binder_is_a_clean_child_binary_safe_fail_closed_gate() {
     let script = normalized_source("scripts/verify-windows-release-candidate.ps1");
 

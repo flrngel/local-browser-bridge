@@ -1,0 +1,17 @@
+LICENSE
+Local Browser Bridge.app
+Local Browser Bridge.app/Contents
+Local Browser Bridge.app/Contents/Info.plist
+Local Browser Bridge.app/Contents/MacOS
+Local Browser Bridge.app/Contents/MacOS/local-browser-bridge-desktop
+Local Browser Bridge.app/Contents/_CodeSignature
+Local Browser Bridge.app/Contents/_CodeSignature/CodeResources
+Local Computer Helper.app
+Local Computer Helper.app/Contents
+Local Computer Helper.app/Contents/Info.plist
+Local Computer Helper.app/Contents/MacOS
+Local Computer Helper.app/Contents/MacOS/local-computer-helper
+Local Computer Helper.app/Contents/_CodeSignature
+Local Computer Helper.app/Contents/_CodeSignature/CodeResources
+THIRD_PARTY_LICENSES.txt
+local-browser-bridge
