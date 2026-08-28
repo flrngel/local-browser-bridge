@@ -161,8 +161,8 @@ node --check scripts/wait-macos-app-share-concurrency-handoff.mjs
 node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test
 node --check scripts/finalize-macos-acceptance.mjs
 node scripts/finalize-macos-acceptance.mjs --self-test
-node --check evidence/v0.12.43/computer/helper-evidence-rig.mjs
-node evidence/v0.12.43/computer/helper-evidence-rig.mjs --self-test
+node --check evidence/v0.12.44/computer/helper-evidence-rig.mjs
+node evidence/v0.12.44/computer/helper-evidence-rig.mjs --self-test
 bash -n scripts/fetch-verify-release-candidate.sh
 bash scripts/fetch-verify-release-candidate.sh --self-test
 cargo fmt --all -- --check
@@ -238,8 +238,8 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 bash scripts/verify-macos-build-host.sh
-xcrun swiftc -typecheck evidence/v0.12.43/computer/HelperEvidenceFixture.swift
-xcrun swiftc -typecheck evidence/v0.12.43/computer/SystemProbe.swift
+xcrun swiftc -typecheck evidence/v0.12.44/computer/HelperEvidenceFixture.swift
+xcrun swiftc -typecheck evidence/v0.12.44/computer/SystemProbe.swift
 bash scripts/verify-macos-app-share-handoff-self-test.sh "$version"
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 cargo build --locked --release --bins --target aarch64-apple-darwin
