@@ -32,7 +32,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$script:ProductVersion = "0.12.45"
+$script:ProductVersion = "0.12.46"
 $script:ForegroundSentinelWindowTitle = "LBB Foreground Sentinel"
 $script:MarkerSchemaVersion = 2
 $script:MaximumMarkerBytes = 16384
@@ -521,7 +521,7 @@ function New-SelfTestMarker {
     $actionRequired = $Status -ceq "action-required"
     $record = [ordered]@{
         schemaVersion = 2
-        productVersion = "0.12.45"
+        productVersion = "0.12.46"
         kind = "foreground-arm"
         status = $Status
         requestId = "0123456789abcdef0123456789abcdef"
