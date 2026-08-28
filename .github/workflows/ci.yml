@@ -37,7 +37,9 @@ jobs:
       - name: Validate the extension manifest and packaging scripts
         run: |
           python3 -m json.tool extension/manifest.json >/dev/null
+          python3 scripts/sync-agent-skill-references.py --check
           bash -n scripts/*.sh
+          bash scripts/install-agent-skill.sh --self-test
           bash scripts/install-macos.sh --self-test
           bash scripts/uninstall-macos.sh --self-test
           bash scripts/publish-release.sh --self-test

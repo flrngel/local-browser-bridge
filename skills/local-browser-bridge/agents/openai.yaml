@@ -1,0 +1,4 @@
+interface:
+  display_name: "Local Browser Bridge"
+  short_description: "Operate Local Browser Bridge safely"
+  default_prompt: "Use $local-browser-bridge to connect to and operate Local Browser Bridge safely."

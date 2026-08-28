@@ -159,6 +159,32 @@ credential derived separately from the master bridge token, so do not paste it
 into issues, analytics-enabled pages, or shared logs. See the
 [Agent Fetch protocol](docs/PROTOCOL.md#agent-fetch-get-only-api).
 
+## Install the optional Agent Skill
+
+Agents that implement the open Agent Skills format can load a compact router
+instead of reading the entire protocol for every task. The skill discloses only
+its short instructions first and loads one generated protocol section when a
+browser, native-computer, transport, or HTTP detail is actually needed.
+
+Install it through the cross-client Skills CLI:
+
+```bash
+npx skills add flrngel/local-browser-bridge --skill local-browser-bridge -g
+```
+
+Or install the checked-out source without Node.js on macOS or Linux into the
+cross-client location:
+
+```bash
+bash scripts/install-agent-skill.sh --target agents
+```
+
+Use `--target codex` or `--target claude` for a client-native user directory.
+The installer refuses to overwrite a different existing skill; `--check`
+verifies an installation byte-for-byte. For agents that do not support skills,
+the canonical [protocol document](docs/PROTOCOL.md) remains the complete,
+portable integration contract.
+
 Windows executables are not yet Microsoft publisher-signed. The macOS package
 is ad-hoc signed but not Developer ID-signed or notarized. Keep SmartScreen and
 Gatekeeper enabled, verify the release, and follow the platform-specific guide
@@ -264,6 +290,7 @@ release-evidence workflows.
 | Understand the process and authority model | [Architecture](docs/ARCHITECTURE.md) |
 | Review known constraints and evidence gaps | [Limitations](docs/LIMITATIONS.md) |
 | Review security boundaries | [Security policy](SECURITY.md) |
+| Install on-demand agent guidance | [Local Browser Bridge skill](skills/local-browser-bridge/SKILL.md) |
 | Integrate with the local API | [Protocol](docs/PROTOCOL.md) |
 | Review implementation research | [Browser research](docs/RESEARCH.md) and [computer-use research](docs/COMPUTER_USE_RESEARCH.md) |
 | Review versioned live results | [Release evidence](evidence/) |
