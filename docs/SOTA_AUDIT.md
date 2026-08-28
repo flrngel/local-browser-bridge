@@ -43,8 +43,8 @@ them to name the current attempt. Its exact
 was preserved and the attempt was canceled. Neither attempt reached Windows,
 stock Chrome, or a public Release.
 
-Audit date: 2026-08-28. Implementation target: version 0.12.46.
-**Current-behavior scope:** this document describes the 0.12.46 source and
+Audit date: 2026-08-28. Implementation target: version 0.12.47.
+**Current-behavior scope:** this document describes the 0.12.47 source and
 schema-3 release pipeline, and labels release or live evidence separately; it
 does not promote source contracts, workflow structure, or non-product Windows
 SelfTest results into a packaged-platform claim. The evidence chain includes
@@ -99,8 +99,12 @@ post-install launch/extension setup; it requires fresh version-bound acceptance
 before it can be published. Its exact candidate passed both macOS lanes and the
 Windows trust gate, then failed at the first packaged Windows `--version` probe
 because native acceptance still expected the retired server-binary identity.
-Version 0.12.46 aligns that check with the shipped desktop host; it requires new
-candidate bytes and cannot reuse the consumed v0.12.45 reservation.
+Version 0.12.46 aligned that check with the shipped desktop host. Its exact
+candidate then failed closed in the macOS quiet lane before product dispatch:
+the independent receiver watcher expired at eight seconds while the product
+call could remain live for fifteen seconds. Version 0.12.47 retains the Windows
+repair, extends both sides of that watcher to one bounded sixteen-second
+deadline, and requires entirely new candidate bytes.
 
 **0.12.27 SOTA marker:** product, protocol, and platform behavior were unchanged from v0.12.26. Release-candidate attestation selection required every returned statement to be well formed and bind the same run, source, tag, workflow, GitHub-hosted runner, and exact subject, with exactly one statement bound to the current attempt. Local deployment also became atomic over one exact five-file set.
 
@@ -185,12 +189,15 @@ kept out of the exact-window helper protocol. Installers now open the browser
 extension page and stable unpacked folder together, copy the folder path, show
 a numbered modal guide, and leave durable dashboard/setup/helper launchers.
 
-**0.12.46 SOTA marker:** the Windows native acceptance runner requires the same
+**0.12.47 SOTA marker:** the Windows native acceptance runner requires the same
 `local-browser-bridge-desktop VERSION` identity already enforced by the
 candidate workflow's PE verifier. A cross-file contract locks the workflow
 producer, artifact verifier, and one-shot acceptance consumer to that identity.
+The macOS packaged lane now binds its asynchronous active-receiver watcher and
+native SystemProbe cap to one sixteen-second deadline, covering the complete
+fifteen-second server call boundary without relaxing any focus invariant.
 
-Earlier audits stay in this document rather than being replaced, so a row's history is readable in one place. The 2026-08-18 audit (version 0.9.0) is the baseline; the 2026-08-19 audit (version 0.10.0) revised the rows marked with a `0.10:` prefix; this audit adds or revises the rows marked `0.11:`, `0.11.1:`, `0.11.2:`, `0.12.1:`, `0.12.2:`, `0.12.3:`, `0.12.4:`, `0.12.5:`, `0.12.6:`, `0.12.7:`, `0.12.8:`, `0.12.9:`, `0.12.10:`, `0.12.11:`, `0.12.12:`, `0.12.20:`, `0.12.22:`, `0.12.23:`, `0.12.24:`, `0.12.25:`, `0.12.26:`, `0.12.27:`, `0.12.28:`, `0.12.29:`, `0.12.30:`, `0.12.31:`, `0.12.32:`, `0.12.33:`, `0.12.34:`, `0.12.35:`, `0.12.37:`, `0.12.38:`, `0.12.45:`, and `0.12.46:`. An unmarked row describes the 0.9 baseline carried forward unless a later entry says otherwise.
+Earlier audits stay in this document rather than being replaced, so a row's history is readable in one place. The 2026-08-18 audit (version 0.9.0) is the baseline; the 2026-08-19 audit (version 0.10.0) revised the rows marked with a `0.10:` prefix; this audit adds or revises the rows marked `0.11:`, `0.11.1:`, `0.11.2:`, `0.12.1:`, `0.12.2:`, `0.12.3:`, `0.12.4:`, `0.12.5:`, `0.12.6:`, `0.12.7:`, `0.12.8:`, `0.12.9:`, `0.12.10:`, `0.12.11:`, `0.12.12:`, `0.12.20:`, `0.12.22:`, `0.12.23:`, `0.12.24:`, `0.12.25:`, `0.12.26:`, `0.12.27:`, `0.12.28:`, `0.12.29:`, `0.12.30:`, `0.12.31:`, `0.12.32:`, `0.12.33:`, `0.12.34:`, `0.12.35:`, `0.12.37:`, `0.12.38:`, `0.12.45:`, `0.12.46:`, and `0.12.47:`. An unmarked row describes the 0.9 baseline carried forward unless a later entry says otherwise.
 
 Version 0.11 covers two bodies of work:
 

@@ -68,8 +68,14 @@ candidate has been built, downloaded, or executed.
 > and Chrome never started, no screenshot or release evidence was produced, and
 > the candidate was withdrawn without a tag or Release.
 >
-> Version 0.12.46 aligns that native consumer with the already enforced Windows
-> artifact contract. It also retains the Job topology but resolves only the prospective
+> Version 0.12.46 aligned that native consumer with the already enforced Windows
+> artifact contract. Its exact candidate then stopped in the macOS quiet lane
+> before product dispatch because the independent active-receiver watcher
+> expired after eight seconds even though the server call boundary remained
+> open for fifteen seconds. The fixture click count stayed zero and no Windows
+> attempt started. Version 0.12.47 retains the Windows identity repair and binds
+> the runner and native receiver probe to one sixteen-second watcher deadline.
+> It also retains the Job topology but resolves only the prospective
 > ledger path before staging. It completes and verifies owner-private staging,
 > configuration and Start records, detached-worker lifetime-Job binding and
 > guard-ownership transfer, and exact runner process/environment/token
@@ -86,7 +92,7 @@ candidate has been built, downloaded, or executed.
 > Its trust verifier also creates the fresh destination and protected owner-only
 > DACL in one operation, verifies the exact persisted owner and single explicit
 > rule, and exercises that boundary in its Windows PowerShell 5.1 self-test.
-> Version 0.12.46 requires entirely fresh candidate and acceptance evidence. Do
+> Version 0.12.47 requires entirely fresh candidate and acceptance evidence. Do
 > not reuse or relabel earlier bytes or results.
 
 ## Source-freeze release boundary
@@ -94,8 +100,8 @@ candidate has been built, downloaded, or executed.
 At this handoff's source-freeze checkpoint, the coordinator source gate was
 complete but every artifact- and UI-bearing release gate remained future work:
 
-- no 0.12.46 tag has been created or pushed;
-- no packaged 0.12.46 server, helper, or extension has been built, downloaded,
+- no 0.12.47 tag has been created or pushed;
+- no packaged 0.12.47 server, helper, or extension has been built, downloaded,
   or executed;
 - neither macOS packaged lane nor Windows packaged-helper acceptance has run;
 - stock-Chrome acceptance has not run and Chrome was not opened or mutated;
@@ -105,7 +111,7 @@ complete but every artifact- and UI-bearing release gate remained future work:
   consent or action authority.
 
 The live publication status belongs to the immutable
-[v0.12.46 GitHub Release](https://github.com/flrngel/local-browser-bridge/releases/tag/v0.12.46)
+[v0.12.47 GitHub Release](https://github.com/flrngel/local-browser-bridge/releases/tag/v0.12.47)
 and its candidate-bound schema-3 evidence receipt, not to this source-checkpoint
 list.
 
@@ -116,7 +122,7 @@ outcome-unknown launch.
 
 ## Verified facts
 
-The active 0.12.46 source provides a checked-in
+The active 0.12.47 source provides a checked-in
 `scripts/run-windows-computer-use-acceptance.ps1` coordinator with:
 
 - a clean exact-system-PowerShell bootstrap;
