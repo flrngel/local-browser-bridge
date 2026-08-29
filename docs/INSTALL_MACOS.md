@@ -91,7 +91,7 @@ extension card.
 To install a specific stable version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-macos.sh | bash -s -- --version 0.12.55
+curl -fsSL https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-macos.sh | bash -s -- --version 0.12.56
 ```
 
 ## One-command uninstall

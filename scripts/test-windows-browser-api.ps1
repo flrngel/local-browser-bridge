@@ -334,7 +334,7 @@ function Get-CandidateBindingFromPreflight {
         $preflightFields = @(
             "schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed", "runNonce", "candidate"
         )
-        if ($Version -ceq "0.12.55") {
+        if ($Version -ceq "0.12.56") {
             $preflightFields = @(
                 "schemaVersion", "evidenceType", "phase", "recordedAtUtc", "passed",
                 "runNonce", "releaseCandidateBinding", "candidate"
@@ -350,13 +350,13 @@ function Get-CandidateBindingFromPreflight {
         foreach ($value in @(
             [string]$record.candidate.checksumManifest.sha256,
             [string]$record.candidate.server.sha256,
-            $(if ($Version -ceq "0.12.55") { [string]$record.candidate.computerHelper.sha256 } else { [string]$record.candidate.server.sha256 }),
+            $(if ($Version -ceq "0.12.56") { [string]$record.candidate.computerHelper.sha256 } else { [string]$record.candidate.server.sha256 }),
             [string]$record.candidate.extension.sha256,
             [string]$record.candidate.extension.combinedPayloadSha256
         )) {
             Assert-Acceptance ($value -cmatch '^[0-9a-f]{64}$') "preflight-candidate-hash"
         }
-        if ($Version -ceq "0.12.55") {
+        if ($Version -ceq "0.12.56") {
             Assert-ReleaseCandidateBinding $record.releaseCandidateBinding $record.candidate `
                 "preflight-release-candidate-binding"
             $script:ReleaseCandidateBinding = $record.releaseCandidateBinding
@@ -368,7 +368,7 @@ function Get-CandidateBindingFromPreflight {
             checksumManifestSha256 = [string]$record.candidate.checksumManifest.sha256
             serverSha256 = [string]$record.candidate.server.sha256
         }
-        if ($Version -ceq "0.12.55") {
+        if ($Version -ceq "0.12.56") {
             $binding.computerHelperSha256 = [string]$record.candidate.computerHelper.sha256
         }
         $binding.extensionZipSha256 = [string]$record.candidate.extension.sha256
@@ -430,7 +430,7 @@ function Assert-ReducedEvidenceRecord {
         "runNonce", "preflightRecordSha256", "finalSha", "checksumManifestSha256",
         "serverSha256", "extensionZipSha256", "extractedPayloadSha256"
     )
-    if ($Version -ceq "0.12.55") {
+    if ($Version -ceq "0.12.56") {
         $bindingFields = @(
             "runNonce", "preflightRecordSha256", "finalSha", "checksumManifestSha256",
             "serverSha256", "computerHelperSha256", "extensionZipSha256", "extractedPayloadSha256"
@@ -521,13 +521,13 @@ function Invoke-RecordSelfTest {
         checksumManifestSha256 = [String]::new([char]"d", 64)
         serverSha256 = [String]::new([char]"e", 64)
     }
-    if ($Version -ceq "0.12.55") {
+    if ($Version -ceq "0.12.56") {
         $selfTestBinding.computerHelperSha256 = [String]::new([char]"1", 64)
     }
     $selfTestBinding.extensionZipSha256 = [String]::new([char]"f", 64)
     $selfTestBinding.extractedPayloadSha256 = [String]::new([char]"0", 64)
     $script:CandidateBinding = [pscustomobject]$selfTestBinding
-    if ($Version -ceq "0.12.55") {
+    if ($Version -ceq "0.12.56") {
         $selfTestCandidate = [pscustomobject][ordered]@{
             version = $Version
             finalSha = $selfTestBinding.finalSha
@@ -634,7 +634,7 @@ function Invoke-RecordSelfTest {
 
 if ($SelfTest) {
     if ([String]::IsNullOrWhiteSpace($Version)) {
-        $Version = "0.12.55"
+        $Version = "0.12.56"
     }
     Invoke-RecordSelfTest
     exit 0
@@ -646,7 +646,7 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 if ([String]::IsNullOrWhiteSpace($Version) -or $Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
     throw "Version must be an explicit stable semantic version."
 }
-if ($Version -ceq "0.12.55") {
+if ($Version -ceq "0.12.56") {
     $MethodScreenshots = $MethodScreenshotsV2
 }
 if ([String]::IsNullOrWhiteSpace($PreflightRecord)) {
