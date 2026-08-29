@@ -74,7 +74,7 @@ not proof that an unobserved transient state never existed. The ledger records a
 was never tagged or published. The bounded observation and its limitations are
 preserved in the immutable [v0.12.34 negative-evidence commit](https://github.com/flrngel/local-browser-bridge/tree/aef8fc68018cdb6181ad3d0886acf4e71fcda96d/evidence/v0.12.34/computer/attempts/withdrawn-2509567-windows-pre-coordinator-interruption).
 
-Version 0.12.62 is the current source and schema-3 release-pipeline target. It
+Version 0.12.63 is the current source and schema-3 release-pipeline target. It
 retains the breakaway-enabled coordinator Job and atomic private Job-list child
 creation, but delays the persistent boundary until private staging and
 configuration verification, detached-worker Job binding and guard-ownership
@@ -140,6 +140,14 @@ but saturates any future lead to zero elapsed age at the callback receipt
 boundary. This matches the other native backend's receipt-time upper bound and
 avoids treating a newly delivered frame as a clock-domain failure. It requires
 entirely fresh acceptance.
+
+The exact v0.12.62 candidate passed both fresh macOS lanes, but its sole Windows
+attempt retained only the persistent `reserved-no-retry` record. No matching
+coordinator, terminal result, evidence directory, candidate process, listener,
+or stock-Chrome record survived, so the protocol classifies the attempt as
+`candidate-execution-unknown`. Version 0.12.63 carries the same product fix with
+fresh package, candidate, reservation, and acceptance identity; no v0.12.62
+artifact or result is reusable.
 
 Coordinator records flush their file contents before an atomic create-once
 rename. That survives a dropped remote shell and ordinary process failure, but
