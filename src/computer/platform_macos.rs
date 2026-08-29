@@ -315,19 +315,33 @@ pub fn move_pointer_path(
         InvariantStage::PointerTrajectory,
         cancellation,
         None,
-        |_, delivery| {
+        |focus, delivery| {
             if points.is_empty() {
                 return Err(input_error("synthetic pointer trajectory is empty"));
             }
             for (index, point) in points.iter().copied().enumerate() {
-                delivery.record(post_mouse(
+                let event = mouse_event(
                     target,
                     point,
                     CGEventType::MouseMoved,
+                    CGMouseButton::Left,
                     0,
                     0,
                     0,
+                )?;
+                // Focus activation and AX main-window state are asynchronous
+                // with the target application's actual event receiver. Re-prove
+                // the exact receiver immediately before every trajectory event,
+                // matching click, drag, scroll, key, and text dispatch instead
+                // of racing the first MouseMoved against activation.
+                let move_deadline = Instant::now() + FOCUS_RESTORE_PROOF_BUDGET;
+                prove_action_dispatch_owner(focus, target, move_deadline, true)?;
+                delivery.record(post_before_deadline(
+                    target,
+                    &event,
                     cancellation,
+                    "pointer dispatch",
+                    move_deadline,
                 )?)?;
                 if index + 1 < points.len() {
                     thread::sleep(step_delay);
@@ -1120,50 +1134,6 @@ fn finish_semantic_after_snapshot(
     Ok((backend_effect?, report))
 }
 
-fn post_mouse(
-    target: &WindowDescriptor,
-    point: TargetPoint,
-    event_type: CGEventType,
-    click_state: i64,
-    button_number: i64,
-    subtype: i64,
-    cancellation: &CommandCancellation,
-) -> Result<MacTargetDispatchRecord, ComputerError> {
-    post_mouse_with_button(
-        target,
-        point,
-        event_type,
-        CGMouseButton::Left,
-        click_state,
-        button_number,
-        subtype,
-        cancellation,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn post_mouse_with_button(
-    target: &WindowDescriptor,
-    point: TargetPoint,
-    event_type: CGEventType,
-    button: CGMouseButton,
-    click_state: i64,
-    button_number: i64,
-    subtype: i64,
-    cancellation: &CommandCancellation,
-) -> Result<MacTargetDispatchRecord, ComputerError> {
-    let event = mouse_event(
-        target,
-        point,
-        event_type,
-        button,
-        click_state,
-        button_number,
-        subtype,
-    )?;
-    post(target, &event, cancellation, "pointer dispatch")
-}
-
 fn mouse_event(
     target: &WindowDescriptor,
     point: TargetPoint,
@@ -1288,16 +1258,6 @@ fn stamp_keyboard(target: &WindowDescriptor, event: &CGEvent) -> Result<(), Comp
     let symbols = symbols().ok_or_else(|| input_error("SkyLight symbols are unavailable"))?;
     unsafe { (symbols.set_integer_field)(event.as_ptr() as *mut c_void, 40, target.pid as i64) };
     Ok(())
-}
-
-fn post(
-    target: &WindowDescriptor,
-    event: &PreparedTargetEvent,
-    cancellation: &CommandCancellation,
-    boundary: &str,
-) -> Result<MacTargetDispatchRecord, ComputerError> {
-    cancellation.begin_side_effect(boundary)?;
-    post_release(target, event)
 }
 
 fn post_before_deadline(
