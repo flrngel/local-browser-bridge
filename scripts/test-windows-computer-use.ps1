@@ -1935,6 +1935,34 @@ function Remove-OwnedFixtureBuildDirectory {
     )
 }
 
+function Test-BoundHelperWorkerCandidate {
+    param(
+        [bool]$Connected,
+        [string]$ReportedSessionId,
+        [string]$ExpectedSessionId,
+        [int64]$ReportedControllerPid,
+        [int]$ExpectedControllerPid,
+        [int64]$ReportedWorkerPid,
+        [bool]$WorkerImageMatched,
+        [object]$WorkerSessionId,
+        [int]$ExpectedWorkerSessionId,
+        [AllowEmptyCollection()][int64[]]$ExactImageChildPids
+    )
+    return (
+        $Connected -and
+        -not [String]::IsNullOrWhiteSpace($ReportedSessionId) -and
+        $ReportedSessionId -ceq $ExpectedSessionId -and
+        $ReportedControllerPid -eq $ExpectedControllerPid -and
+        $ReportedWorkerPid -gt 0 -and
+        $WorkerImageMatched -and
+        $null -ne $WorkerSessionId -and
+        [int]$WorkerSessionId -eq $ExpectedWorkerSessionId -and
+        $ExactImageChildPids.Count -le 1 -and
+        ($ExactImageChildPids.Count -eq 0 -or
+            [int64]$ExactImageChildPids[0] -eq $ReportedWorkerPid)
+    )
+}
+
 if ($SelfTest) {
     $selfTestHost = Get-Process -Id $PID
     $selfTestHostPath = $selfTestHost.Path
@@ -2047,6 +2075,36 @@ if ($SelfTest) {
         if ($script:nativeProbeType::GetProcessSessionId($selfTestChildPid) -ne $selfTestSessionId) {
             throw "The Job-owned self-test child was outside the PowerShell runner session."
         }
+        $selfTestWorkerImageMatched = $script:nativeProbeType::ProcessImageMatches(
+            $selfTestChildPid,
+            $selfTestHostPath
+        )
+        if (-not (Test-BoundHelperWorkerCandidate `
+                -Connected $true `
+                -ReportedSessionId "self-test-session" `
+                -ExpectedSessionId "self-test-session" `
+                -ReportedControllerPid $PID `
+                -ExpectedControllerPid $PID `
+                -ReportedWorkerPid $selfTestChildPid `
+                -WorkerImageMatched $selfTestWorkerImageMatched `
+                -WorkerSessionId $selfTestSessionId `
+                -ExpectedWorkerSessionId $selfTestSessionId `
+                -ExactImageChildPids @())) {
+            throw "The authenticated helper binding rejected an exact live worker when Toolhelp returned no child."
+        }
+        if (Test-BoundHelperWorkerCandidate `
+                -Connected $true `
+                -ReportedSessionId "self-test-session" `
+                -ExpectedSessionId "self-test-session" `
+                -ReportedControllerPid $PID `
+                -ExpectedControllerPid $PID `
+                -ReportedWorkerPid $selfTestChildPid `
+                -WorkerImageMatched $selfTestWorkerImageMatched `
+                -WorkerSessionId $selfTestSessionId `
+                -ExpectedWorkerSessionId $selfTestSessionId `
+                -ExactImageChildPids @([int64]($selfTestChildPid + 1))) {
+            throw "The authenticated helper binding accepted a conflicting Toolhelp child."
+        }
         $nonMatchingImage = [IO.Path]::Combine([IO.Path]::GetDirectoryName($selfTestHostPath), "lbb-self-test-nonmatch.exe")
         if (@($script:nativeProbeType::GetDirectChildProcessIds($PID, $nonMatchingImage)).Count -ne 0) {
             throw "The native exact-image probe accepted a nonmatching executable path."
@@ -2099,7 +2157,7 @@ if ($SelfTest) {
     )
     $renamedHelperSelfTestPath = [IO.Path]::Combine(
         $renamedHelperSelfTestRoot,
-        "local-computer-helper-v0.12.58-windows-x86_64.exe"
+        "local-computer-helper-v0.12.59-windows-x86_64.exe"
     )
     $renamedHelperSelfTestSource = [IO.Path]::GetFullPath($env:ComSpec)
     $renamedHelperSelfTestJob = $script:ownedJobType::new()
@@ -2508,7 +2566,7 @@ if ($SelfTest) {
     try {
         $operatorMarkerSelfTestRequestId = "0123456789abcdef0123456789abcdef"
         $operatorRequestMarker = New-ForegroundArmRequestMarker `
-            -ProductVersion "0.12.58" `
+            -ProductVersion "0.12.59" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -InputStateAtPublication "not-started" `
             -TimeoutSeconds 120 `
@@ -2535,7 +2593,7 @@ if ($SelfTest) {
         )
         if ((@($operatorRequestRecord.PSObject.Properties.Name) -join "|") -cne ($expectedRequestMarkerProperties -join "|") -or
             $operatorRequestRecord.schemaVersion -ne 2 -or
-            $operatorRequestRecord.productVersion -cne "0.12.58" -or
+            $operatorRequestRecord.productVersion -cne "0.12.59" -or
             $operatorRequestRecord.status -cne "action-required" -or
             $operatorRequestRecord.requestId -cne $operatorMarkerSelfTestRequestId -or
             $operatorRequestRecord.operatorActionRequired -ne $true -or
@@ -2581,7 +2639,7 @@ if ($SelfTest) {
         }
 
         $alreadyArmedMarker = New-ForegroundArmRequestMarker `
-            -ProductVersion "0.12.58" `
+            -ProductVersion "0.12.59" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -InputStateAtPublication "already-acknowledged" `
             -TimeoutSeconds 120 `
@@ -2616,7 +2674,7 @@ if ($SelfTest) {
             stableSamplesRequired = 3
         }
         $operatorReceivedMarker = New-ForegroundArmReceivedMarker `
-            -ProductVersion "0.12.58" `
+            -ProductVersion "0.12.59" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -Proof $operatorReceivedProof
         $operatorReceivedPath = Write-NewOperatorMarker `
@@ -2635,7 +2693,7 @@ if ($SelfTest) {
         if ((@($operatorReceivedRecord.PSObject.Properties.Name) -join "|") -cne ($expectedReceivedMarkerProperties -join "|") -or
             $operatorReceivedRecord.status -cne "received" -or
             $operatorReceivedRecord.schemaVersion -ne 2 -or
-            $operatorReceivedRecord.productVersion -cne "0.12.58" -or
+            $operatorReceivedRecord.productVersion -cne "0.12.59" -or
             $operatorReceivedRecord.requestId -cne $operatorRequestRecord.requestId -or
             $operatorReceivedRecord.exactClickCountsMatched -ne $true -or
             $operatorReceivedRecord.stableSamplesObserved -ne 3 -or
@@ -2647,7 +2705,7 @@ if ($SelfTest) {
         $incompleteReceivedMarkerFailure = $null
         try {
             $null = New-ForegroundArmReceivedMarker `
-                -ProductVersion "0.12.58" `
+                -ProductVersion "0.12.59" `
                 -RequestId $operatorMarkerSelfTestRequestId `
                 -Proof $operatorReceivedProof
         }
@@ -2678,10 +2736,10 @@ if ($SelfTest) {
         }
         $candidateBindingSelfTestPath = [IO.Path]::Combine($candidateBindingSelfTestRoot, "candidate-binding.json")
         $candidateBindingNames = @(
-            "local-browser-bridge-v0.12.58-windows-x86_64.exe",
-            "local-computer-helper-v0.12.58-windows-x86_64.exe",
-            "local-browser-bridge-v0.12.58-macos-universal.tar.gz",
-            "local-browser-bridge-extension-v0.12.58.zip"
+            "local-browser-bridge-v0.12.59-windows-x86_64.exe",
+            "local-computer-helper-v0.12.59-windows-x86_64.exe",
+            "local-browser-bridge-v0.12.59-macos-universal.tar.gz",
+            "local-browser-bridge-extension-v0.12.59.zip"
         )
         $candidateBindingChecksums = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
         for ($index = 0; $index -lt $candidateBindingNames.Count; $index++) {
@@ -2706,8 +2764,8 @@ if ($SelfTest) {
         })
         $candidateBindingSelfTestRecord = [ordered]@{
             schemaVersion = 3
-            version = "0.12.58"
-            releaseTag = "v0.12.58"
+            version = "0.12.59"
+            releaseTag = "v0.12.59"
             repository = "flrngel/local-browser-bridge"
             sourceSha = [String]::new([char]'b', 40)
             workflowRunId = "32650000000"
@@ -2733,7 +2791,7 @@ if ($SelfTest) {
         )
         $candidateBindingSelfTestResult = Read-ExactReleaseCandidateBinding `
             -Path $candidateBindingSelfTestPath `
-            -ExpectedVersion "0.12.58" `
+            -ExpectedVersion "0.12.59" `
             -ExpectedManifestSha256 $candidateBindingManifestSha `
             -ExpectedChecksums $candidateBindingChecksums `
             -ExpectedAssetNames $candidateBindingNames
@@ -2752,7 +2810,7 @@ if ($SelfTest) {
         try {
             $null = Read-ExactReleaseCandidateBinding `
                 -Path $candidateBindingSelfTestPath `
-                -ExpectedVersion "0.12.58" `
+                -ExpectedVersion "0.12.59" `
                 -ExpectedManifestSha256 $candidateBindingManifestSha `
                 -ExpectedChecksums $candidateBindingChecksums `
                 -ExpectedAssetNames $candidateBindingNames
@@ -3540,8 +3598,11 @@ function Record-HelperTopologyObservation {
         $Stage,
         $script:helperTopologyDiagnostic.supervisorExited,
         $script:helperTopologyDiagnostic.reportedWorkerPid,
+        $script:helperTopologyDiagnostic.reportedControllerPid,
         $script:helperTopologyDiagnostic.matchingHelperChildCount,
         (@($script:helperTopologyDiagnostic.matchingHelperChildPids) -join ","),
+        $script:helperTopologyDiagnostic.workerImageMatched,
+        $script:helperTopologyDiagnostic.controllerProcessMatched,
         $script:helperTopologyDiagnostic.connected,
         $script:helperTopologyDiagnostic.helloStateMatched,
         $script:helperTopologyDiagnostic.workerSessionId,
@@ -3560,8 +3621,11 @@ function Record-HelperTopologyObservation {
         poll = $script:helperTopologyPollCount
         supervisorExited = $script:helperTopologyDiagnostic.supervisorExited
         reportedWorkerPid = $script:helperTopologyDiagnostic.reportedWorkerPid
+        reportedControllerPid = $script:helperTopologyDiagnostic.reportedControllerPid
         matchingHelperChildCount = $script:helperTopologyDiagnostic.matchingHelperChildCount
         matchingHelperChildPids = @($script:helperTopologyDiagnostic.matchingHelperChildPids)
+        workerImageMatched = $script:helperTopologyDiagnostic.workerImageMatched
+        controllerProcessMatched = $script:helperTopologyDiagnostic.controllerProcessMatched
         connected = $script:helperTopologyDiagnostic.connected
         helloStateMatched = $script:helperTopologyDiagnostic.helloStateMatched
         workerSessionId = $script:helperTopologyDiagnostic.workerSessionId
@@ -3574,7 +3638,7 @@ function Record-HelperTopologyObservation {
     }
 }
 
-function Wait-ForDirectHelperWorker {
+function Wait-ForBoundHelperWorker {
     param(
         [object]$SupervisorProcess,
         [string]$ExpectedSessionId,
@@ -3596,11 +3660,17 @@ function Wait-ForDirectHelperWorker {
         $candidateComputer = Get-PropertyValue $candidate "computer"
         $candidateSessionId = [string](Get-PropertyValue $candidateComputer "sessionId")
         $reportedWorkerPid = [int64](Get-PropertyValue $candidateComputer "processId")
+        $reportedControllerPid = [int64](Get-PropertyValue $candidateComputer "controllerProcessId")
         $script:helperTopologyDiagnostic.supervisorExited = $false
         $script:helperTopologyDiagnostic.supervisorExitCode = $null
         $script:helperTopologyDiagnostic.reportedWorkerPid = $reportedWorkerPid
+        $script:helperTopologyDiagnostic.reportedControllerPid = $reportedControllerPid
         $script:helperTopologyDiagnostic.matchingHelperChildCount = $null
         $script:helperTopologyDiagnostic.matchingHelperChildPids = @()
+        $script:helperTopologyDiagnostic.workerImageMatched = $false
+        $script:helperTopologyDiagnostic.controllerProcessMatched = (
+            $reportedControllerPid -eq $SupervisorProcess.Id
+        )
         $script:helperTopologyDiagnostic.connected = $candidate.computerConnected -eq $true
         $script:helperTopologyDiagnostic.helloStateMatched = $candidateSessionId -ceq $ExpectedSessionId
         $script:helperTopologyDiagnostic.workerSessionId = $null
@@ -3619,6 +3689,28 @@ function Wait-ForDirectHelperWorker {
         $script:helperTopologyDiagnostic.matchingHelperChildCount = $children.Count
         $script:helperTopologyDiagnostic.matchingHelperChildPids = @($children)
 
+        if ($reportedWorkerPid -gt 0) {
+            try {
+                $script:helperTopologyDiagnostic.workerImageMatched = (
+                    $script:nativeProbeType::ProcessImageMatches(
+                        [int]$reportedWorkerPid,
+                        $resolvedHelper
+                    )
+                )
+            }
+            catch [ComponentModel.Win32Exception] {
+                if ($_.Exception.NativeErrorCode -ne 87) {
+                    $script:helperTopologyDiagnostic.nativeErrorCode = $_.Exception.NativeErrorCode
+                    Record-HelperTopologyObservation $Description
+                    throw
+                }
+                # The exact worker retired between the authenticated state
+                # read and exact live-image inspection.
+                $script:helperTopologyDiagnostic.nativeErrorCode = 87
+                $script:helperTopologyDiagnostic.workerImageMatched = $false
+            }
+        }
+
         if ($children.Count -gt 1) {
             $stableIdentity = $null
             $stablePolls = 0
@@ -3626,16 +3718,23 @@ function Wait-ForDirectHelperWorker {
             Record-HelperTopologyObservation $Description
             throw "The helper supervisor had multiple exact-image worker children; authority is ambiguous."
         }
+        if ($children.Count -eq 1 -and [int64]$children[0] -ne $reportedWorkerPid) {
+            $stableIdentity = $null
+            $stablePolls = 0
+            $script:helperTopologyDiagnostic.stablePolls = 0
+            Record-HelperTopologyObservation $Description
+            throw "The enumerated exact-image helper child did not match the authenticated worker process."
+        }
 
-        $identity = "$candidateSessionId|$reportedWorkerPid"
+        $identity = "$candidateSessionId|$reportedControllerPid|$reportedWorkerPid"
         $workerSessionId = $null
         if (
             $candidate.computerConnected -eq $true -and
             -not [String]::IsNullOrWhiteSpace($candidateSessionId) -and
             $candidateSessionId -ceq $ExpectedSessionId -and
+            $reportedControllerPid -eq $SupervisorProcess.Id -and
             $reportedWorkerPid -gt 0 -and
-            $children.Count -eq 1 -and
-            [int64]$children[0] -eq $reportedWorkerPid
+            $script:helperTopologyDiagnostic.workerImageMatched -eq $true
         ) {
             try {
                 $workerSessionId = $script:nativeProbeType::GetProcessSessionId([int]$reportedWorkerPid)
@@ -3656,7 +3755,17 @@ function Wait-ForDirectHelperWorker {
                 Record-HelperTopologyObservation $Description
                 throw "The authenticated helper worker was outside the interactive acceptance session."
             }
-            if ($workerSessionId -eq $sessionId) {
+            if (Test-BoundHelperWorkerCandidate `
+                    -Connected ($candidate.computerConnected -eq $true) `
+                    -ReportedSessionId $candidateSessionId `
+                    -ExpectedSessionId $ExpectedSessionId `
+                    -ReportedControllerPid $reportedControllerPid `
+                    -ExpectedControllerPid $SupervisorProcess.Id `
+                    -ReportedWorkerPid $reportedWorkerPid `
+                    -WorkerImageMatched $script:helperTopologyDiagnostic.workerImageMatched `
+                    -WorkerSessionId $workerSessionId `
+                    -ExpectedWorkerSessionId $sessionId `
+                    -ExactImageChildPids $children) {
                 if ($identity -ceq $stableIdentity) {
                     $stablePolls++
                 }
@@ -3672,8 +3781,10 @@ function Wait-ForDirectHelperWorker {
                     $script:helperTopologyChecks.Add([ordered]@{
                         description = $Description
                         supervisorPid = $SupervisorProcess.Id
+                        controllerPid = [int]$reportedControllerPid
                         workerPid = [int]$reportedWorkerPid
                         exactImageMatched = $true
+                        directChildEnumerated = $children.Count -eq 1
                         interactiveSessionId = $workerSessionId
                         stableConsecutivePolls = $stablePolls
                         helloStateMatched = $true
@@ -3705,7 +3816,7 @@ function Wait-ForDirectHelperWorker {
         Start-Sleep -Milliseconds 150
     } while ([DateTime]::UtcNow -lt $deadline)
 
-    throw "Timed out waiting for $Description (connected=$($script:helperTopologyDiagnostic.connected), helloStateMatched=$($script:helperTopologyDiagnostic.helloStateMatched), reportedWorkerPid=$($script:helperTopologyDiagnostic.reportedWorkerPid), exactImageChildren=$($script:helperTopologyDiagnostic.matchingHelperChildCount), stablePolls=$($script:helperTopologyDiagnostic.stablePolls), topologyTransitions=$script:helperTopologyTransitionCount)."
+    throw "Timed out waiting for $Description (connected=$($script:helperTopologyDiagnostic.connected), helloStateMatched=$($script:helperTopologyDiagnostic.helloStateMatched), reportedControllerPid=$($script:helperTopologyDiagnostic.reportedControllerPid), controllerProcessMatched=$($script:helperTopologyDiagnostic.controllerProcessMatched), reportedWorkerPid=$($script:helperTopologyDiagnostic.reportedWorkerPid), workerImageMatched=$($script:helperTopologyDiagnostic.workerImageMatched), exactImageChildren=$($script:helperTopologyDiagnostic.matchingHelperChildCount), stablePolls=$($script:helperTopologyDiagnostic.stablePolls), topologyTransitions=$script:helperTopologyTransitionCount)."
 }
 
 function Complete-HelperTopologyRoundTrip {
@@ -3724,6 +3835,9 @@ function Complete-HelperTopologyRoundTrip {
     for ($index = $script:helperTopologyChecks.Count - 1; $index -ge 0; $index--) {
         $check = $script:helperTopologyChecks[$index]
         if ([string]$check["description"] -ceq $Description -and [int]$check["workerPid"] -eq $ExpectedProcessId) {
+            Assert-True (
+                [int64](Get-PropertyValue $responseComputer "controllerProcessId") -eq [int]$check["controllerPid"]
+            ) "The helper round trip changed its authenticated controller process identity."
             $check["protocolRoundTrip"] = $true
             $check["roundTripMethod"] = $Method
             return
@@ -3891,8 +4005,11 @@ $script:helperTopologyDiagnostic = [ordered]@{
     supervisorExited = $null
     supervisorExitCode = $null
     reportedWorkerPid = $null
+    reportedControllerPid = $null
     matchingHelperChildCount = $null
     matchingHelperChildPids = @()
+    workerImageMatched = $false
+    controllerProcessMatched = $false
     connected = $null
     helloStateMatched = $null
     workerSessionId = $null
@@ -4034,7 +4151,7 @@ try {
     $script:runStage = "bind-initial-helper-readiness"
     $initialHelperSessionId = [string]$bridgeState.computer.sessionId
     Assert-True (-not [String]::IsNullOrWhiteSpace($initialHelperSessionId)) "The initial helper session identity was missing."
-    $initialWorker = Wait-ForDirectHelperWorker $helperProcess $initialHelperSessionId "the initial disposable helper worker"
+    $initialWorker = Wait-ForBoundHelperWorker $helperProcess $initialHelperSessionId "the initial disposable helper worker"
     $initialWorkerPid = [int]$initialWorker.processId
     $bridgeState = $initialWorker.state
     $readinessProbe = Invoke-LbbCommand "computer.status" @{}
@@ -4160,7 +4277,7 @@ try {
 
     $script:runStage = "rebind-post-arm-helper-readiness"
     $postArmHelperDescription = "the original helper worker after foreground arming"
-    $postArmWorker = Wait-ForDirectHelperWorker $helperProcess $initialHelperSessionId $postArmHelperDescription
+    $postArmWorker = Wait-ForBoundHelperWorker $helperProcess $initialHelperSessionId $postArmHelperDescription
     Assert-True ([int]$postArmWorker.processId -eq $initialWorkerPid) "The helper worker changed while foreground arming was pending."
     $bridgeState = $postArmWorker.state
 
@@ -4242,7 +4359,7 @@ try {
         Assert-True $watchdogCausalityProof.causalityProven "Worker replacement lacked COMPUTER_HELPER_WATCHDOG evidence and occurred too early to prove the 12-second share-pump watchdog caused it."
         $shareStarted = $false
         $replacementSessionId = [string]$recoveredBridgeState.computer.sessionId
-        $replacementWorker = Wait-ForDirectHelperWorker $helperProcess $replacementSessionId "the replacement disposable helper worker"
+        $replacementWorker = Wait-ForBoundHelperWorker $helperProcess $replacementSessionId "the replacement disposable helper worker"
         $replacementWorkerPid = [int]$replacementWorker.processId
         $recoveredBridgeState = $replacementWorker.state
         $replacementReadiness = Invoke-LbbCommand "computer.status" @{}
@@ -4594,7 +4711,7 @@ try {
         Assert-True (-not [String]::IsNullOrWhiteSpace($cancellationSessionId)) "The cancellation frame had no exact helper session identity."
         $cancellationSupervisorPid = $helperProcess.Id
         $cancellationServerPid = $serverProcess.Id
-        $cancellationWorker = Wait-ForDirectHelperWorker $helperProcess $cancellationSessionId "the pre-cancellation disposable helper worker"
+        $cancellationWorker = Wait-ForBoundHelperWorker $helperProcess $cancellationSessionId "the pre-cancellation disposable helper worker"
         $cancellationWorkerPid = [int]$cancellationWorker.processId
         $cancellationReadiness = Invoke-LbbCommand "computer.status" @{}
         Complete-HelperTopologyRoundTrip "the pre-cancellation disposable helper worker" $cancellationSessionId $cancellationWorkerPid "computer.status" $cancellationReadiness
@@ -4673,7 +4790,7 @@ try {
             return $false
         } "a replacement Windows helper worker after outcome-unknown cancellation"
         $replacementSessionId = [string]$replacementState.computer.sessionId
-        $cancellationReplacementWorker = Wait-ForDirectHelperWorker $helperProcess $replacementSessionId "the post-cancellation replacement helper worker"
+        $cancellationReplacementWorker = Wait-ForBoundHelperWorker $helperProcess $replacementSessionId "the post-cancellation replacement helper worker"
         $cancellationReplacementWorkerPid = [int]$cancellationReplacementWorker.processId
         $replacementState = $cancellationReplacementWorker.state
         $cancellationReplacementReadiness = Invoke-LbbCommand "computer.status" @{}
