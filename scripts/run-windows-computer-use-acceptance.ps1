@@ -4013,6 +4013,19 @@ function Wait-SelfTestStateFile {
     }
 }
 
+function ConvertTo-BoundedSelfTestFailureDetail {
+    param([AllowEmptyString()][string]$Value)
+    if ([String]::IsNullOrEmpty($Value)) {
+        return "<empty>"
+    }
+    $detail = $Value.Replace("`r", " ").Replace("`n", " ")
+    $detail = [Text.RegularExpressions.Regex]::Replace($detail, '\s+', ' ').Trim()
+    if ($detail.Length -gt 2000) {
+        $detail = $detail.Substring(0, 2000) + "[truncated]"
+    }
+    return $detail
+}
+
 function Invoke-NestedJobRunnerSelfTest {
     param([Parameter(Mandatory = $true)][string]$Nonce)
     $environmentNonce = [Environment]::GetEnvironmentVariable(
@@ -4078,7 +4091,9 @@ function Invoke-NestedJobRunnerSelfTest {
         if ($runnerExit -ne 0 -or
             $runnerStdout -cne "Windows computer-use acceptance self-test passed." -or
             -not [String]::IsNullOrEmpty($runnerStderr)) {
-            throw "The exact guard-plus-lifetime Job runner self-test failed."
+            $runnerStdoutDetail = ConvertTo-BoundedSelfTestFailureDetail $runnerStdout
+            $runnerStderrDetail = ConvertTo-BoundedSelfTestFailureDetail $runnerStderr
+            throw "The exact guard-plus-lifetime Job runner self-test failed. (runnerExit=$runnerExit; stdout=$runnerStdoutDetail; stderr=$runnerStderrDetail)."
         }
         [GC]::KeepAlive($lifetimeJob)
     }
@@ -4263,7 +4278,11 @@ function Invoke-SelfTest {
                 $nestedRunnerSelfTestStdout -cne
                     "Nested guard/lifetime Job runner self-test passed." -or
                 -not [String]::IsNullOrEmpty($nestedRunnerSelfTestStderr)) {
-                throw "The exact guard-plus-lifetime Job runner self-test failed."
+                $nestedStdoutDetail = ConvertTo-BoundedSelfTestFailureDetail `
+                    $nestedRunnerSelfTestStdout
+                $nestedStderrDetail = ConvertTo-BoundedSelfTestFailureDetail `
+                    $nestedRunnerSelfTestStderr
+                throw "The exact guard-plus-lifetime Job runner self-test failed. (workerExit=$nestedRunnerSelfTestExit; stdout=$nestedStdoutDetail; stderr=$nestedStderrDetail)."
             }
             [LbbCoordinator.WorkerLifetimeJob]::WaitForNameAbsenceForSelfTest(
                 "Local\LBBWindowsAcceptanceNestedRunnerSelfTest-$nestedRunnerSelfTestNonce",

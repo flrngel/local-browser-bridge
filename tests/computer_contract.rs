@@ -7741,6 +7741,8 @@ fn windows_acceptance_coordinator_owns_children_and_delays_watcher_until_marker(
         "$runnerCapture = Start-CapturedProcess $runnerInfo $runnerOut $runnerErr",
         "$runnerExit = Complete-CapturedProcess",
         "Windows computer-use acceptance self-test passed.",
+        "ConvertTo-BoundedSelfTestFailureDetail $runnerStdout",
+        "runnerExit=$runnerExit; stdout=$runnerStdoutDetail; stderr=$runnerStderrDetail",
         "Nested guard/lifetime Job runner self-test passed.",
     ] {
         assert!(
@@ -7776,6 +7778,8 @@ fn windows_acceptance_coordinator_owns_children_and_delays_watcher_until_marker(
         "\"-InternalNestedJobRunnerSelfTestNonce\", $nestedRunnerSelfTestNonce",
         "$nestedRunnerSelfTestProcess.TransferGuardOwnership()",
         "\"Nested guard/lifetime Job runner self-test passed.\"",
+        "ConvertTo-BoundedSelfTestFailureDetail `\n                    $nestedRunnerSelfTestStderr",
+        "workerExit=$nestedRunnerSelfTestExit; stdout=$nestedStdoutDetail; stderr=$nestedStderrDetail",
         "The exact guard-plus-lifetime Job runner self-test failed.",
         "The nested-Job runner self-test crossed a candidate execution boundary.",
     ] {
