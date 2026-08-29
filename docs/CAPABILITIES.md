@@ -64,7 +64,7 @@ The optional helper is a separate Rust process. It connects outbound to the loop
 | Target-effect proof | Accessibility read-back or another allowlisted target postcondition is required for `Confirmed` | UI Automation read-back or another allowlisted target postcondition is required for `Confirmed` |
 | Native key subset | Navigation/editing keys, F1–F12, ASCII letters/digits, mapped US-keyboard punctuation, and Control/Alt/Shift/Meta modifiers | Navigation/editing keys, F1–F12, ASCII letters/digits, mapped punctuation, and Control/Alt/Shift; Windows/global and secure chords fail closed |
 | Readiness signal | Current permission and complete focus/input snapshot must be readable | Non-Session-0 process plus readable input desktop, foreground/focus HWNDs, and cursor; provider acceptance is still per action |
-| Target-activation disclosure | Target-routed pointer paths, including move trajectories, and native text may use and restore a transient exact-target `AXFrontmost` lease; no `AXRaise`, OS-front-process switch, or Space switch | No explicit target-activation or foreground API; provider behavior is still checked before/after |
+| Target-activation disclosure | Target-routed pointer paths, including move trajectories, and native text may use and restore a transient exact-target `AXFrontmost` lease plus a target-only make-key commit; no `AXRaise`, OS-front-process switch, or Space switch | No explicit target-activation or foreground API; provider behavior is still checked before/after |
 | Foreground/focus invariant | WindowServer-front process/window and saved user AX state must match before/after; no zero-transient guarantee | Foreground and GUI-thread focus HWNDs must match before/after; no zero-transient guarantee |
 | Shared pointer attribution | Global position is diagnostic; a healthy HID-system boundary covering movement, drag, buttons, scroll, and tablet activity can distinguish a quiet interval from shared-session contamination, without claiming physical-device provenance | Global position is diagnostic; message-only Raw Input and a minimal low-level injected-flag epoch retain counters/health only. They do not identify a physical actor and can have integrity, remote, or virtual-input blind spots |
 | Helper transport lifecycle | Intentional or unexpected server-transport loss exits the helper; relaunch is required. Explicit share stop stays in process | The launcher supervises disposable workers and restarts them after transport loss. Explicit share stop stays in process |
@@ -85,7 +85,7 @@ These are setup conditions, not product limitations:
 
 - Every installed component must use the same release version.
 - Browser control requires an unpacked Manifest V3 extension loaded from `chrome://extensions` or `edge://extensions`.
-- Browser control requires Chromium 140+. Cross-origin child-session routing first appeared in Chromium 125, but version 0.12.54 retains the overall floor so persisted extension storage can be restricted to trusted contexts.
+- Browser control requires Chromium 140+. Cross-origin child-session routing first appeared in Chromium 125, but version 0.12.55 retains the overall floor so persisted extension storage can be restricted to trusted contexts.
 - The complete macOS archive requires macOS 13+. Live sharing additionally requires Screen Recording permission for the packaged helper application.
 - macOS semantic control and supported input routes require Accessibility permission.
 - Windows native control must run in the signed-in interactive session, not Session 0 or a service.

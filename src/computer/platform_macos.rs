@@ -1518,6 +1518,47 @@ fn activate_without_raise(
         assert_snapshot_held(before)?;
         return Err(error);
     }
+    if lease.target_previous_window_id != lease.target_window_id {
+        let make_key_deadline = std::cmp::min(
+            preparation_deadline,
+            Instant::now() + FOCUS_RESTORE_PROOF_BUDGET,
+        );
+        let made_key = match lease.post_target_make_key_window_for_activation_before(
+            lease.target_window_id,
+            cancellation,
+            InvariantStage::FocusPreparation,
+            make_key_deadline,
+        ) {
+            Ok(posted) => posted,
+            Err(error) => {
+                lease.restore_previous_after_failed_activation(true, true)?;
+                assert_snapshot_held(before)?;
+                return Err(error);
+            }
+        };
+        let committed_result = lease.await_phase_before(
+            FocusLeasePhase::ReleasedWithTargetRequested,
+            true,
+            InvariantStage::FocusPreparation,
+            None,
+            make_key_deadline,
+            FOCUS_PREPARATION_MIN_SETTLE,
+        );
+        let cancellation_result = cancellation.check("target exact receiver preparation");
+        if !made_key || committed_result.is_err() || cancellation_result.is_err() {
+            let error = cancellation_result
+                .err()
+                .or_else(|| committed_result.err())
+                .unwrap_or_else(|| {
+                    background_unavailable(
+                        "macOS could not commit the exact target application's event receiver",
+                    )
+                });
+            lease.restore_previous_after_failed_activation(true, true)?;
+            assert_snapshot_held(before)?;
+            return Err(error);
+        }
+    }
     Ok(Some(lease))
 }
 
@@ -2364,6 +2405,45 @@ impl FocusLease {
             return false;
         }
         post_make_key_window_record(self.symbols, &self.target_psn, window_id)
+    }
+
+    fn post_target_make_key_window_for_activation_before(
+        &self,
+        window_id: u32,
+        cancellation: &CommandCancellation,
+        stage: InvariantStage,
+        deadline: Instant,
+    ) -> Result<bool, ComputerError> {
+        let authorize = || {
+            if self.target_window_is_restorable_before(window_id, deadline)
+                && self
+                    .prove_phase_before(
+                        FocusLeasePhase::ReleasedWithTargetRequested,
+                        true,
+                        stage,
+                        deadline,
+                    )
+                    .is_ok()
+                && self.user_owner_matches_before(false, deadline)
+                && Instant::now() < deadline
+            {
+                Ok(())
+            } else {
+                Err(background_unavailable(
+                    "The exact macOS target receiver changed during preparation",
+                ))
+            }
+        };
+        authorize()?;
+        ensure_dispatch_deadline(cancellation, "target exact receiver preparation", deadline)?;
+        cancellation.begin_side_effect("target exact receiver preparation")?;
+        ensure_dispatch_deadline(cancellation, "target exact receiver preparation", deadline)?;
+        authorize()?;
+        Ok(post_make_key_window_record(
+            self.symbols,
+            &self.target_psn,
+            window_id,
+        ))
     }
 
     fn await_known_active_target_before(

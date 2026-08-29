@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Exact package version from Cargo.toml (for example, 0.12.54)
+        description: Exact package version from Cargo.toml (for example, 0.12.55)
         required: true
         type: string
       source_sha:
