@@ -1561,9 +1561,10 @@ fn qpc_frame_age(
     // Keep both clocks in one rational QPC domain until after subtraction.
     // SystemRelativeTime is QPC time quantized to 100 ns. Converting the
     // current counter first truncates its remainder and can therefore make a
-    // just-rendered frame appear one quantum in the future. Windows also
-    // documents one-tick uncertainty for digital counter measurements, so a
-    // lead bounded by one QPC tick plus one TimeSpan quantum is zero age.
+    // just-rendered frame appear in the future. A compositor timestamp can
+    // also lead a later user-mode QPC sample on real Windows systems. Frame
+    // age is an elapsed-time measurement, so preserve past age precisely and
+    // saturate any future lead to zero at the callback receipt boundary.
     let frequency = i128::from(counter_frequency);
     let current_scaled = i128::from(current_counter)
         .checked_mul(HUNDRED_NANOSECONDS_PER_SECOND)
@@ -1574,12 +1575,6 @@ fn qpc_frame_age(
     let age_scaled = current_scaled
         .checked_sub(frame_scaled)
         .ok_or_else(|| "Windows WGC/QPC timestamp difference overflowed".to_string())?;
-    let future_tolerance = HUNDRED_NANOSECONDS_PER_SECOND
-        .checked_add(frequency)
-        .ok_or_else(|| "Windows WGC/QPC timestamp tolerance overflowed".to_string())?;
-    if age_scaled < -future_tolerance {
-        return Err("The WGC compositor timestamp is ahead of the monotonic clock".to_string());
-    }
     if age_scaled <= 0 {
         return Ok(Duration::ZERO);
     }
@@ -1812,12 +1807,12 @@ mod tests {
         assert_eq!(
             qpc_frame_age(34, 10, 3_000_000).unwrap(),
             Duration::ZERO,
-            "one QPC tick plus one 100 ns quantum of future skew is measurement uncertainty"
+            "future compositor timestamps must saturate to receipt time"
         );
-        assert!(
-            qpc_frame_age(39, 10, 3_000_000)
-                .unwrap_err()
-                .contains("ahead of the monotonic clock")
+        assert_eq!(
+            qpc_frame_age(i64::MAX, 0, 1).unwrap(),
+            Duration::ZERO,
+            "even a large future lead is zero elapsed age rather than a clock-domain failure"
         );
         assert!(qpc_frame_age(-1, 1, 1).is_err());
         assert!(qpc_frame_age(1, 1, 0).is_err());
