@@ -1060,10 +1060,13 @@ fn guarded(
 ) -> Result<InvariantReport, ComputerError> {
     let before = DesktopSnapshot::capture()?;
     let mut delivery = MacTargetDispatchTrace::new(target)?;
-    let focus = (stage != InvariantStage::PointerTrajectory)
-        .then(|| activate_without_raise(target, &before, cancellation, preparation_deadline))
-        .transpose()?
-        .flatten();
+    // Mouse-move events addressed to an exact non-main window can be dropped
+    // when another same-process window remains the application's receiver.
+    // Borrow the same bounded, no-raise focus lease used by the other native
+    // pointer paths so hover/move delivery reaches the requested window, then
+    // restore both the target application's prior receiver and the user's
+    // foreground owner before returning.
+    let focus = activate_without_raise(target, &before, cancellation, preparation_deadline)?;
     let action_result = action(focus.as_ref(), &mut delivery);
     cancellation.mark_verification_started();
     let restore_result = focus.map(FocusLease::restore).transpose();
