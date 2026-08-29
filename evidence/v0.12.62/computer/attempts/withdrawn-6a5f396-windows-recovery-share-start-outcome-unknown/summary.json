@@ -1,0 +1,348 @@
+{
+    "schemaVersion":  2,
+    "passed":  false,
+    "suites":  [
+                   "Smoke",
+                   "Recovery",
+                   "Semantic",
+                   "Keyboard",
+                   "Pixel",
+                   "Capture",
+                   "Cancellation"
+               ],
+    "startedAtUtc":  "2026-08-29T21:52:49.8610947Z",
+    "finishedAtUtc":  "2026-08-29T21:53:39.4645673Z",
+    "interactiveSessionId":  1,
+    "loopbackPort":  61403,
+    "targetPid":  16776,
+    "targetWindowId":  "328546",
+    "steps":  [
+                  {
+                      "name":  "protocol-bound helper readiness",
+                      "passed":  true,
+                      "evidence":  "01-protocol-bound-helper-readiness.json"
+                  },
+                  {
+                      "name":  "foreground arm request delivery",
+                      "passed":  true,
+                      "evidence":  "02-foreground-arm-request-delivery.json"
+                  },
+                  {
+                      "name":  "foreground arm proof",
+                      "passed":  true,
+                      "evidence":  "03-foreground-arm-proof.json"
+                  },
+                  {
+                      "name":  "post-arm protocol-bound helper continuity",
+                      "passed":  true,
+                      "evidence":  "04-post-arm-protocol-bound-helper-continuity.json"
+                  },
+                  {
+                      "name":  "baseline exact window observe",
+                      "passed":  true,
+                      "evidence":  "05-baseline-exact-window-observe.json"
+                  },
+                  {
+                      "name":  "baseline screenshot",
+                      "passed":  true,
+                      "evidence":  "06-baseline-screenshot.json"
+                  }
+              ],
+    "failure":  "Loopback command computer.share.start returned COMMAND_OUTCOME_UNKNOWN: Computer helper connection ended after the command was enqueued; its outcome is unknown: computer.share.start",
+    "failureDetails":  {
+                           "stage":  "recovery-suite",
+                           "exceptionType":  "System.Management.Automation.RuntimeException",
+                           "fullyQualifiedErrorId":  "Loopback command computer.share.start returned COMMAND_OUTCOME_UNKNOWN: Computer helper connection ended after the command was enqueued; its outcome is unknown: computer.share.start",
+                           "category":  "OperationStopped",
+                           "scriptLineNumber":  3367,
+                           "offsetInLine":  9,
+                           "line":  "throw \"Loopback command $Method returned $($responseError.code): $($responseError.message)\"",
+                           "scriptStackTrace":  "at Invoke-LbbCommand, [RUNNER]: line 3367\r\nat \u003cScriptBlock\u003e, [RUNNER]: line 4411",
+                           "pathsRecorded":  false
+                       },
+    "cleanupIssues":  [
+
+                      ],
+    "childHandleInheritancePolicy":  "PROC_THREAD_ATTRIBUTE_HANDLE_LIST:NUL-only",
+    "allowedInheritedHandleCount":  1,
+    "tokenPersistenceVerified":  true,
+    "tokenPersisted":  false,
+    "tokenBearingEvidenceRemoved":  0,
+    "unrelatedProcessesTerminated":  false,
+    "recoveryEventReleased":  true,
+    "helperTopologyChecks":  [
+                                 {
+                                     "description":  "the initial disposable helper worker",
+                                     "supervisorPid":  2716,
+                                     "controllerPid":  2716,
+                                     "workerPid":  6080,
+                                     "exactImageMatched":  true,
+                                     "directChildEnumerated":  true,
+                                     "interactiveSessionId":  1,
+                                     "stableConsecutivePolls":  2,
+                                     "helloStateMatched":  true,
+                                     "protocolRoundTrip":  true,
+                                     "roundTripMethod":  "computer.status"
+                                 },
+                                 {
+                                     "description":  "the original helper worker after foreground arming",
+                                     "supervisorPid":  2716,
+                                     "controllerPid":  2716,
+                                     "workerPid":  6080,
+                                     "exactImageMatched":  true,
+                                     "directChildEnumerated":  true,
+                                     "interactiveSessionId":  1,
+                                     "stableConsecutivePolls":  2,
+                                     "helloStateMatched":  true,
+                                     "protocolRoundTrip":  true,
+                                     "roundTripMethod":  "computer.status"
+                                 }
+                             ],
+    "helperTopologyPollCount":  6,
+    "helperTopologyTransitionCount":  4,
+    "helperTopologyHistory":  [
+                                  {
+                                      "stage":  "the initial disposable helper worker",
+                                      "observedAtUtc":  "2026-08-29T21:52:51.5088708Z",
+                                      "poll":  1,
+                                      "supervisorExited":  false,
+                                      "reportedWorkerPid":  6080,
+                                      "reportedControllerPid":  2716,
+                                      "matchingHelperChildCount":  1,
+                                      "matchingHelperChildPids":  [
+                                                                      6080
+                                                                  ],
+                                      "workerImageMatched":  true,
+                                      "controllerProcessMatched":  true,
+                                      "connected":  true,
+                                      "helloStateMatched":  true,
+                                      "workerSessionId":  1,
+                                      "runnerSessionMatched":  true,
+                                      "stablePolls":  1,
+                                      "nativeErrorCode":  null
+                                  },
+                                  {
+                                      "stage":  "the initial disposable helper worker",
+                                      "observedAtUtc":  "2026-08-29T21:52:51.6817207Z",
+                                      "poll":  3,
+                                      "supervisorExited":  false,
+                                      "reportedWorkerPid":  6080,
+                                      "reportedControllerPid":  2716,
+                                      "matchingHelperChildCount":  1,
+                                      "matchingHelperChildPids":  [
+                                                                      6080
+                                                                  ],
+                                      "workerImageMatched":  true,
+                                      "controllerProcessMatched":  true,
+                                      "connected":  true,
+                                      "helloStateMatched":  true,
+                                      "workerSessionId":  1,
+                                      "runnerSessionMatched":  true,
+                                      "stablePolls":  2,
+                                      "nativeErrorCode":  null
+                                  },
+                                  {
+                                      "stage":  "the original helper worker after foreground arming",
+                                      "observedAtUtc":  "2026-08-29T21:53:35.5498961Z",
+                                      "poll":  4,
+                                      "supervisorExited":  false,
+                                      "reportedWorkerPid":  6080,
+                                      "reportedControllerPid":  2716,
+                                      "matchingHelperChildCount":  1,
+                                      "matchingHelperChildPids":  [
+                                                                      6080
+                                                                  ],
+                                      "workerImageMatched":  true,
+                                      "controllerProcessMatched":  true,
+                                      "connected":  true,
+                                      "helloStateMatched":  true,
+                                      "workerSessionId":  1,
+                                      "runnerSessionMatched":  true,
+                                      "stablePolls":  1,
+                                      "nativeErrorCode":  null
+                                  },
+                                  {
+                                      "stage":  "the original helper worker after foreground arming",
+                                      "observedAtUtc":  "2026-08-29T21:53:35.7219463Z",
+                                      "poll":  6,
+                                      "supervisorExited":  false,
+                                      "reportedWorkerPid":  6080,
+                                      "reportedControllerPid":  2716,
+                                      "matchingHelperChildCount":  1,
+                                      "matchingHelperChildPids":  [
+                                                                      6080
+                                                                  ],
+                                      "workerImageMatched":  true,
+                                      "controllerProcessMatched":  true,
+                                      "connected":  true,
+                                      "helloStateMatched":  true,
+                                      "workerSessionId":  1,
+                                      "runnerSessionMatched":  true,
+                                      "stablePolls":  2,
+                                      "nativeErrorCode":  null
+                                  }
+                              ],
+    "helperTopologyLastObservation":  {
+                                          "supervisorPid":  2716,
+                                          "supervisorExited":  false,
+                                          "supervisorExitCode":  null,
+                                          "reportedWorkerPid":  6080,
+                                          "reportedControllerPid":  2716,
+                                          "matchingHelperChildCount":  1,
+                                          "matchingHelperChildPids":  [
+                                                                          6080
+                                                                      ],
+                                          "workerImageMatched":  true,
+                                          "controllerProcessMatched":  true,
+                                          "connected":  true,
+                                          "helloStateMatched":  true,
+                                          "workerSessionId":  1,
+                                          "runnerSessionMatched":  true,
+                                          "stablePolls":  2,
+                                          "nativeErrorCode":  null,
+                                          "imagePathRecorded":  false,
+                                          "commandLineRecorded":  false
+                                      },
+    "foregroundArmProof":  {
+                               "requestedGeneration":  2116855993,
+                               "requestPosted":  true,
+                               "acknowledgementMode":  "fresh-foreground-focused-left-mouse-down-up",
+                               "nativeForegroundAndFocusRequired":  true,
+                               "fixtureRequestedGeneration":  2116855993,
+                               "fixtureAcknowledgedGeneration":  2116855993,
+                               "fixtureRequestMatched":  true,
+                               "fixtureAcknowledgementMatched":  true,
+                               "fixtureRequestCount":  1,
+                               "fixtureAcknowledgementCount":  1,
+                               "fixtureLeftMouseDownCount":  1,
+                               "fixtureLeftMouseUpCount":  1,
+                               "requestDeliveryPublicationGeneration":  6,
+                               "fixtureStatePublicationGeneration":  200,
+                               "statePublicationAdvanced":  true,
+                               "armAndNativeMatched":  true,
+                               "requestCountMatched":  true,
+                               "acknowledgementCountMatched":  true,
+                               "leftMouseDownCountMatched":  true,
+                               "leftMouseUpCountMatched":  true,
+                               "requestDelivered":  true,
+                               "requestDeliveryTimeoutSeconds":  10,
+                               "armButtonEnabled":  true,
+                               "armButtonIdentityMatched":  true,
+                               "nativeTopologyMatched":  true,
+                               "foregroundMatched":  true,
+                               "foregroundStable":  true,
+                               "focusMatched":  true,
+                               "focusStable":  true,
+                               "cursorAvailable":  true,
+                               "cursorStable":  true,
+                               "inputDesktopAvailable":  true,
+                               "inputDesktopStable":  true,
+                               "stableSamplesRequired":  3,
+                               "stableSamplesObserved":  3,
+                               "stablePublicationSamplesObserved":  3,
+                               "timeoutSeconds":  300,
+                               "completed":  true,
+                               "baselineContinuityMatched":  true,
+                               "rawWindowHandlesRecorded":  false,
+                               "rawCursorCoordinatesRecorded":  false
+                           },
+    "fixtureProcessBinding":  {
+                                  "executionMode":  "dedicated-windows-application",
+                                  "appUserModelId":  "LocalBrowserBridge.WindowsAcceptance",
+                                  "sourceScriptSha256":  "cb12a58f2200521fca692b7ecbff7b9b8b00abeea7dde7e05aad6f483e3cf515",
+                                  "sourceStableAcrossBuild":  true,
+                                  "executableBytes":  36864,
+                                  "executableSha256":  "8d5457f1b9b7e02bfcbcd2d87806e8e912ec39c30baef949b2d8146093f232f1",
+                                  "executableStableAcrossLaunch":  true,
+                                  "entryPointSelfTestPassed":  true,
+                                  "directChildMatched":  true,
+                                  "exactImageMatched":  true,
+                                  "interactiveSessionMatched":  true,
+                                  "readyPidMatched":  true,
+                                  "executableRemoved":  true,
+                                  "terminalHostUsed":  false,
+                                  "pathsRecorded":  false
+                              },
+    "releaseCandidateBinding":  {
+                                    "schemaVersion":  3,
+                                    "version":  "0.12.62",
+                                    "releaseTag":  "v0.12.62",
+                                    "repository":  "flrngel/local-browser-bridge",
+                                    "sourceSha":  "1c89c3dd43595dca2610a4622e35f875fcbab605",
+                                    "workflowRunId":  "33275797498",
+                                    "workflowRunAttempt":  "1",
+                                    "workflowEvent":  "workflow_dispatch",
+                                    "workflowRef":  "refs/heads/main",
+                                    "workflowPath":  ".github/workflows/deploy.yml",
+                                    "artifactId":  "9721601410",
+                                    "artifactName":  "release-candidate",
+                                    "artifactZipBytes":  16138535,
+                                    "artifactZipSha256":  "6a5f39651d5f1c0fe3e8f7570cc495902b5bf6afeb760a9c3fd36fb777c36754",
+                                    "checksumManifestSha256":  "db3966eadd78118fc976514422a7666f445f2d34867315a94c29bd2d0386af24",
+                                    "attestationInvocationUri":  "https://github.com/flrngel/local-browser-bridge/actions/runs/33275797498/attempts/1",
+                                    "attestedAssetCount":  5,
+                                    "githubHostedRunner":  true,
+                                    "assets":  [
+                                                   {
+                                                       "file":  "local-browser-bridge-v0.12.62-windows-x86_64.exe",
+                                                       "bytes":  7353856,
+                                                       "sha256":  "8ea31d712e69e7a00459dee22d3d8d57af7dc072438a94a37960657bd17cbca2"
+                                                   },
+                                                   {
+                                                       "file":  "local-computer-helper-v0.12.62-windows-x86_64.exe",
+                                                       "bytes":  2623488,
+                                                       "sha256":  "58cec466d8e521d5e7afd1a2fb37b8b0c0b32d7f43f8f905ecfd5ab6d05ffbea"
+                                                   },
+                                                   {
+                                                       "file":  "local-browser-bridge-v0.12.62-macos-universal.tar.gz",
+                                                       "bytes":  12165416,
+                                                       "sha256":  "b23beeb3dafb79b9614f01efd18e4f6f7d44567b3a8ed91d6eaa30e2e524a256"
+                                                   },
+                                                   {
+                                                       "file":  "local-browser-bridge-extension-v0.12.62.zip",
+                                                       "bytes":  89023,
+                                                       "sha256":  "96e4c071708f00f7d787d21d82b93c5da7b5d0608f28d978125a9687656e5d3d"
+                                                   },
+                                                   {
+                                                       "file":  "SHA256SUMS.txt",
+                                                       "bytes":  460,
+                                                       "sha256":  "db3966eadd78118fc976514422a7666f445f2d34867315a94c29bd2d0386af24"
+                                                   }
+                                               ]
+                                },
+    "candidateBinding":  {
+                             "version":  "0.12.62",
+                             "checksumManifestMatched":  true,
+                             "exactAssetSetMatched":  true,
+                             "checksumManifest":  {
+                                                      "name":  "SHA256SUMS.txt",
+                                                      "bytes":  460,
+                                                      "sha256":  "db3966eadd78118fc976514422a7666f445f2d34867315a94c29bd2d0386af24",
+                                                      "expectedSha256":  "db3966eadd78118fc976514422a7666f445f2d34867315a94c29bd2d0386af24",
+                                                      "exactEntryCount":  4,
+                                                      "pathRecorded":  false
+                                                  },
+                             "server":  {
+                                            "name":  "local-browser-bridge-v0.12.62-windows-x86_64.exe",
+                                            "bytes":  7353856,
+                                            "sha256":  "8ea31d712e69e7a00459dee22d3d8d57af7dc072438a94a37960657bd17cbca2",
+                                            "checksumManifestMatched":  true,
+                                            "fileVersion":  "0.12.62",
+                                            "productVersion":  "0.12.62",
+                                            "reportedVersion":  "local-browser-bridge-desktop 0.12.62",
+                                            "versionMatched":  true,
+                                            "pathRecorded":  false
+                                        },
+                             "helper":  {
+                                            "name":  "local-computer-helper-v0.12.62-windows-x86_64.exe",
+                                            "bytes":  2623488,
+                                            "sha256":  "58cec466d8e521d5e7afd1a2fb37b8b0c0b32d7f43f8f905ecfd5ab6d05ffbea",
+                                            "checksumManifestMatched":  true,
+                                            "fileVersion":  "0.12.62",
+                                            "productVersion":  "0.12.62",
+                                            "reportedVersion":  "local-computer-helper 0.12.62",
+                                            "versionMatched":  true,
+                                            "pathRecorded":  false
+                                        }
+                         }
+}

@@ -1,0 +1,580 @@
+{
+    "result":  {
+                   "appName":  "lbb-windows-computer-use-fixture.exe",
+                   "captureAgeMs":  210.7855,
+                   "capturedAt":  "2026-08-29T21:53:36.2090007Z",
+                   "deliveryMode":  "exact-window-background",
+                   "displayId":  "328546",
+                   "displayIndex":  0,
+                   "displayName":  "lbb-windows-computer-use-fixture.exe — LBB Windows Fixture Target",
+                   "elements":  [
+                                    {
+                                        "actions":  "press",
+                                        "bounds":  {
+                                                       "height":  32.636655948553056,
+                                                       "width":  139.8944805194805,
+                                                       "x":  1433.4521103896104,
+                                                       "y":  1003.3440514469454
+                                                   },
+                                        "coordinateSpace":  "image-pixels",
+                                        "enabled":  true,
+                                        "name":  "Details",
+                                        "ref":  "u1",
+                                        "role":  "UIAControlType(50000)",
+                                        "screenBounds":  {
+                                                             "height":  35.0,
+                                                             "width":  150.0,
+                                                             "x":  1608.0,
+                                                             "y":  1166.0
+                                                         },
+                                        "sensitive":  false,
+                                        "valueRedacted":  false
+                                    },
+                                    {
+                                        "actions":  "press",
+                                        "bounds":  {
+                                                       "height":  32.636655948553056,
+                                                       "width":  139.8944805194805,
+                                                       "x":  1729.0957792207791,
+                                                       "y":  1003.3440514469454
+                                                   },
+                                        "coordinateSpace":  "image-pixels",
+                                        "enabled":  true,
+                                        "name":  "Continue",
+                                        "ref":  "u2",
+                                        "role":  "UIAControlType(50000)",
+                                        "screenBounds":  {
+                                                             "height":  35.0,
+                                                             "width":  150.0,
+                                                             "x":  1925.0,
+                                                             "y":  1166.0
+                                                         },
+                                        "sensitive":  false,
+                                        "valueRedacted":  false
+                                    },
+                                    {
+                                        "actions":  "press",
+                                        "bounds":  {
+                                                       "height":  32.636655948553056,
+                                                       "width":  139.8944805194805,
+                                                       "x":  1875.5186688311687,
+                                                       "y":  1003.3440514469454
+                                                   },
+                                        "coordinateSpace":  "image-pixels",
+                                        "enabled":  true,
+                                        "name":  "Quit",
+                                        "ref":  "u3",
+                                        "role":  "UIAControlType(50000)",
+                                        "screenBounds":  {
+                                                             "height":  35.0,
+                                                             "width":  150.0,
+                                                             "x":  2082.0,
+                                                             "y":  1166.0
+                                                         },
+                                        "sensitive":  false,
+                                        "valueRedacted":  false
+                                    },
+                                    {
+                                        "actions":  "press",
+                                        "bounds":  {
+                                                       "height":  35.434083601286176,
+                                                       "width":  49.42938311688312,
+                                                       "x":  1979.0405844155844,
+                                                       "y":  730.128617363344
+                                                   },
+                                        "coordinateSpace":  "image-pixels",
+                                        "enabled":  true,
+                                        "name":  "Close",
+                                        "ref":  "u4",
+                                        "role":  "UIAControlType(50000)",
+                                        "screenBounds":  {
+                                                             "height":  38.0,
+                                                             "width":  53.0,
+                                                             "x":  2193.0,
+                                                             "y":  873.0
+                                                         },
+                                        "sensitive":  false,
+                                        "valueRedacted":  false
+                                    },
+                                    {
+                                        "actions":  "press",
+                                        "bounds":  {
+                                                       "height":  47.556270096463024,
+                                                       "width":  209.84172077922076,
+                                                       "x":  700.4050324675325,
+                                                       "y":  262.0257234726688
+                                                   },
+                                        "coordinateSpace":  "image-pixels",
+                                        "enabled":  true,
+                                        "name":  "Increment Counter",
+                                        "ref":  "u5",
+                                        "role":  "UIAControlType(50000)",
+                                        "screenBounds":  {
+                                                             "height":  51.0,
+                                                             "width":  225.0,
+                                                             "x":  822.0,
+                                                             "y":  371.0
+                                                         },
+                                        "sensitive":  false,
+                                        "valueRedacted":  false
+                                    },
+                                    {
+                                        "actions":  "press",
+                                        "bounds":  {
+                                                       "height":  30.771704180064308,
+                                                       "width":  30.77678571428571,
+                                                       "x":  0.93262987012987,
+                                                       "y":  11.189710610932476
+                                                   },
+                                        "coordinateSpace":  "image-pixels",
+                                        "enabled":  true,
+                                        "name":  "System",
+                                        "ref":  "u6",
+                                        "role":  "UIAControlType(50011)",
+                                        "screenBounds":  {
+                                                             "height":  33.0,
+                                                             "width":  33.0,
+                                                             "x":  72.0,
+                                                             "y":  102.0
+                                                         },
+                                        "sensitive":  false,
+                                        "valueRedacted":  false
+                                    },
+                                    {
+                                        "actions":  "press",
+                                        "bounds":  {
+                                                       "height":  41.961414790996784,
+                                                       "width":  66.21672077922078,
+                                                       "x":  951.2824675324676,
+                                                       "y":  1.864951768488746
+                                                   },
+                                        "coordinateSpace":  "image-pixels",
+                                        "enabled":  true,
+                                        "name":  "Minimize",
+                                        "ref":  "u7",
+                                        "role":  "UIAControlType(50000)",
+                                        "screenBounds":  {
+                                                             "height":  45.0,
+                                                             "width":  71.0,
+                                                             "x":  1091.0,
+                                                             "y":  92.0
+                                                         },
+                                        "sensitive":  false,
+                                        "valueRedacted":  false
+                                    },
+                                    {
+                                        "actions":  "press",
+                                        "bounds":  {
+                                                       "height":  41.961414790996784,
+                                                       "width":  66.21672077922078,
+                                                       "x":  1018.431818181818,
+                                                       "y":  1.864951768488746
+                                                   },
+                                        "coordinateSpace":  "image-pixels",
+                                        "enabled":  true,
+                                        "name":  "Maximize",
+                                        "ref":  "u8",
+                                        "role":  "UIAControlType(50000)",
+                                        "screenBounds":  {
+                                                             "height":  45.0,
+                                                             "width":  71.0,
+                                                             "x":  1163.0,
+                                                             "y":  92.0
+                                                         },
+                                        "sensitive":  false,
+                                        "valueRedacted":  false
+                                    },
+                                    {
+                                        "actions":  "press",
+                                        "bounds":  {
+                                                       "height":  41.961414790996784,
+                                                       "width":  66.21672077922078,
+                                                       "x":  1082.7832792207791,
+                                                       "y":  1.864951768488746
+                                                   },
+                                        "coordinateSpace":  "image-pixels",
+                                        "enabled":  true,
+                                        "name":  "Close",
+                                        "ref":  "u9",
+                                        "role":  "UIAControlType(50000)",
+                                        "screenBounds":  {
+                                                             "height":  45.0,
+                                                             "width":  71.0,
+                                                             "x":  1232.0,
+                                                             "y":  92.0
+                                                         },
+                                        "sensitive":  false,
+                                        "valueRedacted":  false
+                                    }
+                                ],
+                   "frameId":  "95cec4f6-23cc-4a97-94d6-123b97ac2d26",
+                   "imageHeight":  870,
+                   "imageWidth":  1149,
+                   "pid":  16776,
+                   "pointer":  {
+                                   "action":  "idle",
+                                   "buttonsMask":  0,
+                                   "coordinateSpace":  "image-pixels",
+                                   "headingDegrees":  45.0,
+                                   "id":  "85d8b1d0-9e2c-4be1-a841-b93a2b4f45eb",
+                                   "imageX":  null,
+                                   "imageY":  null,
+                                   "pressed":  false,
+                                   "revision":  0,
+                                   "screenX":  null,
+                                   "screenY":  null,
+                                   "sequence":  0,
+                                   "style":  {
+                                                 "fill":  "#B8F55D",
+                                                 "hotspot":  "tip",
+                                                 "logicalSize":  42,
+                                                 "outline":  "#FFFFFF",
+                                                 "theme":  "lbb.session-pointer.v1"
+                                             },
+                                   "updatedAt":  "2026-08-29T21:52:51.3537364Z",
+                                   "visible":  false,
+                                   "windowId":  null
+                               },
+                   "rotation":  0.0,
+                   "scaleFactor":  0.93262987012987,
+                   "screenHeight":  933,
+                   "screenWidth":  1232,
+                   "screenX":  71,
+                   "screenY":  90,
+                   "semanticAvailable":  true,
+                   "semanticMode":  "windows-ui-automation",
+                   "semanticTruncated":  false,
+                   "sessionMode":  "background-window",
+                   "share":  {
+                                 "active":  false,
+                                 "reason":  "inactive",
+                                 "stopped":  false
+                             },
+                   "transportScaleX":  0.93262987012987,
+                   "transportScaleY":  0.932475884244373,
+                   "windowId":  "328546",
+                   "windowTitle":  "LBB Windows Fixture Target"
+               },
+    "error":  null,
+    "taxonomy":  null,
+    "callId":  "windows-fixture-69bf0a947d1247fa84874b005da74958",
+    "targetState":  {
+                        "computerConnected":  true,
+                        "computer":  {
+                                         "architecture":  "x86_64",
+                                         "backend":  "background-window/uia+win32-messages+wgc-stream",
+                                         "capabilities":  [
+                                                              "computer.status",
+                                                              "computer.share.start",
+                                                              "computer.share.status",
+                                                              "computer.share.stop",
+                                                              "computer.observe",
+                                                              "computer.move",
+                                                              "computer.click",
+                                                              "computer.drag",
+                                                              "computer.scroll",
+                                                              "computer.typeText",
+                                                              "computer.key",
+                                                              "computer.invoke",
+                                                              "computer.setValue",
+                                                              "computer.share.ack",
+                                                              "computer.capture.native-stream.v1",
+                                                              "computer.input-delivery-provenance.v1",
+                                                              "computer.pointer-activity-monitor.v1"
+                                                          ],
+                                         "compatible":  true,
+                                         "connectedAt":  "2026-08-29T21:52:51.3656688Z",
+                                         "controllerProcessId":  2716,
+                                         "inputReady":  true,
+                                         "invariants":  {
+                                                            "activatesTargetApplication":  false,
+                                                            "exactWindowRequired":  true,
+                                                            "foregroundIdentityPreservedBeforeAfter":  true,
+                                                            "globalHidInput":  false,
+                                                            "hardwareCursorPreservedBeforeAfter":  true,
+                                                            "hardwareCursorSampleAuthoritative":  false,
+                                                            "implicitForegroundFallback":  false,
+                                                            "inputDeliveryProvenanceRequired":  true,
+                                                            "movesHardwareCursor":  false,
+                                                            "switchesActiveSpace":  false,
+                                                            "targetActivationMode":  "no-explicit-target-activation-api",
+                                                            "usesAxRaise":  false,
+                                                            "usesFrontProcessSwitch":  false,
+                                                            "zeroTransientInterruptionGuaranteed":  false
+                                                        },
+                                         "isolation":  "shared-user-session/target-routed",
+                                         "platform":  "windows",
+                                         "processId":  6080,
+                                         "protocolVersion":  1,
+                                         "semanticReady":  true,
+                                         "sessionId":  "2b1c16e2-f2b8-4c21-8be6-dbf6142e7276",
+                                         "sessionMode":  "background-window",
+                                         "share":  {
+                                                       "active":  false,
+                                                       "reason":  "inactive",
+                                                       "stopped":  false
+                                                   },
+                                         "version":  "0.12.62"
+                                     },
+                        "computerObservation":  {
+                                                    "appName":  "lbb-windows-computer-use-fixture.exe",
+                                                    "captureAgeMs":  210.7855,
+                                                    "capturedAt":  "2026-08-29T21:53:36.2090007Z",
+                                                    "contentHash":  "05a3b1ee824a24b5fe6be520bdbf55d48eeed693dc4f6b968efd57eea0ab8015",
+                                                    "deliveryMode":  "exact-window-background",
+                                                    "displayId":  "328546",
+                                                    "displayIndex":  0,
+                                                    "displayName":  "lbb-windows-computer-use-fixture.exe — LBB Windows Fixture Target",
+                                                    "elements":  [
+                                                                     {
+                                                                         "actions":  "press",
+                                                                         "bounds":  {
+                                                                                        "height":  32.636655948553056,
+                                                                                        "width":  139.8944805194805,
+                                                                                        "x":  1433.4521103896104,
+                                                                                        "y":  1003.3440514469454
+                                                                                    },
+                                                                         "coordinateSpace":  "image-pixels",
+                                                                         "enabled":  true,
+                                                                         "name":  "Details",
+                                                                         "ref":  "u1",
+                                                                         "role":  "UIAControlType(50000)",
+                                                                         "screenBounds":  {
+                                                                                              "height":  35.0,
+                                                                                              "width":  150.0,
+                                                                                              "x":  1608.0,
+                                                                                              "y":  1166.0
+                                                                                          },
+                                                                         "sensitive":  false,
+                                                                         "valueRedacted":  false
+                                                                     },
+                                                                     {
+                                                                         "actions":  "press",
+                                                                         "bounds":  {
+                                                                                        "height":  32.636655948553056,
+                                                                                        "width":  139.8944805194805,
+                                                                                        "x":  1729.0957792207791,
+                                                                                        "y":  1003.3440514469454
+                                                                                    },
+                                                                         "coordinateSpace":  "image-pixels",
+                                                                         "enabled":  true,
+                                                                         "name":  "Continue",
+                                                                         "ref":  "u2",
+                                                                         "role":  "UIAControlType(50000)",
+                                                                         "screenBounds":  {
+                                                                                              "height":  35.0,
+                                                                                              "width":  150.0,
+                                                                                              "x":  1925.0,
+                                                                                              "y":  1166.0
+                                                                                          },
+                                                                         "sensitive":  false,
+                                                                         "valueRedacted":  false
+                                                                     },
+                                                                     {
+                                                                         "actions":  "press",
+                                                                         "bounds":  {
+                                                                                        "height":  32.636655948553056,
+                                                                                        "width":  139.8944805194805,
+                                                                                        "x":  1875.5186688311687,
+                                                                                        "y":  1003.3440514469454
+                                                                                    },
+                                                                         "coordinateSpace":  "image-pixels",
+                                                                         "enabled":  true,
+                                                                         "name":  "Quit",
+                                                                         "ref":  "u3",
+                                                                         "role":  "UIAControlType(50000)",
+                                                                         "screenBounds":  {
+                                                                                              "height":  35.0,
+                                                                                              "width":  150.0,
+                                                                                              "x":  2082.0,
+                                                                                              "y":  1166.0
+                                                                                          },
+                                                                         "sensitive":  false,
+                                                                         "valueRedacted":  false
+                                                                     },
+                                                                     {
+                                                                         "actions":  "press",
+                                                                         "bounds":  {
+                                                                                        "height":  35.434083601286176,
+                                                                                        "width":  49.42938311688312,
+                                                                                        "x":  1979.0405844155844,
+                                                                                        "y":  730.128617363344
+                                                                                    },
+                                                                         "coordinateSpace":  "image-pixels",
+                                                                         "enabled":  true,
+                                                                         "name":  "Close",
+                                                                         "ref":  "u4",
+                                                                         "role":  "UIAControlType(50000)",
+                                                                         "screenBounds":  {
+                                                                                              "height":  38.0,
+                                                                                              "width":  53.0,
+                                                                                              "x":  2193.0,
+                                                                                              "y":  873.0
+                                                                                          },
+                                                                         "sensitive":  false,
+                                                                         "valueRedacted":  false
+                                                                     },
+                                                                     {
+                                                                         "actions":  "press",
+                                                                         "bounds":  {
+                                                                                        "height":  47.556270096463024,
+                                                                                        "width":  209.84172077922076,
+                                                                                        "x":  700.4050324675325,
+                                                                                        "y":  262.0257234726688
+                                                                                    },
+                                                                         "coordinateSpace":  "image-pixels",
+                                                                         "enabled":  true,
+                                                                         "name":  "Increment Counter",
+                                                                         "ref":  "u5",
+                                                                         "role":  "UIAControlType(50000)",
+                                                                         "screenBounds":  {
+                                                                                              "height":  51.0,
+                                                                                              "width":  225.0,
+                                                                                              "x":  822.0,
+                                                                                              "y":  371.0
+                                                                                          },
+                                                                         "sensitive":  false,
+                                                                         "valueRedacted":  false
+                                                                     },
+                                                                     {
+                                                                         "actions":  "press",
+                                                                         "bounds":  {
+                                                                                        "height":  30.771704180064308,
+                                                                                        "width":  30.77678571428571,
+                                                                                        "x":  0.93262987012987,
+                                                                                        "y":  11.189710610932476
+                                                                                    },
+                                                                         "coordinateSpace":  "image-pixels",
+                                                                         "enabled":  true,
+                                                                         "name":  "System",
+                                                                         "ref":  "u6",
+                                                                         "role":  "UIAControlType(50011)",
+                                                                         "screenBounds":  {
+                                                                                              "height":  33.0,
+                                                                                              "width":  33.0,
+                                                                                              "x":  72.0,
+                                                                                              "y":  102.0
+                                                                                          },
+                                                                         "sensitive":  false,
+                                                                         "valueRedacted":  false
+                                                                     },
+                                                                     {
+                                                                         "actions":  "press",
+                                                                         "bounds":  {
+                                                                                        "height":  41.961414790996784,
+                                                                                        "width":  66.21672077922078,
+                                                                                        "x":  951.2824675324676,
+                                                                                        "y":  1.864951768488746
+                                                                                    },
+                                                                         "coordinateSpace":  "image-pixels",
+                                                                         "enabled":  true,
+                                                                         "name":  "Minimize",
+                                                                         "ref":  "u7",
+                                                                         "role":  "UIAControlType(50000)",
+                                                                         "screenBounds":  {
+                                                                                              "height":  45.0,
+                                                                                              "width":  71.0,
+                                                                                              "x":  1091.0,
+                                                                                              "y":  92.0
+                                                                                          },
+                                                                         "sensitive":  false,
+                                                                         "valueRedacted":  false
+                                                                     },
+                                                                     {
+                                                                         "actions":  "press",
+                                                                         "bounds":  {
+                                                                                        "height":  41.961414790996784,
+                                                                                        "width":  66.21672077922078,
+                                                                                        "x":  1018.431818181818,
+                                                                                        "y":  1.864951768488746
+                                                                                    },
+                                                                         "coordinateSpace":  "image-pixels",
+                                                                         "enabled":  true,
+                                                                         "name":  "Maximize",
+                                                                         "ref":  "u8",
+                                                                         "role":  "UIAControlType(50000)",
+                                                                         "screenBounds":  {
+                                                                                              "height":  45.0,
+                                                                                              "width":  71.0,
+                                                                                              "x":  1163.0,
+                                                                                              "y":  92.0
+                                                                                          },
+                                                                         "sensitive":  false,
+                                                                         "valueRedacted":  false
+                                                                     },
+                                                                     {
+                                                                         "actions":  "press",
+                                                                         "bounds":  {
+                                                                                        "height":  41.961414790996784,
+                                                                                        "width":  66.21672077922078,
+                                                                                        "x":  1082.7832792207791,
+                                                                                        "y":  1.864951768488746
+                                                                                    },
+                                                                         "coordinateSpace":  "image-pixels",
+                                                                         "enabled":  true,
+                                                                         "name":  "Close",
+                                                                         "ref":  "u9",
+                                                                         "role":  "UIAControlType(50000)",
+                                                                         "screenBounds":  {
+                                                                                              "height":  45.0,
+                                                                                              "width":  71.0,
+                                                                                              "x":  1232.0,
+                                                                                              "y":  92.0
+                                                                                          },
+                                                                         "sensitive":  false,
+                                                                         "valueRedacted":  false
+                                                                     }
+                                                                 ],
+                                                    "frameId":  "95cec4f6-23cc-4a97-94d6-123b97ac2d26",
+                                                    "imageHeight":  870,
+                                                    "imageWidth":  1149,
+                                                    "pid":  16776,
+                                                    "pointer":  {
+                                                                    "action":  "idle",
+                                                                    "buttonsMask":  0,
+                                                                    "coordinateSpace":  "image-pixels",
+                                                                    "headingDegrees":  45.0,
+                                                                    "id":  "85d8b1d0-9e2c-4be1-a841-b93a2b4f45eb",
+                                                                    "imageX":  null,
+                                                                    "imageY":  null,
+                                                                    "pressed":  false,
+                                                                    "revision":  0,
+                                                                    "screenX":  null,
+                                                                    "screenY":  null,
+                                                                    "sequence":  0,
+                                                                    "style":  {
+                                                                                  "fill":  "#B8F55D",
+                                                                                  "hotspot":  "tip",
+                                                                                  "logicalSize":  42,
+                                                                                  "outline":  "#FFFFFF",
+                                                                                  "theme":  "lbb.session-pointer.v1"
+                                                                              },
+                                                                    "updatedAt":  "2026-08-29T21:52:51.3537364Z",
+                                                                    "visible":  false,
+                                                                    "windowId":  null
+                                                                },
+                                                    "rotation":  0.0,
+                                                    "scaleFactor":  0.93262987012987,
+                                                    "screenHeight":  933,
+                                                    "screenWidth":  1232,
+                                                    "screenX":  71,
+                                                    "screenY":  90,
+                                                    "screenshotHeight":  870,
+                                                    "screenshotUrl":  "/api/computer/screenshot?id=813b768f16e741ed9ccd83cacbecf04a\u0026binding=computer-frame.OTVjZWM0ZjYtMjNjYy00YTk3LTk0ZDYtMTIzYjk3YWMyZDI2",
+                                                    "screenshotWidth":  1149,
+                                                    "semanticAvailable":  true,
+                                                    "semanticMode":  "windows-ui-automation",
+                                                    "semanticTruncated":  false,
+                                                    "sessionMode":  "background-window",
+                                                    "share":  {
+                                                                  "active":  false,
+                                                                  "reason":  "inactive",
+                                                                  "stopped":  false
+                                                              },
+                                                    "transportScaleX":  0.93262987012987,
+                                                    "transportScaleY":  0.932475884244373,
+                                                    "windowId":  "328546",
+                                                    "windowTitle":  "LBB Windows Fixture Target"
+                                                }
+                    }
+}
