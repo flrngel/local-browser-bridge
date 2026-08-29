@@ -315,19 +315,33 @@ pub fn move_pointer_path(
         InvariantStage::PointerTrajectory,
         cancellation,
         None,
-        |_, delivery| {
+        |focus, delivery| {
             if points.is_empty() {
                 return Err(input_error("synthetic pointer trajectory is empty"));
             }
             for (index, point) in points.iter().copied().enumerate() {
-                delivery.record(post_mouse(
+                let event = mouse_event(
                     target,
                     point,
                     CGEventType::MouseMoved,
+                    CGMouseButton::Left,
                     0,
                     0,
                     0,
+                )?;
+                // Focus activation and AX main-window state are asynchronous
+                // with the target application's actual event receiver. Re-prove
+                // the exact receiver immediately before every trajectory event,
+                // matching click, drag, scroll, key, and text dispatch instead
+                // of racing the first MouseMoved against activation.
+                let move_deadline = Instant::now() + FOCUS_RESTORE_PROOF_BUDGET;
+                prove_action_dispatch_owner(focus, target, move_deadline, true)?;
+                delivery.record(post_before_deadline(
+                    target,
+                    &event,
                     cancellation,
+                    "pointer dispatch",
+                    move_deadline,
                 )?)?;
                 if index + 1 < points.len() {
                     thread::sleep(step_delay);
@@ -1120,50 +1134,6 @@ fn finish_semantic_after_snapshot(
     Ok((backend_effect?, report))
 }
 
-fn post_mouse(
-    target: &WindowDescriptor,
-    point: TargetPoint,
-    event_type: CGEventType,
-    click_state: i64,
-    button_number: i64,
-    subtype: i64,
-    cancellation: &CommandCancellation,
-) -> Result<MacTargetDispatchRecord, ComputerError> {
-    post_mouse_with_button(
-        target,
-        point,
-        event_type,
-        CGMouseButton::Left,
-        click_state,
-        button_number,
-        subtype,
-        cancellation,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn post_mouse_with_button(
-    target: &WindowDescriptor,
-    point: TargetPoint,
-    event_type: CGEventType,
-    button: CGMouseButton,
-    click_state: i64,
-    button_number: i64,
-    subtype: i64,
-    cancellation: &CommandCancellation,
-) -> Result<MacTargetDispatchRecord, ComputerError> {
-    let event = mouse_event(
-        target,
-        point,
-        event_type,
-        button,
-        click_state,
-        button_number,
-        subtype,
-    )?;
-    post(target, &event, cancellation, "pointer dispatch")
-}
-
 fn mouse_event(
     target: &WindowDescriptor,
     point: TargetPoint,
@@ -1288,16 +1258,6 @@ fn stamp_keyboard(target: &WindowDescriptor, event: &CGEvent) -> Result<(), Comp
     let symbols = symbols().ok_or_else(|| input_error("SkyLight symbols are unavailable"))?;
     unsafe { (symbols.set_integer_field)(event.as_ptr() as *mut c_void, 40, target.pid as i64) };
     Ok(())
-}
-
-fn post(
-    target: &WindowDescriptor,
-    event: &PreparedTargetEvent,
-    cancellation: &CommandCancellation,
-    boundary: &str,
-) -> Result<MacTargetDispatchRecord, ComputerError> {
-    cancellation.begin_side_effect(boundary)?;
-    post_release(target, event)
 }
 
 fn post_before_deadline(
@@ -1557,6 +1517,47 @@ fn activate_without_raise(
         lease.restore_previous_after_failed_activation(true, true)?;
         assert_snapshot_held(before)?;
         return Err(error);
+    }
+    if lease.target_previous_window_id != lease.target_window_id {
+        let make_key_deadline = std::cmp::min(
+            preparation_deadline,
+            Instant::now() + FOCUS_RESTORE_PROOF_BUDGET,
+        );
+        let made_key = match lease.post_target_make_key_window_for_activation_before(
+            lease.target_window_id,
+            cancellation,
+            InvariantStage::FocusPreparation,
+            make_key_deadline,
+        ) {
+            Ok(posted) => posted,
+            Err(error) => {
+                lease.restore_previous_after_failed_activation(true, true)?;
+                assert_snapshot_held(before)?;
+                return Err(error);
+            }
+        };
+        let committed_result = lease.await_phase_before(
+            FocusLeasePhase::ReleasedWithTargetRequested,
+            true,
+            InvariantStage::FocusPreparation,
+            None,
+            make_key_deadline,
+            FOCUS_PREPARATION_MIN_SETTLE,
+        );
+        let cancellation_result = cancellation.check("target exact receiver preparation");
+        if !made_key || committed_result.is_err() || cancellation_result.is_err() {
+            let error = cancellation_result
+                .err()
+                .or_else(|| committed_result.err())
+                .unwrap_or_else(|| {
+                    background_unavailable(
+                        "macOS could not commit the exact target application's event receiver",
+                    )
+                });
+            lease.restore_previous_after_failed_activation(true, true)?;
+            assert_snapshot_held(before)?;
+            return Err(error);
+        }
     }
     Ok(Some(lease))
 }
@@ -2404,6 +2405,45 @@ impl FocusLease {
             return false;
         }
         post_make_key_window_record(self.symbols, &self.target_psn, window_id)
+    }
+
+    fn post_target_make_key_window_for_activation_before(
+        &self,
+        window_id: u32,
+        cancellation: &CommandCancellation,
+        stage: InvariantStage,
+        deadline: Instant,
+    ) -> Result<bool, ComputerError> {
+        let authorize = || {
+            if self.target_window_is_restorable_before(window_id, deadline)
+                && self
+                    .prove_phase_before(
+                        FocusLeasePhase::ReleasedWithTargetRequested,
+                        true,
+                        stage,
+                        deadline,
+                    )
+                    .is_ok()
+                && self.user_owner_matches_before(false, deadline)
+                && Instant::now() < deadline
+            {
+                Ok(())
+            } else {
+                Err(background_unavailable(
+                    "The exact macOS target receiver changed during preparation",
+                ))
+            }
+        };
+        authorize()?;
+        ensure_dispatch_deadline(cancellation, "target exact receiver preparation", deadline)?;
+        cancellation.begin_side_effect("target exact receiver preparation")?;
+        ensure_dispatch_deadline(cancellation, "target exact receiver preparation", deadline)?;
+        authorize()?;
+        Ok(post_make_key_window_record(
+            self.symbols,
+            &self.target_psn,
+            window_id,
+        ))
     }
 
     fn await_known_active_target_before(

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Exact accepted package version (for example, 0.12.53)
+        description: Exact accepted package version (for example, 0.12.58)
         required: true
         type: string
       source_sha:

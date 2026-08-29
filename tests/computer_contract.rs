@@ -156,6 +156,19 @@ fn macos_focus_lease_is_disclosed_without_overclaiming_zero_interruption() {
         "let focus = activate_without_raise(target, &before, cancellation, preparation_deadline)?;"
     ));
     assert!(!macos.contains("stage != InvariantStage::PointerTrajectory"));
+    let move_path = macos
+        .split("pub fn move_pointer_path(")
+        .nth(1)
+        .unwrap()
+        .split("pub fn click(")
+        .next()
+        .unwrap();
+    assert!(move_path.contains("|focus, delivery|"));
+    assert!(
+        move_path.contains("prove_action_dispatch_owner(focus, target, move_deadline, true)?;")
+    );
+    assert!(move_path.contains("post_before_deadline("));
+    assert!(!macos.contains("fn post_mouse("));
     assert!(!macos.contains("AXRaise"));
     assert!(!macos.contains("_SLPSSetFrontProcessWithOptions("));
 
@@ -441,6 +454,8 @@ fn macos_keyboard_delivery_requires_exact_post_focus_receiver_proof() {
     assert!(macos.contains("SLSGetWindowOwner"));
     assert!(macos.contains("SLSGetConnectionPSN"));
     assert!(macos.contains("post_make_key_window_record"));
+    assert!(macos.contains("post_target_make_key_window_for_activation_before"));
+    assert!(macos.contains("target exact receiver preparation"));
     assert!(macos.contains("record[0x3A] = 0x10"));
     assert!(macos.contains("record[0x20..0x30].fill(0xFF)"));
     assert!(macos.contains("record[0x08] = 0x01"));
@@ -456,7 +471,7 @@ fn macos_keyboard_delivery_requires_exact_post_focus_receiver_proof() {
         .split("fn guarded_semantic(")
         .nth(1)
         .unwrap()
-        .split("fn post_mouse(")
+        .split("fn mouse_event(")
         .next()
         .unwrap();
     assert!(!semantic_guard.contains("ensure_same_process_mutation_target"));
@@ -935,8 +950,8 @@ fn background_invariant_failures_use_stage_bound_closed_vocabulary() {
 
 #[test]
 fn macos_v0_12_27_pointer_evidence_is_bounded_corroboration_not_causal_attribution() {
-    let rig = fs::read_to_string("evidence/v0.12.53/computer/helper-evidence-rig.mjs").unwrap();
-    let probe = fs::read_to_string("evidence/v0.12.53/computer/SystemProbe.swift").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.58/computer/helper-evidence-rig.mjs").unwrap();
+    let probe = fs::read_to_string("evidence/v0.12.58/computer/SystemProbe.swift").unwrap();
     assert!(rig.contains("failureProbeBaseline"));
     assert!(rig.contains("collectFailureDiagnostics"));
     assert!(rig.contains("systemInvariants(failureProbeBaseline.system, after)"));
@@ -982,7 +997,7 @@ fn macos_v0_12_27_pointer_evidence_is_bounded_corroboration_not_causal_attributi
     ] {
         assert!(
             rig.contains(required),
-            "missing v0.12.53 pointer contract: {required}"
+            "missing v0.12.58 pointer contract: {required}"
         );
     }
     assert!(!rig.contains("cursorUnchanged"));
@@ -1028,7 +1043,7 @@ fn macos_v0_12_27_pointer_evidence_is_bounded_corroboration_not_causal_attributi
 
 #[test]
 fn macos_v0_12_27_action_pointer_classifier_matches_the_sealed_action_schema() {
-    let rig = fs::read_to_string("evidence/v0.12.53/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.58/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let server = fs::read_to_string("src/server.rs")
@@ -1151,10 +1166,10 @@ fn macos_v0_12_27_action_pointer_classifier_matches_the_sealed_action_schema() {
 
 #[test]
 fn macos_v0_12_14_quiet_lane_stabilizes_the_native_seat_before_candidate_execution() {
-    let rig = fs::read_to_string("evidence/v0.12.53/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.58/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.53/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.58/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1251,13 +1266,13 @@ fn macos_v0_12_14_quiet_lane_stabilizes_the_native_seat_before_candidate_executi
 
 #[test]
 fn macos_v0_12_38_quiet_readiness_is_source_only_sanitized_and_non_evidence() {
-    let rig = fs::read_to_string("evidence/v0.12.53/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.58/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let finalizer = fs::read_to_string("scripts/finalize-macos-acceptance.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.53/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.58/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1439,22 +1454,22 @@ fn macos_v0_12_38_quiet_readiness_is_source_only_sanitized_and_non_evidence() {
 
 #[test]
 fn macos_v0_12_27_app_share_handoff_is_exact_non_authoritative_and_fail_closed() {
-    let app = fs::read_to_string("evidence/v0.12.53/computer/AppShareHandoff.swift")
+    let app = fs::read_to_string("evidence/v0.12.58/computer/AppShareHandoff.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.53/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.58/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.53/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.58/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.53/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.58/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let normalized_readme = readme.split_whitespace().collect::<Vec<_>>().join(" ");
 
     for required in [
-        "private let productVersion = \"0.12.53\"",
+        "private let productVersion = \"0.12.58\"",
         "private let stableWindowTitle = \"LBB macOS Acceptance App Share\"",
         "private let readyButtonTitle = \"START APP-SHARE CHECK\"",
         "private let armWindowSeconds: TimeInterval = 300",
@@ -1763,7 +1778,7 @@ fn macos_v0_12_27_app_share_handoff_is_exact_non_authoritative_and_fail_closed()
 
 #[test]
 fn macos_v0_12_27_refreshes_post_handoff_share_action_authority_before_click() {
-    let rig = fs::read_to_string("evidence/v0.12.53/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.58/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let computer = fs::read_to_string("src/computer.rs")
@@ -1957,7 +1972,7 @@ fn macos_v0_12_27_refreshes_post_handoff_share_action_authority_before_click() {
 fn macos_pointer_arm_state_machine_execution_regressions_pass() {
     let output = match Command::new("node")
         .args([
-            "evidence/v0.12.53/computer/helper-evidence-rig.mjs",
+            "evidence/v0.12.58/computer/helper-evidence-rig.mjs",
             "--self-test",
         ])
         .output()
@@ -1986,7 +2001,7 @@ fn macos_pointer_arm_state_machine_execution_regressions_pass() {
 
 #[test]
 fn v0_12_27_marker_identity_is_exact_on_windows_and_posix() {
-    let rig = fs::read_to_string("evidence/v0.12.53/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.58/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -3264,6 +3279,514 @@ fn withdrawn_v0_12_51_windows_token_prompt_is_sanitized_and_fail_closed() {
 }
 
 #[test]
+fn withdrawn_v0_12_54_local_move_receiver_race_is_byte_exact_and_non_release() {
+    let attempt_root = std::path::Path::new(
+        "evidence/v0.12.54/computer/attempts/withdrawn-local-macos-cancellation-move-key-window-race",
+    );
+    let expected = [
+        (
+            "README.md",
+            1_928,
+            "b1d88deafdd48d62af7b0221cb12ffe3f19c5268748b97cde80139c8de23fbbd",
+        ),
+        (
+            "quiet/computer-01-exact-window-observe.png",
+            836_035,
+            "97415e263bef36e66e3b5da8eb276913779bea91f47c888b0bb05057058e34a2",
+        ),
+        (
+            "quiet/computer-02-semantic-set-value.png",
+            850_766,
+            "07272b377fcc0bd175b42de49add0bf0225213f143116eaf7caaa474aec01bde",
+        ),
+        (
+            "quiet/computer-03-semantic-invoke.png",
+            853_186,
+            "6653135447fd89f941aa94192d5de2864c0fcef7d218d480bfbbdc1551028b26",
+        ),
+        (
+            "quiet/computer-04-persistent-scstream-start.png",
+            780_338,
+            "91c241916682509b12fda2aaf6f28aeec1c461d51cfdc7fdeedddf5dca57a652",
+        ),
+        (
+            "quiet/computer-05-live-share-pixel-action.png",
+            780_321,
+            "65bcf3c9ae28214198e764e79f1bdb740b7d306cf4e91090b93cf77ac5a02c65",
+        ),
+        (
+            "quiet/computer-06-persistent-share-resize.png",
+            706_290,
+            "db0f870c0073ec4b39a639e13102abdde7e2015acb3fa0d3d401692ffe3513aa",
+        ),
+        (
+            "quiet/helper-results.json",
+            44_381,
+            "025944be76d828071b1d04fa557a70f0b7136e996d2f5cdd401da6e15e731bc1",
+        ),
+        (
+            "quiet/helper-rig.log",
+            27_499,
+            "4cc993306f9d4139a55822b9d590454b30f9849a39c1966e362d3d7b26e30b44",
+        ),
+    ];
+    assert_eq!(
+        walk_files(attempt_root),
+        expected
+            .iter()
+            .map(|(name, _, _)| (*name).to_owned())
+            .collect()
+    );
+    for (name, bytes, sha256) in expected {
+        let path = attempt_root.join(name);
+        assert_eq!(fs::metadata(&path).unwrap().len(), bytes);
+        assert_eq!(
+            format!("{:x}", Sha256::digest(fs::read(path).unwrap())),
+            sha256
+        );
+    }
+    let result: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(attempt_root.join("quiet/helper-results.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(result["productVersion"], "0.12.54");
+    assert_eq!(result["status"], "failed-release-candidate");
+    assert_eq!(result["assertions"]["passed"], 158);
+    assert_eq!(result["failureDiagnostics"]["actionDispatched"], false);
+    assert_eq!(
+        result["failureDiagnostics"]["fixtureCounters"]["before"]["moveEvents"],
+        result["failureDiagnostics"]["fixtureCounters"]["after"]["moveEvents"]
+    );
+    let retained = [
+        fs::read_to_string(attempt_root.join("README.md")).unwrap(),
+        fs::read_to_string(attempt_root.join("quiet/helper-results.json")).unwrap(),
+        fs::read_to_string(attempt_root.join("quiet/helper-rig.log")).unwrap(),
+    ]
+    .join("\n");
+    assert!(retained.contains("terminal local negative evidence, not release evidence"));
+    assert!(retained.contains("No GitHub release-candidate workflow or artifact existed"));
+    for forbidden in [
+        "/private/tmp/",
+        "/Users/",
+        "GH_TOKEN=",
+        "ghp_",
+        "github_pat_",
+    ] {
+        assert!(!retained.contains(forbidden));
+    }
+}
+
+#[test]
+fn withdrawn_v0_12_55_local_move_observer_race_is_byte_exact_and_non_release() {
+    let attempt_root = std::path::Path::new(
+        "evidence/v0.12.55/computer/attempts/withdrawn-local-macos-move-observer-first-responder-race",
+    );
+    let expected = [
+        (
+            "README.md",
+            1_835,
+            "f27d9d1bae1bfadcaf508ef6041f2347a05d8192af01c3a59cf9659fe2e31819",
+        ),
+        (
+            "quiet/computer-01-exact-window-observe.png",
+            836_733,
+            "66be1351aca9cba75f28f07d20dad6419aec523fb124bf0db531dee15b9c5a2c",
+        ),
+        (
+            "quiet/computer-02-semantic-set-value.png",
+            851_564,
+            "5cf955770ce0f166bde8727f42f51b2874f7f4dbd4b161d24c98b54dee4dc6c6",
+        ),
+        (
+            "quiet/computer-03-semantic-invoke.png",
+            853_800,
+            "2f4fc480b1b0f46c35486496cdfb34e8a7f325d039c8e0d5e18d98d0fcc13dab",
+        ),
+        (
+            "quiet/computer-04-persistent-scstream-start.png",
+            677_793,
+            "e9ce455841eb2bf6b79da30a762a69c58d27d6e4dc90891fdcf1d1ac1c6d04d4",
+        ),
+        (
+            "quiet/computer-05-live-share-pixel-action.png",
+            678_165,
+            "7427ce4579eec40ab1573715fb424666991ccf914b6d5138530ba95bddf5976f",
+        ),
+        (
+            "quiet/computer-06-persistent-share-resize.png",
+            543_178,
+            "432f03adff7d01930aeca442cfad36e9487d89cce97f0bb71d84da0612aa9071",
+        ),
+        (
+            "quiet/helper-results.json",
+            44_381,
+            "df0fc1b4baecc22a418c704cf456100aed5ca5be06389686415e95f039be4fa1",
+        ),
+        (
+            "quiet/helper-rig.log",
+            27_499,
+            "51499f93fb6e7344075bf40ec4088cd8f3cf6069c75f58af36f09eb11e26bc37",
+        ),
+    ];
+    assert_eq!(
+        walk_files(attempt_root),
+        expected
+            .iter()
+            .map(|(name, _, _)| (*name).to_owned())
+            .collect()
+    );
+    for (name, bytes, sha256) in expected {
+        let path = attempt_root.join(name);
+        assert_eq!(fs::metadata(&path).unwrap().len(), bytes);
+        assert_eq!(
+            format!("{:x}", Sha256::digest(fs::read(path).unwrap())),
+            sha256
+        );
+    }
+    let result: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(attempt_root.join("quiet/helper-results.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(result["productVersion"], "0.12.55");
+    assert_eq!(result["status"], "failed-release-candidate");
+    assert_eq!(result["assertions"]["passed"], 158);
+    assert_eq!(result["failureDiagnostics"]["actionDispatched"], false);
+    assert_eq!(
+        result["failureDiagnostics"]["fixtureCounters"]["before"]["moveEvents"],
+        result["failureDiagnostics"]["fixtureCounters"]["after"]["moveEvents"]
+    );
+    let retained = [
+        fs::read_to_string(attempt_root.join("README.md")).unwrap(),
+        fs::read_to_string(attempt_root.join("quiet/helper-results.json")).unwrap(),
+        fs::read_to_string(attempt_root.join("quiet/helper-rig.log")).unwrap(),
+    ]
+    .join("\n");
+    let normalized_retained = retained.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(retained.contains("terminal local negative evidence, not release evidence"));
+    assert!(normalized_retained.contains("No GitHub candidate workflow or artifact existed"));
+    for forbidden in [
+        "/private/tmp/",
+        "/Users/",
+        "GH_TOKEN=",
+        "ghp_",
+        "github_pat_",
+    ] {
+        assert!(!retained.contains(forbidden));
+    }
+}
+
+#[test]
+fn withdrawn_v0_12_56_local_window_move_observer_race_is_byte_exact_and_non_release() {
+    let attempt_root = std::path::Path::new(
+        "evidence/v0.12.56/computer/attempts/withdrawn-local-macos-window-move-observer-race",
+    );
+    let expected = [
+        (
+            "README.md",
+            1_941,
+            "72f7c8fd720b9543c8f9dcfbd8d7f7a6acc97d9f690e6fbc51072a4d9c0047d1",
+        ),
+        (
+            "quiet/computer-01-exact-window-observe.png",
+            836_584,
+            "e0b20f58220a3a62f41dc21fb512ba77eb1be26d9c631487790b2b1c82ecedc8",
+        ),
+        (
+            "quiet/computer-02-semantic-set-value.png",
+            852_491,
+            "594be56d521e99db1edffb7b906ba63dcfc8727a58de4c40122566a553c0f632",
+        ),
+        (
+            "quiet/computer-03-semantic-invoke.png",
+            854_025,
+            "117f3416697b83ff0829b9f6d2453ce92358665a1b6c0941ddc31da242392851",
+        ),
+        (
+            "quiet/computer-04-persistent-scstream-start.png",
+            678_341,
+            "a3ca4c2599653c1beded25ea5bd5a8cd0142cda192a2b133383c7128fc5499fc",
+        ),
+        (
+            "quiet/computer-05-live-share-pixel-action.png",
+            782_872,
+            "55a853ae9c8d9b3a00335285c95b10531f6008f61e19bcc09514c8c2e3d92456",
+        ),
+        (
+            "quiet/computer-06-persistent-share-resize.png",
+            706_808,
+            "d9c00fa0da16d5f0ec995bfbd3bf72ec3f7a1f5e6114840c8702ee8cb8b622ae",
+        ),
+        (
+            "quiet/helper-results.json",
+            44_381,
+            "2840c4254371a3e5278809b65bf8c5ac96de9cbb0a2f1968618cc2a2ac978f73",
+        ),
+        (
+            "quiet/helper-rig.log",
+            27_499,
+            "f5bbc7919219e81b247a5ce669080a453fb256d67fcfa31d555aaf4648f237a2",
+        ),
+    ];
+    assert_eq!(
+        walk_files(attempt_root),
+        expected
+            .iter()
+            .map(|(name, _, _)| (*name).to_owned())
+            .collect()
+    );
+    for (name, bytes, sha256) in expected {
+        let path = attempt_root.join(name);
+        assert_eq!(fs::metadata(&path).unwrap().len(), bytes);
+        assert_eq!(
+            format!("{:x}", Sha256::digest(fs::read(path).unwrap())),
+            sha256
+        );
+    }
+    let result: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(attempt_root.join("quiet/helper-results.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(result["productVersion"], "0.12.56");
+    assert_eq!(result["status"], "failed-release-candidate");
+    assert_eq!(result["assertions"]["passed"], 158);
+    assert_eq!(result["failureDiagnostics"]["actionDispatched"], false);
+    assert_eq!(
+        result["failureDiagnostics"]["fixtureCounters"]["before"]["moveEvents"],
+        result["failureDiagnostics"]["fixtureCounters"]["after"]["moveEvents"]
+    );
+    let retained = [
+        fs::read_to_string(attempt_root.join("README.md")).unwrap(),
+        fs::read_to_string(attempt_root.join("quiet/helper-results.json")).unwrap(),
+        fs::read_to_string(attempt_root.join("quiet/helper-rig.log")).unwrap(),
+    ]
+    .join("\n");
+    let normalized_retained = retained.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(retained.contains("terminal local negative evidence, not release evidence"));
+    assert!(normalized_retained.contains("No GitHub candidate workflow or artifact existed"));
+    assert!(normalized_retained.contains("package then passed 207 of 207 checks"));
+    for forbidden in [
+        "/private/tmp/",
+        "/Users/",
+        "GH_TOKEN=",
+        "ghp_",
+        "github_pat_",
+    ] {
+        assert!(!retained.contains(forbidden));
+    }
+}
+
+#[test]
+fn withdrawn_v0_12_57_local_cancellation_stale_frame_is_byte_exact_and_non_release() {
+    let attempt_root = std::path::Path::new(
+        "evidence/v0.12.57/computer/attempts/withdrawn-local-macos-cancellation-stale-frame-race",
+    );
+    let expected = [
+        (
+            "README.md",
+            1_893,
+            "eeca72a109fa8262f4aef858f091d8ddcc1ab9da2874e42b577907cb4eb28fd3",
+        ),
+        (
+            "quiet/computer-01-exact-window-observe.png",
+            835_937,
+            "1db042e1a4dfa2f284bef24ad909041835b1229b993162dd154d45627f8a8c92",
+        ),
+        (
+            "quiet/computer-02-semantic-set-value.png",
+            851_004,
+            "be15e556aca23a3e4c99f77f0eb148df546cd39ae3c44497a80e199408811186",
+        ),
+        (
+            "quiet/computer-03-semantic-invoke.png",
+            853_326,
+            "5076c352db022489090292448a9a68647be84a05154f6c812a5b84e8a4bd5f19",
+        ),
+        (
+            "quiet/computer-04-persistent-scstream-start.png",
+            780_225,
+            "58ea6fa35bdcf7dd7ce847ec82100396165a3f5c763e5cb7a602e2d8380db6b0",
+        ),
+        (
+            "quiet/computer-05-live-share-pixel-action.png",
+            781_246,
+            "acc5e30c7efdca281b74b4dfd95ad4e6ff50433c807d05e591e226fd376a84aa",
+        ),
+        (
+            "quiet/computer-06-persistent-share-resize.png",
+            542_300,
+            "92eb5950795fba51bf54c123859e7be58d10565344ad66fc9c1f7af0ccc80e96",
+        ),
+        (
+            "quiet/helper-results.json",
+            44_381,
+            "226da6e4765f7099f69fac4f764411eb681ee42c89d26e6ca9cb2382ef643067",
+        ),
+        (
+            "quiet/helper-rig.log",
+            27_499,
+            "6300b0131218cd19ddfe197980917e1dcaa3b11bb049f74c1cd66f4344d8edc5",
+        ),
+    ];
+    assert_eq!(
+        walk_files(attempt_root),
+        expected
+            .iter()
+            .map(|(name, _, _)| (*name).to_owned())
+            .collect()
+    );
+    for (name, bytes, sha256) in expected {
+        let path = attempt_root.join(name);
+        assert_eq!(fs::metadata(&path).unwrap().len(), bytes);
+        assert_eq!(
+            format!("{:x}", Sha256::digest(fs::read(path).unwrap())),
+            sha256
+        );
+    }
+    let result: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(attempt_root.join("quiet/helper-results.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(result["productVersion"], "0.12.57");
+    assert_eq!(result["status"], "failed-release-candidate");
+    assert_eq!(result["assertions"]["passed"], 158);
+    assert_eq!(result["failureDiagnostics"]["actionDispatched"], false);
+    assert_eq!(
+        result["failureDiagnostics"]["fixtureCounters"]["before"]["moveEvents"],
+        result["failureDiagnostics"]["fixtureCounters"]["after"]["moveEvents"]
+    );
+    let retained = [
+        fs::read_to_string(attempt_root.join("README.md")).unwrap(),
+        fs::read_to_string(attempt_root.join("quiet/helper-results.json")).unwrap(),
+        fs::read_to_string(attempt_root.join("quiet/helper-rig.log")).unwrap(),
+    ]
+    .join("\n");
+    let normalized_retained = retained.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(retained.contains("terminal local negative evidence, not release evidence"));
+    assert!(normalized_retained.contains("No GitHub candidate workflow or artifact existed"));
+    assert!(normalized_retained.contains("exact HTTP 409 `COMPUTER_STALE_FRAME`"));
+    for forbidden in [
+        "/private/tmp/",
+        "/Users/",
+        "GH_TOKEN=",
+        "ghp_",
+        "github_pat_",
+    ] {
+        assert!(!retained.contains(forbidden));
+    }
+}
+
+#[test]
+fn withdrawn_v0_12_53_macos_move_delivery_timeout_is_byte_exact_and_fail_closed() {
+    let attempt_root = std::path::Path::new(
+        "evidence/v0.12.53/computer/attempts/withdrawn-f5e7c85b-macos-cancellation-move-delivery-timeout",
+    );
+    let expected = [
+        (
+            "README.md",
+            2_237,
+            "102849925e8675dcd59f36d267eb5ebee68f97162cef396102209eea44edde39",
+        ),
+        (
+            "quiet/computer-01-exact-window-observe.png",
+            836_883,
+            "eee31e3f2fe51f1e54e43de9da64774dc211adbbdb260602780db049e5e633eb",
+        ),
+        (
+            "quiet/computer-02-semantic-set-value.png",
+            852_493,
+            "6f3a71b11e3ded0de99cad4fb53524b5780a7d097b6e1a148d7e1a1860b615b7",
+        ),
+        (
+            "quiet/computer-03-semantic-invoke.png",
+            854_563,
+            "016f14dafa98fcc9a48a362686be31e0aa863cf481508dc8be61660a7d337d50",
+        ),
+        (
+            "quiet/computer-04-persistent-scstream-start.png",
+            781_890,
+            "f9d2ef49bf1e878e64cef4abc8a9231d6005459ba63cbd9badb0e5f5c1eb2396",
+        ),
+        (
+            "quiet/computer-05-live-share-pixel-action.png",
+            782_740,
+            "dba4dc78091fe4ae7086d381673cfe1f715c1464bcf74aff1e734c011512f54e",
+        ),
+        (
+            "quiet/computer-06-persistent-share-resize.png",
+            706_608,
+            "0e425ae4fc26bfa42c0b224065dca96ef33bf3a1c6fc40588c0fd819543377f3",
+        ),
+        (
+            "quiet/helper-results.json",
+            44_400,
+            "88e4e64a4a055fa21ff3f32711e243f9c740f20c8a7fe2730847f110fa68679c",
+        ),
+        (
+            "quiet/helper-rig.log",
+            27_499,
+            "001aeee1fbf1a8d96dd992969a5191b3c4fbc10f4c199612fa484aef55b110ed",
+        ),
+    ];
+    let actual = walk_files(attempt_root);
+    assert_eq!(
+        actual,
+        expected
+            .iter()
+            .map(|(name, _, _)| (*name).to_owned())
+            .collect()
+    );
+    for (name, expected_bytes, expected_sha256) in expected {
+        let path = attempt_root.join(name);
+        assert_eq!(fs::metadata(&path).unwrap().len(), expected_bytes);
+        assert_eq!(
+            format!("{:x}", Sha256::digest(fs::read(path).unwrap())),
+            expected_sha256
+        );
+    }
+
+    let result: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(attempt_root.join("quiet/helper-results.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(result["productVersion"], "0.12.53");
+    assert_eq!(result["status"], "failed-release-candidate");
+    assert_eq!(result["assertions"]["passed"], 158);
+    assert_eq!(result["assertions"]["failed"], 0);
+    assert_eq!(
+        result["fatal"],
+        "fixture target-routed cancellation move dispatch timed out"
+    );
+    assert_eq!(result["failureDiagnostics"]["actionDispatched"], false);
+    assert_eq!(
+        result["failureDiagnostics"]["fixtureCounters"]["before"]["moveEvents"],
+        result["failureDiagnostics"]["fixtureCounters"]["after"]["moveEvents"]
+    );
+    assert_eq!(
+        result["failureDiagnostics"]["targetSiblingReceiver"]["expectationMet"],
+        true
+    );
+    assert_eq!(result["screenshots"].as_array().unwrap().len(), 6);
+
+    let retained_text = [
+        fs::read_to_string(attempt_root.join("README.md")).unwrap(),
+        fs::read_to_string(attempt_root.join("quiet/helper-results.json")).unwrap(),
+        fs::read_to_string(attempt_root.join("quiet/helper-rig.log")).unwrap(),
+    ]
+    .join("\n");
+    assert!(retained_text.contains("This is terminal negative evidence, not release evidence."));
+    assert!(retained_text.contains("The v0.12.53 attempt was not retried."));
+    for forbidden in [
+        "/private/tmp/",
+        "/Users/",
+        "GH_TOKEN=",
+        "ghp_",
+        "github_pat_",
+    ] {
+        assert!(!retained_text.contains(forbidden));
+    }
+}
+
+#[test]
 fn withdrawn_v0_12_52_macos_move_delivery_timeout_is_byte_exact_and_fail_closed() {
     let attempt_root = std::path::Path::new(
         "evidence/v0.12.52/computer/attempts/withdrawn-e4461d4b-macos-cancellation-move-delivery-timeout",
@@ -3734,7 +4257,7 @@ fn withdrawn_v0_12_9_macos_cursor_invariant_attempt_is_byte_exact_and_fail_close
 
 #[test]
 fn latest_macos_candidate_evidence_remains_version_bound_and_reduced() {
-    let entries = fs::read_dir("evidence/v0.12.53/computer")
+    let entries = fs::read_dir("evidence/v0.12.58/computer")
         .unwrap()
         .map(Result::unwrap)
         .map(|entry| {
@@ -3759,19 +4282,19 @@ fn latest_macos_candidate_evidence_remains_version_bound_and_reduced() {
         ])
     );
 
-    let rig = fs::read_to_string("evidence/v0.12.53/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.58/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let fixture =
-        fs::read_to_string("evidence/v0.12.53/computer/HelperEvidenceFixture.swift").unwrap();
-    let readme = fs::read_to_string("evidence/v0.12.53/computer/README.md").unwrap();
+        fs::read_to_string("evidence/v0.12.58/computer/HelperEvidenceFixture.swift").unwrap();
+    let readme = fs::read_to_string("evidence/v0.12.58/computer/README.md").unwrap();
 
-    assert!(rig.contains("const EXPECTED_VERSION = \"0.12.53\";"));
+    assert!(rig.contains("const EXPECTED_VERSION = \"0.12.58\";"));
     assert!(rig.contains("const EXPECTED_ARCHIVE = `local-browser-bridge-v${EXPECTED_VERSION}-macos-universal.tar.gz`;"));
     assert!(rig.contains("status: \"passed-release-candidate\""));
     assert!(rig.contains("evidenceClass: \"exact-release-candidate-package-live-observation\""));
     assert!(rig.contains("candidateNotice:"));
-    assert!(fixture.contains("LBB v0.12.53 Persistent SCStream Evidence"));
+    assert!(fixture.contains("LBB v0.12.58 Persistent SCStream Evidence"));
     assert!(fixture.contains("var evidenceLane = \"\""));
     assert!(fixture.contains("\"evidence-lane=\\(evidenceLane)\".draw("));
     assert!(fixture.contains("environment[\"LBB_FIXTURE_EVIDENCE_LANE\"]"));
@@ -3784,12 +4307,12 @@ fn latest_macos_candidate_evidence_remains_version_bound_and_reduced() {
     assert!(readme.contains("`evidence-lane=quiet`"));
     assert!(readme.contains("all twelve lane screenshots to have distinct file SHA-256"));
     assert!(readme.contains("distinct canonical decoded-RGBA pixel SHA-256 digests"));
-    assert!(readme.contains("macOS v0.12.53 server and helper"));
-    assert!(readme.contains("local-browser-bridge-v0.12.53-macos-universal.tar.gz"));
-    assert!(!rig.replace("v0.12.53", "").contains("v0.12.1"));
-    assert!(!fixture.replace("v0.12.53", "").contains("v0.12.1"));
-    assert!(!rig.replace("v0.12.53", "").contains("v0.12.2"));
-    assert!(!fixture.replace("v0.12.53", "").contains("v0.12.2"));
+    assert!(readme.contains("macOS v0.12.58 server and helper"));
+    assert!(readme.contains("local-browser-bridge-v0.12.58-macos-universal.tar.gz"));
+    assert!(!rig.replace("v0.12.58", "").contains("v0.12.1"));
+    assert!(!fixture.replace("v0.12.58", "").contains("v0.12.1"));
+    assert!(!rig.replace("v0.12.58", "").contains("v0.12.2"));
+    assert!(!fixture.replace("v0.12.58", "").contains("v0.12.2"));
     let current_readme = readme
         .split("## Withdrawn v0.12.10 exact-candidate result")
         .next()
@@ -3836,10 +4359,10 @@ fn latest_macos_candidate_evidence_remains_version_bound_and_reduced() {
 
 #[test]
 fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
-    let rig = fs::read_to_string("evidence/v0.12.53/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.58/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.53/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.58/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let binder = fs::read_to_string("scripts/fetch-verify-release-candidate.sh")
@@ -3983,7 +4506,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
 
 #[test]
 fn macos_packaged_evidence_streams_one_exact_bounded_pax_free_archive() {
-    let rig = fs::read_to_string("evidence/v0.12.53/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.58/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -4090,7 +4613,7 @@ fn macos_package_preparer_accepts_only_the_canonical_bounded_ustar_package() {
     }
 
     let repository = std::env::current_dir().unwrap();
-    let rig = repository.join("evidence/v0.12.53/computer/helper-evidence-rig.mjs");
+    let rig = repository.join("evidence/v0.12.58/computer/helper-evidence-rig.mjs");
     let temporary = tempfile::tempdir().unwrap();
     set_mode(temporary.path(), 0o700);
     let generator = temporary.path().join("make-package.py");
@@ -4168,7 +4691,7 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
         let case_root = temporary.path().join(scenario);
         fs::create_dir(&case_root).unwrap();
         set_mode(&case_root, 0o700);
-        let archive = case_root.join("local-browser-bridge-v0.12.53-macos-universal.tar.gz");
+        let archive = case_root.join("local-browser-bridge-v0.12.58-macos-universal.tar.gz");
         let generated = Command::new("python3")
             .arg(&generator)
             .arg(scenario)
@@ -4184,10 +4707,10 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
         let archive_sha256 = file_sha256(archive.to_str().unwrap());
         let zero_hash = "0".repeat(64);
         let manifest_text = format!(
-            "{zero_hash}  local-browser-bridge-v0.12.53-windows-x86_64.exe\n\
-             {zero_hash}  local-computer-helper-v0.12.53-windows-x86_64.exe\n\
-             {archive_sha256}  local-browser-bridge-v0.12.53-macos-universal.tar.gz\n\
-             {zero_hash}  local-browser-bridge-extension-v0.12.53.zip\n"
+            "{zero_hash}  local-browser-bridge-v0.12.58-windows-x86_64.exe\n\
+             {zero_hash}  local-computer-helper-v0.12.58-windows-x86_64.exe\n\
+             {archive_sha256}  local-browser-bridge-v0.12.58-macos-universal.tar.gz\n\
+             {zero_hash}  local-browser-bridge-extension-v0.12.58.zip\n"
         );
         let manifest = case_root.join("SHA256SUMS.txt");
         fs::write(&manifest, &manifest_text).unwrap();
@@ -4335,7 +4858,7 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
 
 #[test]
 fn macos_packaged_evidence_uses_a_clean_source_harness_and_fresh_lane_outputs() {
-    let rig = fs::read_to_string("evidence/v0.12.53/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.58/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -4392,7 +4915,7 @@ fn macos_packaged_evidence_uses_a_clean_source_harness_and_fresh_lane_outputs() 
 
 #[test]
 fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
-    let rig = fs::read_to_string("evidence/v0.12.53/computer/helper-evidence-rig.mjs").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.58/computer/helper-evidence-rig.mjs").unwrap();
     assert!(rig.contains("capturedFrameMatchesWindowGeometry"));
     assert!(rig.contains("share-resize-settled"));
     assert!(rig.contains("sample.sourceSequence > resizeTransition.sample.sourceSequence"));
@@ -4404,12 +4927,12 @@ fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
 
 #[test]
 fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.53/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.58/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     assert!(rig.contains("function childEnvironment(overrides = {})"));
     assert!(!rig.contains("...process.env"));
-    let fixture = fs::read_to_string("evidence/v0.12.53/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.58/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -4461,7 +4984,12 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
         "editor.setSelectedRange",
         "control.action == \"focus-semantic-field\"",
         "var moveEvents = 0",
-        "override func mouseMoved(with event: NSEvent)",
+        "private final class FixtureWindow: NSWindow",
+        "override func sendEvent(_ event: NSEvent)",
+        "event.type == .mouseMoved, event.windowNumber == windowNumber",
+        "recordExactMouseMoved?()",
+        "func recordExactWindowMoveDelivery()",
+        "window.recordExactMouseMoved = { [weak view] in",
         "state.moveEvents < 1_000_000",
         "window.acceptsMouseMovedEvents = true",
     ] {
@@ -4470,6 +4998,7 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
             "missing fixture focus proof: {required}"
         );
     }
+    assert!(!fixture.contains("NSTrackingArea"));
     let native_text = rig
         .split("const nativeTextSetupSystemBefore")
         .nth(1)
@@ -4513,6 +5042,43 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
     assert!(!native_text.contains("freshObserve(targetWindow.id)"));
 
     assert!(rig.contains("cancellation starts from a current resized share frame"));
+    let pre_cancellation = rig
+        .split("const shareStatusBody = await command(\"computer.share.status\");")
+        .nth(1)
+        .unwrap()
+        .split("const cancellationStartedAt = Date.now();")
+        .next()
+        .unwrap();
+    for required in [
+        "const preCancellationShareSample = current.sample",
+        "const cancellationFixtureBefore = await fixtureState(fixtureStatePath)",
+        "const cancellationSystemBefore = processProbe(systemProbeBinary)",
+        "fresh cancellation action frame",
+        "sample.sequence > preCancellationShareSample.sequence",
+        "sample.sourceSequence > preCancellationShareSample.sourceSequence",
+        "candidateObservation.sourceSequence === sample.sourceSequence",
+        "capturedFrameMatchesWindowGeometry(sample)",
+        "const canceledFrameId = observation.frameId",
+    ] {
+        assert!(
+            pre_cancellation.contains(required),
+            "missing fresh cancellation authority proof: {required}"
+        );
+    }
+    assert!(
+        pre_cancellation
+            .find("const cancellationSystemBefore")
+            .unwrap()
+            < pre_cancellation
+                .find("fresh cancellation action frame")
+                .unwrap()
+    );
+    assert!(
+        pre_cancellation
+            .find("fresh cancellation action frame")
+            .unwrap()
+            < pre_cancellation.find("const canceledFrameId").unwrap()
+    );
     let cancellation = rig
         .split("const cancellationStartedAt = Date.now();")
         .nth(1)
@@ -4526,6 +5092,9 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
         "fixture target-routed cancellation move dispatch",
         "snapshot.moveEvents > cancellationFixtureBefore.moveEvents",
         "CANCELLATION_DISPATCH_PROOF_TIMEOUT_MS",
+        "Promise.race([",
+        "originalCanceledRequest.then((response) =>",
+        "computer.move completed before target delivery",
         "cancellation waits for target-routed native move delivery",
         "cancelCommandResponse(cancellationCallId)",
         "cancelAccepted.status === 202",
@@ -4587,10 +5156,10 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
 
 #[test]
 fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.53/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.58/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.53/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.58/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let normalized_readme = readme.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -4722,10 +5291,10 @@ fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() 
 
 #[test]
 fn macos_system_probe_anchors_user_focus_to_the_ax_focused_onscreen_window() {
-    let probe = fs::read_to_string("evidence/v0.12.53/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.58/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.53/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.58/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -4753,21 +5322,21 @@ fn macos_system_probe_anchors_user_focus_to_the_ax_focused_onscreen_window() {
 
 #[test]
 fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negative() {
-    let fixture = fs::read_to_string("evidence/v0.12.53/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.58/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.53/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.58/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.53/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.58/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.53/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.58/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
     for required in [
-        "private let siblingFixtureTitle = \"LBB v0.12.53 Same-PID Sibling Receiver\"",
+        "private let siblingFixtureTitle = \"LBB v0.12.58 Same-PID Sibling Receiver\"",
         "var primaryWindowId = 0",
         "var siblingWindowId = 0",
         "var siblingTextLength = 0",
@@ -4787,7 +5356,8 @@ fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negati
             "fixture is missing genuine same-PID sibling topology: {required}"
         );
     }
-    assert_eq!(fixture.matches("= NSWindow(").count(), 2);
+    assert_eq!(fixture.matches("= FixtureWindow(").count(), 1);
+    assert_eq!(fixture.matches("= NSWindow(").count(), 1);
     assert!(!fixture.contains("Process("));
     assert!(!fixture.contains("NSWorkspace.shared.launch"));
 
@@ -5177,7 +5747,7 @@ fn windows_helper_readiness_is_protocol_and_process_bound() {
     for required in [
         "$selfTestJob.StartProcess(",
         "GetDirectChildProcessIds($PID, $selfTestHostPath)",
-        "local-computer-helper-v0.12.53-windows-x86_64.exe",
+        "local-computer-helper-v0.12.58-windows-x86_64.exe",
         "$renamedHelperSelfTestJob.StartProcess(",
         "GetDirectChildProcessIds($PID, $renamedHelperSelfTestPath)",
         "The native exact-parent/full-image probe did not identify the renamed packaged-image self-test child.",
@@ -7535,7 +8105,7 @@ fn windows_foreground_arm_handoff_watcher_is_strict_read_only_and_non_authoritat
         .replace("\r\n", "\n");
 
     for required in [
-        "$script:ProductVersion = \"0.12.53\"",
+        "$script:ProductVersion = \"0.12.58\"",
         "$script:MarkerSchemaVersion = 2",
         "function Assert-ExactPropertyOrder {",
         "function Assert-ExactMarkerSchema {",
@@ -7680,7 +8250,7 @@ fn windows_foreground_arm_handoff_watcher_is_strict_read_only_and_non_authoritat
         "$markerReader = { return Read-AtomicRequestMarker $markerPath $operatorDirectory }.GetNewClosure()"
     ));
     assert!(runner.contains("-ProductVersion $Version"));
-    assert!(runner.contains("-ProductVersion \"0.12.53\""));
+    assert!(runner.contains("-ProductVersion \"0.12.58\""));
     assert!(runner.contains("maximumClickAttempts -ne 1"));
     assert!(runner.contains("maximumClickAttempts -ne 0"));
 }
@@ -7752,7 +8322,7 @@ fn semantic_backends_revalidate_exact_targets_and_report_effects() {
         .split("fn finish_semantic_after_snapshot(")
         .nth(1)
         .unwrap()
-        .split("fn post_mouse(")
+        .split("fn mouse_event(")
         .next()
         .unwrap();
     assert!(macos_semantic_finish.contains("let report = report.assert_held(stage)?;"));
