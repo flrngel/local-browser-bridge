@@ -1,0 +1,8 @@
+2026-08-29T01:38:42.546Z PASS evidence output parent is an owner-private ordinary directory: the direct evidence parent is ordinary, owner-private, and current-user owned
+2026-08-29T01:38:42.547Z PASS evidence output directory is newly created and owner-private: the runner created one private lane output directory
+2026-08-29T01:38:43.659Z PASS pre-run harness source commit matches coordinator binding: exact source SHA matched
+2026-08-29T01:38:43.659Z PASS pre-run harness checkout is detached: detached HEAD
+2026-08-29T01:38:43.659Z PASS pre-run harness checkout is clean: tracked, staged, deleted, and untracked sets are empty
+2026-08-29T01:38:43.659Z PASS pre-run harness source repository passes git fsck: git fsck --full passed
+2026-08-29T01:38:43.659Z PASS pre-run harness files are exact tracked blobs: runner, native probes, and acceptance finalizer match HEAD blobs
+2026-08-29T01:38:43.660Z FATAL ENOENT: no such file or directory, access '<redacted-owner-private-scratch-parent>'
