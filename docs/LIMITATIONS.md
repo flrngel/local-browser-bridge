@@ -74,7 +74,7 @@ not proof that an unobserved transient state never existed. The ledger records a
 was never tagged or published. The bounded observation and its limitations are
 preserved in the immutable [v0.12.34 negative-evidence commit](https://github.com/flrngel/local-browser-bridge/tree/aef8fc68018cdb6181ad3d0886acf4e71fcda96d/evidence/v0.12.34/computer/attempts/withdrawn-2509567-windows-pre-coordinator-interruption).
 
-Version 0.12.59 is the current source and schema-3 release-pipeline target. It
+Version 0.12.60 is the current source and schema-3 release-pipeline target. It
 retains the breakaway-enabled coordinator Job and atomic private Job-list child
 creation, but delays the persistent boundary until private staging and
 configuration verification, detached-worker Job binding and guard-ownership
@@ -112,10 +112,18 @@ six-image review passed, but a coordinator-supplied nonexistent scratch path
 made the deliberate runner stop before candidate execution. The exact v0.12.58
 candidate passed both macOS lanes and Windows trust, then failed before UI use
 because the authenticated helper stayed stable while Toolhelp returned zero
-exact-image direct children for 265 polls. Version 0.12.59 binds the
+exact-image direct children for 265 polls. Version 0.12.59 bound the
 authenticated controller PID to the exact launched supervisor, the worker PID
-to the exact live image and interactive session, and treats Toolhelp only as a
-conflicting-child refusal. It requires entirely fresh acceptance.
+to the queried live image path and interactive session, and treated Toolhelp
+only as a conflicting-child refusal. Its exact candidate passed both macOS
+lanes and Windows trust, but Windows failed before UI use because the
+authenticated worker's valid live path spelling did not string-equal the
+candidate path. Version 0.12.60 replaces that path-string authority with the
+live image file object's volume serial and file index. A same-file alias is
+accepted, while a byte-for-byte copy is a distinct object and remains refused.
+The exact [v0.12.59 negative record](../evidence/v0.12.59/computer/attempts/withdrawn-ece060c-windows-helper-readiness-image-mismatch/README.md)
+contains no paths or candidate bytes. Version 0.12.60 requires entirely fresh
+acceptance.
 
 Coordinator records flush their file contents before an atomic create-once
 rename. That survives a dropped remote shell and ordinary process failure, but

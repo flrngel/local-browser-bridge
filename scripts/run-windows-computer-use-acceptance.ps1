@@ -35,7 +35,7 @@ $ProgressPreference = "SilentlyContinue"
 
 $script:SchemaVersion = 1
 $script:AttemptReservationSchemaVersion = 2
-$script:ProductVersion = "0.12.59"
+$script:ProductVersion = "0.12.60"
 $script:ExpectedWindowTitle = "LBB Foreground Sentinel"
 $script:ExpectedActionButton = "CLICK TO ARM"
 $script:ExpectedArmedButton = "ARMED - DO NOT USE THIS SESSION"
@@ -4013,6 +4013,19 @@ function Wait-SelfTestStateFile {
     }
 }
 
+function ConvertTo-BoundedSelfTestFailureDetail {
+    param([AllowEmptyString()][string]$Value)
+    if ([String]::IsNullOrEmpty($Value)) {
+        return "<empty>"
+    }
+    $detail = $Value.Replace("`r", " ").Replace("`n", " ")
+    $detail = [Text.RegularExpressions.Regex]::Replace($detail, '\s+', ' ').Trim()
+    if ($detail.Length -gt 2000) {
+        $detail = $detail.Substring(0, 2000) + "[truncated]"
+    }
+    return $detail
+}
+
 function Invoke-NestedJobRunnerSelfTest {
     param([Parameter(Mandatory = $true)][string]$Nonce)
     $environmentNonce = [Environment]::GetEnvironmentVariable(
@@ -4078,7 +4091,9 @@ function Invoke-NestedJobRunnerSelfTest {
         if ($runnerExit -ne 0 -or
             $runnerStdout -cne "Windows computer-use acceptance self-test passed." -or
             -not [String]::IsNullOrEmpty($runnerStderr)) {
-            throw "The exact guard-plus-lifetime Job runner self-test failed."
+            $runnerStdoutDetail = ConvertTo-BoundedSelfTestFailureDetail $runnerStdout
+            $runnerStderrDetail = ConvertTo-BoundedSelfTestFailureDetail $runnerStderr
+            throw "The exact guard-plus-lifetime Job runner self-test failed. (runnerExit=$runnerExit; stdout=$runnerStdoutDetail; stderr=$runnerStderrDetail)."
         }
         [GC]::KeepAlive($lifetimeJob)
     }
@@ -4263,7 +4278,11 @@ function Invoke-SelfTest {
                 $nestedRunnerSelfTestStdout -cne
                     "Nested guard/lifetime Job runner self-test passed." -or
                 -not [String]::IsNullOrEmpty($nestedRunnerSelfTestStderr)) {
-                throw "The exact guard-plus-lifetime Job runner self-test failed."
+                $nestedStdoutDetail = ConvertTo-BoundedSelfTestFailureDetail `
+                    $nestedRunnerSelfTestStdout
+                $nestedStderrDetail = ConvertTo-BoundedSelfTestFailureDetail `
+                    $nestedRunnerSelfTestStderr
+                throw "The exact guard-plus-lifetime Job runner self-test failed. (workerExit=$nestedRunnerSelfTestExit; stdout=$nestedStdoutDetail; stderr=$nestedStderrDetail)."
             }
             [LbbCoordinator.WorkerLifetimeJob]::WaitForNameAbsenceForSelfTest(
                 "Local\LBBWindowsAcceptanceNestedRunnerSelfTest-$nestedRunnerSelfTestNonce",
@@ -5825,8 +5844,8 @@ finally {
             throw "Exact process identity self-test failed."
         }
         $selfTestInputs = New-PrivateChildDirectory $testRoot "follow-inputs" "Follow self-test inputs"
-        $inputServer = [IO.Path]::Combine($selfTestInputs, "local-browser-bridge-v0.12.59-windows-x86_64.exe")
-        $inputHelper = [IO.Path]::Combine($selfTestInputs, "local-computer-helper-v0.12.59-windows-x86_64.exe")
+        $inputServer = [IO.Path]::Combine($selfTestInputs, "local-browser-bridge-v0.12.60-windows-x86_64.exe")
+        $inputHelper = [IO.Path]::Combine($selfTestInputs, "local-computer-helper-v0.12.60-windows-x86_64.exe")
         $inputManifest = [IO.Path]::Combine($selfTestInputs, "SHA256SUMS.txt")
         $inputBinding = [IO.Path]::Combine($selfTestInputs, "candidate-binding.json")
         [IO.File]::WriteAllText($inputServer, "server-self-test", $script:Utf8NoBom)
