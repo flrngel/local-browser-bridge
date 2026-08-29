@@ -106,12 +106,18 @@ candidate has been built, downloaded, or executed.
 > authenticated helper session and worker PID stayed stable for 265 polls, but
 > the redundant Toolhelp snapshot returned zero exact-image direct children.
 > No sentinel, Computer Use click, Chrome action, tag, or Release followed.
-> Version 0.12.59 binds the authenticated controller PID to the exact launched
-> supervisor and the worker PID to its exact live helper image and interactive
-> session; Toolhelp remains a conflicting-child refusal rather than a required
-> rediscovery source. Failed runner summaries also take precedence over the
+> Version 0.12.59 bound the authenticated controller PID to the exact launched
+> supervisor and the worker PID to a queried live path and interactive session.
+> Its exact candidate passed both macOS lanes and this trust gate, then failed
+> before UI use because a valid path alias did not string-equal the candidate
+> path. The sanitized
+> [negative record](../evidence/v0.12.59/computer/attempts/withdrawn-ece060c-windows-helper-readiness-image-mismatch/README.md)
+> contains no absolute path or candidate byte. Version 0.12.60 replaces that
+> string comparison with the live image file object's volume serial and file
+> index. Toolhelp remains a conflicting-child refusal rather than a required
+> rediscovery source. Failed runner summaries still take precedence over the
 > generic missing-watcher terminal reason.
-> Version 0.12.59 requires entirely fresh candidate and acceptance evidence. Do
+> Version 0.12.60 requires entirely fresh candidate and acceptance evidence. Do
 > not reuse or relabel earlier bytes or results.
 
 ## Source-freeze release boundary
@@ -119,8 +125,8 @@ candidate has been built, downloaded, or executed.
 At this handoff's source-freeze checkpoint, the coordinator source gate was
 complete but every artifact- and UI-bearing release gate remained future work:
 
-- no 0.12.59 tag has been created or pushed;
-- no packaged 0.12.59 server, helper, or extension has been built, downloaded,
+- no 0.12.60 tag has been created or pushed;
+- no packaged 0.12.60 server, helper, or extension has been built, downloaded,
   or executed;
 - neither macOS packaged lane nor Windows packaged-helper acceptance has run;
 - stock-Chrome acceptance has not run and Chrome was not opened or mutated;
@@ -130,7 +136,7 @@ complete but every artifact- and UI-bearing release gate remained future work:
   consent or action authority.
 
 The live publication status belongs to the immutable
-[v0.12.59 GitHub Release](https://github.com/flrngel/local-browser-bridge/releases/tag/v0.12.59)
+[v0.12.60 GitHub Release](https://github.com/flrngel/local-browser-bridge/releases/tag/v0.12.60)
 and its candidate-bound schema-3 evidence receipt, not to this source-checkpoint
 list.
 
@@ -141,7 +147,7 @@ outcome-unknown launch.
 
 ## Verified facts
 
-The active 0.12.59 source provides a checked-in
+The active 0.12.60 source provides a checked-in
 `scripts/run-windows-computer-use-acceptance.ps1` coordinator with:
 
 - a clean exact-system-PowerShell bootstrap;

@@ -496,6 +496,12 @@ namespace LbbWindowsAcceptance
         private const int UOI_NAME = 2;
         private const uint TH32CS_SNAPPROCESS = 0x00000002;
         private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x00001000;
+        private const uint FILE_READ_ATTRIBUTES = 0x00000080;
+        private const uint FILE_SHARE_READ = 0x00000001;
+        private const uint FILE_SHARE_WRITE = 0x00000002;
+        private const uint FILE_SHARE_DELETE = 0x00000004;
+        private const uint OPEN_EXISTING = 3;
+        private const uint FILE_ATTRIBUTE_NORMAL = 0x00000080;
         private const int ERROR_INVALID_PARAMETER = 87;
         private const int ERROR_NO_MORE_FILES = 18;
         private const uint SYNCHRONIZE = 0x00100000;
@@ -547,6 +553,21 @@ namespace LbbWindowsAcceptance
             internal uint Flags;
             [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
             internal string ExeFile;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct BY_HANDLE_FILE_INFORMATION
+        {
+            internal uint FileAttributes;
+            internal System.Runtime.InteropServices.ComTypes.FILETIME CreationTime;
+            internal System.Runtime.InteropServices.ComTypes.FILETIME LastAccessTime;
+            internal System.Runtime.InteropServices.ComTypes.FILETIME LastWriteTime;
+            internal uint VolumeSerialNumber;
+            internal uint FileSizeHigh;
+            internal uint FileSizeLow;
+            internal uint NumberOfLinks;
+            internal uint FileIndexHigh;
+            internal uint FileIndexLow;
         }
 
         [DllImport("user32.dll")]
@@ -609,6 +630,29 @@ namespace LbbWindowsAcceptance
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder imagePath, ref uint size);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr CreateFile(
+            string fileName,
+            uint desiredAccess,
+            uint shareMode,
+            IntPtr securityAttributes,
+            uint creationDisposition,
+            uint flagsAndAttributes,
+            IntPtr templateFile);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetFileInformationByHandle(
+            IntPtr file,
+            out BY_HANDLE_FILE_INFORMATION information);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CreateHardLink(
+            string fileName,
+            string existingFileName,
+            IntPtr securityAttributes);
 
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -710,11 +754,10 @@ namespace LbbWindowsAcceptance
                 {
                     if (entry.ParentProcessId == (uint)parentProcessId)
                     {
-                        // Toolhelp's basename is not an authority boundary and
-                        // may differ from a renamed packaged executable. Bind
-                        // every direct child through its live full image path.
-                        string childPath = ReadProcessImagePath(entry.ProcessId);
-                        if (childPath != null && String.Equals(Path.GetFullPath(childPath), expectedPath, StringComparison.OrdinalIgnoreCase))
+                        // Toolhelp's basename and Win32 path spelling are not
+                        // authority boundaries. Bind every direct child through
+                        // the live image's stable volume/file identity instead.
+                        if (ProcessImageIdentityMatches((int)entry.ProcessId, expectedPath))
                         {
                             output.Add((int)entry.ProcessId);
                         }
@@ -745,19 +788,57 @@ namespace LbbWindowsAcceptance
             return checked((int)processSessionId);
         }
 
-        public static bool ProcessImageMatches(int processId, string expectedImagePath)
+        public static bool ProcessImageIdentityMatches(int processId, string expectedImagePath)
         {
-            if (processId <= 0 || String.IsNullOrWhiteSpace(expectedImagePath))
+            if (processId <= 0 || String.IsNullOrWhiteSpace(expectedImagePath) || !File.Exists(expectedImagePath))
             {
                 return false;
             }
             string observed = ReadProcessImagePath((uint)processId);
-            return observed != null &&
-                String.Equals(
-                    Path.GetFullPath(observed),
-                    Path.GetFullPath(expectedImagePath),
-                    StringComparison.OrdinalIgnoreCase
-                );
+            return observed != null && FileIdentityMatches(observed, expectedImagePath);
+        }
+
+        public static bool CreateHardLinkForSelfTest(string fileName, string existingFileName)
+        {
+            return CreateHardLink(fileName, existingFileName, IntPtr.Zero);
+        }
+
+        private static bool FileIdentityMatches(string firstPath, string secondPath)
+        {
+            BY_HANDLE_FILE_INFORMATION first = ReadFileIdentity(firstPath);
+            BY_HANDLE_FILE_INFORMATION second = ReadFileIdentity(secondPath);
+            return first.VolumeSerialNumber == second.VolumeSerialNumber &&
+                first.FileIndexHigh == second.FileIndexHigh &&
+                first.FileIndexLow == second.FileIndexLow;
+        }
+
+        private static BY_HANDLE_FILE_INFORMATION ReadFileIdentity(string path)
+        {
+            IntPtr file = CreateFile(
+                path,
+                FILE_READ_ATTRIBUTES,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                IntPtr.Zero,
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                IntPtr.Zero);
+            if (file == InvalidHandle)
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not open a helper image for exact file-identity verification");
+            }
+            try
+            {
+                BY_HANDLE_FILE_INFORMATION information;
+                if (!GetFileInformationByHandle(file, out information))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not read a helper image file identity");
+                }
+                return information;
+            }
+            finally
+            {
+                CloseHandle(file);
+            }
         }
 
         private static string ReadProcessImagePath(uint processId)
@@ -1970,15 +2051,58 @@ if ($SelfTest) {
     if ($script:nativeProbeType::GetProcessSessionId($PID) -ne $selfTestSessionId) {
         throw "The native process-session probe did not identify the PowerShell runner session."
     }
-    if (-not $script:nativeProbeType::ProcessImageMatches($PID, $selfTestHostPath)) {
-        throw "The native exact process-image probe did not identify the PowerShell runner image."
+    if (-not $script:nativeProbeType::ProcessImageIdentityMatches($PID, $selfTestHostPath)) {
+        throw "The native exact process-image identity probe did not identify the PowerShell runner image."
     }
     $selfTestWrongImage = [IO.Path]::Combine(
         [IO.Path]::GetDirectoryName($selfTestHostPath),
         "lbb-self-test-wrong-image.exe"
     )
-    if ($script:nativeProbeType::ProcessImageMatches($PID, $selfTestWrongImage)) {
-        throw "The native exact process-image probe accepted a different image path."
+    if ($script:nativeProbeType::ProcessImageIdentityMatches($PID, $selfTestWrongImage)) {
+        throw "The native exact process-image identity probe accepted a different image."
+    }
+
+    # QueryFullProcessImageName can expose a different valid Win32 alias than
+    # the runner's candidate path. Prove that authority follows the immutable
+    # file object, while a byte-for-byte copy remains a distinct executable.
+    $fileIdentitySelfTestRoot = [IO.Path]::Combine(
+        [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData),
+        "lbb-file-identity-self-test-" + [Guid]::NewGuid().ToString("N")
+    )
+    $fileIdentitySelfTestLink = [IO.Path]::Combine($fileIdentitySelfTestRoot, "host-alias.exe")
+    $fileIdentitySelfTestCopy = [IO.Path]::Combine($fileIdentitySelfTestRoot, "host-copy.exe")
+    try {
+        [IO.Directory]::CreateDirectory($fileIdentitySelfTestRoot) | Out-Null
+        if (-not $script:nativeProbeType::CreateHardLinkForSelfTest(
+                $fileIdentitySelfTestLink,
+                $selfTestHostPath
+            )) {
+            throw "The native file-identity self-test could not create a same-volume path alias."
+        }
+        if (-not $script:nativeProbeType::ProcessImageIdentityMatches(
+                $PID,
+                $fileIdentitySelfTestLink
+            )) {
+            throw "The native file-identity probe rejected an alias of the exact live image."
+        }
+        [IO.File]::Copy($selfTestHostPath, $fileIdentitySelfTestCopy, $false)
+        if ($script:nativeProbeType::ProcessImageIdentityMatches(
+                $PID,
+                $fileIdentitySelfTestCopy
+            )) {
+            throw "The native file-identity probe accepted a distinct executable copy."
+        }
+    }
+    finally {
+        foreach ($fileIdentitySelfTestPath in @($fileIdentitySelfTestLink, $fileIdentitySelfTestCopy)) {
+            if ([IO.File]::Exists($fileIdentitySelfTestPath)) {
+                [IO.File]::SetAttributes($fileIdentitySelfTestPath, [IO.FileAttributes]::Normal)
+                [IO.File]::Delete($fileIdentitySelfTestPath)
+            }
+        }
+        if ([IO.Directory]::Exists($fileIdentitySelfTestRoot)) {
+            [IO.Directory]::Delete($fileIdentitySelfTestRoot, $false)
+        }
     }
 
     $fixtureCleanupSelfTestRoot = [IO.Path]::Combine(
@@ -2075,7 +2199,7 @@ if ($SelfTest) {
         if ($script:nativeProbeType::GetProcessSessionId($selfTestChildPid) -ne $selfTestSessionId) {
             throw "The Job-owned self-test child was outside the PowerShell runner session."
         }
-        $selfTestWorkerImageMatched = $script:nativeProbeType::ProcessImageMatches(
+        $selfTestWorkerImageMatched = $script:nativeProbeType::ProcessImageIdentityMatches(
             $selfTestChildPid,
             $selfTestHostPath
         )
@@ -2150,14 +2274,14 @@ if ($SelfTest) {
 
     # Reproduce the release layout with an ordinary system executable copied
     # under the exact long helper asset name. The topology probe must derive
-    # authority from the live full image path, not Toolhelp's basename field.
+    # authority from the live file identity, not Toolhelp's basename field.
     $renamedHelperSelfTestRoot = [IO.Path]::Combine(
         [IO.Path]::GetTempPath(),
         "lbb-renamed-helper-self-test-" + [Guid]::NewGuid().ToString("N")
     )
     $renamedHelperSelfTestPath = [IO.Path]::Combine(
         $renamedHelperSelfTestRoot,
-        "local-computer-helper-v0.12.59-windows-x86_64.exe"
+        "local-computer-helper-v0.12.60-windows-x86_64.exe"
     )
     $renamedHelperSelfTestSource = [IO.Path]::GetFullPath($env:ComSpec)
     $renamedHelperSelfTestJob = $script:ownedJobType::new()
@@ -2189,7 +2313,7 @@ if ($SelfTest) {
             $renamedHelperSelfTestChildren[0] -ne $renamedHelperSelfTestChild.Id) {
             throw "The native exact-parent/full-image probe did not identify the renamed packaged-image self-test child."
         }
-        if (-not $script:nativeProbeType::ProcessImageMatches(
+        if (-not $script:nativeProbeType::ProcessImageIdentityMatches(
                 $renamedHelperSelfTestChild.Id,
                 $renamedHelperSelfTestPath
             )) {
@@ -2566,7 +2690,7 @@ if ($SelfTest) {
     try {
         $operatorMarkerSelfTestRequestId = "0123456789abcdef0123456789abcdef"
         $operatorRequestMarker = New-ForegroundArmRequestMarker `
-            -ProductVersion "0.12.59" `
+            -ProductVersion "0.12.60" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -InputStateAtPublication "not-started" `
             -TimeoutSeconds 120 `
@@ -2593,7 +2717,7 @@ if ($SelfTest) {
         )
         if ((@($operatorRequestRecord.PSObject.Properties.Name) -join "|") -cne ($expectedRequestMarkerProperties -join "|") -or
             $operatorRequestRecord.schemaVersion -ne 2 -or
-            $operatorRequestRecord.productVersion -cne "0.12.59" -or
+            $operatorRequestRecord.productVersion -cne "0.12.60" -or
             $operatorRequestRecord.status -cne "action-required" -or
             $operatorRequestRecord.requestId -cne $operatorMarkerSelfTestRequestId -or
             $operatorRequestRecord.operatorActionRequired -ne $true -or
@@ -2639,7 +2763,7 @@ if ($SelfTest) {
         }
 
         $alreadyArmedMarker = New-ForegroundArmRequestMarker `
-            -ProductVersion "0.12.59" `
+            -ProductVersion "0.12.60" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -InputStateAtPublication "already-acknowledged" `
             -TimeoutSeconds 120 `
@@ -2674,7 +2798,7 @@ if ($SelfTest) {
             stableSamplesRequired = 3
         }
         $operatorReceivedMarker = New-ForegroundArmReceivedMarker `
-            -ProductVersion "0.12.59" `
+            -ProductVersion "0.12.60" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -Proof $operatorReceivedProof
         $operatorReceivedPath = Write-NewOperatorMarker `
@@ -2693,7 +2817,7 @@ if ($SelfTest) {
         if ((@($operatorReceivedRecord.PSObject.Properties.Name) -join "|") -cne ($expectedReceivedMarkerProperties -join "|") -or
             $operatorReceivedRecord.status -cne "received" -or
             $operatorReceivedRecord.schemaVersion -ne 2 -or
-            $operatorReceivedRecord.productVersion -cne "0.12.59" -or
+            $operatorReceivedRecord.productVersion -cne "0.12.60" -or
             $operatorReceivedRecord.requestId -cne $operatorRequestRecord.requestId -or
             $operatorReceivedRecord.exactClickCountsMatched -ne $true -or
             $operatorReceivedRecord.stableSamplesObserved -ne 3 -or
@@ -2705,7 +2829,7 @@ if ($SelfTest) {
         $incompleteReceivedMarkerFailure = $null
         try {
             $null = New-ForegroundArmReceivedMarker `
-                -ProductVersion "0.12.59" `
+                -ProductVersion "0.12.60" `
                 -RequestId $operatorMarkerSelfTestRequestId `
                 -Proof $operatorReceivedProof
         }
@@ -2736,10 +2860,10 @@ if ($SelfTest) {
         }
         $candidateBindingSelfTestPath = [IO.Path]::Combine($candidateBindingSelfTestRoot, "candidate-binding.json")
         $candidateBindingNames = @(
-            "local-browser-bridge-v0.12.59-windows-x86_64.exe",
-            "local-computer-helper-v0.12.59-windows-x86_64.exe",
-            "local-browser-bridge-v0.12.59-macos-universal.tar.gz",
-            "local-browser-bridge-extension-v0.12.59.zip"
+            "local-browser-bridge-v0.12.60-windows-x86_64.exe",
+            "local-computer-helper-v0.12.60-windows-x86_64.exe",
+            "local-browser-bridge-v0.12.60-macos-universal.tar.gz",
+            "local-browser-bridge-extension-v0.12.60.zip"
         )
         $candidateBindingChecksums = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
         for ($index = 0; $index -lt $candidateBindingNames.Count; $index++) {
@@ -2764,8 +2888,8 @@ if ($SelfTest) {
         })
         $candidateBindingSelfTestRecord = [ordered]@{
             schemaVersion = 3
-            version = "0.12.59"
-            releaseTag = "v0.12.59"
+            version = "0.12.60"
+            releaseTag = "v0.12.60"
             repository = "flrngel/local-browser-bridge"
             sourceSha = [String]::new([char]'b', 40)
             workflowRunId = "32650000000"
@@ -2791,7 +2915,7 @@ if ($SelfTest) {
         )
         $candidateBindingSelfTestResult = Read-ExactReleaseCandidateBinding `
             -Path $candidateBindingSelfTestPath `
-            -ExpectedVersion "0.12.59" `
+            -ExpectedVersion "0.12.60" `
             -ExpectedManifestSha256 $candidateBindingManifestSha `
             -ExpectedChecksums $candidateBindingChecksums `
             -ExpectedAssetNames $candidateBindingNames
@@ -2810,7 +2934,7 @@ if ($SelfTest) {
         try {
             $null = Read-ExactReleaseCandidateBinding `
                 -Path $candidateBindingSelfTestPath `
-                -ExpectedVersion "0.12.59" `
+                -ExpectedVersion "0.12.60" `
                 -ExpectedManifestSha256 $candidateBindingManifestSha `
                 -ExpectedChecksums $candidateBindingChecksums `
                 -ExpectedAssetNames $candidateBindingNames
@@ -3692,7 +3816,7 @@ function Wait-ForBoundHelperWorker {
         if ($reportedWorkerPid -gt 0) {
             try {
                 $script:helperTopologyDiagnostic.workerImageMatched = (
-                    $script:nativeProbeType::ProcessImageMatches(
+                    $script:nativeProbeType::ProcessImageIdentityMatches(
                         [int]$reportedWorkerPid,
                         $resolvedHelper
                     )
@@ -4082,7 +4206,7 @@ try {
         $fixtureArguments += "--show-occluder"
     }
     $fixtureProcess = Start-IsolatedProcess $fixtureExecutablePath $fixtureArguments @{}
-    $fixtureProcessBinding.exactImageMatched = $script:nativeProbeType::ProcessImageMatches(
+    $fixtureProcessBinding.exactImageMatched = $script:nativeProbeType::ProcessImageIdentityMatches(
         $fixtureProcess.Id,
         $fixtureExecutablePath
     )
