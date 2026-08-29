@@ -12,7 +12,7 @@ fn finalizer_wrapper_source() -> String {
 #[test]
 fn macos_finalizer_wrapper_owns_dependent_aggregate_path_creation() {
     let wrapper = finalizer_wrapper_source().replace("\r\n", "\n");
-    let documentation = fs::read_to_string("evidence/v0.12.52/computer/README.md")
+    let documentation = fs::read_to_string("evidence/v0.12.53/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -39,17 +39,17 @@ fn macos_finalizer_wrapper_owns_dependent_aggregate_path_creation() {
 #[test]
 fn macos_v0_12_27_result_and_aggregate_schemas_are_aligned_end_to_end() {
     let finalizer = finalizer_source().replace("\r\n", "\n");
-    let producer = fs::read_to_string("evidence/v0.12.52/computer/helper-evidence-rig.mjs")
+    let producer = fs::read_to_string("evidence/v0.12.53/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let documentation = fs::read_to_string("evidence/v0.12.52/computer/README.md")
+    let documentation = fs::read_to_string("evidence/v0.12.53/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let verifier = fs::read_to_string("scripts/verify-release-acceptance-evidence.sh")
         .unwrap()
         .replace("\r\n", "\n");
 
-    assert!(finalizer.contains("const PRODUCT_VERSION = \"0.12.52\";"));
+    assert!(finalizer.contains("const PRODUCT_VERSION = \"0.12.53\";"));
     assert!(finalizer.contains("const RESULT_SCHEMA_VERSION = 9;"));
     assert!(finalizer.contains("const AGGREGATE_SCHEMA_VERSION = 3;"));
     assert!(producer.matches("schemaVersion: 9,").count() >= 2);
@@ -79,7 +79,7 @@ fn macos_v0_12_27_result_and_aggregate_schemas_are_aligned_end_to_end() {
     ] {
         assert!(
             verifier.contains(required),
-            "release evidence verifier is missing the v0.12.52 schema binding: {required}"
+            "release evidence verifier is missing the v0.12.53 schema binding: {required}"
         );
     }
 }
@@ -159,7 +159,7 @@ fn macos_v0_12_27_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
     }
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.52\";",
+        "const PRODUCT_VERSION = \"0.12.53\";",
         "const RESULT_SCHEMA_VERSION = 9;",
         "const AGGREGATE_SCHEMA_VERSION = 3;",
         "const APP_SHARE_MARKER_SCHEMA_VERSION = 2;",
