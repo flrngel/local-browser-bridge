@@ -1,0 +1,713 @@
+{
+  "schemaVersion": 9,
+  "productVersion": "0.12.48",
+  "status": "failed-release-candidate",
+  "evidenceClass": "release-candidate-negative-result",
+  "startedAt": "2026-08-28T23:46:46.973Z",
+  "capturedAt": "2026-08-28T23:47:58.895Z",
+  "fatal": "fresh share action authority timed out: polls=49, distinctCandidates=6, minimumEstimatedAgeMs=1040.609619140625, rejectionCounts={\"replayOrNonAdvancing\":1,\"shareMismatch\":0,\"targetMismatch\":0,\"geometryMismatch\":0,\"invalidMetadata\":0,\"staleAge\":6}",
+  "helperSpawnCount": 1,
+  "packageBinding": {
+    "file": "SHA256SUMS.txt",
+    "expectedSha256": "895be72638d61f70674fee10576b6867b1cd0d8d0ba75f1ab2e4e8886828498a",
+    "actualSha256": "895be72638d61f70674fee10576b6867b1cd0d8d0ba75f1ab2e4e8886828498a",
+    "expectedSha256Matched": true,
+    "exactCanonicalAssetSet": true,
+    "canonicalEntryCount": 4,
+    "archiveFile": "local-browser-bridge-v0.12.48-macos-universal.tar.gz",
+    "archiveSha256": "c8c0ac8cad113339f35ac51b3565a5e1b3ab414e042bdc81d1476ba5db29662b",
+    "archiveEntryMatched": true
+  },
+  "releaseCandidateBinding": {
+    "schemaVersion": 3,
+    "version": "0.12.48",
+    "releaseTag": "v0.12.48",
+    "repository": "flrngel/local-browser-bridge",
+    "sourceSha": "c08f673790179c5fc1f32dbd0b843585fa31dc0f",
+    "workflowRunId": "33220576267",
+    "workflowRunAttempt": "1",
+    "workflowEvent": "workflow_dispatch",
+    "workflowRef": "refs/heads/main",
+    "workflowPath": ".github/workflows/deploy.yml",
+    "artifactId": "9705227058",
+    "artifactZipSha256": "8b98da5e53963700f16fb5aeb7e9514dbd2a92723afd3a056b3f064df3f718df",
+    "checksumManifestSha256": "895be72638d61f70674fee10576b6867b1cd0d8d0ba75f1ab2e4e8886828498a"
+  },
+  "harnessSourceBinding": {
+    "sourceSha": "c08f673790179c5fc1f32dbd0b843585fa31dc0f",
+    "detachedHead": true,
+    "cleanTrackedAndUntracked": true,
+    "fsckPassed": true,
+    "exactTrackedHarnessBlobs": true
+  },
+  "capabilityBinding": {
+    "inputDeliveryProvenanceV1": true,
+    "pointerActivityMonitorV1": true
+  },
+  "quietSeatStabilization": {
+    "required": true,
+    "completed": true,
+    "requiredStableMilliseconds": 30000,
+    "maximumWaitMilliseconds": 1800000,
+    "sampleIntervalMilliseconds": 500,
+    "requiredStableTransitions": 60,
+    "stableDurationMilliseconds": 35865,
+    "observedSamples": 61,
+    "stableTransitions": 60,
+    "resetCount": 0,
+    "monitoringUnknown": false,
+    "diagnosticSchemaVersion": 1,
+    "lastResetCause": null,
+    "lastUnknownCause": null,
+    "resetCauseCounts": {
+      "foreground-transition": 0,
+      "hid-pointer-activity": 0,
+      "hid-keyboard-activity": 0,
+      "foreground-changed": 0,
+      "focus-changed": 0,
+      "active-space-changed": 0
+    },
+    "probeFailureCategory": null,
+    "completedBeforeCandidateExecution": true,
+    "rawPointerDataRetained": false
+  },
+  "screenshots": [
+    {
+      "file": "computer-01-exact-window-observe.png",
+      "sha256": "2a518d45fe643a94642e2f665dbedf637c77878dd4e491f100845bf0549dd874",
+      "bytes": 835300,
+      "width": 1209,
+      "height": 826,
+      "frameId": "aa21bdce-4604-47a0-a974-1d74da3f9d58",
+      "windowId": "81970",
+      "sourceSequence": null,
+      "transportSequence": null
+    },
+    {
+      "file": "computer-02-semantic-set-value.png",
+      "sha256": "3797fdc01462a709896be1362406c331d9e7a753ce348b11b52ce2f8572b11fd",
+      "bytes": 850927,
+      "width": 1209,
+      "height": 826,
+      "frameId": "cf477cec-2c4e-4d17-9633-7bfaba54300d",
+      "windowId": "81970",
+      "sourceSequence": null,
+      "transportSequence": null
+    },
+    {
+      "file": "computer-03-semantic-invoke.png",
+      "sha256": "c4c49a644422b463ace52b597f937c1daa315c236a35a1e2364068eeec806704",
+      "bytes": 851237,
+      "width": 1209,
+      "height": 826,
+      "frameId": "97d7b250-6c3b-461f-8a23-c44c86ff13d8",
+      "windowId": "81970",
+      "sourceSequence": null,
+      "transportSequence": null
+    },
+    {
+      "file": "computer-04-persistent-scstream-start.png",
+      "sha256": "70a2c195694b772935bd978330521c7521f8f5c9cac7ffae086ac83add48e2af",
+      "bytes": 786233,
+      "width": 1209,
+      "height": 826,
+      "frameId": "3f253b18-0f37-4ee9-aaa3-96c65a36999b",
+      "windowId": "81970",
+      "sourceSequence": 11,
+      "transportSequence": 1
+    },
+    {
+      "file": "computer-05-live-share-pixel-action.png",
+      "sha256": "12faa73b01fc15526b9c7b6cdc08c171b82c83d1f9c5aa663d9b18b949b4faa8",
+      "bytes": 786990,
+      "width": 1209,
+      "height": 826,
+      "frameId": "e5609db1-073a-4a25-a58d-fe74a638fadb",
+      "windowId": "81970",
+      "sourceSequence": 82,
+      "transportSequence": 7
+    },
+    {
+      "file": "computer-06-persistent-share-resize.png",
+      "sha256": "5d0b317b4612dbcaf9cf2e4900e56053d96aa664a062f47194da8b3d4e8fafcd",
+      "bytes": 714440,
+      "width": 1218,
+      "height": 820,
+      "frameId": "f8c9501b-1de9-4a6d-befd-55184b281814",
+      "windowId": "81970",
+      "sourceSequence": 103,
+      "transportSequence": 9
+    }
+  ],
+  "pointerEvidence": {
+    "requestedLane": "deliberate-concurrency",
+    "quietObserved": true,
+    "concurrentSharedSeatActivityObserved": false,
+    "unknownObserved": false,
+    "rawCursorPositionsRetained": false,
+    "rawPlatformActivityCountersRetained": false,
+    "rawHidSystemCountersRetained": false,
+    "hidSystemActivityClaimedAsPhysical": false
+  },
+  "appShareHandoff": {
+    "requested": true,
+    "requestPublicationAcknowledged": true,
+    "startReceiptAcknowledged": true,
+    "completePublicationAcknowledged": false,
+    "promptClosed": false,
+    "exactAppBundleObserved": true,
+    "exactWindowObserved": true,
+    "exactButtonObserved": true,
+    "buttonDisabledAfterAction": true,
+    "acceptanceButtonActionObserved": true,
+    "appShareSurfaceObservedAtProductBoundaries": false,
+    "sharedHidInputObserved": false,
+    "sampledSharedContextUnchanged": true,
+    "authorityRefreshedAfterReceipt": false,
+    "authorityFreshAtDispatch": false,
+    "actionDispatched": false,
+    "targetPostconditionObserved": false,
+    "productBoundaryQuiet": false,
+    "independentBoundaryQuiet": false,
+    "physicalHumanProvenanceClaimed": false,
+    "cryptographicToolIdentityClaimed": false,
+    "orchestrationNotProductControl": true,
+    "markerNotificationOnly": false,
+    "markerAcceptedAsProductAuthority": false,
+    "rawAppIdentityRetainedInResult": false,
+    "rawPointerDataRetained": false
+  },
+  "failureDiagnostics": {
+    "stage": "refreshExactShareActionAuthority",
+    "actionDispatched": false,
+    "systemProbe": {
+      "baselineCaptured": true,
+      "afterCaptured": true,
+      "equality": {
+        "foregroundUnchanged": true,
+        "userFocusUnchanged": true,
+        "foregroundIdentitySandwichHeld": true,
+        "rawForegroundIdentitySandwichHeld": true,
+        "foregroundAxFocusUnchanged": true,
+        "foregroundAxFrontmostHeld": true,
+        "cursorPositionUnchanged": true,
+        "sharedPointerActivityObserved": false,
+        "hidSystemPointerActivityObserved": false,
+        "rawInputPointerActivityObserved": false,
+        "injectedPointerActivityObserved": false,
+        "pointerActivityMonitorHealthy": true,
+        "sharedPointerBoundaryCorroborated": true,
+        "sharedPointerBoundaryState": "corroborated",
+        "sharedPointerActivityState": "quiet",
+        "hidSystemKeyboardActivityObserved": false,
+        "keyboardActivityMonitorHealthy": true,
+        "sharedKeyboardBoundaryCorroborated": true,
+        "sharedKeyboardBoundaryState": "corroborated",
+        "sharedKeyboardActivityState": "quiet",
+        "sharedInputSeatActivityObserved": false,
+        "spaceUnchanged": true
+      }
+    },
+    "fixtureCounters": {
+      "baselineCaptured": true,
+      "afterCaptured": true,
+      "before": {
+        "clicks": 1,
+        "semanticPresses": 1,
+        "animationTick": 255,
+        "resizeCount": 1,
+        "focusCount": 0,
+        "moveEvents": 52,
+        "appliedControlSequence": 1,
+        "siblingTextLength": 0,
+        "siblingClicks": 0,
+        "siblingFocusCount": 0,
+        "distinctSamePidWindows": true,
+        "siblingFocusPrepared": false,
+        "semanticValueMatchesExpected": true,
+        "lastAction": "resize"
+      },
+      "after": {
+        "clicks": 1,
+        "semanticPresses": 1,
+        "animationTick": 713,
+        "resizeCount": 1,
+        "focusCount": 0,
+        "moveEvents": 52,
+        "appliedControlSequence": 1,
+        "siblingTextLength": 0,
+        "siblingClicks": 0,
+        "siblingFocusCount": 0,
+        "distinctSamePidWindows": true,
+        "siblingFocusPrepared": false,
+        "semanticValueMatchesExpected": true,
+        "lastAction": "resize"
+      }
+    },
+    "targetSiblingReceiver": {
+      "targetKnown": true,
+      "expectedFocusedAfter": true,
+      "afterCaptured": true,
+      "focusedAfter": true,
+      "mainAfter": true,
+      "expectationMet": true
+    }
+  },
+  "assertions": {
+    "passed": 90,
+    "failed": 0,
+    "total": 90,
+    "details": [
+      {
+        "name": "evidence output parent is an owner-private ordinary directory",
+        "passed": true,
+        "detail": "the direct evidence parent is ordinary, owner-private, and current-user owned"
+      },
+      {
+        "name": "evidence output directory is newly created and owner-private",
+        "passed": true,
+        "detail": "the runner created one private lane output directory"
+      },
+      {
+        "name": "pre-run harness source commit matches coordinator binding",
+        "passed": true,
+        "detail": "exact source SHA matched"
+      },
+      {
+        "name": "pre-run harness checkout is detached",
+        "passed": true,
+        "detail": "detached HEAD"
+      },
+      {
+        "name": "pre-run harness checkout is clean",
+        "passed": true,
+        "detail": "tracked, staged, deleted, and untracked sets are empty"
+      },
+      {
+        "name": "pre-run harness source repository passes git fsck",
+        "passed": true,
+        "detail": "git fsck --full passed"
+      },
+      {
+        "name": "pre-run harness files are exact tracked blobs",
+        "passed": true,
+        "detail": "runner, native probes, and acceptance finalizer match HEAD blobs"
+      },
+      {
+        "name": "macOS host",
+        "passed": true,
+        "detail": "Darwin"
+      },
+      {
+        "name": "expected checksum-manifest hash format",
+        "passed": true,
+        "detail": "64 lowercase hexadecimal characters"
+      },
+      {
+        "name": "canonical checksum-manifest name",
+        "passed": true,
+        "detail": "SHA256SUMS.txt"
+      },
+      {
+        "name": "exact archive name",
+        "passed": true,
+        "detail": "local-browser-bridge-v0.12.48-macos-universal.tar.gz"
+      },
+      {
+        "name": "checksum manifest is one bounded current-user-owned ordinary file",
+        "passed": true,
+        "detail": "ordinary, singly linked, owner-controlled, and within the manifest byte bound"
+      },
+      {
+        "name": "checksum manifest stayed stable while it was bound",
+        "passed": true,
+        "detail": "path and descriptor identity, size, links, and timestamps remained unchanged"
+      },
+      {
+        "name": "out-of-band checksum-manifest hash matches",
+        "passed": true,
+        "detail": "895be72638d61f70674fee10576b6867b1cd0d8d0ba75f1ab2e4e8886828498a"
+      },
+      {
+        "name": "checksum manifest has the exact canonical four-entry set",
+        "passed": true,
+        "detail": "local-browser-bridge-v0.12.48-windows-x86_64.exe,local-computer-helper-v0.12.48-windows-x86_64.exe,local-browser-bridge-v0.12.48-macos-universal.tar.gz,local-browser-bridge-extension-v0.12.48.zip"
+      },
+      {
+        "name": "canonical manifest contains the macOS archive checksum",
+        "passed": true,
+        "detail": "c8c0ac8cad113339f35ac51b3565a5e1b3ab414e042bdc81d1476ba5db29662b"
+      },
+      {
+        "name": "macOS archive bounded exact inventory",
+        "passed": true,
+        "detail": "seventeen PAX-free regular-file/directory entries passed bounded streaming extraction"
+      },
+      {
+        "name": "archive checksum is bound by the canonical manifest",
+        "passed": true,
+        "detail": "c8c0ac8cad113339f35ac51b3565a5e1b3ab414e042bdc81d1476ba5db29662b"
+      },
+      {
+        "name": "supplied server is archive-exact",
+        "passed": true,
+        "detail": "d057f57dab55bb25c99645e699c0dae3d7bf7ef781dfab525d89b529cdbd7644"
+      },
+      {
+        "name": "supplied helper is archive-exact",
+        "passed": true,
+        "detail": "6b587d6774c064f6b1c3b6a256e8295ff8fb5099a2def33554516014088207c1"
+      },
+      {
+        "name": "server universal architecture",
+        "passed": true,
+        "detail": "arm64,x86_64"
+      },
+      {
+        "name": "helper universal architecture",
+        "passed": true,
+        "detail": "arm64,x86_64"
+      },
+      {
+        "name": "helper uses packaged app layout",
+        "passed": true,
+        "detail": "Local Computer Helper.app"
+      },
+      {
+        "name": "strict code-signature verification",
+        "passed": true,
+        "detail": "server, helper executable, and helper app bundle passed strict verification"
+      },
+      {
+        "name": "helper bundle version",
+        "passed": true,
+        "detail": "0.12.48/0.12.48"
+      },
+      {
+        "name": "system probe foreground-window self-test",
+        "passed": true,
+        "detail": "AX-focused/main identity wins over same-process app-share auxiliary compositor order"
+      },
+      {
+        "name": "optional physical-pointer adversarial prompt self-test",
+        "passed": true,
+        "detail": "source-only optional adversarial prompt cannot satisfy either release lane"
+      },
+      {
+        "name": "app-share handoff bundle identity",
+        "passed": true,
+        "detail": "dev.flrngel.local-browser-bridge.acceptance.app-share"
+      },
+      {
+        "name": "app-share handoff self-test",
+        "passed": true,
+        "detail": "stable bundle/window/button vocabulary and create-once receipts"
+      },
+      {
+        "name": "screen-capture permission preflight",
+        "passed": true,
+        "detail": "preexisting permission; no request was made"
+      },
+      {
+        "name": "accessibility permission preflight",
+        "passed": true,
+        "detail": "preexisting permission; no request was made"
+      },
+      {
+        "name": "active Space probe available",
+        "passed": true,
+        "detail": "nonzero active Space identity"
+      },
+      {
+        "name": "sandwiched foreground AX focus probe available",
+        "passed": true,
+        "detail": "stable NSWorkspace/raw PSN plus exact AX focused/main-window identities are available"
+      },
+      {
+        "name": "native quiet-seat stabilization completed before candidate execution",
+        "passed": true,
+        "detail": "35865 ms across 60 stable native transitions after 0 reset(s)"
+      },
+      {
+        "name": "server version",
+        "passed": true,
+        "detail": "0.12.48"
+      },
+      {
+        "name": "helper version",
+        "passed": true,
+        "detail": "0.12.48"
+      },
+      {
+        "name": "fixture process identity",
+        "passed": true,
+        "detail": "state belongs to the spawned fixture"
+      },
+      {
+        "name": "startup same-PID sibling is the target app's remembered receiver",
+        "passed": true,
+        "detail": "sibling-main-and-focused=true, fixture-background=true"
+      },
+      {
+        "name": "packaged helper compatible",
+        "passed": true,
+        "detail": "protocol-compatible helper 0.12.48"
+      },
+      {
+        "name": "single helper spawn",
+        "passed": true,
+        "detail": "1 packaged helper process"
+      },
+      {
+        "name": "acknowledged share advertised",
+        "passed": true,
+        "detail": "computer.share.ack present"
+      },
+      {
+        "name": "native stream advertised",
+        "passed": true,
+        "detail": "computer.capture.native-stream.v1 present"
+      },
+      {
+        "name": "input-delivery provenance advertised",
+        "passed": true,
+        "detail": "computer.input-delivery-provenance.v1 present"
+      },
+      {
+        "name": "pointer-activity monitor advertised",
+        "passed": true,
+        "detail": "computer.pointer-activity-monitor.v1 present"
+      },
+      {
+        "name": "helper status backend",
+        "passed": true,
+        "detail": "background-window/ax+skylight+screencapturekit-stream"
+      },
+      {
+        "name": "background shared-session mode",
+        "passed": true,
+        "detail": "background-window/shared-user-session/target-routed"
+      },
+      {
+        "name": "background input backend ready",
+        "passed": true,
+        "detail": "target-routed input is ready"
+      },
+      {
+        "name": "semantic backend ready",
+        "passed": true,
+        "detail": "macos-accessibility is ready without prompting"
+      },
+      {
+        "name": "fixture exact window discovered",
+        "passed": true,
+        "detail": "1 matching windows"
+      },
+      {
+        "name": "genuine same-PID sibling window discovered",
+        "passed": true,
+        "detail": "1 sibling matches, distinct=true"
+      },
+      {
+        "name": "fixture is a background target",
+        "passed": true,
+        "detail": "neither same-PID fixture window owns the user's foreground process or front window"
+      },
+      {
+        "name": "exact fixture window observed",
+        "passed": true,
+        "detail": "1209x826"
+      },
+      {
+        "name": "semantic snapshot available",
+        "passed": true,
+        "detail": "4 elements"
+      },
+      {
+        "name": "semantic value element discovered",
+        "passed": true,
+        "detail": "AXTextField"
+      },
+      {
+        "name": "semantic setValue confirmed",
+        "passed": true,
+        "detail": "Confirmed/value-confirmed"
+      },
+      {
+        "name": "semantic setValue route, helper-preservation, and shared-pointer invariants",
+        "passed": true,
+        "detail": "{\"cursorPositionUnchanged\":true,\"foregroundUnchanged\":true,\"hardwareCursorPreservedByHelper\":true,\"helperGlobalPointerPreservation\":\"confirmed\",\"hidSystemPointerActivityObserved\":false,\"injectedPointerActivityObserved\":false,\"inputDelivery\":{\"dispatchAttemptRecorded\":true,\"exactTargetBound\":true,\"globalHidInputUsed\":false,\"hardwareCursorMutationRequested\":false,\"osAcceptanceObserved\":true,\"osAcceptanceSignalAvailable\":true,\"route\":\"macosAccessibility\",\"sharedInputSeatUsed\":false,\"supportLevel\":\"publicDocumented\"},\"pointerActivityMonitorHealthy\":true,\"rawInputPointerActivityObserved\":false,\"sharedPointerActivityObserved\":false,\"sharedPointerActivityState\":\"quiet\",\"sharedPointerBoundaryCorroborated\":true,\"sharedPointerBoundaryState\":\"corroborated\",\"spaceUnchanged\":true,\"userFocusUnchanged\":true}"
+      },
+      {
+        "name": "semantic setValue screenshot changed",
+        "passed": true,
+        "detail": "fresh exact-window pixels differ from the pre-action observation"
+      },
+      {
+        "name": "semantic action element discovered",
+        "passed": true,
+        "detail": "AXButton"
+      },
+      {
+        "name": "semantic invoke target-side proof",
+        "passed": true,
+        "detail": "fixture semantic counter advanced to 1"
+      },
+      {
+        "name": "semantic invoke conservatively classified",
+        "passed": true,
+        "detail": "Partial/element-state-changed"
+      },
+      {
+        "name": "semantic invoke route, helper-preservation, and shared-pointer invariants",
+        "passed": true,
+        "detail": "{\"cursorPositionUnchanged\":true,\"foregroundUnchanged\":true,\"hardwareCursorPreservedByHelper\":true,\"helperGlobalPointerPreservation\":\"confirmed\",\"hidSystemPointerActivityObserved\":false,\"injectedPointerActivityObserved\":false,\"inputDelivery\":{\"dispatchAttemptRecorded\":true,\"exactTargetBound\":true,\"globalHidInputUsed\":false,\"hardwareCursorMutationRequested\":false,\"osAcceptanceObserved\":true,\"osAcceptanceSignalAvailable\":true,\"route\":\"macosAccessibility\",\"sharedInputSeatUsed\":false,\"supportLevel\":\"publicDocumented\"},\"pointerActivityMonitorHealthy\":true,\"rawInputPointerActivityObserved\":false,\"sharedPointerActivityObserved\":false,\"sharedPointerActivityState\":\"quiet\",\"sharedPointerBoundaryCorroborated\":true,\"sharedPointerBoundaryState\":\"corroborated\",\"spaceUnchanged\":true,\"userFocusUnchanged\":true}"
+      },
+      {
+        "name": "semantic invoke screenshot changed",
+        "passed": true,
+        "detail": "fresh exact-window pixels differ from the setValue stage"
+      },
+      {
+        "name": "persistent live share started",
+        "passed": true,
+        "detail": "persistent-native-stream/exact-window"
+      },
+      {
+        "name": "SCStream start metadata",
+        "passed": true,
+        "detail": "macos-screencapturekit-scstream, native=true, indicator-policy=true, selection=programmatic-exact-window"
+      },
+      {
+        "name": "live share ack pacing",
+        "passed": true,
+        "detail": "latest-frame-wins, ackPaced=true"
+      },
+      {
+        "name": "live share cursor policy",
+        "passed": true,
+        "detail": "system cursor excluded; synthetic session pointer composited"
+      },
+      {
+        "name": "persistent-share screenshot is fresh",
+        "passed": true,
+        "detail": "sourceSequence=11"
+      },
+      {
+        "name": "same-PID sibling is remembered before primary pixel dispatch",
+        "passed": true,
+        "detail": "sibling-main-and-focused=true, sibling-state-clean=true"
+      },
+      {
+        "name": "exact active target receiver observed during pixel lease",
+        "passed": true,
+        "detail": "active-target=true, exact-main-and-focused=true, saved-user-owner=true"
+      },
+      {
+        "name": "background pixel click targets only primary and restores sibling receiver",
+        "passed": true,
+        "detail": "only the primary click counter advanced and the target app's prior sibling receiver was restored"
+      },
+      {
+        "name": "pixel click conservatively classified",
+        "passed": true,
+        "detail": "Unverifiable"
+      },
+      {
+        "name": "pixel action bound to persistent share",
+        "passed": true,
+        "detail": "share=true, source=30"
+      },
+      {
+        "name": "live-share pixel click route, helper-preservation, and shared-pointer invariants",
+        "passed": true,
+        "detail": "{\"cursorPositionUnchanged\":true,\"foregroundUnchanged\":true,\"hardwareCursorPreservedByHelper\":true,\"helperGlobalPointerPreservation\":\"confirmed\",\"hidSystemPointerActivityObserved\":false,\"injectedPointerActivityObserved\":false,\"inputDelivery\":{\"dispatchAttemptRecorded\":true,\"exactTargetBound\":true,\"globalHidInputUsed\":false,\"hardwareCursorMutationRequested\":false,\"osAcceptanceObserved\":false,\"osAcceptanceSignalAvailable\":false,\"route\":\"macosTargetedProcessEvent\",\"sharedInputSeatUsed\":false,\"supportLevel\":\"privateUnsupported\"},\"pointerActivityMonitorHealthy\":true,\"rawInputPointerActivityObserved\":false,\"sharedPointerActivityObserved\":false,\"sharedPointerActivityState\":\"quiet\",\"sharedPointerBoundaryCorroborated\":true,\"sharedPointerBoundaryState\":\"corroborated\",\"spaceUnchanged\":true,\"userFocusUnchanged\":true}"
+      },
+      {
+        "name": "same-PID pixel routing independent foreground/focus/pointer/Space invariants",
+        "passed": true,
+        "detail": "{\"foregroundUnchanged\":true,\"userFocusUnchanged\":true,\"foregroundIdentitySandwichHeld\":true,\"rawForegroundIdentitySandwichHeld\":true,\"foregroundAxFocusUnchanged\":true,\"foregroundAxFrontmostHeld\":true,\"cursorPositionUnchanged\":true,\"sharedPointerActivityObserved\":false,\"hidSystemPointerActivityObserved\":false,\"rawInputPointerActivityObserved\":false,\"injectedPointerActivityObserved\":false,\"pointerActivityMonitorHealthy\":true,\"sharedPointerBoundaryCorroborated\":true,\"sharedPointerBoundaryState\":\"corroborated\",\"sharedPointerActivityState\":\"quiet\",\"hidSystemKeyboardActivityObserved\":false,\"keyboardActivityMonitorHealthy\":true,\"sharedKeyboardBoundaryCorroborated\":true,\"sharedKeyboardBoundaryState\":\"corroborated\",\"sharedKeyboardActivityState\":\"quiet\",\"sharedInputSeatActivityObserved\":false,\"spaceUnchanged\":true}"
+      },
+      {
+        "name": "native source remained live during input",
+        "passed": true,
+        "detail": "source +52/drop +51; transport +3"
+      },
+      {
+        "name": "settled synthetic pointer published",
+        "passed": true,
+        "detail": "action=click"
+      },
+      {
+        "name": "live-share action screenshot changed",
+        "passed": true,
+        "detail": "fresh exact-window pixels include the action stage"
+      },
+      {
+        "name": "persistent share survived exact-target resize",
+        "passed": true,
+        "detail": "720x492 -> 820x552"
+      },
+      {
+        "name": "settled resize frame matches exact-window geometry",
+        "passed": true,
+        "detail": "window=820x552, image=1218x820"
+      },
+      {
+        "name": "resize screenshot dimensions match settled observation",
+        "passed": true,
+        "detail": "1218x820"
+      },
+      {
+        "name": "resize screenshot geometry changed",
+        "passed": true,
+        "detail": "1209x826 -> 1218x820"
+      },
+      {
+        "name": "app-share WAITING presentation independent foreground/focus/pointer/Space invariants",
+        "passed": true,
+        "detail": "{\"foregroundUnchanged\":true,\"userFocusUnchanged\":true,\"foregroundIdentitySandwichHeld\":true,\"rawForegroundIdentitySandwichHeld\":true,\"foregroundAxFocusUnchanged\":true,\"foregroundAxFrontmostHeld\":true,\"cursorPositionUnchanged\":true,\"sharedPointerActivityObserved\":false,\"hidSystemPointerActivityObserved\":false,\"rawInputPointerActivityObserved\":false,\"injectedPointerActivityObserved\":false,\"pointerActivityMonitorHealthy\":true,\"sharedPointerBoundaryCorroborated\":true,\"sharedPointerBoundaryState\":\"corroborated\",\"sharedPointerActivityState\":\"quiet\",\"hidSystemKeyboardActivityObserved\":false,\"keyboardActivityMonitorHealthy\":true,\"sharedKeyboardBoundaryCorroborated\":true,\"sharedKeyboardBoundaryState\":\"corroborated\",\"sharedKeyboardActivityState\":\"quiet\",\"sharedInputSeatActivityObserved\":false,\"spaceUnchanged\":true}"
+      },
+      {
+        "name": "app-share WAITING presentation remained quiet",
+        "passed": true,
+        "detail": "the bound app appeared without shared-pointer or user-context activity"
+      },
+      {
+        "name": "app-share READY presentation independent foreground/focus/pointer/Space invariants",
+        "passed": true,
+        "detail": "{\"foregroundUnchanged\":true,\"userFocusUnchanged\":true,\"foregroundIdentitySandwichHeld\":true,\"rawForegroundIdentitySandwichHeld\":true,\"foregroundAxFocusUnchanged\":true,\"foregroundAxFrontmostHeld\":true,\"cursorPositionUnchanged\":true,\"sharedPointerActivityObserved\":false,\"hidSystemPointerActivityObserved\":false,\"rawInputPointerActivityObserved\":false,\"injectedPointerActivityObserved\":false,\"pointerActivityMonitorHealthy\":true,\"sharedPointerBoundaryCorroborated\":true,\"sharedPointerBoundaryState\":\"corroborated\",\"sharedPointerActivityState\":\"quiet\",\"hidSystemKeyboardActivityObserved\":false,\"keyboardActivityMonitorHealthy\":true,\"sharedKeyboardBoundaryCorroborated\":true,\"sharedKeyboardBoundaryState\":\"corroborated\",\"sharedKeyboardActivityState\":\"quiet\",\"sharedInputSeatActivityObserved\":false,\"spaceUnchanged\":true}"
+      },
+      {
+        "name": "app-share READY transition preserved the shared input seat",
+        "passed": true,
+        "detail": "foreground, focus, cursor, HID counters, and active Space stayed unchanged"
+      },
+      {
+        "name": "exact-app-share action independent foreground/focus/pointer/Space invariants",
+        "passed": true,
+        "detail": "{\"foregroundUnchanged\":true,\"userFocusUnchanged\":true,\"foregroundIdentitySandwichHeld\":true,\"rawForegroundIdentitySandwichHeld\":true,\"foregroundAxFocusUnchanged\":true,\"foregroundAxFrontmostHeld\":true,\"cursorPositionUnchanged\":true,\"sharedPointerActivityObserved\":false,\"hidSystemPointerActivityObserved\":false,\"rawInputPointerActivityObserved\":false,\"injectedPointerActivityObserved\":false,\"pointerActivityMonitorHealthy\":true,\"sharedPointerBoundaryCorroborated\":true,\"sharedPointerBoundaryState\":\"corroborated\",\"sharedPointerActivityState\":\"quiet\",\"hidSystemKeyboardActivityObserved\":false,\"keyboardActivityMonitorHealthy\":true,\"sharedKeyboardBoundaryCorroborated\":true,\"sharedKeyboardBoundaryState\":\"corroborated\",\"sharedKeyboardActivityState\":\"quiet\",\"sharedInputSeatActivityObserved\":false,\"spaceUnchanged\":true}"
+      },
+      {
+        "name": "exact-app-share action did not use the shared input seat",
+        "passed": true,
+        "detail": "foreground, focus, cursor, HID counters, and active Space stayed unchanged across the external app action"
+      },
+      {
+        "name": "app-share ACTION transition independent foreground/focus/pointer/Space invariants",
+        "passed": true,
+        "detail": "{\"foregroundUnchanged\":true,\"userFocusUnchanged\":true,\"foregroundIdentitySandwichHeld\":true,\"rawForegroundIdentitySandwichHeld\":true,\"foregroundAxFocusUnchanged\":true,\"foregroundAxFrontmostHeld\":true,\"cursorPositionUnchanged\":true,\"sharedPointerActivityObserved\":false,\"hidSystemPointerActivityObserved\":false,\"rawInputPointerActivityObserved\":false,\"injectedPointerActivityObserved\":false,\"pointerActivityMonitorHealthy\":true,\"sharedPointerBoundaryCorroborated\":true,\"sharedPointerBoundaryState\":\"corroborated\",\"sharedPointerActivityState\":\"quiet\",\"hidSystemKeyboardActivityObserved\":false,\"keyboardActivityMonitorHealthy\":true,\"sharedKeyboardBoundaryCorroborated\":true,\"sharedKeyboardBoundaryState\":\"corroborated\",\"sharedKeyboardActivityState\":\"quiet\",\"sharedInputSeatActivityObserved\":false,\"spaceUnchanged\":true}"
+      },
+      {
+        "name": "app-share ACTION transition remained outside the shared input seat",
+        "passed": true,
+        "detail": "the exact app remained bound while the product action window opened"
+      },
+      {
+        "name": "app-share receipt retained the exact persistent share",
+        "passed": true,
+        "detail": "target=true, share=true, source-bound=true, geometry=true"
+      }
+    ]
+  }
+}
