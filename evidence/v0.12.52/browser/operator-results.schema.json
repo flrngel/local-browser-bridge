@@ -1,0 +1,535 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/flrngel/local-browser-bridge/evidence/v0.12.52/browser/operator-results.schema.json",
+  "title": "Local Browser Bridge v0.12.52 stock Chrome operator observations",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "evidenceType", "releaseCandidateBinding", "candidateBinding", "environment", "actionSurfaces",
+    "computerHelperChain", "consentCheckpoints", "initialState", "extension",
+    "handback", "screenshotCaptures", "independentVisualReview", "restoration", "cleanup", "retainedEvidence"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 3 },
+    "evidenceType": { "const": "stock-user-chrome-operator-observations" },
+    "releaseCandidateBinding": { "$ref": "#/$defs/releaseCandidateBinding" },
+    "candidateBinding": { "$ref": "#/$defs/candidateBinding" },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "platform", "browserProduct", "browserVersion", "stockUserChrome", "existingUserSession",
+        "dedicatedTemporaryWindow", "browserLaunchFlagsUsed", "directCdpUsed",
+        "automationTestProfileUsed", "localDemoOnly"
+      ],
+      "properties": {
+        "platform": { "const": "windows-x86_64" },
+        "browserProduct": { "const": "Google Chrome" },
+        "browserVersion": { "type": "string", "pattern": "^(1(?:4[0-9]|[5-9][0-9])|[2-9][0-9]{2})\\.[0-9]{1,5}\\.[0-9]{1,5}\\.[0-9]{1,5}$" },
+        "stockUserChrome": { "const": true },
+        "existingUserSession": { "const": true },
+        "dedicatedTemporaryWindow": { "const": true },
+        "browserLaunchFlagsUsed": { "const": false },
+        "directCdpUsed": { "const": false },
+        "automationTestProfileUsed": { "const": false },
+        "localDemoOnly": { "const": true }
+      }
+    },
+    "actionSurfaces": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bridgeApiMatrix", "computerHelperApi", "orchestrationAndConsent", "dedicatedWindowCreation",
+        "chromeExtensionsPage", "nativeLoadUnpackedPicker", "extensionPopup", "chromeDebuggerNotice",
+        "browserApiResult", "computerShareAction", "acceptanceScreenshots",
+        "debuggerOwnerDuringBridgeLease", "competingDebuggerAttachmentAllowed",
+        "chromeMcpUsedDuringBridgeLease", "chromeMcpReleaseEvidenceClaimed"
+      ],
+      "properties": {
+        "bridgeApiMatrix": { "const": "local-browser-bridge-api" },
+        "computerHelperApi": { "const": "local-browser-bridge-computer-api" },
+        "orchestrationAndConsent": { "const": "user-orchestrator-secured-ssh-exported-file-review" },
+        "dedicatedWindowCreation": { "$ref": "#/$defs/productSurface" },
+        "chromeExtensionsPage": { "$ref": "#/$defs/productSurface" },
+        "nativeLoadUnpackedPicker": { "$ref": "#/$defs/productSurface" },
+        "extensionPopup": { "$ref": "#/$defs/productSurface" },
+        "chromeDebuggerNotice": { "$ref": "#/$defs/productSurface" },
+        "browserApiResult": { "$ref": "#/$defs/productSurface" },
+        "computerShareAction": { "$ref": "#/$defs/productSurface" },
+        "acceptanceScreenshots": { "$ref": "#/$defs/productSurface" },
+        "debuggerOwnerDuringBridgeLease": { "const": "local-browser-bridge-extension" },
+        "competingDebuggerAttachmentAllowed": { "const": false },
+        "chromeMcpUsedDuringBridgeLease": { "const": false },
+        "chromeMcpReleaseEvidenceClaimed": { "const": false }
+      }
+    },
+    "computerHelperChain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidateBoundExecutableStarted", "connectedThroughLoopbackServer", "serverApiOnly",
+        "exactChromeWindowSelected", "chromeExtensionsLoadCompleted", "browserApiActionCompleted",
+        "exactWindowShareActionCompleted", "freshFramesBoundToComputerAction", "screenshotEndpoint",
+        "rawScreenshotCount", "topologyProtocolBound", "ownerForcedSupervisorTermination", "helperDisconnectedAfterTermination",
+        "noHelperChildrenOrListenersRemain", "helperStopped"
+      ],
+      "properties": {
+        "candidateBoundExecutableStarted": { "const": true },
+        "connectedThroughLoopbackServer": { "const": true },
+        "serverApiOnly": { "const": true },
+        "exactChromeWindowSelected": { "const": true },
+        "chromeExtensionsLoadCompleted": { "const": true },
+        "browserApiActionCompleted": { "const": true },
+        "exactWindowShareActionCompleted": { "const": true },
+        "freshFramesBoundToComputerAction": { "const": true },
+        "screenshotEndpoint": { "const": "/api/computer/screenshot" },
+        "rawScreenshotCount": { "const": 6 },
+        "topologyProtocolBound": { "const": true },
+        "ownerForcedSupervisorTermination": { "const": true },
+        "helperDisconnectedAfterTermination": { "const": true },
+        "noHelperChildrenOrListenersRemain": { "const": true },
+        "helperStopped": { "const": true }
+      }
+    },
+    "consentCheckpoints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scopedActionTimeApproval", "installCandidate", "developerModeChange", "fullAccessUse",
+        "acceptanceTokenSave", "clearSavedToken", "removeTestOwnedExtension",
+        "restoreCapturedBrowserSettings", "failureRollback"
+      ],
+      "properties": {
+        "scopedActionTimeApproval": {
+          "type": "object", "additionalProperties": false,
+          "required": [
+            "recordSha256", "approvalId", "obtainedAtActionTime", "consumedBeforeFirstCoveredAction",
+            "consumedBeforeExpiry", "freshStateRevalidatedAfterApproval",
+            "scopeUnchangedThroughRun", "singleCandidateRun"
+          ],
+          "properties": {
+            "recordSha256": { "$ref": "#/$defs/sha256" },
+            "approvalId": { "$ref": "#/$defs/sha256" },
+            "obtainedAtActionTime": { "const": true },
+            "consumedBeforeFirstCoveredAction": { "const": true },
+            "consumedBeforeExpiry": { "const": true },
+            "freshStateRevalidatedAfterApproval": { "const": true },
+            "scopeUnchangedThroughRun": { "const": true },
+            "singleCandidateRun": { "const": true }
+          }
+        },
+        "installCandidate": { "$ref": "#/$defs/approvedCheckpoint" },
+        "developerModeChange": { "$ref": "#/$defs/conditionalApprovedCheckpoint" },
+        "fullAccessUse": { "$ref": "#/$defs/conditionalApprovedCheckpoint" },
+        "acceptanceTokenSave": { "$ref": "#/$defs/approvedCheckpoint" },
+        "clearSavedToken": { "$ref": "#/$defs/approvedCheckpoint" },
+        "removeTestOwnedExtension": { "$ref": "#/$defs/approvedCheckpoint" },
+        "restoreCapturedBrowserSettings": { "$ref": "#/$defs/approvedCheckpoint" },
+        "failureRollback": { "$ref": "#/$defs/unusedApprovedCheckpoint" }
+      }
+    },
+    "initialState": {
+      "type": "object", "additionalProperties": false,
+      "required": ["capturedBeforeRelevantMutation", "candidateExtensionPresent", "developerMode", "fullAccess", "savedTokenConfigured"],
+      "properties": {
+        "capturedBeforeRelevantMutation": { "const": true },
+        "candidateExtensionPresent": { "const": false },
+        "developerMode": { "$ref": "#/$defs/toggleInitial" },
+        "fullAccess": { "$ref": "#/$defs/toggleInitial" },
+        "savedTokenConfigured": { "const": false }
+      }
+    },
+    "extension": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "cardCount", "version", "enabled", "loadErrors", "loadedVia",
+        "loadedDirectoryByteMatchesCandidateZip", "popupConnected",
+        "debuggerLeaseActiveAtFirstCapture", "nativeDebuggerUseIndicatorSeen"
+      ],
+      "properties": {
+        "cardCount": { "const": 1 },
+        "version": { "const": "0.12.52" },
+        "enabled": { "const": true },
+        "loadErrors": { "const": 0 },
+        "loadedVia": { "const": "chrome://extensions-load-unpacked" },
+        "loadedDirectoryByteMatchesCandidateZip": { "const": true },
+        "popupConnected": { "const": true },
+        "debuggerLeaseActiveAtFirstCapture": { "const": true },
+        "nativeDebuggerUseIndicatorSeen": { "const": true }
+      }
+    },
+    "handback": { "$ref": "#/$defs/handbackMatrix" },
+    "screenshotCaptures": {
+      "type": "array", "minItems": 6, "maxItems": 6,
+      "prefixItems": [
+        { "$ref": "#/$defs/extensionLoadedCapture" },
+        { "$ref": "#/$defs/apiResultCapture" },
+        { "$ref": "#/$defs/computerActionCapture" },
+        { "$ref": "#/$defs/stopPausedCapture" },
+        { "$ref": "#/$defs/cancelPausedCapture" },
+        { "$ref": "#/$defs/postHandbackResumeCapture" }
+      ]
+    },
+    "independentVisualReview": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "recordSha256", "executorSessionRef", "reviewerSessionRef", "independentSessionBoundary",
+        "reviewedCropCount", "everySanitizedCropOpenedByReviewer", "allImageDigestsMatched",
+        "requiredVisibleStateConfirmedByReviewer", "noSensitivePixelsObservedByReviewer",
+        "noUncertaintyReported", "visualJudgmentNotPixelSafetyProof"
+      ],
+      "properties": {
+        "recordSha256": { "$ref": "#/$defs/sha256" },
+        "executorSessionRef": { "$ref": "#/$defs/sha256" },
+        "reviewerSessionRef": { "$ref": "#/$defs/sha256" },
+        "independentSessionBoundary": { "const": true },
+        "reviewedCropCount": { "const": 6 },
+        "everySanitizedCropOpenedByReviewer": { "const": true },
+        "allImageDigestsMatched": { "const": true },
+        "requiredVisibleStateConfirmedByReviewer": { "const": true },
+        "noSensitivePixelsObservedByReviewer": { "const": true },
+        "noUncertaintyReported": { "const": true },
+        "visualJudgmentNotPixelSafetyProof": { "const": true }
+      }
+    },
+    "restoration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["candidateExtensionPresence", "developerMode", "fullAccess", "savedToken"],
+      "properties": {
+        "candidateExtensionPresence": { "$ref": "#/$defs/removedRestoration" },
+        "developerMode": { "$ref": "#/$defs/toggleRestoration" },
+        "fullAccess": { "$ref": "#/$defs/toggleRestoration" },
+        "savedToken": {
+          "type": "object", "additionalProperties": false,
+          "required": ["finalConfigured", "matchesInitial", "verifiedFromLiveUi"],
+          "properties": {
+            "finalConfigured": { "const": false },
+            "matchesInitial": { "const": true },
+            "verifiedFromLiveUi": { "const": true }
+          }
+        }
+      }
+    },
+    "cleanup": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "controlReleased", "testTabsClosed", "testWindowClosed", "popupDisconnected", "serverStopped",
+        "portReleased", "acceptanceCredentialClearedFromShell", "savedTokenClear",
+        "externalSurfacePreflightAttestationSha256", "externalSurfacePostflightAttestationSha256",
+        "chromeMcpDisposition", "computerUseDisposition", "reviewerInputDisposition",
+        "computerHelperStopped",
+        "rawScreenshotScratchDeleted", "pendingReviewRecordsDeleted",
+        "extractedExtensionInventoryVerifiedBeforeDeletion", "extractedExtensionDirectoryDeleted",
+        "extensionDisposition", "unrelatedTargetMutationCommandsIssued",
+        "unrelatedExtensionMutationCommandsIssued"
+      ],
+      "properties": {
+        "controlReleased": { "const": true },
+        "testTabsClosed": { "const": true },
+        "testWindowClosed": { "const": true },
+        "popupDisconnected": { "const": true },
+        "serverStopped": { "const": true },
+        "portReleased": { "const": true },
+        "acceptanceCredentialClearedFromShell": { "const": true },
+        "savedTokenClear": { "$ref": "#/$defs/savedTokenClear" },
+        "externalSurfacePreflightAttestationSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "externalSurfacePostflightAttestationSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "chromeMcpDisposition": { "const": "never-used-through-independent-review" },
+        "computerUseDisposition": { "const": "not-resumed-through-independent-review" },
+        "reviewerInputDisposition": { "const": "exported-digest-bound-files-only" },
+        "computerHelperStopped": { "const": true },
+        "rawScreenshotScratchDeleted": { "const": true },
+        "pendingReviewRecordsDeleted": { "const": true },
+        "extractedExtensionInventoryVerifiedBeforeDeletion": { "const": true },
+        "extractedExtensionDirectoryDeleted": { "const": true },
+        "extensionDisposition": { "const": "removed" },
+        "unrelatedTargetMutationCommandsIssued": { "const": false },
+        "unrelatedExtensionMutationCommandsIssued": { "const": false }
+      }
+    },
+    "retainedEvidence": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "scope", "exactAllowlistVerified", "inputFileCount", "finalFileCount",
+        "rawScreenshotsPresent", "pendingReviewRecordsPresent", "chromeMcpTranscriptPresent",
+        "computerUseTranscriptPresent", "secretCredentialPresent",
+        "filesystemLocationsOrBrowserIdsPresent", "externalToolAndPlatformLogsScope"
+      ],
+      "properties": {
+        "scope": { "const": "acceptance-evidence-directory-only" },
+        "exactAllowlistVerified": { "const": true },
+        "inputFileCount": { "const": 21 },
+        "finalFileCount": { "const": 22 },
+        "rawScreenshotsPresent": { "const": false },
+        "pendingReviewRecordsPresent": { "const": false },
+        "chromeMcpTranscriptPresent": { "const": false },
+        "computerUseTranscriptPresent": { "const": false },
+        "secretCredentialPresent": { "const": false },
+        "filesystemLocationsOrBrowserIdsPresent": { "const": false },
+        "externalToolAndPlatformLogsScope": { "const": "not-asserted" }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "sha1": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "candidateBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "runNonce", "preflightRecordSha256", "finalSha", "checksumManifestSha256",
+        "serverSha256", "computerHelperSha256", "extensionZipSha256", "extractedPayloadSha256"
+      ],
+      "properties": {
+        "runNonce": { "$ref": "#/$defs/sha256" },
+        "preflightRecordSha256": { "$ref": "#/$defs/sha256" },
+        "finalSha": { "$ref": "#/$defs/sha1" },
+        "checksumManifestSha256": { "$ref": "#/$defs/sha256" },
+        "serverSha256": { "$ref": "#/$defs/sha256" },
+        "computerHelperSha256": { "$ref": "#/$defs/sha256" },
+        "extensionZipSha256": { "$ref": "#/$defs/sha256" },
+        "extractedPayloadSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "releaseAsset": {
+      "type": "object", "additionalProperties": false,
+      "required": ["file", "bytes", "sha256"],
+      "properties": {
+        "file": { "type": "string" },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 104857600 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "releaseCandidateBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "schemaVersion", "version", "releaseTag", "repository", "sourceSha",
+        "workflowRunId", "workflowRunAttempt", "workflowEvent", "workflowRef", "workflowPath",
+        "artifactId", "artifactName",
+        "artifactZipBytes", "artifactZipSha256", "checksumManifestSha256",
+        "attestationInvocationUri", "attestedAssetCount", "githubHostedRunner", "assets"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 3 },
+        "version": { "const": "0.12.52" },
+        "releaseTag": { "const": "v0.12.52" },
+        "repository": { "const": "flrngel/local-browser-bridge" },
+        "sourceSha": { "$ref": "#/$defs/sha1" },
+        "workflowRunId": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+        "workflowRunAttempt": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+        "workflowEvent": { "const": "workflow_dispatch" },
+        "workflowRef": { "const": "refs/heads/main" },
+        "workflowPath": { "const": ".github/workflows/deploy.yml" },
+        "artifactId": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+        "artifactName": { "const": "release-candidate" },
+        "artifactZipBytes": { "type": "integer", "minimum": 1 },
+        "artifactZipSha256": { "$ref": "#/$defs/sha256" },
+        "checksumManifestSha256": { "$ref": "#/$defs/sha256" },
+        "attestationInvocationUri": { "type": "string", "pattern": "^https://github\\.com/flrngel/local-browser-bridge/actions/runs/[1-9][0-9]*/attempts/[1-9][0-9]*$" },
+        "attestedAssetCount": { "const": 5 },
+        "githubHostedRunner": { "const": true },
+        "assets": {
+          "type": "array", "minItems": 5, "maxItems": 5,
+          "prefixItems": [
+            { "allOf": [{ "$ref": "#/$defs/releaseAsset" }, { "properties": { "file": { "const": "local-browser-bridge-v0.12.52-windows-x86_64.exe" } } }] },
+            { "allOf": [{ "$ref": "#/$defs/releaseAsset" }, { "properties": { "file": { "const": "local-computer-helper-v0.12.52-windows-x86_64.exe" } } }] },
+            { "allOf": [{ "$ref": "#/$defs/releaseAsset" }, { "properties": { "file": { "const": "local-browser-bridge-v0.12.52-macos-universal.tar.gz" } } }] },
+            { "allOf": [{ "$ref": "#/$defs/releaseAsset" }, { "properties": { "file": { "const": "local-browser-bridge-extension-v0.12.52.zip" } } }] },
+            { "allOf": [{ "$ref": "#/$defs/releaseAsset" }, { "properties": { "file": { "const": "SHA256SUMS.txt" } } }] }
+          ]
+        }
+      }
+    },
+    "productSurface": { "const": "local-browser-bridge-computer-helper" },
+    "approvedCheckpoint": {
+      "type": "object", "additionalProperties": false,
+      "required": ["performed", "approvalRef"],
+      "properties": {
+        "performed": { "const": true },
+        "approvalRef": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "conditionalApprovedCheckpoint": {
+      "type": "object", "additionalProperties": false,
+      "required": ["performed", "approvalRef"],
+      "properties": {
+        "performed": { "type": "boolean" },
+        "approvalRef": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "unusedApprovedCheckpoint": {
+      "type": "object", "additionalProperties": false,
+      "required": ["performed", "approvalRef"],
+      "properties": {
+        "performed": { "const": false },
+        "approvalRef": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "toggleInitial": {
+      "type": "object", "additionalProperties": false,
+      "required": ["value", "changedByRun"],
+      "properties": {
+        "value": { "enum": ["enabled", "disabled"] },
+        "changedByRun": { "type": "boolean" }
+      }
+    },
+    "toggleRestoration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["finalValue", "matchesInitial", "verifiedFromLiveUi"],
+      "properties": {
+        "finalValue": { "enum": ["enabled", "disabled"] },
+        "matchesInitial": { "const": true },
+        "verifiedFromLiveUi": { "const": true }
+      }
+    },
+    "removedRestoration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["finalPresent", "matchesInitial", "verifiedFromLiveUi"],
+      "properties": {
+        "finalPresent": { "const": false },
+        "matchesInitial": { "const": true },
+        "verifiedFromLiveUi": { "const": true }
+      }
+    },
+    "capture": {
+      "type": "object", "additionalProperties": false,
+      "required": ["purpose", "image", "captureSurface", "requiredVisibleState"],
+      "properties": {
+        "purpose": { "type": "string" },
+        "image": { "type": "string" },
+        "captureSurface": { "$ref": "#/$defs/productSurface" },
+        "requiredVisibleState": { "type": "string" }
+      }
+    },
+    "extensionLoadedCapture": {
+      "$ref": "#/$defs/capture",
+      "properties": {
+        "purpose": { "const": "extension-loaded" },
+        "image": { "const": "browser-01-extension-loaded.png" },
+        "requiredVisibleState": { "const": "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.52 card with no load errors and Chrome's debugger-use indicator during the active bridge lease" }
+      }
+    },
+    "apiResultCapture": {
+      "$ref": "#/$defs/capture",
+      "properties": {
+        "purpose": { "const": "api-action-result" },
+        "image": { "const": "browser-02-api-action-result.png" },
+        "requiredVisibleState": { "const": "the loopback demo visibly shows Hello, Bridge Matrix. blue selected. after the browser API action" }
+      }
+    },
+    "computerActionCapture": {
+      "$ref": "#/$defs/capture",
+      "properties": {
+        "purpose": { "const": "computer-share-action" },
+        "image": { "const": "browser-03-computer-share-action.png" },
+        "requiredVisibleState": { "const": "the exact shared Chrome window visibly shows the post-click demo state and synthetic session pointer from a fresh helper frame" }
+      }
+    },
+    "stopPausedCapture": {
+      "$ref": "#/$defs/capture",
+      "properties": {
+        "purpose": { "const": "stop-paused" },
+        "image": { "const": "browser-04-stop-paused.png" },
+        "requiredVisibleState": { "const": "the trusted extension popup visibly shows the human pause and Resume remote control after the in-page Stop handback" }
+      }
+    },
+    "cancelPausedCapture": {
+      "$ref": "#/$defs/capture",
+      "properties": {
+        "purpose": { "const": "cancel-paused" },
+        "image": { "const": "browser-05-cancel-paused.png" },
+        "requiredVisibleState": { "const": "the trusted extension popup visibly shows the human pause and Resume remote control after Chrome's browser-owned Cancel handback" }
+      }
+    },
+    "postHandbackResumeCapture": {
+      "$ref": "#/$defs/capture",
+      "properties": {
+        "purpose": { "const": "post-handback-resume" },
+        "image": { "const": "browser-06-post-handback-resume.png" },
+        "requiredVisibleState": { "const": "the exact demo visibly shows the restored Chrome debugger-use indicator and page control pill after both trusted-popup recovery cycles" }
+      }
+    },
+    "pauseRefusal": {
+      "type": "object", "additionalProperties": false,
+      "required": ["httpStatus", "errorCode", "taxonomyState", "taxonomyAction", "retriable"],
+      "properties": {
+        "httpStatus": { "const": 423 },
+        "errorCode": { "const": "HUMAN_CONTROL_PAUSED" },
+        "taxonomyState": { "const": "needs_user" },
+        "taxonomyAction": { "const": "handback" },
+        "retriable": { "const": false }
+      }
+    },
+    "resumeProof": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "trustedPopupClick", "operatorSurface", "statusPollMethod", "statusPolledAfterResume",
+        "reducedStatus", "postResumeStartSucceeded", "activeStatusPolled", "activeStatus"
+      ],
+      "properties": {
+        "trustedPopupClick": { "const": true },
+        "operatorSurface": { "$ref": "#/$defs/productSurface" },
+        "statusPollMethod": { "const": "browser.control.status" },
+        "statusPolledAfterResume": { "const": true },
+        "reducedStatus": {
+          "type": "object", "additionalProperties": false,
+          "required": ["active", "humanPaused", "revocationPending"],
+          "properties": { "active": { "const": false }, "humanPaused": { "const": false }, "revocationPending": { "const": false } }
+        },
+        "postResumeStartSucceeded": { "const": true },
+        "activeStatusPolled": { "const": true },
+        "activeStatus": {
+          "type": "object", "additionalProperties": false,
+          "required": ["active", "humanPaused", "revocationPending"],
+          "properties": { "active": { "const": true }, "humanPaused": { "const": false }, "revocationPending": { "const": false } }
+        }
+      }
+    },
+    "handbackCase": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "trigger", "operatorSurface", "statusPollMethod", "statusPolledAfterTrigger",
+        "reducedStatus", "controlStartRefusal", "tabMutationRefusal", "indicatorsRemoved", "resume"
+      ],
+      "properties": {
+        "trigger": { "enum": ["in-page-stop", "chrome-native-cancel"] },
+        "operatorSurface": { "$ref": "#/$defs/productSurface" },
+        "statusPollMethod": { "const": "browser.control.status" },
+        "statusPolledAfterTrigger": { "const": true },
+        "reducedStatus": {
+          "type": "object", "additionalProperties": false,
+          "required": ["active", "humanPaused", "reason", "revocationPending"],
+          "properties": {
+            "active": { "const": false }, "humanPaused": { "const": true },
+            "reason": { "enum": ["released_by_user", "canceled_by_user"] },
+            "revocationPending": { "const": false }
+          }
+        },
+        "controlStartRefusal": { "$ref": "#/$defs/pauseRefusal" },
+        "tabMutationRefusal": { "$ref": "#/$defs/pauseRefusal" },
+        "indicatorsRemoved": { "const": true },
+        "resume": { "$ref": "#/$defs/resumeProof" }
+      }
+    },
+    "handbackMatrix": {
+      "type": "object", "additionalProperties": false,
+      "required": ["stop", "cancel"],
+      "properties": { "stop": { "$ref": "#/$defs/handbackCase" }, "cancel": { "$ref": "#/$defs/handbackCase" } }
+    },
+    "savedTokenClear": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "trustedPopupClick", "confirmationDialogShown", "confirmationAcceptedByExecutor", "approvalRef",
+        "popupStateVerifiedAfterClear", "tokenConfigured", "clearButtonDisabled"
+      ],
+      "properties": {
+        "trustedPopupClick": { "const": true },
+        "confirmationDialogShown": { "const": true },
+        "confirmationAcceptedByExecutor": { "const": true },
+        "approvalRef": { "$ref": "#/$defs/sha256" },
+        "popupStateVerifiedAfterClear": { "const": true },
+        "tokenConfigured": { "const": false },
+        "clearButtonDisabled": { "const": true }
+      }
+    }
+  }
+}

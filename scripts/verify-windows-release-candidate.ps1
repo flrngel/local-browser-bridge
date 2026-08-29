@@ -81,6 +81,10 @@ function Assert-OrdinaryAbsolutePath([string]$Path, [bool]$RequireFile, [string]
 }
 
 if ([String]::IsNullOrWhiteSpace($CleanCoordinatorNonce)) {
+  $CallerGhToken = [Environment]::GetEnvironmentVariable("GH_TOKEN", "Process")
+  if (-not $SelfTest -and [String]::IsNullOrWhiteSpace($CallerGhToken)) {
+    throw "GH_TOKEN must be present before the one-shot Windows trust gate is invoked."
+  }
   if ([String]::IsNullOrWhiteSpace($PSCommandPath)) {
     throw "The trust wrapper must be launched from an ordinary script file."
   }
@@ -93,8 +97,11 @@ if ([String]::IsNullOrWhiteSpace($CleanCoordinatorNonce)) {
   $Info = [Diagnostics.ProcessStartInfo]::new()
   $Info.FileName = $PowerShellForChild
   $Info.WorkingDirectory = [IO.Path]::GetDirectoryName($PowerShellForChild)
-  $Info.Arguments = '-NoLogo -NoProfile -File "' + $ScriptForChild + '" -CleanCoordinatorNonce ' + $Nonce
+  $Info.Arguments = '-NoLogo -NoProfile -NonInteractive -File "' + $ScriptForChild + '" -CleanCoordinatorNonce ' + $Nonce
   $Info.UseShellExecute = $false
+  if (-not $SelfTest) {
+    $Info.EnvironmentVariables["GH_TOKEN"] = $CallerGhToken
+  }
   $Info.EnvironmentVariables["LBB_WINDOWS_TRUST_NONCE"] = $Nonce
   $Info.EnvironmentVariables["LBB_WINDOWS_TRUST_SELF_TEST"] = $(if ($SelfTest) { "1" } else { "0" })
   $Info.EnvironmentVariables["LBB_WINDOWS_TRUST_VERSION"] = $Version
@@ -113,6 +120,8 @@ if ([String]::IsNullOrWhiteSpace($CleanCoordinatorNonce)) {
     $ChildExitCode = $Child.ExitCode
   }
   finally {
+    [void]$Info.EnvironmentVariables.Remove("GH_TOKEN")
+    $CallerGhToken = $null
     $Child.Dispose()
   }
   exit $ChildExitCode
@@ -160,7 +169,7 @@ $ProgressPreference = "SilentlyContinue"
 $Repository = "flrngel/local-browser-bridge"
 $Origin = "https://github.com/$Repository.git"
 $WorkflowPath = ".github/workflows/deploy.yml"
-$ProductVersion = "0.12.51"
+$ProductVersion = "0.12.52"
 $WorkflowRef = "refs/heads/main"
 $MaximumCandidateBytes = [int64]536870912
 
@@ -1102,10 +1111,23 @@ if ($Version -cne $ProductVersion -or $Version -cnotmatch '^[0-9]+\.[0-9]+\.[0-9
     $WorkflowRunAttempt -cnotmatch '^[1-9][0-9]*$' -or
     $ArtifactId -cnotmatch '^[1-9][0-9]*$' -or
     $SourceSha -cnotmatch '^[0-9a-f]{40}$') {
-  throw "Candidate identifiers are not canonical v0.12.51 identifiers."
+  throw "Candidate identifiers are not canonical v0.12.52 identifiers."
 }
 $Tag = "v$Version"
 $ExpectedInvocationUri = "https://github.com/$Repository/actions/runs/$WorkflowRunId/attempts/$WorkflowRunAttempt"
+
+$InheritedToken = [Environment]::GetEnvironmentVariable("GH_TOKEN", "Process")
+$SecureGhToken = $null
+if (-not [String]::IsNullOrWhiteSpace($InheritedToken)) {
+  $SecureGhToken = [Security.SecureString]::new()
+  foreach ($Character in $InheritedToken.ToCharArray()) { $SecureGhToken.AppendChar($Character) }
+  $SecureGhToken.MakeReadOnly()
+}
+[Environment]::SetEnvironmentVariable("GH_TOKEN", $null, "Process")
+$InheritedToken = $null
+if ($null -eq $SecureGhToken -or $SecureGhToken.Length -lt 1) {
+  throw "The clean Windows trust child did not receive GH_TOKEN."
+}
 
 $TrustedGit = Assert-OrdinaryAbsolutePath $TrustedGit $true "Trusted git.exe"
 $TrustedGh = Assert-OrdinaryAbsolutePath $TrustedGh $true "Trusted gh.exe"
@@ -1143,16 +1165,6 @@ foreach ($Directory in @($PayloadDirectory, $TrustDirectory, $IsolatedGh, $Empty
   }
 }
 if ($SourceDirectory.Length -gt 98) { throw "Detached source checkout root is not short enough." }
-
-$InheritedToken = [Environment]::GetEnvironmentVariable("GH_TOKEN", "Process")
-$SecureGhToken = $null
-if (-not [String]::IsNullOrWhiteSpace($InheritedToken)) {
-  $SecureGhToken = [Security.SecureString]::new()
-  foreach ($Character in $InheritedToken.ToCharArray()) { $SecureGhToken.AppendChar($Character) }
-  $SecureGhToken.MakeReadOnly()
-}
-[Environment]::SetEnvironmentVariable("GH_TOKEN", $null, "Process")
-$InheritedToken = $null
 
 foreach ($EnvironmentName in @([Environment]::GetEnvironmentVariables("Process").Keys)) {
   $Name = [string]$EnvironmentName
@@ -1371,13 +1383,6 @@ foreach ($Relative in $TrustedRelativeFiles) {
 $FreshWrapper = Join-Path $SourceDirectory "scripts/verify-windows-release-candidate.ps1"
 if ((Get-TrustedSha256 $FreshWrapper) -cne (Get-TrustedSha256 $PSCommandPath)) {
   throw "Executing trust wrapper does not match the exact source wrapper blob."
-}
-
-if ($null -eq $SecureGhToken) {
-  $SecureGhToken = Read-Host "Least-privilege GitHub candidate-verification token" -AsSecureString
-}
-if ($null -eq $SecureGhToken -or $SecureGhToken.Length -lt 1) {
-  throw "A non-empty GitHub token is required."
 }
 
 $Run = Invoke-TrustedGhJson @(
