@@ -1,0 +1,178 @@
+{
+  "schemaVersion": 9,
+  "productVersion": "0.12.50",
+  "status": "failed-release-candidate",
+  "evidenceClass": "release-candidate-negative-result",
+  "startedAt": null,
+  "capturedAt": "2026-08-29T01:38:43.659Z",
+  "fatal": "ENOENT: no such file or directory, access '<redacted-owner-private-scratch-parent>'",
+  "helperSpawnCount": 0,
+  "packageBinding": {
+    "file": "SHA256SUMS.txt",
+    "expectedSha256": "2ebc5894ab4fe66c74e7c19d6b3fc5ef7bf89dce529217bc44d4388caffd3d81",
+    "actualSha256": null,
+    "expectedSha256Matched": false,
+    "exactCanonicalAssetSet": false,
+    "canonicalEntryCount": 0,
+    "archiveFile": "local-browser-bridge-v0.12.50-macos-universal.tar.gz",
+    "archiveSha256": null,
+    "archiveEntryMatched": false
+  },
+  "releaseCandidateBinding": {
+    "schemaVersion": 3,
+    "version": "0.12.50",
+    "releaseTag": "v0.12.50",
+    "repository": "flrngel/local-browser-bridge",
+    "sourceSha": "ff549a5e4fd35c7fad299a7f3733b8de4e6c3194",
+    "workflowRunId": "33226239420",
+    "workflowRunAttempt": "1",
+    "workflowEvent": "workflow_dispatch",
+    "workflowRef": "refs/heads/main",
+    "workflowPath": ".github/workflows/deploy.yml",
+    "artifactId": "9707082268",
+    "artifactZipSha256": "e5530cea34ef89733dbb4088baca019fe6c0683621f945f12d962ef0bdf6a407",
+    "checksumManifestSha256": "2ebc5894ab4fe66c74e7c19d6b3fc5ef7bf89dce529217bc44d4388caffd3d81"
+  },
+  "harnessSourceBinding": {
+    "sourceSha": "ff549a5e4fd35c7fad299a7f3733b8de4e6c3194",
+    "detachedHead": true,
+    "cleanTrackedAndUntracked": true,
+    "fsckPassed": true,
+    "exactTrackedHarnessBlobs": true
+  },
+  "capabilityBinding": {
+    "inputDeliveryProvenanceV1": false,
+    "pointerActivityMonitorV1": false
+  },
+  "quietSeatStabilization": {
+    "required": true,
+    "completed": false,
+    "requiredStableMilliseconds": 30000,
+    "maximumWaitMilliseconds": 1800000,
+    "sampleIntervalMilliseconds": 500,
+    "requiredStableTransitions": 60,
+    "stableDurationMilliseconds": 0,
+    "observedSamples": 0,
+    "stableTransitions": 0,
+    "resetCount": 0,
+    "monitoringUnknown": false,
+    "diagnosticSchemaVersion": 1,
+    "lastResetCause": null,
+    "lastUnknownCause": null,
+    "resetCauseCounts": {
+      "foreground-transition": 0,
+      "hid-pointer-activity": 0,
+      "hid-keyboard-activity": 0,
+      "foreground-changed": 0,
+      "focus-changed": 0,
+      "active-space-changed": 0
+    },
+    "probeFailureCategory": null,
+    "completedBeforeCandidateExecution": false,
+    "rawPointerDataRetained": false
+  },
+  "screenshots": [],
+  "pointerEvidence": {
+    "requestedLane": "deliberate-concurrency",
+    "quietObserved": false,
+    "concurrentSharedSeatActivityObserved": false,
+    "unknownObserved": false,
+    "rawCursorPositionsRetained": false,
+    "rawPlatformActivityCountersRetained": false,
+    "rawHidSystemCountersRetained": false,
+    "hidSystemActivityClaimedAsPhysical": false
+  },
+  "appShareHandoff": {
+    "requested": true,
+    "requestPublicationAcknowledged": false,
+    "startReceiptAcknowledged": false,
+    "completePublicationAcknowledged": false,
+    "promptClosed": false,
+    "exactAppBundleObserved": false,
+    "exactWindowObserved": false,
+    "exactButtonObserved": false,
+    "buttonDisabledAfterAction": false,
+    "acceptanceButtonActionObserved": false,
+    "appShareSurfaceObservedAtProductBoundaries": false,
+    "sharedHidInputObserved": null,
+    "sampledSharedContextUnchanged": false,
+    "authorityRefreshedAfterReceipt": false,
+    "authorityFreshAtDispatch": false,
+    "actionDispatched": false,
+    "targetPostconditionObserved": false,
+    "productBoundaryQuiet": false,
+    "independentBoundaryQuiet": false,
+    "physicalHumanProvenanceClaimed": false,
+    "cryptographicToolIdentityClaimed": false,
+    "orchestrationNotProductControl": true,
+    "markerNotificationOnly": false,
+    "markerAcceptedAsProductAuthority": false,
+    "rawAppIdentityRetainedInResult": false,
+    "rawPointerDataRetained": false
+  },
+  "failureDiagnostics": {
+    "stage": "notReached",
+    "actionDispatched": false,
+    "systemProbe": {
+      "baselineCaptured": false,
+      "afterCaptured": false,
+      "equality": null
+    },
+    "fixtureCounters": {
+      "baselineCaptured": false,
+      "afterCaptured": false,
+      "before": null,
+      "after": null
+    },
+    "targetSiblingReceiver": {
+      "targetKnown": false,
+      "expectedFocusedAfter": false,
+      "afterCaptured": false,
+      "focusedAfter": null,
+      "mainAfter": null,
+      "expectationMet": null
+    }
+  },
+  "assertions": {
+    "passed": 7,
+    "failed": 0,
+    "total": 7,
+    "details": [
+      {
+        "name": "evidence output parent is an owner-private ordinary directory",
+        "passed": true,
+        "detail": "the direct evidence parent is ordinary, owner-private, and current-user owned"
+      },
+      {
+        "name": "evidence output directory is newly created and owner-private",
+        "passed": true,
+        "detail": "the runner created one private lane output directory"
+      },
+      {
+        "name": "pre-run harness source commit matches coordinator binding",
+        "passed": true,
+        "detail": "exact source SHA matched"
+      },
+      {
+        "name": "pre-run harness checkout is detached",
+        "passed": true,
+        "detail": "detached HEAD"
+      },
+      {
+        "name": "pre-run harness checkout is clean",
+        "passed": true,
+        "detail": "tracked, staged, deleted, and untracked sets are empty"
+      },
+      {
+        "name": "pre-run harness source repository passes git fsck",
+        "passed": true,
+        "detail": "git fsck --full passed"
+      },
+      {
+        "name": "pre-run harness files are exact tracked blobs",
+        "passed": true,
+        "detail": "runner, native probes, and acceptance finalizer match HEAD blobs"
+      }
+    ]
+  }
+}

@@ -74,7 +74,7 @@ not proof that an unobserved transient state never existed. The ledger records a
 was never tagged or published. The bounded observation and its limitations are
 preserved in the immutable [v0.12.34 negative-evidence commit](https://github.com/flrngel/local-browser-bridge/tree/aef8fc68018cdb6181ad3d0886acf4e71fcda96d/evidence/v0.12.34/computer/attempts/withdrawn-2509567-windows-pre-coordinator-interruption).
 
-Version 0.12.50 is the current source and schema-3 release-pipeline target. It
+Version 0.12.51 is the current source and schema-3 release-pipeline target. It
 retains the breakaway-enabled coordinator Job and atomic private Job-list child
 creation, but delays the persistent boundary until private staging and
 configuration verification, detached-worker Job binding and guard-ownership
@@ -105,9 +105,12 @@ share, target, geometry, advancement, and dispatch-time age checks remain
 mandatory; no v0.12.48 candidate or evidence byte is reusable. Its fresh
 macOS lanes passed, but Windows stopped before UI use because the readiness
 probe's redundant Toolhelp basename filter returned no exact-image child for
-the authenticated helper worker. Version 0.12.50 removes only that advisory
+the authenticated helper worker. Version 0.12.50 removed only that advisory
 filter; direct-parent, exact live full-image-path, PID, protocol-session, and
-interactive-session checks remain mandatory.
+interactive-session checks remain mandatory. Its fresh quiet macOS lane and
+six-image review passed, but a coordinator-supplied nonexistent scratch path
+made the deliberate runner stop before candidate execution. Version 0.12.51
+retains the Windows repair and requires entirely fresh acceptance.
 
 Coordinator records flush their file contents before an atomic create-once
 rename. That survives a dropped remote shell and ordinary process failure, but
