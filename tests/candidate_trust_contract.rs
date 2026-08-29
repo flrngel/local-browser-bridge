@@ -70,7 +70,10 @@ fn windows_candidate_binder_is_a_clean_child_binary_safe_fail_closed_gate() {
         "[Microsoft.Win32.RegistryView]::Registry64",
         "[Microsoft.Win32.RegistryKey]::OpenBaseKey",
         "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion",
-        "-NoLogo -NoProfile -File",
+        "-NoLogo -NoProfile -NonInteractive -File",
+        "GH_TOKEN must be present before the one-shot Windows trust gate is invoked.",
+        "$Info.EnvironmentVariables[\"GH_TOKEN\"] = $CallerGhToken",
+        "The clean Windows trust child did not receive GH_TOKEN.",
         "[Environment]::Is64BitProcess",
         "MainModule.FileName",
         "LBB_WINDOWS_TRUST_NONCE",
@@ -157,8 +160,8 @@ fn windows_candidate_binder_is_a_clean_child_binary_safe_fail_closed_gate() {
     let live_private_directory = script.rfind("New-PrivateDirectory $Destination").unwrap();
     let token_read = script.find("$InheritedToken =").unwrap();
     let source_clone = script.find("Fixed-origin fresh source clone").unwrap();
-    let token_prompt = script
-        .find("Read-Host \"Least-privilege GitHub candidate-verification token\"")
+    let token_required = script
+        .find("The clean Windows trust child did not receive GH_TOKEN.")
         .unwrap();
     let first_api = script.find("$Run = Invoke-TrustedGhJson").unwrap();
     let raw_download = script.find("Invoke-TrustedGhBinary @(").unwrap();
@@ -178,8 +181,9 @@ fn windows_candidate_binder_is_a_clean_child_binary_safe_fail_closed_gate() {
     assert!(self_test_stop < live_private_directory);
     assert!(self_test_stop < token_read);
     assert!(token_read < source_clone);
-    assert!(source_clone < token_prompt);
-    assert!(token_prompt < first_api);
+    assert!(token_read < token_required);
+    assert!(token_required < source_clone);
+    assert!(source_clone < first_api);
     assert!(first_api < raw_download);
     assert!(raw_download < raw_digest);
     assert!(raw_digest < archive_open);
@@ -462,7 +466,9 @@ fn windows_candidate_binder_does_not_leak_tokens_or_execute_candidate_bytes() {
     let script = normalized_source("scripts/verify-windows-release-candidate.ps1");
 
     for required in [
-        "Read-Host \"Least-privilege GitHub candidate-verification token\" -AsSecureString",
+        "GH_TOKEN must be present before the one-shot Windows trust gate is invoked.",
+        "$Info.EnvironmentVariables[\"GH_TOKEN\"] = $CallerGhToken",
+        "The clean Windows trust child did not receive GH_TOKEN.",
         "[Environment]::SetEnvironmentVariable(\"GH_TOKEN\", $null, \"Process\")",
         "$Info.EnvironmentVariables[\"GH_TOKEN\"] = $ChildToken",
         "$Info.EnvironmentVariables.Remove(\"GH_TOKEN\")",
@@ -483,6 +489,7 @@ fn windows_candidate_binder_does_not_leak_tokens_or_execute_candidate_bytes() {
         "Write-Output $ChildToken",
         "Write-Host $ChildToken",
         "ConvertFrom-SecureString",
+        "Read-Host",
         "[Environment]::GetEnvironmentVariable(\"SystemRoot\", \"Machine\")",
         "Set-Content $ArtifactPartial",
         "Out-File $ArtifactPartial",
@@ -503,6 +510,25 @@ fn windows_candidate_binder_does_not_leak_tokens_or_execute_candidate_bytes() {
             "Windows trust gate must not contain `{forbidden}`"
         );
     }
+}
+
+#[test]
+fn windows_candidate_playbook_supplies_and_clears_the_noninteractive_token() {
+    let playbook = normalized_source("evidence/v0.12.52/browser/README.md");
+    for required in [
+        "`GH_TOKEN` must already be present when",
+        "$trustedGh auth token --hostname github.com",
+        "$previousGhToken = [Environment]::GetEnvironmentVariable(\"GH_TOKEN\", \"Process\")",
+        "[Environment]::SetEnvironmentVariable(\"GH_TOKEN\", $ghToken.Trim(), \"Process\")",
+        "[Environment]::SetEnvironmentVariable(\"GH_TOKEN\", $previousGhToken, \"Process\")",
+        "$ghToken = $null",
+    ] {
+        assert!(
+            playbook.contains(required),
+            "Windows candidate playbook is missing `{required}`"
+        );
+    }
+    assert!(!playbook.contains("Read-Host"));
 }
 
 #[test]
