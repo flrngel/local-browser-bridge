@@ -2062,49 +2062,6 @@ if ($SelfTest) {
         throw "The native exact process-image identity probe accepted a different image."
     }
 
-    # QueryFullProcessImageName can expose a different valid Win32 alias than
-    # the runner's candidate path. Prove that authority follows the immutable
-    # file object, while a byte-for-byte copy remains a distinct executable.
-    $fileIdentitySelfTestRoot = [IO.Path]::Combine(
-        [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData),
-        "lbb-file-identity-self-test-" + [Guid]::NewGuid().ToString("N")
-    )
-    $fileIdentitySelfTestLink = [IO.Path]::Combine($fileIdentitySelfTestRoot, "host-alias.exe")
-    $fileIdentitySelfTestCopy = [IO.Path]::Combine($fileIdentitySelfTestRoot, "host-copy.exe")
-    try {
-        [IO.Directory]::CreateDirectory($fileIdentitySelfTestRoot) | Out-Null
-        if (-not $script:nativeProbeType::CreateHardLinkForSelfTest(
-                $fileIdentitySelfTestLink,
-                $selfTestHostPath
-            )) {
-            throw "The native file-identity self-test could not create a same-volume path alias."
-        }
-        if (-not $script:nativeProbeType::ProcessImageIdentityMatches(
-                $PID,
-                $fileIdentitySelfTestLink
-            )) {
-            throw "The native file-identity probe rejected an alias of the exact live image."
-        }
-        [IO.File]::Copy($selfTestHostPath, $fileIdentitySelfTestCopy, $false)
-        if ($script:nativeProbeType::ProcessImageIdentityMatches(
-                $PID,
-                $fileIdentitySelfTestCopy
-            )) {
-            throw "The native file-identity probe accepted a distinct executable copy."
-        }
-    }
-    finally {
-        foreach ($fileIdentitySelfTestPath in @($fileIdentitySelfTestLink, $fileIdentitySelfTestCopy)) {
-            if ([IO.File]::Exists($fileIdentitySelfTestPath)) {
-                [IO.File]::SetAttributes($fileIdentitySelfTestPath, [IO.FileAttributes]::Normal)
-                [IO.File]::Delete($fileIdentitySelfTestPath)
-            }
-        }
-        if ([IO.Directory]::Exists($fileIdentitySelfTestRoot)) {
-            [IO.Directory]::Delete($fileIdentitySelfTestRoot, $false)
-        }
-    }
-
     $fixtureCleanupSelfTestRoot = [IO.Path]::Combine(
         [IO.Path]::GetTempPath(),
         "lbb-fixture-cleanup-self-test-" + [Guid]::NewGuid().ToString("N")
@@ -2283,12 +2240,22 @@ if ($SelfTest) {
         $renamedHelperSelfTestRoot,
         "local-computer-helper-v0.12.60-windows-x86_64.exe"
     )
+    $renamedHelperSelfTestAliasPath = [IO.Path]::Combine(
+        $renamedHelperSelfTestRoot,
+        "helper-image-alias.exe"
+    )
     $renamedHelperSelfTestSource = [IO.Path]::GetFullPath($env:ComSpec)
     $renamedHelperSelfTestJob = $script:ownedJobType::new()
     $renamedHelperSelfTestChild = $null
     try {
         [IO.Directory]::CreateDirectory($renamedHelperSelfTestRoot) | Out-Null
         [IO.File]::Copy($renamedHelperSelfTestSource, $renamedHelperSelfTestPath, $false)
+        if (-not $script:nativeProbeType::CreateHardLinkForSelfTest(
+                $renamedHelperSelfTestAliasPath,
+                $renamedHelperSelfTestPath
+            )) {
+            throw "The packaged-image self-test could not create a same-volume path alias."
+        }
         $renamedHelperSelfTestCommandLine = (
             '"' + $renamedHelperSelfTestPath + '" /D /Q /C "ping.exe -n 30 127.0.0.1 >NUL"'
         )
@@ -2317,7 +2284,19 @@ if ($SelfTest) {
                 $renamedHelperSelfTestChild.Id,
                 $renamedHelperSelfTestPath
             )) {
-            throw "The renamed packaged-image self-test child did not retain its exact live image path."
+            throw "The renamed packaged-image self-test child did not retain its exact live file identity."
+        }
+        if (-not $script:nativeProbeType::ProcessImageIdentityMatches(
+                $renamedHelperSelfTestChild.Id,
+                $renamedHelperSelfTestAliasPath
+            )) {
+            throw "The native file-identity probe rejected an alias of the exact live image."
+        }
+        if ($script:nativeProbeType::ProcessImageIdentityMatches(
+                $renamedHelperSelfTestChild.Id,
+                $renamedHelperSelfTestSource
+            )) {
+            throw "The native file-identity probe accepted a distinct executable copy."
         }
         $renamedHelperSelfTestJob.Terminate()
         if (-not $renamedHelperSelfTestChild.WaitForExit(5000)) {
@@ -2345,16 +2324,18 @@ if ($SelfTest) {
             $renamedHelperSelfTestEntries = @(
                 [IO.Directory]::EnumerateFileSystemEntries($renamedHelperSelfTestRoot)
             )
-            if ($renamedHelperSelfTestEntries.Count -ne 1 -or
-                -not [String]::Equals(
-                    [IO.Path]::GetFullPath($renamedHelperSelfTestEntries[0]),
-                    $renamedHelperSelfTestPath,
-                    [StringComparison]::OrdinalIgnoreCase
-                )) {
+            if ($renamedHelperSelfTestEntries.Count -ne 2 -or
+                -not ($renamedHelperSelfTestEntries -contains $renamedHelperSelfTestPath) -or
+                -not ($renamedHelperSelfTestEntries -contains $renamedHelperSelfTestAliasPath)) {
                 throw "The renamed packaged-image self-test root contained an unexpected entry."
             }
-            [IO.File]::SetAttributes($renamedHelperSelfTestPath, [IO.FileAttributes]::Normal)
-            [IO.File]::Delete($renamedHelperSelfTestPath)
+            foreach ($renamedHelperSelfTestEntry in @(
+                $renamedHelperSelfTestAliasPath,
+                $renamedHelperSelfTestPath
+            )) {
+                [IO.File]::SetAttributes($renamedHelperSelfTestEntry, [IO.FileAttributes]::Normal)
+                [IO.File]::Delete($renamedHelperSelfTestEntry)
+            }
             [IO.Directory]::Delete($renamedHelperSelfTestRoot, $false)
         }
     }
