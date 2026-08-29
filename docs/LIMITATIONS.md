@@ -74,7 +74,7 @@ not proof that an unobserved transient state never existed. The ledger records a
 was never tagged or published. The bounded observation and its limitations are
 preserved in the immutable [v0.12.34 negative-evidence commit](https://github.com/flrngel/local-browser-bridge/tree/aef8fc68018cdb6181ad3d0886acf4e71fcda96d/evidence/v0.12.34/computer/attempts/withdrawn-2509567-windows-pre-coordinator-interruption).
 
-Version 0.12.61 is the current source and schema-3 release-pipeline target. It
+Version 0.12.62 is the current source and schema-3 release-pipeline target. It
 retains the breakaway-enabled coordinator Job and atomic private Job-list child
 creation, but delays the persistent boundary until private staging and
 configuration verification, detached-worker Job binding and guard-ownership
@@ -128,11 +128,18 @@ foreground-arm action. Its first `computer.observe` failed closed because the
 WGC compositor time appeared slightly ahead after the runner converted the
 current QPC value to 100 ns before subtraction. Stock Chrome never started.
 The sanitized [v0.12.60 negative record](../evidence/v0.12.60/computer/attempts/withdrawn-7ceb294-windows-wgc-compositor-frame-age/README.md)
-contains no paths or candidate bytes. Version 0.12.61 keeps the two clocks in a
-single rational QPC domain until after subtraction, treats only one QPC tick
-plus one 100 ns quantum as zero-age measurement uncertainty, rounds positive
-age upward, and refuses any larger future timestamp. It requires entirely
-fresh acceptance.
+contains no paths or candidate bytes. Version 0.12.61 kept the two clocks in a
+single rational QPC domain until after subtraction, but its exact candidate
+still failed after the one foreground-arm action when the first WGC compositor
+timestamp led a later user-mode QPC sample by more than the assumed
+quantization tolerance. Stock Chrome never started. Its sanitized negative
+record is retained only on the immutable evidence branch
+`evidence/v0.12.61-windows-wgc-timestamp-ahead-33271808677`.
+Version 0.12.62 preserves positive compositor age exactly and rounds it upward,
+but saturates any future lead to zero elapsed age at the callback receipt
+boundary. This matches the other native backend's receipt-time upper bound and
+avoids treating a newly delivered frame as a clock-domain failure. It requires
+entirely fresh acceptance.
 
 Coordinator records flush their file contents before an atomic create-once
 rename. That survives a dropped remote shell and ordinary process failure, but

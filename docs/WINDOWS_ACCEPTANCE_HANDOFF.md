@@ -122,10 +122,14 @@ candidate has been built, downloaded, or executed.
 > because WGC/QPC conversion classified a compositor timestamp as outside the
 > monotonic range. Stock Chrome never started. Its sanitized
 > [negative record](../evidence/v0.12.60/computer/attempts/withdrawn-7ceb294-windows-wgc-compositor-frame-age/README.md)
-> is immutable and non-release evidence. Version 0.12.61 keeps subtraction in
-> one rational QPC domain, accepts only documented one-tick plus one-quantum
-> uncertainty as zero age, and rounds positive frame age upward.
-> Version 0.12.61 requires entirely fresh candidate and acceptance evidence. Do
+> is immutable and non-release evidence. Version 0.12.61 kept subtraction in
+> one rational QPC domain, but its exact candidate still failed at the first
+> `computer.observe` because the WGC compositor timestamp led a later user-mode
+> QPC sample by more than that assumed tolerance. Its single foreground-arm
+> action completed, stock Chrome never started, and the candidate was not
+> retried. Version 0.12.62 preserves and rounds positive age upward while
+> saturating every future lead to zero elapsed age at callback receipt.
+> Version 0.12.62 requires entirely fresh candidate and acceptance evidence. Do
 > not reuse or relabel earlier bytes or results.
 
 ## Source-freeze release boundary
@@ -133,8 +137,8 @@ candidate has been built, downloaded, or executed.
 At this handoff's source-freeze checkpoint, the coordinator source gate was
 complete but every artifact- and UI-bearing release gate remained future work:
 
-- no 0.12.61 tag has been created or pushed;
-- no packaged 0.12.61 server, helper, or extension has been built, downloaded,
+- no 0.12.62 tag has been created or pushed;
+- no packaged 0.12.62 server, helper, or extension has been built, downloaded,
   or executed;
 - neither macOS packaged lane nor Windows packaged-helper acceptance has run;
 - stock-Chrome acceptance has not run and Chrome was not opened or mutated;
@@ -144,7 +148,7 @@ complete but every artifact- and UI-bearing release gate remained future work:
   consent or action authority.
 
 The live publication status belongs to the immutable
-[v0.12.61 GitHub Release](https://github.com/flrngel/local-browser-bridge/releases/tag/v0.12.61)
+[v0.12.62 GitHub Release](https://github.com/flrngel/local-browser-bridge/releases/tag/v0.12.62)
 and its candidate-bound schema-3 evidence receipt, not to this source-checkpoint
 list.
 
@@ -155,7 +159,7 @@ outcome-unknown launch.
 
 ## Verified facts
 
-The active 0.12.61 source provides a checked-in
+The active 0.12.62 source provides a checked-in
 `scripts/run-windows-computer-use-acceptance.ps1` coordinator with:
 
 - a clean exact-system-PowerShell bootstrap;

@@ -514,7 +514,7 @@ fn windows_candidate_binder_does_not_leak_tokens_or_execute_candidate_bytes() {
 
 #[test]
 fn windows_candidate_playbook_supplies_and_clears_the_noninteractive_token() {
-    let playbook = normalized_source("evidence/v0.12.61/browser/README.md");
+    let playbook = normalized_source("evidence/v0.12.62/browser/README.md");
     for required in [
         "`GH_TOKEN` must already be present when",
         "$trustedGh auth token --hostname github.com",
