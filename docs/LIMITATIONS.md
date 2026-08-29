@@ -74,7 +74,7 @@ not proof that an unobserved transient state never existed. The ledger records a
 was never tagged or published. The bounded observation and its limitations are
 preserved in the immutable [v0.12.34 negative-evidence commit](https://github.com/flrngel/local-browser-bridge/tree/aef8fc68018cdb6181ad3d0886acf4e71fcda96d/evidence/v0.12.34/computer/attempts/withdrawn-2509567-windows-pre-coordinator-interruption).
 
-Version 0.12.60 is the current source and schema-3 release-pipeline target. It
+Version 0.12.61 is the current source and schema-3 release-pipeline target. It
 retains the breakaway-enabled coordinator Job and atomic private Job-list child
 creation, but delays the persistent boundary until private staging and
 configuration verification, detached-worker Job binding and guard-ownership
@@ -122,8 +122,17 @@ candidate path. Version 0.12.60 replaces that path-string authority with the
 live image file object's volume serial and file index. A same-file alias is
 accepted, while a byte-for-byte copy is a distinct object and remains refused.
 The exact [v0.12.59 negative record](../evidence/v0.12.59/computer/attempts/withdrawn-ece060c-windows-helper-readiness-image-mismatch/README.md)
-contains no paths or candidate bytes. Version 0.12.60 requires entirely fresh
-acceptance.
+contains no paths or candidate bytes. The exact v0.12.60 candidate then passed
+both macOS lanes, Windows trust, file-identity helper readiness, and the single
+foreground-arm action. Its first `computer.observe` failed closed because the
+WGC compositor time appeared slightly ahead after the runner converted the
+current QPC value to 100 ns before subtraction. Stock Chrome never started.
+The sanitized [v0.12.60 negative record](../evidence/v0.12.60/computer/attempts/withdrawn-7ceb294-windows-wgc-compositor-frame-age/README.md)
+contains no paths or candidate bytes. Version 0.12.61 keeps the two clocks in a
+single rational QPC domain until after subtraction, treats only one QPC tick
+plus one 100 ns quantum as zero-age measurement uncertainty, rounds positive
+age upward, and refuses any larger future timestamp. It requires entirely
+fresh acceptance.
 
 Coordinator records flush their file contents before an atomic create-once
 rename. That survives a dropped remote shell and ordinary process failure, but
