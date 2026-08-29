@@ -74,7 +74,7 @@ not proof that an unobserved transient state never existed. The ledger records a
 was never tagged or published. The bounded observation and its limitations are
 preserved in the immutable [v0.12.34 negative-evidence commit](https://github.com/flrngel/local-browser-bridge/tree/aef8fc68018cdb6181ad3d0886acf4e71fcda96d/evidence/v0.12.34/computer/attempts/withdrawn-2509567-windows-pre-coordinator-interruption).
 
-Version 0.12.49 is the current source and schema-3 release-pipeline target. It
+Version 0.12.50 is the current source and schema-3 release-pipeline target. It
 retains the breakaway-enabled coordinator Job and atomic private Job-list child
 creation, but delays the persistent boundary until private staging and
 configuration verification, detached-worker Job binding and guard-ownership
@@ -99,10 +99,15 @@ The deliberate lane observed the separately authorized exact-app button once
 without shared-seat activity, then failed closed before product dispatch when
 its 1,000 ms evidence-only frame-age ceiling rejected otherwise advancing
 same-share frames whose minimum estimated age was 1,040.609619140625 ms.
-Version 0.12.49 uses a 2,500 ms evidence ceiling, preserving a 500 ms margin
-inside the product's unchanged three-second stale-frame refusal. Exact share,
-target, geometry, advancement, and dispatch-time age checks remain mandatory;
-no v0.12.48 candidate or evidence byte is reusable.
+Version 0.12.49 introduced a 2,500 ms evidence ceiling, preserving a 500 ms
+margin inside the product's unchanged three-second stale-frame refusal. Exact
+share, target, geometry, advancement, and dispatch-time age checks remain
+mandatory; no v0.12.48 candidate or evidence byte is reusable. Its fresh
+macOS lanes passed, but Windows stopped before UI use because the readiness
+probe's redundant Toolhelp basename filter returned no exact-image child for
+the authenticated helper worker. Version 0.12.50 removes only that advisory
+filter; direct-parent, exact live full-image-path, PID, protocol-session, and
+interactive-session checks remain mandatory.
 
 Coordinator records flush their file contents before an atomic create-once
 rename. That survives a dropped remote shell and ordinary process failure, but

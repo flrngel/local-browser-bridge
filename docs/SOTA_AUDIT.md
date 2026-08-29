@@ -43,8 +43,8 @@ them to name the current attempt. Its exact
 was preserved and the attempt was canceled. Neither attempt reached Windows,
 stock Chrome, or a public Release.
 
-Audit date: 2026-08-28. Implementation target: version 0.12.49.
-**Current-behavior scope:** this document describes the 0.12.49 source and
+Audit date: 2026-08-29. Implementation target: version 0.12.50.
+**Current-behavior scope:** this document describes the 0.12.50 source and
 schema-3 release pipeline, and labels release or live evidence separately; it
 does not promote source contracts, workflow structure, or non-product Windows
 SelfTest results into a packaged-platform claim. The evidence chain includes
@@ -102,9 +102,13 @@ because native acceptance still expected the retired server-binary identity.
 Version 0.12.46 aligned that check with the shipped desktop host. Its exact
 candidate then failed closed in the macOS quiet lane before product dispatch:
 the independent receiver watcher expired at eight seconds while the product
-call could remain live for fifteen seconds. Version 0.12.49 retains the Windows
-repair, extends both sides of that watcher to one bounded sixteen-second
-deadline, and requires entirely new candidate bytes.
+call could remain live for fifteen seconds. Version 0.12.49 retained the
+Windows repair and extended both sides of that watcher to one bounded
+sixteen-second deadline. It passed both fresh macOS lanes, then failed before
+Windows UI use when a redundant Toolhelp basename prefilter hid the
+authenticated disposable helper worker from the exact-image readiness probe.
+Version 0.12.50 removes that advisory prefilter while retaining exact parent,
+live full-image path, PID, protocol session, and interactive-session binding.
 
 **0.12.27 SOTA marker:** product, protocol, and platform behavior were unchanged from v0.12.26. Release-candidate attestation selection required every returned statement to be well formed and bind the same run, source, tag, workflow, GitHub-hosted runner, and exact subject, with exactly one statement bound to the current attempt. Local deployment also became atomic over one exact five-file set.
 
@@ -224,7 +228,13 @@ stale-frame refusal. Exact share, target, geometry, source/transport
 advancement, frame rebasing, and dispatch-time age checks remain mandatory;
 2,501 ms and all identity or geometry mismatches still fail closed.
 
-Earlier audits stay in this document rather than being replaced, so a row's history is readable in one place. The 2026-08-18 audit (version 0.9.0) is the baseline; the 2026-08-19 audit (version 0.10.0) revised the rows marked with a `0.10:` prefix; this audit adds or revises the rows marked `0.11:`, `0.11.1:`, `0.11.2:`, `0.12.1:`, `0.12.2:`, `0.12.3:`, `0.12.4:`, `0.12.5:`, `0.12.6:`, `0.12.7:`, `0.12.8:`, `0.12.9:`, `0.12.10:`, `0.12.11:`, `0.12.12:`, `0.12.20:`, `0.12.22:`, `0.12.23:`, `0.12.24:`, `0.12.25:`, `0.12.26:`, `0.12.27:`, `0.12.28:`, `0.12.29:`, `0.12.30:`, `0.12.31:`, `0.12.32:`, `0.12.33:`, `0.12.34:`, `0.12.35:`, `0.12.37:`, `0.12.38:`, `0.12.45:`, `0.12.46:`, `0.12.48:`, and `0.12.49:`. An unmarked row describes the 0.9 baseline carried forward unless a later entry says otherwise.
+**0.12.50 SOTA marker:** Windows helper readiness no longer treats the
+Toolhelp process-entry basename as an authority signal. The probe enumerates
+direct children of the exact supervisor and binds each candidate through
+`QueryFullProcessImageName`; the authenticated worker PID, protocol session,
+interactive session, and stable consecutive observations must still match.
+
+Earlier audits stay in this document rather than being replaced, so a row's history is readable in one place. The 2026-08-18 audit (version 0.9.0) is the baseline; the 2026-08-19 audit (version 0.10.0) revised the rows marked with a `0.10:` prefix; this audit adds or revises the rows marked `0.11:`, `0.11.1:`, `0.11.2:`, `0.12.1:`, `0.12.2:`, `0.12.3:`, `0.12.4:`, `0.12.5:`, `0.12.6:`, `0.12.7:`, `0.12.8:`, `0.12.9:`, `0.12.10:`, `0.12.11:`, `0.12.12:`, `0.12.20:`, `0.12.22:`, `0.12.23:`, `0.12.24:`, `0.12.25:`, `0.12.26:`, `0.12.27:`, `0.12.28:`, `0.12.29:`, `0.12.30:`, `0.12.31:`, `0.12.32:`, `0.12.33:`, `0.12.34:`, `0.12.35:`, `0.12.37:`, `0.12.38:`, `0.12.45:`, `0.12.46:`, `0.12.48:`, and `0.12.50:`. An unmarked row describes the 0.9 baseline carried forward unless a later entry says otherwise.
 
 Version 0.11 covers two bodies of work:
 

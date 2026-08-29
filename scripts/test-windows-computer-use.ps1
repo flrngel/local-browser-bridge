@@ -692,7 +692,6 @@ namespace LbbWindowsAcceptance
                 throw new ArgumentException("A positive parent PID and exact helper image path are required");
             }
             string expectedPath = Path.GetFullPath(expectedImagePath);
-            string expectedName = Path.GetFileName(expectedPath);
             List<int> output = new List<int>();
             IntPtr snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
             if (snapshot == InvalidHandle)
@@ -709,9 +708,11 @@ namespace LbbWindowsAcceptance
                 }
                 do
                 {
-                    if (entry.ParentProcessId == (uint)parentProcessId &&
-                        String.Equals(entry.ExeFile, expectedName, StringComparison.OrdinalIgnoreCase))
+                    if (entry.ParentProcessId == (uint)parentProcessId)
                     {
+                        // Toolhelp's basename is not an authority boundary and
+                        // may differ from a renamed packaged executable. Bind
+                        // every direct child through its live full image path.
                         string childPath = ReadProcessImagePath(entry.ProcessId);
                         if (childPath != null && String.Equals(Path.GetFullPath(childPath), expectedPath, StringComparison.OrdinalIgnoreCase))
                         {
@@ -2089,6 +2090,93 @@ if ($SelfTest) {
         $selfTestJob.Dispose()
     }
 
+    # Reproduce the release layout with an ordinary system executable copied
+    # under the exact long helper asset name. The topology probe must derive
+    # authority from the live full image path, not Toolhelp's basename field.
+    $renamedHelperSelfTestRoot = [IO.Path]::Combine(
+        [IO.Path]::GetTempPath(),
+        "lbb-renamed-helper-self-test-" + [Guid]::NewGuid().ToString("N")
+    )
+    $renamedHelperSelfTestPath = [IO.Path]::Combine(
+        $renamedHelperSelfTestRoot,
+        "local-computer-helper-v0.12.50-windows-x86_64.exe"
+    )
+    $renamedHelperSelfTestSource = [IO.Path]::GetFullPath($env:ComSpec)
+    $renamedHelperSelfTestJob = $script:ownedJobType::new()
+    $renamedHelperSelfTestChild = $null
+    try {
+        [IO.Directory]::CreateDirectory($renamedHelperSelfTestRoot) | Out-Null
+        [IO.File]::Copy($renamedHelperSelfTestSource, $renamedHelperSelfTestPath, $false)
+        $renamedHelperSelfTestCommandLine = (
+            '"' + $renamedHelperSelfTestPath + '" /D /Q /C "ping.exe -n 30 127.0.0.1 >NUL"'
+        )
+        $renamedHelperSelfTestChild = $renamedHelperSelfTestJob.StartProcess(
+            $renamedHelperSelfTestPath,
+            $renamedHelperSelfTestCommandLine,
+            $renamedHelperSelfTestRoot,
+            @{}
+        )
+        $renamedHelperSelfTestDeadline = [DateTime]::UtcNow.AddSeconds(5)
+        $renamedHelperSelfTestChildren = @()
+        do {
+            $renamedHelperSelfTestChildren = @(
+                $script:nativeProbeType::GetDirectChildProcessIds($PID, $renamedHelperSelfTestPath)
+            )
+            if ($renamedHelperSelfTestChildren -contains $renamedHelperSelfTestChild.Id) {
+                break
+            }
+            Start-Sleep -Milliseconds 50
+        } while ([DateTime]::UtcNow -lt $renamedHelperSelfTestDeadline)
+        if ($renamedHelperSelfTestChildren.Count -ne 1 -or
+            $renamedHelperSelfTestChildren[0] -ne $renamedHelperSelfTestChild.Id) {
+            throw "The native exact-parent/full-image probe did not identify the renamed packaged-image self-test child."
+        }
+        if (-not $script:nativeProbeType::ProcessImageMatches(
+                $renamedHelperSelfTestChild.Id,
+                $renamedHelperSelfTestPath
+            )) {
+            throw "The renamed packaged-image self-test child did not retain its exact live image path."
+        }
+        $renamedHelperSelfTestJob.Terminate()
+        if (-not $renamedHelperSelfTestChild.WaitForExit(5000)) {
+            throw "The renamed packaged-image self-test child did not terminate with its private Job."
+        }
+    }
+    finally {
+        try {
+            if ($renamedHelperSelfTestJob.ActiveProcessCount -gt 0) {
+                $renamedHelperSelfTestJob.Terminate()
+            }
+        }
+        catch {
+            # Dispose still closes the kill-on-close Job handle below.
+        }
+        if ($null -ne $renamedHelperSelfTestChild) {
+            $renamedHelperSelfTestChild.Dispose()
+        }
+        $renamedHelperSelfTestJob.Dispose()
+        if ([IO.Directory]::Exists($renamedHelperSelfTestRoot)) {
+            $renamedHelperSelfTestRootAttributes = [IO.File]::GetAttributes($renamedHelperSelfTestRoot)
+            if (($renamedHelperSelfTestRootAttributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "The renamed packaged-image self-test root became a reparse point."
+            }
+            $renamedHelperSelfTestEntries = @(
+                [IO.Directory]::EnumerateFileSystemEntries($renamedHelperSelfTestRoot)
+            )
+            if ($renamedHelperSelfTestEntries.Count -ne 1 -or
+                -not [String]::Equals(
+                    [IO.Path]::GetFullPath($renamedHelperSelfTestEntries[0]),
+                    $renamedHelperSelfTestPath,
+                    [StringComparison]::OrdinalIgnoreCase
+                )) {
+                throw "The renamed packaged-image self-test root contained an unexpected entry."
+            }
+            [IO.File]::SetAttributes($renamedHelperSelfTestPath, [IO.FileAttributes]::Normal)
+            [IO.File]::Delete($renamedHelperSelfTestPath)
+            [IO.Directory]::Delete($renamedHelperSelfTestRoot, $false)
+        }
+    }
+
     # Exercise the .NET Framework fixture compiler only under the exact Desktop
     # host used by live acceptance. PowerShell Core remains a parser and
     # runner-only self-test surface for this script.
@@ -2420,7 +2508,7 @@ if ($SelfTest) {
     try {
         $operatorMarkerSelfTestRequestId = "0123456789abcdef0123456789abcdef"
         $operatorRequestMarker = New-ForegroundArmRequestMarker `
-            -ProductVersion "0.12.49" `
+            -ProductVersion "0.12.50" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -InputStateAtPublication "not-started" `
             -TimeoutSeconds 120 `
@@ -2447,7 +2535,7 @@ if ($SelfTest) {
         )
         if ((@($operatorRequestRecord.PSObject.Properties.Name) -join "|") -cne ($expectedRequestMarkerProperties -join "|") -or
             $operatorRequestRecord.schemaVersion -ne 2 -or
-            $operatorRequestRecord.productVersion -cne "0.12.49" -or
+            $operatorRequestRecord.productVersion -cne "0.12.50" -or
             $operatorRequestRecord.status -cne "action-required" -or
             $operatorRequestRecord.requestId -cne $operatorMarkerSelfTestRequestId -or
             $operatorRequestRecord.operatorActionRequired -ne $true -or
@@ -2493,7 +2581,7 @@ if ($SelfTest) {
         }
 
         $alreadyArmedMarker = New-ForegroundArmRequestMarker `
-            -ProductVersion "0.12.49" `
+            -ProductVersion "0.12.50" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -InputStateAtPublication "already-acknowledged" `
             -TimeoutSeconds 120 `
@@ -2528,7 +2616,7 @@ if ($SelfTest) {
             stableSamplesRequired = 3
         }
         $operatorReceivedMarker = New-ForegroundArmReceivedMarker `
-            -ProductVersion "0.12.49" `
+            -ProductVersion "0.12.50" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -Proof $operatorReceivedProof
         $operatorReceivedPath = Write-NewOperatorMarker `
@@ -2547,7 +2635,7 @@ if ($SelfTest) {
         if ((@($operatorReceivedRecord.PSObject.Properties.Name) -join "|") -cne ($expectedReceivedMarkerProperties -join "|") -or
             $operatorReceivedRecord.status -cne "received" -or
             $operatorReceivedRecord.schemaVersion -ne 2 -or
-            $operatorReceivedRecord.productVersion -cne "0.12.49" -or
+            $operatorReceivedRecord.productVersion -cne "0.12.50" -or
             $operatorReceivedRecord.requestId -cne $operatorRequestRecord.requestId -or
             $operatorReceivedRecord.exactClickCountsMatched -ne $true -or
             $operatorReceivedRecord.stableSamplesObserved -ne 3 -or
@@ -2559,7 +2647,7 @@ if ($SelfTest) {
         $incompleteReceivedMarkerFailure = $null
         try {
             $null = New-ForegroundArmReceivedMarker `
-                -ProductVersion "0.12.49" `
+                -ProductVersion "0.12.50" `
                 -RequestId $operatorMarkerSelfTestRequestId `
                 -Proof $operatorReceivedProof
         }
@@ -2590,10 +2678,10 @@ if ($SelfTest) {
         }
         $candidateBindingSelfTestPath = [IO.Path]::Combine($candidateBindingSelfTestRoot, "candidate-binding.json")
         $candidateBindingNames = @(
-            "local-browser-bridge-v0.12.49-windows-x86_64.exe",
-            "local-computer-helper-v0.12.49-windows-x86_64.exe",
-            "local-browser-bridge-v0.12.49-macos-universal.tar.gz",
-            "local-browser-bridge-extension-v0.12.49.zip"
+            "local-browser-bridge-v0.12.50-windows-x86_64.exe",
+            "local-computer-helper-v0.12.50-windows-x86_64.exe",
+            "local-browser-bridge-v0.12.50-macos-universal.tar.gz",
+            "local-browser-bridge-extension-v0.12.50.zip"
         )
         $candidateBindingChecksums = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
         for ($index = 0; $index -lt $candidateBindingNames.Count; $index++) {
@@ -2618,8 +2706,8 @@ if ($SelfTest) {
         })
         $candidateBindingSelfTestRecord = [ordered]@{
             schemaVersion = 3
-            version = "0.12.49"
-            releaseTag = "v0.12.49"
+            version = "0.12.50"
+            releaseTag = "v0.12.50"
             repository = "flrngel/local-browser-bridge"
             sourceSha = [String]::new([char]'b', 40)
             workflowRunId = "32650000000"
@@ -2645,7 +2733,7 @@ if ($SelfTest) {
         )
         $candidateBindingSelfTestResult = Read-ExactReleaseCandidateBinding `
             -Path $candidateBindingSelfTestPath `
-            -ExpectedVersion "0.12.49" `
+            -ExpectedVersion "0.12.50" `
             -ExpectedManifestSha256 $candidateBindingManifestSha `
             -ExpectedChecksums $candidateBindingChecksums `
             -ExpectedAssetNames $candidateBindingNames
@@ -2664,7 +2752,7 @@ if ($SelfTest) {
         try {
             $null = Read-ExactReleaseCandidateBinding `
                 -Path $candidateBindingSelfTestPath `
-                -ExpectedVersion "0.12.49" `
+                -ExpectedVersion "0.12.50" `
                 -ExpectedManifestSha256 $candidateBindingManifestSha `
                 -ExpectedChecksums $candidateBindingChecksums `
                 -ExpectedAssetNames $candidateBindingNames
