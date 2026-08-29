@@ -43,8 +43,8 @@ them to name the current attempt. Its exact
 was preserved and the attempt was canceled. Neither attempt reached Windows,
 stock Chrome, or a public Release.
 
-Audit date: 2026-08-29. Implementation target: version 0.12.60.
-**Current-behavior scope:** this document describes the 0.12.60 source and
+Audit date: 2026-08-29. Implementation target: version 0.12.61.
+**Current-behavior scope:** this document describes the 0.12.61 source and
 schema-3 release pipeline, and labels release or live evidence separately; it
 does not promote source contracts, workflow structure, or non-product Windows
 SelfTest results into a packaged-platform claim. The evidence chain includes
@@ -113,7 +113,9 @@ Its fresh quiet macOS lane and six-image review passed, but the candidate was
 withdrawn when a coordinator-supplied nonexistent scratch parent terminated
 the deliberate runner before candidate execution. Version 0.12.59 retained the
 Windows repair but exposed the path-alias boundary described below. Version
-0.12.60 requires fresh candidate and acceptance bytes.
+0.12.60 repaired that boundary, passed both macOS lanes and the Windows
+foreground arm, and then exposed the WGC/QPC conversion boundary described
+below. Version 0.12.61 requires fresh candidate and acceptance bytes.
 
 **0.12.27 SOTA marker:** product, protocol, and platform behavior were unchanged from v0.12.26. Release-candidate attestation selection required every returned statement to be well formed and bind the same run, source, tag, workflow, GitHub-hosted runner, and exact subject, with exactly one statement bound to the current attempt. Local deployment also became atomic over one exact five-file set.
 
@@ -267,7 +269,20 @@ byte-for-byte copy remains a different executable and is refused. The existing
 controller/PID/session/stability/round-trip checks and Toolhelp
 conflicting-child refusal remain mandatory.
 
-Earlier audits stay in this document rather than being replaced, so a row's history is readable in one place. The 2026-08-18 audit (version 0.9.0) is the baseline; the 2026-08-19 audit (version 0.10.0) revised the rows marked with a `0.10:` prefix; this audit adds or revises the rows marked `0.11:`, `0.11.1:`, `0.11.2:`, `0.12.1:`, `0.12.2:`, `0.12.3:`, `0.12.4:`, `0.12.5:`, `0.12.6:`, `0.12.7:`, `0.12.8:`, `0.12.9:`, `0.12.10:`, `0.12.11:`, `0.12.12:`, `0.12.20:`, `0.12.22:`, `0.12.23:`, `0.12.24:`, `0.12.25:`, `0.12.26:`, `0.12.27:`, `0.12.28:`, `0.12.29:`, `0.12.30:`, `0.12.31:`, `0.12.32:`, `0.12.33:`, `0.12.34:`, `0.12.35:`, `0.12.37:`, `0.12.38:`, `0.12.45:`, `0.12.46:`, `0.12.48:`, `0.12.50:`, `0.12.58:`, `0.12.59:`, and `0.12.60:`. An unmarked row describes the 0.9 baseline carried forward unless a later entry says otherwise.
+The exact v0.12.60 candidate passed both packaged macOS lanes, Windows trust,
+file-identity helper readiness, and one foreground-arm action. The first
+`computer.observe` then failed closed with `COMPUTER_CAPTURE_FAILED` because
+the current QPC value had been truncated to 100 ns before subtraction and the
+WGC compositor timestamp appeared outside the monotonic range. Chrome was not
+claimed or started, and the candidate was not retried.
+
+**0.12.61 SOTA marker:** frame age is now computed by subtracting the WGC
+100 ns timestamp and the current counter in a shared rational QPC domain before
+conversion. One QPC tick plus one 100 ns quantum is the only tolerated future
+measurement uncertainty and maps to zero age. Positive ages round upward, and
+larger future timestamps still fail closed.
+
+Earlier audits stay in this document rather than being replaced, so a row's history is readable in one place. The 2026-08-18 audit (version 0.9.0) is the baseline; the 2026-08-19 audit (version 0.10.0) revised the rows marked with a `0.10:` prefix; this audit adds or revises the rows marked `0.11:`, `0.11.1:`, `0.11.2:`, `0.12.1:`, `0.12.2:`, `0.12.3:`, `0.12.4:`, `0.12.5:`, `0.12.6:`, `0.12.7:`, `0.12.8:`, `0.12.9:`, `0.12.10:`, `0.12.11:`, `0.12.12:`, `0.12.20:`, `0.12.22:`, `0.12.23:`, `0.12.24:`, `0.12.25:`, `0.12.26:`, `0.12.27:`, `0.12.28:`, `0.12.29:`, `0.12.30:`, `0.12.31:`, `0.12.32:`, `0.12.33:`, `0.12.34:`, `0.12.35:`, `0.12.37:`, `0.12.38:`, `0.12.45:`, `0.12.46:`, `0.12.48:`, `0.12.50:`, `0.12.58:`, `0.12.59:`, `0.12.60:`, and `0.12.61:`. An unmarked row describes the 0.9 baseline carried forward unless a later entry says otherwise.
 
 Version 0.11 covers two bodies of work:
 

@@ -1558,13 +1558,37 @@ fn qpc_frame_age(
     if frame_timestamp_100ns < 0 || current_counter < 0 || counter_frequency <= 0 {
         return Err("Windows returned an invalid WGC/QPC timestamp".to_string());
     }
-    let current_100ns = i128::from(current_counter)
+    // Keep both clocks in one rational QPC domain until after subtraction.
+    // SystemRelativeTime is QPC time quantized to 100 ns. Converting the
+    // current counter first truncates its remainder and can therefore make a
+    // just-rendered frame appear one quantum in the future. Windows also
+    // documents one-tick uncertainty for digital counter measurements, so a
+    // lead bounded by one QPC tick plus one TimeSpan quantum is zero age.
+    let frequency = i128::from(counter_frequency);
+    let current_scaled = i128::from(current_counter)
         .checked_mul(HUNDRED_NANOSECONDS_PER_SECOND)
-        .and_then(|value| value.checked_div(i128::from(counter_frequency)))
         .ok_or_else(|| "Windows QPC timestamp conversion overflowed".to_string())?;
-    let age_100ns = current_100ns.saturating_sub(i128::from(frame_timestamp_100ns));
-    let age_nanos = age_100ns
+    let frame_scaled = i128::from(frame_timestamp_100ns)
+        .checked_mul(frequency)
+        .ok_or_else(|| "Windows WGC timestamp conversion overflowed".to_string())?;
+    let age_scaled = current_scaled
+        .checked_sub(frame_scaled)
+        .ok_or_else(|| "Windows WGC/QPC timestamp difference overflowed".to_string())?;
+    let future_tolerance = HUNDRED_NANOSECONDS_PER_SECOND
+        .checked_add(frequency)
+        .ok_or_else(|| "Windows WGC/QPC timestamp tolerance overflowed".to_string())?;
+    if age_scaled < -future_tolerance {
+        return Err("The WGC compositor timestamp is ahead of the monotonic clock".to_string());
+    }
+    if age_scaled <= 0 {
+        return Ok(Duration::ZERO);
+    }
+
+    // Round upward so the conversion never understates frame age.
+    let age_nanos = age_scaled
         .checked_mul(100)
+        .and_then(|value| value.checked_add(frequency - 1))
+        .and_then(|value| value.checked_div(frequency))
         .and_then(|value| u64::try_from(value).ok())
         .ok_or_else(|| "WGC compositor frame age exceeded the monotonic range".to_string())?;
     Ok(Duration::from_nanos(age_nanos))
@@ -1780,8 +1804,24 @@ mod tests {
         let age = qpc_frame_age(19_500_000, 2_000_000, 1_000_000)
             .expect("valid QPC timestamps should map");
         assert_eq!(age, Duration::from_millis(50));
+        assert_eq!(
+            qpc_frame_age(33, 10, 3_000_000).unwrap(),
+            Duration::from_nanos(34),
+            "age conversion must round upward without truncating the clocks first"
+        );
+        assert_eq!(
+            qpc_frame_age(34, 10, 3_000_000).unwrap(),
+            Duration::ZERO,
+            "one QPC tick plus one 100 ns quantum of future skew is measurement uncertainty"
+        );
+        assert!(
+            qpc_frame_age(39, 10, 3_000_000)
+                .unwrap_err()
+                .contains("ahead of the monotonic clock")
+        );
         assert!(qpc_frame_age(-1, 1, 1).is_err());
         assert!(qpc_frame_age(1, 1, 0).is_err());
+        assert!(qpc_frame_age(0, i64::MAX, 1).is_err());
     }
 
     #[test]
