@@ -43,8 +43,8 @@ them to name the current attempt. Its exact
 was preserved and the attempt was canceled. Neither attempt reached Windows,
 stock Chrome, or a public Release.
 
-Audit date: 2026-08-29. Implementation target: version 0.12.58.
-**Current-behavior scope:** this document describes the 0.12.58 source and
+Audit date: 2026-08-29. Implementation target: version 0.12.59.
+**Current-behavior scope:** this document describes the 0.12.59 source and
 schema-3 release pipeline, and labels release or live evidence separately; it
 does not promote source contracts, workflow structure, or non-product Windows
 SelfTest results into a packaged-platform claim. The evidence chain includes
@@ -111,7 +111,7 @@ Version 0.12.50 removed that advisory prefilter while retaining exact parent,
 live full-image path, PID, protocol session, and interactive-session binding.
 Its fresh quiet macOS lane and six-image review passed, but the candidate was
 withdrawn when a coordinator-supplied nonexistent scratch parent terminated
-the deliberate runner before candidate execution. Version 0.12.58 retains the
+the deliberate runner before candidate execution. Version 0.12.59 retains the
 Windows repair and requires fresh candidate and acceptance bytes.
 
 **0.12.27 SOTA marker:** product, protocol, and platform behavior were unchanged from v0.12.26. Release-candidate attestation selection required every returned statement to be well formed and bind the same run, source, tag, workflow, GitHub-hosted runner, and exact subject, with exactly one statement bound to the current attempt. Local deployment also became atomic over one exact five-file set.
@@ -238,13 +238,22 @@ direct children of the exact supervisor and binds each candidate through
 `QueryFullProcessImageName`; the authenticated worker PID, protocol session,
 interactive session, and stable consecutive observations must still match.
 
-**0.12.58 SOTA marker:** product and acceptance contracts are unchanged. The
-sole v0.12.50 candidate passed its quiet macOS lane and mandatory review, then
-was withdrawn after a coordinator path error stopped the deliberate runner
-before candidate execution. v0.12.58 exists only to provide fresh immutable
-candidate and evidence identity.
+**0.12.58 SOTA marker:** the exact candidate passed both macOS lanes and the
+Windows trust gate, then failed at `bind-initial-helper-readiness`. The helper
+was authenticated and session-matched with a stable reported worker PID for
+265 polls, while Toolhelp returned zero exact-image direct children. No
+sentinel, Computer Use click, Chrome action, tag, or Release followed.
 
-Earlier audits stay in this document rather than being replaced, so a row's history is readable in one place. The 2026-08-18 audit (version 0.9.0) is the baseline; the 2026-08-19 audit (version 0.10.0) revised the rows marked with a `0.10:` prefix; this audit adds or revises the rows marked `0.11:`, `0.11.1:`, `0.11.2:`, `0.12.1:`, `0.12.2:`, `0.12.3:`, `0.12.4:`, `0.12.5:`, `0.12.6:`, `0.12.7:`, `0.12.8:`, `0.12.9:`, `0.12.10:`, `0.12.11:`, `0.12.12:`, `0.12.20:`, `0.12.22:`, `0.12.23:`, `0.12.24:`, `0.12.25:`, `0.12.26:`, `0.12.27:`, `0.12.28:`, `0.12.29:`, `0.12.30:`, `0.12.31:`, `0.12.32:`, `0.12.33:`, `0.12.34:`, `0.12.35:`, `0.12.37:`, `0.12.38:`, `0.12.45:`, `0.12.46:`, `0.12.48:`, `0.12.50:`, and `0.12.58:`. An unmarked row describes the 0.9 baseline carried forward unless a later entry says otherwise.
+**0.12.59 SOTA marker:** Windows readiness now requires the authenticated
+`controllerProcessId` to equal the exact launched supervisor and independently
+binds the reported worker PID to the exact live helper image and interactive
+session across stable polls and a `computer.status` round trip. Toolhelp still
+fails closed on multiple or conflicting exact-image children, but absence from
+that redundant snapshot no longer overrides the authenticated live binding.
+Coordinator terminal classification also preserves a failed runner summary
+before considering a missing watcher handoff.
+
+Earlier audits stay in this document rather than being replaced, so a row's history is readable in one place. The 2026-08-18 audit (version 0.9.0) is the baseline; the 2026-08-19 audit (version 0.10.0) revised the rows marked with a `0.10:` prefix; this audit adds or revises the rows marked `0.11:`, `0.11.1:`, `0.11.2:`, `0.12.1:`, `0.12.2:`, `0.12.3:`, `0.12.4:`, `0.12.5:`, `0.12.6:`, `0.12.7:`, `0.12.8:`, `0.12.9:`, `0.12.10:`, `0.12.11:`, `0.12.12:`, `0.12.20:`, `0.12.22:`, `0.12.23:`, `0.12.24:`, `0.12.25:`, `0.12.26:`, `0.12.27:`, `0.12.28:`, `0.12.29:`, `0.12.30:`, `0.12.31:`, `0.12.32:`, `0.12.33:`, `0.12.34:`, `0.12.35:`, `0.12.37:`, `0.12.38:`, `0.12.45:`, `0.12.46:`, `0.12.48:`, `0.12.50:`, `0.12.58:`, and `0.12.59:`. An unmarked row describes the 0.9 baseline carried forward unless a later entry says otherwise.
 
 Version 0.11 covers two bodies of work:
 
@@ -280,7 +289,7 @@ Version 0.12.3 is a live-found recovery and acceptance-integrity patch:
 Version 0.12.4 is a Windows helper-lifecycle and acceptance-integrity patch found by the exact 0.12.3 candidate run:
 
 14. **No-console shutdown is not a stop request** — Windows acceptance launches the supervisor with `CREATE_NO_WINDOW`, so a console signal handler may be unavailable. A failed `tokio::signal::ctrl_c()` registration now logs once and stays pending instead of selecting the shutdown branch, terminating the worker, or exiting the supervisor. One pinned shutdown future is reused across worker polling and restart backoff; deterministic tests prove success completes and registration failure remains pending.
-15. **Protocol-bound worker readiness** — the helper hello now requires a nonzero OS `processId`. Windows acceptance binds that authenticated PID to exactly one direct child using the canonical helper image path, verifies the interactive Windows session, requires the same protocol session and PID across consecutive polls, then completes a read-only `computer.status` round trip. Unrelated children are ignored; multiple exact-image workers, supervisor exit, Toolhelp/image-query failures, PID/session mismatch, and timeout fail closed with sanitized, stage-labelled topology transition history. The generic wait no longer catches and erases arbitrary exceptions. Both Windows CI and release jobs parse the live runner, compile its embedded C# under Windows PowerShell 5.1 and PowerShell Core, and exercise exact parent/image/session lookup plus suspended Job-owned launch, resume, termination, and accounting before live acceptance.
+15. **Protocol-bound worker readiness** — the helper hello requires nonzero OS `processId` and `controllerProcessId` values. Windows acceptance binds the controller identity to the exact launched supervisor, binds the authenticated worker PID through its exact live helper image path and interactive session, requires the same protocol/controller/worker tuple across consecutive polls, then completes a read-only `computer.status` round trip. Toolhelp enumeration remains a conflict detector: multiple exact-image children or one that disagrees with the authenticated worker fail closed, while an empty redundant snapshot cannot erase the authenticated live-image/session binding. Supervisor exit, image-query failures, PID/session mismatch, and timeout fail closed with sanitized, stage-labelled topology history. The generic wait no longer catches and erases arbitrary exceptions. Both Windows CI and release jobs parse the live runner, compile its embedded C# under Windows PowerShell 5.1 and PowerShell Core, and exercise exact image/session lookup plus suspended Job-owned launch, resume, termination, and accounting before live acceptance.
 
 Version 0.12.5 is an acceptance-runner correctness patch found by the exact 0.12.4 Windows run:
 
@@ -294,7 +303,7 @@ Version 0.12.7 is an acceptance-authority repair found by the exact 0.12.6 Windo
 
 18. **Click-bound Windows foreground arming** — fixture readiness no longer treats `Shown`, `TopMost`, or an unchecked WinForms `Activate()` callback as proof of the global foreground. Only after helper topology, recovery-event readiness, and exact target selection does the runner post a fresh test-only `WM_APP` generation to the exact sentinel. Before prompting the operator, it separately waits for a bounded delivery receipt proving that exact generation was processed once, the button is enabled, the same-thread fixture-owned root/button topology still holds, and input is either untouched or already one internally consistent acknowledgement. Accepting the latter avoids rejecting a valid click made as soon as the button visibly enables; the prompt explicitly says not to click again if the button already says **ARMED**. The button accepts mouse down only while `GetForegroundWindow` equals the sentinel and the sentinel UI thread's `GetFocus` equals the exact button; focus loss, deactivation, or a new generation clears the pending press. Mouse up must repeat the exact generation, button, point, foreground, and focus checks before acknowledgement, and total left-down/up attempts must each remain exactly one through final invariants. The runner then requires three consecutive direct native samples with stable foreground, focus, OS-global cursor position, and input desktop plus exact equality at the arm-to-baseline recapture. Persistent cursor motion resets stability and eventually reaches the bounded timeout; missing clicks, stale acknowledgements, duplicate counts, focus mismatch, unavailable probes, and timeout fail closed. The proof retains only generations, counts, equality/availability booleans, and sample totals—never raw window handles or cursor coordinates. No `SetForegroundWindow`, `AttachThreadInput`, `SendInput`, synthetic Alt key, automatic click, or focus-stealing loop was added. A trusted human or separately authorized Computer Use surface performs the one explicit setup click, then must stop interacting while product actions run. This is an acceptance receipt inside a trusted interactive session, not cryptographic provenance of physical input; untrusted same-integrity window-message injectors are outside that evidence boundary.
 
-The fixture increments a monotonic state-publication generation on every state write. Each accepted arm sample must use a newer publication than the delivery receipt and the prior accepted sample; the baseline must use a further publication, and every later invariant comparison advances a run-global publication boundary. A stalled or replayed valid JSON snapshot therefore cannot satisfy stability or hide a later duplicate request/click. After arming, the runner also re-binds the original authenticated helper session and PID to the same exact-image direct child and completes another `computer.status` round trip before the first baseline observation. A fixture writer stall or helper restart during the human wait fails closed before any observation, capture/share, input, or other effectful product action; the earlier protocol-binding `computer.status` is deliberately read-only.
+The fixture increments a monotonic state-publication generation on every state write. Each accepted arm sample must use a newer publication than the delivery receipt and the prior accepted sample; the baseline must use a further publication, and every later invariant comparison advances a run-global publication boundary. A stalled or replayed valid JSON snapshot therefore cannot satisfy stability or hide a later duplicate request/click. After arming, the runner also re-binds the original authenticated helper session, controller PID, worker PID, exact live image, and interactive session and completes another `computer.status` round trip before the first baseline observation. A fixture writer stall or helper restart during the human wait fails closed before any observation, capture/share, input, or other effectful product action; the earlier protocol-binding `computer.status` is deliberately read-only.
 
 Version 0.12.8 made the click-bound Windows boundary observable to an
 asynchronous coordinator. The sentinel initially showed without activation,
