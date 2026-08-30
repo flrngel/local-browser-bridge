@@ -169,7 +169,7 @@ $ProgressPreference = "SilentlyContinue"
 $Repository = "flrngel/local-browser-bridge"
 $Origin = "https://github.com/$Repository.git"
 $WorkflowPath = ".github/workflows/deploy.yml"
-$ProductVersion = "0.12.63"
+$ProductVersion = "0.12.64"
 $WorkflowRef = "refs/heads/main"
 $MaximumCandidateBytes = [int64]536870912
 
@@ -1111,7 +1111,7 @@ if ($Version -cne $ProductVersion -or $Version -cnotmatch '^[0-9]+\.[0-9]+\.[0-9
     $WorkflowRunAttempt -cnotmatch '^[1-9][0-9]*$' -or
     $ArtifactId -cnotmatch '^[1-9][0-9]*$' -or
     $SourceSha -cnotmatch '^[0-9a-f]{40}$') {
-  throw "Candidate identifiers are not canonical v0.12.63 identifiers."
+  throw "Candidate identifiers are not canonical v0.12.64 identifiers."
 }
 $Tag = "v$Version"
 $ExpectedInvocationUri = "https://github.com/$Repository/actions/runs/$WorkflowRunId/attempts/$WorkflowRunAttempt"

@@ -38,6 +38,12 @@ const CAPTURE_STOP_EXIT_CODE: i32 = 71;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 const TRANSPORT_EXIT_CODE: i32 = 72;
 const OUTCOME_UNKNOWN_EXIT_CODE: i32 = 73;
+// A frame that already spent substantial time in capture, semantic discovery,
+// and PNG conversion needs one bounded command-admission opportunity before
+// the next serialized share pump can take the controller again. This preserves
+// the three-second frame lease instead of extending stale visual authority.
+const AGED_SHARE_FRAME_THRESHOLD_MS: f64 = 1_000.0;
+const AGED_SHARE_ACTION_GRACE: Duration = Duration::from_millis(500);
 
 #[cfg(target_os = "windows")]
 const SUPERVISOR_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -868,6 +874,7 @@ async fn run_authenticated_session(
     let mut active: Option<ActiveCommand> = None;
     let (completion_tx, mut completion_rx) = mpsc::unbounded_channel();
     let mut active_share_pump: Option<ActiveSharePump> = None;
+    let mut next_share_pump_not_before = tokio::time::Instant::now();
     let (share_pump_tx, mut share_pump_rx) = mpsc::unbounded_channel::<SharePumpCompletion>();
     loop {
         let command_deadline = active.as_ref().and_then(|command| command.deadline);
@@ -937,6 +944,10 @@ async fn run_authenticated_session(
                 let Some(completion) = completion else { break };
                 active_share_pump.take();
                 let emissions = completion.emissions;
+                if aged_share_frame_emitted(&emissions) {
+                    next_share_pump_not_before =
+                        tokio::time::Instant::now() + AGED_SHARE_ACTION_GRACE;
+                }
                 let fatal_capture_stop = emissions.iter().any(|(name, data)| {
                     *name == "computer.share.error"
                         && data.get("code").and_then(Value::as_str)
@@ -1172,13 +1183,15 @@ async fn run_authenticated_session(
                 );
             }
             _ = share_tick.tick() => {
-                dispatch_share_pump(
-                    &controller,
-                    &mut pending_share_acks,
-                    &mut active_share_pump,
-                    &share_pump_tx,
-                    active.is_some() || !pending.is_empty(),
-                );
+                if tokio::time::Instant::now() >= next_share_pump_not_before {
+                    dispatch_share_pump(
+                        &controller,
+                        &mut pending_share_acks,
+                        &mut active_share_pump,
+                        &share_pump_tx,
+                        active.is_some() || !pending.is_empty(),
+                    );
+                }
             }
         }
     }
@@ -1217,6 +1230,17 @@ struct ActiveSharePump {
 
 struct SharePumpCompletion {
     emissions: Vec<(&'static str, Value)>,
+}
+
+fn aged_share_frame_emitted(emissions: &[(&'static str, Value)]) -> bool {
+    emissions.iter().any(|(name, data)| {
+        *name == "computer.share.frame"
+            && data
+                .get("frame")
+                .and_then(|frame| frame.get("captureAgeMs"))
+                .and_then(Value::as_f64)
+                .is_some_and(|age| age.is_finite() && age >= AGED_SHARE_FRAME_THRESHOLD_MS)
+    })
 }
 
 fn command_key(message: &Value) -> Option<CommandKey> {
@@ -1943,6 +1967,31 @@ mod tests {
             .unwrap();
         assert_eq!(completion.key.id, "queued-behind-share");
         assert_eq!(completion.result.unwrap_err().code, "COMPUTER_CANCELED");
+    }
+
+    #[test]
+    fn only_aged_published_share_frames_open_the_action_grace() {
+        let aged = vec![(
+            "computer.share.frame",
+            json!({ "frame": { "captureAgeMs": 1_784.713 } }),
+        )];
+        let fresh = vec![(
+            "computer.share.frame",
+            json!({ "frame": { "captureAgeMs": 999.999 } }),
+        )];
+        let non_frame = vec![(
+            "computer.share.error",
+            json!({ "frame": { "captureAgeMs": 10_000.0 } }),
+        )];
+        let malformed = vec![(
+            "computer.share.frame",
+            json!({ "frame": { "captureAgeMs": "1784" } }),
+        )];
+
+        assert!(aged_share_frame_emitted(&aged));
+        assert!(!aged_share_frame_emitted(&fresh));
+        assert!(!aged_share_frame_emitted(&non_frame));
+        assert!(!aged_share_frame_emitted(&malformed));
     }
 
     #[tokio::test]
