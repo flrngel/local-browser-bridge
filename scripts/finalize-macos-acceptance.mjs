@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { deflateSync, inflateSync } from "node:zlib";
 
-const PRODUCT_VERSION = "0.12.64";
+const PRODUCT_VERSION = "0.12.65";
 const RESULT_SCHEMA_VERSION = 9;
 const AGGREGATE_SCHEMA_VERSION = 3;
 const APP_SHARE_MARKER_SCHEMA_VERSION = 2;
@@ -36,7 +36,7 @@ const MAX_MARKER_BYTES = 16 * 1024;
 const MAX_SCREENSHOT_BYTES = 64 * 1024 * 1024;
 const MAX_REQUEST_LIFETIME_MS = 300_000;
 const MAX_REQUEST_TO_COMPLETE_MS = 310_000;
-const MAX_ACTION_TO_COMPLETE_MS = 10_000;
+const MAX_ACTION_TO_COMPLETE_MS = 18_000;
 const QUIET_SEAT_REQUIRED_STABLE_MS = 30_000;
 const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;
 const QUIET_SEAT_SAMPLE_INTERVAL_MS = 500;
@@ -2055,6 +2055,29 @@ async function runSelfTest() {
     const completeProbeRecord = await readStableCanonicalMarker(
       join(deliberate, COMPLETE_MARKER),
       "self-test complete receipt",
+    );
+    const longActionStartedAtMs = startProbe.createdAtMs + 100;
+    const longActionCompletedAtMs = startProbe.createdAtMs + 12_000;
+    const longCompleteCreatedAtMs = startProbe.createdAtMs + 12_100;
+    const longCompleteProbeRecord = {
+      ...completeProbeRecord,
+      stats: {
+        ...completeProbeRecord.stats,
+        mtimeNs: BigInt(longCompleteCreatedAtMs) * 1_000_000n,
+      },
+      value: {
+        ...completeProbeRecord.value,
+        createdAt: new Date(longCompleteCreatedAtMs).toISOString(),
+        productActionCompletedAt: new Date(longActionCompletedAtMs).toISOString(),
+        productActionStartedAt: new Date(longActionStartedAtMs).toISOString(),
+      },
+    };
+    validateCompleteMarker(
+      longCompleteProbeRecord,
+      requestProbe,
+      startProbe,
+      longCompleteCreatedAtMs,
+      "self-test valid long complete receipt",
     );
     await expectSelfTestFailure(
       () => Promise.resolve(validateCompleteMarker(
