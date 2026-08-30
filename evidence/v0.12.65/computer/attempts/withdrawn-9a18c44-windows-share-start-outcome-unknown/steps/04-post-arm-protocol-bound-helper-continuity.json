@@ -1,0 +1,126 @@
+{
+    "result":  {
+                   "architecture":  "x86_64",
+                   "backend":  "background-window/uia+win32-messages+wgc-stream",
+                   "frameReady":  false,
+                   "inputReady":  true,
+                   "invariants":  {
+                                      "activatesTargetApplication":  false,
+                                      "exactWindowRequired":  true,
+                                      "foregroundIdentityPreservedBeforeAfter":  true,
+                                      "globalHidInput":  false,
+                                      "hardwareCursorPreservedBeforeAfter":  true,
+                                      "hardwareCursorSampleAuthoritative":  false,
+                                      "implicitForegroundFallback":  false,
+                                      "inputDeliveryProvenanceRequired":  true,
+                                      "movesHardwareCursor":  false,
+                                      "switchesActiveSpace":  false,
+                                      "targetActivationMode":  "no-explicit-target-activation-api",
+                                      "usesAxRaise":  false,
+                                      "usesFrontProcessSwitch":  false,
+                                      "zeroTransientInterruptionGuaranteed":  false
+                                  },
+                   "isolation":  "shared-user-session/target-routed",
+                   "limitations":  [
+                                       "UI Automation is preferred for Chromium, WPF, WinUI, and native controls",
+                                       "Pixel-only events use Win32 messages; games, elevated windows, and protected content can refuse them",
+                                       "Unsupported controls fail rather than falling back to global input injection or foreground activation",
+                                       "Raw Input and low-level pointer epochs retain no input contents or device identity and cannot distinguish every virtual or remote source",
+                                       "Windows exposes no continuous low-level hook health query; monitor health means bounded setup and sample readability only"
+                                   ],
+                   "platform":  "windows",
+                   "pointer":  {
+                                   "action":  "idle",
+                                   "buttonsMask":  0,
+                                   "coordinateSpace":  "image-pixels",
+                                   "headingDegrees":  45.0,
+                                   "id":  "7abe96b6-5d4f-4027-b185-91b9e3ea9cfc",
+                                   "imageX":  null,
+                                   "imageY":  null,
+                                   "pressed":  false,
+                                   "revision":  0,
+                                   "screenX":  null,
+                                   "screenY":  null,
+                                   "sequence":  0,
+                                   "style":  {
+                                                 "fill":  "#B8F55D",
+                                                 "hotspot":  "tip",
+                                                 "logicalSize":  42,
+                                                 "outline":  "#FFFFFF",
+                                                 "theme":  "lbb.session-pointer.v1"
+                                             },
+                                   "updatedAt":  "2026-08-30T02:23:43.8217358Z",
+                                   "visible":  false,
+                                   "windowId":  null
+                               },
+                   "semanticReady":  true,
+                   "sessionMode":  "background-window",
+                   "share":  {
+                                 "active":  false
+                             },
+                   "windowCount":  10
+               },
+    "error":  null,
+    "taxonomy":  null,
+    "callId":  "windows-fixture-9199a00deea145f8839f985b6b7eea70",
+    "targetState":  {
+                        "computerConnected":  true,
+                        "computer":  {
+                                         "architecture":  "x86_64",
+                                         "backend":  "background-window/uia+win32-messages+wgc-stream",
+                                         "capabilities":  [
+                                                              "computer.status",
+                                                              "computer.share.start",
+                                                              "computer.share.status",
+                                                              "computer.share.stop",
+                                                              "computer.observe",
+                                                              "computer.move",
+                                                              "computer.click",
+                                                              "computer.drag",
+                                                              "computer.scroll",
+                                                              "computer.typeText",
+                                                              "computer.key",
+                                                              "computer.invoke",
+                                                              "computer.setValue",
+                                                              "computer.share.ack",
+                                                              "computer.capture.native-stream.v1",
+                                                              "computer.input-delivery-provenance.v1",
+                                                              "computer.pointer-activity-monitor.v1"
+                                                          ],
+                                         "compatible":  true,
+                                         "connectedAt":  "2026-08-30T02:23:43.8343565Z",
+                                         "controllerProcessId":  12116,
+                                         "inputReady":  true,
+                                         "invariants":  {
+                                                            "activatesTargetApplication":  false,
+                                                            "exactWindowRequired":  true,
+                                                            "foregroundIdentityPreservedBeforeAfter":  true,
+                                                            "globalHidInput":  false,
+                                                            "hardwareCursorPreservedBeforeAfter":  true,
+                                                            "hardwareCursorSampleAuthoritative":  false,
+                                                            "implicitForegroundFallback":  false,
+                                                            "inputDeliveryProvenanceRequired":  true,
+                                                            "movesHardwareCursor":  false,
+                                                            "switchesActiveSpace":  false,
+                                                            "targetActivationMode":  "no-explicit-target-activation-api",
+                                                            "usesAxRaise":  false,
+                                                            "usesFrontProcessSwitch":  false,
+                                                            "zeroTransientInterruptionGuaranteed":  false
+                                                        },
+                                         "isolation":  "shared-user-session/target-routed",
+                                         "platform":  "windows",
+                                         "processId":  4220,
+                                         "protocolVersion":  1,
+                                         "semanticReady":  true,
+                                         "sessionId":  "0f837b8a-0ebd-4d78-a779-b0af62bfb1ce",
+                                         "sessionMode":  "background-window",
+                                         "share":  {
+                                                       "active":  false,
+                                                       "reason":  "inactive",
+                                                       "stopped":  false
+                                                   },
+                                         "version":  "0.12.65"
+                                     },
+                        "computerObservation":  null
+                    }
+}
