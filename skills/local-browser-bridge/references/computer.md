@@ -126,7 +126,15 @@ share, target, pointer, and geometry bindings. This scheduling interval keeps a
 new conversion from consuming the caller's remaining lease; it does not extend
 or renew frame authority.
 
-The exact v0.12.23 deliberate-concurrency run demonstrated this refusal boundary without weakening it: its app-share start receipt and 89/89 completed assertions passed, but the harness reused a pre-handoff frame after 43.807 seconds and the helper returned HTTP 409 `COMPUTER_STALE_FRAME` before dispatch. Version 0.12.24 retained the three-second helper lease and added a release-harness wait, within the already reserved handoff deadline, for a strictly newer streamed frame whose share ID, exact target, and complete window/image geometry match the pre-refresh authority; only that successor may derive the product click. Version 0.12.64 retains that contract. A timeout or mismatch fails closed; there is no retry with the stale frame and no relaxed helper freshness limit.
+The exact v0.12.23 deliberate-concurrency run demonstrated this refusal boundary without weakening it: its app-share start receipt and 89/89 completed assertions passed, but the harness reused a pre-handoff frame after 43.807 seconds and the helper returned HTTP 409 `COMPUTER_STALE_FRAME` before dispatch. Version 0.12.24 retained the three-second helper lease and added a release-harness wait, within the already reserved handoff deadline, for a strictly newer streamed frame whose share ID, exact target, and complete window/image geometry match the pre-refresh authority; only that successor may derive the product click. Version 0.12.65 retains that contract. A timeout or mismatch fails closed; there is no retry with the stale frame and no relaxed helper freshness limit.
+
+The macOS exact-app handoff reserves 18 seconds from its create-once start
+receipt through product action and create-once completion receipt. The app,
+runner, read-only watcher, receipt reader, and aggregate finalizer enforce that
+same bound. Receipt identity, request/start hashes, exact prompt process,
+canonical timestamp order, disabled-button state, and shared-seat invariants
+remain mandatory; aligning the deadline does not authorize retries or accept a
+late, changed, or copied receipt.
 
 The helper re-enumerates the exact `(pid, native window id)` target before input and returns `COMPUTER_STALE_FRAME` if identity or geometry changed. macOS keyboard eligibility uses an independent all-window inventory, requires a known on-screen exact owner/layer/geometry row and a non-minimized AX top-level mapping, and does not treat same-PID sibling count as receiver authority. ScreenCaptureKit can add a same-PID layer-0 `AXDialog` for its title-bar indicator, so dispatch instead requires the app's exact `AXFocusedWindow`; text also requires the focused element to resolve to that window.
 

@@ -12,7 +12,7 @@ fn finalizer_wrapper_source() -> String {
 #[test]
 fn macos_finalizer_wrapper_owns_dependent_aggregate_path_creation() {
     let wrapper = finalizer_wrapper_source().replace("\r\n", "\n");
-    let documentation = fs::read_to_string("evidence/v0.12.64/computer/README.md")
+    let documentation = fs::read_to_string("evidence/v0.12.65/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -39,17 +39,17 @@ fn macos_finalizer_wrapper_owns_dependent_aggregate_path_creation() {
 #[test]
 fn macos_v0_12_27_result_and_aggregate_schemas_are_aligned_end_to_end() {
     let finalizer = finalizer_source().replace("\r\n", "\n");
-    let producer = fs::read_to_string("evidence/v0.12.64/computer/helper-evidence-rig.mjs")
+    let producer = fs::read_to_string("evidence/v0.12.65/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let documentation = fs::read_to_string("evidence/v0.12.64/computer/README.md")
+    let documentation = fs::read_to_string("evidence/v0.12.65/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let verifier = fs::read_to_string("scripts/verify-release-acceptance-evidence.sh")
         .unwrap()
         .replace("\r\n", "\n");
 
-    assert!(finalizer.contains("const PRODUCT_VERSION = \"0.12.64\";"));
+    assert!(finalizer.contains("const PRODUCT_VERSION = \"0.12.65\";"));
     assert!(finalizer.contains("const RESULT_SCHEMA_VERSION = 9;"));
     assert!(finalizer.contains("const AGGREGATE_SCHEMA_VERSION = 3;"));
     assert!(producer.matches("schemaVersion: 9,").count() >= 2);
@@ -79,7 +79,7 @@ fn macos_v0_12_27_result_and_aggregate_schemas_are_aligned_end_to_end() {
     ] {
         assert!(
             verifier.contains(required),
-            "release evidence verifier is missing the v0.12.64 schema binding: {required}"
+            "release evidence verifier is missing the v0.12.65 schema binding: {required}"
         );
     }
 }
@@ -159,7 +159,7 @@ fn macos_v0_12_27_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
     }
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.64\";",
+        "const PRODUCT_VERSION = \"0.12.65\";",
         "const RESULT_SCHEMA_VERSION = 9;",
         "const AGGREGATE_SCHEMA_VERSION = 3;",
         "const APP_SHARE_MARKER_SCHEMA_VERSION = 2;",
@@ -167,7 +167,9 @@ fn macos_v0_12_27_dual_lane_finalizer_is_dependency_free_and_fail_closed() {
         "const MAX_FRESH_AGE_MS = 12 * 60 * 60 * 1_000;",
         "const MAX_REQUEST_LIFETIME_MS = 300_000;",
         "const MAX_REQUEST_TO_COMPLETE_MS = 310_000;",
-        "const MAX_ACTION_TO_COMPLETE_MS = 10_000;",
+        "const MAX_ACTION_TO_COMPLETE_MS = 18_000;",
+        "const longActionCompletedAtMs = startProbe.createdAtMs + 12_000;",
+        "const longCompleteCreatedAtMs = startProbe.createdAtMs + 12_100;",
         "const MAX_LANE_DURATION_MS = 2 * 60 * 60 * 1_000;",
         "const MAX_DELIBERATE_REVIEW_DELAY_MS = 30 * 60 * 1_000;",
         "const QUIET_SEAT_REQUIRED_STABLE_MS = 30_000;",

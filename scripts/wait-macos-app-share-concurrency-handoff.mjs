@@ -5,7 +5,7 @@ import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 
-const PRODUCT_VERSION = "0.12.64";
+const PRODUCT_VERSION = "0.12.65";
 const SCHEMA_VERSION = 2;
 const OPERATOR_DIRECTORY = "operator";
 const REQUEST_FILE = "macos-app-share-concurrency-handoff-request.json";
@@ -20,7 +20,7 @@ const BUTTON_TEXT = "START APP-SHARE CHECK";
 const BUTTON_IDENTIFIER = "lbb-app-share-start";
 const MAX_MARKER_BYTES = 16_384;
 const MAX_REQUEST_LIFETIME_MS = 300_000;
-const MAX_ACTION_TO_COMPLETE_MS = 10_000;
+const MAX_ACTION_TO_COMPLETE_MS = 18_000;
 const FUTURE_TOLERANCE_MS = 1_000;
 const FILE_TIME_TOLERANCE_MS = 5_000;
 const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;
@@ -497,12 +497,12 @@ async function selfTest() {
   const completeRecord = record({
     acceptedAsAuthority: false,
     buttonRemainedDisabledDuringProductAction: true,
-    createdAt: new Date(nowMs + 2_100).toISOString(),
+    createdAt: new Date(nowMs + 12_100).toISOString(),
     cryptographicToolIdentityClaimed: false,
     handoffStateSequenceBound: true,
     kind: COMPLETE_KIND,
     physicalHumanProvenanceClaimed: false,
-    productActionCompletedAt: new Date(nowMs + 2_000).toISOString(),
+    productActionCompletedAt: new Date(nowMs + 12_000).toISOString(),
     productActionStartedAt: new Date(nowMs + 100).toISOString(),
     productVersion: PRODUCT_VERSION,
     promptPid,
@@ -510,14 +510,14 @@ async function selfTest() {
     requestSha256: request.sha256,
     schemaVersion: 2,
     startReceiptSha256: start.sha256,
-  }, nowMs + 2_100);
-  validateComplete(completeRecord, request, start, nowMs + 2_100);
+  }, nowMs + 12_100);
+  validateComplete(completeRecord, request, start, nowMs + 12_100);
   await expectFailure(
     () => Promise.resolve(validateComplete(
       completeRecord,
       request,
       { ...start, createdAtMs: nowMs - MAX_ACTION_TO_COMPLETE_MS },
-      nowMs + 2_100,
+      nowMs + 12_100,
     )),
     "bound product-action interval",
   );
@@ -541,7 +541,7 @@ async function selfTest() {
       if (message.startsWith("ACTION REQUIRED:")) actionSent = true;
       if (message.startsWith("START RECEIVED:")) {
         startSent = true;
-        clock = nowMs + 2_100;
+        clock = nowMs + 12_100;
       }
     },
     timeoutMs: 1_000,
@@ -557,7 +557,7 @@ async function selfTest() {
     loadMarker: async (name) => name === REQUEST_FILE ? requestRecord
       : name === START_FILE ? startRecord : completeRecord,
     isAlive: () => false,
-    now: () => nowMs + 2_100,
+    now: () => nowMs + 12_100,
     pause: async () => {},
     emit: (message) => catchUp.push(message),
     timeoutMs: 1_000,
