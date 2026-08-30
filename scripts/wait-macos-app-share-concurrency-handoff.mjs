@@ -5,7 +5,7 @@ import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 
-const PRODUCT_VERSION = "0.12.63";
+const PRODUCT_VERSION = "0.12.64";
 const SCHEMA_VERSION = 2;
 const OPERATOR_DIRECTORY = "operator";
 const REQUEST_FILE = "macos-app-share-concurrency-handoff-request.json";

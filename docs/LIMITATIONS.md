@@ -74,7 +74,7 @@ not proof that an unobserved transient state never existed. The ledger records a
 was never tagged or published. The bounded observation and its limitations are
 preserved in the immutable [v0.12.34 negative-evidence commit](https://github.com/flrngel/local-browser-bridge/tree/aef8fc68018cdb6181ad3d0886acf4e71fcda96d/evidence/v0.12.34/computer/attempts/withdrawn-2509567-windows-pre-coordinator-interruption).
 
-Version 0.12.63 is the current source and schema-3 release-pipeline target. It
+Version 0.12.64 is the current source and schema-3 release-pipeline target. It
 retains the breakaway-enabled coordinator Job and atomic private Job-list child
 creation, but delays the persistent boundary until private staging and
 configuration verification, detached-worker Job binding and guard-ownership
@@ -86,6 +86,17 @@ publication; only the immutable
 [v0.12.37 GitHub Release](https://github.com/flrngel/local-browser-bridge/releases/tag/v0.12.37)
 and its bound evidence receipt can establish that the gate later passed. See
 the [Windows acceptance source-gate record](WINDOWS_ACCEPTANCE_HANDOFF.md).
+
+The exact v0.12.63 candidate passed the 207-check macOS quiet lane and its
+visual review. Its deliberate lane completed the single exact-app-share action
+with a quiet shared input seat and selected a newer same-share frame at
+1,784.713 milliseconds estimated age. A new serialized share conversion then
+held the helper controller until that frame exceeded the unchanged three-second
+lease, and the click failed closed with HTTP 409 `COMPUTER_STALE_FRAME` before
+dispatch could be classified. The candidate was not retried and never reached
+Windows or publication. Version 0.12.64 reserves a bounded action-admission
+interval after publishing an already-aged share frame; it does not extend the
+lease or weaken exact target binding.
 
 The exact v0.12.47 candidate passed both packaged macOS lanes and mandatory
 visual review, but its coordinator supplied an empty aggregate output path
@@ -145,7 +156,7 @@ The exact v0.12.62 candidate passed both fresh macOS lanes, but its sole Windows
 attempt retained only the persistent `reserved-no-retry` record. No matching
 coordinator, terminal result, evidence directory, candidate process, listener,
 or stock-Chrome record survived, so the protocol classifies the attempt as
-`candidate-execution-unknown`. Version 0.12.63 carries the same product fix with
+`candidate-execution-unknown`. Version 0.12.64 carries the same product fix with
 fresh package, candidate, reservation, and acceptance identity; no v0.12.62
 artifact or result is reusable.
 

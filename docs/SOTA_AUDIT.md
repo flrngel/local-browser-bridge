@@ -43,8 +43,8 @@ them to name the current attempt. Its exact
 was preserved and the attempt was canceled. Neither attempt reached Windows,
 stock Chrome, or a public Release.
 
-Audit date: 2026-08-29. Implementation target: version 0.12.63.
-**Current-behavior scope:** this document describes the 0.12.63 source and
+Audit date: 2026-08-29. Implementation target: version 0.12.64.
+**Current-behavior scope:** this document describes the 0.12.64 source and
 schema-3 release pipeline, and labels release or live evidence separately; it
 does not promote source contracts, workflow structure, or non-product Windows
 SelfTest results into a packaged-platform claim. The evidence chain includes
@@ -115,7 +115,7 @@ the deliberate runner before candidate execution. Version 0.12.59 retained the
 Windows repair but exposed the path-alias boundary described below. Version
 0.12.60 repaired that boundary, passed both macOS lanes and the Windows
 foreground arm, and then exposed the WGC/QPC conversion boundary described
-below. Version 0.12.63 requires fresh candidate and acceptance bytes.
+below. Version 0.12.64 requires fresh candidate and acceptance bytes.
 
 **0.12.27 SOTA marker:** product, protocol, and platform behavior were unchanged from v0.12.26. Release-candidate attestation selection required every returned statement to be well formed and bind the same run, source, tag, workflow, GitHub-hosted runner, and exact subject, with exactly one statement bound to the current attempt. Local deployment also became atomic over one exact five-file set.
 
@@ -298,10 +298,18 @@ The exact v0.12.62 Windows attempt retained a schema-2 `reserved-no-retry`
 record but no matching coordinator, terminal result, evidence directory,
 candidate process, listener, or stock-Chrome record. It is terminal
 `candidate-execution-unknown` and cannot be retried. **0.12.63 SOTA marker:**
-the product behavior is unchanged from the reviewed v0.12.62 fix, but every
-package, reservation, and acceptance identity is fresh.
+the product behavior was unchanged from the reviewed v0.12.62 fix, but every
+package, reservation, and acceptance identity was fresh. Its macOS quiet lane
+passed; the deliberate lane then exposed an action-starvation race in the
+serialized share pump and was withdrawn without retry.
 
-Earlier audits stay in this document rather than being replaced, so a row's history is readable in one place. The 2026-08-18 audit (version 0.9.0) is the baseline; the 2026-08-19 audit (version 0.10.0) revised the rows marked with a `0.10:` prefix; this audit adds or revises the rows marked `0.11:`, `0.11.1:`, `0.11.2:`, `0.12.1:`, `0.12.2:`, `0.12.3:`, `0.12.4:`, `0.12.5:`, `0.12.6:`, `0.12.7:`, `0.12.8:`, `0.12.9:`, `0.12.10:`, `0.12.11:`, `0.12.12:`, `0.12.20:`, `0.12.22:`, `0.12.23:`, `0.12.24:`, `0.12.25:`, `0.12.26:`, `0.12.27:`, `0.12.28:`, `0.12.29:`, `0.12.30:`, `0.12.31:`, `0.12.32:`, `0.12.33:`, `0.12.34:`, `0.12.35:`, `0.12.37:`, `0.12.38:`, `0.12.45:`, `0.12.46:`, `0.12.48:`, `0.12.50:`, `0.12.58:`, `0.12.59:`, `0.12.60:`, `0.12.61:`, `0.12.62:`, and `0.12.63:`. An unmarked row describes the 0.9 baseline carried forward unless a later entry says otherwise.
+**0.12.64 SOTA marker:** an emitted share frame whose capture/semantic/PNG work
+already consumed at least one second gets one bounded 500 ms command-admission
+interval before another share pump can acquire the controller. This schedules
+the caller's opportunity without extending the unchanged three-second frame
+lease or relaxing share, target, pointer, or geometry binding.
+
+Earlier audits stay in this document rather than being replaced, so a row's history is readable in one place. The 2026-08-18 audit (version 0.9.0) is the baseline; the 2026-08-19 audit (version 0.10.0) revised the rows marked with a `0.10:` prefix; this audit adds or revises the rows marked `0.11:`, `0.11.1:`, `0.11.2:`, `0.12.1:`, `0.12.2:`, `0.12.3:`, `0.12.4:`, `0.12.5:`, `0.12.6:`, `0.12.7:`, `0.12.8:`, `0.12.9:`, `0.12.10:`, `0.12.11:`, `0.12.12:`, `0.12.20:`, `0.12.22:`, `0.12.23:`, `0.12.24:`, `0.12.25:`, `0.12.26:`, `0.12.27:`, `0.12.28:`, `0.12.29:`, `0.12.30:`, `0.12.31:`, `0.12.32:`, `0.12.33:`, `0.12.34:`, `0.12.35:`, `0.12.37:`, `0.12.38:`, `0.12.45:`, `0.12.46:`, `0.12.48:`, `0.12.50:`, `0.12.58:`, `0.12.59:`, `0.12.60:`, `0.12.61:`, `0.12.62:`, `0.12.63:`, and `0.12.64:`. An unmarked row describes the 0.9 baseline carried forward unless a later entry says otherwise.
 
 Version 0.11 covers two bodies of work:
 
