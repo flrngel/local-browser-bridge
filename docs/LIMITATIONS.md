@@ -74,7 +74,7 @@ not proof that an unobserved transient state never existed. The ledger records a
 was never tagged or published. The bounded observation and its limitations are
 preserved in the immutable [v0.12.34 negative-evidence commit](https://github.com/flrngel/local-browser-bridge/tree/aef8fc68018cdb6181ad3d0886acf4e71fcda96d/evidence/v0.12.34/computer/attempts/withdrawn-2509567-windows-pre-coordinator-interruption).
 
-Version 0.12.66 is the current source and schema-3 release-pipeline target. It
+Version 0.12.67 is the current source and schema-3 release-pipeline target. It
 retains the breakaway-enabled coordinator Job and atomic private Job-list child
 creation, but delays the persistent boundary until private staging and
 configuration verification, detached-worker Job binding and guard-ownership
@@ -103,9 +103,9 @@ observed the target postcondition with both shared-seat boundaries quiet. Its
 bound completion receipt arrived after 11,765 ms, inside the app and runner's
 18-second grace, but an inconsistent 10-second watcher/reader/finalizer bound
 rejected it. The candidate was not retried and did not reach Windows or
-publication. Version 0.12.66 aligns all completion-receipt boundaries at 18
-seconds; it does not weaken receipt identity, chronology, create-once, or
-shared-seat requirements.
+publication. Version 0.12.66 aligned all completion-receipt boundaries at 18
+seconds; it did not weaken receipt identity, chronology, create-once, or
+shared-seat requirements. Version 0.12.67 retains that repair.
 
 The exact v0.12.47 candidate passed both packaged macOS lanes and mandatory
 visual review, but its coordinator supplied an empty aggregate output path
@@ -165,7 +165,7 @@ The exact v0.12.62 candidate passed both fresh macOS lanes, but its sole Windows
 attempt retained only the persistent `reserved-no-retry` record. No matching
 coordinator, terminal result, evidence directory, candidate process, listener,
 or stock-Chrome record survived, so the protocol classifies the attempt as
-`candidate-execution-unknown`. Version 0.12.66 carries the same product fix with
+`candidate-execution-unknown`. Version 0.12.67 carries the same product fix with
 fresh package, candidate, reservation, and acceptance identity; no v0.12.62
 artifact or result is reusable.
 
@@ -213,6 +213,13 @@ The macOS helper has no reconnecting supervisor. Any intentional or unexpected l
 ### Windows
 
 The capture backend is project-owned Windows Graphics Capture using a `CreateFreeThreaded` frame pool on a dedicated MTA owner thread for an exact `(PID, HWND)`. It leaves the normal capture border setting under Windows control and does not request a borderless entitlement. The exact indicator or border depends on Windows version and policy.
+
+WGC owner readiness, first-frame readiness, and startup-only rollback share one
+absolute ten-second budget inside the helper's unchanged twelve-second command
+watchdog. Shutdown joins the owner only after it has confirmed exit; a driver or
+native validation call that remains blocked past the internal deadline leaves
+the unconfirmed thread to the disposable worker's termination boundary and
+returns a fatal capture-stop result so a fresh helper session is required.
 
 The Windows transport currently requests SDR `B8G8R8A8UIntNormalized` frames and converts BGRA8 to PNG. [Microsoft recommends a full `R16G16B16A16_FLOAT` pipeline when HDR is enabled](https://learn.microsoft.com/en-us/windows/uwp/audio-video-camera/screen-capture); until that color-management path is implemented, HDR content can look washed out or clipped. This affects color fidelity, not the exact-window identity boundary.
 

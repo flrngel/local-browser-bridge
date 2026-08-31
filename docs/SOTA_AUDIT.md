@@ -43,8 +43,8 @@ them to name the current attempt. Its exact
 was preserved and the attempt was canceled. Neither attempt reached Windows,
 stock Chrome, or a public Release.
 
-Audit date: 2026-08-29. Implementation target: version 0.12.66.
-**Current-behavior scope:** this document describes the 0.12.66 source and
+Audit date: 2026-08-31. Implementation target: version 0.12.67.
+**Current-behavior scope:** this document describes the 0.12.67 source and
 schema-3 release pipeline, and labels release or live evidence separately; it
 does not promote source contracts, workflow structure, or non-product Windows
 SelfTest results into a packaged-platform claim. The evidence chain includes
@@ -115,7 +115,7 @@ the deliberate runner before candidate execution. Version 0.12.59 retained the
 Windows repair but exposed the path-alias boundary described below. Version
 0.12.60 repaired that boundary, passed both macOS lanes and the Windows
 foreground arm, and then exposed the WGC/QPC conversion boundary described
-below. Version 0.12.66 requires fresh candidate and acceptance bytes.
+below. Version 0.12.67 requires fresh candidate and acceptance bytes.
 
 **0.12.27 SOTA marker:** product, protocol, and platform behavior were unchanged from v0.12.26. Release-candidate attestation selection required every returned statement to be well formed and bind the same run, source, tag, workflow, GitHub-hosted runner, and exact subject, with exactly one statement bound to the current attempt. Local deployment also became atomic over one exact five-file set.
 
@@ -316,7 +316,25 @@ exposed an inconsistent 10-second consumer bound inside the producer's existing
 reader, and aggregate finalizer now share the same 18-second bound, with a
 source regression that accepts a valid action lasting more than ten seconds.
 
-Earlier audits stay in this document rather than being replaced, so a row's history is readable in one place. The 2026-08-18 audit (version 0.9.0) is the baseline; the 2026-08-19 audit (version 0.10.0) revised the rows marked with a `0.10:` prefix; this audit adds or revises the rows marked `0.11:`, `0.11.1:`, `0.11.2:`, `0.12.1:`, `0.12.2:`, `0.12.3:`, `0.12.4:`, `0.12.5:`, `0.12.6:`, `0.12.7:`, `0.12.8:`, `0.12.9:`, `0.12.10:`, `0.12.11:`, `0.12.12:`, `0.12.20:`, `0.12.22:`, `0.12.23:`, `0.12.24:`, `0.12.25:`, `0.12.26:`, `0.12.27:`, `0.12.28:`, `0.12.29:`, `0.12.30:`, `0.12.31:`, `0.12.32:`, `0.12.33:`, `0.12.34:`, `0.12.35:`, `0.12.37:`, `0.12.38:`, `0.12.45:`, `0.12.46:`, `0.12.48:`, `0.12.50:`, `0.12.58:`, `0.12.59:`, `0.12.60:`, `0.12.61:`, `0.12.62:`, `0.12.63:`, `0.12.64:`, and `0.12.66:`. An unmarked row describes the 0.9 baseline carried forward unless a later entry says otherwise.
+**0.12.67 SOTA marker:** The sole exact v0.12.66 candidate passed both packaged
+macOS lanes, then its
+one-shot Windows recovery suite's initial share start reached the helper's
+outer 12-second command watchdog. The WGC path still permitted owner readiness,
+first-frame readiness, and cleanup to exceed that outer bound, but the run
+retained no named injected-fault event or replacement-worker causality and
+therefore does not prove which startup phase stalled. It was withdrawn without
+Chrome, evidence publication, a tag, or a public Release. Version 0.12.67 gives
+those three phases one absolute 10-second budget; an unconfirmed owner is never
+joined past that deadline, and the disposable worker reports a fatal capture
+stop before the unchanged outer watchdog. Its recovery gate starts the fault-bound
+HTTP request asynchronously, observes the exact kernel event first, latches the
+first replacement session and time, and requires at least 11.5 seconds from
+event observation to replacement. Exact success, post-fault 504
+`COMMAND_OUTCOME_UNKNOWN`, and true pre-response transport loss remain distinct
+receipt classes; a command-watchdog response cannot substitute for elapsed
+live-share-pump causality.
+
+Earlier audits stay in this document rather than being replaced, so a row's history is readable in one place. The 2026-08-18 audit (version 0.9.0) is the baseline; the 2026-08-19 audit (version 0.10.0) revised the rows marked with a `0.10:` prefix; this audit adds or revises the rows marked `0.11:`, `0.11.1:`, `0.11.2:`, `0.12.1:`, `0.12.2:`, `0.12.3:`, `0.12.4:`, `0.12.5:`, `0.12.6:`, `0.12.7:`, `0.12.8:`, `0.12.9:`, `0.12.10:`, `0.12.11:`, `0.12.12:`, `0.12.20:`, `0.12.22:`, `0.12.23:`, `0.12.24:`, `0.12.25:`, `0.12.26:`, `0.12.27:`, `0.12.28:`, `0.12.29:`, `0.12.30:`, `0.12.31:`, `0.12.32:`, `0.12.33:`, `0.12.34:`, `0.12.35:`, `0.12.37:`, `0.12.38:`, `0.12.45:`, `0.12.46:`, `0.12.48:`, `0.12.50:`, `0.12.58:`, `0.12.59:`, `0.12.60:`, `0.12.61:`, `0.12.62:`, `0.12.63:`, `0.12.64:`, `0.12.66:`, and `0.12.67:`. An unmarked row describes the 0.9 baseline carried forward unless a later entry says otherwise.
 
 Version 0.11 covers two bodies of work:
 
