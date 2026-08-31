@@ -354,6 +354,7 @@ pub fn classify(legacy_code: &str) -> Taxonomy {
         | "COMPUTER_UNSUPPORTED_PLATFORM"
         | "COMPUTER_BACKGROUND_UNAVAILABLE"
         | "COMPUTER_SEMANTIC_UNAVAILABLE"
+        | "COMPUTER_HELPER_WATCHDOG"
         | "COMPUTER_SHARE_SESSION_EXHAUSTED"
         | "NO_SCREENSHOT"
         | "NO_COMPUTER_SCREENSHOT" => TaxonomyCode::Unavailable,
@@ -529,6 +530,7 @@ pub(crate) const LEGACY_CODES: &[(&str, TaxonomyCode)] = &[
     ("COMPUTER_UNSUPPORTED_PLATFORM", TaxonomyCode::Unavailable),
     ("COMPUTER_BACKGROUND_UNAVAILABLE", TaxonomyCode::Unavailable),
     ("COMPUTER_SEMANTIC_UNAVAILABLE", TaxonomyCode::Unavailable),
+    ("COMPUTER_HELPER_WATCHDOG", TaxonomyCode::Unavailable),
     (
         "COMPUTER_SHARE_SESSION_EXHAUSTED",
         TaxonomyCode::Unavailable,
@@ -613,6 +615,24 @@ mod tests {
             assert!(!taxonomy.retriable);
             assert_eq!(taxonomy.recovery_hint, RecoveryHint::None);
         }
+    }
+
+    #[test]
+    fn helper_watchdog_requires_a_fresh_connector_session() {
+        let taxonomy = classify("COMPUTER_HELPER_WATCHDOG");
+        assert_eq!(taxonomy.code, TaxonomyCode::Unavailable);
+        assert_eq!(taxonomy.code.http_status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(taxonomy.retriable);
+        assert_eq!(taxonomy.recovery_hint, RecoveryHint::Reconnect);
+
+        let post_dispatch = classify("COMPUTER_OUTCOME_UNKNOWN");
+        assert_eq!(post_dispatch.code, TaxonomyCode::OutcomeUnknown);
+        assert_eq!(
+            post_dispatch.code.http_status(),
+            StatusCode::GATEWAY_TIMEOUT
+        );
+        assert!(!post_dispatch.retriable);
+        assert_eq!(post_dispatch.recovery_hint, RecoveryHint::Reobserve);
     }
 
     #[test]

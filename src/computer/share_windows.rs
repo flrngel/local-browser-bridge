@@ -49,9 +49,16 @@ use super::{ComputerError, WindowDescriptor};
 const MIN_SHARE_FPS: u64 = 1;
 const MAX_SHARE_FPS: u64 = 10;
 const BYTES_PER_PIXEL: u32 = 4;
-const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
-const OWNER_START_TIMEOUT: Duration = Duration::from_secs(5);
-const CALLBACK_DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
+const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(4);
+const OWNER_START_TIMEOUT: Duration = Duration::from_secs(4);
+const OWNER_STOP_TIMEOUT: Duration = Duration::from_secs(2);
+const CALLBACK_DRAIN_TIMEOUT: Duration = Duration::from_millis(1_500);
+// The helper has a separate 12-second hard command watchdog. Keep startup and
+// any startup-only rollback inside a smaller total budget so the worker can
+// report a specific capture failure before that outer watchdog revokes it.
+const STARTUP_TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
+const STARTUP_ROLLBACK_RESERVE: Duration = OWNER_STOP_TIMEOUT;
+const STARTUP_JOIN_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const MAX_WGC_SOURCE_PIXELS: u64 = 16_777_216;
 const MAX_WGC_SOURCE_DIMENSION: u32 = 8_192;
 const MAX_WGC_OUTPUT_PIXELS: u64 = 1_000_000;
@@ -282,6 +289,7 @@ struct TargetBinding {
     id: String,
     pid: u32,
     hwnd_value: usize,
+    expected_geometry: SourceGeometry,
 }
 
 impl TargetBinding {
@@ -548,6 +556,8 @@ pub(crate) struct NativeShareCapture {
 
 impl NativeShareCapture {
     pub(crate) fn start(target: &WindowDescriptor, fps: u64) -> Result<Self, ComputerError> {
+        let startup_deadline = Instant::now() + STARTUP_TOTAL_TIMEOUT;
+        let readiness_deadline = startup_deadline - STARTUP_ROLLBACK_RESERVE;
         let minimum_interval = share_interval(fps)?;
         let target_binding = validate_descriptor_geometry(target)?;
         let state = Arc::new(SharedCaptureState::new(target.id.clone(), target.pid));
@@ -580,10 +590,20 @@ impl NativeShareCapture {
             fps,
         };
 
-        match startup_receiver.recv_timeout(OWNER_START_TIMEOUT) {
+        let Some(owner_start_timeout) =
+            bounded_wait_timeout(readiness_deadline, OWNER_START_TIMEOUT)
+        else {
+            stop_startup_capture(
+                &mut capture,
+                "owner readiness budget exhaustion",
+                startup_deadline,
+            )?;
+            return Err(startup_budget_error(target, "WGC owner readiness"));
+        };
+        match startup_receiver.recv_timeout(owner_start_timeout) {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
-                let _ = capture.stop();
+                capture.confirm_reported_startup_failure_before(startup_deadline, &error)?;
                 return Err(error);
             }
             Err(error) => {
@@ -591,7 +611,7 @@ impl NativeShareCapture {
                     "WGC owner did not confirm startup for HWND {} (PID {}) within {} ms: {error}",
                     target.id,
                     target.pid,
-                    OWNER_START_TIMEOUT.as_millis()
+                    owner_start_timeout.as_millis()
                 );
                 if let Some(sender) = capture.command_sender.take() {
                     let _ = sender.send(OwnerCommand::Stop);
@@ -604,12 +624,22 @@ impl NativeShareCapture {
             }
         }
 
-        if let Err(error) = exact_window_pair(&target_binding) {
-            stop_startup_capture(&mut capture, "target revalidation failure")?;
-            return Err(error);
-        }
-        if let Err(error) = capture.state.wait_for_first_frame(FIRST_FRAME_TIMEOUT) {
-            stop_startup_capture(&mut capture, "first-frame readiness failure")?;
+        let Some(first_frame_timeout) =
+            bounded_wait_timeout(readiness_deadline, FIRST_FRAME_TIMEOUT)
+        else {
+            stop_startup_capture(
+                &mut capture,
+                "first-frame readiness budget exhaustion",
+                startup_deadline,
+            )?;
+            return Err(startup_budget_error(target, "first-frame readiness"));
+        };
+        if let Err(error) = capture.state.wait_for_first_frame(first_frame_timeout) {
+            stop_startup_capture(
+                &mut capture,
+                "first-frame readiness failure",
+                startup_deadline,
+            )?;
             return Err(error);
         }
 
@@ -642,11 +672,21 @@ impl NativeShareCapture {
     }
 
     pub(crate) fn stop(&mut self) -> Result<(), ComputerError> {
+        self.stop_before(Instant::now() + OWNER_STOP_TIMEOUT)
+    }
+
+    fn stop_before(&mut self, deadline: Instant) -> Result<(), ComputerError> {
         let Some(owner) = self.owner.take() else {
             return Ok(());
         };
         if let Some(sender) = self.command_sender.take() {
             let _ = sender.send(OwnerCommand::Stop);
+        }
+        if !wait_for_owner_exit(&owner, deadline) {
+            return Err(fatal_stop_error(format!(
+                "The WGC owner did not confirm shutdown before the internal deadline for HWND {} (PID {})",
+                self.state.target_id, self.state.target_pid
+            )));
         }
         let owner_result = owner.join().map_err(|_| {
             fatal_stop_error(format!(
@@ -656,6 +696,74 @@ impl NativeShareCapture {
         })?;
         owner_result?;
         self.state.clear_latest()
+    }
+
+    fn confirm_reported_startup_failure_before(
+        &mut self,
+        deadline: Instant,
+        reported_error: &ComputerError,
+    ) -> Result<(), ComputerError> {
+        self.command_sender.take();
+        let Some(owner) = self.owner.take() else {
+            let message = format!(
+                "The WGC owner handle disappeared after reporting startup failure for HWND {} (PID {})",
+                self.state.target_id, self.state.target_pid
+            );
+            self.state.mark_failed(message.clone());
+            return Err(fatal_stop_error(message));
+        };
+        if !wait_for_owner_exit(&owner, deadline) {
+            let message = format!(
+                "The WGC owner did not confirm exit after reporting startup failure before the internal deadline for HWND {} (PID {})",
+                self.state.target_id, self.state.target_pid
+            );
+            self.state.mark_failed(message.clone());
+            return Err(fatal_stop_error(message));
+        }
+        let owner_result = owner.join().map_err(|_| {
+            let message = format!(
+                "The WGC owner thread panicked after reporting startup failure for HWND {} (PID {})",
+                self.state.target_id, self.state.target_pid
+            );
+            self.state.mark_failed(message.clone());
+            fatal_stop_error(message)
+        })?;
+        match owner_result {
+            Err(owner_error)
+                if owner_error.code == reported_error.code
+                    && owner_error.message == reported_error.message =>
+            {
+                self.state.clear_latest().map_err(|error| {
+                    let message = format!(
+                        "The WGC owner confirmed startup failure for HWND {} (PID {}), but capture-state rollback was unconfirmed: {error}",
+                        self.state.target_id, self.state.target_pid
+                    );
+                    self.state.mark_failed(message.clone());
+                    fatal_stop_error(message)
+                })
+            }
+            Err(owner_error) => {
+                let message = format!(
+                    "The WGC owner reported startup error {} ({}) for HWND {} (PID {}) but exited with different error {} ({})",
+                    reported_error.code,
+                    reported_error.message,
+                    self.state.target_id,
+                    self.state.target_pid,
+                    owner_error.code,
+                    owner_error.message
+                );
+                self.state.mark_failed(message.clone());
+                Err(fatal_stop_error(message))
+            }
+            Ok(()) => {
+                let message = format!(
+                    "The WGC owner reported startup failure but exited successfully for HWND {} (PID {})",
+                    self.state.target_id, self.state.target_pid
+                );
+                self.state.mark_failed(message.clone());
+                Err(fatal_stop_error(message))
+            }
+        }
     }
 
     pub(crate) const fn metadata(&self) -> NativeShareMetadata {
@@ -670,8 +778,9 @@ impl NativeShareCapture {
 fn stop_startup_capture(
     capture: &mut NativeShareCapture,
     rollback_reason: &str,
+    deadline: Instant,
 ) -> Result<(), ComputerError> {
-    if let Err(error) = capture.stop() {
+    if let Err(error) = capture.stop_before(deadline) {
         let message = format!(
             "Could not confirm WGC startup rollback after {rollback_reason} for HWND {} (PID {}): {error}",
             capture.state.target_id, capture.state.target_pid
@@ -680,6 +789,37 @@ fn stop_startup_capture(
         return Err(fatal_stop_error(message));
     }
     Ok(())
+}
+
+fn bounded_wait_timeout(deadline: Instant, maximum: Duration) -> Option<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .map(|remaining| remaining.min(maximum))
+        .filter(|remaining| !remaining.is_zero())
+}
+
+fn wait_for_owner_exit(owner: &JoinHandle<Result<(), ComputerError>>, deadline: Instant) -> bool {
+    loop {
+        if owner.is_finished() {
+            return true;
+        }
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return false;
+        };
+        if remaining.is_zero() {
+            return false;
+        }
+        thread::sleep(remaining.min(STARTUP_JOIN_POLL_INTERVAL));
+    }
+}
+
+fn startup_budget_error(target: &WindowDescriptor, phase: &str) -> ComputerError {
+    capture_error(format!(
+        "Windows Graphics Capture exhausted its {} ms internal startup budget during {phase} for HWND {} (PID {})",
+        STARTUP_TOTAL_TIMEOUT.as_millis(),
+        target.id,
+        target.pid
+    ))
 }
 
 impl Drop for NativeShareCapture {
@@ -761,7 +901,7 @@ fn create_capture_runtime(
     minimum_interval: Duration,
     stop_sender: Sender<OwnerCommand>,
 ) -> Result<CaptureRuntime, ComputerError> {
-    exact_window_pair(&target)?;
+    validate_target_binding_geometry(&target)?;
     if !GraphicsCaptureSession::IsSupported().map_err(windows_capture_error)? {
         return Err(capture_error(
             "Windows Graphics Capture is not supported on this Windows build",
@@ -831,7 +971,7 @@ fn create_capture_runtime(
 
     let closed_state = Arc::clone(&state);
     let closed_gate = Arc::clone(&runtime.gate);
-    let closed_target = target;
+    let closed_target = target.clone();
     let closed_stop_sender = stop_sender;
     let closed_handler =
         TypedEventHandler::<GraphicsCaptureItem, IInspectable>::new(move |_, _| {
@@ -859,6 +999,15 @@ fn create_capture_runtime(
     }
     if let Err(error) = runtime.session.StartCapture() {
         return Err(startup_runtime_failure(&mut runtime, "StartCapture", error));
+    }
+    if let Err(error) = exact_window_pair(&target) {
+        let cleanup_error = runtime.shutdown().err();
+        return match cleanup_error {
+            Some(cleanup_error) => Err(fatal_stop_error(format!(
+                "WGC target revalidation failed ({error}) and startup rollback was unconfirmed ({cleanup_error})"
+            ))),
+            None => Err(error),
+        };
     }
     Ok(runtime)
 }
@@ -1204,22 +1353,28 @@ fn validate_descriptor_geometry(target: &WindowDescriptor) -> Result<TargetBindi
         id: target.id.clone(),
         pid: target.pid,
         hwnd_value,
+        expected_geometry: SourceGeometry {
+            x: target.x,
+            y: target.y,
+            width: target.width,
+            height: target.height,
+        },
     };
-    let geometry = exact_window_geometry(&binding)?;
-    if geometry.x != target.x
-        || geometry.y != target.y
-        || geometry.width != target.width
-        || geometry.height != target.height
-    {
+    Ok(binding)
+}
+
+fn validate_target_binding_geometry(target: &TargetBinding) -> Result<(), ComputerError> {
+    let geometry = exact_window_geometry(target)?;
+    if geometry != target.expected_geometry {
         return Err(ComputerError::new(
             "COMPUTER_STALE_FRAME",
             format!(
                 "The exact target HWND {} geometry changed from ({}, {}) {}x{} to ({}, {}) {}x{} before capture allocation",
                 target.id,
-                target.x,
-                target.y,
-                target.width,
-                target.height,
+                target.expected_geometry.x,
+                target.expected_geometry.y,
+                target.expected_geometry.width,
+                target.expected_geometry.height,
                 geometry.x,
                 geometry.y,
                 geometry.width,
@@ -1227,7 +1382,7 @@ fn validate_descriptor_geometry(target: &WindowDescriptor) -> Result<TargetBindi
             ),
         ));
     }
-    Ok(binding)
+    Ok(())
 }
 
 fn exact_window_pair(target: &TargetBinding) -> Result<(), ComputerError> {
@@ -1618,6 +1773,99 @@ pub(crate) fn take_fatal_stop_error() -> Option<ComputerError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_budget_reserves_bounded_rollback_and_watchdog_margin() {
+        assert_eq!(STARTUP_TOTAL_TIMEOUT, Duration::from_secs(10));
+        assert_eq!(STARTUP_ROLLBACK_RESERVE, OWNER_STOP_TIMEOUT);
+        assert_eq!(
+            STARTUP_TOTAL_TIMEOUT,
+            OWNER_START_TIMEOUT + FIRST_FRAME_TIMEOUT + OWNER_STOP_TIMEOUT
+        );
+        assert!(CALLBACK_DRAIN_TIMEOUT < OWNER_STOP_TIMEOUT);
+        assert!(STARTUP_TOTAL_TIMEOUT < Duration::from_secs(12));
+    }
+
+    #[test]
+    fn startup_wait_is_clipped_before_the_rollback_reserve() {
+        let deadline = Instant::now() + Duration::from_millis(100);
+        let clipped = bounded_wait_timeout(deadline, Duration::from_secs(5))
+            .expect("a future readiness deadline should have a wait budget");
+        assert!(clipped <= Duration::from_millis(100));
+        assert!(clipped > Duration::ZERO);
+        assert!(bounded_wait_timeout(Instant::now(), Duration::from_secs(5)).is_none());
+    }
+
+    #[test]
+    fn startup_owner_wait_refuses_to_join_past_its_deadline() {
+        let (release_tx, release_rx) = mpsc::channel();
+        let owner = thread::spawn(move || {
+            let _ = release_rx.recv();
+            Ok(())
+        });
+
+        assert!(!wait_for_owner_exit(
+            &owner,
+            Instant::now() + Duration::from_millis(20)
+        ));
+        release_tx
+            .send(())
+            .expect("the test owner should still be waiting");
+        owner.join().expect("the test owner should exit").unwrap();
+    }
+
+    #[test]
+    fn reported_owner_startup_failure_is_confirmed_without_fatal_reclassification() {
+        let reported_error = capture_error("expected owner startup failure");
+        let owner_error = reported_error.clone();
+        let (command_sender, _command_receiver) = mpsc::channel();
+        let mut capture = NativeShareCapture {
+            command_sender: Some(command_sender),
+            owner: Some(thread::spawn(move || Err(owner_error))),
+            state: Arc::new(SharedCaptureState::new("42".to_string(), 7)),
+            window_id: "42".to_string(),
+            fps: 4,
+        };
+
+        capture
+            .confirm_reported_startup_failure_before(
+                Instant::now() + Duration::from_secs(1),
+                &reported_error,
+            )
+            .expect("a matching reported startup failure should confirm bounded owner exit");
+        assert!(capture.owner.is_none());
+        assert!(capture.command_sender.is_none());
+    }
+
+    #[test]
+    fn startup_descriptor_preserves_geometry_for_owner_side_revalidation() {
+        let target = WindowDescriptor {
+            id: "42".to_string(),
+            pid: 7,
+            app_name: "Fixture".to_string(),
+            title: "Target".to_string(),
+            x: -120,
+            y: 40,
+            width: 800,
+            height: 600,
+            minimized: false,
+            focused: false,
+        };
+
+        let binding = validate_descriptor_geometry(&target)
+            .expect("descriptor validation should not require a live HWND");
+        assert_eq!(binding.hwnd_value, 42);
+        assert_eq!(binding.pid, 7);
+        assert_eq!(
+            binding.expected_geometry,
+            SourceGeometry {
+                x: -120,
+                y: 40,
+                width: 800,
+                height: 600,
+            }
+        );
+    }
 
     #[test]
     fn direct_copy_swizzles_bgra_to_rgba_and_removes_stride_padding() {

@@ -2044,7 +2044,725 @@ function Test-BoundHelperWorkerCandidate {
     )
 }
 
+function ConvertTo-CanonicalUtcTimestamp {
+    param([DateTime]$Value)
+    return $Value.ToUniversalTime().ToString(
+        "yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'",
+        [Globalization.CultureInfo]::InvariantCulture
+    )
+}
+
+function Get-RecoveryResponseProperty {
+    param([object]$Object, [string]$Name)
+    if ($null -eq $Object) {
+        return $null
+    }
+    if ($Object -is [Collections.IDictionary]) {
+        $matchingKeys = @($Object.Keys | Where-Object {
+                $_ -is [string] -and [string]$_ -ceq $Name
+            })
+        if ($matchingKeys.Count -ne 1) {
+            return $null
+        }
+        $value = $Object[$matchingKeys[0]]
+        return ,$value
+    }
+    $matchingProperties = @($Object.PSObject.Properties | Where-Object {
+            $_.Name -ceq $Name
+        })
+    if ($matchingProperties.Count -ne 1) {
+        return $null
+    }
+    $value = $matchingProperties[0].Value
+    return ,$value
+}
+
+function ConvertFrom-RecoveryFaultHttpBody {
+    param(
+        [int]$Status,
+        [bool]$HttpOk,
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Json
+    )
+    if ([String]::IsNullOrWhiteSpace($Json)) {
+        throw "The recovery fault response body was empty."
+    }
+    $trimmedJson = $Json.Trim()
+    if (-not $trimmedJson.StartsWith("{", [StringComparison]::Ordinal)) {
+        throw "The recovery fault response body was not a JSON object."
+    }
+    try {
+        $body = ConvertFrom-JsonPreservingStrings $trimmedJson
+    }
+    catch {
+        throw "The recovery fault response body was not valid JSON."
+    }
+    if ($null -eq $body -or $body -is [Array] -or
+        ($body -isnot [pscustomobject] -and $body -isnot [Collections.IDictionary])) {
+        throw "The recovery fault response body was not a JSON object."
+    }
+    return [pscustomobject]@{
+        status = [int]$Status
+        httpOk = [bool]$HttpOk
+        body = $body
+    }
+}
+
+function ConvertTo-RecoveryFaultStartRecord {
+    [CmdletBinding(DefaultParameterSetName = "Response")]
+    param(
+        [Parameter(Mandatory = $true, ParameterSetName = "Response")]
+        [object]$Response,
+
+        [Parameter(Mandatory = $true, ParameterSetName = "Response")]
+        [ValidatePattern('^windows-recovery-fault-[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$')]
+        [string]$ExpectedCallId,
+
+        [Parameter(Mandatory = $true, ParameterSetName = "Response")]
+        [ValidatePattern('^[1-9][0-9]{0,19}$')]
+        [string]$ExpectedWindowId,
+
+        [Parameter(Mandatory = $true, ParameterSetName = "Response")]
+        [ValidatePattern('^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')]
+        [string]$ExpectedHelperSessionId,
+
+        [Parameter(Mandatory = $true, ParameterSetName = "Response")]
+        [ValidateRange(1, [int]::MaxValue)]
+        [int]$ExpectedWorkerPid,
+
+        [Parameter(Mandatory = $true, ParameterSetName = "Response")]
+        [ValidateRange(1, [int]::MaxValue)]
+        [int]$ExpectedControllerPid,
+
+        [Parameter(Mandatory = $true, ParameterSetName = "Response")]
+        [ValidateRange(1, [int]::MaxValue)]
+        [int]$ExpectedTargetPid,
+
+        [Parameter(Mandatory = $true, ParameterSetName = "Transport")]
+        [switch]$TransportFailure
+    )
+
+    if ($PSCmdlet.ParameterSetName -ceq "Transport") {
+        return [ordered]@{
+            schemaVersion = 1
+            outcomeClass = "transport-ended-before-watchdog-receipt"
+            httpStatus = $null
+            httpOk = $null
+            bodyOk = $null
+            callId = $null
+            callIdMatched = $null
+            watchdogErrorObserved = $false
+            errorCode = $null
+            taxonomyCode = $null
+            taxonomyRetriable = $null
+            taxonomyRecoveryHint = $null
+            transportFailure = $true
+            pathsRecorded = $false
+            secretsRecorded = $false
+        }
+    }
+
+    $status = Get-RecoveryResponseProperty $Response "status"
+    $httpOk = Get-RecoveryResponseProperty $Response "httpOk"
+    $body = Get-RecoveryResponseProperty $Response "body"
+    if ($status -isnot [int] -or $httpOk -isnot [bool] -or $null -eq $body) {
+        throw "The recovery fault response envelope is invalid."
+    }
+
+    $ok = Get-RecoveryResponseProperty $body "ok"
+    $callId = Get-RecoveryResponseProperty $body "callId"
+    $errorObject = Get-RecoveryResponseProperty $body "error"
+    $taxonomy = Get-RecoveryResponseProperty $body "taxonomy"
+    $result = Get-RecoveryResponseProperty $body "result"
+    $state = Get-RecoveryResponseProperty $body "state"
+    $stateComputerConnected = Get-RecoveryResponseProperty $state "computerConnected"
+    $stateComputer = Get-RecoveryResponseProperty $state "computer"
+    $stateComputerSessionId = Get-RecoveryResponseProperty $stateComputer "sessionId"
+    $stateComputerProcessId = Get-RecoveryResponseProperty $stateComputer "processId"
+    $stateComputerControllerProcessId = Get-RecoveryResponseProperty $stateComputer "controllerProcessId"
+    $stateShare = Get-RecoveryResponseProperty $stateComputer "share"
+    $resultActive = Get-RecoveryResponseProperty $result "active"
+    $resultShareId = Get-RecoveryResponseProperty $result "id"
+    $resultWindowId = Get-RecoveryResponseProperty $result "windowId"
+    $resultTargetPid = Get-RecoveryResponseProperty $result "pid"
+    $resultFps = Get-RecoveryResponseProperty $result "fps"
+    $stateShareActive = Get-RecoveryResponseProperty $stateShare "active"
+    $stateShareId = Get-RecoveryResponseProperty $stateShare "id"
+    $stateShareWindowId = Get-RecoveryResponseProperty $stateShare "windowId"
+    $stateShareTargetPid = Get-RecoveryResponseProperty $stateShare "pid"
+    $stateShareFps = Get-RecoveryResponseProperty $stateShare "fps"
+    $stateObservation = Get-RecoveryResponseProperty $state "computerObservation"
+    $stateObservationFrameId = Get-RecoveryResponseProperty $stateObservation "frameId"
+    $stateObservationFrameShareId = Get-RecoveryResponseProperty $stateObservation "shareId"
+    $stateObservationFrameSourceSequence = Get-RecoveryResponseProperty $stateObservation "sourceSequence"
+    $stateObservationWindowId = Get-RecoveryResponseProperty $stateObservation "windowId"
+    $stateObservationTargetPid = Get-RecoveryResponseProperty $stateObservation "pid"
+    $stateObservationShare = Get-RecoveryResponseProperty $stateObservation "share"
+    $stateObservationShareActive = Get-RecoveryResponseProperty $stateObservationShare "active"
+    $stateObservationShareId = Get-RecoveryResponseProperty $stateObservationShare "id"
+    $stateObservationShareWindowId = Get-RecoveryResponseProperty $stateObservationShare "windowId"
+    $stateObservationShareTargetPid = Get-RecoveryResponseProperty $stateObservationShare "pid"
+    $stateObservationShareFps = Get-RecoveryResponseProperty $stateObservationShare "fps"
+    $stateObservationShareSourceSequence = Get-RecoveryResponseProperty $stateObservationShare "sourceSequence"
+    $stateObservationShareSequence = Get-RecoveryResponseProperty $stateObservationShare "sequence"
+    $workerPidIsInteger = $stateComputerProcessId -is [int] -or $stateComputerProcessId -is [int64]
+    $controllerPidIsInteger = $stateComputerControllerProcessId -is [int] -or $stateComputerControllerProcessId -is [int64]
+    $observationShareSourceIsInteger = $stateObservationShareSourceSequence -is [int] -or
+        $stateObservationShareSourceSequence -is [int64]
+    $observationShareSequenceIsInteger = $stateObservationShareSequence -is [int] -or
+        $stateObservationShareSequence -is [int64]
+    $stateObservationAuthorityIsValid = $false
+    if ($observationShareSourceIsInteger -and
+        [int64]$stateObservationShareSourceSequence -ge 0 -and
+        $observationShareSequenceIsInteger -and
+        [int64]$stateObservationShareSequence -ge 0) {
+        if ($null -eq $stateObservationFrameShareId -and
+            $null -eq $stateObservationFrameSourceSequence) {
+            $stateObservationAuthorityIsValid = $true
+        }
+        elseif ($stateObservationFrameShareId -is [string] -and
+            $stateObservationFrameShareId -ceq $resultShareId -and
+            ($stateObservationFrameSourceSequence -is [int] -or
+                $stateObservationFrameSourceSequence -is [int64]) -and
+            [int64]$stateObservationFrameSourceSequence -gt 0 -and
+            [int64]$stateObservationFrameSourceSequence -eq
+                [int64]$stateObservationShareSourceSequence -and
+            [int64]$stateObservationShareSequence -gt 0) {
+            $stateObservationAuthorityIsValid = $true
+        }
+    }
+    if ($status -eq 200 -and $httpOk -eq $true -and
+        $ok -is [bool] -and $ok -eq $true -and
+        $callId -is [string] -and $callId -ceq $ExpectedCallId -and
+        $result -isnot [Array] -and
+        ($result -is [pscustomobject] -or $result -is [Collections.IDictionary]) -and
+        $resultActive -is [bool] -and $resultActive -eq $true -and
+        $resultShareId -is [string] -and
+        $resultShareId -cmatch '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' -and
+        $resultWindowId -is [string] -and $resultWindowId -ceq $ExpectedWindowId -and
+        ($resultTargetPid -is [int] -or $resultTargetPid -is [int64]) -and
+        [int64]$resultTargetPid -eq $ExpectedTargetPid -and
+        ($resultFps -is [int] -or $resultFps -is [int64]) -and [int64]$resultFps -eq 4 -and
+        $state -isnot [Array] -and
+        ($state -is [pscustomobject] -or $state -is [Collections.IDictionary]) -and
+        $stateComputerConnected -is [bool] -and $stateComputerConnected -eq $true -and
+        $stateComputer -isnot [Array] -and
+        ($stateComputer -is [pscustomobject] -or $stateComputer -is [Collections.IDictionary]) -and
+        $stateComputerSessionId -is [string] -and $stateComputerSessionId -ceq $ExpectedHelperSessionId -and
+        $workerPidIsInteger -and [int64]$stateComputerProcessId -eq $ExpectedWorkerPid -and
+        $controllerPidIsInteger -and [int64]$stateComputerControllerProcessId -eq $ExpectedControllerPid -and
+        $stateShare -isnot [Array] -and
+        ($stateShare -is [pscustomobject] -or $stateShare -is [Collections.IDictionary]) -and
+        $stateShareActive -is [bool] -and $stateShareActive -eq $true -and
+        $stateShareId -is [string] -and $stateShareId -ceq $resultShareId -and
+        $stateShareWindowId -is [string] -and $stateShareWindowId -ceq $ExpectedWindowId -and
+        ($stateShareTargetPid -is [int] -or $stateShareTargetPid -is [int64]) -and
+        [int64]$stateShareTargetPid -eq $ExpectedTargetPid -and
+        ($stateShareFps -is [int] -or $stateShareFps -is [int64]) -and [int64]$stateShareFps -eq 4 -and
+        $stateObservation -isnot [Array] -and
+        ($stateObservation -is [pscustomobject] -or $stateObservation -is [Collections.IDictionary]) -and
+        $stateObservationFrameId -is [string] -and
+        $stateObservationFrameId -cmatch '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' -and
+        $stateObservationWindowId -is [string] -and $stateObservationWindowId -ceq $ExpectedWindowId -and
+        ($stateObservationTargetPid -is [int] -or $stateObservationTargetPid -is [int64]) -and
+        [int64]$stateObservationTargetPid -eq $ExpectedTargetPid -and
+        $stateObservationShare -isnot [Array] -and
+        ($stateObservationShare -is [pscustomobject] -or $stateObservationShare -is [Collections.IDictionary]) -and
+        $stateObservationShareActive -is [bool] -and $stateObservationShareActive -eq $true -and
+        $stateObservationShareId -is [string] -and $stateObservationShareId -ceq $resultShareId -and
+        $stateObservationShareWindowId -is [string] -and
+        $stateObservationShareWindowId -ceq $ExpectedWindowId -and
+        ($stateObservationShareTargetPid -is [int] -or $stateObservationShareTargetPid -is [int64]) -and
+        [int64]$stateObservationShareTargetPid -eq $ExpectedTargetPid -and
+        ($stateObservationShareFps -is [int] -or $stateObservationShareFps -is [int64]) -and
+        [int64]$stateObservationShareFps -eq 4 -and
+        $stateObservationAuthorityIsValid -eq $true -and
+        $null -eq $errorObject -and $null -eq $taxonomy) {
+        return [ordered]@{
+            schemaVersion = 1
+            outcomeClass = "accepted-before-watchdog"
+            httpStatus = [int]$status
+            httpOk = $true
+            bodyOk = $true
+            callId = $ExpectedCallId
+            callIdMatched = $true
+            watchdogErrorObserved = $false
+            errorCode = $null
+            taxonomyCode = $null
+            taxonomyRetriable = $null
+            taxonomyRecoveryHint = $null
+            transportFailure = $false
+            pathsRecorded = $false
+            secretsRecorded = $false
+        }
+    }
+
+    $code = Get-RecoveryResponseProperty $errorObject "code"
+    $message = Get-RecoveryResponseProperty $errorObject "message"
+    $taxonomyCode = Get-RecoveryResponseProperty $taxonomy "code"
+    $taxonomyRetriable = Get-RecoveryResponseProperty $taxonomy "retriable"
+    $taxonomyRecoveryHint = Get-RecoveryResponseProperty $taxonomy "recoveryHint"
+    $expectedOutcomeUnknownMessage = "Computer helper connection ended after the command was enqueued; its outcome is unknown: computer.observe"
+    if ($status -ne 504 -or $httpOk -ne $false -or
+        $ok -isnot [bool] -or $ok -ne $false -or
+        $callId -isnot [string] -or $callId -cne $ExpectedCallId -or
+        $null -ne $result -or $null -ne $state -or
+        $code -isnot [string] -or $code -cne "COMMAND_OUTCOME_UNKNOWN" -or
+        $message -isnot [string] -or $message -cne $expectedOutcomeUnknownMessage -or
+        $taxonomyCode -isnot [string] -or $taxonomyCode -cne "outcome_unknown" -or
+        $taxonomyRetriable -isnot [bool] -or $taxonomyRetriable -ne $false -or
+        $taxonomyRecoveryHint -isnot [string] -or $taxonomyRecoveryHint -cne "reobserve") {
+        throw "The recovery fault response was not an exact accepted outcome."
+    }
+    return [ordered]@{
+        schemaVersion = 1
+        outcomeClass = "outcome-unknown-after-fault"
+        httpStatus = [int]$status
+        httpOk = $false
+        bodyOk = $false
+        callId = $ExpectedCallId
+        callIdMatched = $true
+        watchdogErrorObserved = $false
+        errorCode = "COMMAND_OUTCOME_UNKNOWN"
+        taxonomyCode = "outcome_unknown"
+        taxonomyRetriable = $false
+        taxonomyRecoveryHint = "reobserve"
+        transportFailure = $false
+        pathsRecorded = $false
+        secretsRecorded = $false
+    }
+}
+
 if ($SelfTest) {
+    $watchdogFixtureCallId = "windows-recovery-fault-11111111111141118111111111111111"
+    $watchdogFixtureWindowId = "123456"
+    $watchdogFixtureSessionId = "11111111-1111-4111-8111-111111111111"
+    $watchdogFixtureShareId = "22222222-2222-4222-8222-222222222222"
+    $watchdogFixtureFrameId = "33333333-3333-4333-8333-333333333333"
+    $watchdogFixtureWorkerPid = 303
+    $watchdogFixtureControllerPid = 202
+    $watchdogFixtureTargetPid = 505
+    $successFixture = [pscustomobject]@{
+        status = [int]200
+        httpOk = $true
+        body = [pscustomobject]@{
+            ok = $true
+            callId = $watchdogFixtureCallId
+            result = [pscustomobject]@{
+                active = $true
+                id = $watchdogFixtureShareId
+                windowId = $watchdogFixtureWindowId
+                pid = $watchdogFixtureTargetPid
+                fps = 4
+            }
+            state = [pscustomobject]@{
+                computerConnected = $true
+                computer = [pscustomobject]@{
+                    sessionId = $watchdogFixtureSessionId
+                    processId = $watchdogFixtureWorkerPid
+                    controllerProcessId = $watchdogFixtureControllerPid
+                    share = [pscustomobject]@{
+                        active = $true
+                        id = $watchdogFixtureShareId
+                        windowId = $watchdogFixtureWindowId
+                        pid = $watchdogFixtureTargetPid
+                        fps = 4
+                        sourceSequence = 0
+                        sequence = 0
+                    }
+                }
+                computerObservation = [pscustomobject]@{
+                    frameId = $watchdogFixtureFrameId
+                    windowId = $watchdogFixtureWindowId
+                    pid = $watchdogFixtureTargetPid
+                    share = [pscustomobject]@{
+                        active = $true
+                        id = $watchdogFixtureShareId
+                        windowId = $watchdogFixtureWindowId
+                        pid = $watchdogFixtureTargetPid
+                        fps = 4
+                        sourceSequence = 0
+                        sequence = 0
+                    }
+                }
+            }
+        }
+    }
+    $successRecord = ConvertTo-RecoveryFaultStartRecord `
+        -Response $successFixture `
+        -ExpectedCallId $watchdogFixtureCallId `
+        -ExpectedWindowId $watchdogFixtureWindowId `
+        -ExpectedHelperSessionId $watchdogFixtureSessionId `
+        -ExpectedWorkerPid $watchdogFixtureWorkerPid `
+        -ExpectedControllerPid $watchdogFixtureControllerPid `
+        -ExpectedTargetPid $watchdogFixtureTargetPid
+    if ($successRecord.outcomeClass -cne "accepted-before-watchdog" -or
+        $successRecord.watchdogErrorObserved -ne $false -or
+        $successRecord.callId -cne $watchdogFixtureCallId -or
+        $successRecord.callIdMatched -ne $true -or
+        $successRecord.transportFailure -ne $false) {
+        throw "The recovery watchdog classifier rejected a consistent pre-watchdog success receipt."
+    }
+
+    $outcomeUnknownFixture = [pscustomobject]@{
+        status = [int]504
+        httpOk = $false
+        body = [pscustomobject]@{
+            ok = $false
+            callId = $watchdogFixtureCallId
+            error = [pscustomobject]@{
+                code = "COMMAND_OUTCOME_UNKNOWN"
+                message = "Computer helper connection ended after the command was enqueued; its outcome is unknown: computer.observe"
+            }
+            taxonomy = [pscustomobject]@{
+                code = "outcome_unknown"
+                retriable = $false
+                recoveryHint = "reobserve"
+            }
+        }
+    }
+    $outcomeUnknownRecord = ConvertTo-RecoveryFaultStartRecord `
+        -Response $outcomeUnknownFixture `
+        -ExpectedCallId $watchdogFixtureCallId `
+        -ExpectedWindowId $watchdogFixtureWindowId `
+        -ExpectedHelperSessionId $watchdogFixtureSessionId `
+        -ExpectedWorkerPid $watchdogFixtureWorkerPid `
+        -ExpectedControllerPid $watchdogFixtureControllerPid `
+        -ExpectedTargetPid $watchdogFixtureTargetPid
+    if ($outcomeUnknownRecord.outcomeClass -cne "outcome-unknown-after-fault" -or
+        $outcomeUnknownRecord.httpStatus -ne 504 -or
+        $outcomeUnknownRecord.callId -cne $watchdogFixtureCallId -or
+        $outcomeUnknownRecord.callIdMatched -ne $true -or
+        $outcomeUnknownRecord.watchdogErrorObserved -ne $false -or
+        $outcomeUnknownRecord.errorCode -cne "COMMAND_OUTCOME_UNKNOWN" -or
+        $outcomeUnknownRecord.taxonomyCode -cne "outcome_unknown" -or
+        $outcomeUnknownRecord.taxonomyRetriable -ne $false -or
+        $outcomeUnknownRecord.taxonomyRecoveryHint -cne "reobserve" -or
+        $outcomeUnknownRecord.transportFailure -ne $false) {
+        throw "The recovery watchdog classifier rejected an exact post-fault outcome-unknown receipt."
+    }
+
+    $transportRecord = ConvertTo-RecoveryFaultStartRecord -TransportFailure
+    if ($transportRecord.outcomeClass -cne "transport-ended-before-watchdog-receipt" -or
+        $transportRecord.watchdogErrorObserved -ne $false -or
+        $transportRecord.callId -ne $null -or
+        $transportRecord.callIdMatched -ne $null -or
+        $transportRecord.transportFailure -ne $true) {
+        throw "The recovery watchdog classifier rejected a bounded transport-end receipt."
+    }
+
+    $utcSerializationFixture = [DateTime]::SpecifyKind(
+        [DateTime]::ParseExact(
+            "2026-08-31 00:00:00.1234567",
+            "yyyy-MM-dd HH:mm:ss.fffffff",
+            [Globalization.CultureInfo]::InvariantCulture
+        ),
+        [DateTimeKind]::Utc
+    )
+    $canonicalUtcFixture = ConvertTo-CanonicalUtcTimestamp $utcSerializationFixture
+    $serializedUtcFixture = [ordered]@{ faultTriggeredAtUtc = $canonicalUtcFixture } |
+        ConvertTo-Json -Compress
+    if ($canonicalUtcFixture -cne "2026-08-31T00:00:00.1234567Z" -or
+        $serializedUtcFixture -cne '{"faultTriggeredAtUtc":"2026-08-31T00:00:00.1234567Z"}') {
+        throw "The recovery fault UTC timestamp was not serialized canonically."
+    }
+
+    foreach ($invalidBody in @(
+            "",
+            "{",
+            "null",
+            "[]",
+            "[{}]",
+            '[{"ok":true,"callId":"windows-recovery-fault-11111111111141118111111111111111"}]'
+        )) {
+        $invalidBodyFailure = $null
+        try {
+            $null = ConvertFrom-RecoveryFaultHttpBody -Status 200 -HttpOk $true -Json $invalidBody
+        }
+        catch {
+            $invalidBodyFailure = $_.Exception.Message
+        }
+        if ($invalidBodyFailure -notin @(
+                "The recovery fault response body was empty.",
+                "The recovery fault response body was not valid JSON.",
+                "The recovery fault response body was not a JSON object."
+            )) {
+            throw "The recovery fault body decoder accepted or misclassified an invalid body."
+        }
+    }
+
+    function New-DecodedRecoveryFaultFixture {
+        param([int]$Status, [bool]$HttpOk, [object]$Body)
+        $json = $Body | ConvertTo-Json -Depth 20 -Compress
+        return ConvertFrom-RecoveryFaultHttpBody -Status $Status -HttpOk $HttpOk -Json $json
+    }
+
+    $streamedSuccessBody = ConvertFrom-JsonPreservingStrings (
+        $successFixture.body | ConvertTo-Json -Depth 20 -Compress
+    )
+    $streamedSuccessBody.state.computerObservation | Add-Member `
+        -NotePropertyName "shareId" -NotePropertyValue $watchdogFixtureShareId
+    $streamedSuccessBody.state.computerObservation | Add-Member `
+        -NotePropertyName "sourceSequence" -NotePropertyValue 1
+    $streamedSuccessBody.state.computerObservation.share.sourceSequence = 1
+    $streamedSuccessBody.state.computerObservation.share.sequence = 1
+    $streamedSuccessFixture = New-DecodedRecoveryFaultFixture `
+        -Status 200 -HttpOk $true -Body $streamedSuccessBody
+    $streamedSuccessRecord = ConvertTo-RecoveryFaultStartRecord `
+        -Response $streamedSuccessFixture `
+        -ExpectedCallId $watchdogFixtureCallId `
+        -ExpectedWindowId $watchdogFixtureWindowId `
+        -ExpectedHelperSessionId $watchdogFixtureSessionId `
+        -ExpectedWorkerPid $watchdogFixtureWorkerPid `
+        -ExpectedControllerPid $watchdogFixtureControllerPid `
+        -ExpectedTargetPid $watchdogFixtureTargetPid
+    if ($streamedSuccessRecord.outcomeClass -cne "accepted-before-watchdog") {
+        throw "The recovery watchdog classifier rejected a complete streamed-frame authority tuple."
+    }
+
+    $nestedArrayWatchdogFixtures = [Collections.Generic.List[object]]::new()
+    foreach ($arrayPath in @(
+            "result",
+            "state",
+            "state.computer",
+            "state.computer.share",
+            "state.computerObservation",
+            "state.computerObservation.share"
+        )) {
+        $arrayBody = ConvertFrom-JsonPreservingStrings (
+            $successFixture.body | ConvertTo-Json -Depth 20 -Compress
+        )
+        switch ($arrayPath) {
+            "result" { $arrayBody.result = @($arrayBody.result) }
+            "state" { $arrayBody.state = @($arrayBody.state) }
+            "state.computer" { $arrayBody.state.computer = @($arrayBody.state.computer) }
+            "state.computer.share" { $arrayBody.state.computer.share = @($arrayBody.state.computer.share) }
+            "state.computerObservation" { $arrayBody.state.computerObservation = @($arrayBody.state.computerObservation) }
+            "state.computerObservation.share" { $arrayBody.state.computerObservation.share = @($arrayBody.state.computerObservation.share) }
+        }
+        $nestedArrayWatchdogFixtures.Add((
+            New-DecodedRecoveryFaultFixture -Status 200 -HttpOk $true -Body $arrayBody
+        ))
+    }
+    foreach ($arrayPath in @("error", "taxonomy")) {
+        $arrayBody = ConvertFrom-JsonPreservingStrings (
+            $outcomeUnknownFixture.body | ConvertTo-Json -Depth 20 -Compress
+        )
+        if ($arrayPath -ceq "error") {
+            $arrayBody.error = @($arrayBody.error)
+        }
+        else {
+            $arrayBody.taxonomy = @($arrayBody.taxonomy)
+        }
+        $nestedArrayWatchdogFixtures.Add((
+            New-DecodedRecoveryFaultFixture -Status 504 -HttpOk $false -Body $arrayBody
+        ))
+    }
+
+    $uppercaseJsonKeys = @(
+        "ok", "callId", "result", "active", "id", "windowId", "pid", "fps",
+        "state", "computerConnected", "computer", "sessionId", "processId",
+        "controllerProcessId", "share", "computerObservation", "frameId", "shareId",
+        "sourceSequence", "sequence",
+        "error", "code", "message", "taxonomy", "retriable", "recoveryHint"
+    )
+    $uppercaseSuccessJson = $successFixture.body | ConvertTo-Json -Depth 20 -Compress
+    $uppercaseOutcomeUnknownJson = $outcomeUnknownFixture.body | ConvertTo-Json -Depth 20 -Compress
+    foreach ($jsonKey in $uppercaseJsonKeys) {
+        $exactKey = '"' + $jsonKey + '":'
+        $uppercaseKey = '"' + $jsonKey.ToUpperInvariant() + '":'
+        $uppercaseSuccessJson = $uppercaseSuccessJson.Replace($exactKey, $uppercaseKey)
+        $uppercaseOutcomeUnknownJson = $uppercaseOutcomeUnknownJson.Replace($exactKey, $uppercaseKey)
+    }
+    $uppercaseSuccessFixture = ConvertFrom-RecoveryFaultHttpBody `
+        -Status 200 -HttpOk $true -Json $uppercaseSuccessJson
+    $uppercaseOutcomeUnknownFixture = ConvertFrom-RecoveryFaultHttpBody `
+        -Status 504 -HttpOk $false -Json $uppercaseOutcomeUnknownJson
+    $contradictoryOutcomeUnknownFixture = New-DecodedRecoveryFaultFixture `
+        -Status 504 `
+        -HttpOk $false `
+        -Body ([ordered]@{
+            ok = $false
+            callId = $watchdogFixtureCallId
+            error = $outcomeUnknownFixture.body.error
+            taxonomy = $outcomeUnknownFixture.body.taxonomy
+            result = $successFixture.body.result
+            state = $successFixture.body.state
+        })
+    $contradictoryStateSharePidBody = ConvertFrom-JsonPreservingStrings (
+        $successFixture.body | ConvertTo-Json -Depth 20 -Compress
+    )
+    $contradictoryStateSharePidBody.state.computer.share.pid = $watchdogFixtureTargetPid + 1
+    $contradictoryStateSharePidFixture = New-DecodedRecoveryFaultFixture `
+        -Status 200 -HttpOk $true -Body $contradictoryStateSharePidBody
+    $contradictoryObservationShareWindowBody = ConvertFrom-JsonPreservingStrings (
+        $successFixture.body | ConvertTo-Json -Depth 20 -Compress
+    )
+    $contradictoryObservationShareWindowBody.state.computerObservation.share.windowId = "654321"
+    $contradictoryObservationShareWindowFixture = New-DecodedRecoveryFaultFixture `
+        -Status 200 -HttpOk $true -Body $contradictoryObservationShareWindowBody
+    $contradictoryObservationSharePidBody = ConvertFrom-JsonPreservingStrings (
+        $successFixture.body | ConvertTo-Json -Depth 20 -Compress
+    )
+    $contradictoryObservationSharePidBody.state.computerObservation.share.pid = $watchdogFixtureTargetPid + 1
+    $contradictoryObservationSharePidFixture = New-DecodedRecoveryFaultFixture `
+        -Status 200 -HttpOk $true -Body $contradictoryObservationSharePidBody
+    $contradictoryObservationShareFpsBody = ConvertFrom-JsonPreservingStrings (
+        $successFixture.body | ConvertTo-Json -Depth 20 -Compress
+    )
+    $contradictoryObservationShareFpsBody.state.computerObservation.share.fps = 5
+    $contradictoryObservationShareFpsFixture = New-DecodedRecoveryFaultFixture `
+        -Status 200 -HttpOk $true -Body $contradictoryObservationShareFpsBody
+    $partialFrameShareIdBody = ConvertFrom-JsonPreservingStrings (
+        $successFixture.body | ConvertTo-Json -Depth 20 -Compress
+    )
+    $partialFrameShareIdBody.state.computerObservation | Add-Member `
+        -NotePropertyName "shareId" -NotePropertyValue $watchdogFixtureShareId
+    $partialFrameShareIdFixture = New-DecodedRecoveryFaultFixture `
+        -Status 200 -HttpOk $true -Body $partialFrameShareIdBody
+    $partialFrameSourceSequenceBody = ConvertFrom-JsonPreservingStrings (
+        $successFixture.body | ConvertTo-Json -Depth 20 -Compress
+    )
+    $partialFrameSourceSequenceBody.state.computerObservation | Add-Member `
+        -NotePropertyName "sourceSequence" -NotePropertyValue 1
+    $partialFrameSourceSequenceFixture = New-DecodedRecoveryFaultFixture `
+        -Status 200 -HttpOk $true -Body $partialFrameSourceSequenceBody
+    $mismatchedFrameShareIdBody = ConvertFrom-JsonPreservingStrings (
+        $streamedSuccessBody | ConvertTo-Json -Depth 20 -Compress
+    )
+    $mismatchedFrameShareIdBody.state.computerObservation.shareId =
+        "44444444-4444-4444-8444-444444444444"
+    $mismatchedFrameShareIdFixture = New-DecodedRecoveryFaultFixture `
+        -Status 200 -HttpOk $true -Body $mismatchedFrameShareIdBody
+    $mismatchedFrameSourceSequenceBody = ConvertFrom-JsonPreservingStrings (
+        $streamedSuccessBody | ConvertTo-Json -Depth 20 -Compress
+    )
+    $mismatchedFrameSourceSequenceBody.state.computerObservation.sourceSequence = 2
+    $mismatchedFrameSourceSequenceFixture = New-DecodedRecoveryFaultFixture `
+        -Status 200 -HttpOk $true -Body $mismatchedFrameSourceSequenceBody
+    $malformedNestedSourceSequenceBody = ConvertFrom-JsonPreservingStrings (
+        $successFixture.body | ConvertTo-Json -Depth 20 -Compress
+    )
+    $malformedNestedSourceSequenceBody.state.computerObservation.share.sourceSequence = "0"
+    $malformedNestedSourceSequenceFixture = New-DecodedRecoveryFaultFixture `
+        -Status 200 -HttpOk $true -Body $malformedNestedSourceSequenceBody
+    $negativeNestedSequenceBody = ConvertFrom-JsonPreservingStrings (
+        $successFixture.body | ConvertTo-Json -Depth 20 -Compress
+    )
+    $negativeNestedSequenceBody.state.computerObservation.share.sequence = -1
+    $negativeNestedSequenceFixture = New-DecodedRecoveryFaultFixture `
+        -Status 200 -HttpOk $true -Body $negativeNestedSequenceBody
+
+    $invalidWatchdogFixtures = @(
+        [pscustomobject]@{
+            status = [int]201; httpOk = $true
+            body = $successFixture.body
+        },
+        [pscustomobject]@{
+            status = [int]503; httpOk = $false
+            body = [pscustomobject]@{
+                ok = $false
+                callId = $watchdogFixtureCallId
+                error = [pscustomobject]@{
+                    code = "COMPUTER_HELPER_WATCHDOG"
+                    message = "The computer helper exceeded its 12 second command deadline and will terminate so native authority is revoked"
+                }
+                taxonomy = [pscustomobject]@{
+                    code = "unavailable"
+                    retriable = $true
+                    recoveryHint = "reconnect"
+                }
+            }
+        },
+        [pscustomobject]@{
+            status = [int]200; httpOk = $true
+            body = [pscustomobject]@{
+                ok = 1
+                callId = $watchdogFixtureCallId
+            }
+        },
+        [pscustomobject]@{
+            status = [int]200; httpOk = 1
+            body = $successFixture.body
+        },
+        [pscustomobject]@{
+            status = [int]200; httpOk = $true
+            body = [pscustomobject]@{
+                ok = $true
+                callId = "windows-recovery-fault-22222222222242228222222222222222"
+            }
+        },
+        [pscustomobject]@{
+            status = [int]200; httpOk = $true
+            body = [pscustomobject]@{
+                ok = $true
+                callId = $watchdogFixtureCallId
+                result = $successFixture.body.result
+                state = [pscustomobject]@{
+                    computerConnected = $true
+                    computer = [pscustomobject]@{
+                        sessionId = "33333333-3333-4333-8333-333333333333"
+                        processId = $watchdogFixtureWorkerPid
+                        controllerProcessId = $watchdogFixtureControllerPid
+                        share = $successFixture.body.state.computer.share
+                    }
+                }
+            }
+        },
+        [pscustomobject]@{
+            status = [int]504; httpOk = $false
+            body = [pscustomobject]@{
+                ok = $false
+                callId = $watchdogFixtureCallId
+                error = $outcomeUnknownFixture.body.error
+                taxonomy = [pscustomobject]@{
+                    code = "outcome_unknown"
+                    retriable = "False"
+                    recoveryHint = "reobserve"
+                }
+            }
+        }
+    )
+    $invalidWatchdogFixtures += $nestedArrayWatchdogFixtures.ToArray()
+    $invalidWatchdogFixtures += @($uppercaseSuccessFixture, $uppercaseOutcomeUnknownFixture)
+    $invalidWatchdogFixtures += @(
+        $contradictoryOutcomeUnknownFixture,
+        $contradictoryStateSharePidFixture,
+        $contradictoryObservationShareWindowFixture,
+        $contradictoryObservationSharePidFixture,
+        $contradictoryObservationShareFpsFixture,
+        $partialFrameShareIdFixture,
+        $partialFrameSourceSequenceFixture,
+        $mismatchedFrameShareIdFixture,
+        $mismatchedFrameSourceSequenceFixture,
+        $malformedNestedSourceSequenceFixture,
+        $negativeNestedSequenceFixture
+    )
+    if ($invalidWatchdogFixtures.Count -ne 28) {
+        throw "The recovery watchdog self-test did not construct every invalid response fixture."
+    }
+    foreach ($invalidWatchdogFixture in $invalidWatchdogFixtures) {
+        $invalidWatchdogFailure = $null
+        try {
+            $null = ConvertTo-RecoveryFaultStartRecord `
+                -Response $invalidWatchdogFixture `
+                -ExpectedCallId $watchdogFixtureCallId `
+                -ExpectedWindowId $watchdogFixtureWindowId `
+                -ExpectedHelperSessionId $watchdogFixtureSessionId `
+                -ExpectedWorkerPid $watchdogFixtureWorkerPid `
+                -ExpectedControllerPid $watchdogFixtureControllerPid `
+                -ExpectedTargetPid $watchdogFixtureTargetPid
+        }
+        catch {
+            $invalidWatchdogFailure = $_.Exception.Message
+        }
+        if ($invalidWatchdogFailure -cne "The recovery fault response was not an exact accepted outcome." -and
+            $invalidWatchdogFailure -cne "The recovery fault response envelope is invalid.") {
+            throw "The recovery watchdog classifier accepted or misclassified an invalid response."
+        }
+    }
+
     $selfTestHost = Get-Process -Id $PID
     $selfTestHostPath = $selfTestHost.Path
     $selfTestSessionId = $selfTestHost.SessionId
@@ -2238,7 +2956,7 @@ if ($SelfTest) {
     )
     $renamedHelperSelfTestPath = [IO.Path]::Combine(
         $renamedHelperSelfTestRoot,
-        "local-computer-helper-v0.12.66-windows-x86_64.exe"
+        "local-computer-helper-v0.12.67-windows-x86_64.exe"
     )
     $renamedHelperSelfTestAliasPath = [IO.Path]::Combine(
         $renamedHelperSelfTestRoot,
@@ -2671,7 +3389,7 @@ if ($SelfTest) {
     try {
         $operatorMarkerSelfTestRequestId = "0123456789abcdef0123456789abcdef"
         $operatorRequestMarker = New-ForegroundArmRequestMarker `
-            -ProductVersion "0.12.66" `
+            -ProductVersion "0.12.67" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -InputStateAtPublication "not-started" `
             -TimeoutSeconds 120 `
@@ -2698,7 +3416,7 @@ if ($SelfTest) {
         )
         if ((@($operatorRequestRecord.PSObject.Properties.Name) -join "|") -cne ($expectedRequestMarkerProperties -join "|") -or
             $operatorRequestRecord.schemaVersion -ne 2 -or
-            $operatorRequestRecord.productVersion -cne "0.12.66" -or
+            $operatorRequestRecord.productVersion -cne "0.12.67" -or
             $operatorRequestRecord.status -cne "action-required" -or
             $operatorRequestRecord.requestId -cne $operatorMarkerSelfTestRequestId -or
             $operatorRequestRecord.operatorActionRequired -ne $true -or
@@ -2744,7 +3462,7 @@ if ($SelfTest) {
         }
 
         $alreadyArmedMarker = New-ForegroundArmRequestMarker `
-            -ProductVersion "0.12.66" `
+            -ProductVersion "0.12.67" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -InputStateAtPublication "already-acknowledged" `
             -TimeoutSeconds 120 `
@@ -2779,7 +3497,7 @@ if ($SelfTest) {
             stableSamplesRequired = 3
         }
         $operatorReceivedMarker = New-ForegroundArmReceivedMarker `
-            -ProductVersion "0.12.66" `
+            -ProductVersion "0.12.67" `
             -RequestId $operatorMarkerSelfTestRequestId `
             -Proof $operatorReceivedProof
         $operatorReceivedPath = Write-NewOperatorMarker `
@@ -2798,7 +3516,7 @@ if ($SelfTest) {
         if ((@($operatorReceivedRecord.PSObject.Properties.Name) -join "|") -cne ($expectedReceivedMarkerProperties -join "|") -or
             $operatorReceivedRecord.status -cne "received" -or
             $operatorReceivedRecord.schemaVersion -ne 2 -or
-            $operatorReceivedRecord.productVersion -cne "0.12.66" -or
+            $operatorReceivedRecord.productVersion -cne "0.12.67" -or
             $operatorReceivedRecord.requestId -cne $operatorRequestRecord.requestId -or
             $operatorReceivedRecord.exactClickCountsMatched -ne $true -or
             $operatorReceivedRecord.stableSamplesObserved -ne 3 -or
@@ -2810,7 +3528,7 @@ if ($SelfTest) {
         $incompleteReceivedMarkerFailure = $null
         try {
             $null = New-ForegroundArmReceivedMarker `
-                -ProductVersion "0.12.66" `
+                -ProductVersion "0.12.67" `
                 -RequestId $operatorMarkerSelfTestRequestId `
                 -Proof $operatorReceivedProof
         }
@@ -2841,10 +3559,10 @@ if ($SelfTest) {
         }
         $candidateBindingSelfTestPath = [IO.Path]::Combine($candidateBindingSelfTestRoot, "candidate-binding.json")
         $candidateBindingNames = @(
-            "local-browser-bridge-v0.12.66-windows-x86_64.exe",
-            "local-computer-helper-v0.12.66-windows-x86_64.exe",
-            "local-browser-bridge-v0.12.66-macos-universal.tar.gz",
-            "local-browser-bridge-extension-v0.12.66.zip"
+            "local-browser-bridge-v0.12.67-windows-x86_64.exe",
+            "local-computer-helper-v0.12.67-windows-x86_64.exe",
+            "local-browser-bridge-v0.12.67-macos-universal.tar.gz",
+            "local-browser-bridge-extension-v0.12.67.zip"
         )
         $candidateBindingChecksums = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
         for ($index = 0; $index -lt $candidateBindingNames.Count; $index++) {
@@ -2869,8 +3587,8 @@ if ($SelfTest) {
         })
         $candidateBindingSelfTestRecord = [ordered]@{
             schemaVersion = 3
-            version = "0.12.66"
-            releaseTag = "v0.12.66"
+            version = "0.12.67"
+            releaseTag = "v0.12.67"
             repository = "flrngel/local-browser-bridge"
             sourceSha = [String]::new([char]'b', 40)
             workflowRunId = "32650000000"
@@ -2896,7 +3614,7 @@ if ($SelfTest) {
         )
         $candidateBindingSelfTestResult = Read-ExactReleaseCandidateBinding `
             -Path $candidateBindingSelfTestPath `
-            -ExpectedVersion "0.12.66" `
+            -ExpectedVersion "0.12.67" `
             -ExpectedManifestSha256 $candidateBindingManifestSha `
             -ExpectedChecksums $candidateBindingChecksums `
             -ExpectedAssetNames $candidateBindingNames
@@ -2915,7 +3633,7 @@ if ($SelfTest) {
         try {
             $null = Read-ExactReleaseCandidateBinding `
                 -Path $candidateBindingSelfTestPath `
-                -ExpectedVersion "0.12.66" `
+                -ExpectedVersion "0.12.67" `
                 -ExpectedManifestSha256 $candidateBindingManifestSha `
                 -ExpectedChecksums $candidateBindingChecksums `
                 -ExpectedAssetNames $candidateBindingNames
@@ -3292,6 +4010,43 @@ function Receive-LbbJsonResponse {
     }
     catch {
         throw "Loopback API request failed: $(ConvertTo-SafeFailureText $_.Exception.Message)"
+    }
+    finally {
+        if ($null -ne $httpResponse) {
+            $httpResponse.Dispose()
+        }
+        Close-LbbPendingRequest $Pending
+    }
+}
+
+function Receive-RecoveryFaultResponse {
+    param([object]$Pending)
+    $httpResponse = $null
+    try {
+        try {
+            $httpResponse = ($Pending.task.GetAwaiter()).GetResult()
+        }
+        catch {
+            return [pscustomobject]@{
+                transportFailure = $true
+                response = $null
+            }
+        }
+
+        try {
+            $json = (($httpResponse.Content.ReadAsStringAsync()).GetAwaiter()).GetResult()
+        }
+        catch {
+            throw "The recovery fault HTTP response body could not be read."
+        }
+        $response = ConvertFrom-RecoveryFaultHttpBody `
+            -Status ([int]$httpResponse.StatusCode) `
+            -HttpOk ([bool]$httpResponse.IsSuccessStatusCode) `
+            -Json $json
+        return [pscustomobject]@{
+            transportFailure = $false
+            response = $response
+        }
     }
     finally {
         if ($null -ne $httpResponse) {
@@ -3953,30 +4708,29 @@ function Complete-HelperTopologyRoundTrip {
 
 function New-WatchdogCausalityProof {
     param(
+        [ValidatePattern('^windows-recovery-fault-[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$')]
+        [string]$FaultCallId,
         [DateTime]$FaultTriggeredAtUtc,
         [int64]$EventObservedAfterShareStartMs,
         [int64]$ReplacementObservedAfterShareStartMs,
-        [bool]$WatchdogErrorObserved,
         [int64]$ElapsedLowerBoundMs
     )
     $replacementAfterEventMs = $ReplacementObservedAfterShareStartMs - $EventObservedAfterShareStartMs
     $elapsedLowerBoundSatisfied = $replacementAfterEventMs -ge $ElapsedLowerBoundMs
-    $causalityProven = $WatchdogErrorObserved -or $elapsedLowerBoundSatisfied
-    $causalityMode = if ($WatchdogErrorObserved) {
-        "observed-COMPUTER_HELPER_WATCHDOG"
-    }
-    elseif ($elapsedLowerBoundSatisfied) {
+    $causalityProven = $elapsedLowerBoundSatisfied
+    $causalityMode = if ($elapsedLowerBoundSatisfied) {
         "elapsed-lower-bound"
     }
     else {
         "unproven"
     }
     return [ordered]@{
-        faultTriggeredAtUtc = $FaultTriggeredAtUtc.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
+        faultCallId = $FaultCallId
+        faultTriggeredAtUtc = ConvertTo-CanonicalUtcTimestamp $FaultTriggeredAtUtc
         eventObservedAfterShareStartMs = $EventObservedAfterShareStartMs
         replacementObservedAfterShareStartMs = $ReplacementObservedAfterShareStartMs
         replacementObservedAfterEventMs = $replacementAfterEventMs
-        watchdogErrorObserved = $WatchdogErrorObserved
+        watchdogErrorObserved = $false
         elapsedLowerBoundMs = $ElapsedLowerBoundMs
         elapsedLowerBoundSatisfied = $elapsedLowerBoundSatisfied
         causalityMode = $causalityMode
@@ -4002,6 +4756,7 @@ $fixtureBuilderProcess = $null
 $fixtureExecutableSelfTestProcess = $null
 $serverProcess = $null
 $helperProcess = $null
+$pendingRecoveryFaultRequest = $null
 $pendingCancellationRequest = $null
 $script:ownedJob = $null
 $script:fixtureReady = $null
@@ -4406,11 +5161,14 @@ try {
         $script:runStage = "recovery-suite"
         $supervisorPidBefore = $helperProcess.Id
         $serverPidBefore = $serverProcess.Id
+        $faultReceipt = $null
+        $faultCallId = "windows-recovery-fault-" + [Guid]::NewGuid().ToString("N")
         $faultTriggeredAtUtc = [DateTime]::UtcNow
         $faultStopwatch = [Diagnostics.Stopwatch]::StartNew()
-        $faultStart = Invoke-LbbCommand "computer.share.start" @{ windowId = $targetWindowId; fps = 4 }
-        $shareStarted = $true
-        Save-StepResponse "one-shot share pump stall start" $faultStart
+        $pendingRecoveryFaultRequest = Start-LbbCommandRequest `
+            "computer.share.start" `
+            @{ windowId = $targetWindowId; fps = 4 } `
+            $faultCallId
         $null = Wait-Condition {
             if ($script:nativeProbeType::GetKernelEventState($recoveryEventName) -eq 2) { return $true }
             return $false
@@ -4421,10 +5179,38 @@ try {
         $statePolls = 0
         $statePollFailures = 0
         $disconnectObserved = $false
-        $watchdogErrorObserved = $false
         $recoveredBridgeState = $null
         $replacementObservedElapsedMs = $null
         do {
+            if ($null -eq $faultReceipt -and $pendingRecoveryFaultRequest.task.IsCompleted) {
+                $faultResult = $null
+                try {
+                    $faultResult = Receive-RecoveryFaultResponse $pendingRecoveryFaultRequest
+                }
+                finally {
+                    if ($null -ne $pendingRecoveryFaultRequest) {
+                        Close-LbbPendingRequest $pendingRecoveryFaultRequest
+                        $pendingRecoveryFaultRequest = $null
+                    }
+                }
+                if ($faultResult.transportFailure -eq $true) {
+                    $faultReceipt = ConvertTo-RecoveryFaultStartRecord -TransportFailure
+                }
+                elseif ($null -ne $faultResult.response) {
+                    $faultReceipt = ConvertTo-RecoveryFaultStartRecord `
+                        -Response $faultResult.response `
+                        -ExpectedCallId $faultCallId `
+                        -ExpectedWindowId $targetWindowId `
+                        -ExpectedHelperSessionId $initialHelperSessionId `
+                        -ExpectedWorkerPid $initialWorkerPid `
+                        -ExpectedControllerPid $supervisorPidBefore `
+                        -ExpectedTargetPid $targetPid
+                }
+                else {
+                    throw "The recovery fault request settled without a response or transport failure."
+                }
+                $shareStarted = $faultReceipt.outcomeClass -ceq "accepted-before-watchdog"
+            }
             Assert-True (-not $serverProcess.HasExited -and $serverProcess.Id -eq $serverPidBefore) "The loopback server exited during disposable-worker recovery."
             Assert-True (-not $helperProcess.HasExited -and $helperProcess.Id -eq $supervisorPidBefore) "The helper supervisor exited instead of replacing only its disposable worker."
             try {
@@ -4434,34 +5220,37 @@ try {
                     $disconnectObserved = $true
                 }
                 $candidateComputer = Get-PropertyValue $candidate "computer"
-                $candidateShare = Get-PropertyValue $candidateComputer "share"
-                if ((Get-PropertyValue $candidateShare "code") -eq "COMPUTER_HELPER_WATCHDOG") {
-                    $watchdogErrorObserved = $true
-                }
                 $candidateSession = [string](Get-PropertyValue $candidateComputer "sessionId")
-                if ($candidate.computerConnected -eq $true -and -not [String]::IsNullOrWhiteSpace($candidateSession) -and $candidateSession -ne $initialHelperSessionId) {
+                if ($null -eq $replacementObservedElapsedMs -and
+                    $candidate.computerConnected -eq $true -and
+                    -not [String]::IsNullOrWhiteSpace($candidateSession) -and
+                    $candidateSession -ne $initialHelperSessionId) {
                     $recoveredBridgeState = $candidate
                     $replacementObservedElapsedMs = [int64]$faultStopwatch.ElapsedMilliseconds
-                    break
                 }
             }
             catch {
                 $statePollFailures++
                 throw "The loopback server API stopped responding during disposable-worker recovery."
             }
+            if ($null -ne $faultReceipt -and $null -ne $recoveredBridgeState) {
+                break
+            }
             Start-Sleep -Milliseconds 200
         } while ([DateTime]::UtcNow -lt $recoveryDeadline)
 
+        Assert-True ($null -ne $faultReceipt) "The injected share-start request did not settle within the bounded recovery window."
+        Save-StepRecord "one-shot share pump stall start" $faultReceipt
         Assert-True ($null -ne $recoveredBridgeState) "The helper supervisor did not reconnect a replacement worker within the bounded recovery window."
         $faultStopwatch.Stop()
         $watchdogCausalityProof = New-WatchdogCausalityProof `
+            -FaultCallId $faultCallId `
             -FaultTriggeredAtUtc $faultTriggeredAtUtc `
             -EventObservedAfterShareStartMs $faultEventObservedElapsedMs `
             -ReplacementObservedAfterShareStartMs $replacementObservedElapsedMs `
-            -WatchdogErrorObserved $watchdogErrorObserved `
             -ElapsedLowerBoundMs $watchdogCausalityMinimumMs
         Save-StepRecord "share pump watchdog causality proof" $watchdogCausalityProof
-        Assert-True $watchdogCausalityProof.causalityProven "Worker replacement lacked COMPUTER_HELPER_WATCHDOG evidence and occurred too early to prove the 12-second share-pump watchdog caused it."
+        Assert-True $watchdogCausalityProof.causalityProven "Worker replacement occurred too early after the exact injected-fault event to prove the 12-second live-share pump watchdog caused it."
         $shareStarted = $false
         $replacementSessionId = [string]$recoveredBridgeState.computer.sessionId
         $replacementWorker = Wait-ForBoundHelperWorker $helperProcess $replacementSessionId "the replacement disposable helper worker"
@@ -4487,10 +5276,35 @@ try {
         Save-StepResponse "replacement worker fresh share start" $recoveryShareStart
         $recoveryShareFrame = Wait-Condition {
             $candidate = Get-CurrentObservation
-            if ($candidate.share.active -eq $true -and [int64]$candidate.share.sequence -gt 0) { return $candidate }
+            $expectedShareId = [string]$recoveryShareStart.result.id
+            if ($candidate.share.active -eq $true -and
+                [string]$candidate.share.id -ceq $expectedShareId -and
+                [string]$candidate.shareId -ceq $expectedShareId -and
+                [int64]$candidate.sourceSequence -gt 0 -and
+                [int64]$candidate.sourceSequence -eq [int64]$candidate.share.sourceSequence -and
+                [int64]$candidate.share.sequence -gt 0 -and
+                [string]$candidate.frameId -cne [string]$observation.frameId -and
+                [string]$candidate.windowId -ceq $targetWindowId -and
+                [int]$candidate.pid -eq $targetPid) {
+                return $candidate
+            }
             return $false
         } "a live native frame from the replacement worker"
+        Assert-True ([string]$recoveryShareFrame.share.id -ceq [string]$recoveryShareStart.result.id) "The replacement share frame escaped its exact share authority epoch."
+        Assert-True ([string]$recoveryShareFrame.shareId -ceq [string]$recoveryShareStart.result.id) "The replacement share frame lacked exact top-level share authority."
+        Assert-True ([int64]$recoveryShareFrame.sourceSequence -gt 0 -and [int64]$recoveryShareFrame.sourceSequence -eq [int64]$recoveryShareFrame.share.sourceSequence) "The replacement share frame lacked exact source-sequence authority."
+        Assert-True ([string]$recoveryShareFrame.frameId -cne [string]$observation.frameId) "The replacement share reused the preceding one-shot observation frame."
+        Assert-True ([string]$recoveryShareFrame.windowId -ceq $targetWindowId) "The replacement share frame escaped the exact fixture HWND."
+        Assert-True ([int]$recoveryShareFrame.pid -eq $targetPid) "The replacement share frame escaped the fixture process."
         $recoveryShareShot = Save-ObservationScreenshot $recoveryShareFrame "06-recovery-fresh-share"
+        $recoveryShareShot["shareActive"] = $true
+        $recoveryShareShot["shareId"] = [string]$recoveryShareFrame.share.id
+        $recoveryShareShot["frameShareId"] = [string]$recoveryShareFrame.shareId
+        $recoveryShareShot["sourceSequence"] = [int64]$recoveryShareFrame.sourceSequence
+        $recoveryShareShot["shareSourceSequence"] = [int64]$recoveryShareFrame.share.sourceSequence
+        $recoveryShareShot["windowId"] = [string]$recoveryShareFrame.windowId
+        $recoveryShareShot["pid"] = [int]$recoveryShareFrame.pid
+        $recoveryShareShot["sequence"] = [int64]$recoveryShareFrame.share.sequence
         Save-StepRecord "replacement worker fresh share screenshot" $recoveryShareShot
         $recoveryShareStop = Invoke-LbbCommand "computer.share.stop" @{}
         $shareStarted = $false
@@ -4509,7 +5323,7 @@ try {
             helperSessionBefore = $initialHelperSessionId
             helperSessionAfter = $replacementSessionId
             disconnectObserved = $disconnectObserved
-            watchdogErrorObserved = $watchdogErrorObserved
+            watchdogErrorObserved = $false
             watchdogCausality = $watchdogCausalityProof
             successfulServerStatePolls = $statePolls
             failedServerStatePolls = $statePollFailures
@@ -5024,6 +5838,15 @@ catch {
     }
 }
 finally {
+    if ($null -ne $pendingRecoveryFaultRequest) {
+        try {
+            Close-LbbPendingRequest $pendingRecoveryFaultRequest
+            $pendingRecoveryFaultRequest = $null
+        }
+        catch {
+            $cleanupIssues.Add("The runner-owned pending recovery fault request did not close cleanly.")
+        }
+    }
     if ($null -ne $pendingCancellationRequest) {
         try {
             Close-LbbPendingRequest $pendingCancellationRequest

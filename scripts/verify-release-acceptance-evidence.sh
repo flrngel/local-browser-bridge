@@ -6,7 +6,7 @@ export LC_ALL=C
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly API_VERSION="2026-03-10"
 readonly RECEIPT_SCHEMA_VERSION="3"
-readonly EVIDENCE_PRODUCT_VERSION="0.12.66"
+readonly EVIDENCE_PRODUCT_VERSION="0.12.67"
 readonly EVIDENCE_MAX_BLOB_BYTES=20971520
 readonly EVIDENCE_MAX_TOTAL_BYTES=209715200
 readonly EVIDENCE_MAX_PATH_BYTES=1024
@@ -1581,6 +1581,366 @@ validate_windows_step_inventory() {
     ' "$summary" >/dev/null
 }
 
+validate_windows_recovery_chain() {
+  local fault_start="$1"
+  local causality="$2"
+  local recovery="$3"
+  local summary="$4"
+  local initial_readiness="$5"
+  local replacement_readiness="$6"
+  local recovery_observe="$7"
+  local recovery_observe_screenshot="$8"
+  local recovery_share_start="$9"
+  local recovery_share_screenshot="${10}"
+  local recovery_share_stop="${11}"
+  jq -s -e \
+    --slurpfile causality "$causality" \
+    --slurpfile recovery "$recovery" \
+    --slurpfile summary "$summary" \
+    --slurpfile initial "$initial_readiness" \
+    --slurpfile replacement "$replacement_readiness" \
+    --slurpfile observe "$recovery_observe" \
+    --slurpfile observeShot "$recovery_observe_screenshot" \
+    --slurpfile shareStart "$recovery_share_start" \
+    --slurpfile shareShot "$recovery_share_screenshot" \
+    --slurpfile shareStop "$recovery_share_stop" '
+      def uuid_v4:
+        type == "string"
+        and test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$");
+      def recovery_call_id_v4:
+        type == "string"
+        and test("^windows-recovery-fault-[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$");
+      def fixture_call_id_v4:
+        type == "string"
+        and test("^windows-fixture-[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$");
+      def raw_inactive_share:
+        type == "object"
+        and .active == false
+        and keys == ["active"];
+      def inactive_share:
+        type == "object"
+        and .active == false
+        and .stopped == false
+        and .reason == "inactive"
+        and keys == ["active","reason","stopped"];
+      length == 1
+      and (.[0] as $fault |
+        ($fault | type == "object")
+        and ($fault | keys_unsorted) == [
+          "schemaVersion","outcomeClass","httpStatus","httpOk","bodyOk",
+          "callId","callIdMatched","watchdogErrorObserved","errorCode","taxonomyCode",
+          "taxonomyRetriable","taxonomyRecoveryHint","transportFailure",
+          "pathsRecorded","secretsRecorded"
+        ]
+        and $fault.schemaVersion == 1
+        and $fault.pathsRecorded == false
+        and $fault.secretsRecorded == false
+        and (
+          if $fault.outcomeClass == "accepted-before-watchdog" then
+            $fault.httpStatus == 200 and $fault.httpOk == true and $fault.bodyOk == true
+            and ($fault.callId | recovery_call_id_v4)
+            and $fault.callIdMatched == true and $fault.watchdogErrorObserved == false
+            and $fault.errorCode == null and $fault.taxonomyCode == null
+            and $fault.taxonomyRetriable == null and $fault.taxonomyRecoveryHint == null
+            and $fault.transportFailure == false
+          elif $fault.outcomeClass == "outcome-unknown-after-fault" then
+            $fault.httpStatus == 504 and $fault.httpOk == false and $fault.bodyOk == false
+            and ($fault.callId | recovery_call_id_v4)
+            and $fault.callIdMatched == true and $fault.watchdogErrorObserved == false
+            and $fault.errorCode == "COMMAND_OUTCOME_UNKNOWN"
+            and $fault.taxonomyCode == "outcome_unknown" and $fault.taxonomyRetriable == false
+            and $fault.taxonomyRecoveryHint == "reobserve" and $fault.transportFailure == false
+          elif $fault.outcomeClass == "transport-ended-before-watchdog-receipt" then
+            $fault.httpStatus == null and $fault.httpOk == null and $fault.bodyOk == null
+            and $fault.callId == null
+            and $fault.callIdMatched == null and $fault.watchdogErrorObserved == false
+            and $fault.errorCode == null and $fault.taxonomyCode == null
+            and $fault.taxonomyRetriable == null and $fault.taxonomyRecoveryHint == null
+            and $fault.transportFailure == true
+          else false end
+        )
+      )
+      and ($causality | length) == 1
+      and ($recovery | length) == 1
+      and ($summary | length) == 1
+      and ($initial | length) == 1
+      and ($replacement | length) == 1
+      and ($observe | length) == 1
+      and ($observeShot | length) == 1
+      and ($shareStart | length) == 1
+      and ($shareShot | length) == 1
+      and ($shareStop | length) == 1
+      and ($summary[0].targetWindowId | type == "string" and test("^[1-9][0-9]{0,19}$"))
+      and ($summary[0].targetPid | type == "number" and floor == . and . > 0)
+      and ($summary[0].interactiveSessionId | type == "number" and floor == . and . >= 1)
+      and ($causality[0] as $cause |
+        ($cause | keys_unsorted) == [
+          "faultCallId","faultTriggeredAtUtc","eventObservedAfterShareStartMs",
+          "replacementObservedAfterShareStartMs","replacementObservedAfterEventMs",
+          "watchdogErrorObserved","elapsedLowerBoundMs","elapsedLowerBoundSatisfied",
+          "causalityMode","causalityProven"
+        ]
+        and ($cause.faultCallId | recovery_call_id_v4)
+        and (
+          if .[0].outcomeClass == "transport-ended-before-watchdog-receipt" then
+            .[0].callId == null
+          else
+            .[0].callId == $cause.faultCallId
+          end
+        )
+        and ($cause.faultTriggeredAtUtc | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{7}Z$"))
+        and ($cause.eventObservedAfterShareStartMs | type == "number" and floor == . and . >= 0)
+        and ($cause.replacementObservedAfterShareStartMs | type == "number" and floor == . and . >= 0)
+        and ($cause.replacementObservedAfterEventMs | type == "number" and floor == . and . >= 0)
+        and $cause.replacementObservedAfterShareStartMs >= $cause.eventObservedAfterShareStartMs
+        and $cause.replacementObservedAfterEventMs ==
+          ($cause.replacementObservedAfterShareStartMs - $cause.eventObservedAfterShareStartMs)
+        and $cause.elapsedLowerBoundMs == 11500
+        and $cause.elapsedLowerBoundSatisfied == ($cause.replacementObservedAfterEventMs >= 11500)
+        and $cause.causalityProven == true
+        and $cause.watchdogErrorObserved == false
+        and $cause.elapsedLowerBoundSatisfied == true
+        and $cause.causalityMode == "elapsed-lower-bound"
+        and ($recovery[0] as $proof |
+          ($proof | keys_unsorted) == [
+            "faultHook","eventSignaled","eventName","serverPidBefore","serverPidAfter",
+            "supervisorPidBefore","supervisorPidAfter","workerPidBefore","workerPidAfter",
+            "helperSessionBefore","helperSessionAfter","disconnectObserved",
+            "watchdogErrorObserved","watchdogCausality","successfulServerStatePolls",
+            "failedServerStatePolls","recoveredObserveFrameId","recoveredShareFrameId",
+            "remoteProtocolFaultMethodAdded"
+          ]
+          and $proof.faultHook == "launch-time-only one-shot share-pump stall kernel event"
+          and $proof.eventSignaled == true
+          and ($proof.eventName | type == "string" and test("^Local\\\\LBBTestSharePump-[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$"))
+          and ($proof.serverPidBefore | type == "number" and floor == . and . > 0)
+          and $proof.serverPidAfter == $proof.serverPidBefore
+          and ($proof.supervisorPidBefore | type == "number" and floor == . and . > 0)
+          and $proof.supervisorPidAfter == $proof.supervisorPidBefore
+          and ($proof.workerPidBefore | type == "number" and floor == . and . > 0)
+          and ($proof.workerPidAfter | type == "number" and floor == . and . > 0)
+          and $proof.workerPidAfter != $proof.workerPidBefore
+          and ($proof.helperSessionBefore | uuid_v4)
+          and ($proof.helperSessionAfter | uuid_v4)
+          and $proof.helperSessionAfter != $proof.helperSessionBefore
+          and ($proof.disconnectObserved | type == "boolean")
+          and $proof.watchdogErrorObserved == $cause.watchdogErrorObserved
+          and $proof.watchdogCausality == $cause
+          and ($proof.successfulServerStatePolls | type == "number" and floor == . and . > 0)
+          and $proof.failedServerStatePolls == 0
+          and ($proof.recoveredObserveFrameId | uuid_v4)
+          and ($proof.recoveredShareFrameId | uuid_v4)
+          and $proof.recoveredShareFrameId != $proof.recoveredObserveFrameId
+          and $proof.remoteProtocolFaultMethodAdded == false
+          and ($initial[0] as $before |
+            $replacement[0] as $after |
+            $observe[0] as $freshObserve |
+            $observeShot[0] as $freshObserveShot |
+            $shareStart[0] as $freshShareStart |
+            $shareShot[0] as $freshShareShot |
+            $shareStop[0] as $freshShareStop |
+            ($summary[0].helperTopologyChecks
+              | map(select(.description == "the original helper worker after foreground arming"))) as $beforeTopology |
+            ($summary[0].helperTopologyChecks
+              | map(select(.description == "the replacement disposable helper worker"))) as $afterTopology |
+            ($beforeTopology | length) == 1
+            and ($afterTopology | length) == 1
+            and $beforeTopology[0].supervisorPid == $proof.supervisorPidBefore
+            and $beforeTopology[0].controllerPid == $proof.supervisorPidBefore
+            and $beforeTopology[0].workerPid == $proof.workerPidBefore
+            and $beforeTopology[0].interactiveSessionId == $summary[0].interactiveSessionId
+            and ($beforeTopology[0].stableConsecutivePolls | type == "number" and floor == . and . >= 2)
+            and $beforeTopology[0].exactImageMatched == true
+            and $beforeTopology[0].directChildEnumerated == true
+            and $beforeTopology[0].helloStateMatched == true
+            and $beforeTopology[0].protocolRoundTrip == true
+            and $beforeTopology[0].roundTripMethod == "computer.status"
+            and $afterTopology[0].supervisorPid == $proof.supervisorPidAfter
+            and $afterTopology[0].controllerPid == $proof.supervisorPidAfter
+            and $afterTopology[0].workerPid == $proof.workerPidAfter
+            and $afterTopology[0].interactiveSessionId == $summary[0].interactiveSessionId
+            and ($afterTopology[0].stableConsecutivePolls | type == "number" and floor == . and . >= 2)
+            and $afterTopology[0].exactImageMatched == true
+            and $afterTopology[0].directChildEnumerated == true
+            and $afterTopology[0].helloStateMatched == true
+            and $afterTopology[0].protocolRoundTrip == true
+            and $afterTopology[0].roundTripMethod == "computer.status"
+            and ($before.error == null and $before.taxonomy == null)
+            and ($before.callId | fixture_call_id_v4)
+            and $before.targetState.computerConnected == true
+            and $before.targetState.computerObservation == null
+            and $before.targetState.computer.sessionId == $proof.helperSessionBefore
+            and $before.targetState.computer.processId == $proof.workerPidBefore
+            and $before.targetState.computer.controllerProcessId == $proof.supervisorPidBefore
+            and ($before.targetState.computer.share | inactive_share)
+            and $before.result.inputReady == true and $before.result.semanticReady == true
+            and ($before.result.share | raw_inactive_share)
+            and ($after.error == null and $after.taxonomy == null)
+            and ($after.callId | fixture_call_id_v4)
+            and $after.targetState.computerConnected == true
+            and $after.targetState.computerObservation == null
+            and $after.targetState.computer.sessionId == $proof.helperSessionAfter
+            and $after.targetState.computer.processId == $proof.workerPidAfter
+            and $after.targetState.computer.controllerProcessId == $proof.supervisorPidAfter
+            and ($after.targetState.computer.share | inactive_share)
+            and $after.result.inputReady == true and $after.result.semanticReady == true
+            and ($after.result.share | raw_inactive_share)
+            and ([$before.callId, $after.callId, $freshObserve.callId,
+                  $freshShareStart.callId, $freshShareStop.callId] | unique | length) == 5
+            and ($freshObserve.error == null and $freshObserve.taxonomy == null)
+            and ($freshObserve.callId | fixture_call_id_v4)
+            and $freshObserve.targetState.computerConnected == true
+            and $freshObserve.targetState.computer.sessionId == $proof.helperSessionAfter
+            and $freshObserve.targetState.computer.processId == $proof.workerPidAfter
+            and $freshObserve.targetState.computer.controllerProcessId == $proof.supervisorPidAfter
+            and ($freshObserve.targetState.computer.share | inactive_share)
+            and $freshObserve.result.frameId == $proof.recoveredObserveFrameId
+            and ($freshObserve.result.share | inactive_share)
+            and ($freshObserve.result | has("shareId") | not)
+            and ($freshObserve.result | has("sourceSequence") | not)
+            and ($freshObserve.result | has("screenshotUrl") | not)
+            and ($freshObserve.result | has("contentHash") | not)
+            and ($freshObserve.result | has("screenshotWidth") | not)
+            and ($freshObserve.result | has("screenshotHeight") | not)
+            and ($freshObserve.targetState.computerObservation.screenshotUrl
+              | type == "string" and startswith("/api/computer/screenshot?"))
+            and ($freshObserve.targetState.computerObservation.contentHash
+              | type == "string" and test("^[0-9a-f]{64}$"))
+            and ($freshObserve.targetState.computerObservation.screenshotWidth
+              | type == "number" and floor == . and . > 0)
+            and ($freshObserve.targetState.computerObservation.screenshotHeight
+              | type == "number" and floor == . and . > 0)
+            and $freshObserve.result == ($freshObserve.targetState.computerObservation
+              | del(.screenshotUrl,.contentHash,.screenshotWidth,.screenshotHeight))
+            and $freshObserve.targetState.computerObservation.frameId == $proof.recoveredObserveFrameId
+            and ($freshObserve.targetState.computerObservation.share | inactive_share)
+            and ($freshObserve.targetState.computerObservation | has("shareId") | not)
+            and ($freshObserve.targetState.computerObservation | has("sourceSequence") | not)
+            and $freshObserve.result.windowId == $freshObserve.targetState.computerObservation.windowId
+            and $freshObserve.result.windowId == $summary[0].targetWindowId
+            and ($freshObserve.result.pid | type == "number" and floor == . and . > 0)
+            and $freshObserve.result.pid == $freshObserve.targetState.computerObservation.pid
+            and $freshObserve.result.pid == $summary[0].targetPid
+            and ($freshObserveShot | keys_unsorted) == ["file","bytes","sha256","frameId","contentHash"]
+            and $freshObserveShot.file == "05-recovery-fresh-observe.png"
+            and ($freshObserveShot.bytes | type == "number" and floor == . and . > 1000)
+            and ($freshObserveShot.sha256 | type == "string" and test("^[0-9a-f]{64}$"))
+            and $freshObserveShot.contentHash == $freshObserveShot.sha256
+            and $freshObserveShot.contentHash == $freshObserve.targetState.computerObservation.contentHash
+            and $freshObserveShot.frameId == $proof.recoveredObserveFrameId
+            and ($freshShareStart.error == null and $freshShareStart.taxonomy == null)
+            and ($freshShareStart.callId | fixture_call_id_v4)
+            and $freshShareStart.result.active == true
+            and ($freshShareStart.result.id | uuid_v4)
+            and $freshShareStart.result.windowId == $summary[0].targetWindowId
+            and $freshShareStart.result.pid == $summary[0].targetPid
+            and $freshShareStart.result.fps == 4
+            and $freshShareStart.targetState.computerConnected == true
+            and $freshShareStart.targetState.computer.sessionId == $proof.helperSessionAfter
+            and $freshShareStart.targetState.computer.processId == $proof.workerPidAfter
+            and $freshShareStart.targetState.computer.controllerProcessId == $proof.supervisorPidAfter
+            and $freshShareStart.targetState.computer.share.active == true
+            and $freshShareStart.targetState.computer.share.id == $freshShareStart.result.id
+            and $freshShareStart.targetState.computer.share.windowId == $freshShareStart.result.windowId
+            and $freshShareStart.targetState.computer.share.pid == $freshShareStart.result.pid
+            and $freshShareStart.targetState.computer.share.fps == $freshShareStart.result.fps
+            and ($freshShareStart.targetState.computerObservation.frameId | uuid_v4)
+            and $freshShareStart.targetState.computerObservation.frameId != $proof.recoveredObserveFrameId
+            and ($freshShareStart.targetState.computerObservation.contentHash
+              | type == "string" and test("^[0-9a-f]{64}$"))
+            and $freshShareStart.targetState.computerObservation.windowId == $summary[0].targetWindowId
+            and $freshShareStart.targetState.computerObservation.pid == $summary[0].targetPid
+            and $freshShareStart.targetState.computerObservation.share.active == true
+            and $freshShareStart.targetState.computerObservation.share.id == $freshShareStart.result.id
+            and $freshShareStart.targetState.computerObservation.share.windowId == $freshShareStart.result.windowId
+            and $freshShareStart.targetState.computerObservation.share.pid == $freshShareStart.result.pid
+            and $freshShareStart.targetState.computerObservation.share.fps == $freshShareStart.result.fps
+            and ($freshShareStart.targetState.computerObservation.share.sourceSequence
+              | type == "number" and floor == . and . >= 0)
+            and ($freshShareStart.targetState.computerObservation.share.sequence
+              | type == "number" and floor == . and . >= 0)
+            and (
+              if ($freshShareStart.targetState.computerObservation | has("shareId")) or
+                 ($freshShareStart.targetState.computerObservation | has("sourceSequence")) then
+                $freshShareStart.targetState.computerObservation.shareId == $freshShareStart.result.id
+                and ($freshShareStart.targetState.computerObservation.sourceSequence
+                  | type == "number" and floor == . and . > 0)
+                and $freshShareStart.targetState.computerObservation.share.sourceSequence ==
+                  $freshShareStart.targetState.computerObservation.sourceSequence
+                and ($freshShareStart.targetState.computerObservation.share.sequence
+                  | type == "number" and floor == . and . > 0)
+                and (
+                  if $freshShareStart.targetState.computerObservation.frameId == $freshShareShot.frameId then
+                    $freshShareStart.targetState.computerObservation.contentHash == $freshShareShot.contentHash
+                    and $freshShareStart.targetState.computerObservation.sourceSequence ==
+                      $freshShareShot.sourceSequence
+                    and $freshShareStart.targetState.computerObservation.share.sourceSequence ==
+                      $freshShareShot.shareSourceSequence
+                    and $freshShareStart.targetState.computerObservation.share.sequence ==
+                      $freshShareShot.sequence
+                  else
+                    $freshShareShot.sourceSequence >
+                      $freshShareStart.targetState.computerObservation.sourceSequence
+                    and $freshShareShot.sequence >
+                      $freshShareStart.targetState.computerObservation.share.sequence
+                  end
+                )
+              else
+                $freshShareStart.targetState.computerObservation.frameId != $freshShareShot.frameId
+                and $freshShareShot.sourceSequence >=
+                  $freshShareStart.targetState.computerObservation.share.sourceSequence
+                and $freshShareShot.sequence >=
+                  $freshShareStart.targetState.computerObservation.share.sequence
+              end
+            )
+            and ($freshShareShot | keys_unsorted) == [
+              "file","bytes","sha256","frameId","contentHash",
+              "shareActive","shareId","frameShareId","sourceSequence",
+              "shareSourceSequence","windowId","pid","sequence"
+            ]
+            and $freshShareShot.file == "06-recovery-fresh-share.png"
+            and ($freshShareShot.bytes | type == "number" and floor == . and . > 1000)
+            and ($freshShareShot.sha256 | type == "string" and test("^[0-9a-f]{64}$"))
+            and $freshShareShot.contentHash == $freshShareShot.sha256
+            and $freshShareShot.frameId == $proof.recoveredShareFrameId
+            and $freshShareShot.frameId != $freshObserveShot.frameId
+            and $freshShareShot.shareActive == true
+            and $freshShareShot.shareId == $freshShareStart.result.id
+            and $freshShareShot.frameShareId == $freshShareShot.shareId
+            and ($freshShareShot.sourceSequence | type == "number" and floor == . and . > 0)
+            and $freshShareShot.shareSourceSequence == $freshShareShot.sourceSequence
+            and $freshShareShot.windowId == $summary[0].targetWindowId
+            and $freshShareShot.pid == $summary[0].targetPid
+            and ($freshShareShot.sequence | type == "number" and floor == . and . > 0)
+            and ($freshShareStop.error == null and $freshShareStop.taxonomy == null)
+            and ($freshShareStop.callId | fixture_call_id_v4)
+            and $freshShareStop.result.active == false
+            and $freshShareStop.result.stopped == true
+            and $freshShareStop.result.reason == "requested"
+            and $freshShareStop.result.id == $freshShareStart.result.id
+            and $freshShareStop.targetState.computerConnected == true
+            and $freshShareStop.targetState.computer.sessionId == $proof.helperSessionAfter
+            and $freshShareStop.targetState.computer.processId == $proof.workerPidAfter
+            and $freshShareStop.targetState.computer.controllerProcessId == $proof.supervisorPidAfter
+            and ($freshShareStop.targetState.computer.share | keys) == ["active","reason","stopped"]
+            and $freshShareStop.targetState.computer.share.active == false
+            and $freshShareStop.targetState.computer.share.stopped == true
+            and $freshShareStop.targetState.computer.share.reason == "requested"
+            and $freshShareStop.targetState.computerObservation == null
+          )
+        )
+      )
+    ' "$fault_start" >/dev/null
+  local status=$?
+  test "$status" = 0 || return "$status"
+  local run_started run_finished fault_triggered
+  run_started="$(jq -er '.startedAtUtc' "$summary")" || return 1
+  run_finished="$(jq -er '.finishedAtUtc' "$summary")" || return 1
+  fault_triggered="$(jq -er '.faultTriggeredAtUtc' "$causality")" || return 1
+  assert_utc_interval "$run_started" "$fault_triggered" 7200 "Windows recovery pre-fault" >/dev/null 2>&1 \
+    && assert_utc_interval "$fault_triggered" "$run_finished" 7200 "Windows recovery post-fault" >/dev/null 2>&1
+}
+
 validate_windows_arm_pair_identity() {
   local request="$1"
   local received="$2"
@@ -1772,6 +2132,19 @@ verify_windows_computer() {
     ' "$summary" >/dev/null || die "Windows computer result failed its pass, binding, cleanup, or arm invariants"
   validate_windows_step_inventory "$summary" "$expected_steps" \
     || die "Windows computer result does not contain the exact ordered Suite=All step inventory"
+  validate_windows_recovery_chain \
+    "$evidence_root/windows/computer/steps/07-one-shot-share-pump-stall-start.json" \
+    "$evidence_root/windows/computer/steps/08-share-pump-watchdog-causality-proof.json" \
+    "$evidence_root/windows/computer/steps/15-disposable-worker-recovery-proof.json" \
+    "$summary" \
+    "$evidence_root/windows/computer/steps/04-post-arm-protocol-bound-helper-continuity.json" \
+    "$evidence_root/windows/computer/steps/09-replacement-protocol-bound-helper-readiness.json" \
+    "$evidence_root/windows/computer/steps/10-replacement-worker-fresh-observe.json" \
+    "$evidence_root/windows/computer/steps/11-replacement-worker-fresh-observe-screenshot.json" \
+    "$evidence_root/windows/computer/steps/12-replacement-worker-fresh-share-start.json" \
+    "$evidence_root/windows/computer/steps/13-replacement-worker-fresh-share-screenshot.json" \
+    "$evidence_root/windows/computer/steps/14-replacement-worker-fresh-share-stop.json" \
+    || die "Windows computer recovery evidence does not bind the exact fault receipt, watchdog causality, and replacement worker"
   assert_release_candidate_binding "$summary" '.releaseCandidateBinding'
   assert_utc_interval "$(jq -er '.startedAtUtc' "$summary")" "$(jq -er '.finishedAtUtc' "$summary")" 7200 \
     "Windows computer acceptance"
@@ -2131,7 +2504,7 @@ PY
   jq -e '
       .schemaVersion == 1
       and .evidenceType == "stock-user-chrome-api-matrix"
-      and .version == "0.12.66" and .target == "loopback-demo" and .passed == true
+      and .version == "0.12.67" and .target == "loopback-demo" and .passed == true
       and .methodCount == 25 and (.methods | length) == 25
       and ([.methods[].name] == [
         "status","browser.control.start","browser.control.status","browser.control.stop",
@@ -2170,7 +2543,7 @@ PY
       . as $root
       |
       .schemaVersion == 2 and .evidenceType == "stock-user-chrome-computer-helper-chain"
-      and .version == "0.12.66" and .passed == true
+      and .version == "0.12.67" and .passed == true
       and .server.soleListener == "127.0.0.1:17373" and .server.updateCheckDisabled == true
       and .helper.connectedThroughLoopbackServer == true and .helper.serverApiOnly == true
       and .extensionPayload.fileCount == 11
@@ -2309,7 +2682,7 @@ PY
       and ([.computerHelperChain[] | select(type == "boolean")] | all(. == true))
       and .initialState.capturedBeforeRelevantMutation == true
       and .initialState.candidateExtensionPresent == false and .initialState.savedTokenConfigured == false
-      and .extension.cardCount == 1 and .extension.version == "0.12.66" and .extension.enabled == true
+      and .extension.cardCount == 1 and .extension.version == "0.12.67" and .extension.enabled == true
       and .extension.loadErrors == 0 and .extension.loadedVia == "chrome://extensions-load-unpacked"
       and .extension.loadedDirectoryByteMatchesCandidateZip == true and .extension.popupConnected == true
       and .extension.debuggerLeaseActiveAtFirstCapture == true and .extension.nativeDebuggerUseIndicatorSeen == true
@@ -3103,15 +3476,15 @@ self_test() {
   local sha256_a="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   local receipt="$scratch/receipt.json"
   self_test_attestation_selection
-  printf '%s' '{"schemaVersion":3,"version":"0.12.66","releaseTag":"v0.12.66","sourceSha":"1111111111111111111111111111111111111111","workflowRunId":"123","workflowRunAttempt":"1","releaseCandidateArtifactId":"456","releaseCandidateArtifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","evidenceRef":"refs/heads/evidence/v0.12.66-release-run-123-attempt-1","evidenceCommitSha":"3333333333333333333333333333333333333333","macosPassed":true,"macosAcceptanceSha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","macosQuietResultSha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","macosDeliberateConcurrencyResultSha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","windowsPassed":true,"windowsResultSha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","stockChromePassed":true,"stockChrome":true,"stockChromeResultSha256":"9999999999999999999999999999999999999999999999999999999999999999"}' > "$receipt"
-  validate_receipt "$receipt" 0.12.66 v0.12.66 "$sha1_a" 123 1 "$sha256_a" \
+  printf '%s' '{"schemaVersion":3,"version":"0.12.67","releaseTag":"v0.12.67","sourceSha":"1111111111111111111111111111111111111111","workflowRunId":"123","workflowRunAttempt":"1","releaseCandidateArtifactId":"456","releaseCandidateArtifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","evidenceRef":"refs/heads/evidence/v0.12.67-release-run-123-attempt-1","evidenceCommitSha":"3333333333333333333333333333333333333333","macosPassed":true,"macosAcceptanceSha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","macosQuietResultSha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","macosDeliberateConcurrencyResultSha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","windowsPassed":true,"windowsResultSha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","stockChromePassed":true,"stockChrome":true,"stockChromeResultSha256":"9999999999999999999999999999999999999999999999999999999999999999"}' > "$receipt"
+  validate_receipt "$receipt" 0.12.67 v0.12.67 "$sha1_a" 123 1 "$sha256_a" \
     || die "self-test rejected a valid canonical schema-3 receipt"
   jq -cS . "$receipt" > "$scratch/noncanonical.json"
-  if validate_receipt "$scratch/noncanonical.json" 0.12.66 v0.12.66 "$sha1_a" 123 1 "$sha256_a"; then
+  if validate_receipt "$scratch/noncanonical.json" 0.12.67 v0.12.67 "$sha1_a" 123 1 "$sha256_a"; then
     die "self-test accepted reordered receipt keys"
   fi
   jq -c '.schemaVersion = 2' "$receipt" > "$scratch/stale.json"
-  if validate_receipt "$scratch/stale.json" 0.12.66 v0.12.66 "$sha1_a" 123 1 "$sha256_a"; then
+  if validate_receipt "$scratch/stale.json" 0.12.67 v0.12.67 "$sha1_a" 123 1 "$sha256_a"; then
     die "self-test accepted a stale schema-2 receipt"
   fi
   mkdir "$scratch/safe"
@@ -3131,7 +3504,7 @@ self_test() {
   fi
 
   EXPECTED_RELEASE_CANDIDATE_BINDING="$scratch/expected-binding.json"
-  printf '%s' '{"schemaVersion":3,"version":"0.12.66","releaseTag":"v0.12.66","repository":"flrngel/local-browser-bridge","sourceSha":"1111111111111111111111111111111111111111","workflowRunId":"123","workflowRunAttempt":"2","workflowEvent":"workflow_dispatch","workflowRef":"refs/heads/main","workflowPath":".github/workflows/deploy.yml","artifactId":"456","artifactName":"release-candidate","artifactZipBytes":789,"artifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","attestationInvocationUri":"https://github.com/flrngel/local-browser-bridge/actions/runs/123/attempts/2","attestedAssetCount":5,"githubHostedRunner":true,"assets":[]}' > "$EXPECTED_RELEASE_CANDIDATE_BINDING"
+  printf '%s' '{"schemaVersion":3,"version":"0.12.67","releaseTag":"v0.12.67","repository":"flrngel/local-browser-bridge","sourceSha":"1111111111111111111111111111111111111111","workflowRunId":"123","workflowRunAttempt":"2","workflowEvent":"workflow_dispatch","workflowRef":"refs/heads/main","workflowPath":".github/workflows/deploy.yml","artifactId":"456","artifactName":"release-candidate","artifactZipBytes":789,"artifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","attestationInvocationUri":"https://github.com/flrngel/local-browser-bridge/actions/runs/123/attempts/2","attestedAssetCount":5,"githubHostedRunner":true,"assets":[]}' > "$EXPECTED_RELEASE_CANDIDATE_BINDING"
   printf '%s' "{\"releaseCandidateBinding\":$(<"$EXPECTED_RELEASE_CANDIDATE_BINDING")}" > "$scratch/current-binding.json"
   assert_release_candidate_binding "$scratch/current-binding.json" '.releaseCandidateBinding'
   jq -c '.releaseCandidateBinding.workflowRunAttempt = "1"' "$scratch/current-binding.json" > "$scratch/replayed-binding.json"
@@ -3167,6 +3540,721 @@ self_test() {
   if validate_windows_step_inventory "$scratch/windows-reordered.json" "$synthetic_steps"; then
     die "self-test accepted a reordered Windows step inventory"
   fi
+
+  local recovery_fault_start="$scratch/windows-recovery-fault-start.json"
+  local recovery_causality="$scratch/windows-recovery-causality.json"
+  local recovery_proof="$scratch/windows-recovery-proof.json"
+  jq -cn '{
+      schemaVersion: 1,
+      outcomeClass: "accepted-before-watchdog",
+      httpStatus: 200,
+      httpOk: true,
+      bodyOk: true,
+      callId: "windows-recovery-fault-11111111111141118111111111111111",
+      callIdMatched: true,
+      watchdogErrorObserved: false,
+      errorCode: null,
+      taxonomyCode: null,
+      taxonomyRetriable: null,
+      taxonomyRecoveryHint: null,
+      transportFailure: false,
+      pathsRecorded: false,
+      secretsRecorded: false
+    }' > "$recovery_fault_start"
+  jq -cn '{
+      faultCallId: "windows-recovery-fault-11111111111141118111111111111111",
+      faultTriggeredAtUtc: "2026-08-31T00:00:00.0000000Z",
+      eventObservedAfterShareStartMs: 25,
+      replacementObservedAfterShareStartMs: 12025,
+      replacementObservedAfterEventMs: 12000,
+      watchdogErrorObserved: false,
+      elapsedLowerBoundMs: 11500,
+      elapsedLowerBoundSatisfied: true,
+      causalityMode: "elapsed-lower-bound",
+      causalityProven: true
+    }' > "$recovery_causality"
+  jq -cn --slurpfile causality "$recovery_causality" '{
+      faultHook: "launch-time-only one-shot share-pump stall kernel event",
+      eventSignaled: true,
+      eventName: "Local\\LBBTestSharePump-11111111111141118111111111111111",
+      serverPidBefore: 101,
+      serverPidAfter: 101,
+      supervisorPidBefore: 202,
+      supervisorPidAfter: 202,
+      workerPidBefore: 303,
+      workerPidAfter: 404,
+      helperSessionBefore: "11111111-1111-4111-8111-111111111111",
+      helperSessionAfter: "22222222-2222-4222-8222-222222222222",
+      disconnectObserved: true,
+      watchdogErrorObserved: false,
+      watchdogCausality: $causality[0],
+      successfulServerStatePolls: 60,
+      failedServerStatePolls: 0,
+      recoveredObserveFrameId: "33333333-3333-4333-8333-333333333333",
+      recoveredShareFrameId: "44444444-4444-4444-8444-444444444444",
+      remoteProtocolFaultMethodAdded: false
+    }' > "$recovery_proof"
+  local recovery_summary="$scratch/windows-recovery-summary.json"
+  local recovery_initial="$scratch/windows-recovery-initial.json"
+  local recovery_replacement="$scratch/windows-recovery-replacement.json"
+  local recovery_observe="$scratch/windows-recovery-observe.json"
+  local recovery_observe_shot="$scratch/windows-recovery-observe-shot.json"
+  local recovery_share_start="$scratch/windows-recovery-share-start.json"
+  local recovery_share_shot="$scratch/windows-recovery-share-shot.json"
+  local recovery_share_stop="$scratch/windows-recovery-share-stop.json"
+  jq -cn '{
+      startedAtUtc: "2026-08-30T23:59:59.0000000Z",
+      finishedAtUtc: "2026-08-31T00:01:00.0000000Z",
+      targetWindowId: "123456",
+      targetPid: 505,
+      interactiveSessionId: 1,
+      helperTopologyChecks: [
+        {
+          description: "the original helper worker after foreground arming",
+          supervisorPid: 202, controllerPid: 202, workerPid: 303,
+          exactImageMatched: true, directChildEnumerated: true,
+          interactiveSessionId: 1, stableConsecutivePolls: 2,
+          helloStateMatched: true, protocolRoundTrip: true,
+          roundTripMethod: "computer.status"
+        },
+        {
+          description: "the replacement disposable helper worker",
+          supervisorPid: 202, controllerPid: 202, workerPid: 404,
+          exactImageMatched: true, directChildEnumerated: true,
+          interactiveSessionId: 1, stableConsecutivePolls: 2,
+          helloStateMatched: true, protocolRoundTrip: true,
+          roundTripMethod: "computer.status"
+        }
+      ]
+    }' > "$recovery_summary"
+  jq -cn '{
+      result: {inputReady:true, semanticReady:true, share:{active:false}},
+      error:null, taxonomy:null,
+      callId:"windows-fixture-11111111111141118111111111111111",
+      targetState:{
+        computerConnected:true,
+        computer:{
+          sessionId:"11111111-1111-4111-8111-111111111111",
+          processId:303, controllerProcessId:202,
+          share:{active:false, stopped:false, reason:"inactive"}
+        },
+        computerObservation:null
+      }
+    }' > "$recovery_initial"
+  jq -cn '{
+      result: {inputReady:true, semanticReady:true, share:{active:false}},
+      error:null, taxonomy:null,
+      callId:"windows-fixture-22222222222242228222222222222222",
+      targetState:{
+        computerConnected:true,
+        computer:{
+          sessionId:"22222222-2222-4222-8222-222222222222",
+          processId:404, controllerProcessId:202,
+          share:{active:false, stopped:false, reason:"inactive"}
+        },
+        computerObservation:null
+      }
+    }' > "$recovery_replacement"
+  jq -cn '{
+      result:{
+        frameId:"33333333-3333-4333-8333-333333333333",
+        windowId:"123456", pid:505,
+        share:{active:false, stopped:false, reason:"inactive"}
+      },
+      error:null, taxonomy:null,
+      callId:"windows-fixture-33333333333343338333333333333333",
+      targetState:{
+        computerConnected:true,
+        computer:{
+          sessionId:"22222222-2222-4222-8222-222222222222",
+          processId:404, controllerProcessId:202,
+          share:{active:false, stopped:false, reason:"inactive"}
+        },
+        computerObservation:{
+          frameId:"33333333-3333-4333-8333-333333333333",
+          screenshotUrl:"/api/computer/screenshot?id=77777777777777777777777777777777&binding=computer.MTIzNDU2",
+          contentHash:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          screenshotWidth:1280, screenshotHeight:720,
+          windowId:"123456", pid:505,
+          share:{active:false, stopped:false, reason:"inactive"}
+        }
+      }
+    }' > "$recovery_observe"
+  jq -cn '{
+      file:"05-recovery-fresh-observe.png", bytes:4096,
+      sha256:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      frameId:"33333333-3333-4333-8333-333333333333",
+      contentHash:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }' > "$recovery_observe_shot"
+  jq -cn '{
+      result:{
+        active:true, id:"55555555-5555-4555-8555-555555555555",
+        windowId:"123456", pid:505, fps:4
+      },
+      error:null, taxonomy:null,
+      callId:"windows-fixture-44444444444444448444444444444444",
+      targetState:{
+        computerConnected:true,
+        computer:{
+          sessionId:"22222222-2222-4222-8222-222222222222",
+          processId:404, controllerProcessId:202,
+          share:{
+            active:true, id:"55555555-5555-4555-8555-555555555555",
+            windowId:"123456", pid:505, fps:4
+          }
+        },
+        computerObservation:{
+          frameId:"66666666-6666-4666-8666-666666666666",
+          contentHash:"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          windowId:"123456", pid:505,
+          share:{
+            active:true, id:"55555555-5555-4555-8555-555555555555",
+            windowId:"123456", pid:505, fps:4,
+            sourceSequence:1, sequence:1
+          }
+        }
+      }
+    }' > "$recovery_share_start"
+  jq -cn '{
+      file:"06-recovery-fresh-share.png", bytes:4097,
+      sha256:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      frameId:"44444444-4444-4444-8444-444444444444",
+      contentHash:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      shareActive:true, shareId:"55555555-5555-4555-8555-555555555555",
+      frameShareId:"55555555-5555-4555-8555-555555555555",
+      sourceSequence:2, shareSourceSequence:2,
+      windowId:"123456", pid:505, sequence:2
+    }' > "$recovery_share_shot"
+  jq -cn '{
+      result:{
+        active:false, stopped:true,
+        id:"55555555-5555-4555-8555-555555555555", reason:"requested"
+      },
+      error:null, taxonomy:null,
+      callId:"windows-fixture-55555555555545558555555555555555",
+      targetState:{
+        computerConnected:true,
+        computer:{
+          sessionId:"22222222-2222-4222-8222-222222222222",
+          processId:404, controllerProcessId:202,
+          share:{active:false, stopped:true, reason:"requested"}
+        },
+        computerObservation:null
+      }
+    }' > "$recovery_share_stop"
+  local -a recovery_chain_artifacts=(
+    "$recovery_summary"
+    "$recovery_initial"
+    "$recovery_replacement"
+    "$recovery_observe"
+    "$recovery_observe_shot"
+    "$recovery_share_start"
+    "$recovery_share_shot"
+    "$recovery_share_stop"
+  )
+  validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "${recovery_chain_artifacts[@]}" \
+    || die "self-test rejected an exact success-receipt Windows recovery chain"
+
+  jq -c '.targetState.computer.share.stopped = "wrong" | .targetState.computer.share.reason = 42' \
+    "$recovery_initial" > "$scratch/windows-recovery-malformed-inactive-state.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$scratch/windows-recovery-malformed-inactive-state.json" \
+      "$recovery_replacement" "$recovery_observe" "$recovery_observe_shot" \
+      "$recovery_share_start" "$recovery_share_shot" "$recovery_share_stop"; then
+    die "self-test accepted malformed inactive share status fields"
+  fi
+
+  jq -c '.targetState.computer.share.stopped = true | .targetState.computer.share.reason = "requested"' \
+    "$recovery_initial" > "$scratch/windows-recovery-stopped-pre-share-state.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$scratch/windows-recovery-stopped-pre-share-state.json" \
+      "$recovery_replacement" "$recovery_observe" "$recovery_observe_shot" \
+      "$recovery_share_start" "$recovery_share_shot" "$recovery_share_stop"; then
+    die "self-test accepted a stopped share as the inactive pre-share state"
+  fi
+
+  jq -c '.result.share = {active:false,stopped:true,reason:"requested"}' \
+    "$recovery_initial" > "$scratch/windows-recovery-unsanitized-raw-status.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$scratch/windows-recovery-unsanitized-raw-status.json" \
+      "$recovery_replacement" "$recovery_observe" "$recovery_observe_shot" \
+      "$recovery_share_start" "$recovery_share_shot" "$recovery_share_stop"; then
+    die "self-test accepted a sanitized share object where raw status was required"
+  fi
+
+  jq -c '
+      .result.id as $shareId
+      | .targetState.computerObservation.shareId = $shareId
+      | .targetState.computerObservation.sourceSequence = 1
+    ' "$recovery_share_start" > "$scratch/windows-recovery-concurrent-stream-share-start.json"
+  validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$recovery_initial" "$recovery_replacement" \
+      "$recovery_observe" "$recovery_observe_shot" \
+      "$scratch/windows-recovery-concurrent-stream-share-start.json" \
+      "$recovery_share_shot" "$recovery_share_stop" \
+    || die "self-test rejected a share-start state replaced by a complete concurrent streamed frame"
+
+  jq -c --slurpfile shot "$recovery_share_shot" '
+      .result.id as $shareId
+      | .targetState.computerObservation.frameId = $shot[0].frameId
+      | .targetState.computerObservation.contentHash = $shot[0].contentHash
+      | .targetState.computerObservation.shareId = $shareId
+      | .targetState.computerObservation.sourceSequence = $shot[0].sourceSequence
+      | .targetState.computerObservation.share.sourceSequence = $shot[0].shareSourceSequence
+      | .targetState.computerObservation.share.sequence = $shot[0].sequence
+    ' "$recovery_share_start" > "$scratch/windows-recovery-same-streamed-frame-share-start.json"
+  validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$recovery_initial" "$recovery_replacement" \
+      "$recovery_observe" "$recovery_observe_shot" \
+      "$scratch/windows-recovery-same-streamed-frame-share-start.json" \
+      "$recovery_share_shot" "$recovery_share_stop" \
+    || die "self-test rejected the same complete streamed frame retained across share-start and screenshot steps"
+
+  jq -c '
+      .result.id as $shareId
+      | .targetState.computerObservation.shareId = $shareId
+    ' "$recovery_share_start" > "$scratch/windows-recovery-partial-share-authority.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$recovery_initial" "$recovery_replacement" \
+      "$recovery_observe" "$recovery_observe_shot" \
+      "$scratch/windows-recovery-partial-share-authority.json" \
+      "$recovery_share_shot" "$recovery_share_stop"; then
+    die "self-test accepted a partial share-start frame-authority tuple"
+  fi
+
+  jq -c --slurpfile shot "$recovery_share_shot" '
+      .targetState.computerObservation.frameId = $shot[0].frameId
+      | .targetState.computerObservation.contentHash = $shot[0].contentHash
+    ' "$recovery_share_start" > "$scratch/windows-recovery-one-shot-frame-reuse.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$recovery_initial" "$recovery_replacement" \
+      "$recovery_observe" "$recovery_observe_shot" \
+      "$scratch/windows-recovery-one-shot-frame-reuse.json" \
+      "$recovery_share_shot" "$recovery_share_stop"; then
+    die "self-test accepted a one-shot share-start frame reused as the streamed screenshot"
+  fi
+
+  jq -c '
+      .targetState.computerObservation.share.sourceSequence = 9
+      | .targetState.computerObservation.share.sequence = 9
+    ' "$recovery_share_start" > "$scratch/windows-recovery-one-shot-sequence-regression.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$recovery_initial" "$recovery_replacement" \
+      "$recovery_observe" "$recovery_observe_shot" \
+      "$scratch/windows-recovery-one-shot-sequence-regression.json" \
+      "$recovery_share_shot" "$recovery_share_stop"; then
+    die "self-test accepted a streamed screenshot behind one-shot share counters"
+  fi
+
+  jq -c '
+      .result.id as $shareId
+      | .targetState.computerObservation.shareId = $shareId
+      | .targetState.computerObservation.sourceSequence = 9
+      | .targetState.computerObservation.share.sourceSequence = 9
+      | .targetState.computerObservation.share.sequence = 9
+    ' "$recovery_share_start" > "$scratch/windows-recovery-stream-sequence-regression.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$recovery_initial" "$recovery_replacement" \
+      "$recovery_observe" "$recovery_observe_shot" \
+      "$scratch/windows-recovery-stream-sequence-regression.json" \
+      "$recovery_share_shot" "$recovery_share_stop"; then
+    die "self-test accepted a streamed screenshot behind prior streamed counters"
+  fi
+
+  jq -c --slurpfile shot "$recovery_share_shot" '
+      .result.id as $shareId
+      | .targetState.computerObservation.frameId = $shot[0].frameId
+      | .targetState.computerObservation.contentHash = $shot[0].contentHash
+      | .targetState.computerObservation.shareId = $shareId
+      | .targetState.computerObservation.sourceSequence = 1
+      | .targetState.computerObservation.share.sourceSequence = 1
+      | .targetState.computerObservation.share.sequence = 1
+    ' "$recovery_share_start" > "$scratch/windows-recovery-same-frame-sequence-mismatch.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$recovery_initial" "$recovery_replacement" \
+      "$recovery_observe" "$recovery_observe_shot" \
+      "$scratch/windows-recovery-same-frame-sequence-mismatch.json" \
+      "$recovery_share_shot" "$recovery_share_stop"; then
+    die "self-test accepted one frame with contradictory stream counters"
+  fi
+
+  jq -c --slurpfile shot "$recovery_share_shot" '
+      .result.id as $shareId
+      | .targetState.computerObservation.frameId = $shot[0].frameId
+      | .targetState.computerObservation.shareId = $shareId
+      | .targetState.computerObservation.sourceSequence = $shot[0].sourceSequence
+      | .targetState.computerObservation.share.sourceSequence = $shot[0].shareSourceSequence
+      | .targetState.computerObservation.share.sequence = $shot[0].sequence
+    ' "$recovery_share_start" > "$scratch/windows-recovery-same-frame-content-mismatch.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$recovery_initial" "$recovery_replacement" \
+      "$recovery_observe" "$recovery_observe_shot" \
+      "$scratch/windows-recovery-same-frame-content-mismatch.json" \
+      "$recovery_share_shot" "$recovery_share_stop"; then
+    die "self-test accepted one frame ID with contradictory content hashes"
+  fi
+
+  {
+    printf '%s\n' '{}'
+    cat "$recovery_fault_start"
+  } > "$scratch/windows-recovery-multiple-fault-records.json"
+  if validate_windows_recovery_chain \
+      "$scratch/windows-recovery-multiple-fault-records.json" \
+      "$recovery_causality" "$recovery_proof" \
+      "${recovery_chain_artifacts[@]}"; then
+    die "self-test accepted multiple JSON records in the Windows recovery fault artifact"
+  fi
+
+  jq -c '
+      .interactiveSessionId = null
+      | .helperTopologyChecks |= map(
+          .interactiveSessionId = null | .stableConsecutivePolls = 0
+        )
+    ' "$recovery_summary" > "$scratch/windows-recovery-invalid-topology.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$scratch/windows-recovery-invalid-topology.json" \
+      "${recovery_chain_artifacts[@]:1}"; then
+    die "self-test accepted a noninteractive or unstable Windows recovery topology"
+  fi
+
+  jq -c '.result.share.active = true' \
+    "$recovery_initial" > "$scratch/windows-recovery-initial-active-result-share.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" \
+      "$scratch/windows-recovery-initial-active-result-share.json" \
+      "$recovery_replacement" "$recovery_observe" "$recovery_observe_shot" \
+      "$recovery_share_start" "$recovery_share_shot" "$recovery_share_stop"; then
+    die "self-test accepted an active result share in initial helper readiness"
+  fi
+
+  jq -c 'del(.result.share)' \
+    "$recovery_replacement" > "$scratch/windows-recovery-replacement-missing-result-share.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$recovery_initial" \
+      "$scratch/windows-recovery-replacement-missing-result-share.json" \
+      "$recovery_observe" "$recovery_observe_shot" "$recovery_share_start" \
+      "$recovery_share_shot" "$recovery_share_stop"; then
+    die "self-test accepted a missing result share in replacement helper readiness"
+  fi
+
+  jq -c '
+      .result.share.id = "55555555-5555-4555-8555-555555555555"
+      | .targetState.computerObservation.share.id = "55555555-5555-4555-8555-555555555555"
+      | .targetState.computer.share.id = "55555555-5555-4555-8555-555555555555"
+    ' "$recovery_observe" > "$scratch/windows-recovery-stale-inactive-share-ids.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$recovery_initial" "$recovery_replacement" \
+      "$scratch/windows-recovery-stale-inactive-share-ids.json" \
+      "$recovery_observe_shot" "$recovery_share_start" \
+      "$recovery_share_shot" "$recovery_share_stop"; then
+    die "self-test accepted stale IDs inside inactive Windows recovery share objects"
+  fi
+
+  jq -c '.result.share.active = true' \
+    "$recovery_observe" > "$scratch/windows-recovery-observe-active-result.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$recovery_initial" "$recovery_replacement" \
+      "$scratch/windows-recovery-observe-active-result.json" \
+      "$recovery_observe_shot" "$recovery_share_start" \
+      "$recovery_share_shot" "$recovery_share_stop"; then
+    die "self-test accepted an active result share in the fresh non-share observation"
+  fi
+
+  jq -c '.targetState.computerObservation.share.active = true' \
+    "$recovery_observe" > "$scratch/windows-recovery-observe-active-state.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$recovery_initial" "$recovery_replacement" \
+      "$scratch/windows-recovery-observe-active-state.json" \
+      "$recovery_observe_shot" "$recovery_share_start" \
+      "$recovery_share_shot" "$recovery_share_stop"; then
+    die "self-test accepted an active state share in the fresh non-share observation"
+  fi
+
+  jq -c '.result.windowId = "654321"' \
+    "$recovery_observe" > "$scratch/windows-recovery-observe-nonmetadata-mismatch.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$recovery_initial" "$recovery_replacement" \
+      "$scratch/windows-recovery-observe-nonmetadata-mismatch.json" \
+      "$recovery_observe_shot" "$recovery_share_start" \
+      "$recovery_share_shot" "$recovery_share_stop"; then
+    die "self-test accepted a non-metadata mismatch between observe result and state"
+  fi
+
+  jq -c '.result.contentHash = .targetState.computerObservation.contentHash' \
+    "$recovery_observe" > "$scratch/windows-recovery-observe-result-metadata.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$recovery_initial" "$recovery_replacement" \
+      "$scratch/windows-recovery-observe-result-metadata.json" \
+      "$recovery_observe_shot" "$recovery_share_start" \
+      "$recovery_share_shot" "$recovery_share_stop"; then
+    die "self-test accepted state-only screenshot metadata in the observe result"
+  fi
+
+  jq -c '.targetState.computerObservation.frameId = "not-a-uuid"' \
+    "$recovery_share_start" > "$scratch/windows-recovery-share-start-bad-frame.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$recovery_initial" "$recovery_replacement" \
+      "$recovery_observe" "$recovery_observe_shot" \
+      "$scratch/windows-recovery-share-start-bad-frame.json" \
+      "$recovery_share_shot" "$recovery_share_stop"; then
+    die "self-test accepted a malformed share-start observation frame ID"
+  fi
+
+  jq -c '.targetState.computerObservation.frameId = "33333333-3333-4333-8333-333333333333"' \
+    "$recovery_share_start" > "$scratch/windows-recovery-share-start-reused-frame.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$recovery_initial" "$recovery_replacement" \
+      "$recovery_observe" "$recovery_observe_shot" \
+      "$scratch/windows-recovery-share-start-reused-frame.json" \
+      "$recovery_share_shot" "$recovery_share_stop"; then
+    die "self-test accepted a share-start frame replayed from the prior one-shot observation"
+  fi
+
+  jq -c '.targetState.computer.share.fps = 5' \
+    "$recovery_share_start" > "$scratch/windows-recovery-share-start-fps-mismatch.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$recovery_initial" "$recovery_replacement" \
+      "$recovery_observe" "$recovery_observe_shot" \
+      "$scratch/windows-recovery-share-start-fps-mismatch.json" \
+      "$recovery_share_shot" "$recovery_share_stop"; then
+    die "self-test accepted a share-start state with a mismatched frame rate"
+  fi
+
+  jq -c '.targetState.computer.share.pid = 506' \
+    "$recovery_share_start" > "$scratch/windows-recovery-share-start-pid-mismatch.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$recovery_initial" "$recovery_replacement" \
+      "$recovery_observe" "$recovery_observe_shot" \
+      "$scratch/windows-recovery-share-start-pid-mismatch.json" \
+      "$recovery_share_shot" "$recovery_share_stop"; then
+    die "self-test accepted a share-start state with a mismatched target PID"
+  fi
+
+  jq -c '.targetState.computerObservation.share.windowId = "654321"' \
+    "$recovery_share_start" > "$scratch/windows-recovery-share-frame-window-mismatch.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$recovery_initial" "$recovery_replacement" \
+      "$recovery_observe" "$recovery_observe_shot" \
+      "$scratch/windows-recovery-share-frame-window-mismatch.json" \
+      "$recovery_share_shot" "$recovery_share_stop"; then
+    die "self-test accepted a share-start frame with a mismatched target window"
+  fi
+
+  jq -c '.targetState.computerObservation.share.pid = 506' \
+    "$recovery_share_start" > "$scratch/windows-recovery-share-frame-pid-mismatch.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$recovery_initial" "$recovery_replacement" \
+      "$recovery_observe" "$recovery_observe_shot" \
+      "$scratch/windows-recovery-share-frame-pid-mismatch.json" \
+      "$recovery_share_shot" "$recovery_share_stop"; then
+    die "self-test accepted a share-start frame with a mismatched target PID"
+  fi
+
+  jq -c '.targetState.computerObservation.share.fps = 5' \
+    "$recovery_share_start" > "$scratch/windows-recovery-share-frame-fps-mismatch.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$recovery_initial" "$recovery_replacement" \
+      "$recovery_observe" "$recovery_observe_shot" \
+      "$scratch/windows-recovery-share-frame-fps-mismatch.json" \
+      "$recovery_share_shot" "$recovery_share_stop"; then
+    die "self-test accepted a share-start frame with a mismatched frame rate"
+  fi
+
+  jq -c '.callId = "windows-fixture-44444444444444448444444444444444"' \
+    "$recovery_share_stop" > "$scratch/windows-recovery-replayed-call-id.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$recovery_initial" "$recovery_replacement" \
+      "$recovery_observe" "$recovery_observe_shot" "$recovery_share_start" \
+      "$recovery_share_shot" "$scratch/windows-recovery-replayed-call-id.json"; then
+    die "self-test accepted a replayed call ID across Windows recovery steps"
+  fi
+
+  jq -c '.targetState.computer.share.id = "55555555-5555-4555-8555-555555555555"' \
+    "$recovery_share_stop" > "$scratch/windows-recovery-unsanitized-inactive-share.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" "$recovery_initial" "$recovery_replacement" \
+      "$recovery_observe" "$recovery_observe_shot" "$recovery_share_start" \
+      "$recovery_share_shot" "$scratch/windows-recovery-unsanitized-inactive-share.json"; then
+    die "self-test accepted a noncanonical inactive share state"
+  fi
+
+  jq -c '.recoveredShareFrameId = "00000000-0000-0000-0000-000000000000"' \
+    "$recovery_proof" > "$scratch/windows-recovery-nil-frame-proof.json"
+  jq -c '.frameId = "00000000-0000-0000-0000-000000000000"' \
+    "$recovery_share_shot" > "$scratch/windows-recovery-nil-frame-shot.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" \
+      "$scratch/windows-recovery-nil-frame-proof.json" \
+      "$recovery_summary" "$recovery_initial" "$recovery_replacement" \
+      "$recovery_observe" "$recovery_observe_shot" "$recovery_share_start" \
+      "$scratch/windows-recovery-nil-frame-shot.json" "$recovery_share_stop"; then
+    die "self-test accepted a nil or non-v4 Windows recovery frame ID"
+  fi
+
+  jq -c '.callIdMatched = false' "$recovery_fault_start" > "$scratch/windows-recovery-call-mismatch.json"
+  if validate_windows_recovery_chain \
+      "$scratch/windows-recovery-call-mismatch.json" "$recovery_causality" "$recovery_proof" \
+      "${recovery_chain_artifacts[@]}"; then
+    die "self-test accepted Windows recovery evidence without an exact call-ID binding"
+  fi
+
+  jq -c '.callId = "windows-recovery-fault-22222222222242228222222222222222"' \
+    "$recovery_fault_start" > "$scratch/windows-recovery-cross-artifact-call-mismatch.json"
+  if validate_windows_recovery_chain \
+      "$scratch/windows-recovery-cross-artifact-call-mismatch.json" \
+      "$recovery_causality" "$recovery_proof" \
+      "${recovery_chain_artifacts[@]}"; then
+    die "self-test accepted a Windows recovery fault call ID from another causality chain"
+  fi
+
+  jq -c '.targetState.computer.sessionId = "77777777-7777-4777-8777-777777777777"' \
+    "$recovery_replacement" > "$scratch/windows-recovery-replacement-mismatch.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" "$recovery_causality" "$recovery_proof" \
+      "$recovery_summary" \
+      "$recovery_initial" \
+      "$scratch/windows-recovery-replacement-mismatch.json" \
+      "$recovery_observe" \
+      "$recovery_observe_shot" \
+      "$recovery_share_start" \
+      "$recovery_share_shot" \
+      "$recovery_share_stop"; then
+    die "self-test accepted Windows recovery evidence with a cross-artifact replacement-session mismatch"
+  fi
+
+  jq -c '.faultTriggeredAtUtc = "2026-08-31T00:02:00.0000000Z"' \
+    "$recovery_causality" > "$scratch/windows-recovery-outside-summary.json"
+  jq -c --slurpfile causality "$scratch/windows-recovery-outside-summary.json" \
+    '.watchdogCausality = $causality[0]' \
+    "$recovery_proof" > "$scratch/windows-recovery-outside-summary-proof.json"
+  if validate_windows_recovery_chain \
+      "$recovery_fault_start" \
+      "$scratch/windows-recovery-outside-summary.json" \
+      "$scratch/windows-recovery-outside-summary-proof.json" \
+      "${recovery_chain_artifacts[@]}"; then
+    die "self-test accepted a Windows recovery fault timestamp outside the summary interval"
+  fi
+
+  jq -cn '{
+      schemaVersion: 1,
+      outcomeClass: "transport-ended-before-watchdog-receipt",
+      httpStatus: null,
+      httpOk: null,
+      bodyOk: null,
+      callId: null,
+      callIdMatched: null,
+      watchdogErrorObserved: false,
+      errorCode: null,
+      taxonomyCode: null,
+      taxonomyRetriable: null,
+      taxonomyRecoveryHint: null,
+      transportFailure: true,
+      pathsRecorded: false,
+      secretsRecorded: false
+    }' > "$scratch/windows-recovery-transport.json"
+  jq -c '
+      .watchdogErrorObserved = false
+      | .causalityMode = "elapsed-lower-bound"
+    ' "$recovery_causality" > "$scratch/windows-recovery-elapsed.json"
+  jq -c --slurpfile causality "$scratch/windows-recovery-elapsed.json" '
+      .watchdogErrorObserved = false
+      | .watchdogCausality = $causality[0]
+    ' "$recovery_proof" > "$scratch/windows-recovery-elapsed-proof.json"
+  validate_windows_recovery_chain \
+      "$scratch/windows-recovery-transport.json" \
+      "$scratch/windows-recovery-elapsed.json" \
+      "$scratch/windows-recovery-elapsed-proof.json" \
+      "${recovery_chain_artifacts[@]}" \
+    || die "self-test rejected an event-bound transport-end Windows recovery chain"
+
+  jq -c '
+      .outcomeClass = "outcome-unknown-after-fault"
+      | .httpStatus = 504
+      | .httpOk = false
+      | .bodyOk = false
+      | .errorCode = "COMMAND_OUTCOME_UNKNOWN"
+      | .taxonomyCode = "outcome_unknown"
+      | .taxonomyRetriable = false
+      | .taxonomyRecoveryHint = "reobserve"
+    ' "$recovery_fault_start" > "$scratch/windows-recovery-outcome-unknown.json"
+  validate_windows_recovery_chain \
+      "$scratch/windows-recovery-outcome-unknown.json" \
+      "$scratch/windows-recovery-elapsed.json" \
+      "$scratch/windows-recovery-elapsed-proof.json" \
+      "${recovery_chain_artifacts[@]}" \
+    || die "self-test rejected an exact post-fault outcome-unknown Windows recovery chain"
+
+  jq -c '.causalityMode = "observed-COMPUTER_HELPER_WATCHDOG"' \
+    "$scratch/windows-recovery-elapsed.json" > "$scratch/windows-recovery-unbound-mode.json"
+  if validate_windows_recovery_chain \
+      "$scratch/windows-recovery-transport.json" \
+      "$scratch/windows-recovery-unbound-mode.json" \
+      "$scratch/windows-recovery-elapsed-proof.json" \
+      "${recovery_chain_artifacts[@]}"; then
+    die "self-test accepted a transport-end recovery receipt without elapsed-bound causality"
+  fi
+
+  jq -c '
+      .outcomeClass = "structured-watchdog"
+      | .httpStatus = 503
+      | .httpOk = false
+      | .bodyOk = false
+      | .watchdogErrorObserved = true
+      | .errorCode = "COMPUTER_HELPER_WATCHDOG"
+      | .taxonomyCode = "unavailable"
+      | .taxonomyRetriable = true
+      | .taxonomyRecoveryHint = "reconnect"
+    ' "$recovery_fault_start" > "$scratch/windows-recovery-structured.json"
+  jq -c '
+      .replacementObservedAfterShareStartMs = 125
+      | .replacementObservedAfterEventMs = 100
+      | .watchdogErrorObserved = true
+      | .elapsedLowerBoundSatisfied = false
+      | .causalityMode = "observed-COMPUTER_HELPER_WATCHDOG"
+      | .causalityProven = false
+    ' "$recovery_causality" > "$scratch/windows-recovery-structured-short.json"
+  jq -c --slurpfile causality "$scratch/windows-recovery-structured-short.json" '
+      .watchdogErrorObserved = true
+      | .watchdogCausality = $causality[0]
+    ' "$recovery_proof" > "$scratch/windows-recovery-structured-short-proof.json"
+  if validate_windows_recovery_chain \
+      "$scratch/windows-recovery-structured.json" \
+      "$scratch/windows-recovery-structured-short.json" \
+      "$scratch/windows-recovery-structured-short-proof.json" \
+      "${recovery_chain_artifacts[@]}"; then
+    die "self-test accepted a producer-unreachable command-watchdog receipt as live-share causality"
+  fi
+
   jq -cn '
       {requestId:"0123456789abcdef0123456789abcdef",status:"action-required",maximumClickAttempts:1,inputStateAtPublication:"not-started"}
       + (reduce range(1;30) as $n ({}; .[("k" + ($n|tostring))] = false))

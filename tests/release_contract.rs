@@ -134,7 +134,7 @@ fn release_workflow_and_local_builder_package_both_processes() {
     );
     assert!(
         source(".github/workflows/ci.yml")
-            .contains("verify-macos-app-share-handoff-self-test.sh 0.12.66\n")
+            .contains("verify-macos-app-share-handoff-self-test.sh 0.12.67\n")
     );
     assert!(!source(".github/workflows/deploy.yml").contains("--historical-source"));
     assert!(!local.contains("--historical-source"));
@@ -420,44 +420,44 @@ fn current_source_is_unblocked_and_package_versions_are_aligned() {
     }
 
     for (path, required) in [
-        ("Cargo.toml", "version = \"0.12.66\""),
+        ("Cargo.toml", "version = \"0.12.67\""),
         (
             "Cargo.lock",
-            "name = \"local-browser-bridge\"\nversion = \"0.12.66\"",
+            "name = \"local-browser-bridge\"\nversion = \"0.12.67\"",
         ),
-        ("extension/manifest.json", "\"version\": \"0.12.66\""),
-        ("extension/lib.js", "export const VERSION = \"0.12.66\";"),
+        ("extension/manifest.json", "\"version\": \"0.12.67\""),
+        ("extension/lib.js", "export const VERSION = \"0.12.67\";"),
         (
             "scripts/run-windows-computer-use-acceptance.ps1",
-            "$script:ProductVersion = \"0.12.66\"",
+            "$script:ProductVersion = \"0.12.67\"",
         ),
         (
             "scripts/finalize-macos-acceptance.mjs",
-            "const PRODUCT_VERSION = \"0.12.66\";",
+            "const PRODUCT_VERSION = \"0.12.67\";",
         ),
         (
             "scripts/record-computer-helper-chain.ps1",
-            "$script:Version = \"0.12.66\"",
+            "$script:Version = \"0.12.67\"",
         ),
         (
             "scripts/test-windows-stock-chrome.ps1",
-            "$Version = \"0.12.66\"",
+            "$Version = \"0.12.67\"",
         ),
         (
             "scripts/verify-release-acceptance-evidence.sh",
-            "readonly EVIDENCE_PRODUCT_VERSION=\"0.12.66\"",
+            "readonly EVIDENCE_PRODUCT_VERSION=\"0.12.67\"",
         ),
         (
             "scripts/verify-windows-release-candidate.ps1",
-            "$ProductVersion = \"0.12.66\"",
+            "$ProductVersion = \"0.12.67\"",
         ),
         (
             "scripts/write-browser-evidence-record.ps1",
-            "$script:OperatorV2Version = \"0.12.66\"",
+            "$script:OperatorV2Version = \"0.12.67\"",
         ),
         (
             "scripts/write-stock-chrome-operator-response.ps1",
-            "$script:Version = \"0.12.66\"",
+            "$script:Version = \"0.12.67\"",
         ),
     ] {
         assert!(
@@ -467,12 +467,12 @@ fn current_source_is_unblocked_and_package_versions_are_aligned() {
     }
 
     assert!(
-        source("evidence/v0.12.66/computer/AppShareHandoff.swift")
-            .contains("private let productVersion = \"0.12.66\"")
+        source("evidence/v0.12.67/computer/AppShareHandoff.swift")
+            .contains("private let productVersion = \"0.12.67\"")
     );
 
-    assert!(std::path::Path::new("evidence/v0.12.66/browser").is_dir());
-    assert!(std::path::Path::new("evidence/v0.12.66/computer").is_dir());
+    assert!(std::path::Path::new("evidence/v0.12.67/browser").is_dir());
+    assert!(std::path::Path::new("evidence/v0.12.67/computer").is_dir());
     assert!(std::path::Path::new("evidence/v0.12.41/browser").is_dir());
     assert!(std::path::Path::new("evidence/v0.12.41/computer").is_dir());
 }
@@ -671,8 +671,8 @@ fn windows_release_tooling_hashes_without_module_discovery() {
 fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_only() {
     let watcher = source("scripts/wait-macos-app-share-concurrency-handoff.mjs");
     let adversarial_watcher = source("scripts/wait-macos-pointer-concurrency-handoff.mjs");
-    let producer = source("evidence/v0.12.66/computer/helper-evidence-rig.mjs");
-    let playbook = source("evidence/v0.12.66/computer/README.md");
+    let producer = source("evidence/v0.12.67/computer/helper-evidence-rig.mjs");
+    let playbook = source("evidence/v0.12.67/computer/README.md");
     let finalizer = source("scripts/finalize-macos-acceptance.mjs");
     let verifier = source("scripts/verify-release-acceptance-evidence.sh");
     let handoff_self_test = source("scripts/verify-macos-app-share-handoff-self-test.sh");
@@ -715,7 +715,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
             "the legacy pointer watcher must not gate or satisfy release"
         );
     }
-    assert!(adversarial_watcher.contains("const PRODUCT_VERSION = \"0.12.66\";"));
+    assert!(adversarial_watcher.contains("const PRODUCT_VERSION = \"0.12.67\";"));
     assert!(
         adversarial_watcher.contains("macOS pointer-concurrency handoff watcher self-test passed.")
     );
@@ -734,7 +734,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         }
     }
     for aggregate_contract in [
-        "const PRODUCT_VERSION = \"0.12.66\";",
+        "const PRODUCT_VERSION = \"0.12.67\";",
         "const RESULT_SCHEMA_VERSION = 9;",
         "const AGGREGATE_SCHEMA_VERSION = 3;",
         "const REQUEST_MARKER = \"operator/macos-app-share-concurrency-handoff-request.json\";",
@@ -751,7 +751,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
     }
 
     for required in [
-        "const PRODUCT_VERSION = \"0.12.66\";",
+        "const PRODUCT_VERSION = \"0.12.67\";",
         "const SCHEMA_VERSION = 2;",
         "const OPERATOR_DIRECTORY = \"operator\";",
         "const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;",
@@ -942,12 +942,12 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
 
     for integration in [&ci, &local] {
         assert!(
-            integration.contains("node --check evidence/v0.12.66/computer/helper-evidence-rig.mjs"),
-            "CI/local validation does not syntax-check the exact v0.12.66 macOS evidence rig"
+            integration.contains("node --check evidence/v0.12.67/computer/helper-evidence-rig.mjs"),
+            "CI/local validation does not syntax-check the exact v0.12.67 macOS evidence rig"
         );
         assert!(
             integration
-                .contains("node evidence/v0.12.66/computer/helper-evidence-rig.mjs --self-test")
+                .contains("node evidence/v0.12.67/computer/helper-evidence-rig.mjs --self-test")
         );
         assert!(
             !integration.contains("evidence/v0.12.20/computer/"),
@@ -958,7 +958,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         for source in ["HelperEvidenceFixture.swift", "SystemProbe.swift"] {
             assert!(
                 integration.contains(&format!(
-                    "xcrun swiftc -typecheck evidence/v0.12.66/computer/{source}"
+                    "xcrun swiftc -typecheck evidence/v0.12.67/computer/{source}"
                 )),
                 "macOS workflow does not typecheck {source}"
             );
@@ -982,7 +982,7 @@ fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_o
         );
     }
     assert!(ci.contains(
-        "xcrun swiftc -typecheck evidence/v0.12.66/computer/PhysicalPointerHandoff.swift"
+        "xcrun swiftc -typecheck evidence/v0.12.67/computer/PhysicalPointerHandoff.swift"
     ));
     for release_path in [&candidate, &local] {
         assert!(
@@ -1670,6 +1670,27 @@ fn release_evidence_verifier_executes_adversarial_replay_and_decoder_tests() {
         "self-test accepted release-candidate evidence replayed from another workflow attempt",
         "self-test accepted a truncated Windows step inventory",
         "self-test accepted a reordered Windows step inventory",
+        "self-test accepted Windows recovery evidence without an exact call-ID binding",
+        "self-test accepted multiple JSON records in the Windows recovery fault artifact",
+        "self-test accepted a noninteractive or unstable Windows recovery topology",
+        "self-test accepted an active result share in initial helper readiness",
+        "self-test accepted a missing result share in replacement helper readiness",
+        "self-test accepted stale IDs inside inactive Windows recovery share objects",
+        "self-test accepted an active result share in the fresh non-share observation",
+        "self-test accepted an active state share in the fresh non-share observation",
+        "self-test accepted a malformed share-start observation frame ID",
+        "self-test accepted a share-start frame replayed from the prior one-shot observation",
+        "self-test accepted a partial share-start frame-authority tuple",
+        "self-test rejected a share-start state replaced by a complete concurrent streamed frame",
+        "self-test accepted a share-start state with a mismatched frame rate",
+        "self-test accepted a replayed call ID across Windows recovery steps",
+        "self-test accepted a noncanonical inactive share state",
+        "self-test accepted a nil or non-v4 Windows recovery frame ID",
+        "self-test accepted a Windows recovery fault call ID from another causality chain",
+        "self-test accepted Windows recovery evidence with a cross-artifact replacement-session mismatch",
+        "self-test accepted a Windows recovery fault timestamp outside the summary interval",
+        "self-test accepted a transport-end recovery receipt without elapsed-bound causality",
+        "self-test accepted a producer-unreachable command-watchdog receipt as live-share causality",
         "self-test accepted an arm receipt without the request ID",
         "self-test accepted an empty stock-Chrome method matrix",
         "self-test accepted a macOS screenshot hash replayed across lanes",
@@ -1701,6 +1722,61 @@ fn release_evidence_gate_requires_exact_current_attempt_and_complete_ui_proofs()
         "workflowRunAttempt: $workflow_run_attempt",
         "length == 62",
         "62-foreground-cursor-focus-desktop-invariants.json",
+        "04-post-arm-protocol-bound-helper-continuity.json",
+        "09-replacement-protocol-bound-helper-readiness.json",
+        "13-replacement-worker-fresh-share-screenshot.json",
+        "$freshShareShot.shareId == $freshShareStart.result.id",
+        "$freshShareStop.result.id == $freshShareStart.result.id",
+        ".[0].callId == $cause.faultCallId",
+        "$summary[0].interactiveSessionId | type == \"number\" and floor == . and . >= 1",
+        "$beforeTopology[0].stableConsecutivePolls | type == \"number\" and floor == . and . >= 2",
+        "($freshObserve.result.share | inactive_share)",
+        "($freshObserve.targetState.computerObservation.share | inactive_share)",
+        "def raw_inactive_share:",
+        "and .stopped == false",
+        "and .reason == \"inactive\"",
+        "($before.result.share | raw_inactive_share)",
+        "$freshShareStart.targetState.computer.share.pid == $freshShareStart.result.pid",
+        "$freshShareStart.targetState.computer.share.fps == $freshShareStart.result.fps",
+        "$freshShareStart.targetState.computerObservation.share.windowId == $freshShareStart.result.windowId",
+        "$freshShareStart.targetState.computerObservation.share.pid == $freshShareStart.result.pid",
+        "$freshShareStart.targetState.computerObservation.share.fps == $freshShareStart.result.fps",
+        "$freshShareStart.targetState.computerObservation.frameId",
+        "$freshShareStart.targetState.computerObservation.frameId != $proof.recoveredObserveFrameId",
+        "$freshShareStart.targetState.computerObservation.contentHash",
+        "$freshShareStart.targetState.computerObservation.share.sourceSequence",
+        "$freshShareStart.targetState.computerObservation.share.sequence",
+        "$freshShareStart.targetState.computerObservation.frameId != $freshShareShot.frameId",
+        "$freshShareShot.sourceSequence >=",
+        "$freshShareShot.sourceSequence >",
+        "$freshShareShot.sequence >=",
+        "$freshShareShot.sequence >",
+        "$freshObserve.result == ($freshObserve.targetState.computerObservation",
+        "del(.screenshotUrl,.contentHash,.screenshotWidth,.screenshotHeight)",
+        "$freshObserve.result | has(\"screenshotUrl\") | not",
+        "$freshObserve.targetState.computerObservation.screenshotWidth",
+        "def uuid_v4:",
+        "def inactive_share:",
+        "$freshShareShot.frameShareId == $freshShareShot.shareId",
+        "$freshShareShot.shareSourceSequence == $freshShareShot.sourceSequence",
+        "$freshShareStop.targetState.computer.share | keys",
+        "$freshShareStop.callId] | unique | length) == 5",
+        "self-test accepted a share-start state with a mismatched target PID",
+        "self-test accepted a share-start frame with a mismatched target window",
+        "self-test accepted a share-start frame with a mismatched target PID",
+        "self-test accepted a share-start frame with a mismatched frame rate",
+        "self-test accepted a non-metadata mismatch between observe result and state",
+        "self-test accepted state-only screenshot metadata in the observe result",
+        "self-test accepted malformed inactive share status fields",
+        "self-test accepted a stopped share as the inactive pre-share state",
+        "self-test accepted a sanitized share object where raw status was required",
+        "self-test accepted a one-shot share-start frame reused as the streamed screenshot",
+        "self-test accepted a streamed screenshot behind one-shot share counters",
+        "self-test accepted a streamed screenshot behind prior streamed counters",
+        "self-test accepted one frame with contradictory stream counters",
+        "self-test accepted one frame ID with contradictory content hashes",
+        "Windows recovery pre-fault",
+        "Windows recovery post-fault",
         "test \"${#windows_screenshots[@]}\" = 20",
         "stableSamplesRequired == 3",
         "methodCount == 25",
