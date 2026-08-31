@@ -85,7 +85,7 @@ These are setup conditions, not product limitations:
 
 - Every installed component must use the same release version.
 - Browser control requires an unpacked Manifest V3 extension loaded from `chrome://extensions` or `edge://extensions`.
-- Browser control requires Chromium 140+. Cross-origin child-session routing first appeared in Chromium 125, but version 0.12.65 retains the overall floor so persisted extension storage can be restricted to trusted contexts.
+- Browser control requires Chromium 140+. Cross-origin child-session routing first appeared in Chromium 125, but version 0.12.66 retains the overall floor so persisted extension storage can be restricted to trusted contexts.
 - The complete macOS archive requires macOS 13+. Live sharing additionally requires Screen Recording permission for the packaged helper application.
 - macOS semantic control and supported input routes require Accessibility permission.
 - Windows native control must run in the signed-in interactive session, not Session 0 or a service.

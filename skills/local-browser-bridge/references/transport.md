@@ -1,6 +1,6 @@
 # Bridge protocol
 
-Protocol version: `1`. Package version examples below use `0.12.65`.
+Protocol version: `1`. Package version examples below use `0.12.66`.
 
 Agents that support the open Agent Skills format can install the compact
 [`local-browser-bridge` skill](../skills/local-browser-bridge/SKILL.md). Its
@@ -94,7 +94,7 @@ After mutual authentication succeeds, the server sends the normal welcome for th
   "type": "welcome",
   "protocolVersion": 1,
   "sessionId": "82b6b311-f71d-4a88-ae07-0b5e7a897815",
-  "serverVersion": "0.12.65",
+  "serverVersion": "0.12.66",
   "connector": "browser-extension"
 }
 ```
@@ -110,7 +110,7 @@ The connector must validate `protocolVersion`, `serverVersion`, `sessionId`, and
   "controllerSequence": 81,
   "controllerId": "38a72d1f-d124-4335-8f1e-9cb85777df14",
   "connectionId": "2f9ad9af-5bb7-42b3-a77d-a0c83a625792",
-  "version": "0.12.65",
+  "version": "0.12.66",
   "browser": "Google Chrome",
   "mode": "full-access",
   "capabilities": ["tabs.list", "page.observe", "browser.control.start"]
@@ -126,7 +126,7 @@ The computer helper uses the same negotiated envelope and reports its bounded na
   "type": "hello",
   "protocolVersion": 1,
   "sessionId": "d559c7b3-56fb-49e6-b661-801cfcb8807f",
-  "version": "0.12.65",
+  "version": "0.12.66",
   "processId": 4242,
   "platform": "macos",
   "architecture": "aarch64",

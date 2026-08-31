@@ -574,9 +574,9 @@ mod desktop {
         let executable = env::current_exe()?;
         #[cfg(target_os = "windows")]
         {
-            return executable.parent().map(Path::to_path_buf).ok_or_else(|| {
+            executable.parent().map(Path::to_path_buf).ok_or_else(|| {
                 io::Error::new(io::ErrorKind::NotFound, "Desktop executable has no parent")
-            });
+            })
         }
         #[cfg(target_os = "macos")]
         {

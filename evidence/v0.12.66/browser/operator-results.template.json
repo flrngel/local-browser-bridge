@@ -1,0 +1,358 @@
+{
+  "schemaVersion": 3,
+  "evidenceType": "stock-user-chrome-operator-observations",
+  "releaseCandidateBinding": {
+    "schemaVersion": 3,
+    "version": "REPLACE_WITH_INITIALIZER",
+    "releaseTag": "REPLACE_WITH_INITIALIZER",
+    "repository": "REPLACE_WITH_INITIALIZER",
+    "sourceSha": "REPLACE_WITH_INITIALIZER",
+    "workflowRunId": "REPLACE_WITH_INITIALIZER",
+    "workflowRunAttempt": "REPLACE_WITH_INITIALIZER",
+    "workflowEvent": "REPLACE_WITH_INITIALIZER",
+    "workflowRef": "REPLACE_WITH_INITIALIZER",
+    "workflowPath": "REPLACE_WITH_INITIALIZER",
+    "artifactId": "REPLACE_WITH_INITIALIZER",
+    "artifactName": "REPLACE_WITH_INITIALIZER",
+    "artifactZipBytes": 0,
+    "artifactZipSha256": "REPLACE_WITH_INITIALIZER",
+    "checksumManifestSha256": "REPLACE_WITH_INITIALIZER",
+    "attestationInvocationUri": "REPLACE_WITH_INITIALIZER",
+    "attestedAssetCount": 0,
+    "githubHostedRunner": false,
+    "assets": []
+  },
+  "candidateBinding": {
+    "runNonce": "REPLACE_WITH_INITIALIZER",
+    "preflightRecordSha256": "REPLACE_WITH_INITIALIZER",
+    "finalSha": "REPLACE_WITH_INITIALIZER",
+    "checksumManifestSha256": "REPLACE_WITH_INITIALIZER",
+    "serverSha256": "REPLACE_WITH_INITIALIZER",
+    "computerHelperSha256": "REPLACE_WITH_INITIALIZER",
+    "extensionZipSha256": "REPLACE_WITH_INITIALIZER",
+    "extractedPayloadSha256": "REPLACE_WITH_INITIALIZER"
+  },
+  "environment": {
+    "platform": "windows-x86_64",
+    "browserProduct": "Google Chrome",
+    "browserVersion": "REPLACE_WITH_FOUR_PART_VERSION",
+    "stockUserChrome": false,
+    "existingUserSession": false,
+    "dedicatedTemporaryWindow": false,
+    "browserLaunchFlagsUsed": true,
+    "directCdpUsed": true,
+    "automationTestProfileUsed": true,
+    "localDemoOnly": false
+  },
+  "actionSurfaces": {
+    "bridgeApiMatrix": "local-browser-bridge-api",
+    "computerHelperApi": "local-browser-bridge-computer-api",
+    "orchestrationAndConsent": "REPLACE_WITH_EXTERNAL_ORCHESTRATION_SURFACE",
+    "dedicatedWindowCreation": "REPLACE_WITH_PRODUCT_SURFACE",
+    "chromeExtensionsPage": "REPLACE_WITH_PRODUCT_SURFACE",
+    "nativeLoadUnpackedPicker": "REPLACE_WITH_PRODUCT_SURFACE",
+    "extensionPopup": "REPLACE_WITH_PRODUCT_SURFACE",
+    "chromeDebuggerNotice": "REPLACE_WITH_PRODUCT_SURFACE",
+    "browserApiResult": "REPLACE_WITH_PRODUCT_SURFACE",
+    "computerShareAction": "REPLACE_WITH_PRODUCT_SURFACE",
+    "acceptanceScreenshots": "REPLACE_WITH_PRODUCT_SURFACE",
+    "debuggerOwnerDuringBridgeLease": "local-browser-bridge-extension",
+    "competingDebuggerAttachmentAllowed": true,
+    "chromeMcpUsedDuringBridgeLease": true,
+    "chromeMcpReleaseEvidenceClaimed": true
+  },
+  "computerHelperChain": {
+    "candidateBoundExecutableStarted": false,
+    "connectedThroughLoopbackServer": false,
+    "serverApiOnly": false,
+    "exactChromeWindowSelected": false,
+    "chromeExtensionsLoadCompleted": false,
+    "browserApiActionCompleted": false,
+    "exactWindowShareActionCompleted": false,
+    "freshFramesBoundToComputerAction": false,
+    "screenshotEndpoint": "/api/computer/screenshot",
+    "rawScreenshotCount": 0,
+    "topologyProtocolBound": false,
+    "ownerForcedSupervisorTermination": false,
+    "helperDisconnectedAfterTermination": false,
+    "noHelperChildrenOrListenersRemain": false,
+    "helperStopped": false
+  },
+  "consentCheckpoints": {
+    "scopedActionTimeApproval": {
+      "recordSha256": "REPLACE_WITH_APPROVAL_RECORD_SHA256",
+      "approvalId": "REPLACE_WITH_APPROVAL_ID",
+      "obtainedAtActionTime": false,
+      "consumedBeforeFirstCoveredAction": false,
+      "consumedBeforeExpiry": false,
+      "freshStateRevalidatedAfterApproval": false,
+      "scopeUnchangedThroughRun": false,
+      "singleCandidateRun": false
+    },
+    "installCandidate": {
+      "performed": false,
+      "approvalRef": "REPLACE_WITH_APPROVAL_ID"
+    },
+    "developerModeChange": {
+      "performed": false,
+      "approvalRef": "REPLACE_WITH_APPROVAL_ID"
+    },
+    "fullAccessUse": {
+      "performed": false,
+      "approvalRef": "REPLACE_WITH_APPROVAL_ID"
+    },
+    "acceptanceTokenSave": {
+      "performed": false,
+      "approvalRef": "REPLACE_WITH_APPROVAL_ID"
+    },
+    "clearSavedToken": {
+      "performed": false,
+      "approvalRef": "REPLACE_WITH_APPROVAL_ID"
+    },
+    "removeTestOwnedExtension": {
+      "performed": false,
+      "approvalRef": "REPLACE_WITH_APPROVAL_ID"
+    },
+    "restoreCapturedBrowserSettings": {
+      "performed": false,
+      "approvalRef": "REPLACE_WITH_APPROVAL_ID"
+    },
+    "failureRollback": {
+      "performed": false,
+      "approvalRef": "REPLACE_WITH_APPROVAL_ID"
+    }
+  },
+  "initialState": {
+    "capturedBeforeRelevantMutation": false,
+    "candidateExtensionPresent": true,
+    "developerMode": {
+      "value": "REPLACE_WITH_ENABLED_OR_DISABLED",
+      "changedByRun": false
+    },
+    "fullAccess": {
+      "value": "REPLACE_WITH_ENABLED_OR_DISABLED",
+      "changedByRun": false
+    },
+    "savedTokenConfigured": true
+  },
+  "extension": {
+    "cardCount": 0,
+    "version": "0.12.66",
+    "enabled": false,
+    "loadErrors": 1,
+    "loadedVia": "chrome://extensions-load-unpacked",
+    "loadedDirectoryByteMatchesCandidateZip": false,
+    "popupConnected": false,
+    "debuggerLeaseActiveAtFirstCapture": false,
+    "nativeDebuggerUseIndicatorSeen": false
+  },
+  "handback": {
+    "stop": {
+      "trigger": "in-page-stop",
+      "operatorSurface": "local-browser-bridge-computer-helper",
+      "statusPollMethod": "browser.control.status",
+      "statusPolledAfterTrigger": false,
+      "reducedStatus": {
+        "active": true,
+        "humanPaused": false,
+        "reason": "released_by_user",
+        "revocationPending": true
+      },
+      "controlStartRefusal": {
+        "httpStatus": 0,
+        "errorCode": "REPLACE_WITH_MACHINE_PROOF",
+        "taxonomyState": "REPLACE_WITH_MACHINE_PROOF",
+        "taxonomyAction": "REPLACE_WITH_MACHINE_PROOF",
+        "retriable": true
+      },
+      "tabMutationRefusal": {
+        "httpStatus": 0,
+        "errorCode": "REPLACE_WITH_MACHINE_PROOF",
+        "taxonomyState": "REPLACE_WITH_MACHINE_PROOF",
+        "taxonomyAction": "REPLACE_WITH_MACHINE_PROOF",
+        "retriable": true
+      },
+      "indicatorsRemoved": false,
+      "resume": {
+        "trustedPopupClick": false,
+        "operatorSurface": "local-browser-bridge-computer-helper",
+        "statusPollMethod": "browser.control.status",
+        "statusPolledAfterResume": false,
+        "reducedStatus": {
+          "active": true,
+          "humanPaused": true,
+          "revocationPending": true
+        },
+        "postResumeStartSucceeded": false,
+        "activeStatusPolled": false,
+        "activeStatus": {
+          "active": false,
+          "humanPaused": true,
+          "revocationPending": true
+        }
+      }
+    },
+    "cancel": {
+      "trigger": "chrome-native-cancel",
+      "operatorSurface": "local-browser-bridge-computer-helper",
+      "statusPollMethod": "browser.control.status",
+      "statusPolledAfterTrigger": false,
+      "reducedStatus": {
+        "active": true,
+        "humanPaused": false,
+        "reason": "canceled_by_user",
+        "revocationPending": true
+      },
+      "controlStartRefusal": {
+        "httpStatus": 0,
+        "errorCode": "REPLACE_WITH_MACHINE_PROOF",
+        "taxonomyState": "REPLACE_WITH_MACHINE_PROOF",
+        "taxonomyAction": "REPLACE_WITH_MACHINE_PROOF",
+        "retriable": true
+      },
+      "tabMutationRefusal": {
+        "httpStatus": 0,
+        "errorCode": "REPLACE_WITH_MACHINE_PROOF",
+        "taxonomyState": "REPLACE_WITH_MACHINE_PROOF",
+        "taxonomyAction": "REPLACE_WITH_MACHINE_PROOF",
+        "retriable": true
+      },
+      "indicatorsRemoved": false,
+      "resume": {
+        "trustedPopupClick": false,
+        "operatorSurface": "local-browser-bridge-computer-helper",
+        "statusPollMethod": "browser.control.status",
+        "statusPolledAfterResume": false,
+        "reducedStatus": {
+          "active": true,
+          "humanPaused": true,
+          "revocationPending": true
+        },
+        "postResumeStartSucceeded": false,
+        "activeStatusPolled": false,
+        "activeStatus": {
+          "active": false,
+          "humanPaused": true,
+          "revocationPending": true
+        }
+      }
+    }
+  },
+  "screenshotCaptures": [
+    {
+      "purpose": "extension-loaded",
+      "image": "browser-01-extension-loaded.png",
+      "captureSurface": "REPLACE_WITH_PRODUCT_SURFACE",
+      "requiredVisibleState": "stock Chrome chrome://extensions shows exactly one enabled unpacked Local Browser Bridge v0.12.66 card with no load errors and Chrome's debugger-use indicator during the active bridge lease"
+    },
+    {
+      "purpose": "api-action-result",
+      "image": "browser-02-api-action-result.png",
+      "captureSurface": "REPLACE_WITH_PRODUCT_SURFACE",
+      "requiredVisibleState": "the loopback demo visibly shows Hello, Bridge Matrix. blue selected. after the browser API action"
+    },
+    {
+      "purpose": "computer-share-action",
+      "image": "browser-03-computer-share-action.png",
+      "captureSurface": "REPLACE_WITH_PRODUCT_SURFACE",
+      "requiredVisibleState": "the exact shared Chrome window visibly shows the post-click demo state and synthetic session pointer from a fresh helper frame"
+    },
+    {
+      "purpose": "stop-paused",
+      "image": "browser-04-stop-paused.png",
+      "captureSurface": "REPLACE_WITH_PRODUCT_SURFACE",
+      "requiredVisibleState": "the trusted extension popup visibly shows the human pause and Resume remote control after the in-page Stop handback"
+    },
+    {
+      "purpose": "cancel-paused",
+      "image": "browser-05-cancel-paused.png",
+      "captureSurface": "REPLACE_WITH_PRODUCT_SURFACE",
+      "requiredVisibleState": "the trusted extension popup visibly shows the human pause and Resume remote control after Chrome's browser-owned Cancel handback"
+    },
+    {
+      "purpose": "post-handback-resume",
+      "image": "browser-06-post-handback-resume.png",
+      "captureSurface": "REPLACE_WITH_PRODUCT_SURFACE",
+      "requiredVisibleState": "the exact demo visibly shows the restored Chrome debugger-use indicator and page control pill after both trusted-popup recovery cycles"
+    }
+  ],
+  "independentVisualReview": {
+    "recordSha256": "REPLACE_WITH_INDEPENDENT_VISUAL_REVIEW_SHA256",
+    "executorSessionRef": "REPLACE_WITH_EXECUTOR_SESSION_REF",
+    "reviewerSessionRef": "REPLACE_WITH_REVIEWER_SESSION_REF",
+    "independentSessionBoundary": false,
+    "reviewedCropCount": 0,
+    "everySanitizedCropOpenedByReviewer": false,
+    "allImageDigestsMatched": false,
+    "requiredVisibleStateConfirmedByReviewer": false,
+    "noSensitivePixelsObservedByReviewer": false,
+    "noUncertaintyReported": false,
+    "visualJudgmentNotPixelSafetyProof": false
+  },
+  "restoration": {
+    "candidateExtensionPresence": {
+      "finalPresent": true,
+      "matchesInitial": false,
+      "verifiedFromLiveUi": false
+    },
+    "developerMode": {
+      "finalValue": "REPLACE_WITH_ENABLED_OR_DISABLED",
+      "matchesInitial": false,
+      "verifiedFromLiveUi": false
+    },
+    "fullAccess": {
+      "finalValue": "REPLACE_WITH_ENABLED_OR_DISABLED",
+      "matchesInitial": false,
+      "verifiedFromLiveUi": false
+    },
+    "savedToken": {
+      "finalConfigured": true,
+      "matchesInitial": false,
+      "verifiedFromLiveUi": false
+    }
+  },
+  "cleanup": {
+    "controlReleased": false,
+    "testTabsClosed": false,
+    "testWindowClosed": false,
+    "popupDisconnected": false,
+    "serverStopped": false,
+    "portReleased": false,
+    "acceptanceCredentialClearedFromShell": false,
+    "savedTokenClear": {
+      "trustedPopupClick": false,
+      "confirmationDialogShown": false,
+      "confirmationAcceptedByExecutor": false,
+      "approvalRef": "REPLACE_WITH_APPROVAL_ID",
+      "popupStateVerifiedAfterClear": false,
+      "tokenConfigured": true,
+      "clearButtonDisabled": false
+    },
+    "externalSurfacePreflightAttestationSha256": "REPLACE_WITH_SHA256",
+    "externalSurfacePostflightAttestationSha256": "REPLACE_WITH_SHA256",
+    "chromeMcpDisposition": "never-used-through-independent-review",
+    "computerUseDisposition": "not-resumed-through-independent-review",
+    "reviewerInputDisposition": "exported-digest-bound-files-only",
+    "computerHelperStopped": false,
+    "rawScreenshotScratchDeleted": false,
+    "pendingReviewRecordsDeleted": false,
+    "extractedExtensionInventoryVerifiedBeforeDeletion": false,
+    "extractedExtensionDirectoryDeleted": false,
+    "extensionDisposition": "REPLACE_WITH_DISPOSITION",
+    "unrelatedTargetMutationCommandsIssued": true,
+    "unrelatedExtensionMutationCommandsIssued": true
+  },
+  "retainedEvidence": {
+    "scope": "acceptance-evidence-directory-only",
+    "exactAllowlistVerified": false,
+    "inputFileCount": 0,
+    "finalFileCount": 0,
+    "rawScreenshotsPresent": true,
+    "pendingReviewRecordsPresent": true,
+    "chromeMcpTranscriptPresent": true,
+    "computerUseTranscriptPresent": true,
+    "secretCredentialPresent": true,
+    "filesystemLocationsOrBrowserIdsPresent": true,
+    "externalToolAndPlatformLogsScope": "not-asserted"
+  }
+}
