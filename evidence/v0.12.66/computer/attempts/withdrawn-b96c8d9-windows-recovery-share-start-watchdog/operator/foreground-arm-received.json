@@ -1,0 +1,22 @@
+{
+    "schemaVersion":  2,
+    "productVersion":  "0.12.66",
+    "kind":  "foreground-arm",
+    "status":  "received",
+    "requestId":  "4f9d24dc98204525a928aac7ca4d3278",
+    "receivedAtUtc":  "2026-08-31T09:44:29.3287691Z",
+    "exactClickCountsMatched":  true,
+    "stableSamplesObserved":  3,
+    "stableSamplesRequired":  3,
+    "nativeTopologyMatched":  true,
+    "foregroundMatched":  true,
+    "focusMatched":  true,
+    "cursorStable":  true,
+    "inputDesktopStable":  true,
+    "notificationOnly":  true,
+    "acceptedAsAuthority":  false,
+    "rawWindowHandlesRecorded":  false,
+    "rawCursorCoordinatesRecorded":  false,
+    "pathsRecorded":  false,
+    "secretsRecorded":  false
+}
