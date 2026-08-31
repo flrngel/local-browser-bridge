@@ -74,7 +74,7 @@ not proof that an unobserved transient state never existed. The ledger records a
 was never tagged or published. The bounded observation and its limitations are
 preserved in the immutable [v0.12.34 negative-evidence commit](https://github.com/flrngel/local-browser-bridge/tree/aef8fc68018cdb6181ad3d0886acf4e71fcda96d/evidence/v0.12.34/computer/attempts/withdrawn-2509567-windows-pre-coordinator-interruption).
 
-Version 0.12.65 is the current source and schema-3 release-pipeline target. It
+Version 0.12.66 is the current source and schema-3 release-pipeline target. It
 retains the breakaway-enabled coordinator Job and atomic private Job-list child
 creation, but delays the persistent boundary until private staging and
 configuration verification, detached-worker Job binding and guard-ownership
@@ -103,7 +103,7 @@ observed the target postcondition with both shared-seat boundaries quiet. Its
 bound completion receipt arrived after 11,765 ms, inside the app and runner's
 18-second grace, but an inconsistent 10-second watcher/reader/finalizer bound
 rejected it. The candidate was not retried and did not reach Windows or
-publication. Version 0.12.65 aligns all completion-receipt boundaries at 18
+publication. Version 0.12.66 aligns all completion-receipt boundaries at 18
 seconds; it does not weaken receipt identity, chronology, create-once, or
 shared-seat requirements.
 
@@ -165,7 +165,7 @@ The exact v0.12.62 candidate passed both fresh macOS lanes, but its sole Windows
 attempt retained only the persistent `reserved-no-retry` record. No matching
 coordinator, terminal result, evidence directory, candidate process, listener,
 or stock-Chrome record survived, so the protocol classifies the attempt as
-`candidate-execution-unknown`. Version 0.12.65 carries the same product fix with
+`candidate-execution-unknown`. Version 0.12.66 carries the same product fix with
 fresh package, candidate, reservation, and acceptance identity; no v0.12.62
 artifact or result is reusable.
 
