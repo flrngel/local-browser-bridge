@@ -140,6 +140,24 @@ candidate has been built, downloaded, or executed.
 > requires the event-relative 11.5-second live-share watchdog lower bound for
 > every accepted receipt class. It requires entirely fresh candidate and
 > acceptance evidence. Do not reuse or relabel earlier bytes or results.
+>
+> The terminal v0.12.67 Windows attempt used source
+> `4d47485499fa855fdfe788bf3a9317979727d1f4`, candidate workflow run
+> `33401392061` attempt 1, and artifact `9761807586`. Candidate trust and
+> protocol-bound helper readiness passed. The runner published its
+> foreground-arm request but observed zero fixture left-mouse-down events, zero
+> left-mouse-up events, and zero acknowledgements. It exhausted the full
+> 300-second foreground-arm deadline before the baseline, any product action,
+> or stock-Chrome acceptance. The persistent attempt is terminal
+> `reserved-no-retry` with `retryAllowed: false`. Its immutable sanitized
+> evidence is on branch
+> `evidence/v0.12.67-windows-foreground-arm-timeout-33401392061-attempt-1` at
+> commit
+> [`50070fdda84b329a5bcd9f6a5a7fceadf36add3c`](https://github.com/flrngel/local-browser-bridge/tree/50070fdda84b329a5bcd9f6a5a7fceadf36add3c/evidence/v0.12.67/computer/attempts/withdrawn-98fcda7-windows-foreground-arm-timeout).
+> Never retry or relabel that attempt. Version 0.12.68 replaces its
+> operator-dependent click gate with the automatic stable external-foreground
+> proof described below and requires entirely fresh bytes, reservation, and
+> evidence.
 
 > The exact v0.12.62 candidate later retained only a schema-2
 > `reserved-no-retry` record. No matching coordinator, terminal result, evidence
@@ -150,12 +168,14 @@ candidate has been built, downloaded, or executed.
 
 ## Source-freeze release boundary
 
-At this handoff's source-freeze checkpoint, the coordinator source gate was
-complete but every artifact- and UI-bearing release gate remained future work:
+At this handoff's source-freeze checkpoint, the Windows implementation and
+local artifact gates are complete, but immutable candidate and release gates
+remain future work:
 
-- no 0.12.67 tag has been created or pushed;
-- no packaged 0.12.67 server, helper, or extension has been built, downloaded,
-  or executed;
+- no 0.12.68 tag has been created or pushed;
+- local Windows x86_64 server/helper release binaries and the version-matched
+  extension ZIP have been built and verified; they are not a frozen GitHub
+  candidate and cannot satisfy candidate acceptance;
 - neither macOS packaged lane nor Windows packaged-helper acceptance has run;
 - stock-Chrome acceptance has not run and Chrome was not opened or mutated;
 - no candidate-bound evidence commit, approval, publication, or GitHub Release
@@ -164,7 +184,7 @@ complete but every artifact- and UI-bearing release gate remained future work:
   consent or action authority.
 
 The live publication status belongs to the immutable
-[v0.12.67 GitHub Release](https://github.com/flrngel/local-browser-bridge/releases/tag/v0.12.67)
+[v0.12.68 GitHub Release](https://github.com/flrngel/local-browser-bridge/releases/tag/v0.12.68)
 and its candidate-bound schema-3 evidence receipt, not to this source-checkpoint
 list.
 
@@ -175,7 +195,7 @@ outcome-unknown launch.
 
 ## Verified facts
 
-The active 0.12.67 source provides a checked-in
+The active 0.12.68 source provides a checked-in
 `scripts/run-windows-computer-use-acceptance.ps1` coordinator with:
 
 - a clean exact-system-PowerShell bootstrap;
@@ -189,8 +209,36 @@ The active 0.12.67 source provides a checked-in
 - suspended native process creation with an exact handle list and Job list;
 - exact PID plus process-start-time liveness checks;
 - full predecessor-chain validation for `Follow`;
-- watcher startup only after the foreground-arm request exists; and
-- notification-only `Follow` output with `uiActionAllowed: false`.
+- nonblocking `Start` output that truthfully reports
+  `foregroundGateMode: automatic-stable-external-foreground`,
+  `operatorActionRequired: false`, and `action: none` without claiming that
+  readiness has completed;
+- watcher startup only after the legacy-named
+  `operator/foreground-arm-request.json` exists;
+- read-only validation of matching schema-v3 request and
+  `operator/foreground-arm-received.json` ready proof; and
+- notification-only `Follow` output with `uiActionAllowed: false`, returning
+  `waiting` before proof and `automatic-ready` only after proof.
+
+The dedicated fixture is a nonactivating background process. It must never be
+the accepted foreground or focus owner. After an initial fresh zero-input
+publication, the runner writes the schema-v3 automatic request notification and
+requires three distinct, fresh, advancing fixture publications. Each accepted
+native sample uses foreground-before/after reads as a seqlock, and all three
+must retain the same external foreground/focus root in the runner's current
+interactive session outside the fixture PID, the same owner identities, unchanged available OS-global cursor,
+and the same available input desktop. Fixture request, acknowledgement,
+left-mouse-down, and left-mouse-up counts must all remain zero.
+
+Only after that automatic proof does the runner create the matching schema-v3
+ready notification under the legacy received filename. Both files are
+create-once, sanitized, notification-only evidence and never product authority.
+The watcher is read-only and validates their exact request ID, freshness,
+runner identity, stable-sample count, native seqlock, external-owner and
+fixture-exclusion facts, cursor/input-desktop stability, and zero-input facts.
+The Windows path requires no click, manual relay, operator action, global or
+synthetic input, cursor movement, focus change, focus stealing, or app share.
+The separately authorized macOS exact-app-share operator flow is unchanged.
 
 It now also provides the reviewed fail-closed named-Job state machine described
 in [Implemented state machine](#implemented-state-machine).

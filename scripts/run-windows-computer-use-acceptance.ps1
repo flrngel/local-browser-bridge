@@ -35,10 +35,9 @@ $ProgressPreference = "SilentlyContinue"
 
 $script:SchemaVersion = 1
 $script:AttemptReservationSchemaVersion = 2
-$script:ProductVersion = "0.12.67"
-$script:ExpectedWindowTitle = "LBB Foreground Sentinel"
-$script:ExpectedActionButton = "CLICK TO ARM"
-$script:ExpectedArmedButton = "ARMED - DO NOT USE THIS SESSION"
+$script:ProductVersion = "0.12.68"
+$script:ForegroundGateMode = "automatic-stable-external-foreground"
+$script:AutomaticHandoffSchemaVersion = 2
 $script:SuccessMessage = "Windows computer-use acceptance coordinator self-test passed."
 $script:Utf8NoBom = [Text.UTF8Encoding]::new($false)
 $script:SensitiveEnvironmentPattern = '(?i)(?:TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|COOKIE|API[_-]?KEY|PRIVATE[_-]?KEY|AUTHORIZATION)'
@@ -2579,67 +2578,57 @@ function Assert-ExactHandoffRecord {
     )
     $fields = @(
         "schemaVersion", "productVersion", "kind", "status", "requestId",
-        "publishedAtUtc", "observedAtUtc", "expiresAtUtc", "operatorActionRequired",
-        "preferredRelaySurface", "fallbackRelaySurface", "expectedVisibleWindowTitle",
-        "expectedVisibleButtonText", "expectedAccessibleName", "action", "stopUiAfterAction",
-        "requiresSeparateAuthorization", "markerGrantsAuthorization", "markerGrantsConsent",
-        "externalOneShotConsentRequired", "externalAuthorizationVerifiedByWatcher",
-        "visualConfirmationRequired", "maximumClickAttempts", "retryOnUnknownOutcome",
-        "instruction", "notificationOnly", "acceptedAsAuthority", "runnerIdentityMatched",
-        "markerFresh", "rawWindowHandlesRecorded", "rawCursorCoordinatesRecorded",
-        "processIdentifiersRecorded", "pathsRecorded", "secretsRecorded"
+        "publishedAtUtc", "receivedAtUtc", "observedAtUtc", "deadlineAtUtc", "mode",
+        "operatorActionRequired", "action", "clickAttemptsObserved", "stableSamplesObserved",
+        "stableSamplesRequired", "nativeSampleSeqlockMatched", "ownerIdentityStable",
+        "focusRootMatched", "fixtureProcessExcluded", "interactiveSessionMatched", "cursorStable", "inputDesktopStable",
+        "globalInputUsed", "focusChangedByRunner", "cursorChangedByRunner", "syntheticInputUsed",
+        "notificationOnly", "acceptedAsAuthority", "runnerIdentityMatched", "requestFresh",
+        "receivedBeforeDeadline", "rawWindowHandlesRecorded", "rawProcessIdentifiersRecorded",
+        "rawCursorCoordinatesRecorded", "pathsRecorded", "secretsRecorded"
     )
     Assert-ExactPropertyOrder $Record $fields "Handoff record"
-    Assert-ExactIntegerRange $Record.schemaVersion 1 1 "handoff schemaVersion"
+    Assert-ExactIntegerRange `
+        $Record.schemaVersion `
+        $script:AutomaticHandoffSchemaVersion `
+        $script:AutomaticHandoffSchemaVersion `
+        "handoff schemaVersion"
     Assert-ExactStringValue $Record.productVersion ([string]$Config.version) "handoff productVersion"
-    Assert-ExactStringValue $Record.kind "windows-acceptance-handoff" "handoff kind"
-    if ($Record.status -isnot [string] -or @("action-required", "already-armed") -cnotcontains [string]$Record.status -or
-        $Record.requestId -isnot [string] -or $Record.requestId -cnotmatch '^[0-9a-f]{32}$') {
+    Assert-ExactStringValue $Record.kind "windows-acceptance-automatic-handoff" "handoff kind"
+    Assert-ExactStringValue $Record.status "automatic-ready" "handoff status"
+    if ($Record.requestId -isnot [string] -or $Record.requestId -cnotmatch '^[0-9a-f]{32}$') {
         throw "The handoff status or request ID is invalid."
     }
     $published = ConvertFrom-CanonicalUtcString $Record.publishedAtUtc "handoff publishedAtUtc"
+    $received = ConvertFrom-CanonicalUtcString $Record.receivedAtUtc "handoff receivedAtUtc"
     $observed = ConvertFrom-CanonicalUtcString $Record.observedAtUtc "handoff observedAtUtc"
-    $expires = ConvertFrom-CanonicalUtcString $Record.expiresAtUtc "handoff expiresAtUtc"
-    if ($observed -lt $published -or $observed -ge $expires -or
-        $expires -le $published -or ($expires - $published).TotalSeconds -gt 300) {
+    $deadline = ConvertFrom-CanonicalUtcString $Record.deadlineAtUtc "handoff deadlineAtUtc"
+    if ($received -lt $published -or $received -gt $deadline -or $observed -lt $received -or
+        $deadline -le $published -or ($deadline - $published).TotalSeconds -gt 300) {
         throw "The handoff freshness interval is invalid."
     }
-    Assert-ExactStringValue $Record.preferredRelaySurface "windows-computer-use-app-share" "handoff preferred relay"
-    Assert-ExactStringValue $Record.fallbackRelaySurface "human-on-windows-session" "handoff fallback relay"
-    Assert-ExactStringValue $Record.expectedVisibleWindowTitle $script:ExpectedWindowTitle "handoff window title"
-    Assert-ExactStringValue $Record.expectedAccessibleName "Click to arm Windows acceptance" "handoff accessible name"
-    Assert-ExactBoolean $Record.stopUiAfterAction $true "handoff stopUiAfterAction"
-    Assert-ExactBoolean $Record.requiresSeparateAuthorization $true "handoff requiresSeparateAuthorization"
-    Assert-ExactBoolean $Record.markerGrantsAuthorization $false "handoff markerGrantsAuthorization"
-    Assert-ExactBoolean $Record.markerGrantsConsent $false "handoff markerGrantsConsent"
-    Assert-ExactBoolean $Record.externalOneShotConsentRequired $true "handoff externalOneShotConsentRequired"
-    Assert-ExactBoolean $Record.externalAuthorizationVerifiedByWatcher $false "handoff externalAuthorizationVerifiedByWatcher"
-    Assert-ExactBoolean $Record.visualConfirmationRequired $true "handoff visualConfirmationRequired"
-    Assert-ExactBoolean $Record.retryOnUnknownOutcome $false "handoff retryOnUnknownOutcome"
+    Assert-ExactStringValue $Record.mode $script:ForegroundGateMode "handoff mode"
+    Assert-ExactBoolean $Record.operatorActionRequired $false "handoff operatorActionRequired"
+    Assert-ExactStringValue $Record.action "none" "handoff action"
+    Assert-ExactIntegerRange $Record.clickAttemptsObserved 0 0 "handoff clickAttemptsObserved"
+    Assert-ExactIntegerRange $Record.stableSamplesRequired 3 3 "handoff stableSamplesRequired"
+    Assert-ExactIntegerRange $Record.stableSamplesObserved 3 3 "handoff stableSamplesObserved"
+    foreach ($field in @(
+        "nativeSampleSeqlockMatched", "ownerIdentityStable", "focusRootMatched",
+        "fixtureProcessExcluded", "interactiveSessionMatched", "cursorStable", "inputDesktopStable", "runnerIdentityMatched",
+        "requestFresh", "receivedBeforeDeadline"
+    )) {
+        Assert-ExactBoolean $Record.$field $true "handoff $field"
+    }
+    foreach ($field in @(
+        "globalInputUsed", "focusChangedByRunner", "cursorChangedByRunner", "syntheticInputUsed",
+        "acceptedAsAuthority", "rawWindowHandlesRecorded", "rawProcessIdentifiersRecorded",
+        "rawCursorCoordinatesRecorded", "pathsRecorded", "secretsRecorded"
+    )) {
+        Assert-ExactBoolean $Record.$field $false "handoff $field"
+    }
     Assert-ExactBoolean $Record.notificationOnly $true "handoff notificationOnly"
-    Assert-ExactBoolean $Record.acceptedAsAuthority $false "handoff acceptedAsAuthority"
-    Assert-ExactBoolean $Record.runnerIdentityMatched $true "handoff runnerIdentityMatched"
-    Assert-ExactBoolean $Record.markerFresh $true "handoff markerFresh"
-    Assert-ExactBoolean $Record.rawWindowHandlesRecorded $false "handoff rawWindowHandlesRecorded"
-    Assert-ExactBoolean $Record.rawCursorCoordinatesRecorded $false "handoff rawCursorCoordinatesRecorded"
-    Assert-ExactBoolean $Record.processIdentifiersRecorded $false "handoff processIdentifiersRecorded"
-    Assert-ExactBoolean $Record.pathsRecorded $false "handoff pathsRecorded"
-    Assert-ExactBoolean $Record.secretsRecorded $false "handoff secretsRecorded"
     Assert-ExactIntegerRange $Runner.runnerPid 1 ([Int32]::MaxValue) "runner record PID"
-    if ([string]$Record.status -ceq "action-required") {
-        Assert-ExactBoolean $Record.operatorActionRequired $true "handoff operatorActionRequired"
-        Assert-ExactIntegerRange $Record.maximumClickAttempts 1 1 "handoff maximumClickAttempts"
-        Assert-ExactStringValue $Record.expectedVisibleButtonText $script:ExpectedActionButton "handoff button"
-        Assert-ExactStringValue $Record.action "single-left-click" "handoff action"
-        Assert-ExactStringValue $Record.instruction "Use a separately authorized Windows Computer Use app share to visually confirm this exact window and button, click it once, then stop all UI use. If it already says ARMED or the outcome is uncertain, do not click or retry." "handoff instruction"
-    }
-    else {
-        Assert-ExactBoolean $Record.operatorActionRequired $false "handoff operatorActionRequired"
-        Assert-ExactIntegerRange $Record.maximumClickAttempts 0 0 "handoff maximumClickAttempts"
-        Assert-ExactStringValue $Record.expectedVisibleButtonText $script:ExpectedArmedButton "handoff button"
-        Assert-ExactStringValue $Record.action "none" "handoff action"
-        Assert-ExactStringValue $Record.instruction "Do not click; stop all UI use because the foreground arm is already acknowledged." "handoff instruction"
-    }
 }
 
 function Get-ValidatedFollowChain {
@@ -2717,50 +2706,51 @@ function ConvertTo-ExactPrivateHandoffRecord {
     )
     Assert-ExactPropertyOrder $WatcherHandoff @(
         "schemaVersion", "productVersion", "kind", "status", "requestId",
-        "publishedAtUtc", "observedAtUtc", "expiresAtUtc", "operatorActionRequired",
-        "preferredRelaySurface", "fallbackRelaySurface", "expectedVisibleWindowTitle",
-        "expectedVisibleButtonText", "expectedAccessibleName", "action", "stopUiAfterAction",
-        "requiresSeparateAuthorization", "markerGrantsAuthorization", "markerGrantsConsent",
-        "externalOneShotConsentRequired", "externalAuthorizationVerifiedByWatcher",
-        "visualConfirmationRequired", "maximumClickAttempts", "retryOnUnknownOutcome",
-        "instruction", "notificationOnly", "acceptedAsAuthority", "runnerIdentityMatched",
-        "markerFresh", "rawWindowHandlesRecorded", "rawCursorCoordinatesRecorded",
-        "processIdentifiersRecorded", "pathsRecorded", "secretsRecorded"
+        "publishedAtUtc", "receivedAtUtc", "observedAtUtc", "deadlineAtUtc", "mode",
+        "operatorActionRequired", "action", "clickAttemptsObserved", "stableSamplesObserved",
+        "stableSamplesRequired", "nativeSampleSeqlockMatched", "ownerIdentityStable",
+        "focusRootMatched", "fixtureProcessExcluded", "interactiveSessionMatched", "cursorStable", "inputDesktopStable",
+        "globalInputUsed", "focusChangedByRunner", "cursorChangedByRunner", "syntheticInputUsed",
+        "notificationOnly", "acceptedAsAuthority", "runnerIdentityMatched", "requestFresh",
+        "receivedBeforeDeadline", "rawWindowHandlesRecorded", "rawProcessIdentifiersRecorded",
+        "rawCursorCoordinatesRecorded", "pathsRecorded", "secretsRecorded"
     ) "Watcher handoff"
-    Assert-ExactStringValue $WatcherHandoff.kind "foreground-arm-visual-handoff" "watcher handoff kind"
+    Assert-ExactStringValue $WatcherHandoff.kind "foreground-baseline-ready-handoff" "watcher handoff kind"
     $record = [pscustomobject]([ordered]@{
         schemaVersion = $WatcherHandoff.schemaVersion
         productVersion = $WatcherHandoff.productVersion
-        kind = "windows-acceptance-handoff"
+        kind = "windows-acceptance-automatic-handoff"
         status = $WatcherHandoff.status
         requestId = $WatcherHandoff.requestId
         publishedAtUtc = $WatcherHandoff.publishedAtUtc
+        receivedAtUtc = $WatcherHandoff.receivedAtUtc
         observedAtUtc = $WatcherHandoff.observedAtUtc
-        expiresAtUtc = $WatcherHandoff.expiresAtUtc
+        deadlineAtUtc = $WatcherHandoff.deadlineAtUtc
+        mode = $WatcherHandoff.mode
         operatorActionRequired = $WatcherHandoff.operatorActionRequired
-        preferredRelaySurface = $WatcherHandoff.preferredRelaySurface
-        fallbackRelaySurface = $WatcherHandoff.fallbackRelaySurface
-        expectedVisibleWindowTitle = $WatcherHandoff.expectedVisibleWindowTitle
-        expectedVisibleButtonText = $WatcherHandoff.expectedVisibleButtonText
-        expectedAccessibleName = $WatcherHandoff.expectedAccessibleName
         action = $WatcherHandoff.action
-        stopUiAfterAction = $WatcherHandoff.stopUiAfterAction
-        requiresSeparateAuthorization = $WatcherHandoff.requiresSeparateAuthorization
-        markerGrantsAuthorization = $WatcherHandoff.markerGrantsAuthorization
-        markerGrantsConsent = $WatcherHandoff.markerGrantsConsent
-        externalOneShotConsentRequired = $WatcherHandoff.externalOneShotConsentRequired
-        externalAuthorizationVerifiedByWatcher = $WatcherHandoff.externalAuthorizationVerifiedByWatcher
-        visualConfirmationRequired = $WatcherHandoff.visualConfirmationRequired
-        maximumClickAttempts = $WatcherHandoff.maximumClickAttempts
-        retryOnUnknownOutcome = $WatcherHandoff.retryOnUnknownOutcome
-        instruction = $WatcherHandoff.instruction
+        clickAttemptsObserved = $WatcherHandoff.clickAttemptsObserved
+        stableSamplesObserved = $WatcherHandoff.stableSamplesObserved
+        stableSamplesRequired = $WatcherHandoff.stableSamplesRequired
+        nativeSampleSeqlockMatched = $WatcherHandoff.nativeSampleSeqlockMatched
+        ownerIdentityStable = $WatcherHandoff.ownerIdentityStable
+        focusRootMatched = $WatcherHandoff.focusRootMatched
+        fixtureProcessExcluded = $WatcherHandoff.fixtureProcessExcluded
+        interactiveSessionMatched = $WatcherHandoff.interactiveSessionMatched
+        cursorStable = $WatcherHandoff.cursorStable
+        inputDesktopStable = $WatcherHandoff.inputDesktopStable
+        globalInputUsed = $WatcherHandoff.globalInputUsed
+        focusChangedByRunner = $WatcherHandoff.focusChangedByRunner
+        cursorChangedByRunner = $WatcherHandoff.cursorChangedByRunner
+        syntheticInputUsed = $WatcherHandoff.syntheticInputUsed
         notificationOnly = $WatcherHandoff.notificationOnly
         acceptedAsAuthority = $WatcherHandoff.acceptedAsAuthority
         runnerIdentityMatched = $WatcherHandoff.runnerIdentityMatched
-        markerFresh = $WatcherHandoff.markerFresh
+        requestFresh = $WatcherHandoff.requestFresh
+        receivedBeforeDeadline = $WatcherHandoff.receivedBeforeDeadline
         rawWindowHandlesRecorded = $WatcherHandoff.rawWindowHandlesRecorded
+        rawProcessIdentifiersRecorded = $WatcherHandoff.rawProcessIdentifiersRecorded
         rawCursorCoordinatesRecorded = $WatcherHandoff.rawCursorCoordinatesRecorded
-        processIdentifiersRecorded = $WatcherHandoff.processIdentifiersRecorded
         pathsRecorded = $WatcherHandoff.pathsRecorded
         secretsRecorded = $WatcherHandoff.secretsRecorded
     })
@@ -2794,6 +2784,67 @@ function Write-TerminalFailure {
             if (-not [IO.File]::Exists($Files.Failure)) { throw }
         }
     }
+}
+
+function Get-RunnerSummaryFailureReasonCode {
+    param([object]$Summary)
+    if ($null -eq $Summary -or $Summary -is [Array]) {
+        return "runner-summary-failed"
+    }
+    $failureDetailsProperty = $Summary.PSObject.Properties["failureDetails"]
+    if ($null -eq $failureDetailsProperty -or $null -eq $failureDetailsProperty.Value -or
+        $failureDetailsProperty.Value -is [Array]) {
+        return "runner-summary-failed"
+    }
+    $detailReasonProperty = $failureDetailsProperty.Value.PSObject.Properties["reasonCode"]
+    if ($null -ne $detailReasonProperty -and $detailReasonProperty.Value -is [string]) {
+        switch -CaseSensitive ([string]$detailReasonProperty.Value) {
+            "foreground-baseline-timeout" { return "runner-foreground-baseline-timeout" }
+            "foreground-baseline-state-refused" { return "runner-foreground-baseline-state-refused" }
+            "foreground-baseline-continuity-failed" { return "runner-foreground-baseline-continuity-failed" }
+            "acceptance-test-failed" { return "runner-acceptance-test-failed" }
+        }
+    }
+    $stageProperty = $failureDetailsProperty.Value.PSObject.Properties["stage"]
+    if ($null -eq $stageProperty -or $stageProperty.Value -isnot [string]) {
+        return "runner-summary-failed"
+    }
+    $stage = [string]$stageProperty.Value
+    switch -CaseSensitive ($stage) {
+        "wait-stable-external-foreground" {
+            $failureProperty = $Summary.PSObject.Properties["failure"]
+            if ($null -ne $failureProperty -and
+                $failureProperty.Value -is [string] -and
+                ([string]$failureProperty.Value).StartsWith(
+                    "Timed out waiting for ",
+                    [StringComparison]::Ordinal
+                )) {
+                return "runner-foreground-baseline-timeout"
+            }
+            return "runner-foreground-baseline-failed"
+        }
+        "publish-foreground-baseline-request" {
+            return "runner-foreground-baseline-publication-failed"
+        }
+        "bind-foreground-baseline" {
+            return "runner-foreground-baseline-binding-failed"
+        }
+        { @(
+            "initialize-owned-processes", "build-dedicated-fixture", "self-test-dedicated-fixture",
+            "start-dedicated-fixture", "select-exact-fixture-window", "start-loopback-server",
+            "start-computer-helper", "bind-initial-helper-readiness"
+        ) -ccontains $_ } {
+            return "runner-pre-baseline-failed"
+        }
+        { @(
+            "rebind-post-baseline-helper-readiness", "baseline-status-and-observation",
+            "wait-recovery-event-ready", "recovery-suite", "semantic-suite", "keyboard-suite",
+            "pixel-suite", "capture-suite", "cancellation-suite", "final-invariants"
+        ) -ccontains $_ } {
+            return "runner-post-baseline-failed"
+        }
+    }
+    return "runner-summary-failed"
 }
 
 function Get-WorkerConfiguration {
@@ -2914,6 +2965,7 @@ function Invoke-CoordinatorWorker {
     $runnerCapture = $null
     $watcherCapture = $null
     $watcherAccepted = $false
+    $watcherRefusedWhileRunnerLive = $false
     $handoffPublished = $false
     $runnerInfo = $null
     $token = $null
@@ -3031,7 +3083,7 @@ function Invoke-CoordinatorWorker {
             $watcherCapture = Start-CapturedProcess $watcherInfo $files.WatcherOut $files.WatcherErr
             $watcherExit = Complete-CapturedProcess `
                 $watcherCapture `
-                -TimeoutMilliseconds (([int]$config.foregroundArmTimeoutSeconds + 30) * 1000)
+                -TimeoutMilliseconds (([int]$config.foregroundArmTimeoutSeconds + 5) * 1000)
             $watcherCapture.Process.Dispose()
             $watcherCapture = $null
             $watcherStdout = [IO.File]::ReadAllText($files.WatcherOut, $script:Utf8NoBom).Trim()
@@ -3070,7 +3122,7 @@ function Invoke-CoordinatorWorker {
                 $handoffPublished = $true
             }
             else {
-                Write-TerminalFailure $files "watcher-finished" "runner-started-terminal" "watcher-refused"
+                $watcherRefusedWhileRunnerLive = -not $runnerCapture.Process.HasExited
                 if (-not $runnerCapture.Process.HasExited) {
                     $runnerCapture.Process.Kill()
                 }
@@ -3090,10 +3142,14 @@ function Invoke-CoordinatorWorker {
         $summaryPath = [IO.Path]::Combine([string]$config.evidenceDirectory, "summary.json")
         $summaryExists = [IO.File]::Exists($summaryPath)
         $summaryPassed = $false
+        $summaryFailureReasonCode = "runner-summary-failed"
         if ($summaryExists) {
             try {
                 $summary = Read-BoundedJson $summaryPath 1048576 "Windows acceptance summary"
                 $summaryPassed = $summary.passed -is [bool] -and $summary.passed -eq $true
+                if (-not $summaryPassed) {
+                    $summaryFailureReasonCode = Get-RunnerSummaryFailureReasonCode $summary
+                }
             }
             catch { $summaryPassed = $false }
         }
@@ -3127,8 +3183,9 @@ function Invoke-CoordinatorWorker {
         $runnerCapture = $null
         if (-not $acceptanceCompleted) {
             Write-TerminalFailure $files "runner-finished" "runner-started-terminal" $(
-                if (-not $summaryExists) { "runner-summary-missing" }
-                elseif (-not $summaryPassed) { "runner-summary-failed" }
+                if ($watcherRefusedWhileRunnerLive) { "watcher-refused" }
+                elseif (-not $summaryExists) { "runner-summary-missing" }
+                elseif (-not $summaryPassed) { $summaryFailureReasonCode }
                 elseif ($runnerExit -ne 0) { "runner-nonzero" }
                 elseif (-not $watcherAccepted -or -not $handoffPublished) { "watcher-handoff-missing" }
                 else { "prior-terminal-failure" }
@@ -3487,6 +3544,9 @@ function Start-Coordinator {
             workerPid = [int]$workerRecord.workerPid
             workerStartedAtUtc = [string]$workerRecord.workerStartedAtUtc
             attemptState = "not-started-or-transitioning"
+            foregroundGateMode = $script:ForegroundGateMode
+            operatorActionRequired = $false
+            action = "none"
             retryOnUnknownOutcome = $false
             pathsRecorded = $false
             secretsRecorded = $false
@@ -3761,20 +3821,6 @@ function Follow-Coordinator {
         $started = (ConvertFrom-CanonicalUtcString `
             $runnerRecord.runnerStartedAtUtc `
             "runner start time").UtcDateTime
-        $expires = ConvertFrom-CanonicalUtcString $handoff.expiresAtUtc "handoff expiresAtUtc"
-        if ([DateTimeOffset]::UtcNow -ge $expires) {
-            $terminalOutput = @(Get-TerminalFollowOutput $files $config)
-            if ($terminalOutput.Count -gt 0) {
-                if ($terminalOutput.Count -ne 1) { throw "Terminal Follow projection is not singular." }
-                Write-Output ([string]$terminalOutput[0])
-                return
-            }
-            Write-FollowFailureOutput `
-                -Stage "handoff-expiry" `
-                -AttemptState "runner-started-terminal" `
-                -ReasonCode "handoff-expired"
-            return
-        }
         if (-not (Test-BoundProcessAlive ([int]$runnerRecord.runnerPid) $started)) {
             $terminalOutput = @(Get-TerminalFollowOutput $files $config)
             if ($terminalOutput.Count -gt 0) {
@@ -3838,48 +3884,43 @@ function Follow-Coordinator {
                 -Phase "runner-finalizing"
             return
         }
-        if ([DateTimeOffset]::UtcNow -ge $expires) {
-            Write-FollowFailureOutput `
-                -Stage "handoff-expiry" `
-                -AttemptState "runner-started-terminal" `
-                -ReasonCode "handoff-expired"
-            return
-        }
         Write-Output (([ordered]@{
             schemaVersion = $script:SchemaVersion
             productVersion = [string]$config.version
             kind = "windows-acceptance-follow"
-            status = if ([string]$handoff.status -ceq "action-required") { "handoff-ready" } else { "already-armed" }
+            status = "automatic-ready"
             requestId = [string]$handoff.requestId
             publishedAtUtc = [string]$handoff.publishedAtUtc
+            receivedAtUtc = [string]$handoff.receivedAtUtc
             observedAtUtc = [string]$handoff.observedAtUtc
-            expiresAtUtc = [string]$handoff.expiresAtUtc
+            deadlineAtUtc = [string]$handoff.deadlineAtUtc
+            mode = [string]$handoff.mode
             operatorActionRequired = [bool]$handoff.operatorActionRequired
-            preferredRelaySurface = [string]$handoff.preferredRelaySurface
-            fallbackRelaySurface = [string]$handoff.fallbackRelaySurface
-            expectedVisibleWindowTitle = [string]$handoff.expectedVisibleWindowTitle
-            expectedVisibleButtonText = [string]$handoff.expectedVisibleButtonText
-            expectedAccessibleName = [string]$handoff.expectedAccessibleName
             action = [string]$handoff.action
-            instruction = [string]$handoff.instruction
-            stopUiAfterAction = [bool]$handoff.stopUiAfterAction
-            requiresSeparateAuthorization = [bool]$handoff.requiresSeparateAuthorization
-            markerGrantsAuthorization = [bool]$handoff.markerGrantsAuthorization
-            markerGrantsConsent = [bool]$handoff.markerGrantsConsent
-            externalOneShotConsentRequired = [bool]$handoff.externalOneShotConsentRequired
-            externalAuthorizationVerifiedByWatcher = [bool]$handoff.externalAuthorizationVerifiedByWatcher
-            visualConfirmationRequired = [bool]$handoff.visualConfirmationRequired
-            maximumClickAttempts = [int]$handoff.maximumClickAttempts
-            consumerMustDeduplicateByRequestId = $true
-            retryOnUnknownOutcome = [bool]$handoff.retryOnUnknownOutcome
+            clickAttemptsObserved = [int]$handoff.clickAttemptsObserved
+            stableSamplesObserved = [int]$handoff.stableSamplesObserved
+            stableSamplesRequired = [int]$handoff.stableSamplesRequired
+            nativeSampleSeqlockMatched = [bool]$handoff.nativeSampleSeqlockMatched
+            ownerIdentityStable = [bool]$handoff.ownerIdentityStable
+            focusRootMatched = [bool]$handoff.focusRootMatched
+            fixtureProcessExcluded = [bool]$handoff.fixtureProcessExcluded
+            interactiveSessionMatched = [bool]$handoff.interactiveSessionMatched
+            cursorStable = [bool]$handoff.cursorStable
+            inputDesktopStable = [bool]$handoff.inputDesktopStable
+            globalInputUsed = [bool]$handoff.globalInputUsed
+            focusChangedByRunner = [bool]$handoff.focusChangedByRunner
+            cursorChangedByRunner = [bool]$handoff.cursorChangedByRunner
+            syntheticInputUsed = [bool]$handoff.syntheticInputUsed
+            retryOnUnknownOutcome = $false
             runnerIdentityMatched = [bool]$handoff.runnerIdentityMatched
-            markerFresh = [bool]$handoff.markerFresh
+            requestFresh = [bool]$handoff.requestFresh
+            receivedBeforeDeadline = [bool]$handoff.receivedBeforeDeadline
             uiActionAllowed = $false
             notificationOnly = [bool]$handoff.notificationOnly
             acceptedAsAuthority = [bool]$handoff.acceptedAsAuthority
             rawWindowHandlesRecorded = [bool]$handoff.rawWindowHandlesRecorded
+            rawProcessIdentifiersRecorded = [bool]$handoff.rawProcessIdentifiersRecorded
             rawCursorCoordinatesRecorded = [bool]$handoff.rawCursorCoordinatesRecorded
-            processIdentifiersRecorded = [bool]$handoff.processIdentifiersRecorded
             pathsRecorded = [bool]$handoff.pathsRecorded
             secretsRecorded = [bool]$handoff.secretsRecorded
         }) | ConvertTo-Json -Compress)
@@ -5844,8 +5885,8 @@ finally {
             throw "Exact process identity self-test failed."
         }
         $selfTestInputs = New-PrivateChildDirectory $testRoot "follow-inputs" "Follow self-test inputs"
-        $inputServer = [IO.Path]::Combine($selfTestInputs, "local-browser-bridge-v0.12.67-windows-x86_64.exe")
-        $inputHelper = [IO.Path]::Combine($selfTestInputs, "local-computer-helper-v0.12.67-windows-x86_64.exe")
+        $inputServer = [IO.Path]::Combine($selfTestInputs, "local-browser-bridge-v0.12.68-windows-x86_64.exe")
+        $inputHelper = [IO.Path]::Combine($selfTestInputs, "local-computer-helper-v0.12.68-windows-x86_64.exe")
         $inputManifest = [IO.Path]::Combine($selfTestInputs, "SHA256SUMS.txt")
         $inputBinding = [IO.Path]::Combine($selfTestInputs, "candidate-binding.json")
         [IO.File]::WriteAllText($inputServer, "server-self-test", $script:Utf8NoBom)
@@ -6035,43 +6076,77 @@ finally {
             }
         }
         $newHandoffRecord = {
-            param([DateTime]$PublishedAt, [DateTime]$ObservedAt, [DateTime]$ExpiresAt)
+            param([DateTime]$PublishedAt, [DateTime]$ObservedAt, [DateTime]$DeadlineAt)
             return [ordered]@{
-                schemaVersion = 1
+                schemaVersion = $script:AutomaticHandoffSchemaVersion
                 productVersion = $script:ProductVersion
-                kind = "windows-acceptance-handoff"
-                status = "action-required"
+                kind = "windows-acceptance-automatic-handoff"
+                status = "automatic-ready"
                 requestId = "0123456789abcdef0123456789abcdef"
                 publishedAtUtc = ConvertTo-CanonicalUtcString $PublishedAt
+                receivedAtUtc = ConvertTo-CanonicalUtcString ($PublishedAt.AddMilliseconds(500))
                 observedAtUtc = ConvertTo-CanonicalUtcString $ObservedAt
-                expiresAtUtc = ConvertTo-CanonicalUtcString $ExpiresAt
-                operatorActionRequired = $true
-                preferredRelaySurface = "windows-computer-use-app-share"
-                fallbackRelaySurface = "human-on-windows-session"
-                expectedVisibleWindowTitle = $script:ExpectedWindowTitle
-                expectedVisibleButtonText = $script:ExpectedActionButton
-                expectedAccessibleName = "Click to arm Windows acceptance"
-                action = "single-left-click"
-                stopUiAfterAction = $true
-                requiresSeparateAuthorization = $true
-                markerGrantsAuthorization = $false
-                markerGrantsConsent = $false
-                externalOneShotConsentRequired = $true
-                externalAuthorizationVerifiedByWatcher = $false
-                visualConfirmationRequired = $true
-                maximumClickAttempts = 1
-                retryOnUnknownOutcome = $false
-                instruction = "Use a separately authorized Windows Computer Use app share to visually confirm this exact window and button, click it once, then stop all UI use. If it already says ARMED or the outcome is uncertain, do not click or retry."
+                deadlineAtUtc = ConvertTo-CanonicalUtcString $DeadlineAt
+                mode = $script:ForegroundGateMode
+                operatorActionRequired = $false
+                action = "none"
+                clickAttemptsObserved = 0
+                stableSamplesObserved = 3
+                stableSamplesRequired = 3
+                nativeSampleSeqlockMatched = $true
+                ownerIdentityStable = $true
+                focusRootMatched = $true
+                fixtureProcessExcluded = $true
+                interactiveSessionMatched = $true
+                cursorStable = $true
+                inputDesktopStable = $true
+                globalInputUsed = $false
+                focusChangedByRunner = $false
+                cursorChangedByRunner = $false
+                syntheticInputUsed = $false
                 notificationOnly = $true
                 acceptedAsAuthority = $false
                 runnerIdentityMatched = $true
-                markerFresh = $true
+                requestFresh = $true
+                receivedBeforeDeadline = $true
                 rawWindowHandlesRecorded = $false
+                rawProcessIdentifiersRecorded = $false
                 rawCursorCoordinatesRecorded = $false
-                processIdentifiersRecorded = $false
                 pathsRecorded = $false
                 secretsRecorded = $false
             }
+        }
+        $automaticTimeoutSummary = [pscustomobject]([ordered]@{
+            passed = $false
+            failure = "Timed out waiting for 3 fresh stable external foreground publications."
+            failureDetails = [pscustomobject]([ordered]@{
+                stage = "wait-stable-external-foreground"
+                reasonCode = "foreground-baseline-timeout"
+            })
+        })
+        $laterRunnerFailureSummary = [pscustomobject]([ordered]@{
+            passed = $false
+            failure = "self-test free-form text must not be projected"
+            failureDetails = [pscustomobject]([ordered]@{
+                stage = "semantic-suite"
+                reasonCode = "acceptance-test-failed"
+            })
+        })
+        $untrustedReasonSummary = [pscustomobject]([ordered]@{
+            passed = $false
+            failure = "untrusted"
+            failureDetails = [pscustomobject]([ordered]@{
+                stage = "unknown-self-test-stage"
+                reasonCode = "free-form-not-in-the-closed-vocabulary"
+            })
+        })
+        if ((Get-RunnerSummaryFailureReasonCode $automaticTimeoutSummary) -cne
+                "runner-foreground-baseline-timeout" -or
+            (Get-RunnerSummaryFailureReasonCode $laterRunnerFailureSummary) -cne
+                "runner-acceptance-test-failed" -or
+            (Get-RunnerSummaryFailureReasonCode $untrustedReasonSummary) -cne
+                "runner-summary-failed") {
+            throw "Runner summary typed-failure projection self-test failed."
         }
         $originalCoordinatorDirectory = $CoordinatorDirectory
         try {
@@ -6252,24 +6327,98 @@ finally {
             }
 
             $handoffFixture = & $newFollowFixture "follow-handoff"
-            $handoffPublished = [DateTime]::UtcNow.AddSeconds(-1)
+            $handoffPublished = [DateTime]::UtcNow.AddSeconds(-120)
             Write-CreateOnceJson $handoffFixture.Files.Worker (& $newWorkerRecord $currentProcess.Id $currentStartedAt)
             Write-CreateOnceJson $handoffFixture.Files.Ownership (& $newOwnershipRecord $currentProcess.Id $currentStartedAt)
             Write-CreateOnceJson $handoffFixture.Files.Intent (& $newIntentRecord)
-            Write-CreateOnceJson $handoffFixture.Files.Runner (& $newRunnerRecord $currentProcess.Id $currentStartedAt)
+            $handoffRunnerRecord = [pscustomobject](& $newRunnerRecord $currentProcess.Id $currentStartedAt)
+            Write-CreateOnceJson $handoffFixture.Files.Runner $handoffRunnerRecord
             Write-CreateOnceJson $handoffFixture.Files.Watcher (& $newAcceptedWatcherRecord)
-            Write-CreateOnceJson $handoffFixture.Files.Handoff (& $newHandoffRecord $handoffPublished ([DateTime]::UtcNow) $handoffPublished.AddSeconds(60))
+            $watcherHandoff = [pscustomobject](& $newHandoffRecord $handoffPublished ($handoffPublished.AddSeconds(1)) ($handoffPublished.AddSeconds(60)))
+            $watcherHandoff.kind = "foreground-baseline-ready-handoff"
+            $handoffConfig = Read-BoundedJson `
+                $handoffFixture.Files.Config `
+                65536 `
+                "Automatic handoff conversion self-test configuration"
+            $privateHandoff = ConvertTo-ExactPrivateHandoffRecord `
+                $watcherHandoff `
+                $handoffConfig `
+                $handoffRunnerRecord
+
+            $extraSampleWatcherHandoff = [pscustomobject](& $newHandoffRecord `
+                    $handoffPublished `
+                    ($handoffPublished.AddSeconds(1)) `
+                    ($handoffPublished.AddSeconds(60)))
+            $extraSampleWatcherHandoff.kind = "foreground-baseline-ready-handoff"
+            $extraSampleWatcherHandoff.stableSamplesObserved = 4
+            $extraSampleRefused = $false
+            try {
+                $null = ConvertTo-ExactPrivateHandoffRecord `
+                    $extraSampleWatcherHandoff `
+                    $handoffConfig `
+                    $handoffRunnerRecord
+            }
+            catch {
+                $extraSampleRefused = $_.Exception.Message.IndexOf(
+                    "handoff stableSamplesObserved must be an integer from 3 through 3.",
+                    [StringComparison]::Ordinal
+                ) -ge 0
+            }
+            if (-not $extraSampleRefused) {
+                throw "The coordinator accepted a producer-unreachable fourth stable sample."
+            }
+
+            $wrongSessionWatcherHandoff = [pscustomobject](& $newHandoffRecord `
+                    $handoffPublished `
+                    ($handoffPublished.AddSeconds(1)) `
+                    ($handoffPublished.AddSeconds(60)))
+            $wrongSessionWatcherHandoff.kind = "foreground-baseline-ready-handoff"
+            $wrongSessionWatcherHandoff.interactiveSessionMatched = $false
+            $wrongSessionRefused = $false
+            try {
+                $null = ConvertTo-ExactPrivateHandoffRecord `
+                    $wrongSessionWatcherHandoff `
+                    $handoffConfig `
+                    $handoffRunnerRecord
+            }
+            catch {
+                $wrongSessionRefused = $_.Exception.Message.IndexOf(
+                    "handoff interactiveSessionMatched must be True.",
+                    [StringComparison]::Ordinal
+                ) -ge 0
+            }
+            if (-not $wrongSessionRefused) {
+                throw "The coordinator accepted a foreground proof from the wrong interactive session."
+            }
+
+            Write-CreateOnceJson $handoffFixture.Files.Handoff $privateHandoff
             $CoordinatorDirectory = $handoffFixture.Root
             $handoffFirstText = [string](Follow-Coordinator)
             $handoffSecondText = [string](Follow-Coordinator)
             $handoffFirst = $handoffFirstText | ConvertFrom-Json
             if ($handoffFirstText -cne $handoffSecondText -or
-                $handoffFirst.status -cne "handoff-ready" -or
+                $handoffFirst.status -cne "automatic-ready" -or
+                $handoffFirst.mode -cne $script:ForegroundGateMode -or
+                $handoffFirst.operatorActionRequired -ne $false -or
+                $handoffFirst.action -cne "none" -or
+                $handoffFirst.clickAttemptsObserved -ne 0 -or
+                $handoffFirst.stableSamplesObserved -ne 3 -or
+                $handoffFirst.nativeSampleSeqlockMatched -ne $true -or
+                $handoffFirst.ownerIdentityStable -ne $true -or
+                $handoffFirst.focusRootMatched -ne $true -or
+                $handoffFirst.fixtureProcessExcluded -ne $true -or
+                $handoffFirst.interactiveSessionMatched -ne $true -or
+                $handoffFirst.cursorStable -ne $true -or
+                $handoffFirst.inputDesktopStable -ne $true -or
+                $handoffFirst.globalInputUsed -ne $false -or
+                $handoffFirst.focusChangedByRunner -ne $false -or
+                $handoffFirst.cursorChangedByRunner -ne $false -or
+                $handoffFirst.syntheticInputUsed -ne $false -or
+                $handoffFirst.receivedBeforeDeadline -ne $true -or
                 $handoffFirst.uiActionAllowed -ne $false -or
                 $handoffFirst.notificationOnly -ne $true -or
-                $handoffFirst.acceptedAsAuthority -ne $false -or
-                $handoffFirst.consumerMustDeduplicateByRequestId -ne $true) {
-                throw "Follow non-authoritative repeated-handoff self-test failed."
+                $handoffFirst.acceptedAsAuthority -ne $false) {
+                throw "Follow automatic foreground-baseline handoff self-test failed."
             }
 
             $deadFixture = & $newFollowFixture "follow-dead-worker"
@@ -6304,7 +6453,7 @@ finally {
             Write-CreateOnceJson $finalizingFixture.Files.Intent (& $newIntentRecord)
             Write-CreateOnceJson $finalizingFixture.Files.Runner (& $newRunnerRecord 2147483646 $currentStartedAt)
             Write-CreateOnceJson $finalizingFixture.Files.Watcher (& $newAcceptedWatcherRecord)
-            Write-CreateOnceJson $finalizingFixture.Files.Handoff (& $newHandoffRecord $finalizingPublished ([DateTime]::UtcNow) $finalizingPublished.AddSeconds(60))
+            Write-CreateOnceJson $finalizingFixture.Files.Handoff (& $newHandoffRecord $finalizingPublished ([DateTime]::UtcNow) ($finalizingPublished.AddSeconds(60)))
             $CoordinatorDirectory = $finalizingFixture.Root
             $finalizing = (Follow-Coordinator | ConvertFrom-Json)
             if ($finalizing.status -cne "waiting" -or
@@ -6343,7 +6492,7 @@ finally {
             Write-CreateOnceJson $missingIntentFixture.Files.Ownership (& $newOwnershipRecord $currentProcess.Id $currentStartedAt)
             Write-CreateOnceJson $missingIntentFixture.Files.Runner (& $newRunnerRecord $currentProcess.Id $currentStartedAt)
             Write-CreateOnceJson $missingIntentFixture.Files.Watcher (& $newAcceptedWatcherRecord)
-            Write-CreateOnceJson $missingIntentFixture.Files.Handoff (& $newHandoffRecord $missingIntentPublished ([DateTime]::UtcNow) $missingIntentPublished.AddSeconds(60))
+            Write-CreateOnceJson $missingIntentFixture.Files.Handoff (& $newHandoffRecord $missingIntentPublished ([DateTime]::UtcNow) ($missingIntentPublished.AddSeconds(60)))
             $CoordinatorDirectory = $missingIntentFixture.Root
             $missingIntentRefused = $false
             try { $null = Follow-Coordinator }

@@ -15,14 +15,8 @@ param(
     [ValidateRange(1, 300)]
     [int]$WaitTimeoutSeconds = 300,
 
-    [ValidateRange(1, 300)]
-    [int]$MaximumMarkerAgeSeconds = 30,
-
     [ValidateRange(0, 30)]
     [int]$FutureToleranceSeconds = 5,
-
-    [ValidateRange(0, 30)]
-    [int]$FileTimestampToleranceSeconds = 5,
 
     [ValidateRange(25, 1000)]
     [int]$PollMilliseconds = 100
@@ -32,12 +26,13 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$script:ProductVersion = "0.12.67"
-$script:ForegroundSentinelWindowTitle = "LBB Foreground Sentinel"
-$script:MarkerSchemaVersion = 2
+$script:ProductVersion = "0.12.68"
+$script:ForegroundGateMode = "automatic-stable-external-foreground"
+$script:MarkerSchemaVersion = 3
+$script:HandoffSchemaVersion = 2
 $script:MaximumMarkerBytes = 16384
 $script:Utf8StrictNoBom = [Text.UTF8Encoding]::new($false, $true)
-$script:MarkerFields = @(
+$script:RequestFields = @(
     "schemaVersion",
     "productVersion",
     "kind",
@@ -45,29 +40,50 @@ $script:MarkerFields = @(
     "requestId",
     "publishedAtUtc",
     "timeoutSeconds",
+    "mode",
     "operatorActionRequired",
-    "preferredRelaySurface",
-    "fallbackRelaySurface",
-    "expectedVisibleWindowTitle",
-    "expectedVisibleButtonText",
-    "expectedAccessibleName",
     "action",
-    "stopUiAfterAction",
-    "requiresSeparateAuthorization",
-    "markerGrantsAuthorization",
-    "markerGrantsConsent",
-    "externalOneShotConsentRequired",
-    "visualConfirmationRequired",
-    "maximumClickAttempts",
-    "retryOnUnknownOutcome",
-    "instruction",
-    "requestDelivered",
-    "buttonEnabled",
-    "nativeTopologyMatched",
-    "inputStateAtPublication",
+    "globalInputUsed",
+    "focusChangedByRunner",
+    "cursorChangedByRunner",
+    "syntheticInputUsed",
+    "requiredStableSamples",
     "notificationOnly",
     "acceptedAsAuthority",
     "rawWindowHandlesRecorded",
+    "rawProcessIdentifiersRecorded",
+    "rawCursorCoordinatesRecorded",
+    "pathsRecorded",
+    "secretsRecorded"
+)
+$script:ReceivedFields = @(
+    "schemaVersion",
+    "productVersion",
+    "kind",
+    "status",
+    "requestId",
+    "receivedAtUtc",
+    "mode",
+    "operatorActionRequired",
+    "action",
+    "clickAttemptsObserved",
+    "stableSamplesObserved",
+    "stableSamplesRequired",
+    "nativeSampleSeqlockMatched",
+    "ownerIdentityStable",
+    "focusRootMatched",
+    "fixtureProcessExcluded",
+    "interactiveSessionMatched",
+    "cursorStable",
+    "inputDesktopStable",
+    "globalInputUsed",
+    "focusChangedByRunner",
+    "cursorChangedByRunner",
+    "syntheticInputUsed",
+    "notificationOnly",
+    "acceptedAsAuthority",
+    "rawWindowHandlesRecorded",
+    "rawProcessIdentifiersRecorded",
     "rawCursorCoordinatesRecorded",
     "pathsRecorded",
     "secretsRecorded"
@@ -154,102 +170,94 @@ function ConvertTo-CanonicalUtcString {
     return $Value.UtcDateTime.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
 }
 
-function Assert-ExactMarkerSchema {
-    param([object]$Marker, [string]$Json)
-
-    Assert-ExactPropertyOrder $Marker $script:MarkerFields "foreground-arm request marker"
-    foreach ($field in $script:MarkerFields) {
+function Assert-ExactMarkerFieldOccurrences {
+    param([string]$Json, [string[]]$Fields, [string]$Label)
+    foreach ($field in $Fields) {
         $propertyPattern = '"' + [regex]::Escape($field) + '"\s*:'
         if ([regex]::Matches($Json, $propertyPattern).Count -ne 1) {
-            throw "The foreground-arm request marker must contain each canonical field exactly once."
+            throw "$Label must contain each canonical field exactly once."
         }
     }
+}
 
-    Assert-ExactIntegerRange $Marker.schemaVersion $script:MarkerSchemaVersion $script:MarkerSchemaVersion "marker schemaVersion"
+function Assert-CommonAutomaticMarkerSemantics {
+    param([object]$Marker, [string]$Label)
+    Assert-ExactIntegerRange $Marker.schemaVersion $script:MarkerSchemaVersion $script:MarkerSchemaVersion "$Label schemaVersion"
     if ($Marker.productVersion -isnot [string] -or $Marker.productVersion -cne $script:ProductVersion) {
-        throw "The marker productVersion must be $($script:ProductVersion)."
+        throw "$Label productVersion must be $($script:ProductVersion)."
     }
-    if ($Marker.kind -isnot [string] -or $Marker.kind -cne "foreground-arm") {
-        throw "The marker kind is invalid."
+    if ($Marker.kind -isnot [string] -or $Marker.kind -cne "foreground-baseline") {
+        throw "$Label kind is invalid."
     }
     if ($Marker.requestId -isnot [string] -or $Marker.requestId -cnotmatch '^[0-9a-f]{32}$') {
-        throw "The marker requestId is invalid."
+        throw "$Label requestId is invalid."
     }
-    $null = ConvertFrom-CanonicalUtcTimestamp $Marker.publishedAtUtc "marker publishedAtUtc"
-    Assert-ExactIntegerRange $Marker.timeoutSeconds 15 300 "marker timeoutSeconds"
+    if ($Marker.mode -isnot [string] -or $Marker.mode -cne $script:ForegroundGateMode) {
+        throw "$Label mode is invalid."
+    }
+    Assert-ExactBoolean $Marker.operatorActionRequired $false "$Label operatorActionRequired"
+    if ($Marker.action -isnot [string] -or $Marker.action -cne "none") {
+        throw "$Label action must be none."
+    }
+    Assert-ExactBoolean $Marker.globalInputUsed $false "$Label globalInputUsed"
+    Assert-ExactBoolean $Marker.focusChangedByRunner $false "$Label focusChangedByRunner"
+    Assert-ExactBoolean $Marker.cursorChangedByRunner $false "$Label cursorChangedByRunner"
+    Assert-ExactBoolean $Marker.syntheticInputUsed $false "$Label syntheticInputUsed"
+    Assert-ExactBoolean $Marker.notificationOnly $true "$Label notificationOnly"
+    Assert-ExactBoolean $Marker.acceptedAsAuthority $false "$Label acceptedAsAuthority"
+    Assert-ExactBoolean $Marker.rawWindowHandlesRecorded $false "$Label rawWindowHandlesRecorded"
+    Assert-ExactBoolean $Marker.rawProcessIdentifiersRecorded $false "$Label rawProcessIdentifiersRecorded"
+    Assert-ExactBoolean $Marker.rawCursorCoordinatesRecorded $false "$Label rawCursorCoordinatesRecorded"
+    Assert-ExactBoolean $Marker.pathsRecorded $false "$Label pathsRecorded"
+    Assert-ExactBoolean $Marker.secretsRecorded $false "$Label secretsRecorded"
+}
 
-    if ($Marker.preferredRelaySurface -isnot [string] -or
-        $Marker.preferredRelaySurface -cne "windows-computer-use-app-share" -or
-        $Marker.fallbackRelaySurface -isnot [string] -or
-        $Marker.fallbackRelaySurface -cne "human-on-windows-session") {
-        throw "The marker relay surfaces are invalid."
+function Assert-ExactRequestMarkerSchema {
+    param([object]$Marker, [string]$Json)
+    $label = "foreground-baseline request marker"
+    Assert-ExactPropertyOrder $Marker $script:RequestFields $label
+    Assert-ExactMarkerFieldOccurrences $Json $script:RequestFields $label
+    Assert-CommonAutomaticMarkerSemantics $Marker $label
+    if ($Marker.status -isnot [string] -or $Marker.status -cne "automatic") {
+        throw "The foreground-baseline request marker status is invalid."
     }
-    if ($Marker.expectedAccessibleName -isnot [string] -or
-        $Marker.expectedAccessibleName -cne "Click to arm Windows acceptance") {
-        throw "The marker accessible target is invalid."
-    }
-    if ($Marker.expectedVisibleWindowTitle -isnot [string] -or
-        $Marker.expectedVisibleWindowTitle -cne $script:ForegroundSentinelWindowTitle) {
-        throw "The marker stable foreground-sentinel window title is invalid."
-    }
+    $null = ConvertFrom-CanonicalUtcTimestamp $Marker.publishedAtUtc "request marker publishedAtUtc"
+    Assert-ExactIntegerRange $Marker.timeoutSeconds 15 300 "request marker timeoutSeconds"
+    Assert-ExactIntegerRange $Marker.requiredStableSamples 3 3 "request marker requiredStableSamples"
+}
 
-    Assert-ExactBoolean $Marker.stopUiAfterAction $true "marker stopUiAfterAction"
-    Assert-ExactBoolean $Marker.requiresSeparateAuthorization $true "marker requiresSeparateAuthorization"
-    Assert-ExactBoolean $Marker.markerGrantsAuthorization $false "marker markerGrantsAuthorization"
-    Assert-ExactBoolean $Marker.markerGrantsConsent $false "marker markerGrantsConsent"
-    Assert-ExactBoolean $Marker.externalOneShotConsentRequired $true "marker externalOneShotConsentRequired"
-    Assert-ExactBoolean $Marker.visualConfirmationRequired $true "marker visualConfirmationRequired"
-    Assert-ExactBoolean $Marker.retryOnUnknownOutcome $false "marker retryOnUnknownOutcome"
-    Assert-ExactBoolean $Marker.requestDelivered $true "marker requestDelivered"
-    Assert-ExactBoolean $Marker.buttonEnabled $true "marker buttonEnabled"
-    Assert-ExactBoolean $Marker.nativeTopologyMatched $true "marker nativeTopologyMatched"
-    Assert-ExactBoolean $Marker.notificationOnly $true "marker notificationOnly"
-    Assert-ExactBoolean $Marker.acceptedAsAuthority $false "marker acceptedAsAuthority"
-    Assert-ExactBoolean $Marker.rawWindowHandlesRecorded $false "marker rawWindowHandlesRecorded"
-    Assert-ExactBoolean $Marker.rawCursorCoordinatesRecorded $false "marker rawCursorCoordinatesRecorded"
-    Assert-ExactBoolean $Marker.pathsRecorded $false "marker pathsRecorded"
-    Assert-ExactBoolean $Marker.secretsRecorded $false "marker secretsRecorded"
-
-    if ($Marker.status -ceq "action-required") {
-        Assert-ExactBoolean $Marker.operatorActionRequired $true "action-required operatorActionRequired"
-        Assert-ExactIntegerRange $Marker.maximumClickAttempts 1 1 "action-required maximumClickAttempts"
-        if ($Marker.inputStateAtPublication -isnot [string] -or
-            $Marker.inputStateAtPublication -cne "not-started" -or
-            $Marker.expectedVisibleButtonText -isnot [string] -or
-            $Marker.expectedVisibleButtonText -cne "CLICK TO ARM" -or
-            $Marker.action -isnot [string] -or
-            $Marker.action -cne "single-left-click" -or
-            $Marker.instruction -isnot [string] -or
-            $Marker.instruction -cne "Use a separately authorized Windows Computer Use app share to visually confirm this exact window and button, click it once, then stop all UI use. If it already says ARMED or the outcome is uncertain, do not click or retry.") {
-            throw "The action-required marker semantics are invalid."
-        }
+function Assert-ExactReceivedMarkerSchema {
+    param([object]$Marker, [string]$Json)
+    $label = "foreground-baseline received marker"
+    Assert-ExactPropertyOrder $Marker $script:ReceivedFields $label
+    Assert-ExactMarkerFieldOccurrences $Json $script:ReceivedFields $label
+    Assert-CommonAutomaticMarkerSemantics $Marker $label
+    if ($Marker.status -isnot [string] -or $Marker.status -cne "ready") {
+        throw "The foreground-baseline received marker status is invalid."
     }
-    elseif ($Marker.status -ceq "already-armed") {
-        Assert-ExactBoolean $Marker.operatorActionRequired $false "already-armed operatorActionRequired"
-        Assert-ExactIntegerRange $Marker.maximumClickAttempts 0 0 "already-armed maximumClickAttempts"
-        if ($Marker.inputStateAtPublication -isnot [string] -or
-            $Marker.inputStateAtPublication -cne "already-acknowledged" -or
-            $Marker.expectedVisibleButtonText -isnot [string] -or
-            $Marker.expectedVisibleButtonText -cne "ARMED - DO NOT USE THIS SESSION" -or
-            $Marker.action -isnot [string] -or
-            $Marker.action -cne "none" -or
-            $Marker.instruction -isnot [string] -or
-            $Marker.instruction -cne "Do not click; stop all UI use because the foreground arm is already acknowledged.") {
-            throw "The already-armed marker semantics are invalid."
-        }
-    }
-    else {
-        throw "The marker status is invalid."
+    $null = ConvertFrom-CanonicalUtcTimestamp $Marker.receivedAtUtc "received marker receivedAtUtc"
+    Assert-ExactIntegerRange $Marker.clickAttemptsObserved 0 0 "received marker clickAttemptsObserved"
+    Assert-ExactIntegerRange $Marker.stableSamplesRequired 3 3 "received marker stableSamplesRequired"
+    Assert-ExactIntegerRange $Marker.stableSamplesObserved 3 3 "received marker stableSamplesObserved"
+    foreach ($field in @(
+        "nativeSampleSeqlockMatched", "ownerIdentityStable", "focusRootMatched",
+        "fixtureProcessExcluded", "interactiveSessionMatched", "cursorStable", "inputDesktopStable"
+    )) {
+        Assert-ExactBoolean $Marker.$field $true "received marker $field"
     }
 }
 
 function ConvertFrom-ExactMarkerJson {
-    param([string]$Json)
+    param([string]$Json, [ValidateSet("Request", "Received")][string]$MarkerType)
+    $label = if ($MarkerType -ceq "Request") {
+        "foreground-baseline request marker"
+    }
+    else { "foreground-baseline received marker" }
     if ([String]::IsNullOrWhiteSpace($Json) -or $Json.Length -gt $script:MaximumMarkerBytes) {
-        throw "The foreground-arm request marker has an invalid size."
+        throw "The $label has an invalid size."
     }
     if ($Json.IndexOf([char]0) -ge 0) {
-        throw "The foreground-arm request marker contains a NUL character."
+        throw "The $label contains a NUL character."
     }
     $marker = $null
     try {
@@ -264,9 +272,14 @@ function ConvertFrom-ExactMarkerJson {
         $marker = ConvertFrom-Json @conversionArguments
     }
     catch {
-        throw "The foreground-arm request marker is not one complete JSON object."
+        throw "The $label is not one complete JSON object."
     }
-    Assert-ExactMarkerSchema $marker $Json
+    if ($MarkerType -ceq "Request") {
+        Assert-ExactRequestMarkerSchema $marker $Json
+    }
+    else {
+        Assert-ExactReceivedMarkerSchema $marker $Json
+    }
     return $marker
 }
 
@@ -289,8 +302,17 @@ function Resolve-OrdinaryEvidenceDirectory {
     return $resolved.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
 }
 
-function Read-AtomicRequestMarker {
-    param([string]$MarkerPath, [string]$OperatorDirectory)
+function Read-AtomicForegroundMarker {
+    param(
+        [string]$MarkerPath,
+        [string]$OperatorDirectory,
+        [ValidateSet("Request", "Received")][string]$MarkerType
+    )
+
+    $label = if ($MarkerType -ceq "Request") {
+        "foreground-baseline request marker"
+    }
+    else { "foreground-baseline received marker" }
 
     if (-not [IO.Directory]::Exists($OperatorDirectory)) {
         return $null
@@ -308,7 +330,7 @@ function Read-AtomicRequestMarker {
     try {
         $markerInfo = [IO.FileInfo]::new($MarkerPath)
         if (($markerInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "The foreground-arm request marker must be an ordinary file."
+            throw "The $label must be an ordinary file."
         }
         $stream = [IO.FileStream]::new(
             $MarkerPath,
@@ -318,36 +340,35 @@ function Read-AtomicRequestMarker {
         )
         $length = $stream.Length
         if ($length -le 0 -or $length -gt $script:MaximumMarkerBytes) {
-            throw "The foreground-arm request marker has an invalid size."
+            throw "The $label has an invalid size."
         }
         $bytes = [byte[]]::new([int]$length)
         $offset = 0
         while ($offset -lt $bytes.Length) {
             $read = $stream.Read($bytes, $offset, $bytes.Length - $offset)
             if ($read -le 0) {
-                throw "The foreground-arm request marker ended before its observed length."
+                throw "The $label ended before its observed length."
             }
             $offset += $read
         }
         if ($stream.ReadByte() -ne -1 -or $stream.Length -ne $length) {
-            throw "The foreground-arm request marker changed while it was read."
+            throw "The $label changed while it was read."
         }
         if ($bytes.Length -ge 3 -and
             $bytes[0] -eq 0xEF -and
             $bytes[1] -eq 0xBB -and
             $bytes[2] -eq 0xBF) {
-            throw "The foreground-arm request marker must be UTF-8 without a BOM."
+            throw "The $label must be UTF-8 without a BOM."
         }
         $json = $script:Utf8StrictNoBom.GetString($bytes)
-        $marker = ConvertFrom-ExactMarkerJson $json
+        $marker = ConvertFrom-ExactMarkerJson $json $MarkerType
         $markerInfo.Refresh()
         if (-not $markerInfo.Exists -or $markerInfo.Length -ne $length) {
-            throw "The foreground-arm request marker changed while it was read."
+            throw "The $label changed while it was read."
         }
         return [pscustomobject]([ordered]@{
             marker = $marker
             json = $json
-            lastWriteTimeUtc = $markerInfo.LastWriteTimeUtc
         })
     }
     catch [IO.FileNotFoundException] {
@@ -400,110 +421,169 @@ function Assert-BoundRunnerState {
     }
 }
 
-function Assert-FreshMarkerBinding {
+function Assert-FreshRequestBinding {
     param(
-        [object]$AtomicMarker,
+        [object]$RequestMarker,
         [DateTimeOffset]$ExpectedRunnerStart,
         [DateTimeOffset]$Now,
-        [int]$MaximumAgeSeconds,
-        [int]$AllowedFutureSeconds,
-        [int]$AllowedFileTimestampDifferenceSeconds
+        [int]$AllowedFutureSeconds
     )
-    $marker = $AtomicMarker.marker
-    $published = ConvertFrom-CanonicalUtcTimestamp $marker.publishedAtUtc "marker publishedAtUtc"
-    $lastWrite = ConvertTo-UtcTimestamp $AtomicMarker.lastWriteTimeUtc "marker file timestamp"
-    if ($published.UtcDateTime.Ticks -lt $ExpectedRunnerStart.UtcDateTime.Ticks -or
-        $lastWrite.UtcDateTime.Ticks -lt $ExpectedRunnerStart.UtcDateTime.Ticks) {
-        throw "The marker predates the bound runner instance."
+    $published = ConvertFrom-CanonicalUtcTimestamp $RequestMarker.publishedAtUtc "request marker publishedAtUtc"
+    if ($published.UtcDateTime.Ticks -lt $ExpectedRunnerStart.UtcDateTime.Ticks) {
+        throw "The request marker predates the bound runner instance."
     }
     if ($published -gt $Now.AddSeconds($AllowedFutureSeconds)) {
-        throw "The marker publication time is unacceptably far in the future."
+        throw "The request marker publication time is unacceptably far in the future."
     }
-    if ($Now -ge $published.AddSeconds([int]$marker.timeoutSeconds)) {
-        throw "The marker has expired."
+    $deadline = $published.AddSeconds([int]$RequestMarker.timeoutSeconds)
+    if ($Now -ge $deadline) {
+        throw "The automatic foreground-baseline request has expired."
     }
-    if (($Now - $published).TotalSeconds -gt $MaximumAgeSeconds) {
-        throw "The marker is stale for immediate operator handoff."
+    return [pscustomobject]([ordered]@{
+        published = $published
+        deadline = $deadline
+    })
+}
+
+function Assert-ReceivedMarkerBinding {
+    param(
+        [object]$RequestMarker,
+        [object]$ReceivedMarker,
+        [DateTimeOffset]$Published,
+        [DateTimeOffset]$Deadline,
+        [DateTimeOffset]$Observed,
+        [int]$AllowedFutureSeconds
+    )
+    if ([string]$ReceivedMarker.requestId -cne [string]$RequestMarker.requestId) {
+        throw "The received marker does not match the automatic foreground-baseline request ID."
     }
-    if ([Math]::Abs(($lastWrite - $published).TotalSeconds) -gt $AllowedFileTimestampDifferenceSeconds) {
-        throw "The marker file timestamp does not match its publication time."
+    if ([string]$ReceivedMarker.mode -cne [string]$RequestMarker.mode -or
+        [int]$ReceivedMarker.stableSamplesRequired -ne [int]$RequestMarker.requiredStableSamples) {
+        throw "The received marker does not match the automatic foreground-baseline request semantics."
     }
-    return $published
+    $received = ConvertFrom-CanonicalUtcTimestamp $ReceivedMarker.receivedAtUtc "received marker receivedAtUtc"
+    if ($received -lt $Published) {
+        throw "The received marker predates its matching request."
+    }
+    if ($received -gt $Deadline) {
+        throw "The received marker was published after the automatic foreground-baseline deadline."
+    }
+    if ($received -gt $Observed.AddSeconds($AllowedFutureSeconds)) {
+        throw "The received marker time is unacceptably far in the future."
+    }
+    return $received
 }
 
 function New-SanitizedHandoff {
-    param([object]$Marker, [DateTimeOffset]$Published, [DateTimeOffset]$Observed)
+    param(
+        [object]$RequestMarker,
+        [object]$ReceivedMarker,
+        [DateTimeOffset]$Published,
+        [DateTimeOffset]$Received,
+        [DateTimeOffset]$Observed,
+        [DateTimeOffset]$Deadline
+    )
     return [pscustomobject]([ordered]@{
-        schemaVersion = 1
+        schemaVersion = $script:HandoffSchemaVersion
         productVersion = $script:ProductVersion
-        kind = "foreground-arm-visual-handoff"
-        status = [string]$Marker.status
-        requestId = [string]$Marker.requestId
+        kind = "foreground-baseline-ready-handoff"
+        status = "automatic-ready"
+        requestId = [string]$RequestMarker.requestId
         publishedAtUtc = ConvertTo-CanonicalUtcString $Published
+        receivedAtUtc = ConvertTo-CanonicalUtcString $Received
         observedAtUtc = ConvertTo-CanonicalUtcString $Observed
-        expiresAtUtc = ConvertTo-CanonicalUtcString ($Published.AddSeconds([int]$Marker.timeoutSeconds))
-        operatorActionRequired = [bool]$Marker.operatorActionRequired
-        preferredRelaySurface = [string]$Marker.preferredRelaySurface
-        fallbackRelaySurface = [string]$Marker.fallbackRelaySurface
-        expectedVisibleWindowTitle = [string]$Marker.expectedVisibleWindowTitle
-        expectedVisibleButtonText = [string]$Marker.expectedVisibleButtonText
-        expectedAccessibleName = [string]$Marker.expectedAccessibleName
-        action = [string]$Marker.action
-        stopUiAfterAction = $true
-        requiresSeparateAuthorization = $true
-        markerGrantsAuthorization = $false
-        markerGrantsConsent = $false
-        externalOneShotConsentRequired = $true
-        externalAuthorizationVerifiedByWatcher = $false
-        visualConfirmationRequired = $true
-        maximumClickAttempts = [int]$Marker.maximumClickAttempts
-        retryOnUnknownOutcome = $false
-        instruction = [string]$Marker.instruction
+        deadlineAtUtc = ConvertTo-CanonicalUtcString $Deadline
+        mode = $script:ForegroundGateMode
+        operatorActionRequired = $false
+        action = "none"
+        clickAttemptsObserved = [int]$ReceivedMarker.clickAttemptsObserved
+        stableSamplesObserved = [int]$ReceivedMarker.stableSamplesObserved
+        stableSamplesRequired = [int]$ReceivedMarker.stableSamplesRequired
+        nativeSampleSeqlockMatched = [bool]$ReceivedMarker.nativeSampleSeqlockMatched
+        ownerIdentityStable = [bool]$ReceivedMarker.ownerIdentityStable
+        focusRootMatched = [bool]$ReceivedMarker.focusRootMatched
+        fixtureProcessExcluded = [bool]$ReceivedMarker.fixtureProcessExcluded
+        interactiveSessionMatched = [bool]$ReceivedMarker.interactiveSessionMatched
+        cursorStable = [bool]$ReceivedMarker.cursorStable
+        inputDesktopStable = [bool]$ReceivedMarker.inputDesktopStable
+        globalInputUsed = $false
+        focusChangedByRunner = $false
+        cursorChangedByRunner = $false
+        syntheticInputUsed = $false
         notificationOnly = $true
         acceptedAsAuthority = $false
         runnerIdentityMatched = $true
-        markerFresh = $true
+        requestFresh = $true
+        receivedBeforeDeadline = $true
         rawWindowHandlesRecorded = $false
+        rawProcessIdentifiersRecorded = $false
         rawCursorCoordinatesRecorded = $false
-        processIdentifiersRecorded = $false
         pathsRecorded = $false
         secretsRecorded = $false
     })
 }
 
-function Wait-ForegroundArmHandoff {
+function Wait-ForegroundBaselineHandoff {
     param(
         [int]$ExpectedRunnerProcessId,
         [DateTimeOffset]$ExpectedRunnerStart,
         [scriptblock]$RunnerStateReader,
-        [scriptblock]$MarkerReader,
-        [object[]]$MarkerReaderArguments = @(),
+        [scriptblock]$RequestReader,
+        [object[]]$RequestReaderArguments = @(),
+        [scriptblock]$ReceivedReader,
+        [object[]]$ReceivedReaderArguments = @(),
         [scriptblock]$ClockReader,
         [scriptblock]$Sleeper,
         [int]$TimeoutMilliseconds,
-        [int]$MaximumAgeSeconds,
         [int]$AllowedFutureSeconds,
-        [int]$AllowedFileTimestampDifferenceSeconds,
         [int]$PollIntervalMilliseconds
     )
     $timeoutWatch = [Diagnostics.Stopwatch]::StartNew()
+    $requestMarker = $null
+    $published = [DateTimeOffset]::MinValue
+    $deadline = [DateTimeOffset]::MinValue
     try {
         do {
             $beforeRunner = & $RunnerStateReader $ExpectedRunnerProcessId
             Assert-BoundRunnerState $beforeRunner $ExpectedRunnerStart
-            $atomicMarker = & $MarkerReader @MarkerReaderArguments
-            if ($null -ne $atomicMarker) {
+            if ($null -eq $requestMarker) {
+                $atomicRequest = & $RequestReader @RequestReaderArguments
+                if ($null -ne $atomicRequest) {
+                    $requestMarker = $atomicRequest.marker
+                    $now = ConvertTo-UtcTimestamp (& $ClockReader) "clock reader"
+                    $requestBinding = Assert-FreshRequestBinding `
+                        -RequestMarker $requestMarker `
+                        -ExpectedRunnerStart $ExpectedRunnerStart `
+                        -Now $now `
+                        -AllowedFutureSeconds $AllowedFutureSeconds
+                    $published = $requestBinding.published
+                    $deadline = $requestBinding.deadline
+                }
+            }
+            if ($null -ne $requestMarker) {
                 $now = ConvertTo-UtcTimestamp (& $ClockReader) "clock reader"
-                $published = Assert-FreshMarkerBinding `
-                    -AtomicMarker $atomicMarker `
-                    -ExpectedRunnerStart $ExpectedRunnerStart `
-                    -Now $now `
-                    -MaximumAgeSeconds $MaximumAgeSeconds `
-                    -AllowedFutureSeconds $AllowedFutureSeconds `
-                    -AllowedFileTimestampDifferenceSeconds $AllowedFileTimestampDifferenceSeconds
-                $afterRunner = & $RunnerStateReader $ExpectedRunnerProcessId
-                Assert-BoundRunnerState $afterRunner $ExpectedRunnerStart
-                return New-SanitizedHandoff $atomicMarker.marker $published $now
+                $atomicReceived = & $ReceivedReader @ReceivedReaderArguments
+                if ($null -ne $atomicReceived) {
+                    $received = Assert-ReceivedMarkerBinding `
+                        -RequestMarker $requestMarker `
+                        -ReceivedMarker $atomicReceived.marker `
+                        -Published $published `
+                        -Deadline $deadline `
+                        -Observed $now `
+                        -AllowedFutureSeconds $AllowedFutureSeconds
+                    $afterRunner = & $RunnerStateReader $ExpectedRunnerProcessId
+                    Assert-BoundRunnerState $afterRunner $ExpectedRunnerStart
+                    return New-SanitizedHandoff `
+                        -RequestMarker $requestMarker `
+                        -ReceivedMarker $atomicReceived.marker `
+                        -Published $published `
+                        -Received $received `
+                        -Observed $now `
+                        -Deadline $deadline
+                }
+                if ($now -ge $deadline) {
+                    throw "The automatic foreground-baseline request expired before a matching ready marker arrived."
+                }
             }
             if ($PollIntervalMilliseconds -gt 0) {
                 & $Sleeper $PollIntervalMilliseconds
@@ -513,52 +593,83 @@ function Wait-ForegroundArmHandoff {
     finally {
         $timeoutWatch.Stop()
     }
-    throw "Timed out waiting for the fresh foreground-arm request marker."
+    throw "Timed out waiting for matching automatic foreground-baseline request and ready markers."
 }
 
-function New-SelfTestMarker {
-    param([DateTimeOffset]$Published, [ValidateSet("action-required", "already-armed")][string]$Status, [int]$TimeoutSeconds)
-    $actionRequired = $Status -ceq "action-required"
+function New-SelfTestRequestMarker {
+    param([DateTimeOffset]$Published, [int]$TimeoutSeconds)
     $record = [ordered]@{
-        schemaVersion = 2
-        productVersion = "0.12.67"
-        kind = "foreground-arm"
-        status = $Status
+        schemaVersion = 3
+        productVersion = "0.12.68"
+        kind = "foreground-baseline"
+        status = "automatic"
         requestId = "0123456789abcdef0123456789abcdef"
         publishedAtUtc = ConvertTo-CanonicalUtcString $Published
         timeoutSeconds = $TimeoutSeconds
-        operatorActionRequired = $actionRequired
-        preferredRelaySurface = "windows-computer-use-app-share"
-        fallbackRelaySurface = "human-on-windows-session"
-        expectedVisibleWindowTitle = $script:ForegroundSentinelWindowTitle
-        expectedVisibleButtonText = if ($actionRequired) { "CLICK TO ARM" } else { "ARMED - DO NOT USE THIS SESSION" }
-        expectedAccessibleName = "Click to arm Windows acceptance"
-        action = if ($actionRequired) { "single-left-click" } else { "none" }
-        stopUiAfterAction = $true
-        requiresSeparateAuthorization = $true
-        markerGrantsAuthorization = $false
-        markerGrantsConsent = $false
-        externalOneShotConsentRequired = $true
-        visualConfirmationRequired = $true
-        maximumClickAttempts = if ($actionRequired) { 1 } else { 0 }
-        retryOnUnknownOutcome = $false
-        instruction = if ($actionRequired) { "Use a separately authorized Windows Computer Use app share to visually confirm this exact window and button, click it once, then stop all UI use. If it already says ARMED or the outcome is uncertain, do not click or retry." } else { "Do not click; stop all UI use because the foreground arm is already acknowledged." }
-        requestDelivered = $true
-        buttonEnabled = $true
-        nativeTopologyMatched = $true
-        inputStateAtPublication = if ($actionRequired) { "not-started" } else { "already-acknowledged" }
+        mode = $script:ForegroundGateMode
+        operatorActionRequired = $false
+        action = "none"
+        globalInputUsed = $false
+        focusChangedByRunner = $false
+        cursorChangedByRunner = $false
+        syntheticInputUsed = $false
+        requiredStableSamples = 3
         notificationOnly = $true
         acceptedAsAuthority = $false
         rawWindowHandlesRecorded = $false
+        rawProcessIdentifiersRecorded = $false
         rawCursorCoordinatesRecorded = $false
         pathsRecorded = $false
         secretsRecorded = $false
     }
     $json = $record | ConvertTo-Json -Depth 8
     return [pscustomobject]([ordered]@{
-        marker = ConvertFrom-ExactMarkerJson $json
+        marker = ConvertFrom-ExactMarkerJson $json "Request"
         json = $json
-        lastWriteTimeUtc = $Published.UtcDateTime
+    })
+}
+
+function New-SelfTestReceivedMarker {
+    param(
+        [DateTimeOffset]$Received,
+        [string]$RequestId = "0123456789abcdef0123456789abcdef"
+    )
+    $record = [ordered]@{
+        schemaVersion = 3
+        productVersion = "0.12.68"
+        kind = "foreground-baseline"
+        status = "ready"
+        requestId = $RequestId
+        receivedAtUtc = ConvertTo-CanonicalUtcString $Received
+        mode = $script:ForegroundGateMode
+        operatorActionRequired = $false
+        action = "none"
+        clickAttemptsObserved = 0
+        stableSamplesObserved = 3
+        stableSamplesRequired = 3
+        nativeSampleSeqlockMatched = $true
+        ownerIdentityStable = $true
+        focusRootMatched = $true
+        fixtureProcessExcluded = $true
+        interactiveSessionMatched = $true
+        cursorStable = $true
+        inputDesktopStable = $true
+        globalInputUsed = $false
+        focusChangedByRunner = $false
+        cursorChangedByRunner = $false
+        syntheticInputUsed = $false
+        notificationOnly = $true
+        acceptedAsAuthority = $false
+        rawWindowHandlesRecorded = $false
+        rawProcessIdentifiersRecorded = $false
+        rawCursorCoordinatesRecorded = $false
+        pathsRecorded = $false
+        secretsRecorded = $false
+    }
+    $json = $record | ConvertTo-Json -Depth 8
+    return [pscustomobject]([ordered]@{
+        marker = ConvertFrom-ExactMarkerJson $json "Received"
+        json = $json
     })
 }
 
@@ -590,35 +701,52 @@ function Invoke-SelfTest {
     $clockReader = { return $now }.GetNewClosure()
     $noSleep = { param($ignoredMilliseconds) }.GetNewClosure()
 
-    $validAtomic = New-SelfTestMarker $now.AddSeconds(-1) "action-required" 300
-    $validCounter = [pscustomobject]@{ reads = 0 }
-    $validReader = {
-        $validCounter.reads += 1
-        return $validAtomic
+    $validRequest = New-SelfTestRequestMarker $now.AddSeconds(-40) 300
+    $validReceived = New-SelfTestReceivedMarker $now.AddSeconds(-1)
+    $validCounters = [pscustomobject]@{ requestReads = 0; receivedReads = 0 }
+    $validRequestReader = {
+        $validCounters.requestReads += 1
+        return $validRequest
+    }.GetNewClosure()
+    $validReceivedReader = {
+        $validCounters.receivedReads += 1
+        return $validReceived
     }.GetNewClosure()
     $validEmissions = @(
-        Wait-ForegroundArmHandoff `
+        Wait-ForegroundBaselineHandoff `
             -ExpectedRunnerProcessId 17 `
             -ExpectedRunnerStart $runnerStart `
             -RunnerStateReader $runnerReader `
-            -MarkerReader $validReader `
+            -RequestReader $validRequestReader `
+            -ReceivedReader $validReceivedReader `
             -ClockReader $clockReader `
             -Sleeper $noSleep `
             -TimeoutMilliseconds 1000 `
-            -MaximumAgeSeconds 30 `
             -AllowedFutureSeconds 2 `
-            -AllowedFileTimestampDifferenceSeconds 2 `
             -PollIntervalMilliseconds 0
     )
     Assert-Condition ($validEmissions.Count -eq 1) "The watcher core emitted more than one handoff."
     $validResult = $validEmissions[0]
-    Assert-Condition ($validResult.status -ceq "action-required" -and
-        $validResult.action -ceq "single-left-click" -and
-        $validResult.maximumClickAttempts -eq 1 -and
-        $script:ForegroundSentinelWindowTitle -ceq "LBB Foreground Sentinel" -and
-        $validResult.expectedVisibleWindowTitle -ceq $script:ForegroundSentinelWindowTitle -and
-        $validResult.externalAuthorizationVerifiedByWatcher -eq $false -and
-        $validCounter.reads -eq 1) "The valid action-required handoff failed its self-test."
+    Assert-Condition ($validResult.schemaVersion -eq $script:HandoffSchemaVersion -and
+        $validResult.status -ceq "automatic-ready" -and
+        $validResult.mode -ceq $script:ForegroundGateMode -and
+        $validResult.operatorActionRequired -eq $false -and
+        $validResult.action -ceq "none" -and
+        $validResult.clickAttemptsObserved -eq 0 -and
+        $validResult.stableSamplesObserved -eq 3 -and
+        $validResult.nativeSampleSeqlockMatched -eq $true -and
+        $validResult.ownerIdentityStable -eq $true -and
+        $validResult.focusRootMatched -eq $true -and
+        $validResult.fixtureProcessExcluded -eq $true -and
+        $validResult.interactiveSessionMatched -eq $true -and
+        $validResult.cursorStable -eq $true -and
+        $validResult.inputDesktopStable -eq $true -and
+        $validResult.globalInputUsed -eq $false -and
+        $validResult.focusChangedByRunner -eq $false -and
+        $validResult.cursorChangedByRunner -eq $false -and
+        $validResult.syntheticInputUsed -eq $false -and
+        $validCounters.requestReads -eq 1 -and
+        $validCounters.receivedReads -eq 1) "The valid automatic foreground-baseline handoff failed its self-test."
     $singleEmission = @($validResult | ConvertTo-Json -Depth 8 -Compress)
     Assert-Condition ($singleEmission.Count -eq 1 -and
         $singleEmission[0].IndexOf("`n", [StringComparison]::Ordinal) -lt 0 -and
@@ -631,93 +759,130 @@ function Invoke-SelfTest {
     # resolution without moving either bound path into global state.
     $liveStyleRoot = [IO.Path]::Combine(
         [IO.Path]::GetTempPath(),
-        "lbb-foreground-arm-watcher-self-test-$([Guid]::NewGuid().ToString('N'))"
+        "lbb-foreground-baseline-watcher-self-test-$([Guid]::NewGuid().ToString('N'))"
     )
     $liveStyleOperatorDirectory = [IO.Path]::Combine($liveStyleRoot, "operator")
-    $liveStyleMarkerPath = [IO.Path]::Combine($liveStyleOperatorDirectory, "foreground-arm-request.json")
+    $liveStyleRequestPath = [IO.Path]::Combine($liveStyleOperatorDirectory, "foreground-arm-request.json")
+    $liveStyleReceivedPath = [IO.Path]::Combine($liveStyleOperatorDirectory, "foreground-arm-received.json")
     Assert-Condition (-not [IO.Directory]::Exists($liveStyleRoot)) "The live-style self-test path unexpectedly exists."
     $liveStyleMarkerReader = {
-        param([string]$boundMarkerPath, [string]$boundOperatorDirectory)
-        return Read-AtomicRequestMarker $boundMarkerPath $boundOperatorDirectory
+        param([string]$boundMarkerPath, [string]$boundOperatorDirectory, [string]$boundMarkerType)
+        return Read-AtomicForegroundMarker $boundMarkerPath $boundOperatorDirectory $boundMarkerType
     }
-    $liveStyleMissingMarker = & $liveStyleMarkerReader $liveStyleMarkerPath $liveStyleOperatorDirectory
-    Assert-Condition ($null -eq $liveStyleMissingMarker -and
+    $liveStyleMissingRequest = & $liveStyleMarkerReader $liveStyleRequestPath $liveStyleOperatorDirectory "Request"
+    $liveStyleMissingReceived = & $liveStyleMarkerReader $liveStyleReceivedPath $liveStyleOperatorDirectory "Received"
+    Assert-Condition ($null -eq $liveStyleMissingRequest -and
+        $null -eq $liveStyleMissingReceived -and
         -not [IO.Directory]::Exists($liveStyleRoot)) "The zero-write live-style marker callback failed its self-test."
 
-    $alreadyAtomic = New-SelfTestMarker $now.AddSeconds(-1) "already-armed" 300
-    $alreadyResult = Wait-ForegroundArmHandoff `
-        -ExpectedRunnerProcessId 17 `
-        -ExpectedRunnerStart $runnerStart `
-        -RunnerStateReader $runnerReader `
-        -MarkerReader ({ return $alreadyAtomic }.GetNewClosure()) `
-        -ClockReader $clockReader `
-        -Sleeper $noSleep `
-        -TimeoutMilliseconds 1000 `
-        -MaximumAgeSeconds 30 `
-        -AllowedFutureSeconds 2 `
-        -AllowedFileTimestampDifferenceSeconds 2 `
-        -PollIntervalMilliseconds 0
-    Assert-Condition ($alreadyResult.status -ceq "already-armed" -and
-        $alreadyResult.operatorActionRequired -eq $false -and
-        $alreadyResult.action -ceq "none" -and
-        $alreadyResult.expectedVisibleWindowTitle -ceq $script:ForegroundSentinelWindowTitle -and
-        $alreadyResult.expectedVisibleWindowTitle -ceq $validResult.expectedVisibleWindowTitle -and
-        $alreadyResult.maximumClickAttempts -eq 0) "The already-armed handoff failed its self-test."
-
-    $unstableTitleAtomic = New-SelfTestMarker $now.AddSeconds(-1) "action-required" 300
-    $unstableTitleAtomic.marker.expectedVisibleWindowTitle = "LBB Windows Acceptance - ACTION REQUIRED"
-    $unstableTitleJson = $unstableTitleAtomic.marker | ConvertTo-Json -Depth 8
+    $manualRequest = New-SelfTestRequestMarker $now.AddSeconds(-1) 300
+    $manualRequest.marker.operatorActionRequired = $true
+    $manualRequestJson = $manualRequest.marker | ConvertTo-Json -Depth 8
     Assert-SelfTestFailure `
-        -Operation { $null = ConvertFrom-ExactMarkerJson $unstableTitleJson } `
-        -ExpectedText "stable foreground-sentinel window title is invalid" `
-        -Label "state-mutating window title"
+        -Operation { $null = ConvertFrom-ExactMarkerJson $manualRequestJson "Request" } `
+        -ExpectedText "operatorActionRequired must be False" `
+        -Label "manual-action request"
+
+    $inputReceived = New-SelfTestReceivedMarker $now.AddSeconds(-1)
+    $inputReceived.marker.clickAttemptsObserved = 1
+    $inputReceivedJson = $inputReceived.marker | ConvertTo-Json -Depth 8
+    Assert-SelfTestFailure `
+        -Operation { $null = ConvertFrom-ExactMarkerJson $inputReceivedJson "Received" } `
+        -ExpectedText "clickAttemptsObserved must be an integer from 0 through 0" `
+        -Label "received input attempt"
+
+    $extraSampleReceived = New-SelfTestReceivedMarker $now.AddSeconds(-1)
+    $extraSampleReceived.marker.stableSamplesObserved = 4
+    $extraSampleReceivedJson = $extraSampleReceived.marker | ConvertTo-Json -Depth 8
+    Assert-SelfTestFailure `
+        -Operation { $null = ConvertFrom-ExactMarkerJson $extraSampleReceivedJson "Received" } `
+        -ExpectedText "stableSamplesObserved must be an integer from 3 through 3" `
+        -Label "producer-unreachable extra stable sample"
+
+    $wrongSessionReceived = New-SelfTestReceivedMarker $now.AddSeconds(-1)
+    $wrongSessionReceived.marker.interactiveSessionMatched = $false
+    $wrongSessionReceivedJson = $wrongSessionReceived.marker | ConvertTo-Json -Depth 8
+    Assert-SelfTestFailure `
+        -Operation { $null = ConvertFrom-ExactMarkerJson $wrongSessionReceivedJson "Received" } `
+        -ExpectedText "interactiveSessionMatched must be True" `
+        -Label "wrong interactive session"
+
+    $unstableReceived = New-SelfTestReceivedMarker $now.AddSeconds(-1)
+    $unstableReceived.marker.ownerIdentityStable = $false
+    $unstableReceivedJson = $unstableReceived.marker | ConvertTo-Json -Depth 8
+    Assert-SelfTestFailure `
+        -Operation { $null = ConvertFrom-ExactMarkerJson $unstableReceivedJson "Received" } `
+        -ExpectedText "ownerIdentityStable must be True" `
+        -Label "unstable owner identity"
 
     Assert-SelfTestFailure `
-        -Operation { $null = ConvertFrom-ExactMarkerJson '{not-json' } `
+        -Operation { $null = ConvertFrom-ExactMarkerJson '{not-json' "Request" } `
         -ExpectedText "not one complete JSON object" `
         -Label "malformed marker"
 
     # Keep these operation blocks in the script scope. PowerShell 7 runs a
     # GetNewClosure() block in a dynamic module that cannot resolve the
     # watcher functions when this script is invoked with the call operator.
-    $staleAtomic = New-SelfTestMarker $now.AddSeconds(-40) "action-required" 300
+    $futureRequest = New-SelfTestRequestMarker $now.AddSeconds(10) 300
     Assert-SelfTestFailure `
         -Operation {
-            $null = Assert-FreshMarkerBinding $staleAtomic $runnerStart $now 30 2 2
-        } `
-        -ExpectedText "stale for immediate operator handoff" `
-        -Label "stale marker"
-
-    $futureAtomic = New-SelfTestMarker $now.AddSeconds(10) "action-required" 300
-    Assert-SelfTestFailure `
-        -Operation {
-            $null = Assert-FreshMarkerBinding $futureAtomic $runnerStart $now 30 2 2
+            $null = Assert-FreshRequestBinding $futureRequest.marker $runnerStart $now 2
         } `
         -ExpectedText "unacceptably far in the future" `
         -Label "future marker"
 
-    $expiredAtomic = New-SelfTestMarker $now.AddSeconds(-20) "action-required" 15
+    $expiredRequest = New-SelfTestRequestMarker $now.AddSeconds(-20) 15
     Assert-SelfTestFailure `
         -Operation {
-            $null = Assert-FreshMarkerBinding $expiredAtomic $runnerStart $now 60 2 2
+            $null = Assert-FreshRequestBinding $expiredRequest.marker $runnerStart $now 2
         } `
-        -ExpectedText "marker has expired" `
+        -ExpectedText "request has expired" `
         -Label "expired marker"
+
+    $mismatchedReceived = New-SelfTestReceivedMarker `
+        $now.AddSeconds(-1) `
+        "fedcba9876543210fedcba9876543210"
+    Assert-SelfTestFailure `
+        -Operation {
+            $null = Assert-ReceivedMarkerBinding `
+                $validRequest.marker `
+                $mismatchedReceived.marker `
+                $now.AddSeconds(-40) `
+                $now.AddSeconds(260) `
+                $now `
+                2
+        } `
+        -ExpectedText "does not match the automatic foreground-baseline request ID" `
+        -Label "mismatched received marker"
+
+    $shortRequest = New-SelfTestRequestMarker $now.AddSeconds(-20) 15
+    $lateReceived = New-SelfTestReceivedMarker $now.AddSeconds(-1)
+    Assert-SelfTestFailure `
+        -Operation {
+            $null = Assert-ReceivedMarkerBinding `
+                $shortRequest.marker `
+                $lateReceived.marker `
+                $now.AddSeconds(-20) `
+                $now.AddSeconds(-5) `
+                $now `
+                2
+        } `
+        -ExpectedText "after the automatic foreground-baseline deadline" `
+        -Label "late received marker"
 
     $deadRunnerReader = { param($ignoredProcessId) return [pscustomobject]@{ alive = $false; startTimeUtc = $null } }
     Assert-SelfTestFailure `
         -Operation {
-            $null = Wait-ForegroundArmHandoff `
+            $null = Wait-ForegroundBaselineHandoff `
                 -ExpectedRunnerProcessId 17 `
                 -ExpectedRunnerStart $runnerStart `
                 -RunnerStateReader $deadRunnerReader `
-                -MarkerReader ({ return $validAtomic }.GetNewClosure()) `
+                -RequestReader ({ return $validRequest }.GetNewClosure()) `
+                -ReceivedReader ({ return $validReceived }.GetNewClosure()) `
                 -ClockReader $clockReader `
                 -Sleeper $noSleep `
                 -TimeoutMilliseconds 1000 `
-                -MaximumAgeSeconds 30 `
                 -AllowedFutureSeconds 2 `
-                -AllowedFileTimestampDifferenceSeconds 2 `
                 -PollIntervalMilliseconds 0
         } `
         -ExpectedText "runner is not alive" `
@@ -732,7 +897,7 @@ function Invoke-SelfTest {
         -ExpectedText "does not match the exact expected start time" `
         -Label "runner start-time mismatch"
 
-    Write-Output "Windows foreground-arm handoff watcher self-test passed."
+    Write-Output "Windows automatic foreground-baseline handoff watcher self-test passed."
 }
 
 if ($Mode -ceq "SelfTest") {
@@ -749,27 +914,28 @@ if ($RunnerProcessId -le 0) {
 $resolvedEvidenceDirectory = Resolve-OrdinaryEvidenceDirectory $EvidenceDirectory
 $expectedRunnerStart = ConvertFrom-CanonicalUtcTimestamp $RunnerStartedAtUtc "RunnerStartedAtUtc"
 $operatorDirectory = [IO.Path]::Combine($resolvedEvidenceDirectory, "operator")
-$markerPath = [IO.Path]::Combine($operatorDirectory, "foreground-arm-request.json")
+$requestMarkerPath = [IO.Path]::Combine($operatorDirectory, "foreground-arm-request.json")
+$receivedMarkerPath = [IO.Path]::Combine($operatorDirectory, "foreground-arm-received.json")
 $runnerReader = { param($processId) return Get-RunnerState $processId }
 $markerReader = {
-    param([string]$boundMarkerPath, [string]$boundOperatorDirectory)
-    return Read-AtomicRequestMarker $boundMarkerPath $boundOperatorDirectory
+    param([string]$boundMarkerPath, [string]$boundOperatorDirectory, [string]$boundMarkerType)
+    return Read-AtomicForegroundMarker $boundMarkerPath $boundOperatorDirectory $boundMarkerType
 }
 $clockReader = { return [DateTimeOffset]::UtcNow }
 $sleeper = { param($milliseconds) Start-Sleep -Milliseconds $milliseconds }
 
-$handoff = Wait-ForegroundArmHandoff `
+$handoff = Wait-ForegroundBaselineHandoff `
     -ExpectedRunnerProcessId $RunnerProcessId `
     -ExpectedRunnerStart $expectedRunnerStart `
     -RunnerStateReader $runnerReader `
-    -MarkerReader $markerReader `
-    -MarkerReaderArguments @($markerPath, $operatorDirectory) `
+    -RequestReader $markerReader `
+    -RequestReaderArguments @($requestMarkerPath, $operatorDirectory, "Request") `
+    -ReceivedReader $markerReader `
+    -ReceivedReaderArguments @($receivedMarkerPath, $operatorDirectory, "Received") `
     -ClockReader $clockReader `
     -Sleeper $sleeper `
     -TimeoutMilliseconds ($WaitTimeoutSeconds * 1000) `
-    -MaximumAgeSeconds $MaximumMarkerAgeSeconds `
     -AllowedFutureSeconds $FutureToleranceSeconds `
-    -AllowedFileTimestampDifferenceSeconds $FileTimestampToleranceSeconds `
     -PollIntervalMilliseconds $PollMilliseconds
 
 Write-Output ($handoff | ConvertTo-Json -Depth 8 -Compress)

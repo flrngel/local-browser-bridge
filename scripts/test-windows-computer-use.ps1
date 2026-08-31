@@ -57,7 +57,6 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
-$script:ForegroundSentinelWindowTitle = "LBB Foreground Sentinel"
 
 function ConvertFrom-JsonPreservingStrings {
     param([Parameter(Mandatory = $true, ValueFromPipeline = $true)][string]$Json)
@@ -483,7 +482,20 @@ namespace LbbWindowsAcceptance
     public sealed class ProbeSnapshot
     {
         public long ForegroundHwnd;
+        public long ForegroundAfterHwnd;
         public long FocusHwnd;
+        public long FocusAfterHwnd;
+        public long ForegroundRootHwnd;
+        public long FocusRootHwnd;
+        public uint ForegroundProcessId;
+        public uint FocusProcessId;
+        public uint ForegroundThreadId;
+        public uint FocusThreadId;
+        public uint ForegroundSessionId;
+        public uint FocusSessionId;
+        public bool NativeSampleSeqlockMatched;
+        public bool OwnerIdentityStable;
+        public bool FocusRootMatched;
         public int CursorX;
         public int CursorY;
         public bool CursorAvailable;
@@ -682,15 +694,55 @@ namespace LbbWindowsAcceptance
         public static ProbeSnapshot Capture()
         {
             ProbeSnapshot output = new ProbeSnapshot();
-            IntPtr foreground = GetForegroundWindow();
-            output.ForegroundHwnd = foreground.ToInt64();
+            output.ForegroundSessionId = UInt32.MaxValue;
+            output.FocusSessionId = UInt32.MaxValue;
+            const uint GA_ROOT = 2;
+            IntPtr foregroundBefore = GetForegroundWindow();
+            output.ForegroundHwnd = foregroundBefore.ToInt64();
+            uint foregroundBeforeProcessId;
+            uint foregroundBeforeThreadId = GetWindowThreadProcessIdWithOwner(
+                foregroundBefore,
+                out foregroundBeforeProcessId);
+            output.ForegroundProcessId = foregroundBeforeProcessId;
+            output.ForegroundThreadId = foregroundBeforeThreadId;
+            uint foregroundSessionId = UInt32.MaxValue;
+            if (foregroundBeforeProcessId != 0 && ProcessIdToSessionId(foregroundBeforeProcessId, out foregroundSessionId))
+            {
+                output.ForegroundSessionId = foregroundSessionId;
+            }
+            IntPtr foregroundRoot = foregroundBefore == IntPtr.Zero
+                ? IntPtr.Zero
+                : GetAncestor(foregroundBefore, GA_ROOT);
+            output.ForegroundRootHwnd = foregroundRoot.ToInt64();
+            uint foregroundRootProcessId = 0;
+            uint foregroundRootThreadId = foregroundRoot == IntPtr.Zero
+                ? 0
+                : GetWindowThreadProcessIdWithOwner(foregroundRoot, out foregroundRootProcessId);
             GUITHREADINFO info = new GUITHREADINFO();
             info.cbSize = Marshal.SizeOf(typeof(GUITHREADINFO));
-            uint threadId = GetWindowThreadProcessId(foreground, IntPtr.Zero);
-            if (threadId != 0 && GetGUIThreadInfo(threadId, ref info))
+            IntPtr focus = IntPtr.Zero;
+            if (foregroundBeforeThreadId != 0 && GetGUIThreadInfo(foregroundBeforeThreadId, ref info))
             {
-                output.FocusHwnd = info.hwndFocus.ToInt64();
+                focus = info.hwndFocus;
             }
+            output.FocusHwnd = focus.ToInt64();
+            uint focusProcessId = 0;
+            uint focusThreadId = focus == IntPtr.Zero
+                ? 0
+                : GetWindowThreadProcessIdWithOwner(focus, out focusProcessId);
+            output.FocusProcessId = focusProcessId;
+            output.FocusThreadId = focusThreadId;
+            uint focusSessionId = UInt32.MaxValue;
+            if (focusProcessId != 0 && ProcessIdToSessionId(focusProcessId, out focusSessionId))
+            {
+                output.FocusSessionId = focusSessionId;
+            }
+            IntPtr focusRoot = focus == IntPtr.Zero ? IntPtr.Zero : GetAncestor(focus, GA_ROOT);
+            output.FocusRootHwnd = focusRoot.ToInt64();
+            uint focusRootProcessId = 0;
+            uint focusRootThreadId = focusRoot == IntPtr.Zero
+                ? 0
+                : GetWindowThreadProcessIdWithOwner(focusRoot, out focusRootProcessId);
             POINT cursor;
             if (GetCursorPos(out cursor))
             {
@@ -699,6 +751,64 @@ namespace LbbWindowsAcceptance
                 output.CursorAvailable = true;
             }
             output.InputDesktop = ReadInputDesktopName();
+            IntPtr foregroundAfter = GetForegroundWindow();
+            output.ForegroundAfterHwnd = foregroundAfter.ToInt64();
+            uint foregroundAfterProcessId;
+            uint foregroundAfterThreadId = GetWindowThreadProcessIdWithOwner(
+                foregroundAfter,
+                out foregroundAfterProcessId);
+            IntPtr foregroundRootAfter = foregroundAfter == IntPtr.Zero
+                ? IntPtr.Zero
+                : GetAncestor(foregroundAfter, GA_ROOT);
+            uint foregroundRootAfterProcessId = 0;
+            uint foregroundRootAfterThreadId = foregroundRootAfter == IntPtr.Zero
+                ? 0
+                : GetWindowThreadProcessIdWithOwner(foregroundRootAfter, out foregroundRootAfterProcessId);
+            GUITHREADINFO infoAfter = new GUITHREADINFO();
+            infoAfter.cbSize = Marshal.SizeOf(typeof(GUITHREADINFO));
+            IntPtr focusAfter = IntPtr.Zero;
+            if (foregroundAfterThreadId != 0 && GetGUIThreadInfo(foregroundAfterThreadId, ref infoAfter))
+            {
+                focusAfter = infoAfter.hwndFocus;
+            }
+            output.FocusAfterHwnd = focusAfter.ToInt64();
+            uint focusAfterProcessId = 0;
+            uint focusAfterThreadId = focusAfter == IntPtr.Zero
+                ? 0
+                : GetWindowThreadProcessIdWithOwner(focusAfter, out focusAfterProcessId);
+            IntPtr focusRootAfter = focusAfter == IntPtr.Zero ? IntPtr.Zero : GetAncestor(focusAfter, GA_ROOT);
+            uint focusRootAfterProcessId = 0;
+            uint focusRootAfterThreadId = focusRootAfter == IntPtr.Zero
+                ? 0
+                : GetWindowThreadProcessIdWithOwner(focusRootAfter, out focusRootAfterProcessId);
+            output.NativeSampleSeqlockMatched = foregroundBefore != IntPtr.Zero &&
+                foregroundBefore == foregroundAfter &&
+                foregroundRoot != IntPtr.Zero &&
+                foregroundRoot == foregroundRootAfter &&
+                focus != IntPtr.Zero &&
+                focus == focusAfter &&
+                focusRoot != IntPtr.Zero &&
+                focusRoot == focusRootAfter;
+            output.FocusRootMatched = focus != IntPtr.Zero &&
+                foregroundRoot != IntPtr.Zero &&
+                focusRoot == foregroundRoot &&
+                focusRootAfter == foregroundRootAfter;
+            output.OwnerIdentityStable = foregroundBeforeThreadId != 0 &&
+                foregroundBeforeProcessId != 0 &&
+                foregroundAfterThreadId == foregroundBeforeThreadId &&
+                foregroundAfterProcessId == foregroundBeforeProcessId &&
+                foregroundRootThreadId != 0 &&
+                foregroundRootProcessId != 0 &&
+                foregroundRootAfterThreadId == foregroundRootThreadId &&
+                foregroundRootAfterProcessId == foregroundRootProcessId &&
+                focusThreadId != 0 &&
+                focusProcessId != 0 &&
+                focusAfterThreadId == focusThreadId &&
+                focusAfterProcessId == focusProcessId &&
+                focusRootThreadId != 0 &&
+                focusRootProcessId != 0 &&
+                focusRootAfterThreadId == focusRootThreadId &&
+                focusRootAfterProcessId == focusRootProcessId;
             return output;
         }
 
@@ -1646,62 +1756,44 @@ function Write-NewOperatorMarker {
     return $finalPath
 }
 
-function New-ForegroundArmRequestMarker {
+function New-ForegroundBaselineRequestMarker {
     param(
         [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+$')]
         [string]$ProductVersion,
         [ValidatePattern('^[0-9a-f]{32}$')]
         [string]$RequestId,
-        [ValidateSet("not-started", "already-acknowledged")]
-        [string]$InputStateAtPublication,
         [ValidateRange(15, 300)]
         [int]$TimeoutSeconds,
-        [bool]$RequestDelivered,
-        [bool]$ButtonEnabled,
-        [bool]$NativeTopologyMatched
+        [ValidateRange(3, 10)]
+        [int]$RequiredStableSamples = 3
     )
-    if (-not $RequestDelivered -or -not $ButtonEnabled -or -not $NativeTopologyMatched) {
-        throw "An operator request marker requires a completed request-delivery proof."
-    }
-    $operatorActionRequired = $InputStateAtPublication -ceq "not-started"
     return [ordered]@{
-        schemaVersion = 2
+        schemaVersion = 3
         productVersion = $ProductVersion
-        kind = "foreground-arm"
-        status = if ($operatorActionRequired) { "action-required" } else { "already-armed" }
+        kind = "foreground-baseline"
+        status = "automatic"
         requestId = $RequestId
         publishedAtUtc = [DateTime]::UtcNow.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
         timeoutSeconds = $TimeoutSeconds
-        operatorActionRequired = $operatorActionRequired
-        preferredRelaySurface = "windows-computer-use-app-share"
-        fallbackRelaySurface = "human-on-windows-session"
-        expectedVisibleWindowTitle = $script:ForegroundSentinelWindowTitle
-        expectedVisibleButtonText = if ($operatorActionRequired) { "CLICK TO ARM" } else { "ARMED - DO NOT USE THIS SESSION" }
-        expectedAccessibleName = "Click to arm Windows acceptance"
-        action = if ($operatorActionRequired) { "single-left-click" } else { "none" }
-        stopUiAfterAction = $true
-        requiresSeparateAuthorization = $true
-        markerGrantsAuthorization = $false
-        markerGrantsConsent = $false
-        externalOneShotConsentRequired = $true
-        visualConfirmationRequired = $true
-        maximumClickAttempts = if ($operatorActionRequired) { 1 } else { 0 }
-        retryOnUnknownOutcome = $false
-        instruction = if ($operatorActionRequired) { "Use a separately authorized Windows Computer Use app share to visually confirm this exact window and button, click it once, then stop all UI use. If it already says ARMED or the outcome is uncertain, do not click or retry." } else { "Do not click; stop all UI use because the foreground arm is already acknowledged." }
-        requestDelivered = $true
-        buttonEnabled = $true
-        nativeTopologyMatched = $true
-        inputStateAtPublication = $InputStateAtPublication
+        mode = "automatic-stable-external-foreground"
+        operatorActionRequired = $false
+        action = "none"
+        globalInputUsed = $false
+        focusChangedByRunner = $false
+        cursorChangedByRunner = $false
+        syntheticInputUsed = $false
+        requiredStableSamples = $RequiredStableSamples
         notificationOnly = $true
         acceptedAsAuthority = $false
         rawWindowHandlesRecorded = $false
+        rawProcessIdentifiersRecorded = $false
         rawCursorCoordinatesRecorded = $false
         pathsRecorded = $false
         secretsRecorded = $false
     }
 }
 
-function New-ForegroundArmReceivedMarker {
+function New-ForegroundBaselineReceivedMarker {
     param(
         [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+$')]
         [string]$ProductVersion,
@@ -1709,44 +1801,66 @@ function New-ForegroundArmReceivedMarker {
         [string]$RequestId,
         [object]$Proof
     )
-    $exactClickCountsMatched = (
+    $zeroInputCountsMatched = (
         $Proof.completed -eq $true -and
-        [int]$Proof.fixtureRequestCount -eq 1 -and
-        [int]$Proof.fixtureAcknowledgementCount -eq 1 -and
-        [int]$Proof.fixtureLeftMouseDownCount -eq 1 -and
-        [int]$Proof.fixtureLeftMouseUpCount -eq 1
+        [int]$Proof.clickAttemptsObserved -eq 0 -and
+        [int]$Proof.fixtureRequestCount -eq 0 -and
+        [int]$Proof.fixtureAcknowledgementCount -eq 0 -and
+        [int]$Proof.fixtureLeftMouseDownCount -eq 0 -and
+        [int]$Proof.fixtureLeftMouseUpCount -eq 0
     )
     $nativeGatesMatched = (
-        $Proof.nativeTopologyMatched -eq $true -and
-        $Proof.foregroundMatched -eq $true -and
-        $Proof.focusMatched -eq $true -and
-        $Proof.cursorAvailable -eq $true -and
+        $Proof.mode -ceq "automatic-stable-external-foreground" -and
+        $Proof.operatorActionRequired -eq $false -and
+        $Proof.action -ceq "none" -and
+        $Proof.requestId -ceq $RequestId -and
+        $Proof.nativeSampleSeqlockMatched -eq $true -and
+        $Proof.ownerIdentityStable -eq $true -and
+        $Proof.focusRootMatched -eq $true -and
+        $Proof.fixtureProcessExcluded -eq $true -and
+        $Proof.interactiveSessionMatched -eq $true -and
         $Proof.cursorStable -eq $true -and
-        $Proof.inputDesktopAvailable -eq $true -and
         $Proof.inputDesktopStable -eq $true -and
-        [int]$Proof.stableSamplesObserved -ge [int]$Proof.stableSamplesRequired
+        [int]$Proof.stableSamplesRequired -eq 3 -and
+        [int]$Proof.stableSamplesObserved -eq [int]$Proof.stableSamplesRequired
     )
-    if (-not $exactClickCountsMatched -or -not $nativeGatesMatched) {
-        throw "An operator received marker requires the complete click and stable-native-sample proof."
+    $noRunnerInput = (
+        $Proof.globalInputUsed -eq $false -and
+        $Proof.focusChangedByRunner -eq $false -and
+        $Proof.cursorChangedByRunner -eq $false -and
+        $Proof.syntheticInputUsed -eq $false
+    )
+    if (-not $zeroInputCountsMatched -or -not $nativeGatesMatched -or -not $noRunnerInput) {
+        throw "A foreground baseline received marker requires a complete automatic stable-external-foreground proof."
     }
     return [ordered]@{
-        schemaVersion = 2
+        schemaVersion = 3
         productVersion = $ProductVersion
-        kind = "foreground-arm"
-        status = "received"
+        kind = "foreground-baseline"
+        status = "ready"
         requestId = $RequestId
         receivedAtUtc = [DateTime]::UtcNow.ToString("o", [Globalization.CultureInfo]::InvariantCulture)
-        exactClickCountsMatched = $true
+        mode = "automatic-stable-external-foreground"
+        operatorActionRequired = $false
+        action = "none"
+        clickAttemptsObserved = 0
         stableSamplesObserved = [int]$Proof.stableSamplesObserved
         stableSamplesRequired = [int]$Proof.stableSamplesRequired
-        nativeTopologyMatched = $true
-        foregroundMatched = $true
-        focusMatched = $true
+        nativeSampleSeqlockMatched = $true
+        ownerIdentityStable = $true
+        focusRootMatched = $true
+        fixtureProcessExcluded = $true
+        interactiveSessionMatched = $true
         cursorStable = $true
         inputDesktopStable = $true
+        globalInputUsed = $false
+        focusChangedByRunner = $false
+        cursorChangedByRunner = $false
+        syntheticInputUsed = $false
         notificationOnly = $true
         acceptedAsAuthority = $false
         rawWindowHandlesRecorded = $false
+        rawProcessIdentifiersRecorded = $false
         rawCursorCoordinatesRecorded = $false
         pathsRecorded = $false
         secretsRecorded = $false
@@ -1755,50 +1869,19 @@ function New-ForegroundArmReceivedMarker {
 
 $script:foregroundArmProof = $null
 
-function Test-ForegroundArmRequestDeliveryState {
+function Wait-ForStableExternalForeground {
     param(
-        [object]$State,
-        [ValidateRange(1, 2147483647)]
-        [int]$RequestedGeneration,
-        [Int64]$ArmButtonHwnd
-    )
-    if ($null -eq $State -or $ArmButtonHwnd -le 0) {
-        return $false
-    }
-    $requestIdentityMatched = (
-        [int]$State.foregroundArmRequestedGeneration -eq $RequestedGeneration -and
-        [int]$State.foregroundArmRequestCount -eq 1 -and
-        $State.foregroundArmButtonEnabled -eq $true -and
-        [Int64]$State.armButtonHwnd -eq $ArmButtonHwnd
-    )
-    $inputNotStarted = (
-        [int]$State.foregroundArmAcknowledgedGeneration -eq 0 -and
-        [int]$State.foregroundArmAcknowledgementCount -eq 0 -and
-        [int]$State.foregroundArmLeftMouseDownCount -eq 0 -and
-        [int]$State.foregroundArmLeftMouseUpCount -eq 0
-    )
-    $inputAlreadyComplete = (
-        [int]$State.foregroundArmAcknowledgedGeneration -eq $RequestedGeneration -and
-        [int]$State.foregroundArmAcknowledgementCount -eq 1 -and
-        [int]$State.foregroundArmLeftMouseDownCount -eq 1 -and
-        [int]$State.foregroundArmLeftMouseUpCount -eq 1
-    )
-    return $requestIdentityMatched -and ($inputNotStarted -or $inputAlreadyComplete)
-}
-
-function Wait-ForStableForegroundArm {
-    param(
-        [ValidateRange(1, 2147483647)]
-        [int]$RequestedGeneration,
-        [Int64]$SentinelHwnd,
-        [Int64]$ArmButtonHwnd,
+        [Int64]$TargetHwnd,
         [ValidateRange(1, 2147483647)]
         [int]$ExpectedFixtureProcessId,
+        [Parameter(Mandatory = $true)]
+        [ValidateRange(0, 2147483647)]
+        [int]$ExpectedInteractiveSessionId,
+        [Parameter(Mandatory = $true)]
+        [ValidatePattern('^[0-9a-f]{32}$')]
+        [string]$RequestId,
         [scriptblock]$StateReader = { Get-FixtureStateSnapshot },
         [scriptblock]$NativeReader = { $script:nativeProbeType::Capture() },
-        [scriptblock]$TopologyReader = { param($sentinel, $button, $processId) $script:nativeProbeType::ValidateFixtureArmTopology($sentinel, $button, $processId) },
-        [ValidateRange(1, 300)]
-        [int]$RequestDeliveryTimeoutSeconds = 10,
         [Int64]$AfterPublicationGeneration = 0,
         [ValidateRange(3, 10)]
         [int]$RequiredStableSamples = 3,
@@ -1807,11 +1890,11 @@ function Wait-ForStableForegroundArm {
         [ValidateRange(0, 10000)]
         [int]$PollMilliseconds = 150
     )
-    if ($SentinelHwnd -le 0 -or $ArmButtonHwnd -le 0) {
-        throw "Positive fixture-owned sentinel and arm-button HWNDs are required."
+    if ($TargetHwnd -le 0) {
+        throw "A positive fixture target HWND is required."
     }
     if ($AfterPublicationGeneration -lt 0) {
-        throw "The foreground-arm publication boundary must be non-negative."
+        throw "The foreground-baseline publication boundary must be non-negative."
     }
     $timeoutWatch = [Diagnostics.Stopwatch]::StartNew()
     $previousSignature = $null
@@ -1829,46 +1912,96 @@ function Wait-ForStableForegroundArm {
                 foregroundArmLeftMouseDownCount = 0
                 foregroundArmLeftMouseUpCount = 0
                 foregroundArmButtonEnabled = $false
-                armButtonHwnd = 0
                 statePublicationGeneration = 0
+            }
+        }
+        if ($null -eq $native) {
+            $native = [pscustomobject]@{
+                ForegroundHwnd = 0
+                ForegroundAfterHwnd = 0
+                FocusHwnd = 0
+                FocusAfterHwnd = 0
+                ForegroundRootHwnd = 0
+                FocusRootHwnd = 0
+                ForegroundProcessId = 0
+                FocusProcessId = 0
+                ForegroundThreadId = 0
+                FocusThreadId = 0
+                ForegroundSessionId = [uint32]::MaxValue
+                FocusSessionId = [uint32]::MaxValue
+                NativeSampleSeqlockMatched = $false
+                OwnerIdentityStable = $false
+                FocusRootMatched = $false
+                CursorX = 0
+                CursorY = 0
+                CursorAvailable = $false
+                InputDesktop = "unavailable"
             }
         }
         $statePublicationGeneration = [Int64]$state.statePublicationGeneration
         $statePublicationAdvanced = $statePublicationGeneration -gt $lastAcceptedPublicationGeneration
-        $requestMatched = [int]$state.foregroundArmRequestedGeneration -eq $RequestedGeneration
-        $acknowledgementMatched = [int]$state.foregroundArmAcknowledgedGeneration -eq $RequestedGeneration
-        $requestCountMatched = [int]$state.foregroundArmRequestCount -eq 1
-        $acknowledgementCountMatched = [int]$state.foregroundArmAcknowledgementCount -eq 1
-        $leftMouseDownCountMatched = [int]$state.foregroundArmLeftMouseDownCount -eq 1
-        $leftMouseUpCountMatched = [int]$state.foregroundArmLeftMouseUpCount -eq 1
-        $armButtonEnabled = $state.foregroundArmButtonEnabled -eq $true
-        $buttonIdentityMatched = [Int64]$state.armButtonHwnd -eq $ArmButtonHwnd
-        $nativeTopologyMatched = (& $TopologyReader $SentinelHwnd $ArmButtonHwnd $ExpectedFixtureProcessId) -eq $true
-        $foregroundMatched = [Int64]$native.ForegroundHwnd -eq $SentinelHwnd
-        $focusMatched = [Int64]$native.FocusHwnd -eq $ArmButtonHwnd
+        $noFixtureInputObserved = (
+            [int]$state.foregroundArmRequestedGeneration -eq 0 -and
+            [int]$state.foregroundArmAcknowledgedGeneration -eq 0 -and
+            [int]$state.foregroundArmRequestCount -eq 0 -and
+            [int]$state.foregroundArmAcknowledgementCount -eq 0 -and
+            [int]$state.foregroundArmLeftMouseDownCount -eq 0 -and
+            [int]$state.foregroundArmLeftMouseUpCount -eq 0 -and
+            $state.foregroundArmButtonEnabled -eq $false
+        )
+        $nativeSampleSeqlockMatched = $native.NativeSampleSeqlockMatched -eq $true
+        $ownerIdentityStable = $native.OwnerIdentityStable -eq $true
+        $focusRootMatched = (
+            $native.FocusRootMatched -eq $true -and
+            [Int64]$native.ForegroundRootHwnd -gt 0 -and
+            [Int64]$native.FocusRootHwnd -eq [Int64]$native.ForegroundRootHwnd
+        )
+        $fixtureProcessExcluded = (
+            [uint32]$native.ForegroundProcessId -gt 0 -and
+            [uint32]$native.FocusProcessId -gt 0 -and
+            [uint32]$native.ForegroundProcessId -ne [uint32]$ExpectedFixtureProcessId -and
+            [uint32]$native.FocusProcessId -ne [uint32]$ExpectedFixtureProcessId
+        )
+        $interactiveSessionMatched = (
+            [uint32]$native.ForegroundSessionId -eq [uint32]$ExpectedInteractiveSessionId -and
+            [uint32]$native.FocusSessionId -eq [uint32]$ExpectedInteractiveSessionId
+        )
+        $externalForegroundMatched = (
+            [Int64]$native.ForegroundHwnd -gt 0 -and
+            [Int64]$native.ForegroundAfterHwnd -eq [Int64]$native.ForegroundHwnd -and
+            [Int64]$native.ForegroundHwnd -ne $TargetHwnd -and
+            [Int64]$native.FocusHwnd -gt 0 -and
+            [Int64]$native.FocusAfterHwnd -eq [Int64]$native.FocusHwnd -and
+            $fixtureProcessExcluded -and
+            $interactiveSessionMatched
+        )
         $cursorAvailable = $native.CursorAvailable -eq $true
         $inputDesktopAvailable = -not [String]::IsNullOrWhiteSpace([string]$native.InputDesktop) -and [string]$native.InputDesktop -cne "unavailable"
-        $armAndNativeMatched = ($requestMatched -and
-            $acknowledgementMatched -and
-            $requestCountMatched -and
-            $acknowledgementCountMatched -and
-            $leftMouseDownCountMatched -and
-            $leftMouseUpCountMatched -and
-            $armButtonEnabled -and
-            $buttonIdentityMatched -and
-            $nativeTopologyMatched -and
-            $foregroundMatched -and
-            $focusMatched -and
+        $externalAndNativeMatched = ($noFixtureInputObserved -and
+            $nativeSampleSeqlockMatched -and
+            $ownerIdentityStable -and
+            $focusRootMatched -and
+            $externalForegroundMatched -and
             $cursorAvailable -and
             $inputDesktopAvailable)
         $signature = [String]::Join("|", @(
                 [string]$native.ForegroundHwnd,
+                [string]$native.ForegroundAfterHwnd,
                 [string]$native.FocusHwnd,
+                [string]$native.FocusAfterHwnd,
+                [string]$native.ForegroundRootHwnd,
+                [string]$native.FocusRootHwnd,
+                [string]$native.ForegroundProcessId,
+                [string]$native.FocusProcessId,
+                [string]$native.ForegroundThreadId,
+                [string]$native.FocusThreadId,
+                [string]$native.ForegroundSessionId,
+                [string]$native.FocusSessionId,
                 [string]$native.CursorX,
                 [string]$native.CursorY,
                 [string]$native.InputDesktop
             ))
-        if ($armAndNativeMatched -and $statePublicationAdvanced) {
+        if ($externalAndNativeMatched -and $statePublicationAdvanced) {
             $lastAcceptedPublicationGeneration = $statePublicationGeneration
             if ($null -ne $previousSignature -and $signature -ceq $previousSignature) {
                 $stableSamples++
@@ -1878,7 +2011,7 @@ function Wait-ForStableForegroundArm {
                 $stableSamples = 1
             }
         }
-        elseif ($armAndNativeMatched -and
+        elseif ($externalAndNativeMatched -and
             $statePublicationGeneration -eq $lastAcceptedPublicationGeneration -and
             $null -ne $previousSignature -and
             $signature -ceq $previousSignature) {
@@ -1890,48 +2023,49 @@ function Wait-ForStableForegroundArm {
             $previousSignature = $null
             $stableSamples = 0
         }
+        $completed = $stableSamples -ge $RequiredStableSamples
         $proof = [ordered]@{
-            requestedGeneration = $RequestedGeneration
-            requestPosted = $true
-            acknowledgementMode = "fresh-foreground-focused-left-mouse-down-up"
-            nativeForegroundAndFocusRequired = $true
-            fixtureRequestedGeneration = [int]$state.foregroundArmRequestedGeneration
-            fixtureAcknowledgedGeneration = [int]$state.foregroundArmAcknowledgedGeneration
-            fixtureRequestMatched = $requestMatched
-            fixtureAcknowledgementMatched = $acknowledgementMatched
+            mode = "automatic-stable-external-foreground"
+            operatorActionRequired = $false
+            action = "none"
+            requestId = $RequestId
+            clickAttemptsObserved = [Math]::Max(
+                [int]$state.foregroundArmLeftMouseDownCount,
+                [int]$state.foregroundArmLeftMouseUpCount
+            )
             fixtureRequestCount = [int]$state.foregroundArmRequestCount
             fixtureAcknowledgementCount = [int]$state.foregroundArmAcknowledgementCount
             fixtureLeftMouseDownCount = [int]$state.foregroundArmLeftMouseDownCount
             fixtureLeftMouseUpCount = [int]$state.foregroundArmLeftMouseUpCount
-            requestDeliveryPublicationGeneration = $AfterPublicationGeneration
+            afterPublicationGeneration = $AfterPublicationGeneration
             fixtureStatePublicationGeneration = $statePublicationGeneration
             statePublicationAdvanced = $statePublicationAdvanced
-            armAndNativeMatched = $armAndNativeMatched
-            requestCountMatched = $requestCountMatched
-            acknowledgementCountMatched = $acknowledgementCountMatched
-            leftMouseDownCountMatched = $leftMouseDownCountMatched
-            leftMouseUpCountMatched = $leftMouseUpCountMatched
-            requestDelivered = $true
-            requestDeliveryTimeoutSeconds = $RequestDeliveryTimeoutSeconds
-            armButtonEnabled = $armButtonEnabled
-            armButtonIdentityMatched = $buttonIdentityMatched
-            nativeTopologyMatched = $nativeTopologyMatched
-            foregroundMatched = $foregroundMatched
-            foregroundStable = $stableSamples -ge $RequiredStableSamples
-            focusMatched = $focusMatched
-            focusStable = $stableSamples -ge $RequiredStableSamples
+            noFixtureInputObserved = $noFixtureInputObserved
+            nativeSampleSeqlockMatched = $nativeSampleSeqlockMatched
+            ownerIdentityStable = $ownerIdentityStable
+            focusRootMatched = $focusRootMatched
+            fixtureProcessExcluded = $fixtureProcessExcluded
+            interactiveSessionMatched = $interactiveSessionMatched
+            externalForegroundMatched = $externalForegroundMatched
             cursorAvailable = $cursorAvailable
-            cursorStable = $stableSamples -ge $RequiredStableSamples
+            cursorStable = $completed
             inputDesktopAvailable = $inputDesktopAvailable
-            inputDesktopStable = $stableSamples -ge $RequiredStableSamples
+            inputDesktopStable = $completed
             stableSamplesRequired = $RequiredStableSamples
             stableSamplesObserved = $stableSamples
             stablePublicationSamplesObserved = $stableSamples
             timeoutSeconds = [Math]::Ceiling($TimeoutMilliseconds / 1000.0)
-            completed = $stableSamples -ge $RequiredStableSamples
+            completed = $completed
             baselineContinuityMatched = $false
+            globalInputUsed = $false
+            focusChangedByRunner = $false
+            cursorChangedByRunner = $false
+            syntheticInputUsed = $false
             rawWindowHandlesRecorded = $false
+            rawProcessIdentifiersRecorded = $false
             rawCursorCoordinatesRecorded = $false
+            pathsRecorded = $false
+            secretsRecorded = $false
         }
         $script:foregroundArmProof = $proof
         if ($stableSamples -ge $RequiredStableSamples) {
@@ -1947,7 +2081,27 @@ function Wait-ForStableForegroundArm {
         }
     } while ($timeoutWatch.ElapsedMilliseconds -lt $TimeoutMilliseconds)
     $timeoutWatch.Stop()
-    throw "Timed out waiting for a fresh foreground-arm click and $RequiredStableSamples stable native samples."
+    throw "Timed out waiting for $RequiredStableSamples fresh stable external foreground publications."
+}
+
+function Get-RunnerFailureReasonCode {
+    param(
+        [string]$Stage,
+        [string]$FailureText
+    )
+    if ($Stage -ceq "wait-stable-external-foreground") {
+        if ($FailureText -cmatch '^Timed out waiting for [0-9]+ fresh stable external foreground publications\.$') {
+            return "foreground-baseline-timeout"
+        }
+        return "foreground-baseline-state-refused"
+    }
+    if ($Stage -ceq "publish-foreground-baseline-request") {
+        return "foreground-baseline-state-refused"
+    }
+    if ($Stage -ceq "bind-foreground-baseline") {
+        return "foreground-baseline-continuity-failed"
+    }
+    return "acceptance-test-failed"
 }
 
 function Remove-OwnedFixtureBuildDirectory {
@@ -2329,6 +2483,59 @@ function ConvertTo-RecoveryFaultStartRecord {
         taxonomyRetriable = $false
         taxonomyRecoveryHint = "reobserve"
         transportFailure = $false
+        pathsRecorded = $false
+        secretsRecorded = $false
+    }
+}
+
+function New-SanitizedInvariantProof {
+    param([object]$Before, [object]$After)
+    $inputDesktopAvailable = (
+        -not [String]::IsNullOrWhiteSpace([string]$Before.inputDesktop) -and
+        [string]$Before.inputDesktop -cne "unavailable" -and
+        -not [String]::IsNullOrWhiteSpace([string]$After.inputDesktop) -and
+        [string]$After.inputDesktop -cne "unavailable"
+    )
+    $noFixtureInputObserved = (
+        [int]$After.foregroundArmRequestedGeneration -eq 0 -and
+        [int]$After.foregroundArmAcknowledgedGeneration -eq 0 -and
+        [int]$After.foregroundArmRequestCount -eq 0 -and
+        [int]$After.foregroundArmAcknowledgementCount -eq 0 -and
+        [int]$After.foregroundArmLeftMouseDownCount -eq 0 -and
+        [int]$After.foregroundArmLeftMouseUpCount -eq 0 -and
+        $After.foregroundArmButtonEnabled -eq $false
+    )
+    return [ordered]@{
+        schemaVersion = 1
+        statePublicationAdvanced = [Int64]$After.statePublicationGeneration -gt [Int64]$Before.statePublicationGeneration
+        nativeSampleSeqlockMatched = $Before.nativeSampleSeqlockMatched -eq $true -and $After.nativeSampleSeqlockMatched -eq $true
+        ownerIdentityStable = $Before.ownerIdentityStable -eq $true -and $After.ownerIdentityStable -eq $true
+        focusRootMatched = $Before.focusRootMatched -eq $true -and $After.focusRootMatched -eq $true
+        interactiveSessionMatched = $Before.interactiveSessionMatched -eq $true -and $After.interactiveSessionMatched -eq $true
+        foregroundStable = [string]$After.foregroundHwnd -ceq [string]$Before.foregroundHwnd
+        focusStable = [string]$After.focusHwnd -ceq [string]$Before.focusHwnd
+        cursorAvailable = $Before.cursorAvailable -eq $true -and $After.cursorAvailable -eq $true
+        cursorStable = $After.cursor.x -eq $Before.cursor.x -and $After.cursor.y -eq $Before.cursor.y
+        inputDesktopAvailable = $inputDesktopAvailable
+        inputDesktopStable = [string]$After.inputDesktop -ceq [string]$Before.inputDesktop
+        targetActivatedCount = [int]$After.targetActivatedCount
+        sentinelActivatedCount = [int]$After.sentinelActivatedCount
+        sentinelDeactivatedCount = [int]$After.sentinelDeactivatedCount
+        foregroundArmRequestedGeneration = [int]$After.foregroundArmRequestedGeneration
+        foregroundArmAcknowledgedGeneration = [int]$After.foregroundArmAcknowledgedGeneration
+        foregroundArmRequestCount = [int]$After.foregroundArmRequestCount
+        foregroundArmAcknowledgementCount = [int]$After.foregroundArmAcknowledgementCount
+        foregroundArmLeftMouseDownCount = [int]$After.foregroundArmLeftMouseDownCount
+        foregroundArmLeftMouseUpCount = [int]$After.foregroundArmLeftMouseUpCount
+        foregroundArmButtonEnabled = $After.foregroundArmButtonEnabled -eq $true
+        noFixtureInputObserved = $noFixtureInputObserved
+        globalInputUsed = $false
+        focusChangedByRunner = $false
+        cursorChangedByRunner = $false
+        syntheticInputUsed = $false
+        rawWindowHandlesRecorded = $false
+        rawProcessIdentifiersRecorded = $false
+        rawCursorCoordinatesRecorded = $false
         pathsRecorded = $false
         secretsRecorded = $false
     }
@@ -2956,7 +3163,7 @@ if ($SelfTest) {
     )
     $renamedHelperSelfTestPath = [IO.Path]::Combine(
         $renamedHelperSelfTestRoot,
-        "local-computer-helper-v0.12.67-windows-x86_64.exe"
+        "local-computer-helper-v0.12.68-windows-x86_64.exe"
     )
     $renamedHelperSelfTestAliasPath = [IO.Path]::Combine(
         $renamedHelperSelfTestRoot,
@@ -3232,65 +3439,54 @@ if ($SelfTest) {
         throw "The fixture wait did not propagate its predicate failure unchanged."
     }
 
-    $armGeneration = 73
-    $armSentinelHwnd = 101
-    $armButtonHwnd = 102
-    foreach ($deliveryCase in @(
-        [pscustomobject]@{ name = "not started"; expected = $true; requested = $armGeneration; acknowledged = 0; requestCount = 1; acknowledgementCount = 0; leftDownCount = 0; leftUpCount = 0; enabled = $true; buttonHwnd = $armButtonHwnd },
-        [pscustomobject]@{ name = "already complete"; expected = $true; requested = $armGeneration; acknowledged = $armGeneration; requestCount = 1; acknowledgementCount = 1; leftDownCount = 1; leftUpCount = 1; enabled = $true; buttonHwnd = $armButtonHwnd },
-        [pscustomobject]@{ name = "partial mouse down"; expected = $false; requested = $armGeneration; acknowledged = 0; requestCount = 1; acknowledgementCount = 0; leftDownCount = 1; leftUpCount = 0; enabled = $true; buttonHwnd = $armButtonHwnd },
-        [pscustomobject]@{ name = "stale request"; expected = $false; requested = $armGeneration - 1; acknowledged = 0; requestCount = 1; acknowledgementCount = 0; leftDownCount = 0; leftUpCount = 0; enabled = $true; buttonHwnd = $armButtonHwnd },
-        [pscustomobject]@{ name = "duplicate request"; expected = $false; requested = $armGeneration; acknowledged = 0; requestCount = 2; acknowledgementCount = 0; leftDownCount = 0; leftUpCount = 0; enabled = $true; buttonHwnd = $armButtonHwnd },
-        [pscustomobject]@{ name = "duplicate input edges"; expected = $false; requested = $armGeneration; acknowledged = $armGeneration; requestCount = 1; acknowledgementCount = 1; leftDownCount = 2; leftUpCount = 2; enabled = $true; buttonHwnd = $armButtonHwnd },
-        [pscustomobject]@{ name = "button disabled"; expected = $false; requested = $armGeneration; acknowledged = 0; requestCount = 1; acknowledgementCount = 0; leftDownCount = 0; leftUpCount = 0; enabled = $false; buttonHwnd = $armButtonHwnd },
-        [pscustomobject]@{ name = "wrong button"; expected = $false; requested = $armGeneration; acknowledged = 0; requestCount = 1; acknowledgementCount = 0; leftDownCount = 0; leftUpCount = 0; enabled = $true; buttonHwnd = $armButtonHwnd + 1 }
-    )) {
-        $deliveryState = [pscustomobject]@{
-            foregroundArmRequestedGeneration = $deliveryCase.requested
-            foregroundArmAcknowledgedGeneration = $deliveryCase.acknowledged
-            foregroundArmRequestCount = $deliveryCase.requestCount
-            foregroundArmAcknowledgementCount = $deliveryCase.acknowledgementCount
-            foregroundArmLeftMouseDownCount = $deliveryCase.leftDownCount
-            foregroundArmLeftMouseUpCount = $deliveryCase.leftUpCount
-            foregroundArmButtonEnabled = $deliveryCase.enabled
-            armButtonHwnd = $deliveryCase.buttonHwnd
-        }
-        $deliveryAccepted = Test-ForegroundArmRequestDeliveryState $deliveryState $armGeneration $armButtonHwnd
-        if ($deliveryAccepted -ne $deliveryCase.expected) {
-            throw "The foreground-arm request-delivery predicate failed its synthetic $($deliveryCase.name) case."
-        }
-    }
-    $armProbe = [ordered]@{ stateReads = 0; nativeReads = 0 }
-    $armStableResult = Wait-ForStableForegroundArm `
-        -RequestedGeneration $armGeneration `
-        -SentinelHwnd $armSentinelHwnd `
-        -ArmButtonHwnd $armButtonHwnd `
-        -ExpectedFixtureProcessId 103 `
+    $baselineTargetHwnd = 101
+    $baselineExternalForegroundHwnd = 201
+    $baselineExternalFocusHwnd = 202
+    $baselineExternalProcessId = 104
+    $baselineFixtureProcessId = 103
+    $baselineInteractiveSessionId = 1
+    $baselineRequestId = "0123456789abcdef0123456789abcdef"
+    $baselineProbe = [ordered]@{ nativeReads = 0; stateReads = 0 }
+    $baselineStableResult = Wait-ForStableExternalForeground `
+        -TargetHwnd $baselineTargetHwnd `
+        -ExpectedFixtureProcessId $baselineFixtureProcessId `
+        -ExpectedInteractiveSessionId $baselineInteractiveSessionId `
+        -RequestId $baselineRequestId `
         -AfterPublicationGeneration 10 `
-        -TopologyReader { return $true } `
         -StateReader {
-            $armProbe.stateReads = [int]$armProbe.stateReads + 1
-            $requested = if ($armProbe.stateReads -eq 1) { 0 } else { $armGeneration }
-            $acknowledged = if ($armProbe.stateReads -eq 1) { 0 } elseif ($armProbe.stateReads -eq 2) { $armGeneration - 1 } else { $armGeneration }
-            $publicationSequence = @(11, 12, 13, 14, 14, 15, 15, 16)
+            $baselineProbe.stateReads = [int]$baselineProbe.stateReads + 1
             return [pscustomobject]@{
-                foregroundArmRequestedGeneration = $requested
-                foregroundArmAcknowledgedGeneration = $acknowledged
-                foregroundArmRequestCount = if ($requested -eq $armGeneration) { 1 } else { 0 }
-                foregroundArmAcknowledgementCount = if ($acknowledged -gt 0) { 1 } else { 0 }
-                foregroundArmLeftMouseDownCount = if ($acknowledged -gt 0) { 1 } else { 0 }
-                foregroundArmLeftMouseUpCount = if ($acknowledged -gt 0) { 1 } else { 0 }
-                foregroundArmButtonEnabled = $true
-                armButtonHwnd = $armButtonHwnd
-                statePublicationGeneration = $publicationSequence[$armProbe.stateReads - 1]
+                foregroundArmRequestedGeneration = 0
+                foregroundArmAcknowledgedGeneration = 0
+                foregroundArmRequestCount = 0
+                foregroundArmAcknowledgementCount = 0
+                foregroundArmLeftMouseDownCount = 0
+                foregroundArmLeftMouseUpCount = 0
+                foregroundArmButtonEnabled = $false
+                statePublicationGeneration = @(11, 12, 13, 13, 14, 14, 15)[$baselineProbe.stateReads - 1]
             }
         } `
         -NativeReader {
-            $armProbe.nativeReads = [int]$armProbe.nativeReads + 1
+            $baselineProbe.nativeReads = [int]$baselineProbe.nativeReads + 1
+            $seqlockMatched = $baselineProbe.nativeReads -ne 1
+            $focusRootMatched = $baselineProbe.nativeReads -ne 2
             return [pscustomobject]@{
-                ForegroundHwnd = if ($armProbe.nativeReads -eq 1) { $armSentinelHwnd + 1 } else { $armSentinelHwnd }
-                FocusHwnd = if ($armProbe.nativeReads -eq 2) { $armButtonHwnd + 1 } else { $armButtonHwnd }
-                CursorX = if ($armProbe.nativeReads -le 3) { 40 } else { 41 }
+                ForegroundHwnd = $baselineExternalForegroundHwnd
+                ForegroundAfterHwnd = if ($seqlockMatched) { $baselineExternalForegroundHwnd } else { $baselineExternalForegroundHwnd + 1 }
+                FocusHwnd = $baselineExternalFocusHwnd
+                FocusAfterHwnd = $baselineExternalFocusHwnd
+                ForegroundRootHwnd = $baselineExternalForegroundHwnd
+                FocusRootHwnd = if ($focusRootMatched) { $baselineExternalForegroundHwnd } else { $baselineExternalForegroundHwnd + 2 }
+                ForegroundProcessId = $baselineExternalProcessId
+                FocusProcessId = $baselineExternalProcessId
+                ForegroundThreadId = 401
+                FocusThreadId = 401
+                ForegroundSessionId = $baselineInteractiveSessionId
+                FocusSessionId = $baselineInteractiveSessionId
+                NativeSampleSeqlockMatched = $seqlockMatched
+                OwnerIdentityStable = $true
+                FocusRootMatched = $focusRootMatched
+                CursorX = 41
                 CursorY = 50
                 CursorAvailable = $true
                 InputDesktop = "Default"
@@ -3298,70 +3494,111 @@ if ($SelfTest) {
         } `
         -RequiredStableSamples 3 `
         -TimeoutMilliseconds 1000 `
-        -PollMilliseconds 1
-    if ($armProbe.stateReads -ne 8 -or
-        $armProbe.nativeReads -ne 8 -or
-        $armStableResult.proof.completed -ne $true -or
-        $armStableResult.proof.stableSamplesObserved -ne 3 -or
-        $armStableResult.proof.stablePublicationSamplesObserved -ne 3 -or
-        $armStableResult.proof.fixtureStatePublicationGeneration -ne 16 -or
-        $armStableResult.proof.fixtureRequestMatched -ne $true -or
-        $armStableResult.proof.fixtureAcknowledgementMatched -ne $true) {
-        throw "The foreground-arm wait accepted a stale, unstable, or incomplete synthetic sequence."
+        -PollMilliseconds 0
+    if ($baselineProbe.nativeReads -ne 7 -or
+        $baselineStableResult.proof.completed -ne $true -or
+        $baselineStableResult.proof.mode -cne "automatic-stable-external-foreground" -or
+        $baselineStableResult.proof.operatorActionRequired -ne $false -or
+        $baselineStableResult.proof.action -cne "none" -or
+        $baselineStableResult.proof.requestId -cne $baselineRequestId -or
+        $baselineStableResult.proof.clickAttemptsObserved -ne 0 -or
+        $baselineStableResult.proof.fixtureRequestCount -ne 0 -or
+        $baselineStableResult.proof.fixtureAcknowledgementCount -ne 0 -or
+        $baselineStableResult.proof.fixtureLeftMouseDownCount -ne 0 -or
+        $baselineStableResult.proof.fixtureLeftMouseUpCount -ne 0 -or
+        $baselineStableResult.proof.nativeSampleSeqlockMatched -ne $true -or
+        $baselineStableResult.proof.ownerIdentityStable -ne $true -or
+        $baselineStableResult.proof.focusRootMatched -ne $true -or
+        $baselineStableResult.proof.fixtureProcessExcluded -ne $true -or
+        $baselineStableResult.proof.interactiveSessionMatched -ne $true -or
+        $baselineStableResult.proof.cursorStable -ne $true -or
+        $baselineStableResult.proof.inputDesktopStable -ne $true -or
+        $baselineStableResult.proof.stableSamplesObserved -ne 3 -or
+        $baselineStableResult.proof.stablePublicationSamplesObserved -ne 3 -or
+        $baselineStableResult.proof.afterPublicationGeneration -ne 10 -or
+        $baselineStableResult.proof.fixtureStatePublicationGeneration -ne 15 -or
+        $baselineStableResult.proof.globalInputUsed -ne $false -or
+        $baselineStableResult.proof.focusChangedByRunner -ne $false -or
+        $baselineStableResult.proof.cursorChangedByRunner -ne $false -or
+        $baselineStableResult.proof.syntheticInputUsed -ne $false) {
+        throw "The automatic external-foreground gate failed its synthetic success test."
     }
-
-    foreach ($armTimeoutCase in @(
-        [pscustomobject]@{ name = "stale request"; requested = $armGeneration - 1; acknowledged = $armGeneration; requestCount = 1; acknowledgementCount = 1; leftDownCount = 1; leftUpCount = 1; buttonHwnd = $armButtonHwnd; topologyMatched = $true; foregroundHwnd = $armSentinelHwnd; focusHwnd = $armButtonHwnd; cursorAvailable = $true; inputDesktop = "Default"; churnCursor = $false },
-        [pscustomobject]@{ name = "stale acknowledgement"; requested = $armGeneration; acknowledged = $armGeneration - 1; requestCount = 1; acknowledgementCount = 1; leftDownCount = 1; leftUpCount = 1; buttonHwnd = $armButtonHwnd; topologyMatched = $true; foregroundHwnd = $armSentinelHwnd; focusHwnd = $armButtonHwnd; cursorAvailable = $true; inputDesktop = "Default"; churnCursor = $false },
-        [pscustomobject]@{ name = "missing click"; requested = $armGeneration; acknowledged = 0; requestCount = 1; acknowledgementCount = 0; leftDownCount = 0; leftUpCount = 0; buttonHwnd = $armButtonHwnd; topologyMatched = $true; foregroundHwnd = $armSentinelHwnd; focusHwnd = $armButtonHwnd; cursorAvailable = $true; inputDesktop = "Default"; churnCursor = $false },
-        [pscustomobject]@{ name = "duplicate request"; requested = $armGeneration; acknowledged = $armGeneration; requestCount = 2; acknowledgementCount = 1; leftDownCount = 1; leftUpCount = 1; buttonHwnd = $armButtonHwnd; topologyMatched = $true; foregroundHwnd = $armSentinelHwnd; focusHwnd = $armButtonHwnd; cursorAvailable = $true; inputDesktop = "Default"; churnCursor = $false },
-        [pscustomobject]@{ name = "duplicate acknowledgement"; requested = $armGeneration; acknowledged = $armGeneration; requestCount = 1; acknowledgementCount = 2; leftDownCount = 1; leftUpCount = 1; buttonHwnd = $armButtonHwnd; topologyMatched = $true; foregroundHwnd = $armSentinelHwnd; focusHwnd = $armButtonHwnd; cursorAvailable = $true; inputDesktop = "Default"; churnCursor = $false },
-        [pscustomobject]@{ name = "duplicate left mouse down"; requested = $armGeneration; acknowledged = $armGeneration; requestCount = 1; acknowledgementCount = 1; leftDownCount = 2; leftUpCount = 1; buttonHwnd = $armButtonHwnd; topologyMatched = $true; foregroundHwnd = $armSentinelHwnd; focusHwnd = $armButtonHwnd; cursorAvailable = $true; inputDesktop = "Default"; churnCursor = $false },
-        [pscustomobject]@{ name = "duplicate left mouse up"; requested = $armGeneration; acknowledged = $armGeneration; requestCount = 1; acknowledgementCount = 1; leftDownCount = 1; leftUpCount = 2; buttonHwnd = $armButtonHwnd; topologyMatched = $true; foregroundHwnd = $armSentinelHwnd; focusHwnd = $armButtonHwnd; cursorAvailable = $true; inputDesktop = "Default"; churnCursor = $false },
-        [pscustomobject]@{ name = "wrong button identity"; requested = $armGeneration; acknowledged = $armGeneration; requestCount = 1; acknowledgementCount = 1; leftDownCount = 1; leftUpCount = 1; buttonHwnd = $armButtonHwnd + 1; topologyMatched = $true; foregroundHwnd = $armSentinelHwnd; focusHwnd = $armButtonHwnd; cursorAvailable = $true; inputDesktop = "Default"; churnCursor = $false },
-        [pscustomobject]@{ name = "button disabled"; requested = $armGeneration; acknowledged = $armGeneration; requestCount = 1; acknowledgementCount = 1; leftDownCount = 1; leftUpCount = 1; buttonHwnd = $armButtonHwnd; topologyMatched = $true; foregroundHwnd = $armSentinelHwnd; focusHwnd = $armButtonHwnd; cursorAvailable = $true; inputDesktop = "Default"; churnCursor = $false },
-        [pscustomobject]@{ name = "native topology mismatch"; requested = $armGeneration; acknowledged = $armGeneration; requestCount = 1; acknowledgementCount = 1; leftDownCount = 1; leftUpCount = 1; buttonHwnd = $armButtonHwnd; topologyMatched = $false; foregroundHwnd = $armSentinelHwnd; focusHwnd = $armButtonHwnd; cursorAvailable = $true; inputDesktop = "Default"; churnCursor = $false },
-        [pscustomobject]@{ name = "foreground mismatch"; requested = $armGeneration; acknowledged = $armGeneration; requestCount = 1; acknowledgementCount = 1; leftDownCount = 1; leftUpCount = 1; buttonHwnd = $armButtonHwnd; topologyMatched = $true; foregroundHwnd = $armSentinelHwnd + 1; focusHwnd = $armButtonHwnd; cursorAvailable = $true; inputDesktop = "Default"; churnCursor = $false },
-        [pscustomobject]@{ name = "focus mismatch"; requested = $armGeneration; acknowledged = $armGeneration; requestCount = 1; acknowledgementCount = 1; leftDownCount = 1; leftUpCount = 1; buttonHwnd = $armButtonHwnd; topologyMatched = $true; foregroundHwnd = $armSentinelHwnd; focusHwnd = $armButtonHwnd + 1; cursorAvailable = $true; inputDesktop = "Default"; churnCursor = $false },
-        [pscustomobject]@{ name = "cursor unavailable"; requested = $armGeneration; acknowledged = $armGeneration; requestCount = 1; acknowledgementCount = 1; leftDownCount = 1; leftUpCount = 1; buttonHwnd = $armButtonHwnd; topologyMatched = $true; foregroundHwnd = $armSentinelHwnd; focusHwnd = $armButtonHwnd; cursorAvailable = $false; inputDesktop = "Default"; churnCursor = $false },
-        [pscustomobject]@{ name = "input desktop unavailable"; requested = $armGeneration; acknowledged = $armGeneration; requestCount = 1; acknowledgementCount = 1; leftDownCount = 1; leftUpCount = 1; buttonHwnd = $armButtonHwnd; topologyMatched = $true; foregroundHwnd = $armSentinelHwnd; focusHwnd = $armButtonHwnd; cursorAvailable = $true; inputDesktop = "unavailable"; churnCursor = $false },
-        [pscustomobject]@{ name = "perpetual signature churn"; requested = $armGeneration; acknowledged = $armGeneration; requestCount = 1; acknowledgementCount = 1; leftDownCount = 1; leftUpCount = 1; buttonHwnd = $armButtonHwnd; topologyMatched = $true; foregroundHwnd = $armSentinelHwnd; focusHwnd = $armButtonHwnd; cursorAvailable = $true; inputDesktop = "Default"; churnCursor = $true },
-        [pscustomobject]@{ name = "stale valid publication"; requested = $armGeneration; acknowledged = $armGeneration; requestCount = 1; acknowledgementCount = 1; leftDownCount = 1; leftUpCount = 1; buttonHwnd = $armButtonHwnd; topologyMatched = $true; foregroundHwnd = $armSentinelHwnd; focusHwnd = $armButtonHwnd; cursorAvailable = $true; inputDesktop = "Default"; churnCursor = $false }
+    foreach ($baselineTimeoutCaseName in @(
+        "target foreground",
+        "fixture foreground owner",
+        "fixture focus owner",
+        "zero foreground",
+        "zero focus",
+        "seqlock mismatch",
+        "focus-after mismatch",
+        "owner identity unstable",
+        "focus root mismatch",
+        "interactive session mismatch",
+        "cursor unavailable",
+        "input desktop unavailable",
+        "fixture input observed",
+        "perpetual signature churn",
+        "stale valid publication"
     )) {
-        $armTimeoutFailure = $null
-        $armTimeoutProbe = [ordered]@{ nativeReads = 0; stateReads = 0 }
-        $armTimeoutWatch = [Diagnostics.Stopwatch]::StartNew()
+        $baselineTimeoutFailure = $null
+        $baselineTimeoutProbe = [ordered]@{ nativeReads = 0; stateReads = 0 }
+        $baselineTimeoutWatch = [Diagnostics.Stopwatch]::StartNew()
         try {
-            $null = Wait-ForStableForegroundArm `
-                -RequestedGeneration $armGeneration `
-                -SentinelHwnd $armSentinelHwnd `
-                -ArmButtonHwnd $armButtonHwnd `
-                -ExpectedFixtureProcessId 103 `
+            $null = Wait-ForStableExternalForeground `
+                -TargetHwnd $baselineTargetHwnd `
+                -ExpectedFixtureProcessId $baselineFixtureProcessId `
+                -ExpectedInteractiveSessionId $baselineInteractiveSessionId `
+                -RequestId $baselineRequestId `
                 -AfterPublicationGeneration 10 `
-                -TopologyReader { return $armTimeoutCase.topologyMatched } `
                 -StateReader {
-                    $armTimeoutProbe.stateReads = [int]$armTimeoutProbe.stateReads + 1
+                    $baselineTimeoutProbe.stateReads = [int]$baselineTimeoutProbe.stateReads + 1
                     return [pscustomobject]@{
-                        foregroundArmRequestedGeneration = $armTimeoutCase.requested
-                        foregroundArmAcknowledgedGeneration = $armTimeoutCase.acknowledged
-                        foregroundArmRequestCount = $armTimeoutCase.requestCount
-                        foregroundArmAcknowledgementCount = $armTimeoutCase.acknowledgementCount
-                        foregroundArmLeftMouseDownCount = $armTimeoutCase.leftDownCount
-                        foregroundArmLeftMouseUpCount = $armTimeoutCase.leftUpCount
-                        foregroundArmButtonEnabled = $armTimeoutCase.name -cne "button disabled"
-                        armButtonHwnd = $armTimeoutCase.buttonHwnd
-                        statePublicationGeneration = if ($armTimeoutCase.name -ceq "stale valid publication") { 10 } else { 10 + $armTimeoutProbe.stateReads }
+                        foregroundArmRequestedGeneration = 0
+                        foregroundArmAcknowledgedGeneration = 0
+                        foregroundArmRequestCount = 0
+                        foregroundArmAcknowledgementCount = 0
+                        foregroundArmLeftMouseDownCount = if ($baselineTimeoutCaseName -ceq "fixture input observed") { 1 } else { 0 }
+                        foregroundArmLeftMouseUpCount = 0
+                        foregroundArmButtonEnabled = $false
+                        statePublicationGeneration = if ($baselineTimeoutCaseName -ceq "stale valid publication") { 10 } else { 10 + $baselineTimeoutProbe.stateReads }
                     }
                 } `
                 -NativeReader {
-                    $armTimeoutProbe.nativeReads = [int]$armTimeoutProbe.nativeReads + 1
+                    $baselineTimeoutProbe.nativeReads = [int]$baselineTimeoutProbe.nativeReads + 1
+                    $foregroundHwnd = if ($baselineTimeoutCaseName -ceq "target foreground") {
+                        $baselineTargetHwnd
+                    }
+                    elseif ($baselineTimeoutCaseName -ceq "zero foreground") {
+                        0
+                    }
+                    else {
+                        $baselineExternalForegroundHwnd
+                    }
+                    $focusHwnd = if ($baselineTimeoutCaseName -ceq "zero focus") { 0 } else { $baselineExternalFocusHwnd }
+                    $foregroundProcessId = if ($baselineTimeoutCaseName -ceq "fixture foreground owner") { $baselineFixtureProcessId } else { $baselineExternalProcessId }
+                    $focusProcessId = if ($baselineTimeoutCaseName -ceq "fixture focus owner") { $baselineFixtureProcessId } else { $baselineExternalProcessId }
+                    $seqlockMatched = $baselineTimeoutCaseName -cne "seqlock mismatch" -and $foregroundHwnd -gt 0
+                    $focusRootMatched = $baselineTimeoutCaseName -cne "focus root mismatch" -and $focusHwnd -gt 0 -and $foregroundHwnd -gt 0
                     return [pscustomobject]@{
-                        ForegroundHwnd = $armTimeoutCase.foregroundHwnd
-                        FocusHwnd = $armTimeoutCase.focusHwnd
-                        CursorX = if ($armTimeoutCase.churnCursor) { 40 + $armTimeoutProbe.nativeReads } else { 41 }
+                        ForegroundHwnd = $foregroundHwnd
+                        ForegroundAfterHwnd = if ($seqlockMatched) { $foregroundHwnd } else { $foregroundHwnd + 1 }
+                        FocusHwnd = $focusHwnd
+                        FocusAfterHwnd = if ($baselineTimeoutCaseName -ceq "focus-after mismatch") { $focusHwnd + 1 } else { $focusHwnd }
+                        ForegroundRootHwnd = $foregroundHwnd
+                        FocusRootHwnd = if ($focusRootMatched) { $foregroundHwnd } else { $foregroundHwnd + 2 }
+                        ForegroundProcessId = $foregroundProcessId
+                        FocusProcessId = $focusProcessId
+                        ForegroundThreadId = 401
+                        FocusThreadId = 401
+                        ForegroundSessionId = if ($baselineTimeoutCaseName -ceq "interactive session mismatch") { $baselineInteractiveSessionId + 1 } else { $baselineInteractiveSessionId }
+                        FocusSessionId = $baselineInteractiveSessionId
+                        NativeSampleSeqlockMatched = $seqlockMatched
+                        OwnerIdentityStable = $baselineTimeoutCaseName -cne "owner identity unstable"
+                        FocusRootMatched = $focusRootMatched
+                        CursorX = if ($baselineTimeoutCaseName -ceq "perpetual signature churn") { 40 + $baselineTimeoutProbe.nativeReads } else { 41 }
                         CursorY = 50
-                        CursorAvailable = $armTimeoutCase.cursorAvailable
-                        InputDesktop = $armTimeoutCase.inputDesktop
+                        CursorAvailable = $baselineTimeoutCaseName -cne "cursor unavailable"
+                        InputDesktop = if ($baselineTimeoutCaseName -ceq "input desktop unavailable") { "unavailable" } else { "Default" }
                     }
                 } `
                 -RequiredStableSamples 3 `
@@ -3369,16 +3606,81 @@ if ($SelfTest) {
                 -PollMilliseconds 1
         }
         catch {
-            $armTimeoutFailure = $_.Exception.Message
+            $baselineTimeoutFailure = $_.Exception.Message
         }
         finally {
-            $armTimeoutWatch.Stop()
+            $baselineTimeoutWatch.Stop()
         }
-        if ($armTimeoutFailure -cne "Timed out waiting for a fresh foreground-arm click and 3 stable native samples." -or
-            $armTimeoutWatch.ElapsedMilliseconds -gt 2000 -or
+        if ($baselineTimeoutFailure -cne "Timed out waiting for 3 fresh stable external foreground publications." -or
+            $baselineTimeoutWatch.ElapsedMilliseconds -gt 2000 -or
             $script:foregroundArmProof.completed -ne $false) {
-            throw "The foreground-arm wait did not fail closed for the synthetic $($armTimeoutCase.name) case."
+            throw "The automatic external-foreground gate did not fail closed for the synthetic $baselineTimeoutCaseName case."
         }
+    }
+    foreach ($reasonCodeCase in @(
+        [pscustomobject]@{ stage = "wait-stable-external-foreground"; failure = "Timed out waiting for 3 fresh stable external foreground publications."; expected = "foreground-baseline-timeout" },
+        [pscustomobject]@{ stage = "wait-stable-external-foreground"; failure = "Synthetic state refusal."; expected = "foreground-baseline-state-refused" },
+        [pscustomobject]@{ stage = "publish-foreground-baseline-request"; failure = "Synthetic state refusal."; expected = "foreground-baseline-state-refused" },
+        [pscustomobject]@{ stage = "bind-foreground-baseline"; failure = "Synthetic continuity failure."; expected = "foreground-baseline-continuity-failed" },
+        [pscustomobject]@{ stage = "pixel-suite"; failure = "Synthetic product failure."; expected = "acceptance-test-failed" }
+    )) {
+        $reasonCode = Get-RunnerFailureReasonCode $reasonCodeCase.stage $reasonCodeCase.failure
+        if ($reasonCode -cne $reasonCodeCase.expected -or $reasonCode -cnotmatch '^[a-z0-9-]+$') {
+            throw "The runner failure reason-code mapping failed its closed-vocabulary self-test."
+        }
+    }
+
+    $invariantBefore = [pscustomobject]@{
+        statePublicationGeneration = 10
+        foregroundHwnd = "111"
+        focusHwnd = "112"
+        nativeSampleSeqlockMatched = $true
+        ownerIdentityStable = $true
+        focusRootMatched = $true
+        interactiveSessionMatched = $true
+        cursor = [pscustomobject]@{ x = 20; y = 30 }
+        cursorAvailable = $true
+        inputDesktop = "Default"
+        targetActivatedCount = 0
+        sentinelActivatedCount = 0
+        sentinelDeactivatedCount = 0
+        foregroundArmRequestedGeneration = 0
+        foregroundArmAcknowledgedGeneration = 0
+        foregroundArmRequestCount = 0
+        foregroundArmAcknowledgementCount = 0
+        foregroundArmLeftMouseDownCount = 0
+        foregroundArmLeftMouseUpCount = 0
+        foregroundArmButtonEnabled = $false
+    }
+    $invariantAfter = $invariantBefore.PSObject.Copy()
+    $invariantAfter.statePublicationGeneration = 11
+    $sanitizedInvariantProof = New-SanitizedInvariantProof $invariantBefore $invariantAfter
+    $expectedInvariantProofProperties = @(
+        "schemaVersion", "statePublicationAdvanced", "nativeSampleSeqlockMatched",
+        "ownerIdentityStable", "focusRootMatched", "interactiveSessionMatched", "foregroundStable", "focusStable",
+        "cursorAvailable", "cursorStable", "inputDesktopAvailable", "inputDesktopStable",
+        "targetActivatedCount", "sentinelActivatedCount", "sentinelDeactivatedCount",
+        "foregroundArmRequestedGeneration", "foregroundArmAcknowledgedGeneration",
+        "foregroundArmRequestCount", "foregroundArmAcknowledgementCount",
+        "foregroundArmLeftMouseDownCount", "foregroundArmLeftMouseUpCount",
+        "foregroundArmButtonEnabled", "noFixtureInputObserved", "globalInputUsed",
+        "focusChangedByRunner", "cursorChangedByRunner", "syntheticInputUsed",
+        "rawWindowHandlesRecorded", "rawProcessIdentifiersRecorded",
+        "rawCursorCoordinatesRecorded", "pathsRecorded", "secretsRecorded"
+    )
+    $sanitizedInvariantJson = $sanitizedInvariantProof | ConvertTo-Json -Depth 8 -Compress
+    if ((@($sanitizedInvariantProof.Keys) -join "|") -cne ($expectedInvariantProofProperties -join "|") -or
+        $sanitizedInvariantProof.statePublicationAdvanced -ne $true -or
+        $sanitizedInvariantProof.foregroundStable -ne $true -or
+        $sanitizedInvariantProof.focusStable -ne $true -or
+        $sanitizedInvariantProof.cursorStable -ne $true -or
+        $sanitizedInvariantProof.inputDesktopStable -ne $true -or
+        $sanitizedInvariantProof.noFixtureInputObserved -ne $true -or
+        $sanitizedInvariantJson.IndexOf('"foregroundHwnd"', [StringComparison]::Ordinal) -ge 0 -or
+        $sanitizedInvariantJson.IndexOf('"focusHwnd"', [StringComparison]::Ordinal) -ge 0 -or
+        $sanitizedInvariantJson.IndexOf('"cursor"', [StringComparison]::Ordinal) -ge 0 -or
+        $sanitizedInvariantJson.IndexOf('"inputDesktop"', [StringComparison]::Ordinal) -ge 0) {
+        throw "The sanitized invariant proof retained raw external desktop identity or failed its exact schema."
     }
 
     $operatorMarkerSelfTestRoot = [IO.Path]::Combine(
@@ -3388,60 +3690,52 @@ if ($SelfTest) {
     [IO.Directory]::CreateDirectory($operatorMarkerSelfTestRoot) | Out-Null
     try {
         $operatorMarkerSelfTestRequestId = "0123456789abcdef0123456789abcdef"
-        $operatorRequestMarker = New-ForegroundArmRequestMarker `
-            -ProductVersion "0.12.67" `
+        $baselineRequestMarker = New-ForegroundBaselineRequestMarker `
+            -ProductVersion "0.12.68" `
             -RequestId $operatorMarkerSelfTestRequestId `
-            -InputStateAtPublication "not-started" `
             -TimeoutSeconds 120 `
-            -RequestDelivered $true `
-            -ButtonEnabled $true `
-            -NativeTopologyMatched $true
-        $operatorRequestPath = Write-NewOperatorMarker `
+            -RequiredStableSamples 3
+        $baselineRequestPath = Write-NewOperatorMarker `
             -Directory $operatorMarkerSelfTestRoot `
             -FileName "foreground-arm-request.json" `
-            -Value $operatorRequestMarker
-        $operatorRequestBytesBefore = [IO.File]::ReadAllBytes($operatorRequestPath)
-        $operatorRequestJson = [Text.Encoding]::UTF8.GetString($operatorRequestBytesBefore)
-        $operatorRequestRecord = ConvertFrom-JsonPreservingStrings $operatorRequestJson
-        $expectedRequestMarkerProperties = @(
+            -Value $baselineRequestMarker
+        $baselineRequestBytesBefore = [IO.File]::ReadAllBytes($baselineRequestPath)
+        $baselineRequestJson = [Text.Encoding]::UTF8.GetString($baselineRequestBytesBefore)
+        $baselineRequestRecord = ConvertFrom-JsonPreservingStrings $baselineRequestJson
+        $expectedBaselineRequestProperties = @(
             "schemaVersion", "productVersion", "kind", "status", "requestId", "publishedAtUtc",
-            "timeoutSeconds", "operatorActionRequired", "preferredRelaySurface", "fallbackRelaySurface",
-            "expectedVisibleWindowTitle", "expectedVisibleButtonText", "expectedAccessibleName", "action",
-            "stopUiAfterAction", "requiresSeparateAuthorization", "markerGrantsAuthorization",
-            "markerGrantsConsent", "externalOneShotConsentRequired", "visualConfirmationRequired",
-            "maximumClickAttempts", "retryOnUnknownOutcome", "instruction", "requestDelivered",
-            "buttonEnabled", "nativeTopologyMatched", "inputStateAtPublication", "notificationOnly", "acceptedAsAuthority",
-            "rawWindowHandlesRecorded", "rawCursorCoordinatesRecorded", "pathsRecorded",
-            "secretsRecorded"
+            "timeoutSeconds", "mode", "operatorActionRequired", "action", "globalInputUsed",
+            "focusChangedByRunner", "cursorChangedByRunner", "syntheticInputUsed", "requiredStableSamples",
+            "notificationOnly", "acceptedAsAuthority", "rawWindowHandlesRecorded",
+            "rawProcessIdentifiersRecorded", "rawCursorCoordinatesRecorded", "pathsRecorded", "secretsRecorded"
         )
-        if ((@($operatorRequestRecord.PSObject.Properties.Name) -join "|") -cne ($expectedRequestMarkerProperties -join "|") -or
-            $operatorRequestRecord.schemaVersion -ne 2 -or
-            $operatorRequestRecord.productVersion -cne "0.12.67" -or
-            $operatorRequestRecord.status -cne "action-required" -or
-            $operatorRequestRecord.requestId -cne $operatorMarkerSelfTestRequestId -or
-            $operatorRequestRecord.operatorActionRequired -ne $true -or
-            $operatorRequestRecord.preferredRelaySurface -cne "windows-computer-use-app-share" -or
-            $operatorRequestRecord.fallbackRelaySurface -cne "human-on-windows-session" -or
-            $script:ForegroundSentinelWindowTitle -cne "LBB Foreground Sentinel" -or
-            $operatorRequestRecord.expectedVisibleWindowTitle -cne $script:ForegroundSentinelWindowTitle -or
-            $operatorRequestRecord.expectedVisibleButtonText -cne "CLICK TO ARM" -or
-            $operatorRequestRecord.expectedAccessibleName -cne "Click to arm Windows acceptance" -or
-            $operatorRequestRecord.action -cne "single-left-click" -or
-            $operatorRequestRecord.stopUiAfterAction -ne $true -or
-            $operatorRequestRecord.requiresSeparateAuthorization -ne $true -or
-            $operatorRequestRecord.markerGrantsAuthorization -ne $false -or
-            $operatorRequestRecord.markerGrantsConsent -ne $false -or
-            $operatorRequestRecord.externalOneShotConsentRequired -ne $true -or
-            $operatorRequestRecord.visualConfirmationRequired -ne $true -or
-            $operatorRequestRecord.maximumClickAttempts -ne 1 -or
-            $operatorRequestRecord.retryOnUnknownOutcome -ne $false -or
-            $operatorRequestRecord.notificationOnly -ne $true -or
-            $operatorRequestRecord.acceptedAsAuthority -ne $false) {
-            throw "The foreground-arm request marker failed its exact-schema self-test."
+        if ((@($baselineRequestRecord.PSObject.Properties.Name) -join "|") -cne ($expectedBaselineRequestProperties -join "|") -or
+            $baselineRequestRecord.schemaVersion -ne 3 -or
+            $baselineRequestRecord.productVersion -cne "0.12.68" -or
+            $baselineRequestRecord.kind -cne "foreground-baseline" -or
+            $baselineRequestRecord.status -cne "automatic" -or
+            $baselineRequestRecord.requestId -cne $operatorMarkerSelfTestRequestId -or
+            $baselineRequestRecord.timeoutSeconds -ne 120 -or
+            $baselineRequestRecord.mode -cne "automatic-stable-external-foreground" -or
+            $baselineRequestRecord.operatorActionRequired -ne $false -or
+            $baselineRequestRecord.action -cne "none" -or
+            $baselineRequestRecord.globalInputUsed -ne $false -or
+            $baselineRequestRecord.focusChangedByRunner -ne $false -or
+            $baselineRequestRecord.cursorChangedByRunner -ne $false -or
+            $baselineRequestRecord.syntheticInputUsed -ne $false -or
+            $baselineRequestRecord.requiredStableSamples -ne 3 -or
+            $baselineRequestRecord.notificationOnly -ne $true -or
+            $baselineRequestRecord.acceptedAsAuthority -ne $false -or
+            $baselineRequestRecord.rawWindowHandlesRecorded -ne $false -or
+            $baselineRequestRecord.rawProcessIdentifiersRecorded -ne $false -or
+            $baselineRequestRecord.rawCursorCoordinatesRecorded -ne $false -or
+            $baselineRequestRecord.pathsRecorded -ne $false -or
+            $baselineRequestRecord.secretsRecorded -ne $false) {
+            throw "The automatic foreground-baseline request marker failed its exact-schema self-test."
         }
         foreach ($forbiddenMarkerField in @('"token"', '"pid"', '"hwnd"', '"cursorX"', '"cursorY"', '"path"')) {
-            if ($operatorRequestJson.IndexOf($forbiddenMarkerField, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
-                throw "The foreground-arm request marker retained a forbidden raw or secret-bearing field."
+            if ($baselineRequestJson.IndexOf($forbiddenMarkerField, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                throw "The automatic foreground-baseline request marker retained a forbidden raw or secret-bearing field."
             }
         }
         $duplicateMarkerFailure = $null
@@ -3449,95 +3743,113 @@ if ($SelfTest) {
             $null = Write-NewOperatorMarker `
                 -Directory $operatorMarkerSelfTestRoot `
                 -FileName "foreground-arm-request.json" `
-                -Value $operatorRequestMarker
+                -Value $baselineRequestMarker
         }
         catch {
             $duplicateMarkerFailure = $_.Exception.Message
         }
-        $operatorRequestBytesAfter = [IO.File]::ReadAllBytes($operatorRequestPath)
+        $baselineRequestBytesAfter = [IO.File]::ReadAllBytes($baselineRequestPath)
         if ($duplicateMarkerFailure -cne "Operator markers are create-once for this runner and cannot be overwritten by it." -or
-            [Convert]::ToBase64String($operatorRequestBytesBefore) -cne [Convert]::ToBase64String($operatorRequestBytesAfter) -or
+            [Convert]::ToBase64String($baselineRequestBytesBefore) -cne [Convert]::ToBase64String($baselineRequestBytesAfter) -or
             @([IO.Directory]::EnumerateFiles($operatorMarkerSelfTestRoot, "*.tmp")).Count -ne 0) {
-            throw "The operator marker writer failed its atomic create-once self-test."
+            throw "The operator marker writer failed its automatic-baseline atomic create-once self-test."
         }
-
-        $alreadyArmedMarker = New-ForegroundArmRequestMarker `
-            -ProductVersion "0.12.67" `
-            -RequestId $operatorMarkerSelfTestRequestId `
-            -InputStateAtPublication "already-acknowledged" `
-            -TimeoutSeconds 120 `
-            -RequestDelivered $true `
-            -ButtonEnabled $true `
-            -NativeTopologyMatched $true
-        if ($alreadyArmedMarker.status -cne "already-armed" -or
-            $alreadyArmedMarker.operatorActionRequired -ne $false -or
-            $alreadyArmedMarker.expectedVisibleWindowTitle -cne $script:ForegroundSentinelWindowTitle -or
-            $alreadyArmedMarker.expectedVisibleWindowTitle -cne $operatorRequestRecord.expectedVisibleWindowTitle -or
-            $alreadyArmedMarker.expectedVisibleButtonText -cne "ARMED - DO NOT USE THIS SESSION" -or
-            $alreadyArmedMarker.action -cne "none" -or
-            $alreadyArmedMarker.maximumClickAttempts -ne 0 -or
-            $alreadyArmedMarker.retryOnUnknownOutcome -ne $false) {
-            throw "The foreground-arm request marker did not suppress a duplicate-click prompt after an early valid acknowledgement."
-        }
-
-        $operatorReceivedProof = [pscustomobject]@{
+        $baselineReceivedProof = [pscustomobject]@{
             completed = $true
-            fixtureRequestCount = 1
-            fixtureAcknowledgementCount = 1
-            fixtureLeftMouseDownCount = 1
-            fixtureLeftMouseUpCount = 1
-            nativeTopologyMatched = $true
-            foregroundMatched = $true
-            focusMatched = $true
-            cursorAvailable = $true
+            mode = "automatic-stable-external-foreground"
+            operatorActionRequired = $false
+            action = "none"
+            requestId = $operatorMarkerSelfTestRequestId
+            clickAttemptsObserved = 0
+            fixtureRequestCount = 0
+            fixtureAcknowledgementCount = 0
+            fixtureLeftMouseDownCount = 0
+            fixtureLeftMouseUpCount = 0
+            nativeSampleSeqlockMatched = $true
+            ownerIdentityStable = $true
+            focusRootMatched = $true
+            fixtureProcessExcluded = $true
+            interactiveSessionMatched = $true
             cursorStable = $true
-            inputDesktopAvailable = $true
             inputDesktopStable = $true
             stableSamplesObserved = 3
             stableSamplesRequired = 3
+            globalInputUsed = $false
+            focusChangedByRunner = $false
+            cursorChangedByRunner = $false
+            syntheticInputUsed = $false
         }
-        $operatorReceivedMarker = New-ForegroundArmReceivedMarker `
-            -ProductVersion "0.12.67" `
+        $baselineReceivedMarker = New-ForegroundBaselineReceivedMarker `
+            -ProductVersion "0.12.68" `
             -RequestId $operatorMarkerSelfTestRequestId `
-            -Proof $operatorReceivedProof
-        $operatorReceivedPath = Write-NewOperatorMarker `
+            -Proof $baselineReceivedProof
+        $baselineReceivedPath = Write-NewOperatorMarker `
             -Directory $operatorMarkerSelfTestRoot `
             -FileName "foreground-arm-received.json" `
-            -Value $operatorReceivedMarker
-        $operatorReceivedRecord = ConvertFrom-JsonPreservingStrings `
-            ([IO.File]::ReadAllText($operatorReceivedPath, [Text.Encoding]::UTF8))
-        $expectedReceivedMarkerProperties = @(
-            "schemaVersion", "productVersion", "kind", "status", "requestId", "receivedAtUtc",
-            "exactClickCountsMatched", "stableSamplesObserved", "stableSamplesRequired", "nativeTopologyMatched",
-            "foregroundMatched", "focusMatched", "cursorStable", "inputDesktopStable", "notificationOnly",
-            "acceptedAsAuthority", "rawWindowHandlesRecorded", "rawCursorCoordinatesRecorded", "pathsRecorded",
-            "secretsRecorded"
+            -Value $baselineReceivedMarker
+        $baselineReceivedRecord = ConvertFrom-JsonPreservingStrings `
+            ([IO.File]::ReadAllText($baselineReceivedPath, [Text.Encoding]::UTF8))
+        $expectedBaselineReceivedProperties = @(
+            "schemaVersion", "productVersion", "kind", "status", "requestId", "receivedAtUtc", "mode",
+            "operatorActionRequired", "action", "clickAttemptsObserved", "stableSamplesObserved",
+            "stableSamplesRequired", "nativeSampleSeqlockMatched", "ownerIdentityStable", "focusRootMatched",
+            "fixtureProcessExcluded", "interactiveSessionMatched", "cursorStable", "inputDesktopStable", "globalInputUsed",
+            "focusChangedByRunner", "cursorChangedByRunner", "syntheticInputUsed", "notificationOnly",
+            "acceptedAsAuthority", "rawWindowHandlesRecorded", "rawProcessIdentifiersRecorded",
+            "rawCursorCoordinatesRecorded", "pathsRecorded", "secretsRecorded"
         )
-        if ((@($operatorReceivedRecord.PSObject.Properties.Name) -join "|") -cne ($expectedReceivedMarkerProperties -join "|") -or
-            $operatorReceivedRecord.status -cne "received" -or
-            $operatorReceivedRecord.schemaVersion -ne 2 -or
-            $operatorReceivedRecord.productVersion -cne "0.12.67" -or
-            $operatorReceivedRecord.requestId -cne $operatorRequestRecord.requestId -or
-            $operatorReceivedRecord.exactClickCountsMatched -ne $true -or
-            $operatorReceivedRecord.stableSamplesObserved -ne 3 -or
-            $operatorReceivedRecord.notificationOnly -ne $true -or
-            $operatorReceivedRecord.acceptedAsAuthority -ne $false) {
-            throw "The foreground-arm received marker failed its exact-proof self-test."
+        if ((@($baselineReceivedRecord.PSObject.Properties.Name) -join "|") -cne ($expectedBaselineReceivedProperties -join "|") -or
+            $baselineReceivedRecord.schemaVersion -ne 3 -or
+            $baselineReceivedRecord.productVersion -cne "0.12.68" -or
+            $baselineReceivedRecord.kind -cne "foreground-baseline" -or
+            $baselineReceivedRecord.status -cne "ready" -or
+            $baselineReceivedRecord.requestId -cne $baselineRequestRecord.requestId -or
+            $baselineReceivedRecord.mode -cne "automatic-stable-external-foreground" -or
+            $baselineReceivedRecord.operatorActionRequired -ne $false -or
+            $baselineReceivedRecord.action -cne "none" -or
+            $baselineReceivedRecord.clickAttemptsObserved -ne 0 -or
+            $baselineReceivedRecord.stableSamplesObserved -ne 3 -or
+            $baselineReceivedRecord.nativeSampleSeqlockMatched -ne $true -or
+            $baselineReceivedRecord.ownerIdentityStable -ne $true -or
+            $baselineReceivedRecord.focusRootMatched -ne $true -or
+            $baselineReceivedRecord.fixtureProcessExcluded -ne $true -or
+            $baselineReceivedRecord.interactiveSessionMatched -ne $true -or
+            $baselineReceivedRecord.cursorStable -ne $true -or
+            $baselineReceivedRecord.inputDesktopStable -ne $true -or
+            $baselineReceivedRecord.notificationOnly -ne $true -or
+            $baselineReceivedRecord.acceptedAsAuthority -ne $false) {
+            throw "The automatic foreground-baseline received marker failed its exact-proof self-test."
         }
-        $operatorReceivedProof.fixtureLeftMouseUpCount = 2
+        $baselineReceivedProof.clickAttemptsObserved = 1
         $incompleteReceivedMarkerFailure = $null
         try {
-            $null = New-ForegroundArmReceivedMarker `
-                -ProductVersion "0.12.67" `
+            $null = New-ForegroundBaselineReceivedMarker `
+                -ProductVersion "0.12.68" `
                 -RequestId $operatorMarkerSelfTestRequestId `
-                -Proof $operatorReceivedProof
+                -Proof $baselineReceivedProof
         }
         catch {
             $incompleteReceivedMarkerFailure = $_.Exception.Message
         }
-        if ($incompleteReceivedMarkerFailure -cne "An operator received marker requires the complete click and stable-native-sample proof.") {
-            throw "The foreground-arm received marker accepted an incomplete or duplicate-click proof."
+        if ($incompleteReceivedMarkerFailure -cne "A foreground baseline received marker requires a complete automatic stable-external-foreground proof.") {
+            throw "The foreground-baseline received marker accepted a nonzero click-attempt proof."
         }
+        $baselineReceivedProof.clickAttemptsObserved = 0
+        $baselineReceivedProof.stableSamplesObserved = 4
+        $extraSampleReceivedMarkerFailure = $null
+        try {
+            $null = New-ForegroundBaselineReceivedMarker `
+                -ProductVersion "0.12.68" `
+                -RequestId $operatorMarkerSelfTestRequestId `
+                -Proof $baselineReceivedProof
+        }
+        catch {
+            $extraSampleReceivedMarkerFailure = $_.Exception.Message
+        }
+        if ($extraSampleReceivedMarkerFailure -cne "A foreground baseline received marker requires a complete automatic stable-external-foreground proof.") {
+            throw "The foreground-baseline received marker accepted a producer-unreachable extra stable sample."
+        }
+
     }
     finally {
         if ([IO.Directory]::Exists($operatorMarkerSelfTestRoot)) {
@@ -3559,10 +3871,10 @@ if ($SelfTest) {
         }
         $candidateBindingSelfTestPath = [IO.Path]::Combine($candidateBindingSelfTestRoot, "candidate-binding.json")
         $candidateBindingNames = @(
-            "local-browser-bridge-v0.12.67-windows-x86_64.exe",
-            "local-computer-helper-v0.12.67-windows-x86_64.exe",
-            "local-browser-bridge-v0.12.67-macos-universal.tar.gz",
-            "local-browser-bridge-extension-v0.12.67.zip"
+            "local-browser-bridge-v0.12.68-windows-x86_64.exe",
+            "local-computer-helper-v0.12.68-windows-x86_64.exe",
+            "local-browser-bridge-v0.12.68-macos-universal.tar.gz",
+            "local-browser-bridge-extension-v0.12.68.zip"
         )
         $candidateBindingChecksums = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
         for ($index = 0; $index -lt $candidateBindingNames.Count; $index++) {
@@ -3587,8 +3899,8 @@ if ($SelfTest) {
         })
         $candidateBindingSelfTestRecord = [ordered]@{
             schemaVersion = 3
-            version = "0.12.67"
-            releaseTag = "v0.12.67"
+            version = "0.12.68"
+            releaseTag = "v0.12.68"
             repository = "flrngel/local-browser-bridge"
             sourceSha = [String]::new([char]'b', 40)
             workflowRunId = "32650000000"
@@ -3614,7 +3926,7 @@ if ($SelfTest) {
         )
         $candidateBindingSelfTestResult = Read-ExactReleaseCandidateBinding `
             -Path $candidateBindingSelfTestPath `
-            -ExpectedVersion "0.12.67" `
+            -ExpectedVersion "0.12.68" `
             -ExpectedManifestSha256 $candidateBindingManifestSha `
             -ExpectedChecksums $candidateBindingChecksums `
             -ExpectedAssetNames $candidateBindingNames
@@ -3633,7 +3945,7 @@ if ($SelfTest) {
         try {
             $null = Read-ExactReleaseCandidateBinding `
                 -Path $candidateBindingSelfTestPath `
-                -ExpectedVersion "0.12.67" `
+                -ExpectedVersion "0.12.68" `
                 -ExpectedManifestSha256 $candidateBindingManifestSha `
                 -ExpectedChecksums $candidateBindingChecksums `
                 -ExpectedAssetNames $candidateBindingNames
@@ -4177,7 +4489,7 @@ function Get-FixtureStateSnapshot {
     }
     catch {
         # The fixture replaces this small state document in place. A partial
-        # snapshot resets arm stability instead of extending the arm timeout.
+        # snapshot resets baseline stability instead of extending the timeout.
         return $null
     }
 }
@@ -4214,6 +4526,13 @@ function Capture-InvariantProbe {
         statePublicationGeneration = [Int64]$fixture.statePublicationGeneration
         foregroundHwnd = $native.ForegroundHwnd.ToString()
         focusHwnd = $native.FocusHwnd.ToString()
+        nativeSampleSeqlockMatched = $native.NativeSampleSeqlockMatched -eq $true
+        ownerIdentityStable = $native.OwnerIdentityStable -eq $true
+        focusRootMatched = $native.FocusRootMatched -eq $true
+        interactiveSessionMatched = (
+            [uint32]$native.ForegroundSessionId -eq [uint32]$sessionId -and
+            [uint32]$native.FocusSessionId -eq [uint32]$sessionId
+        )
         cursor = [ordered]@{ x = $native.CursorX; y = $native.CursorY }
         cursorAvailable = $native.CursorAvailable
         inputDesktop = $native.InputDesktop
@@ -4241,20 +4560,25 @@ function Assert-InvariantsHeld {
     )
     $after = Capture-InvariantProbe -AfterStatePublicationGeneration $minimumPublicationGeneration
     $script:lastInvariantPublicationGeneration = [Int64]$after.statePublicationGeneration
+    Assert-True ($Before.nativeSampleSeqlockMatched -eq $true -and $after.nativeSampleSeqlockMatched -eq $true) "$Step observed a foreground transition inside a native sample."
+    Assert-True ($Before.ownerIdentityStable -eq $true -and $after.ownerIdentityStable -eq $true) "$Step could not verify stable foreground/focus ownership."
+    Assert-True ($Before.focusRootMatched -eq $true -and $after.focusRootMatched -eq $true) "$Step observed a focus root outside the foreground root."
+    Assert-True ($Before.interactiveSessionMatched -eq $true -and $after.interactiveSessionMatched -eq $true) "$Step observed a foreground or focus owner outside the runner's interactive session."
     Assert-True ($after.foregroundHwnd -eq $Before.foregroundHwnd) "$Step changed the foreground HWND."
     Assert-True ($after.focusHwnd -eq $Before.focusHwnd) "$Step changed the foreground focus HWND."
     Assert-True ($Before.cursorAvailable -eq $true -and $after.cursorAvailable -eq $true) "$Step could not verify the OS-global cursor position."
     Assert-True ($after.cursor.x -eq $Before.cursor.x -and $after.cursor.y -eq $Before.cursor.y) "$Step moved the OS-global cursor position."
     Assert-True ($after.inputDesktop -eq $Before.inputDesktop) "$Step changed the input desktop."
     Assert-True ($after.targetActivatedCount -eq $Before.targetActivatedCount) "$Step activated the background target."
-    Assert-True ($after.sentinelDeactivatedCount -eq $Before.sentinelDeactivatedCount) "$Step deactivated the foreground sentinel."
+    Assert-True ($after.sentinelActivatedCount -eq $Before.sentinelActivatedCount) "$Step activated the nonactivating sentinel."
+    Assert-True ($after.sentinelDeactivatedCount -eq $Before.sentinelDeactivatedCount) "$Step changed the nonactivating sentinel's deactivation count."
     Assert-True ($after.foregroundArmRequestedGeneration -eq $Before.foregroundArmRequestedGeneration) "$Step changed the foreground-arm request generation."
     Assert-True ($after.foregroundArmAcknowledgedGeneration -eq $Before.foregroundArmAcknowledgedGeneration) "$Step changed the foreground-arm acknowledgement generation."
     Assert-True ($after.foregroundArmRequestCount -eq $Before.foregroundArmRequestCount) "$Step changed the foreground-arm request count."
     Assert-True ($after.foregroundArmAcknowledgementCount -eq $Before.foregroundArmAcknowledgementCount) "$Step changed the foreground-arm acknowledgement count."
     Assert-True ($after.foregroundArmLeftMouseDownCount -eq $Before.foregroundArmLeftMouseDownCount) "$Step received another foreground-arm left mouse down."
     Assert-True ($after.foregroundArmLeftMouseUpCount -eq $Before.foregroundArmLeftMouseUpCount) "$Step received another foreground-arm left mouse up."
-    Assert-True ($Before.foregroundArmButtonEnabled -eq $true -and $after.foregroundArmButtonEnabled -eq $true) "$Step lost the foreground-arm button-enabled receipt."
+    Assert-True ($Before.foregroundArmButtonEnabled -eq $false -and $after.foregroundArmButtonEnabled -eq $false) "$Step made the disabled foreground status surface interactive."
     return $after
 }
 
@@ -4802,44 +5126,27 @@ $initialWorkerPid = $null
 $initialHelperSessionId = $null
 $recoveryEventReleased = $true
 $watchdogCausalityMinimumMs = 11500
-$foregroundArmRequestDeliveryTimeoutSeconds = 10
-# Acceptance-only WM_APP handshake shared with the fixture; never exposed by
-# the server or helper protocol.
-$foregroundArmMessage = 0x8126
-$foregroundArmOperatorRequestId = [Guid]::NewGuid().ToString("N")
-$foregroundArmRequestGeneration = [BitConverter]::ToInt32([Guid]::NewGuid().ToByteArray(), 0) -band 0x7fffffff
-if ($foregroundArmRequestGeneration -eq 0) {
-    $foregroundArmRequestGeneration = 1
-}
+$foregroundBaselineRequestId = [Guid]::NewGuid().ToString("N")
 $script:foregroundArmProof = [ordered]@{
-    requestedGeneration = $foregroundArmRequestGeneration
-    requestPosted = $false
-    requestDelivered = $false
-    requestDeliveryTimeoutSeconds = $foregroundArmRequestDeliveryTimeoutSeconds
-    acknowledgementMode = "fresh-foreground-focused-left-mouse-down-up"
-    nativeForegroundAndFocusRequired = $true
-    fixtureRequestedGeneration = $null
-    fixtureAcknowledgedGeneration = $null
-    fixtureRequestMatched = $false
-    fixtureAcknowledgementMatched = $false
+    mode = "automatic-stable-external-foreground"
+    operatorActionRequired = $false
+    action = "none"
+    requestId = $foregroundBaselineRequestId
+    clickAttemptsObserved = 0
     fixtureRequestCount = 0
     fixtureAcknowledgementCount = 0
     fixtureLeftMouseDownCount = 0
     fixtureLeftMouseUpCount = 0
-    requestDeliveryPublicationGeneration = $null
+    afterPublicationGeneration = $null
     fixtureStatePublicationGeneration = $null
     statePublicationAdvanced = $false
-    requestCountMatched = $false
-    acknowledgementCountMatched = $false
-    leftMouseDownCountMatched = $false
-    leftMouseUpCountMatched = $false
-    armButtonEnabled = $false
-    armButtonIdentityMatched = $false
-    nativeTopologyMatched = $false
-    foregroundMatched = $false
-    foregroundStable = $false
-    focusMatched = $false
-    focusStable = $false
+    noFixtureInputObserved = $false
+    nativeSampleSeqlockMatched = $false
+    ownerIdentityStable = $false
+    focusRootMatched = $false
+    fixtureProcessExcluded = $false
+    interactiveSessionMatched = $false
+    externalForegroundMatched = $false
     cursorAvailable = $false
     cursorStable = $false
     inputDesktopAvailable = $false
@@ -4850,8 +5157,15 @@ $script:foregroundArmProof = [ordered]@{
     timeoutSeconds = $ForegroundArmTimeoutSeconds
     completed = $false
     baselineContinuityMatched = $false
+    globalInputUsed = $false
+    focusChangedByRunner = $false
+    cursorChangedByRunner = $false
+    syntheticInputUsed = $false
     rawWindowHandlesRecorded = $false
+    rawProcessIdentifiersRecorded = $false
     rawCursorCoordinatesRecorded = $false
+    pathsRecorded = $false
+    secretsRecorded = $false
 }
 $tokenPersistenceVerified = $false
 $tokenBearingEvidenceRemoved = 0
@@ -5033,118 +5347,126 @@ try {
     $targetWindowId = [string]$matchingWindows[0].id
     Assert-True ($targetWindowId -eq [string]$script:fixtureReady.targetHwnd) "The helper window ID did not match the fixture-owned HWND."
 
-    $sentinelHwnd = [Int64]$script:fixtureReady.sentinelHwnd
-    $armButtonHwnd = [Int64]$script:fixtureReady.armButtonHwnd
-    Assert-True ($sentinelHwnd -gt 0) "The fixture did not publish a valid foreground sentinel HWND."
-    Assert-True ($armButtonHwnd -gt 0) "The fixture did not publish a valid foreground-arm button HWND."
-    Assert-True ($script:nativeProbeType::ValidateFixtureArmTopology($sentinelHwnd, $armButtonHwnd, $fixtureProcess.Id)) "The foreground sentinel and arm button are not a current same-thread fixture-owned root/child pair."
-    $script:runStage = "request-foreground-arm"
-    $armRequestPosted = $script:nativeProbeType::PostMessage(
-        [IntPtr]$sentinelHwnd,
-        $foregroundArmMessage,
-        [IntPtr]$foregroundArmRequestGeneration,
-        [IntPtr]::Zero
-    )
-    Assert-True ($armRequestPosted -eq $true) "The runner could not post the test-only foreground-arm request to the exact sentinel."
-    $script:foregroundArmProof.requestPosted = $true
-    $script:runStage = "wait-foreground-arm-request-delivery"
-    $armRequestDelivery = Wait-ForFixtureProof `
+    $targetHwnd = [Int64]$script:fixtureReady.targetHwnd
+    Assert-True ($targetHwnd -gt 0) "The fixture did not publish a valid target HWND."
+    $script:runStage = "publish-foreground-baseline-request"
+    $foregroundBaselineBoundary = Wait-ForFixtureProof `
         -FixturePredicate {
             param($state)
-            return Test-ForegroundArmRequestDeliveryState $state $foregroundArmRequestGeneration $armButtonHwnd
+            return $null -ne $state -and
+                [Int64]$state.statePublicationGeneration -gt 0 -and
+                [int]$state.foregroundArmRequestedGeneration -eq 0 -and
+                [int]$state.foregroundArmAcknowledgedGeneration -eq 0 -and
+                [int]$state.foregroundArmRequestCount -eq 0 -and
+                [int]$state.foregroundArmAcknowledgementCount -eq 0 -and
+                [int]$state.foregroundArmLeftMouseDownCount -eq 0 -and
+                [int]$state.foregroundArmLeftMouseUpCount -eq 0 -and
+                $state.foregroundArmButtonEnabled -eq $false
         } `
-        -Description "the exact foreground-arm request delivery and enabled button receipt" `
-        -StateReader { Get-FixtureStateSnapshot } `
-        -TimeoutMilliseconds ($foregroundArmRequestDeliveryTimeoutSeconds * 1000)
-    $armRequestTopologyMatched = $script:nativeProbeType::ValidateFixtureArmTopology($sentinelHwnd, $armButtonHwnd, $fixtureProcess.Id)
-    Assert-True ($armRequestTopologyMatched -eq $true) "The fixture-owned foreground-arm topology changed during request delivery."
-    $script:foregroundArmProof.requestDelivered = $true
-    $script:foregroundArmProof.armButtonEnabled = $true
-    $script:foregroundArmProof.nativeTopologyMatched = $true
-    $armRequestInputState = if ([int]$armRequestDelivery.foregroundArmAcknowledgedGeneration -eq $foregroundArmRequestGeneration) { "already-acknowledged" } else { "not-started" }
-    Save-StepRecord "foreground arm request delivery" ([ordered]@{
-        requestedGeneration = $foregroundArmRequestGeneration
-        requestPosted = $true
-        requestDelivered = $true
-        requestDeliveryTimeoutSeconds = $foregroundArmRequestDeliveryTimeoutSeconds
-        fixtureRequestMatched = [int]$armRequestDelivery.foregroundArmRequestedGeneration -eq $foregroundArmRequestGeneration
-        fixtureInputState = $armRequestInputState
-        fixtureRequestCount = [int]$armRequestDelivery.foregroundArmRequestCount
-        fixtureAcknowledgementCount = [int]$armRequestDelivery.foregroundArmAcknowledgementCount
-        fixtureLeftMouseDownCount = [int]$armRequestDelivery.foregroundArmLeftMouseDownCount
-        fixtureLeftMouseUpCount = [int]$armRequestDelivery.foregroundArmLeftMouseUpCount
-        fixtureStatePublicationGeneration = [Int64]$armRequestDelivery.statePublicationGeneration
-        armButtonEnabled = $armRequestDelivery.foregroundArmButtonEnabled -eq $true
-        armButtonIdentityMatched = [Int64]$armRequestDelivery.armButtonHwnd -eq $armButtonHwnd
-        nativeTopologyMatched = $armRequestTopologyMatched
-        rawWindowHandlesRecorded = $false
-        rawCursorCoordinatesRecorded = $false
-    })
-    $foregroundArmRequestMarker = New-ForegroundArmRequestMarker `
+        -Description "a zero-input fixture publication for the automatic foreground baseline" `
+        -StateReader { Get-FixtureStateSnapshot }
+    $foregroundBaselineRequestMarker = New-ForegroundBaselineRequestMarker `
         -ProductVersion $Version `
-        -RequestId $foregroundArmOperatorRequestId `
-        -InputStateAtPublication $armRequestInputState `
+        -RequestId $foregroundBaselineRequestId `
         -TimeoutSeconds $ForegroundArmTimeoutSeconds `
-        -RequestDelivered $true `
-        -ButtonEnabled ($armRequestDelivery.foregroundArmButtonEnabled -eq $true) `
-        -NativeTopologyMatched $armRequestTopologyMatched
+        -RequiredStableSamples 3
     $null = Write-NewOperatorMarker `
         -Directory $operatorEvidence `
         -FileName "foreground-arm-request.json" `
-        -Value $foregroundArmRequestMarker
-    Write-Host "ACTION REQUIRED: Through a separately authorized Windows Computer Use app share, visually confirm the orange LBB Foreground Sentinel and click CLICK TO ARM exactly once within $ForegroundArmTimeoutSeconds seconds. If it already says ARMED or the outcome is uncertain, do not click or retry. Stop all Windows UI use after the action."
-    $script:runStage = "wait-foreground-arm"
-    $foregroundArm = Wait-ForStableForegroundArm `
-        -RequestedGeneration $foregroundArmRequestGeneration `
-        -SentinelHwnd $sentinelHwnd `
-        -ArmButtonHwnd $armButtonHwnd `
+        -Value $foregroundBaselineRequestMarker
+    $foregroundBaselinePublishedAtUtc = [DateTime]::ParseExact(
+        [string]$foregroundBaselineRequestMarker.publishedAtUtc,
+        "o",
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::RoundtripKind
+    ).ToUniversalTime()
+    $foregroundBaselineDeadlineUtc = $foregroundBaselinePublishedAtUtc.AddSeconds(
+        [int]$foregroundBaselineRequestMarker.timeoutSeconds
+    )
+    Save-StepRecord "automatic foreground baseline request" ([ordered]@{
+        mode = "automatic-stable-external-foreground"
+        operatorActionRequired = $false
+        action = "none"
+        requestId = $foregroundBaselineRequestId
+        clickAttemptsObserved = 0
+        afterPublicationGeneration = [Int64]$foregroundBaselineBoundary.statePublicationGeneration
+        requiredStableSamples = 3
+        globalInputUsed = $false
+        focusChangedByRunner = $false
+        cursorChangedByRunner = $false
+        syntheticInputUsed = $false
+        rawWindowHandlesRecorded = $false
+        rawProcessIdentifiersRecorded = $false
+        rawCursorCoordinatesRecorded = $false
+        pathsRecorded = $false
+        secretsRecorded = $false
+    })
+    $script:runStage = "wait-stable-external-foreground"
+    $foregroundBaselineMarkerReserveMilliseconds = 1000
+    $foregroundBaselineRemainingMilliseconds = [int][Math]::Floor(
+        ($foregroundBaselineDeadlineUtc - [DateTime]::UtcNow).TotalMilliseconds
+    ) - $foregroundBaselineMarkerReserveMilliseconds
+    Assert-True ($foregroundBaselineRemainingMilliseconds -gt 0) "The automatic foreground-baseline request expired before native sampling began."
+    $foregroundArm = Wait-ForStableExternalForeground `
+        -TargetHwnd $targetHwnd `
         -ExpectedFixtureProcessId $fixtureProcess.Id `
-        -RequestDeliveryTimeoutSeconds $foregroundArmRequestDeliveryTimeoutSeconds `
-        -AfterPublicationGeneration ([Int64]$armRequestDelivery.statePublicationGeneration) `
+        -ExpectedInteractiveSessionId $sessionId `
+        -RequestId $foregroundBaselineRequestId `
+        -AfterPublicationGeneration ([Int64]$foregroundBaselineBoundary.statePublicationGeneration) `
         -RequiredStableSamples 3 `
-        -TimeoutMilliseconds ($ForegroundArmTimeoutSeconds * 1000)
-    $script:foregroundArmProof.requestPosted = $true
-    $foregroundArmReceivedMarker = New-ForegroundArmReceivedMarker `
+        -TimeoutMilliseconds $foregroundBaselineRemainingMilliseconds
+    $foregroundBaselineReceivedMarker = New-ForegroundBaselineReceivedMarker `
         -ProductVersion $Version `
-        -RequestId $foregroundArmOperatorRequestId `
+        -RequestId $foregroundBaselineRequestId `
         -Proof $foregroundArm.proof
+    $foregroundBaselineReceivedAtUtc = [DateTime]::ParseExact(
+        [string]$foregroundBaselineReceivedMarker.receivedAtUtc,
+        "o",
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::RoundtripKind
+    ).ToUniversalTime()
+    Assert-True ($foregroundBaselineReceivedAtUtc -le $foregroundBaselineDeadlineUtc) "The automatic foreground-baseline proof completed after its request deadline."
     $null = Write-NewOperatorMarker `
         -Directory $operatorEvidence `
         -FileName "foreground-arm-received.json" `
-        -Value $foregroundArmReceivedMarker
+        -Value $foregroundBaselineReceivedMarker
+    $script:runStage = "bind-foreground-baseline"
     $baselineProbe = Capture-InvariantProbe -AfterStatePublicationGeneration ([Int64]$foregroundArm.fixtureState.statePublicationGeneration)
     $script:lastInvariantPublicationGeneration = [Int64]$baselineProbe.statePublicationGeneration
     $armNativeSample = $foregroundArm.nativeSample
-    Assert-True ($script:nativeProbeType::ValidateFixtureArmTopology($sentinelHwnd, $armButtonHwnd, $fixtureProcess.Id)) "The fixture-owned foreground-arm topology changed before the invariant baseline."
-    Assert-True ($baselineProbe.foregroundHwnd -eq $armNativeSample.ForegroundHwnd.ToString()) "The foreground window changed between the accepted arm sample and the invariant baseline."
-    Assert-True ($baselineProbe.focusHwnd -eq $armNativeSample.FocusHwnd.ToString()) "Foreground focus changed between the accepted arm sample and the invariant baseline."
-    Assert-True ($armNativeSample.CursorAvailable -eq $true -and $baselineProbe.cursorAvailable -eq $true) "The OS-global cursor position was unavailable at the arm-to-baseline boundary."
-    Assert-True ($baselineProbe.cursor.x -eq $armNativeSample.CursorX -and $baselineProbe.cursor.y -eq $armNativeSample.CursorY) "The OS-global cursor position moved between the accepted arm sample and the invariant baseline."
-    Assert-True ($baselineProbe.inputDesktop -ceq [string]$armNativeSample.InputDesktop) "The input desktop changed between the accepted arm sample and the invariant baseline."
-    Assert-True ($baselineProbe.foregroundArmRequestedGeneration -eq $foregroundArmRequestGeneration) "The foreground-arm request generation changed before the invariant baseline."
-    Assert-True ($baselineProbe.foregroundArmAcknowledgedGeneration -eq $foregroundArmRequestGeneration) "The foreground-arm acknowledgement generation changed before the invariant baseline."
-    Assert-True ($baselineProbe.foregroundArmRequestCount -eq 1) "The foreground-arm request count changed before the invariant baseline."
-    Assert-True ($baselineProbe.foregroundArmAcknowledgementCount -eq 1) "The foreground-arm acknowledgement count changed before the invariant baseline."
-    Assert-True ($baselineProbe.foregroundArmLeftMouseDownCount -eq 1) "The foreground-arm left-mouse-down count changed before the invariant baseline."
-    Assert-True ($baselineProbe.foregroundArmLeftMouseUpCount -eq 1) "The foreground-arm left-mouse-up count changed before the invariant baseline."
-    Assert-True ($baselineProbe.foregroundArmButtonEnabled -eq $true) "The foreground-arm button-enabled receipt was lost before the invariant baseline."
-    Assert-True ($baselineProbe.statePublicationGeneration -gt [Int64]$foregroundArm.fixtureState.statePublicationGeneration) "The fixture state did not publish a fresh arm-to-baseline boundary."
+    Assert-True ($baselineProbe.nativeSampleSeqlockMatched -eq $true) "The foreground changed while the invariant baseline sample was being captured."
+    Assert-True ($baselineProbe.ownerIdentityStable -eq $true) "The foreground/focus owner identity was not stable at the invariant baseline."
+    Assert-True ($baselineProbe.focusRootMatched -eq $true) "The nonzero focus root did not match the foreground root at the invariant baseline."
+    Assert-True ($baselineProbe.foregroundHwnd -eq $armNativeSample.ForegroundHwnd.ToString()) "The external foreground window changed between the accepted sample and the invariant baseline."
+    Assert-True ($baselineProbe.focusHwnd -eq $armNativeSample.FocusHwnd.ToString()) "External foreground focus changed between the accepted sample and the invariant baseline."
+    Assert-True ($armNativeSample.CursorAvailable -eq $true -and $baselineProbe.cursorAvailable -eq $true) "The OS-global cursor position was unavailable at the external-foreground baseline boundary."
+    Assert-True ($baselineProbe.cursor.x -eq $armNativeSample.CursorX -and $baselineProbe.cursor.y -eq $armNativeSample.CursorY) "The OS-global cursor position moved at the external-foreground baseline boundary."
+    Assert-True ($baselineProbe.inputDesktop -ceq [string]$armNativeSample.InputDesktop) "The input desktop changed at the external-foreground baseline boundary."
+    Assert-True ($baselineProbe.targetActivatedCount -eq 0) "The nonactivating target was activated before the invariant baseline."
+    Assert-True ($baselineProbe.sentinelActivatedCount -eq 0) "The nonactivating sentinel was activated before the invariant baseline."
+    Assert-True ($baselineProbe.sentinelDeactivatedCount -eq 0) "The nonactivating sentinel was deactivated before the invariant baseline."
+    Assert-True ($baselineProbe.foregroundArmRequestedGeneration -eq 0) "The automatic baseline observed a foreground-arm request."
+    Assert-True ($baselineProbe.foregroundArmAcknowledgedGeneration -eq 0) "The automatic baseline observed a foreground-arm acknowledgement."
+    Assert-True ($baselineProbe.foregroundArmRequestCount -eq 0) "The automatic baseline observed a foreground-arm request attempt."
+    Assert-True ($baselineProbe.foregroundArmAcknowledgementCount -eq 0) "The automatic baseline observed a foreground-arm acknowledgement attempt."
+    Assert-True ($baselineProbe.foregroundArmLeftMouseDownCount -eq 0) "The automatic baseline observed a foreground-arm left-mouse-down attempt."
+    Assert-True ($baselineProbe.foregroundArmLeftMouseUpCount -eq 0) "The automatic baseline observed a foreground-arm left-mouse-up attempt."
+    Assert-True ($baselineProbe.foregroundArmButtonEnabled -eq $false) "The disabled foreground status surface became interactive."
+    Assert-True ($baselineProbe.statePublicationGeneration -gt [Int64]$foregroundArm.fixtureState.statePublicationGeneration) "The fixture state did not publish a fresh accepted-sample-to-baseline boundary."
     $script:foregroundArmProof.baselineContinuityMatched = $true
-    Assert-True ($baselineProbe.foregroundHwnd -eq [string]$script:fixtureReady.sentinelHwnd) "The test-owned sentinel is not the foreground window."
-    Assert-True ($baselineProbe.focusHwnd -eq [string]$script:fixtureReady.armButtonHwnd) "The exact foreground-arm button does not retain foreground focus."
-    Assert-True ($baselineProbe.cursorAvailable -eq $true) "The OS-global cursor position became unavailable after foreground arming."
-    Save-StepRecord "foreground arm proof" $script:foregroundArmProof
+    Assert-True ($baselineProbe.cursorAvailable -eq $true) "The OS-global cursor position became unavailable after automatic foreground baseline binding."
+    Save-StepRecord "automatic stable external foreground proof" $script:foregroundArmProof
 
-    $script:runStage = "rebind-post-arm-helper-readiness"
-    $postArmHelperDescription = "the original helper worker after foreground arming"
+    $script:runStage = "rebind-post-baseline-helper-readiness"
+    $postArmHelperDescription = "the original helper worker after automatic foreground baseline binding"
     $postArmWorker = Wait-ForBoundHelperWorker $helperProcess $initialHelperSessionId $postArmHelperDescription
-    Assert-True ([int]$postArmWorker.processId -eq $initialWorkerPid) "The helper worker changed while foreground arming was pending."
+    Assert-True ([int]$postArmWorker.processId -eq $initialWorkerPid) "The helper worker changed while the automatic foreground baseline was being established."
     $bridgeState = $postArmWorker.state
 
     $script:runStage = "baseline-status-and-observation"
     $statusResponse = Invoke-LbbCommand "computer.status" @{}
     Complete-HelperTopologyRoundTrip $postArmHelperDescription $initialHelperSessionId $initialWorkerPid "computer.status" $statusResponse
-    Save-StepResponse "post-arm protocol-bound helper continuity" $statusResponse
+    Save-StepResponse "post-baseline protocol-bound helper continuity" $statusResponse
     Assert-True ($statusResponse.result.inputReady -eq $true) "The helper did not report pixel input readiness."
     Assert-True ($statusResponse.result.semanticReady -eq $true) "The helper did not report semantic input readiness."
 
@@ -5780,6 +6102,7 @@ try {
         $cancelFixtureAfter = Get-FixtureState
         Assert-True ([int]$cancelFixtureAfter.messageCounters.mouseDown -eq [int]$cancelFixtureBefore.messageCounters.mouseDown -and [int]$cancelFixtureAfter.messageCounters.mouseUp -eq [int]$cancelFixtureBefore.messageCounters.mouseUp -and [int]$cancelFixtureAfter.messageCounters.dragMove -eq [int]$cancelFixtureBefore.messageCounters.dragMove) "Cancellation, replay, gating, or stale refusal caused an unexpected functional pointer mutation."
         $cancelFinalProbe = Assert-InvariantsHeld $cancelProbeBefore "Explicit cancellation and recovery"
+        $cancelInvariantProof = New-SanitizedInvariantProof $cancelProbeBefore $cancelFinalProbe
         Save-StepRecord "explicit cancellation authority and recovery proof" ([ordered]@{
             callId = $cancelCallId
             method = "computer.move"
@@ -5810,22 +6133,20 @@ try {
             recoveredFreshFrame = $recoveryFrame.frameId -ne $canceledFrameId
             staleAfterRecoveryCode = $staleAfterRecovery.body.error.code
             recoveredActionDelivered = [int]$cancelFixtureAfter.messageCounters.mouseMove -gt [int]$recoveryMoveBefore.mouseMove
-            independentNonInterruptionSample = $cancelFinalProbe
+            independentNonInterruptionSample = $cancelInvariantProof
         })
     }
 
     $script:runStage = "final-invariants"
     $finalProbe = Assert-InvariantsHeld $baselineProbe "Full acceptance run"
-    Save-StepRecord "foreground cursor focus desktop invariants" ([ordered]@{
-        before = $baselineProbe
-        after = $finalProbe
-    })
+    Save-StepRecord "foreground cursor focus desktop invariants" (New-SanitizedInvariantProof $baselineProbe $finalProbe)
     $script:runStage = "completed"
     $runPassed = $true
 }
 catch {
     $failureText = ConvertTo-SafeFailureText $_.Exception.Message
     $failureDetails = [ordered]@{
+        reasonCode = Get-RunnerFailureReasonCode $script:runStage $failureText
         stage = $script:runStage
         exceptionType = $_.Exception.GetType().FullName
         fullyQualifiedErrorId = ConvertTo-SafeFailureText ([string]$_.FullyQualifiedErrorId)

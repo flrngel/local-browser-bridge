@@ -256,7 +256,7 @@ jobs:
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-stock-chrome.ps1 -SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 stock-Chrome coordinator self-test failed." }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/wait-windows-foreground-arm-handoff.ps1 -Mode SelfTest
-          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 foreground-arm handoff self-test failed." }
+          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 automatic foreground-baseline handoff self-test failed." }
           $watcherPathForPs51 = (Resolve-Path ./scripts/wait-windows-foreground-arm-handoff.ps1).Path
           $previousWatcherPathForPs51 = $env:LBB_PS51_WATCHER_SELF_TEST
           $watcherCallOperatorCommand = '$ErrorActionPreference = "Stop"; $watcherScript = [ScriptBlock]::Create([IO.File]::ReadAllText([IO.Path]::GetFullPath($env:LBB_PS51_WATCHER_SELF_TEST))); & $watcherScript -Mode SelfTest'
@@ -265,8 +265,8 @@ jobs:
             $watcherCallOperatorOutput = @(& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -Command $watcherCallOperatorCommand)
             if ($LASTEXITCODE -ne 0 -or
                 $watcherCallOperatorOutput.Count -ne 1 -or
-                $watcherCallOperatorOutput[0] -cne "Windows foreground-arm handoff watcher self-test passed.") {
-              throw "Windows PowerShell 5.1 foreground-arm call-operator self-test failed."
+                $watcherCallOperatorOutput[0] -cne "Windows automatic foreground-baseline handoff watcher self-test passed.") {
+              throw "Windows PowerShell 5.1 automatic foreground-baseline call-operator self-test failed."
             }
           }
           finally {
@@ -370,13 +370,13 @@ jobs:
           bash scripts/finalize-macos-acceptance.sh --self-test
       - name: Validate the macOS packaged-evidence harness
         run: |
-          node --check evidence/v0.12.67/computer/helper-evidence-rig.mjs
-          node evidence/v0.12.67/computer/helper-evidence-rig.mjs --self-test
-          xcrun swiftc -typecheck evidence/v0.12.67/computer/HelperEvidenceFixture.swift
-          xcrun swiftc -typecheck evidence/v0.12.67/computer/SystemProbe.swift
+          node --check evidence/v0.12.68/computer/helper-evidence-rig.mjs
+          node evidence/v0.12.68/computer/helper-evidence-rig.mjs --self-test
+          xcrun swiftc -typecheck evidence/v0.12.68/computer/HelperEvidenceFixture.swift
+          xcrun swiftc -typecheck evidence/v0.12.68/computer/SystemProbe.swift
           bash scripts/verify-macos-app-share-handoff-self-test.sh 0.12.41 --historical-source
-          bash scripts/verify-macos-app-share-handoff-self-test.sh 0.12.67
-          xcrun swiftc -typecheck evidence/v0.12.67/computer/PhysicalPointerHandoff.swift
+          bash scripts/verify-macos-app-share-handoff-self-test.sh 0.12.68
+          xcrun swiftc -typecheck evidence/v0.12.68/computer/PhysicalPointerHandoff.swift
       - name: Install the minimum supported Rust toolchain
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy

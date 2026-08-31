@@ -6,7 +6,7 @@ export LC_ALL=C
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly API_VERSION="2026-03-10"
 readonly RECEIPT_SCHEMA_VERSION="3"
-readonly EVIDENCE_PRODUCT_VERSION="0.12.67"
+readonly EVIDENCE_PRODUCT_VERSION="0.12.68"
 readonly EVIDENCE_MAX_BLOB_BYTES=20971520
 readonly EVIDENCE_MAX_TOTAL_BYTES=209715200
 readonly EVIDENCE_MAX_PATH_BYTES=1024
@@ -1740,7 +1740,7 @@ validate_windows_recovery_chain() {
             $shareShot[0] as $freshShareShot |
             $shareStop[0] as $freshShareStop |
             ($summary[0].helperTopologyChecks
-              | map(select(.description == "the original helper worker after foreground arming"))) as $beforeTopology |
+              | map(select(.description == "the original helper worker after automatic foreground baseline binding"))) as $beforeTopology |
             ($summary[0].helperTopologyChecks
               | map(select(.description == "the replacement disposable helper worker"))) as $afterTopology |
             ($beforeTopology | length) == 1
@@ -1941,21 +1941,300 @@ validate_windows_recovery_chain() {
     && assert_utc_interval "$fault_triggered" "$run_finished" 7200 "Windows recovery post-fault" >/dev/null 2>&1
 }
 
-validate_windows_arm_pair_identity() {
+validate_windows_foreground_baseline_pair_identity() {
   local request="$1"
   local received="$2"
   jq -e '
-      (keys_unsorted | length) == 33
+      keys_unsorted == [
+        "schemaVersion","productVersion","kind","status","requestId","publishedAtUtc","timeoutSeconds",
+        "mode","operatorActionRequired","action","globalInputUsed","focusChangedByRunner",
+        "cursorChangedByRunner","syntheticInputUsed","requiredStableSamples","notificationOnly",
+        "acceptedAsAuthority","rawWindowHandlesRecorded","rawProcessIdentifiersRecorded",
+        "rawCursorCoordinatesRecorded","pathsRecorded","secretsRecorded"
+      ]
       and (.requestId | type == "string" and test("^[0-9a-f]{32}$"))
-      and .status == "action-required" and .maximumClickAttempts == 1
-      and .inputStateAtPublication == "not-started"
+      and .schemaVersion == 3
+      and (.productVersion | type == "string" and test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))
+      and .kind == "foreground-baseline"
+      and .status == "automatic"
+      and (.publishedAtUtc | type == "string")
+      and (.timeoutSeconds | type == "number" and floor == . and . >= 15 and . <= 300)
+      and .mode == "automatic-stable-external-foreground"
+      and .operatorActionRequired == false
+      and .action == "none"
+      and .requiredStableSamples == 3
+      and .globalInputUsed == false
+      and .focusChangedByRunner == false
+      and .cursorChangedByRunner == false
+      and .syntheticInputUsed == false
+      and .notificationOnly == true
+      and .acceptedAsAuthority == false
+      and .rawWindowHandlesRecorded == false
+      and .rawProcessIdentifiersRecorded == false
+      and .rawCursorCoordinatesRecorded == false
+      and .pathsRecorded == false
+      and .secretsRecorded == false
     ' "$request" >/dev/null \
     && jq -e --slurpfile request "$request" '
-      (keys_unsorted | length) == 20
+      keys_unsorted == [
+        "schemaVersion","productVersion","kind","status","requestId","receivedAtUtc",
+        "mode","operatorActionRequired","action","clickAttemptsObserved","stableSamplesObserved",
+        "stableSamplesRequired","nativeSampleSeqlockMatched","ownerIdentityStable","focusRootMatched",
+        "fixtureProcessExcluded","interactiveSessionMatched","cursorStable","inputDesktopStable","globalInputUsed",
+        "focusChangedByRunner","cursorChangedByRunner","syntheticInputUsed","notificationOnly",
+        "acceptedAsAuthority","rawWindowHandlesRecorded","rawProcessIdentifiersRecorded",
+        "rawCursorCoordinatesRecorded","pathsRecorded","secretsRecorded"
+      ]
       and .requestId == $request[0].requestId
-      and .stableSamplesRequired == 3
-      and (.stableSamplesObserved | type == "number" and . >= 3 and . <= 1000)
-    ' "$received" >/dev/null
+      and .schemaVersion == 3
+      and .productVersion == $request[0].productVersion
+      and .kind == "foreground-baseline"
+      and .status == "ready"
+      and (.receivedAtUtc | type == "string")
+      and .mode == $request[0].mode
+      and .operatorActionRequired == false
+      and .action == "none"
+      and .clickAttemptsObserved == 0
+      and .stableSamplesRequired == $request[0].requiredStableSamples
+      and (.stableSamplesObserved | type == "number" and floor == .)
+      and .stableSamplesObserved == .stableSamplesRequired
+      and .nativeSampleSeqlockMatched == true
+      and .ownerIdentityStable == true
+      and .focusRootMatched == true
+      and .fixtureProcessExcluded == true
+      and .interactiveSessionMatched == true
+      and .cursorStable == true
+      and .inputDesktopStable == true
+      and .globalInputUsed == false
+      and .focusChangedByRunner == false
+      and .cursorChangedByRunner == false
+      and .syntheticInputUsed == false
+      and .notificationOnly == true
+      and .acceptedAsAuthority == false
+      and .rawWindowHandlesRecorded == false
+      and .rawProcessIdentifiersRecorded == false
+      and .rawCursorCoordinatesRecorded == false
+      and .pathsRecorded == false
+      and .secretsRecorded == false
+    ' "$received" >/dev/null \
+    || return 1
+  local published received_at timeout_seconds
+  published="$(jq -er '.publishedAtUtc' "$request")" || return 1
+  received_at="$(jq -er '.receivedAtUtc' "$received")" || return 1
+  timeout_seconds="$(jq -er '.timeoutSeconds' "$request")" || return 1
+  assert_utc_interval "$published" "$received_at" "$timeout_seconds" \
+    "Windows automatic foreground-baseline markers" >/dev/null 2>&1
+}
+
+validate_windows_foreground_baseline_records() {
+  local summary="$1"
+  local request_step="$2"
+  local proof_step="$3"
+  local request_marker="$4"
+  local received_marker="$5"
+  local fixture_state="$6"
+  jq -e \
+    --slurpfile summary "$summary" \
+    --slurpfile proofStep "$proof_step" \
+    --slurpfile requestMarker "$request_marker" \
+    --slurpfile receivedMarker "$received_marker" \
+    --slurpfile fixtureState "$fixture_state" '
+      ($summary[0].foregroundArmProof) as $proof
+      | keys_unsorted == [
+          "mode","operatorActionRequired","action","requestId","clickAttemptsObserved",
+          "afterPublicationGeneration","requiredStableSamples","globalInputUsed",
+          "focusChangedByRunner","cursorChangedByRunner","syntheticInputUsed",
+          "rawWindowHandlesRecorded","rawProcessIdentifiersRecorded",
+          "rawCursorCoordinatesRecorded","pathsRecorded","secretsRecorded"
+        ]
+        and .mode == "automatic-stable-external-foreground"
+        and .operatorActionRequired == false
+        and .action == "none"
+        and .requestId == $requestMarker[0].requestId
+        and .clickAttemptsObserved == 0
+        and (.afterPublicationGeneration | type == "number" and floor == . and . > 0)
+        and .requiredStableSamples == $requestMarker[0].requiredStableSamples
+        and .afterPublicationGeneration == $proof.afterPublicationGeneration
+        and .globalInputUsed == false
+        and .focusChangedByRunner == false
+        and .cursorChangedByRunner == false
+        and .syntheticInputUsed == false
+        and .rawWindowHandlesRecorded == false
+        and .rawProcessIdentifiersRecorded == false
+        and .rawCursorCoordinatesRecorded == false
+        and .pathsRecorded == false
+        and .secretsRecorded == false
+        and ($proof | keys_unsorted) == [
+          "mode","operatorActionRequired","action","requestId","clickAttemptsObserved","fixtureRequestCount",
+          "fixtureAcknowledgementCount","fixtureLeftMouseDownCount","fixtureLeftMouseUpCount",
+          "afterPublicationGeneration","fixtureStatePublicationGeneration","statePublicationAdvanced",
+          "noFixtureInputObserved","nativeSampleSeqlockMatched","ownerIdentityStable","focusRootMatched",
+          "fixtureProcessExcluded","interactiveSessionMatched","externalForegroundMatched","cursorAvailable","cursorStable",
+          "inputDesktopAvailable","inputDesktopStable","stableSamplesRequired","stableSamplesObserved",
+          "stablePublicationSamplesObserved","timeoutSeconds","completed","baselineContinuityMatched",
+          "globalInputUsed","focusChangedByRunner","cursorChangedByRunner","syntheticInputUsed",
+          "rawWindowHandlesRecorded","rawProcessIdentifiersRecorded","rawCursorCoordinatesRecorded",
+          "pathsRecorded","secretsRecorded"
+        ]
+        and $proof.mode == .mode
+        and $proof.operatorActionRequired == false
+        and $proof.action == "none"
+        and $proof.requestId == $requestMarker[0].requestId
+        and $proof.clickAttemptsObserved == 0
+        and $proof.fixtureRequestCount == 0
+        and $proof.fixtureAcknowledgementCount == 0
+        and $proof.fixtureLeftMouseDownCount == 0
+        and $proof.fixtureLeftMouseUpCount == 0
+        and ($proof.afterPublicationGeneration | type == "number" and floor == . and . > 0)
+        and ($proof.fixtureStatePublicationGeneration | type == "number" and floor == .)
+        and $proof.fixtureStatePublicationGeneration > $proof.afterPublicationGeneration
+        and $proof.statePublicationAdvanced == true
+        and $proof.noFixtureInputObserved == true
+        and $proof.nativeSampleSeqlockMatched == true
+        and $proof.ownerIdentityStable == true
+        and $proof.focusRootMatched == true
+        and $proof.fixtureProcessExcluded == true
+        and $proof.interactiveSessionMatched == true
+        and $proof.externalForegroundMatched == true
+        and $proof.cursorAvailable == true
+        and $proof.cursorStable == true
+        and $proof.inputDesktopAvailable == true
+        and $proof.inputDesktopStable == true
+        and $proof.stableSamplesRequired == $requestMarker[0].requiredStableSamples
+        and $proof.stableSamplesObserved == $proof.stableSamplesRequired
+        and $proof.stablePublicationSamplesObserved == $proof.stableSamplesObserved
+        and ($proof.timeoutSeconds | type == "number" and floor == . and . > 0)
+        and $proof.timeoutSeconds <= $requestMarker[0].timeoutSeconds
+        and $proof.completed == true
+        and $proof.baselineContinuityMatched == true
+        and $proof.globalInputUsed == false
+        and $proof.focusChangedByRunner == false
+        and $proof.cursorChangedByRunner == false
+        and $proof.syntheticInputUsed == false
+        and $proof.rawWindowHandlesRecorded == false
+        and $proof.rawProcessIdentifiersRecorded == false
+        and $proof.rawCursorCoordinatesRecorded == false
+        and $proof.pathsRecorded == false
+        and $proof.secretsRecorded == false
+        and $proofStep[0] == $proof
+        and $receivedMarker[0].requestId == $proof.requestId
+        and $receivedMarker[0].stableSamplesObserved == $proof.stableSamplesObserved
+        and $receivedMarker[0].stableSamplesRequired == $proof.stableSamplesRequired
+        and ($fixtureState[0].statePublicationGeneration | type == "number" and floor == .)
+        and $fixtureState[0].statePublicationGeneration > $proof.fixtureStatePublicationGeneration
+    ' "$request_step" >/dev/null
+}
+
+validate_windows_helper_topology_sequence() {
+  local summary="$1"
+  shift
+  jq -e \
+    --slurpfile step01 "$1" \
+    --slurpfile step04 "$2" \
+    --slurpfile step09 "$3" \
+    --slurpfile step46 "$4" \
+    --slurpfile step54 "$5" '
+      . as $summary
+      | .helperTopologyChecks as $topology
+      | [$step01[0],$step04[0],$step09[0],$step46[0],$step54[0]] as $roundTrips
+      | ($topology | length) == 5
+        and ([$topology[].description] == [
+          "the initial disposable helper worker",
+          "the original helper worker after automatic foreground baseline binding",
+          "the replacement disposable helper worker",
+          "the pre-cancellation disposable helper worker",
+          "the post-cancellation replacement helper worker"
+        ])
+        and ([range(0; 5) as $index |
+          ($topology[$index] | keys_unsorted) == [
+            "description","supervisorPid","controllerPid","workerPid","exactImageMatched",
+            "directChildEnumerated","interactiveSessionId","stableConsecutivePolls",
+            "helloStateMatched","protocolRoundTrip","roundTripMethod"
+          ]
+          and ($topology[$index].supervisorPid | type == "number" and floor == . and . > 0)
+          and $topology[$index].controllerPid == $topology[$index].supervisorPid
+          and ($topology[$index].workerPid | type == "number" and floor == . and . > 0)
+          and $topology[$index].interactiveSessionId == $summary.interactiveSessionId
+          and ($topology[$index].stableConsecutivePolls | type == "number" and floor == . and . >= 2)
+          and $topology[$index].exactImageMatched == true
+          and $topology[$index].directChildEnumerated == true
+          and $topology[$index].helloStateMatched == true
+          and $topology[$index].protocolRoundTrip == true
+          and $topology[$index].roundTripMethod == "computer.status"
+          and $roundTrips[$index].error == null
+          and $roundTrips[$index].taxonomy == null
+          and $roundTrips[$index].result.inputReady == true
+          and $roundTrips[$index].result.semanticReady == true
+          and $roundTrips[$index].targetState.computerConnected == true
+          and $roundTrips[$index].targetState.computer.controllerProcessId == $topology[$index].controllerPid
+          and $roundTrips[$index].targetState.computer.processId == $topology[$index].workerPid
+          and $roundTrips[$index].targetState.computer.sessionId != null
+        ] | all)
+        and $topology[0].workerPid == $topology[1].workerPid
+        and $topology[2].workerPid == $topology[3].workerPid
+        and $topology[0].workerPid != $topology[2].workerPid
+        and $topology[2].workerPid != $topology[4].workerPid
+        and $roundTrips[0].targetState.computer.sessionId == $roundTrips[1].targetState.computer.sessionId
+        and $roundTrips[2].targetState.computer.sessionId == $roundTrips[3].targetState.computer.sessionId
+        and $roundTrips[0].targetState.computer.sessionId != $roundTrips[2].targetState.computer.sessionId
+        and $roundTrips[2].targetState.computer.sessionId != $roundTrips[4].targetState.computer.sessionId
+        and ([range(1; 5) as $index |
+          $topology[$index].supervisorPid == $topology[0].supervisorPid
+        ] | all)
+    ' "$summary" >/dev/null
+}
+
+validate_windows_sanitized_invariant_proof() {
+  local file="$1"
+  local field="${2:-}"
+  jq -e --arg field "$field" '
+      (if $field == "" then . else .[$field] end) as $proof
+      | ($proof | keys_unsorted) == [
+          "schemaVersion","statePublicationAdvanced","nativeSampleSeqlockMatched",
+          "ownerIdentityStable","focusRootMatched","interactiveSessionMatched","foregroundStable","focusStable",
+          "cursorAvailable","cursorStable","inputDesktopAvailable","inputDesktopStable",
+          "targetActivatedCount","sentinelActivatedCount","sentinelDeactivatedCount",
+          "foregroundArmRequestedGeneration","foregroundArmAcknowledgedGeneration",
+          "foregroundArmRequestCount","foregroundArmAcknowledgementCount",
+          "foregroundArmLeftMouseDownCount","foregroundArmLeftMouseUpCount",
+          "foregroundArmButtonEnabled","noFixtureInputObserved","globalInputUsed",
+          "focusChangedByRunner","cursorChangedByRunner","syntheticInputUsed",
+          "rawWindowHandlesRecorded","rawProcessIdentifiersRecorded",
+          "rawCursorCoordinatesRecorded","pathsRecorded","secretsRecorded"
+        ]
+        and $proof.schemaVersion == 1
+        and $proof.statePublicationAdvanced == true
+        and $proof.nativeSampleSeqlockMatched == true
+        and $proof.ownerIdentityStable == true
+        and $proof.focusRootMatched == true
+        and $proof.interactiveSessionMatched == true
+        and $proof.foregroundStable == true
+        and $proof.focusStable == true
+        and $proof.cursorAvailable == true
+        and $proof.cursorStable == true
+        and $proof.inputDesktopAvailable == true
+        and $proof.inputDesktopStable == true
+        and $proof.targetActivatedCount == 0
+        and $proof.sentinelActivatedCount == 0
+        and $proof.sentinelDeactivatedCount == 0
+        and $proof.foregroundArmRequestedGeneration == 0
+        and $proof.foregroundArmAcknowledgedGeneration == 0
+        and $proof.foregroundArmRequestCount == 0
+        and $proof.foregroundArmAcknowledgementCount == 0
+        and $proof.foregroundArmLeftMouseDownCount == 0
+        and $proof.foregroundArmLeftMouseUpCount == 0
+        and $proof.foregroundArmButtonEnabled == false
+        and $proof.noFixtureInputObserved == true
+        and $proof.globalInputUsed == false
+        and $proof.focusChangedByRunner == false
+        and $proof.cursorChangedByRunner == false
+        and $proof.syntheticInputUsed == false
+        and $proof.rawWindowHandlesRecorded == false
+        and $proof.rawProcessIdentifiersRecorded == false
+        and $proof.rawCursorCoordinatesRecorded == false
+        and $proof.pathsRecorded == false
+        and $proof.secretsRecorded == false
+    ' "$file" >/dev/null
 }
 
 validate_global_mac_screenshot_hashes() {
@@ -1998,9 +2277,9 @@ verify_windows_computer() {
   fixture_source_sha256="$(sha256_file tests/fixtures/windows/WindowsComputerUseFixture.ps1)"
   expected_steps="$(printf '%s\n' \
     01-protocol-bound-helper-readiness.json \
-    02-foreground-arm-request-delivery.json \
-    03-foreground-arm-proof.json \
-    04-post-arm-protocol-bound-helper-continuity.json \
+    02-automatic-foreground-baseline-request.json \
+    03-automatic-stable-external-foreground-proof.json \
+    04-post-baseline-protocol-bound-helper-continuity.json \
     05-baseline-exact-window-observe.json \
     06-baseline-screenshot.json \
     07-one-shot-share-pump-stall-start.json \
@@ -2094,13 +2373,57 @@ verify_windows_computer() {
       and ([.steps[].evidence] == $expected_steps)
       and ([.steps[] | select(.passed != true)] | length == 0)
       and ([.steps[].evidence] | unique | length == (.steps | length))
+      and (.foregroundArmProof | keys_unsorted) == [
+        "mode","operatorActionRequired","action","requestId","clickAttemptsObserved","fixtureRequestCount",
+        "fixtureAcknowledgementCount","fixtureLeftMouseDownCount","fixtureLeftMouseUpCount",
+        "afterPublicationGeneration","fixtureStatePublicationGeneration","statePublicationAdvanced",
+        "noFixtureInputObserved","nativeSampleSeqlockMatched","ownerIdentityStable","focusRootMatched",
+        "fixtureProcessExcluded","interactiveSessionMatched","externalForegroundMatched","cursorAvailable","cursorStable",
+        "inputDesktopAvailable","inputDesktopStable","stableSamplesRequired","stableSamplesObserved",
+        "stablePublicationSamplesObserved","timeoutSeconds","completed","baselineContinuityMatched",
+        "globalInputUsed","focusChangedByRunner","cursorChangedByRunner","syntheticInputUsed",
+        "rawWindowHandlesRecorded","rawProcessIdentifiersRecorded","rawCursorCoordinatesRecorded",
+        "pathsRecorded","secretsRecorded"
+      ]
+      and .foregroundArmProof.mode == "automatic-stable-external-foreground"
+      and .foregroundArmProof.operatorActionRequired == false
+      and .foregroundArmProof.action == "none"
+      and (.foregroundArmProof.requestId | type == "string" and test("^[0-9a-f]{32}$"))
+      and .foregroundArmProof.clickAttemptsObserved == 0
+      and .foregroundArmProof.fixtureRequestCount == 0
+      and .foregroundArmProof.fixtureAcknowledgementCount == 0
+      and .foregroundArmProof.fixtureLeftMouseDownCount == 0
+      and .foregroundArmProof.fixtureLeftMouseUpCount == 0
+      and (.foregroundArmProof.afterPublicationGeneration | type == "number" and floor == . and . > 0)
+      and (.foregroundArmProof.fixtureStatePublicationGeneration | type == "number" and floor == .)
+      and .foregroundArmProof.fixtureStatePublicationGeneration > .foregroundArmProof.afterPublicationGeneration
+      and .foregroundArmProof.statePublicationAdvanced == true
+      and .foregroundArmProof.noFixtureInputObserved == true
+      and .foregroundArmProof.nativeSampleSeqlockMatched == true
+      and .foregroundArmProof.ownerIdentityStable == true
+      and .foregroundArmProof.focusRootMatched == true
+      and .foregroundArmProof.fixtureProcessExcluded == true
+      and .foregroundArmProof.interactiveSessionMatched == true
+      and .foregroundArmProof.externalForegroundMatched == true
+      and .foregroundArmProof.cursorAvailable == true
+      and .foregroundArmProof.cursorStable == true
+      and .foregroundArmProof.inputDesktopAvailable == true
+      and .foregroundArmProof.inputDesktopStable == true
+      and .foregroundArmProof.stableSamplesRequired == 3
+      and .foregroundArmProof.stableSamplesObserved == .foregroundArmProof.stableSamplesRequired
+      and .foregroundArmProof.stablePublicationSamplesObserved == .foregroundArmProof.stableSamplesObserved
+      and (.foregroundArmProof.timeoutSeconds | type == "number" and floor == . and . > 0 and . <= 300)
       and .foregroundArmProof.completed == true
-      and .foregroundArmProof.fixtureRequestCount == 1
-      and .foregroundArmProof.fixtureAcknowledgementCount == 1
-      and .foregroundArmProof.fixtureLeftMouseDownCount == 1
-      and .foregroundArmProof.fixtureLeftMouseUpCount == 1
-      and .foregroundArmProof.armAndNativeMatched == true
       and .foregroundArmProof.baselineContinuityMatched == true
+      and .foregroundArmProof.globalInputUsed == false
+      and .foregroundArmProof.focusChangedByRunner == false
+      and .foregroundArmProof.cursorChangedByRunner == false
+      and .foregroundArmProof.syntheticInputUsed == false
+      and .foregroundArmProof.rawWindowHandlesRecorded == false
+      and .foregroundArmProof.rawProcessIdentifiersRecorded == false
+      and .foregroundArmProof.rawCursorCoordinatesRecorded == false
+      and .foregroundArmProof.pathsRecorded == false
+      and .foregroundArmProof.secretsRecorded == false
       and .fixtureProcessBinding.executionMode == "dedicated-windows-application"
       and .fixtureProcessBinding.appUserModelId == "LocalBrowserBridge.WindowsAcceptance"
       and .fixtureProcessBinding.sourceScriptSha256 == $fixture_source_sha256
@@ -2129,7 +2452,7 @@ verify_windows_computer() {
       and .candidateBinding.helper.sha256 == $helper_sha256
       and .candidateBinding.helper.checksumManifestMatched == true
       and .candidateBinding.helper.versionMatched == true
-    ' "$summary" >/dev/null || die "Windows computer result failed its pass, binding, cleanup, or arm invariants"
+    ' "$summary" >/dev/null || die "Windows computer result failed its pass, binding, cleanup, or automatic foreground-baseline invariants"
   validate_windows_step_inventory "$summary" "$expected_steps" \
     || die "Windows computer result does not contain the exact ordered Suite=All step inventory"
   validate_windows_recovery_chain \
@@ -2137,7 +2460,7 @@ verify_windows_computer() {
     "$evidence_root/windows/computer/steps/08-share-pump-watchdog-causality-proof.json" \
     "$evidence_root/windows/computer/steps/15-disposable-worker-recovery-proof.json" \
     "$summary" \
-    "$evidence_root/windows/computer/steps/04-post-arm-protocol-bound-helper-continuity.json" \
+    "$evidence_root/windows/computer/steps/04-post-baseline-protocol-bound-helper-continuity.json" \
     "$evidence_root/windows/computer/steps/09-replacement-protocol-bound-helper-readiness.json" \
     "$evidence_root/windows/computer/steps/10-replacement-worker-fresh-observe.json" \
     "$evidence_root/windows/computer/steps/11-replacement-worker-fresh-observe-screenshot.json" \
@@ -2169,7 +2492,7 @@ verify_windows_computer() {
       (keys_unsorted == [
         "schemaVersion","statePublicationGeneration","utc","processId","uptimeMs","ready",
         "targetHwnd","surfaceHwnd","sentinelHwnd","armButtonHwnd","occluderHwnd","backdropHwnd",
-        "foregroundHwnd","targetBounds","surfaceScreenBounds","cursor","animationFrame","invokeCount",
+        "targetBounds","surfaceScreenBounds","animationFrame","invokeCount",
         "semanticValue","focusedText","messageCounters","targetActivatedCount","sentinelActivatedCount",
         "sentinelDeactivatedCount","foregroundArmRequestedGeneration","foregroundArmAcknowledgedGeneration",
         "foregroundArmRequestCount","foregroundArmAcknowledgementCount","foregroundArmLeftMouseDownCount",
@@ -2178,105 +2501,159 @@ verify_windows_computer() {
       and .schemaVersion == 1 and .ready == true and .occluderEnabled == true
       and (.statePublicationGeneration | type == "number" and . > 0)
       and (.utc | type == "string")
-      and .foregroundArmRequestedGeneration > 0
-      and .foregroundArmAcknowledgedGeneration == .foregroundArmRequestedGeneration
-      and .foregroundArmRequestCount == 1 and .foregroundArmAcknowledgementCount == 1
-      and .foregroundArmLeftMouseDownCount == 1 and .foregroundArmLeftMouseUpCount == 1
-      and .foregroundArmButtonEnabled == true
+      and (.processId | type == "number" and floor == . and . > 0)
+      and (([.targetHwnd,.surfaceHwnd,.sentinelHwnd,.armButtonHwnd,.occluderHwnd,.backdropHwnd]
+        | all(type == "string" and test("^[1-9][0-9]*$"))))
+      and .targetActivatedCount == 0
+      and .sentinelActivatedCount == 0 and .sentinelDeactivatedCount == 0
+      and .foregroundArmRequestedGeneration == 0
+      and .foregroundArmAcknowledgedGeneration == 0
+      and .foregroundArmRequestCount == 0 and .foregroundArmAcknowledgementCount == 0
+      and .foregroundArmLeftMouseDownCount == 0 and .foregroundArmLeftMouseUpCount == 0
+      and .foregroundArmButtonEnabled == false
       and (.eventSequence | type == "number" and . > 0)
     ' "$evidence_root/windows/computer/fixture/fixture-state.json" >/dev/null \
-    || die "Windows fixture final state does not prove the exact one-shot foreground arm"
-  jq -e -s '
-      length >= 8
+    || die "Windows fixture final state does not prove a nonactivating zero-input automatic foreground baseline"
+  jq -e -s \
+    --slurpfile ready "$evidence_root/windows/computer/fixture/fixture-ready.json" \
+    --slurpfile state "$evidence_root/windows/computer/fixture/fixture-state.json" \
+    --slurpfile summary "$summary" '
+      length >= 6
       and ([range(0; length) as $i | .[$i].sequence == ($i + 1)] | all)
       and ([.[] | select(.schemaVersion != 1 or (.utc | type) != "string")] | length == 0)
+      and $state[0].eventSequence == length
+      and $state[0].processId == $ready[0].processId
+      and $state[0].processId == $summary[0].targetPid
+      and $state[0].targetHwnd == $summary[0].targetWindowId
+      and (["targetHwnd","surfaceHwnd","sentinelHwnd","armButtonHwnd","occluderHwnd","backdropHwnd"] as $handles
+        | [$handles[] as $name | $state[0][$name] == $ready[0][$name]] | all)
       and ([.[] | select(.event == "fatalError")] | length == 0)
       and ([.[] | select(.source == "fixture" and .event == "ready")] | length == 1)
-      and ([.[] | select(.source == "sentinel" and .event == "foregroundArmRequested")] | length == 1)
-      and ([.[] | select(.source == "sentinel" and .event == "foregroundArmAcknowledged")] | length == 1)
+      and ([.[] | select(.source == "backdrop" and .event == "shown")] | length == 1)
+      and ([.[] | select(.source == "target" and .event == "shown")] | length == 1)
+      and ([.[] | select(.source == "target" and .event == "closed")] | length == 1)
+      and ([.[] | select(.source == "sentinel" and .event == "shown")] | length == 1)
+      and ([.[] | select(.source == "occluder" and .event == "shown")] | length == 1)
+      and .[-1].source == "target" and .[-1].event == "closed"
+      and ([.[] | select(
+        (.source == "target" and .event == "activated")
+        or (.source == "sentinel" and (.event == "activated" or .event == "deactivated"))
+        or (.source == "sentinel" and (.event == "passiveLeftMouseDownObserved" or .event == "passiveLeftMouseUpObserved"))
+        or (.event == "foregroundArmRequested" or .event == "foregroundArmAcknowledged")
+      )] | length == 0)
     ' "$evidence_root/windows/computer/fixture/fixture-events.ndjson" >/dev/null \
-    || die "Windows fixture event stream is incomplete, reordered, or contains a fatal event"
+    || die "Windows fixture event stream is incomplete, reordered, activated, or contains a fatal/input event"
   jq -e --arg version "$version" '
       (keys_unsorted == [
         "schemaVersion","productVersion","kind","status","requestId","publishedAtUtc","timeoutSeconds",
-        "operatorActionRequired","preferredRelaySurface","fallbackRelaySurface","expectedVisibleWindowTitle",
-        "expectedVisibleButtonText","expectedAccessibleName","action","stopUiAfterAction",
-        "requiresSeparateAuthorization","markerGrantsAuthorization","markerGrantsConsent",
-        "externalOneShotConsentRequired","visualConfirmationRequired","maximumClickAttempts",
-        "retryOnUnknownOutcome","instruction","requestDelivered","buttonEnabled","nativeTopologyMatched",
-        "inputStateAtPublication","notificationOnly","acceptedAsAuthority","rawWindowHandlesRecorded",
+        "mode","operatorActionRequired","action","globalInputUsed","focusChangedByRunner",
+        "cursorChangedByRunner","syntheticInputUsed","requiredStableSamples","notificationOnly",
+        "acceptedAsAuthority","rawWindowHandlesRecorded","rawProcessIdentifiersRecorded",
         "rawCursorCoordinatesRecorded","pathsRecorded","secretsRecorded"
       ])
-      and .schemaVersion == 2 and .productVersion == $version and .kind == "foreground-arm"
-      and .status == "action-required"
+      and .schemaVersion == 3 and .productVersion == $version and .kind == "foreground-baseline"
+      and .status == "automatic"
       and (.requestId | type == "string" and test("^[0-9a-f]{32}$"))
       and (.publishedAtUtc | type == "string")
-      and (.timeoutSeconds | type == "number" and . >= 15 and . <= 300)
-      and .operatorActionRequired == true
-      and .preferredRelaySurface == "windows-computer-use-app-share"
-      and .fallbackRelaySurface == "human-on-windows-session"
-      and .expectedVisibleWindowTitle == "LBB Foreground Sentinel"
-      and .expectedVisibleButtonText == "CLICK TO ARM"
-      and .expectedAccessibleName == "Click to arm Windows acceptance"
-      and .action == "single-left-click"
-      and .stopUiAfterAction == true and .requiresSeparateAuthorization == true
-      and .maximumClickAttempts == 1
-      and .retryOnUnknownOutcome == false
-      and .instruction == "Use a separately authorized Windows Computer Use app share to visually confirm this exact window and button, click it once, then stop all UI use. If it already says ARMED or the outcome is uncertain, do not click or retry."
-      and .requestDelivered == true and .buttonEnabled == true and .nativeTopologyMatched == true
-      and .inputStateAtPublication == "not-started"
+      and (.timeoutSeconds | type == "number" and floor == . and . >= 15 and . <= 300)
+      and .mode == "automatic-stable-external-foreground"
+      and .operatorActionRequired == false and .action == "none"
+      and .globalInputUsed == false and .focusChangedByRunner == false
+      and .cursorChangedByRunner == false and .syntheticInputUsed == false
+      and .requiredStableSamples == 3
       and .notificationOnly == true and .acceptedAsAuthority == false
-      and .markerGrantsAuthorization == false and .markerGrantsConsent == false
-      and .externalOneShotConsentRequired == true and .visualConfirmationRequired == true
-      and .rawWindowHandlesRecorded == false and .rawCursorCoordinatesRecorded == false
+      and .rawWindowHandlesRecorded == false and .rawProcessIdentifiersRecorded == false
+      and .rawCursorCoordinatesRecorded == false
       and .secretsRecorded == false and .pathsRecorded == false
     ' "$evidence_root/windows/computer/operator/foreground-arm-request.json" >/dev/null
   jq -e --arg version "$version" \
     --slurpfile request "$evidence_root/windows/computer/operator/foreground-arm-request.json" '
       (keys_unsorted == [
         "schemaVersion","productVersion","kind","status","requestId","receivedAtUtc",
-        "exactClickCountsMatched","stableSamplesObserved","stableSamplesRequired","nativeTopologyMatched",
-        "foregroundMatched","focusMatched","cursorStable","inputDesktopStable","notificationOnly",
-        "acceptedAsAuthority","rawWindowHandlesRecorded","rawCursorCoordinatesRecorded","pathsRecorded","secretsRecorded"
+        "mode","operatorActionRequired","action","clickAttemptsObserved","stableSamplesObserved",
+        "stableSamplesRequired","nativeSampleSeqlockMatched","ownerIdentityStable","focusRootMatched",
+        "fixtureProcessExcluded","interactiveSessionMatched","cursorStable","inputDesktopStable","globalInputUsed",
+        "focusChangedByRunner","cursorChangedByRunner","syntheticInputUsed","notificationOnly",
+        "acceptedAsAuthority","rawWindowHandlesRecorded","rawProcessIdentifiersRecorded",
+        "rawCursorCoordinatesRecorded","pathsRecorded","secretsRecorded"
       ])
-      and .schemaVersion == 2 and .productVersion == $version and .kind == "foreground-arm"
-      and .status == "received" and .exactClickCountsMatched == true
+      and .schemaVersion == 3 and .productVersion == $version and .kind == "foreground-baseline"
+      and .status == "ready"
       and .requestId == $request[0].requestId
       and (.receivedAtUtc | type == "string")
-      and .stableSamplesRequired == 3
-      and (.stableSamplesObserved | type == "number" and . >= 3 and . <= 1000)
-      and .nativeTopologyMatched == true and .foregroundMatched == true and .focusMatched == true
+      and .mode == $request[0].mode
+      and .operatorActionRequired == false and .action == "none"
+      and .clickAttemptsObserved == 0 and .stableSamplesRequired == 3
+      and (.stableSamplesObserved | type == "number" and floor == .)
+      and .stableSamplesObserved == .stableSamplesRequired
+      and .nativeSampleSeqlockMatched == true and .ownerIdentityStable == true
+      and .focusRootMatched == true and .fixtureProcessExcluded == true
+      and .interactiveSessionMatched == true
       and .cursorStable == true and .inputDesktopStable == true
+      and .globalInputUsed == false and .focusChangedByRunner == false
+      and .cursorChangedByRunner == false and .syntheticInputUsed == false
       and .notificationOnly == true and .acceptedAsAuthority == false
-      and .rawWindowHandlesRecorded == false and .rawCursorCoordinatesRecorded == false
+      and .rawWindowHandlesRecorded == false and .rawProcessIdentifiersRecorded == false
+      and .rawCursorCoordinatesRecorded == false
       and .secretsRecorded == false and .pathsRecorded == false
     ' "$evidence_root/windows/computer/operator/foreground-arm-received.json" >/dev/null
-  validate_windows_arm_pair_identity \
+  validate_windows_foreground_baseline_pair_identity \
     "$evidence_root/windows/computer/operator/foreground-arm-request.json" \
     "$evidence_root/windows/computer/operator/foreground-arm-received.json" \
-    || die "Windows foreground-arm request/receipt pair identity is incomplete or replayable"
+    || die "Windows automatic foreground-baseline request/ready pair identity is incomplete or replayable"
+  validate_windows_foreground_baseline_records \
+    "$summary" \
+    "$evidence_root/windows/computer/steps/02-automatic-foreground-baseline-request.json" \
+    "$evidence_root/windows/computer/steps/03-automatic-stable-external-foreground-proof.json" \
+    "$evidence_root/windows/computer/operator/foreground-arm-request.json" \
+    "$evidence_root/windows/computer/operator/foreground-arm-received.json" \
+    "$evidence_root/windows/computer/fixture/fixture-state.json" \
+    || die "Windows automatic foreground-baseline steps, summary proof, markers, and fixture generations are not one exact record"
+  validate_windows_helper_topology_sequence \
+    "$summary" \
+    "$evidence_root/windows/computer/steps/01-protocol-bound-helper-readiness.json" \
+    "$evidence_root/windows/computer/steps/04-post-baseline-protocol-bound-helper-continuity.json" \
+    "$evidence_root/windows/computer/steps/09-replacement-protocol-bound-helper-readiness.json" \
+    "$evidence_root/windows/computer/steps/46-pre-cancellation-protocol-bound-helper-readiness.json" \
+    "$evidence_root/windows/computer/steps/54-post-cancellation-protocol-bound-helper-readiness.json" \
+    || die "Windows helper topology is not the exact five-stage protocol-bound sequence"
+  validate_windows_sanitized_invariant_proof \
+    "$evidence_root/windows/computer/steps/61-explicit-cancellation-authority-and-recovery-proof.json" \
+    "independentNonInterruptionSample" \
+    || die "Windows cancellation invariant proof is not exact, zero-input, and sanitized"
+  validate_windows_sanitized_invariant_proof \
+    "$evidence_root/windows/computer/steps/62-foreground-cursor-focus-desktop-invariants.json" \
+    || die "Windows final invariant proof is not exact, zero-input, and sanitized"
   local arm_published arm_received arm_timeout
   arm_published="$(jq -er '.publishedAtUtc' "$evidence_root/windows/computer/operator/foreground-arm-request.json")"
   arm_received="$(jq -er '.receivedAtUtc' "$evidence_root/windows/computer/operator/foreground-arm-received.json")"
   arm_timeout="$(jq -er '.timeoutSeconds' "$evidence_root/windows/computer/operator/foreground-arm-request.json")"
-  assert_utc_interval "$arm_published" "$arm_received" "$arm_timeout" "Windows foreground-arm marker"
+  assert_utc_interval "$arm_published" "$arm_received" "$arm_timeout" "Windows automatic foreground-baseline markers"
   python3 - "$summary" "$evidence_root/windows/computer/fixture/fixture-events.ndjson" \
+    "$evidence_root/windows/computer/fixture/fixture-state.json" \
     "$arm_published" "$arm_received" <<'PY'
 import datetime, hashlib, json, sys
-summary_path, events_path, published, received = sys.argv[1:]
+summary_path, events_path, state_path, published, received = sys.argv[1:]
 def instant(value):
     if not isinstance(value, str) or not value.endswith("Z"):
         raise SystemExit("Windows evidence timestamp is not canonical UTC")
     return datetime.datetime.fromisoformat(value[:-1] + "+00:00")
 summary = json.load(open(summary_path, encoding="utf-8"))
+state = json.load(open(state_path, encoding="utf-8"))
 started, finished = instant(summary["startedAtUtc"]), instant(summary["finishedAtUtc"])
 published_at, received_at = instant(published), instant(received)
 if not (started <= published_at <= received_at <= finished):
-    raise SystemExit("Windows foreground-arm markers are outside the current acceptance run")
+    raise SystemExit("Windows automatic foreground-baseline markers are outside the current acceptance run")
 events = [json.loads(line) for line in open(events_path, encoding="utf-8") if line.strip()]
 event_times = [instant(item["utc"]) for item in events]
 if event_times != sorted(event_times) or event_times[0] < started or event_times[-1] > finished + datetime.timedelta(seconds=30):
     raise SystemExit("Windows fixture events are not ordered and bounded to the current run")
+ready_times = [instant(item["utc"]) for item in events if item.get("source") == "fixture" and item.get("event") == "ready"]
+if len(ready_times) != 1:
+    raise SystemExit("Windows fixture ready chronology is ambiguous")
+state_at = instant(state["utc"])
+if not (started <= ready_times[0] <= published_at <= received_at <= event_times[-1] <= state_at <= finished):
+    raise SystemExit("Windows fixture, automatic baseline, final state, and run chronology are not one execution")
 PY
 
   local step_name step_path screenshot_rows filename screenshot_sha screenshot_bytes
@@ -2504,7 +2881,7 @@ PY
   jq -e '
       .schemaVersion == 1
       and .evidenceType == "stock-user-chrome-api-matrix"
-      and .version == "0.12.67" and .target == "loopback-demo" and .passed == true
+      and .version == "0.12.68" and .target == "loopback-demo" and .passed == true
       and .methodCount == 25 and (.methods | length) == 25
       and ([.methods[].name] == [
         "status","browser.control.start","browser.control.status","browser.control.stop",
@@ -2543,7 +2920,7 @@ PY
       . as $root
       |
       .schemaVersion == 2 and .evidenceType == "stock-user-chrome-computer-helper-chain"
-      and .version == "0.12.67" and .passed == true
+      and .version == "0.12.68" and .passed == true
       and .server.soleListener == "127.0.0.1:17373" and .server.updateCheckDisabled == true
       and .helper.connectedThroughLoopbackServer == true and .helper.serverApiOnly == true
       and .extensionPayload.fileCount == 11
@@ -2682,7 +3059,7 @@ PY
       and ([.computerHelperChain[] | select(type == "boolean")] | all(. == true))
       and .initialState.capturedBeforeRelevantMutation == true
       and .initialState.candidateExtensionPresent == false and .initialState.savedTokenConfigured == false
-      and .extension.cardCount == 1 and .extension.version == "0.12.67" and .extension.enabled == true
+      and .extension.cardCount == 1 and .extension.version == "0.12.68" and .extension.enabled == true
       and .extension.loadErrors == 0 and .extension.loadedVia == "chrome://extensions-load-unpacked"
       and .extension.loadedDirectoryByteMatchesCandidateZip == true and .extension.popupConnected == true
       and .extension.debuggerLeaseActiveAtFirstCapture == true and .extension.nativeDebuggerUseIndicatorSeen == true
@@ -3462,6 +3839,7 @@ PY
 }
 
 self_test() {
+  require_command cp
   require_command git
   require_command jq
   require_command mkfifo
@@ -3476,15 +3854,15 @@ self_test() {
   local sha256_a="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   local receipt="$scratch/receipt.json"
   self_test_attestation_selection
-  printf '%s' '{"schemaVersion":3,"version":"0.12.67","releaseTag":"v0.12.67","sourceSha":"1111111111111111111111111111111111111111","workflowRunId":"123","workflowRunAttempt":"1","releaseCandidateArtifactId":"456","releaseCandidateArtifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","evidenceRef":"refs/heads/evidence/v0.12.67-release-run-123-attempt-1","evidenceCommitSha":"3333333333333333333333333333333333333333","macosPassed":true,"macosAcceptanceSha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","macosQuietResultSha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","macosDeliberateConcurrencyResultSha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","windowsPassed":true,"windowsResultSha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","stockChromePassed":true,"stockChrome":true,"stockChromeResultSha256":"9999999999999999999999999999999999999999999999999999999999999999"}' > "$receipt"
-  validate_receipt "$receipt" 0.12.67 v0.12.67 "$sha1_a" 123 1 "$sha256_a" \
+  printf '%s' '{"schemaVersion":3,"version":"0.12.68","releaseTag":"v0.12.68","sourceSha":"1111111111111111111111111111111111111111","workflowRunId":"123","workflowRunAttempt":"1","releaseCandidateArtifactId":"456","releaseCandidateArtifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","evidenceRef":"refs/heads/evidence/v0.12.68-release-run-123-attempt-1","evidenceCommitSha":"3333333333333333333333333333333333333333","macosPassed":true,"macosAcceptanceSha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","macosQuietResultSha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","macosDeliberateConcurrencyResultSha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","windowsPassed":true,"windowsResultSha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","stockChromePassed":true,"stockChrome":true,"stockChromeResultSha256":"9999999999999999999999999999999999999999999999999999999999999999"}' > "$receipt"
+  validate_receipt "$receipt" 0.12.68 v0.12.68 "$sha1_a" 123 1 "$sha256_a" \
     || die "self-test rejected a valid canonical schema-3 receipt"
   jq -cS . "$receipt" > "$scratch/noncanonical.json"
-  if validate_receipt "$scratch/noncanonical.json" 0.12.67 v0.12.67 "$sha1_a" 123 1 "$sha256_a"; then
+  if validate_receipt "$scratch/noncanonical.json" 0.12.68 v0.12.68 "$sha1_a" 123 1 "$sha256_a"; then
     die "self-test accepted reordered receipt keys"
   fi
   jq -c '.schemaVersion = 2' "$receipt" > "$scratch/stale.json"
-  if validate_receipt "$scratch/stale.json" 0.12.67 v0.12.67 "$sha1_a" 123 1 "$sha256_a"; then
+  if validate_receipt "$scratch/stale.json" 0.12.68 v0.12.68 "$sha1_a" 123 1 "$sha256_a"; then
     die "self-test accepted a stale schema-2 receipt"
   fi
   mkdir "$scratch/safe"
@@ -3504,7 +3882,7 @@ self_test() {
   fi
 
   EXPECTED_RELEASE_CANDIDATE_BINDING="$scratch/expected-binding.json"
-  printf '%s' '{"schemaVersion":3,"version":"0.12.67","releaseTag":"v0.12.67","repository":"flrngel/local-browser-bridge","sourceSha":"1111111111111111111111111111111111111111","workflowRunId":"123","workflowRunAttempt":"2","workflowEvent":"workflow_dispatch","workflowRef":"refs/heads/main","workflowPath":".github/workflows/deploy.yml","artifactId":"456","artifactName":"release-candidate","artifactZipBytes":789,"artifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","attestationInvocationUri":"https://github.com/flrngel/local-browser-bridge/actions/runs/123/attempts/2","attestedAssetCount":5,"githubHostedRunner":true,"assets":[]}' > "$EXPECTED_RELEASE_CANDIDATE_BINDING"
+  printf '%s' '{"schemaVersion":3,"version":"0.12.68","releaseTag":"v0.12.68","repository":"flrngel/local-browser-bridge","sourceSha":"1111111111111111111111111111111111111111","workflowRunId":"123","workflowRunAttempt":"2","workflowEvent":"workflow_dispatch","workflowRef":"refs/heads/main","workflowPath":".github/workflows/deploy.yml","artifactId":"456","artifactName":"release-candidate","artifactZipBytes":789,"artifactZipSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","checksumManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","attestationInvocationUri":"https://github.com/flrngel/local-browser-bridge/actions/runs/123/attempts/2","attestedAssetCount":5,"githubHostedRunner":true,"assets":[]}' > "$EXPECTED_RELEASE_CANDIDATE_BINDING"
   printf '%s' "{\"releaseCandidateBinding\":$(<"$EXPECTED_RELEASE_CANDIDATE_BINDING")}" > "$scratch/current-binding.json"
   assert_release_candidate_binding "$scratch/current-binding.json" '.releaseCandidateBinding'
   jq -c '.releaseCandidateBinding.workflowRunAttempt = "1"' "$scratch/current-binding.json" > "$scratch/replayed-binding.json"
@@ -3610,7 +3988,7 @@ self_test() {
       interactiveSessionId: 1,
       helperTopologyChecks: [
         {
-          description: "the original helper worker after foreground arming",
+          description: "the original helper worker after automatic foreground baseline binding",
           supervisorPid: 202, controllerPid: 202, workerPid: 303,
           exactImageMatched: true, directChildEnumerated: true,
           interactiveSessionId: 1, stableConsecutivePolls: 2,
@@ -4255,19 +4633,169 @@ self_test() {
     die "self-test accepted a producer-unreachable command-watchdog receipt as live-share causality"
   fi
 
-  jq -cn '
-      {requestId:"0123456789abcdef0123456789abcdef",status:"action-required",maximumClickAttempts:1,inputStateAtPublication:"not-started"}
-      + (reduce range(1;30) as $n ({}; .[("k" + ($n|tostring))] = false))
-    ' > "$scratch/arm-request.json"
-  jq -cn '
-      {requestId:"0123456789abcdef0123456789abcdef",stableSamplesRequired:3,stableSamplesObserved:3}
-      + (reduce range(1;18) as $n ({}; .[("k" + ($n|tostring))] = false))
-    ' > "$scratch/arm-received.json"
-  validate_windows_arm_pair_identity "$scratch/arm-request.json" "$scratch/arm-received.json" \
-    || die "self-test rejected a complete one-shot arm identity"
+  jq -cn '{
+      schemaVersion:3,productVersion:"0.12.68",kind:"foreground-baseline",status:"automatic",
+      requestId:"0123456789abcdef0123456789abcdef",publishedAtUtc:"2026-08-31T12:00:00.0000000Z",
+      timeoutSeconds:300,mode:"automatic-stable-external-foreground",operatorActionRequired:false,
+      action:"none",globalInputUsed:false,focusChangedByRunner:false,cursorChangedByRunner:false,
+      syntheticInputUsed:false,requiredStableSamples:3,notificationOnly:true,acceptedAsAuthority:false,
+      rawWindowHandlesRecorded:false,rawProcessIdentifiersRecorded:false,
+      rawCursorCoordinatesRecorded:false,pathsRecorded:false,secretsRecorded:false
+    }' > "$scratch/arm-request.json"
+  jq -cn '{
+      schemaVersion:3,productVersion:"0.12.68",kind:"foreground-baseline",status:"ready",
+      requestId:"0123456789abcdef0123456789abcdef",receivedAtUtc:"2026-08-31T12:00:01.0000000Z",
+      mode:"automatic-stable-external-foreground",operatorActionRequired:false,action:"none",
+      clickAttemptsObserved:0,stableSamplesObserved:3,stableSamplesRequired:3,
+      nativeSampleSeqlockMatched:true,ownerIdentityStable:true,focusRootMatched:true,
+      fixtureProcessExcluded:true,interactiveSessionMatched:true,cursorStable:true,inputDesktopStable:true,globalInputUsed:false,
+      focusChangedByRunner:false,cursorChangedByRunner:false,syntheticInputUsed:false,
+      notificationOnly:true,acceptedAsAuthority:false,rawWindowHandlesRecorded:false,
+      rawProcessIdentifiersRecorded:false,rawCursorCoordinatesRecorded:false,
+      pathsRecorded:false,secretsRecorded:false
+    }' > "$scratch/arm-received.json"
+  validate_windows_foreground_baseline_pair_identity "$scratch/arm-request.json" "$scratch/arm-received.json" \
+    || die "self-test rejected a complete automatic foreground-baseline identity"
   jq -c 'del(.requestId) | .missing = false' "$scratch/arm-received.json" > "$scratch/arm-missing-request-id.json"
-  if validate_windows_arm_pair_identity "$scratch/arm-request.json" "$scratch/arm-missing-request-id.json"; then
-    die "self-test accepted an arm receipt without the request ID"
+  if validate_windows_foreground_baseline_pair_identity "$scratch/arm-request.json" "$scratch/arm-missing-request-id.json"; then
+    die "self-test accepted an automatic foreground-baseline receipt without the request ID"
+  fi
+  jq -c '.timeoutSeconds = 15.5' "$scratch/arm-request.json" > "$scratch/arm-fractional-timeout.json"
+  if validate_windows_foreground_baseline_pair_identity "$scratch/arm-fractional-timeout.json" "$scratch/arm-received.json"; then
+    die "self-test accepted a fractional automatic foreground-baseline timeout"
+  fi
+  jq -c '.stableSamplesObserved = 3.5' "$scratch/arm-received.json" > "$scratch/arm-fractional-samples.json"
+  if validate_windows_foreground_baseline_pair_identity "$scratch/arm-request.json" "$scratch/arm-fractional-samples.json"; then
+    die "self-test accepted a fractional automatic foreground-baseline sample count"
+  fi
+  jq -c '.stableSamplesObserved = 4' "$scratch/arm-received.json" > "$scratch/arm-extra-samples.json"
+  if validate_windows_foreground_baseline_pair_identity "$scratch/arm-request.json" "$scratch/arm-extra-samples.json"; then
+    die "self-test accepted extra automatic foreground-baseline samples"
+  fi
+  jq -c '.interactiveSessionMatched = false' "$scratch/arm-received.json" > "$scratch/arm-wrong-session.json"
+  if validate_windows_foreground_baseline_pair_identity "$scratch/arm-request.json" "$scratch/arm-wrong-session.json"; then
+    die "self-test accepted an automatic foreground baseline from another interactive session"
+  fi
+  jq -c '.requestId = "fedcba9876543210fedcba9876543210"' "$scratch/arm-received.json" > "$scratch/arm-replayed-received.json"
+  if validate_windows_foreground_baseline_pair_identity "$scratch/arm-request.json" "$scratch/arm-replayed-received.json"; then
+    die "self-test accepted an automatic foreground-baseline receipt replayed from another request"
+  fi
+  jq -c '.receivedAtUtc = "2026-08-31T12:05:01.0000000Z"' "$scratch/arm-received.json" > "$scratch/arm-late-received.json"
+  if validate_windows_foreground_baseline_pair_identity "$scratch/arm-request.json" "$scratch/arm-late-received.json"; then
+    die "self-test accepted an automatic foreground-baseline receipt after its deadline"
+  fi
+
+  local baseline_summary="$scratch/windows-baseline-summary.json"
+  local baseline_request_step="$scratch/windows-baseline-request-step.json"
+  local baseline_proof_step="$scratch/windows-baseline-proof-step.json"
+  local baseline_fixture_state="$scratch/windows-baseline-fixture-state.json"
+  jq -cn '{foregroundArmProof:{
+      mode:"automatic-stable-external-foreground",operatorActionRequired:false,action:"none",
+      requestId:"0123456789abcdef0123456789abcdef",clickAttemptsObserved:0,fixtureRequestCount:0,fixtureAcknowledgementCount:0,
+      fixtureLeftMouseDownCount:0,fixtureLeftMouseUpCount:0,afterPublicationGeneration:10,
+      fixtureStatePublicationGeneration:13,statePublicationAdvanced:true,noFixtureInputObserved:true,
+      nativeSampleSeqlockMatched:true,ownerIdentityStable:true,focusRootMatched:true,
+      fixtureProcessExcluded:true,interactiveSessionMatched:true,externalForegroundMatched:true,cursorAvailable:true,cursorStable:true,
+      inputDesktopAvailable:true,inputDesktopStable:true,stableSamplesRequired:3,stableSamplesObserved:3,
+      stablePublicationSamplesObserved:3,timeoutSeconds:299,completed:true,
+      baselineContinuityMatched:true,globalInputUsed:false,focusChangedByRunner:false,
+      cursorChangedByRunner:false,syntheticInputUsed:false,rawWindowHandlesRecorded:false,
+      rawProcessIdentifiersRecorded:false,rawCursorCoordinatesRecorded:false,pathsRecorded:false,
+      secretsRecorded:false
+    }}' > "$baseline_summary"
+  jq -cn '{
+      mode:"automatic-stable-external-foreground",operatorActionRequired:false,action:"none",
+      requestId:"0123456789abcdef0123456789abcdef",clickAttemptsObserved:0,afterPublicationGeneration:10,requiredStableSamples:3,
+      globalInputUsed:false,focusChangedByRunner:false,cursorChangedByRunner:false,
+      syntheticInputUsed:false,rawWindowHandlesRecorded:false,rawProcessIdentifiersRecorded:false,
+      rawCursorCoordinatesRecorded:false,pathsRecorded:false,secretsRecorded:false
+    }' > "$baseline_request_step"
+  jq -c '.foregroundArmProof' "$baseline_summary" > "$baseline_proof_step"
+  jq -cn '{statePublicationGeneration:20}' > "$baseline_fixture_state"
+  validate_windows_foreground_baseline_records \
+    "$baseline_summary" "$baseline_request_step" "$baseline_proof_step" \
+    "$scratch/arm-request.json" "$scratch/arm-received.json" "$baseline_fixture_state" \
+    || die "self-test rejected an exact automatic foreground-baseline cross-file record"
+  jq -c '.ownerIdentityStable = false' "$baseline_proof_step" > "$scratch/windows-baseline-divergent-step.json"
+  if validate_windows_foreground_baseline_records \
+      "$baseline_summary" "$baseline_request_step" "$scratch/windows-baseline-divergent-step.json" \
+      "$scratch/arm-request.json" "$scratch/arm-received.json" "$baseline_fixture_state"; then
+    die "self-test accepted a foreground-baseline proof step divergent from its summary"
+  fi
+  jq -c '.foregroundArmProof.statePublicationAdvanced = false' "$baseline_summary" > "$scratch/windows-baseline-stale-summary.json"
+  jq -c '.foregroundArmProof' "$scratch/windows-baseline-stale-summary.json" > "$scratch/windows-baseline-stale-step.json"
+  if validate_windows_foreground_baseline_records \
+      "$scratch/windows-baseline-stale-summary.json" "$baseline_request_step" "$scratch/windows-baseline-stale-step.json" \
+      "$scratch/arm-request.json" "$scratch/arm-received.json" "$baseline_fixture_state"; then
+    die "self-test accepted a foreground-baseline proof without a fresh fixture publication"
+  fi
+  jq -c '.afterPublicationGeneration = 9' "$baseline_request_step" > "$scratch/windows-baseline-unbound-request-step.json"
+  if validate_windows_foreground_baseline_records \
+      "$baseline_summary" "$scratch/windows-baseline-unbound-request-step.json" "$baseline_proof_step" \
+      "$scratch/arm-request.json" "$scratch/arm-received.json" "$baseline_fixture_state"; then
+    die "self-test accepted an unbound foreground-baseline request step"
+  fi
+  jq -c '.requestId = "fedcba9876543210fedcba9876543210"' "$scratch/arm-request.json" > "$scratch/arm-other-request.json"
+  jq -c '.requestId = "fedcba9876543210fedcba9876543210"' "$scratch/arm-received.json" > "$scratch/arm-other-received.json"
+  if validate_windows_foreground_baseline_records \
+      "$baseline_summary" "$baseline_request_step" "$baseline_proof_step" \
+      "$scratch/arm-other-request.json" "$scratch/arm-other-received.json" "$baseline_fixture_state"; then
+    die "self-test accepted a foreground-baseline marker pair replayed from another request"
+  fi
+
+  local topology_summary="$scratch/windows-topology-summary.json"
+  local topology_step01="$scratch/windows-topology-step01.json"
+  local topology_step04="$scratch/windows-topology-step04.json"
+  local topology_step09="$scratch/windows-topology-step09.json"
+  local topology_step46="$scratch/windows-topology-step46.json"
+  local topology_step54="$scratch/windows-topology-step54.json"
+  jq -cn '{interactiveSessionId:1,helperTopologyChecks:[
+      {description:"the initial disposable helper worker",supervisorPid:202,controllerPid:202,workerPid:303,exactImageMatched:true,directChildEnumerated:true,interactiveSessionId:1,stableConsecutivePolls:2,helloStateMatched:true,protocolRoundTrip:true,roundTripMethod:"computer.status"},
+      {description:"the original helper worker after automatic foreground baseline binding",supervisorPid:202,controllerPid:202,workerPid:303,exactImageMatched:true,directChildEnumerated:true,interactiveSessionId:1,stableConsecutivePolls:2,helloStateMatched:true,protocolRoundTrip:true,roundTripMethod:"computer.status"},
+      {description:"the replacement disposable helper worker",supervisorPid:202,controllerPid:202,workerPid:404,exactImageMatched:true,directChildEnumerated:true,interactiveSessionId:1,stableConsecutivePolls:2,helloStateMatched:true,protocolRoundTrip:true,roundTripMethod:"computer.status"},
+      {description:"the pre-cancellation disposable helper worker",supervisorPid:202,controllerPid:202,workerPid:404,exactImageMatched:true,directChildEnumerated:true,interactiveSessionId:1,stableConsecutivePolls:2,helloStateMatched:true,protocolRoundTrip:true,roundTripMethod:"computer.status"},
+      {description:"the post-cancellation replacement helper worker",supervisorPid:202,controllerPid:202,workerPid:505,exactImageMatched:true,directChildEnumerated:true,interactiveSessionId:1,stableConsecutivePolls:2,helloStateMatched:true,protocolRoundTrip:true,roundTripMethod:"computer.status"}
+    ]}' > "$topology_summary"
+  jq -cn '{error:null,taxonomy:null,result:{inputReady:true,semanticReady:true},targetState:{computerConnected:true,computer:{controllerProcessId:202,processId:303,sessionId:"11111111-1111-4111-8111-111111111111"}}}' > "$topology_step01"
+  cp "$topology_step01" "$topology_step04"
+  jq -cn '{error:null,taxonomy:null,result:{inputReady:true,semanticReady:true},targetState:{computerConnected:true,computer:{controllerProcessId:202,processId:404,sessionId:"22222222-2222-4222-8222-222222222222"}}}' > "$topology_step09"
+  cp "$topology_step09" "$topology_step46"
+  jq -cn '{error:null,taxonomy:null,result:{inputReady:true,semanticReady:true},targetState:{computerConnected:true,computer:{controllerProcessId:202,processId:505,sessionId:"33333333-3333-4333-8333-333333333333"}}}' > "$topology_step54"
+  validate_windows_helper_topology_sequence \
+    "$topology_summary" "$topology_step01" "$topology_step04" "$topology_step09" "$topology_step46" "$topology_step54" \
+    || die "self-test rejected the exact five-stage Windows helper topology"
+  jq -c '.helperTopologyChecks |= .[1:]' "$topology_summary" > "$scratch/windows-topology-missing-initial.json"
+  if validate_windows_helper_topology_sequence \
+      "$scratch/windows-topology-missing-initial.json" "$topology_step01" "$topology_step04" "$topology_step09" "$topology_step46" "$topology_step54"; then
+    die "self-test accepted a Windows helper topology without its initial binding"
+  fi
+
+  local invariant_proof="$scratch/windows-sanitized-invariant.json"
+  jq -cn '{
+      schemaVersion:1,statePublicationAdvanced:true,nativeSampleSeqlockMatched:true,
+      ownerIdentityStable:true,focusRootMatched:true,interactiveSessionMatched:true,foregroundStable:true,focusStable:true,
+      cursorAvailable:true,cursorStable:true,inputDesktopAvailable:true,inputDesktopStable:true,
+      targetActivatedCount:0,sentinelActivatedCount:0,sentinelDeactivatedCount:0,
+      foregroundArmRequestedGeneration:0,foregroundArmAcknowledgedGeneration:0,
+      foregroundArmRequestCount:0,foregroundArmAcknowledgementCount:0,
+      foregroundArmLeftMouseDownCount:0,foregroundArmLeftMouseUpCount:0,
+      foregroundArmButtonEnabled:false,noFixtureInputObserved:true,globalInputUsed:false,
+      focusChangedByRunner:false,cursorChangedByRunner:false,syntheticInputUsed:false,
+      rawWindowHandlesRecorded:false,rawProcessIdentifiersRecorded:false,
+      rawCursorCoordinatesRecorded:false,pathsRecorded:false,secretsRecorded:false
+    }' > "$invariant_proof"
+  validate_windows_sanitized_invariant_proof "$invariant_proof" \
+    || die "self-test rejected an exact sanitized Windows invariant proof"
+  jq -cn --slurpfile proof "$invariant_proof" '{independentNonInterruptionSample:$proof[0]}' > "$scratch/windows-nested-invariant.json"
+  validate_windows_sanitized_invariant_proof "$scratch/windows-nested-invariant.json" "independentNonInterruptionSample" \
+    || die "self-test rejected a nested sanitized Windows invariant proof"
+  jq -c '.rawForegroundHwnd = "123"' "$invariant_proof" > "$scratch/windows-raw-invariant.json"
+  if validate_windows_sanitized_invariant_proof "$scratch/windows-raw-invariant.json"; then
+    die "self-test accepted a Windows invariant proof containing a raw window handle"
+  fi
+  jq -c '.interactiveSessionMatched = false' "$invariant_proof" > "$scratch/windows-wrong-session-invariant.json"
+  if validate_windows_sanitized_invariant_proof "$scratch/windows-wrong-session-invariant.json"; then
+    die "self-test accepted a Windows invariant proof from another interactive session"
   fi
 
   jq -cn '
