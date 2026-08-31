@@ -1,0 +1,32 @@
+2026-08-31T07:39:02.377Z PASS evidence output parent is an owner-private ordinary directory: the direct evidence parent is ordinary, owner-private, and current-user owned
+2026-08-31T07:39:02.380Z PASS evidence output directory is newly created and owner-private: the runner created one private lane output directory
+2026-08-31T07:39:03.772Z PASS pre-run harness source commit matches coordinator binding: exact source SHA matched
+2026-08-31T07:39:03.772Z PASS pre-run harness checkout is detached: detached HEAD
+2026-08-31T07:39:03.772Z PASS pre-run harness checkout is clean: tracked, staged, deleted, and untracked sets are empty
+2026-08-31T07:39:03.772Z PASS pre-run harness source repository passes git fsck: git fsck --full passed
+2026-08-31T07:39:03.772Z PASS pre-run harness files are exact tracked blobs: runner, native probes, and acceptance finalizer match HEAD blobs
+2026-08-31T07:39:03.777Z PASS macOS host: Darwin
+2026-08-31T07:39:03.783Z PASS expected checksum-manifest hash format: 64 lowercase hexadecimal characters
+2026-08-31T07:39:03.783Z PASS canonical checksum-manifest name: SHA256SUMS.txt
+2026-08-31T07:39:03.783Z PASS exact archive name: local-browser-bridge-v0.12.66-macos-universal.tar.gz
+2026-08-31T07:39:03.784Z PASS checksum manifest is one bounded current-user-owned ordinary file: ordinary, singly linked, owner-controlled, and within the manifest byte bound
+2026-08-31T07:39:03.784Z PASS checksum manifest stayed stable while it was bound: path and descriptor identity, size, links, and timestamps remained unchanged
+2026-08-31T07:39:03.784Z PASS out-of-band checksum-manifest hash matches: 6972970276929bf23bdbed51975adbf95f562597c4f2532d9ac15f0c3049f5f4
+2026-08-31T07:39:03.784Z PASS checksum manifest has the exact canonical four-entry set: local-browser-bridge-v0.12.66-windows-x86_64.exe,local-computer-helper-v0.12.66-windows-x86_64.exe,local-browser-bridge-v0.12.66-macos-universal.tar.gz,local-browser-bridge-extension-v0.12.66.zip
+2026-08-31T07:39:03.784Z PASS canonical manifest contains the macOS archive checksum: 65c088e5b6c71ccc7911addf8c950f49122bd72e84dcfe4c1fb682c78a6d2762
+2026-08-31T07:39:03.844Z PASS macOS archive bounded exact inventory: seventeen PAX-free regular-file/directory entries passed bounded streaming extraction
+2026-08-31T07:39:03.844Z PASS archive checksum is bound by the canonical manifest: 65c088e5b6c71ccc7911addf8c950f49122bd72e84dcfe4c1fb682c78a6d2762
+2026-08-31T07:39:03.849Z PASS supplied server is archive-exact: 1e7a1bb634c68d4008b1366b838de9cf4ac626bb389bda309b37525fdacda429
+2026-08-31T07:39:03.851Z PASS supplied helper is archive-exact: fa4583583793d631e1f34bdbaa5f82738ed07c72d478c6c85e7839347b4f84a4
+2026-08-31T07:39:03.869Z PASS server universal architecture: arm64,x86_64
+2026-08-31T07:39:03.869Z PASS helper universal architecture: arm64,x86_64
+2026-08-31T07:39:03.869Z PASS helper uses packaged app layout: Local Computer Helper.app
+2026-08-31T07:39:03.900Z PASS strict code-signature verification: server, helper executable, and helper app bundle passed strict verification
+2026-08-31T07:39:03.908Z PASS helper bundle version: 0.12.66/0.12.66
+2026-08-31T07:39:05.014Z PASS system probe foreground-window self-test: AX-focused/main identity wins over same-process app-share auxiliary compositor order
+2026-08-31T07:39:05.681Z PASS optional physical-pointer adversarial prompt self-test: source-only optional adversarial prompt cannot satisfy either release lane
+2026-08-31T07:39:06.358Z PASS app-share handoff bundle identity: dev.flrngel.local-browser-bridge.acceptance.app-share
+2026-08-31T07:39:06.592Z PASS app-share handoff self-test: stable bundle/window/button vocabulary and create-once receipts
+2026-08-31T07:39:06.656Z FAIL screen-capture permission preflight: preexisting permission; no request was made
+2026-08-31T07:39:06.657Z FATAL screen-capture permission preflight: preexisting permission; no request was made
+2026-08-31T07:39:06.660Z scratch directory removed

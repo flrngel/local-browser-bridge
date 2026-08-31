@@ -1,0 +1,293 @@
+{
+  "schemaVersion": 9,
+  "productVersion": "0.12.66",
+  "status": "failed-release-candidate",
+  "evidenceClass": "release-candidate-negative-result",
+  "startedAt": null,
+  "capturedAt": "2026-08-31T07:39:06.657Z",
+  "fatal": "screen-capture permission preflight: preexisting permission; no request was made",
+  "helperSpawnCount": 0,
+  "packageBinding": {
+    "file": "SHA256SUMS.txt",
+    "expectedSha256": "6972970276929bf23bdbed51975adbf95f562597c4f2532d9ac15f0c3049f5f4",
+    "actualSha256": "6972970276929bf23bdbed51975adbf95f562597c4f2532d9ac15f0c3049f5f4",
+    "expectedSha256Matched": true,
+    "exactCanonicalAssetSet": true,
+    "canonicalEntryCount": 4,
+    "archiveFile": "local-browser-bridge-v0.12.66-macos-universal.tar.gz",
+    "archiveSha256": "65c088e5b6c71ccc7911addf8c950f49122bd72e84dcfe4c1fb682c78a6d2762",
+    "archiveEntryMatched": true
+  },
+  "releaseCandidateBinding": {
+    "schemaVersion": 3,
+    "version": "0.12.66",
+    "releaseTag": "v0.12.66",
+    "repository": "flrngel/local-browser-bridge",
+    "sourceSha": "2dcc8eccebaed6837a3eb71012e4826d7e9de922",
+    "workflowRunId": "33350856503",
+    "workflowRunAttempt": "2",
+    "workflowEvent": "workflow_dispatch",
+    "workflowRef": "refs/heads/main",
+    "workflowPath": ".github/workflows/deploy.yml",
+    "artifactId": "9745800057",
+    "artifactZipSha256": "a74ec477f35de2e493c7e6e63ce979a3aad8f84d06e594bba05f12c7b80a17dc",
+    "checksumManifestSha256": "6972970276929bf23bdbed51975adbf95f562597c4f2532d9ac15f0c3049f5f4"
+  },
+  "harnessSourceBinding": {
+    "sourceSha": "2dcc8eccebaed6837a3eb71012e4826d7e9de922",
+    "detachedHead": true,
+    "cleanTrackedAndUntracked": true,
+    "fsckPassed": true,
+    "exactTrackedHarnessBlobs": true
+  },
+  "capabilityBinding": {
+    "inputDeliveryProvenanceV1": false,
+    "pointerActivityMonitorV1": false
+  },
+  "quietSeatStabilization": {
+    "required": true,
+    "completed": false,
+    "requiredStableMilliseconds": 30000,
+    "maximumWaitMilliseconds": 1800000,
+    "sampleIntervalMilliseconds": 500,
+    "requiredStableTransitions": 60,
+    "stableDurationMilliseconds": 0,
+    "observedSamples": 0,
+    "stableTransitions": 0,
+    "resetCount": 0,
+    "monitoringUnknown": false,
+    "diagnosticSchemaVersion": 1,
+    "lastResetCause": null,
+    "lastUnknownCause": null,
+    "resetCauseCounts": {
+      "foreground-transition": 0,
+      "hid-pointer-activity": 0,
+      "hid-keyboard-activity": 0,
+      "foreground-changed": 0,
+      "focus-changed": 0,
+      "active-space-changed": 0
+    },
+    "probeFailureCategory": null,
+    "completedBeforeCandidateExecution": false,
+    "rawPointerDataRetained": false
+  },
+  "screenshots": [],
+  "pointerEvidence": {
+    "requestedLane": "quiet",
+    "quietObserved": false,
+    "concurrentSharedSeatActivityObserved": false,
+    "unknownObserved": false,
+    "rawCursorPositionsRetained": false,
+    "rawPlatformActivityCountersRetained": false,
+    "rawHidSystemCountersRetained": false,
+    "hidSystemActivityClaimedAsPhysical": false
+  },
+  "appShareHandoff": {
+    "requested": false,
+    "requestPublicationAcknowledged": false,
+    "startReceiptAcknowledged": false,
+    "completePublicationAcknowledged": false,
+    "promptClosed": false,
+    "exactAppBundleObserved": false,
+    "exactWindowObserved": false,
+    "exactButtonObserved": false,
+    "buttonDisabledAfterAction": false,
+    "acceptanceButtonActionObserved": false,
+    "appShareSurfaceObservedAtProductBoundaries": false,
+    "sharedHidInputObserved": null,
+    "sampledSharedContextUnchanged": false,
+    "authorityRefreshedAfterReceipt": false,
+    "authorityFreshAtDispatch": false,
+    "actionDispatched": false,
+    "targetPostconditionObserved": false,
+    "productBoundaryQuiet": false,
+    "independentBoundaryQuiet": false,
+    "physicalHumanProvenanceClaimed": false,
+    "cryptographicToolIdentityClaimed": false,
+    "orchestrationNotProductControl": true,
+    "markerNotificationOnly": false,
+    "markerAcceptedAsProductAuthority": false,
+    "rawAppIdentityRetainedInResult": false,
+    "rawPointerDataRetained": false
+  },
+  "failureDiagnostics": {
+    "stage": "notReached",
+    "actionDispatched": false,
+    "systemProbe": {
+      "baselineCaptured": false,
+      "afterCaptured": false,
+      "equality": null
+    },
+    "fixtureCounters": {
+      "baselineCaptured": false,
+      "afterCaptured": false,
+      "before": null,
+      "after": null
+    },
+    "targetSiblingReceiver": {
+      "targetKnown": false,
+      "expectedFocusedAfter": false,
+      "afterCaptured": false,
+      "focusedAfter": null,
+      "mainAfter": null,
+      "expectationMet": null
+    }
+  },
+  "assertions": {
+    "passed": 29,
+    "failed": 1,
+    "total": 30,
+    "details": [
+      {
+        "name": "evidence output parent is an owner-private ordinary directory",
+        "passed": true,
+        "detail": "the direct evidence parent is ordinary, owner-private, and current-user owned"
+      },
+      {
+        "name": "evidence output directory is newly created and owner-private",
+        "passed": true,
+        "detail": "the runner created one private lane output directory"
+      },
+      {
+        "name": "pre-run harness source commit matches coordinator binding",
+        "passed": true,
+        "detail": "exact source SHA matched"
+      },
+      {
+        "name": "pre-run harness checkout is detached",
+        "passed": true,
+        "detail": "detached HEAD"
+      },
+      {
+        "name": "pre-run harness checkout is clean",
+        "passed": true,
+        "detail": "tracked, staged, deleted, and untracked sets are empty"
+      },
+      {
+        "name": "pre-run harness source repository passes git fsck",
+        "passed": true,
+        "detail": "git fsck --full passed"
+      },
+      {
+        "name": "pre-run harness files are exact tracked blobs",
+        "passed": true,
+        "detail": "runner, native probes, and acceptance finalizer match HEAD blobs"
+      },
+      {
+        "name": "macOS host",
+        "passed": true,
+        "detail": "Darwin"
+      },
+      {
+        "name": "expected checksum-manifest hash format",
+        "passed": true,
+        "detail": "64 lowercase hexadecimal characters"
+      },
+      {
+        "name": "canonical checksum-manifest name",
+        "passed": true,
+        "detail": "SHA256SUMS.txt"
+      },
+      {
+        "name": "exact archive name",
+        "passed": true,
+        "detail": "local-browser-bridge-v0.12.66-macos-universal.tar.gz"
+      },
+      {
+        "name": "checksum manifest is one bounded current-user-owned ordinary file",
+        "passed": true,
+        "detail": "ordinary, singly linked, owner-controlled, and within the manifest byte bound"
+      },
+      {
+        "name": "checksum manifest stayed stable while it was bound",
+        "passed": true,
+        "detail": "path and descriptor identity, size, links, and timestamps remained unchanged"
+      },
+      {
+        "name": "out-of-band checksum-manifest hash matches",
+        "passed": true,
+        "detail": "6972970276929bf23bdbed51975adbf95f562597c4f2532d9ac15f0c3049f5f4"
+      },
+      {
+        "name": "checksum manifest has the exact canonical four-entry set",
+        "passed": true,
+        "detail": "local-browser-bridge-v0.12.66-windows-x86_64.exe,local-computer-helper-v0.12.66-windows-x86_64.exe,local-browser-bridge-v0.12.66-macos-universal.tar.gz,local-browser-bridge-extension-v0.12.66.zip"
+      },
+      {
+        "name": "canonical manifest contains the macOS archive checksum",
+        "passed": true,
+        "detail": "65c088e5b6c71ccc7911addf8c950f49122bd72e84dcfe4c1fb682c78a6d2762"
+      },
+      {
+        "name": "macOS archive bounded exact inventory",
+        "passed": true,
+        "detail": "seventeen PAX-free regular-file/directory entries passed bounded streaming extraction"
+      },
+      {
+        "name": "archive checksum is bound by the canonical manifest",
+        "passed": true,
+        "detail": "65c088e5b6c71ccc7911addf8c950f49122bd72e84dcfe4c1fb682c78a6d2762"
+      },
+      {
+        "name": "supplied server is archive-exact",
+        "passed": true,
+        "detail": "1e7a1bb634c68d4008b1366b838de9cf4ac626bb389bda309b37525fdacda429"
+      },
+      {
+        "name": "supplied helper is archive-exact",
+        "passed": true,
+        "detail": "fa4583583793d631e1f34bdbaa5f82738ed07c72d478c6c85e7839347b4f84a4"
+      },
+      {
+        "name": "server universal architecture",
+        "passed": true,
+        "detail": "arm64,x86_64"
+      },
+      {
+        "name": "helper universal architecture",
+        "passed": true,
+        "detail": "arm64,x86_64"
+      },
+      {
+        "name": "helper uses packaged app layout",
+        "passed": true,
+        "detail": "Local Computer Helper.app"
+      },
+      {
+        "name": "strict code-signature verification",
+        "passed": true,
+        "detail": "server, helper executable, and helper app bundle passed strict verification"
+      },
+      {
+        "name": "helper bundle version",
+        "passed": true,
+        "detail": "0.12.66/0.12.66"
+      },
+      {
+        "name": "system probe foreground-window self-test",
+        "passed": true,
+        "detail": "AX-focused/main identity wins over same-process app-share auxiliary compositor order"
+      },
+      {
+        "name": "optional physical-pointer adversarial prompt self-test",
+        "passed": true,
+        "detail": "source-only optional adversarial prompt cannot satisfy either release lane"
+      },
+      {
+        "name": "app-share handoff bundle identity",
+        "passed": true,
+        "detail": "dev.flrngel.local-browser-bridge.acceptance.app-share"
+      },
+      {
+        "name": "app-share handoff self-test",
+        "passed": true,
+        "detail": "stable bundle/window/button vocabulary and create-once receipts"
+      },
+      {
+        "name": "screen-capture permission preflight",
+        "passed": false,
+        "detail": "preexisting permission; no request was made"
+      }
+    ]
+  }
+}
