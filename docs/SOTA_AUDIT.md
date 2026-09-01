@@ -43,8 +43,8 @@ them to name the current attempt. Its exact
 was preserved and the attempt was canceled. Neither attempt reached Windows,
 stock Chrome, or a public Release.
 
-Audit date: 2026-08-31. Implementation target: version 0.12.67.
-**Current-behavior scope:** this document describes the 0.12.67 source and
+Audit date: 2026-08-31. Implementation target: version 0.12.68.
+**Current-behavior scope:** this document describes the 0.12.68 source and
 schema-3 release pipeline, and labels release or live evidence separately; it
 does not promote source contracts, workflow structure, or non-product Windows
 SelfTest results into a packaged-platform claim. The evidence chain includes
@@ -115,7 +115,7 @@ the deliberate runner before candidate execution. Version 0.12.59 retained the
 Windows repair but exposed the path-alias boundary described below. Version
 0.12.60 repaired that boundary, passed both macOS lanes and the Windows
 foreground arm, and then exposed the WGC/QPC conversion boundary described
-below. Version 0.12.67 requires fresh candidate and acceptance bytes.
+below. Version 0.12.68 requires fresh candidate and acceptance bytes.
 
 **0.12.27 SOTA marker:** product, protocol, and platform behavior were unchanged from v0.12.26. Release-candidate attestation selection required every returned statement to be well formed and bind the same run, source, tag, workflow, GitHub-hosted runner, and exact subject, with exactly one statement bound to the current attempt. Local deployment also became atomic over one exact five-file set.
 
@@ -334,7 +334,22 @@ event observation to replacement. Exact success, post-fault 504
 receipt classes; a command-watchdog response cannot substitute for elapsed
 live-share-pump causality.
 
-Earlier audits stay in this document rather than being replaced, so a row's history is readable in one place. The 2026-08-18 audit (version 0.9.0) is the baseline; the 2026-08-19 audit (version 0.10.0) revised the rows marked with a `0.10:` prefix; this audit adds or revises the rows marked `0.11:`, `0.11.1:`, `0.11.2:`, `0.12.1:`, `0.12.2:`, `0.12.3:`, `0.12.4:`, `0.12.5:`, `0.12.6:`, `0.12.7:`, `0.12.8:`, `0.12.9:`, `0.12.10:`, `0.12.11:`, `0.12.12:`, `0.12.20:`, `0.12.22:`, `0.12.23:`, `0.12.24:`, `0.12.25:`, `0.12.26:`, `0.12.27:`, `0.12.28:`, `0.12.29:`, `0.12.30:`, `0.12.31:`, `0.12.32:`, `0.12.33:`, `0.12.34:`, `0.12.35:`, `0.12.37:`, `0.12.38:`, `0.12.45:`, `0.12.46:`, `0.12.48:`, `0.12.50:`, `0.12.58:`, `0.12.59:`, `0.12.60:`, `0.12.61:`, `0.12.62:`, `0.12.63:`, `0.12.64:`, `0.12.66:`, and `0.12.67:`. An unmarked row describes the 0.9 baseline carried forward unless a later entry says otherwise.
+The exact v0.12.67 candidate passed the Windows trust gate, source-bound fixture
+build, and protocol-bound helper readiness, but its required foreground-arm
+click never arrived. The fixture recorded zero mouse-down, mouse-up, and
+acknowledgement counts during the bounded 300-second interval. The run failed
+closed before the invariant baseline or any product action and its persistent
+reservation makes the attempt terminal. **0.12.68 SOTA marker:** Windows
+readiness no longer depends on an operator, app-share relay, or injected click.
+The nonactivating fixture preserves the existing foreground in the runner's current interactive session while
+the runner requires three fresh publications with one unchanged external
+foreground/focus root, stable native owner identity, a foreground-before/after
+seqlock, stable cursor and input desktop, and explicit fixture-process
+exclusion. The runner uses no global input, cursor movement, or focus-changing
+API. The matching schema-3 request/ready records remain sanitized,
+notification-only orchestration proof rather than product authority.
+
+Earlier audits stay in this document rather than being replaced, so a row's history is readable in one place. The 2026-08-18 audit (version 0.9.0) is the baseline; the 2026-08-19 audit (version 0.10.0) revised the rows marked with a `0.10:` prefix; this audit adds or revises the rows marked `0.11:`, `0.11.1:`, `0.11.2:`, `0.12.1:`, `0.12.2:`, `0.12.3:`, `0.12.4:`, `0.12.5:`, `0.12.6:`, `0.12.7:`, `0.12.8:`, `0.12.9:`, `0.12.10:`, `0.12.11:`, `0.12.12:`, `0.12.20:`, `0.12.22:`, `0.12.23:`, `0.12.24:`, `0.12.25:`, `0.12.26:`, `0.12.27:`, `0.12.28:`, `0.12.29:`, `0.12.30:`, `0.12.31:`, `0.12.32:`, `0.12.33:`, `0.12.34:`, `0.12.35:`, `0.12.37:`, `0.12.38:`, `0.12.45:`, `0.12.46:`, `0.12.48:`, `0.12.50:`, `0.12.58:`, `0.12.59:`, `0.12.60:`, `0.12.61:`, `0.12.62:`, `0.12.63:`, `0.12.64:`, `0.12.66:`, `0.12.67:`, and `0.12.68:`. An unmarked row describes the 0.9 baseline carried forward unless a later entry says otherwise.
 
 Version 0.11 covers two bodies of work:
 
@@ -541,7 +556,7 @@ These surfaces are intentionally independent. The Chrome warning proves a debugg
 | Mutation/TOCTOU defense | Partial | Mutation, scroll, and resize invalidation; identity, bounds, visibility, connectivity, and hit-test proof immediately before click | Mutate/occlude/replace targets between observe and action; no click lands |
 | One controlled tab | Implemented | Switching lease target detaches old tab first; created tabs enter one named bridge tab group | Start on A, switch to B, prove A is detached and grouped creation is visible |
 | Browser pointer arrival | Implemented | Intermediate CDP `mouseMoved` samples, page cursor updates, exact final point, and `moveSequence` metadata | Long and short trajectories at viewport edges; screenshot/trace exact final coordinates |
-| Exact-window desktop control | Implemented on supported routes in 0.12.37 source; release-specific proof is authoritative only in the immutable Release and bound receipt | PID/native-window binding; AX/UIA first; sealed exact-target route; separately labelled API acceptance and target postcondition; platform-specific foreground/window-focus, pointer-attribution, and desktop boundary. macOS separates WindowServer eligibility from receiver authority and reports shared pointer contamination without calling HID-system activity physical provenance. Windows release acceptance still requires one click-bound foreground-arm receipt plus stable native samples before any accepted product run | Per-action route record plus application-owned outcome and conservative invariants; not transactional rollback, an isolated input seat, or zero-transient-focus proof. Two sequential, fresh, non-mergeable macOS lanes must separately prove the quiet and authorized deliberate-concurrency cells, plus every safe adversarial receiver cell, and bind into one create-once aggregate |
+| Exact-window desktop control | Implemented on supported routes in 0.12.68 source; release-specific proof is authoritative only in the immutable Release and bound receipt | PID/native-window binding; AX/UIA first; sealed exact-target route; separately labelled API acceptance and target postcondition; platform-specific foreground/window-focus, pointer-attribution, and desktop boundary. macOS separates WindowServer eligibility from receiver authority and reports shared pointer contamination without calling HID-system activity physical provenance. Windows release acceptance now requires three advancing zero-input fixture publications under one stable external foreground/focus root, with a native seqlock, owner/focus-root binding, fixture-process exclusion, stable cursor/input desktop, and accepted-sample-to-baseline continuity before any product action | Per-action route record plus application-owned outcome and conservative invariants; not transactional rollback, an isolated input seat, or zero-transient-focus proof. Two sequential, fresh, non-mergeable macOS lanes must separately prove the quiet and authorized deliberate-concurrency cells, plus every safe adversarial receiver cell, and bind into one create-once aggregate |
 | Bounded native text | Implemented in 0.12.37 source; release-specific proof belongs to the immutable Release and bound receipt | Native-only 1–2,000 UTF-16-unit contract at both server and helper; U+0000 refusal; 2,500 ms dispatch budget; per-unit cooperative cancellation; Windows Unicode-recipient gate, valid `WM_CHAR` repeat count, and 16-unit paced bursts. macOS constructs each scalar event, then immediately re-proves the exact focused window and focused-element owner before key-down; key-up remains unconditional once down posting begins | Boundary Unicode and cancellation tests plus exact-target fixture read-back on both packaged platforms. Receiver loss after an earlier scalar is outcome-unknown and must not be retried; success remains `Unverifiable`, while semantic `setValue` is preferred when available |
 | Browser Safe mode as a Chromium permission boundary | **Not implemented; Safe mode is an in-extension policy** | The packaged manifest still declares broad HTTP(S) and optional file host permissions. Safe mode adds allowlists, sensitive-field checks, and selected approvals inside that already-privileged extension | Do not describe Safe mode as host-permission revocation, profile isolation, or protection from a compromised extension/service worker; test its policy gates separately |
 | Native per-application approval ledger | **Not implemented** | Once the helper is running with OS grants, an authenticated bridge user can select a supported application window and grant that helper session its fixed command authority. The helper has no separate durable allow/deny ledger or per-application native consent prompt | Treat helper startup plus window selection as an authority grant, stop the helper when unused, and do not claim OS-style per-app approval until a trusted picker/ledger exists |

@@ -4,53 +4,52 @@
 
 The executable accepts only the case-sensitive ordinal grammar `--self-test` or `--evidence-directory DRIVE_ABSOLUTE_NON_ROOT_PATH [--show-occluder]`. It rejects relative, drive-relative, root-relative, drive-root, and UNC paths; unknown, reordered, duplicated, or differently cased switches; and an evidence directory in which any of the three protected fixture records already exists. The source hash must match before and after compilation. The executable hash is recorded after compilation and must remain unchanged through its entry-point self-test and initial live process binding.
 
-Before creating UI, the executable assigns the stable AppUserModelID `LocalBrowserBridge.WindowsAcceptance`. This is app-share discoverability metadata only. It does not grant consent, identify the exact runner instance, or provide acceptance authority. The runner separately requires one exact-image fixture process in its interactive session, the sole exact-image direct child of the runner, and the same PID in the fixture's create-once ready file.
+Before creating UI, the executable assigns the stable AppUserModelID `LocalBrowserBridge.WindowsAcceptance`. This is fixture identity metadata only. It does not grant consent, identify the exact runner instance, or provide acceptance authority. The runner separately requires one exact-image fixture process in its interactive session, the sole exact-image direct child of the runner, and the same PID in the fixture's create-once ready file.
 
 Use `-ShowOccluder` to place a no-activate magenta window over the animated target. An exact-window capture must not include those magenta pixels.
 
-The fixture's orange foreground sentinel does not activate itself. After the
-repository runner binds the exact target, it posts one fresh test-only arm
-generation. The runner waits for the fixture's separate processed-generation
-and button-enabled receipt before it prompts for input. The button
-accepts one left-button down/up only while the sentinel is the native
-foreground root and the exact button owns focus. It records total left-button
-attempt counts so an extra click invalidates the acceptance run. A trusted
-human or separately authorized Computer Use surface performs that setup click,
-then stops interacting while the product actions run.
+The target, sentinel, occluder, and backdrop are nonactivating top-level
+windows. The orange sentinel is a disabled status surface that says no action
+is required; it never accepts or authorizes a setup click. Its window procedure
+passively counts left-button attempts, including child notifications, so any
+sentinel click invalidates the run. All legacy arm request and acknowledgement
+counters also remain zero for the whole run. WinForms can report a thread-local
+`Activated` callback even while another process still owns the OS-global
+foreground window, so the retained target and sentinel activation counters
+increment only when `GetForegroundWindow()` equals that exact fixture HWND.
 
-For remote coordination, start the retained runner and use
-`scripts/wait-windows-foreground-arm-handoff.ps1 -Mode Watch` to wait for the
-fresh schema-2 action request. Do not initialize, prewarm, or list the Windows
-Computer Use app share before that handoff. The correct order is: let the
-dedicated fixture process create the sentinel, let the runner bind its exact
-image/session/PID/ready-file topology and publish the fresh action marker, and
-only then initialize the separately authorized app share and list its windows.
-This ensures discovery observes the dedicated GUI that belongs to the current
-run rather than an inventory captured before it existed.
+After exact fixture and helper binding, the runner creates the sanitized
+schema-v3 `operator/foreground-arm-request.json` automatic notification. It
+then accepts three distinct, advancing fixture publications only while one
+unchanged foreground/focus root belongs to the runner's current interactive
+session but not to the fixture process. Each sample must also prove a native foreground-before/after
+seqlock, stable owner identity, matching focus root, unchanged global cursor,
+unchanged input desktop, and zero fixture input. The runner injects no input
+and changes no focus or cursor to establish this baseline. It then creates the
+matching schema-v3 `operator/foreground-arm-received.json` ready notification
+and proves one more fresh publication plus accepted-sample-to-baseline
+continuity before any product action.
 
-The watcher is read-only and binds the exact evidence directory plus runner
-PID/start time. Its one sanitized handoff prefers
-`windows-computer-use-app-share` and names `human-on-windows-session` as
-fallback, but grants neither consent nor acceptance authority. The stable AUMID
-may make the application easier to find; it is not a substitute for fresh
-visual confirmation of the exact orange **LBB Foreground Sentinel** and
-**CLICK TO ARM** button. The external surface still needs fresh one-shot
-authorization. Click at most once only when that fresh state is visible; if it
-shows **ARMED** or is ambiguous, click zero times. Never retry an unknown
-outcome. The fixture's native click receipt and advancing samples remain the
-only acceptance proof.
+For remote coordination, `scripts/wait-windows-foreground-arm-handoff.ps1 -Mode Watch`
+is read-only. It reports `automatic-ready` only after both
+create-once markers, the exact request identity and deadline, all stable native
+proof flags, fixture-process exclusion, three samples, and zero-input fields
+match. The watcher is notification-only and grants no product authority. No
+app-share discovery, visual relay, manual click, or external authorization is
+part of the Windows foreground-baseline gate.
 
 Every state write carries a monotonic publication generation. The runner
-requires distinct advancing publications for the click acknowledgement, each
-stable native sample, the baseline, and every later invariant comparison; one
-stale valid JSON snapshot cannot satisfy the live proof.
+requires distinct advancing publications for the initial zero-input boundary,
+each stable native sample, the bound baseline, and every later invariant
+comparison; one stale valid JSON snapshot cannot satisfy the live proof.
 
-Compile the embedded C# and exercise its pure arm-generation/counter state
-machine under the exact system Windows PowerShell 5.1 host without opening
-fixture windows or creating evidence. CI also builds a source-hash-bound
+Compile the embedded C# and exercise its zero-input and nonactivation contracts
+under the exact system Windows PowerShell 5.1 host without opening fixture
+windows or creating evidence. CI also compiles and runs the in-memory self-test
+under PowerShell 7, then builds a source-hash-bound
 temporary `WindowsApplication`, executes its strict `--self-test` entry point,
-and removes it. PowerShell 7 remains a parser surface rather than the live
-WinForms/.NET Framework acceptance runtime:
+and removes it. PowerShell 7 remains a compatibility self-test surface rather
+than the live WinForms/.NET Framework acceptance runtime:
 
 ```powershell
 $windowsPowerShell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -61,7 +60,7 @@ $windowsPowerShell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\
 The fixture writes only these files beneath the caller-selected directory:
 
 - `fixture-ready.json`: process and fixture-owned HWND identifiers;
-- `fixture-state.json`: current counters, bounds, foreground/system-cursor probes, and SHA-256/length text proofs;
+- `fixture-state.json`: current counters, fixture-owned bounds and handles, and SHA-256/length text proofs; it does not retain the external foreground handle or global cursor coordinates;
 - `fixture-events.ndjson`: fixture-owned input events, non-character message parameters, redacted character messages, and decoded key `lParam` bits.
 
 Character contents, tokens, environment variables, command lines, executable paths, and user-profile paths are never written. Existing evidence files are never replaced. Closing the target closes the test-owned sentinel and optional occluder; the target UI thread also closes its capture-evidence backdrop.

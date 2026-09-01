@@ -65,28 +65,112 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
-using System.Web.Script.Serialization;
 
 namespace LbbWindowsFixture
 {
-    internal static class NativeMethods
+    internal static class JsonValueWriter
     {
-        [StructLayout(LayoutKind.Sequential)]
-        internal struct POINT
+        internal static string Serialize(IDictionary<string, object> value)
         {
-            internal int X;
-            internal int Y;
+            if (value == null)
+            {
+                throw new ArgumentNullException("value");
+            }
+            StringBuilder output = new StringBuilder();
+            AppendObject(output, value);
+            return output.ToString();
         }
 
-        [DllImport("user32.dll")]
-        internal static extern IntPtr GetForegroundWindow();
+        private static void AppendObject(StringBuilder output, IDictionary<string, object> value)
+        {
+            output.Append('{');
+            bool first = true;
+            foreach (KeyValuePair<string, object> item in value)
+            {
+                if (!first)
+                {
+                    output.Append(',');
+                }
+                first = false;
+                AppendString(output, item.Key);
+                output.Append(':');
+                AppendValue(output, item.Value);
+            }
+            output.Append('}');
+        }
 
-        [DllImport("user32.dll")]
-        internal static extern IntPtr GetFocus();
+        private static void AppendValue(StringBuilder output, object value)
+        {
+            if (value == null)
+            {
+                output.Append("null");
+                return;
+            }
+            string text = value as string;
+            if (text != null)
+            {
+                AppendString(output, text);
+                return;
+            }
+            if (value is bool)
+            {
+                output.Append((bool)value ? "true" : "false");
+                return;
+            }
+            IDictionary<string, object> dictionary = value as IDictionary<string, object>;
+            if (dictionary != null)
+            {
+                AppendObject(output, dictionary);
+                return;
+            }
+            if ((value is double && (Double.IsNaN((double)value) || Double.IsInfinity((double)value))) ||
+                (value is float && (Single.IsNaN((float)value) || Single.IsInfinity((float)value))))
+            {
+                throw new InvalidOperationException("Non-finite fixture JSON numbers are forbidden.");
+            }
+            TypeCode typeCode = Type.GetTypeCode(value.GetType());
+            if (typeCode == TypeCode.Byte || typeCode == TypeCode.SByte ||
+                typeCode == TypeCode.Int16 || typeCode == TypeCode.UInt16 ||
+                typeCode == TypeCode.Int32 || typeCode == TypeCode.UInt32 ||
+                typeCode == TypeCode.Int64 || typeCode == TypeCode.UInt64 ||
+                typeCode == TypeCode.Decimal || typeCode == TypeCode.Double ||
+                typeCode == TypeCode.Single)
+            {
+                output.Append(Convert.ToString(value, CultureInfo.InvariantCulture));
+                return;
+            }
+            throw new InvalidOperationException("Unsupported fixture JSON value type: " + value.GetType().FullName);
+        }
 
-        [DllImport("user32.dll")]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        internal static extern bool GetCursorPos(out POINT point);
+        private static void AppendString(StringBuilder output, string value)
+        {
+            output.Append('"');
+            foreach (char character in value)
+            {
+                switch (character)
+                {
+                    case '"': output.Append("\\\""); break;
+                    case '\\': output.Append("\\\\"); break;
+                    case '\b': output.Append("\\b"); break;
+                    case '\f': output.Append("\\f"); break;
+                    case '\n': output.Append("\\n"); break;
+                    case '\r': output.Append("\\r"); break;
+                    case '\t': output.Append("\\t"); break;
+                    default:
+                        if (character < 0x20)
+                        {
+                            output.Append("\\u");
+                            output.Append(((int)character).ToString("x4", CultureInfo.InvariantCulture));
+                        }
+                        else
+                        {
+                            output.Append(character);
+                        }
+                        break;
+                }
+            }
+            output.Append('"');
+        }
     }
 
     internal sealed class EvidenceStore
@@ -122,8 +206,7 @@ namespace LbbWindowsFixture
                         record[item.Key] = item.Value;
                     }
                 }
-                JavaScriptSerializer serializer = new JavaScriptSerializer();
-                File.AppendAllText(eventPath, serializer.Serialize(record) + Environment.NewLine, new UTF8Encoding(false));
+                File.AppendAllText(eventPath, JsonValueWriter.Serialize(record) + Environment.NewLine, new UTF8Encoding(false));
                 return current;
             }
         }
@@ -143,8 +226,7 @@ namespace LbbWindowsFixture
         {
             lock (gate)
             {
-                JavaScriptSerializer serializer = new JavaScriptSerializer();
-                File.WriteAllText(statePath, serializer.Serialize(state), new UTF8Encoding(false));
+                File.WriteAllText(statePath, JsonValueWriter.Serialize(state), new UTF8Encoding(false));
             }
         }
 
@@ -152,8 +234,7 @@ namespace LbbWindowsFixture
         {
             lock (gate)
             {
-                JavaScriptSerializer serializer = new JavaScriptSerializer();
-                File.WriteAllText(readyPath, serializer.Serialize(ready), new UTF8Encoding(false));
+                File.WriteAllText(readyPath, JsonValueWriter.Serialize(ready), new UTF8Encoding(false));
             }
         }
 
@@ -532,6 +613,28 @@ namespace LbbWindowsFixture
 
     internal sealed class TargetForm : Form
     {
+        private const int SW_SHOWNOACTIVATE = 4;
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool ShowWindow(IntPtr window, int command);
+
+        protected override bool ShowWithoutActivation
+        {
+            get { return true; }
+        }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                const int WS_EX_NOACTIVATE = 0x08000000;
+                CreateParams parameters = base.CreateParams;
+                parameters.ExStyle |= WS_EX_NOACTIVATE;
+                return parameters;
+            }
+        }
+
         private readonly EvidenceStore store;
         private readonly MessageCounters counters;
         private readonly AnimatedTargetPanel animation;
@@ -547,6 +650,7 @@ namespace LbbWindowsFixture
         private int activatedCount;
         private long statePublicationGeneration;
         private bool readyWritten;
+        private bool lifecycleStarted;
 
         internal TargetForm(EvidenceStore evidenceStore, MessageCounters messageCounters)
         {
@@ -622,7 +726,7 @@ namespace LbbWindowsFixture
             focusedText = new LoggingTextBox(store, counters);
             focusedText.Name = "FocusedTextInput";
             focusedText.AccessibleName = "Focused Text Input";
-            focusedText.AccessibleDescription = "Retains the target UI thread focus chain while the sentinel owns the foreground";
+            focusedText.AccessibleDescription = "Fixture-owned text recipient for background input validation";
             focusedText.Text = String.Empty;
             focusedText.Location = new Point(550, 202);
             focusedText.Size = new Size(250, 30);
@@ -657,14 +761,6 @@ namespace LbbWindowsFixture
                 }
             };
 
-            Shown += delegate
-            {
-                focusedText.Select();
-                focusedText.Focus();
-                timer.Start();
-                store.AppendEvent("target", "shown", null);
-                FixtureRuntime.StartCompanions(this);
-            };
             FormClosed += delegate
             {
                 timer.Stop();
@@ -676,12 +772,27 @@ namespace LbbWindowsFixture
             focusedText.TextChanged += delegate { WriteState(); };
         }
 
+        internal void ShowNonActivating()
+        {
+            if (lifecycleStarted)
+            {
+                throw new InvalidOperationException("The fixture target can be shown only once.");
+            }
+            lifecycleStarted = true;
+            IntPtr window = Handle;
+            ShowWindow(window, SW_SHOWNOACTIVATE);
+            timer.Start();
+            store.AppendEvent("target", "shown", null);
+            FixtureRuntime.StartCompanions(this);
+        }
+
         protected override void OnActivated(EventArgs eventArgs)
         {
-            activatedCount++;
+            bool becameGlobalForeground = FixtureRuntime.IsGlobalForeground(Handle.ToInt64());
             base.OnActivated(eventArgs);
-            if (store != null)
+            if (becameGlobalForeground)
             {
+                activatedCount++;
                 Dictionary<string, object> details = new Dictionary<string, object>();
                 details["activatedCount"] = activatedCount;
                 store.AppendEvent("target", "activated", details);
@@ -731,8 +842,6 @@ namespace LbbWindowsFixture
             {
                 return;
             }
-            NativeMethods.POINT cursor;
-            bool hasCursor = NativeMethods.GetCursorPos(out cursor);
             Rectangle surfaceScreen = surface.RectangleToScreen(surface.ClientRectangle);
             Dictionary<string, object> state = new Dictionary<string, object>();
             state["schemaVersion"] = 1;
@@ -747,12 +856,8 @@ namespace LbbWindowsFixture
             state["armButtonHwnd"] = FixtureRuntime.ArmButtonHandle.ToString(CultureInfo.InvariantCulture);
             state["occluderHwnd"] = FixtureRuntime.OccluderHandle.ToString(CultureInfo.InvariantCulture);
             state["backdropHwnd"] = FixtureRuntime.BackdropHandle.ToString(CultureInfo.InvariantCulture);
-            state["foregroundHwnd"] = NativeMethods.GetForegroundWindow().ToInt64().ToString(CultureInfo.InvariantCulture);
             state["targetBounds"] = Rect(Bounds);
             state["surfaceScreenBounds"] = Rect(surfaceScreen);
-            state["cursor"] = hasCursor
-                ? (object)new Dictionary<string, object> { { "x", cursor.X }, { "y", cursor.Y } }
-                : null;
             state["animationFrame"] = animationFrame;
             state["invokeCount"] = invokeCount;
             state["semanticValue"] = new Dictionary<string, object>
@@ -788,11 +893,21 @@ namespace LbbWindowsFixture
         private readonly EvidenceStore store;
         private readonly Label statusLabel;
         private readonly Button armButton;
-        private int pressedArmGeneration;
 
         protected override bool ShowWithoutActivation
         {
             get { return true; }
+        }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                const int WS_EX_NOACTIVATE = 0x08000000;
+                CreateParams parameters = base.CreateParams;
+                parameters.ExStyle |= WS_EX_NOACTIVATE;
+                return parameters;
+            }
         }
 
         internal SentinelForm(EvidenceStore evidenceStore)
@@ -812,72 +927,20 @@ namespace LbbWindowsFixture
             statusLabel.Size = new Size(360, 62);
             statusLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             statusLabel.TextAlign = ContentAlignment.MiddleCenter;
-            statusLabel.Text = "FOREGROUND SENTINEL\r\nwait for the arm request before clicking";
+            statusLabel.Text = "AUTOMATIC BASELINE\r\nno operator action required";
             Controls.Add(statusLabel);
 
             armButton = new Button();
             armButton.Name = "ForegroundArmButton";
-            armButton.AccessibleName = "Click to arm Windows acceptance";
-            armButton.AccessibleDescription = "Requires a fresh left-mouse click after the runner requests foreground arming";
+            armButton.AccessibleName = "Automatic Windows acceptance baseline status";
+            armButton.AccessibleDescription = "Disabled status surface; no click or operator action is required";
             armButton.Location = new Point(12, 68);
             armButton.Size = new Size(336, 90);
             armButton.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
             armButton.Enabled = false;
-            armButton.Text = "WAITING FOR RUNNER";
+            armButton.Text = "NO ACTION REQUIRED";
             armButton.Font = new Font("Segoe UI", 15.0f, FontStyle.Bold, GraphicsUnit.Point);
             armButton.BackColor = Color.White;
-            armButton.MouseDown += delegate(object sender, MouseEventArgs eventArgs)
-            {
-                if (eventArgs.Button == MouseButtons.Left)
-                {
-                    FixtureRuntime.RecordForegroundArmLeftMouseDown();
-                }
-                if (eventArgs.Button != MouseButtons.Left ||
-                    !armButton.ClientRectangle.Contains(eventArgs.Location) ||
-                    NativeMethods.GetForegroundWindow() != Handle ||
-                    NativeMethods.GetFocus() != armButton.Handle)
-                {
-                    pressedArmGeneration = 0;
-                    return;
-                }
-                int requested = FixtureRuntime.ForegroundArmRequestedGeneration;
-                if (requested > 0 && requested != FixtureRuntime.ForegroundArmAcknowledgedGeneration)
-                {
-                    pressedArmGeneration = requested;
-                }
-                else
-                {
-                    pressedArmGeneration = 0;
-                }
-            };
-            armButton.LostFocus += delegate { pressedArmGeneration = 0; };
-            armButton.MouseUp += delegate(object sender, MouseEventArgs eventArgs)
-            {
-                if (eventArgs.Button == MouseButtons.Left)
-                {
-                    FixtureRuntime.RecordForegroundArmLeftMouseUp();
-                }
-                int pressed = pressedArmGeneration;
-                pressedArmGeneration = 0;
-                if (eventArgs.Button != MouseButtons.Left ||
-                    pressed <= 0 ||
-                    pressed != FixtureRuntime.ForegroundArmRequestedGeneration ||
-                    !armButton.ClientRectangle.Contains(eventArgs.Location) ||
-                    NativeMethods.GetForegroundWindow() != Handle ||
-                    NativeMethods.GetFocus() != armButton.Handle)
-                {
-                    return;
-                }
-                if (FixtureRuntime.TryAcknowledgeForegroundArm(pressed))
-                {
-                    statusLabel.Text = "ARMED\r\nDo not use this session until the run finishes";
-                    armButton.Text = "ARMED - DO NOT USE THIS SESSION";
-                    armButton.BackColor = Color.FromArgb(198, 239, 206);
-                    Dictionary<string, object> details = new Dictionary<string, object>();
-                    details["generation"] = pressed;
-                    store.AppendEvent("sentinel", "foregroundArmAcknowledged", details);
-                }
-            };
             Controls.Add(armButton);
             Shown += delegate
             {
@@ -887,46 +950,56 @@ namespace LbbWindowsFixture
             };
         }
 
-        protected override void WndProc(ref Message message)
-        {
-            if (message.Msg == FixtureRuntime.ForegroundArmMessage)
-            {
-                int generation = message.WParam.ToInt32();
-                if (FixtureRuntime.RecordForegroundArmRequest(generation))
-                {
-                    pressedArmGeneration = 0;
-                    statusLabel.Text = "ACTION REQUIRED\r\nClick once, then stop using this session";
-                    armButton.Enabled = true;
-                    FixtureRuntime.MarkForegroundArmButtonEnabled();
-                    armButton.Text = "CLICK TO ARM";
-                    Dictionary<string, object> details = new Dictionary<string, object>();
-                    details["generation"] = generation;
-                    store.AppendEvent("sentinel", "foregroundArmRequested", details);
-                }
-                return;
-            }
-            base.WndProc(ref message);
-        }
-
         protected override void OnActivated(EventArgs eventArgs)
         {
-            FixtureRuntime.IncrementSentinelActivated();
+            bool becameGlobalForeground = FixtureRuntime.IsGlobalForeground(Handle.ToInt64());
             base.OnActivated(eventArgs);
-            if (store != null)
+            if (becameGlobalForeground)
             {
+                FixtureRuntime.RecordSentinelForegroundActivation();
                 store.AppendEvent("sentinel", "activated", null);
             }
         }
 
         protected override void OnDeactivate(EventArgs eventArgs)
         {
-            pressedArmGeneration = 0;
-            FixtureRuntime.IncrementSentinelDeactivated();
             base.OnDeactivate(eventArgs);
-            if (store != null)
+            if (FixtureRuntime.RecordSentinelForegroundDeactivation())
             {
                 store.AppendEvent("sentinel", "deactivated", null);
             }
+        }
+
+        protected override void WndProc(ref Message message)
+        {
+            const int WM_LBUTTONDOWN = 0x0201;
+            const int WM_LBUTTONUP = 0x0202;
+            const int WM_NCLBUTTONDOWN = 0x00A1;
+            const int WM_NCLBUTTONUP = 0x00A2;
+            const int WM_PARENTNOTIFY = 0x0210;
+            int observedMessage = message.Msg;
+            if (message.Msg == WM_PARENTNOTIFY)
+            {
+                observedMessage = unchecked((int)((long)message.WParam & 0xffff));
+            }
+            bool leftDown = observedMessage == WM_LBUTTONDOWN || observedMessage == WM_NCLBUTTONDOWN;
+            bool leftUp = observedMessage == WM_LBUTTONUP || observedMessage == WM_NCLBUTTONUP;
+            if (leftDown || leftUp)
+            {
+                int count = leftDown
+                    ? FixtureRuntime.RecordPassiveLeftMouseDown()
+                    : FixtureRuntime.RecordPassiveLeftMouseUp();
+                if (store != null)
+                {
+                    Dictionary<string, object> details = new Dictionary<string, object>();
+                    details["count"] = count;
+                    store.AppendEvent(
+                        "sentinel",
+                        leftDown ? "passiveLeftMouseDownObserved" : "passiveLeftMouseUpObserved",
+                        details);
+                }
+            }
+            base.WndProc(ref message);
         }
     }
 
@@ -973,8 +1046,6 @@ namespace LbbWindowsFixture
 
     public static class FixtureRuntime
     {
-        // Acceptance-only UI handshake; this is not a product command surface.
-        internal const int ForegroundArmMessage = 0x8126;
         private static readonly ManualResetEvent sentinelReady = new ManualResetEvent(false);
         private static readonly ManualResetEvent occluderReady = new ManualResetEvent(false);
         private static SentinelForm sentinel;
@@ -983,14 +1054,9 @@ namespace LbbWindowsFixture
         private static int companionStarted;
         private static int sentinelActivated;
         private static int sentinelDeactivated;
-        private static int foregroundArmRequestedGeneration;
-        private static int foregroundArmAcknowledgedGeneration;
-        private static int foregroundArmRequestCount;
-        private static int foregroundArmAcknowledgementCount;
-        private static int foregroundArmLeftMouseDownCount;
-        private static int foregroundArmLeftMouseUpCount;
-        private static int foregroundArmButtonEnabled;
-
+        private static int sentinelForegroundActive;
+        private static int passiveLeftMouseDown;
+        private static int passiveLeftMouseUp;
         internal static bool ShowOccluder;
         internal static long SentinelHandle;
         internal static long ArmButtonHandle;
@@ -1017,86 +1083,73 @@ namespace LbbWindowsFixture
 
         internal static int ForegroundArmRequestedGeneration
         {
-            get { return Interlocked.CompareExchange(ref foregroundArmRequestedGeneration, 0, 0); }
+            get { return 0; }
         }
 
         internal static int ForegroundArmAcknowledgedGeneration
         {
-            get { return Interlocked.CompareExchange(ref foregroundArmAcknowledgedGeneration, 0, 0); }
+            get { return 0; }
         }
 
         internal static int ForegroundArmRequestCount
         {
-            get { return Interlocked.CompareExchange(ref foregroundArmRequestCount, 0, 0); }
+            get { return 0; }
         }
 
         internal static int ForegroundArmAcknowledgementCount
         {
-            get { return Interlocked.CompareExchange(ref foregroundArmAcknowledgementCount, 0, 0); }
+            get { return 0; }
         }
 
         internal static int ForegroundArmLeftMouseDownCount
         {
-            get { return Interlocked.CompareExchange(ref foregroundArmLeftMouseDownCount, 0, 0); }
+            get { return Interlocked.CompareExchange(ref passiveLeftMouseDown, 0, 0); }
         }
 
         internal static int ForegroundArmLeftMouseUpCount
         {
-            get { return Interlocked.CompareExchange(ref foregroundArmLeftMouseUpCount, 0, 0); }
+            get { return Interlocked.CompareExchange(ref passiveLeftMouseUp, 0, 0); }
         }
 
         internal static bool ForegroundArmButtonEnabled
         {
-            get { return Interlocked.CompareExchange(ref foregroundArmButtonEnabled, 0, 0) == 1; }
+            get { return false; }
         }
 
-        internal static void RecordForegroundArmLeftMouseDown()
-        {
-            Interlocked.Increment(ref foregroundArmLeftMouseDownCount);
-        }
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
 
-        internal static void RecordForegroundArmLeftMouseUp()
+        internal static bool IsGlobalForeground(long windowHandle)
         {
-            Interlocked.Increment(ref foregroundArmLeftMouseUpCount);
-        }
-
-        internal static void MarkForegroundArmButtonEnabled()
-        {
-            Interlocked.Exchange(ref foregroundArmButtonEnabled, 1);
-        }
-
-        internal static bool RecordForegroundArmRequest(int generation)
-        {
-            if (generation <= 0)
-            {
-                return false;
-            }
-            Interlocked.Increment(ref foregroundArmRequestCount);
-            int previous = Interlocked.Exchange(ref foregroundArmRequestedGeneration, generation);
-            if (previous == generation)
-            {
-                return false;
-            }
-            Interlocked.Exchange(ref foregroundArmAcknowledgedGeneration, 0);
-            return true;
-        }
-
-        internal static bool TryAcknowledgeForegroundArm(int generation)
-        {
-            if (generation <= 0 || generation != ForegroundArmRequestedGeneration)
-            {
-                return false;
-            }
-            if (Interlocked.CompareExchange(ref foregroundArmAcknowledgedGeneration, generation, 0) != 0)
-            {
-                return false;
-            }
-            Interlocked.Increment(ref foregroundArmAcknowledgementCount);
-            return true;
+            return windowHandle != 0 && GetForegroundWindow().ToInt64() == windowHandle;
         }
 
         public static void RunSelfTest()
         {
+            Dictionary<string, object> nestedJson = new Dictionary<string, object>();
+            nestedJson["quote"] = "a\"b";
+            nestedJson["ok"] = true;
+            Dictionary<string, object> jsonFixture = new Dictionary<string, object>();
+            jsonFixture["schemaVersion"] = 1;
+            jsonFixture["nested"] = nestedJson;
+            if (JsonValueWriter.Serialize(jsonFixture) != "{\"schemaVersion\":1,\"nested\":{\"quote\":\"a\\\"b\",\"ok\":true}}")
+            {
+                throw new InvalidOperationException("The cross-runtime fixture JSON writer failed its self-test.");
+            }
+            jsonFixture["nonFinite"] = Double.NaN;
+            bool nonFiniteRefused = false;
+            try
+            {
+                JsonValueWriter.Serialize(jsonFixture);
+            }
+            catch (InvalidOperationException)
+            {
+                nonFiniteRefused = true;
+            }
+            if (!nonFiniteRefused)
+            {
+                throw new InvalidOperationException("The fixture JSON writer accepted a non-finite number.");
+            }
             if (SentinelForm.StableWindowTitle != "LBB Foreground Sentinel")
             {
                 throw new InvalidOperationException("The stable foreground-sentinel window title failed its self-test.");
@@ -1105,49 +1158,47 @@ namespace LbbWindowsFixture
                 ForegroundArmAcknowledgedGeneration != 0 ||
                 ForegroundArmRequestCount != 0 ||
                 ForegroundArmAcknowledgementCount != 0 ||
-                RecordForegroundArmRequest(0) ||
-                !RecordForegroundArmRequest(41) ||
-                ForegroundArmRequestedGeneration != 41 ||
-                ForegroundArmRequestCount != 1 ||
-                RecordForegroundArmRequest(41) ||
-                ForegroundArmRequestCount != 2 ||
-                TryAcknowledgeForegroundArm(40) ||
-                !TryAcknowledgeForegroundArm(41) ||
-                TryAcknowledgeForegroundArm(41) ||
-                ForegroundArmAcknowledgedGeneration != 41 ||
-                ForegroundArmAcknowledgementCount != 1 ||
-                !RecordForegroundArmRequest(42) ||
-                ForegroundArmRequestedGeneration != 42 ||
-                ForegroundArmAcknowledgedGeneration != 0 ||
-                ForegroundArmRequestCount != 3 ||
-                ForegroundArmAcknowledgementCount != 1 ||
-                !TryAcknowledgeForegroundArm(42) ||
-                ForegroundArmAcknowledgedGeneration != 42 ||
-                ForegroundArmAcknowledgementCount != 2)
+                ForegroundArmLeftMouseDownCount != 0 ||
+                ForegroundArmLeftMouseUpCount != 0 ||
+                ForegroundArmButtonEnabled)
             {
-                throw new InvalidOperationException("The foreground-arm generation state machine failed its self-test.");
+                throw new InvalidOperationException("The automatic baseline must expose zero arm and input-attempt state.");
             }
-            RecordForegroundArmLeftMouseDown();
-            RecordForegroundArmLeftMouseUp();
-            if (ForegroundArmLeftMouseDownCount != 1 || ForegroundArmLeftMouseUpCount != 1)
+            if (RecordPassiveLeftMouseDown() != 1 ||
+                RecordPassiveLeftMouseUp() != 1 ||
+                ForegroundArmLeftMouseDownCount != 1 ||
+                ForegroundArmLeftMouseUpCount != 1)
             {
-                throw new InvalidOperationException("The foreground-arm input-attempt counters failed their self-test.");
-            }
-            MarkForegroundArmButtonEnabled();
-            if (!ForegroundArmButtonEnabled)
-            {
-                throw new InvalidOperationException("The foreground-arm button-enabled receipt failed its self-test.");
+                throw new InvalidOperationException("Passive non-authorizing sentinel input-attempt instrumentation failed its self-test.");
             }
         }
 
-        internal static void IncrementSentinelActivated()
+        internal static void RecordSentinelForegroundActivation()
         {
-            Interlocked.Increment(ref sentinelActivated);
+            if (Interlocked.Exchange(ref sentinelForegroundActive, 1) == 0)
+            {
+                Interlocked.Increment(ref sentinelActivated);
+            }
         }
 
-        internal static void IncrementSentinelDeactivated()
+        internal static bool RecordSentinelForegroundDeactivation()
         {
+            if (Interlocked.Exchange(ref sentinelForegroundActive, 0) == 0)
+            {
+                return false;
+            }
             Interlocked.Increment(ref sentinelDeactivated);
+            return true;
+        }
+
+        internal static int RecordPassiveLeftMouseDown()
+        {
+            return Interlocked.Increment(ref passiveLeftMouseDown);
+        }
+
+        internal static int RecordPassiveLeftMouseUp()
+        {
+            return Interlocked.Increment(ref passiveLeftMouseUp);
         }
 
         public static void Run(string evidenceDirectory, bool showOccluder)
@@ -1168,12 +1219,10 @@ namespace LbbWindowsFixture
                         backdrop.Show();
                         BackdropHandle = backdrop.Handle.ToInt64();
                         store.AppendEvent("backdrop", "shown", null);
-                        target.Shown += delegate
-                        {
-                            backdrop.Bounds = Rectangle.Inflate(target.Bounds, 28, 28);
-                            target.BringToFront();
-                        };
-                        Application.Run(target);
+                        target.FormClosed += delegate { Application.ExitThread(); };
+                        backdrop.Bounds = Rectangle.Inflate(target.Bounds, 28, 28);
+                        target.ShowNonActivating();
+                        Application.Run();
                         backdrop.Close();
                     }
                 }
@@ -1511,8 +1560,7 @@ if ($PSCmdlet.ParameterSetName -eq "Build") {
         -OutputType WindowsApplication `
         -ReferencedAssemblies @(
             "System.Windows.Forms",
-            "System.Drawing",
-            "System.Web.Extensions"
+            "System.Drawing"
         )
     $sourceSha256AfterBuild = Get-FixtureSourceSha256 $PSCommandPath
     if ($sourceSha256AfterBuild -cne $ExpectedSourceSha256) {
@@ -1528,17 +1576,45 @@ if ($PSCmdlet.ParameterSetName -eq "Build") {
     return
 }
 
-Add-Type -TypeDefinition $fixtureSource -Language CSharp -ReferencedAssemblies @(
+$fixtureSelfTestReferences = @(
     "System.Windows.Forms",
-    "System.Drawing",
-    "System.Web.Extensions"
+    "System.Drawing"
 )
+if ($PSVersionTable.PSEdition -ceq "Core") {
+    $fixtureSelfTestReferences += @(
+        "System.Collections",
+        "System.Collections.Specialized",
+        "System.ComponentModel.Primitives",
+        "System.ComponentModel.TypeConverter",
+        "System.Diagnostics.Process",
+        "System.Drawing.Common",
+        "System.Drawing.Primitives",
+        "System.Private.Windows.Core",
+        "System.Private.Windows.GdiPlus",
+        "System.Runtime",
+        "System.Runtime.Extensions",
+        "System.Runtime.InteropServices",
+        "System.Security.Cryptography",
+        "System.Security.Cryptography.Algorithms",
+        "System.Security.Cryptography.Primitives",
+        "System.Text.Encoding",
+        "System.Text.Encoding.Extensions",
+        "System.Threading",
+        "System.Threading.Thread",
+        "System.Windows.Forms.Primitives"
+    )
+}
+Add-Type -TypeDefinition $fixtureSource -Language CSharp -ReferencedAssemblies $fixtureSelfTestReferences
 $fixtureRuntimeType = ("$fixtureNamespace.FixtureRuntime" -as [type])
 if ($null -eq $fixtureRuntimeType) {
     throw "The isolated Windows fixture runtime type did not load."
 }
 
 if ($SelfTest) {
+    $targetSourceStart = $fixtureSource.IndexOf(
+        'internal sealed class TargetForm : Form',
+        [StringComparison]::Ordinal
+    )
     $sentinelSourceStart = $fixtureSource.IndexOf(
         'internal sealed class SentinelForm : Form',
         [StringComparison]::Ordinal
@@ -1548,9 +1624,15 @@ if ($SelfTest) {
         $sentinelSourceStart + 1,
         [StringComparison]::Ordinal
     )
-    if ($sentinelSourceStart -lt 0 -or $sentinelSourceEnd -le $sentinelSourceStart) {
-        throw "The foreground-sentinel source boundary failed its self-test."
+    if ($targetSourceStart -lt 0 -or
+        $sentinelSourceStart -le $targetSourceStart -or
+        $sentinelSourceEnd -le $sentinelSourceStart) {
+        throw "The target/sentinel source boundaries failed their self-test."
     }
+    $targetSource = $fixtureSource.Substring(
+        $targetSourceStart,
+        $sentinelSourceStart - $targetSourceStart
+    )
     $sentinelSource = $fixtureSource.Substring(
         $sentinelSourceStart,
         $sentinelSourceEnd - $sentinelSourceStart
@@ -1566,9 +1648,54 @@ if ($SelfTest) {
     if ($sentinelTitleAssignments.Count -ne 1 -or $allTopLevelTitleAssignments.Count -ne 1) {
         throw "The foreground-sentinel top-level title must be assigned exactly once from its stable creation-time constant."
     }
-    if ($sentinelSource.IndexOf('LBB Windows Acceptance - ACTION REQUIRED', [StringComparison]::Ordinal) -ge 0 -or
-        $sentinelSource.IndexOf('LBB Windows Acceptance - ARMED', [StringComparison]::Ordinal) -ge 0) {
+    if ($sentinelSource.IndexOf(('LBB Windows Acceptance - ACTION' + ' REQUIRED'), [StringComparison]::Ordinal) -ge 0 -or
+        $sentinelSource.IndexOf(('LBB Windows Acceptance - ' + 'ARMED'), [StringComparison]::Ordinal) -ge 0) {
         throw "The foreground-sentinel top-level title must not encode its arm state."
+    }
+    foreach ($nonactivatingSource in @($targetSource, $sentinelSource)) {
+        if ($nonactivatingSource.IndexOf('protected override bool ShowWithoutActivation', [StringComparison]::Ordinal) -lt 0 -or
+            $nonactivatingSource.IndexOf('parameters.ExStyle |= WS_EX_NOACTIVATE;', [StringComparison]::Ordinal) -lt 0) {
+            throw "Every target and sentinel top-level window must be explicitly nonactivating."
+        }
+    }
+    if ([regex]::Matches($fixtureSource, [regex]::Escape('protected override bool ShowWithoutActivation')).Count -ne 4 -or
+        [regex]::Matches($fixtureSource, [regex]::Escape('parameters.ExStyle |= WS_EX_NOACTIVATE')).Count -ne 4) {
+        throw "All four fixture top-level windows must preserve their nonactivating contract."
+    }
+    if ($targetSource.IndexOf('ShowWindow(window, SW_SHOWNOACTIVATE);', [StringComparison]::Ordinal) -lt 0 -or
+        $fixtureSource.IndexOf('target.ShowNonActivating();', [StringComparison]::Ordinal) -lt 0 -or
+        $fixtureSource.IndexOf('Application.Run(target);', [StringComparison]::Ordinal) -ge 0) {
+        throw "The target must enter its message loop through an explicit nonactivating Win32 show."
+    }
+    if ($targetSource.IndexOf('FixtureRuntime.IsGlobalForeground(Handle.ToInt64())', [StringComparison]::Ordinal) -lt 0 -or
+        $sentinelSource.IndexOf('FixtureRuntime.IsGlobalForeground(Handle.ToInt64())', [StringComparison]::Ordinal) -lt 0 -or
+        $sentinelSource.IndexOf('RecordSentinelForegroundDeactivation()', [StringComparison]::Ordinal) -lt 0) {
+        throw "Activation counters must record only real OS-global foreground transitions."
+    }
+    if ($sentinelSource.IndexOf('statusLabel.Text = "AUTOMATIC BASELINE\r\nno operator action required";', [StringComparison]::Ordinal) -lt 0 -or
+        $sentinelSource.IndexOf('armButton.Enabled = false;', [StringComparison]::Ordinal) -lt 0 -or
+        $sentinelSource.IndexOf('armButton.Text = "NO ACTION REQUIRED";', [StringComparison]::Ordinal) -lt 0 -or
+        $sentinelSource.IndexOf('protected override void WndProc(ref Message message)', [StringComparison]::Ordinal) -lt 0 -or
+        $sentinelSource.IndexOf('WM_PARENTNOTIFY', [StringComparison]::Ordinal) -lt 0 -or
+        $sentinelSource.IndexOf('RecordPassiveLeftMouseDown()', [StringComparison]::Ordinal) -lt 0 -or
+        $sentinelSource.IndexOf('RecordPassiveLeftMouseUp()', [StringComparison]::Ordinal) -lt 0) {
+        throw "The foreground status surface did not preserve its disabled automatic-baseline contract."
+    }
+    foreach ($forbiddenActivationSource in @(
+        ('BringTo' + 'Front();'),
+        ('.' + 'Focus();'),
+        ('.' + 'Select();'),
+        ('MouseDown ' + '+='),
+        ('MouseUp ' + '+='),
+        ('ForegroundArm' + 'Message'),
+        ('TryAcknowledge' + 'ForegroundArm'),
+        ('Record' + 'ForegroundArm'),
+        ('SetForeground' + 'Window'),
+        ('Send' + 'Input(')
+    )) {
+        if ($fixtureSource.IndexOf($forbiddenActivationSource, [StringComparison]::Ordinal) -ge 0) {
+            throw "The fixture retained a forbidden activation or synthetic-input path."
+        }
     }
     if ($fixtureProgramSource.IndexOf(
             'private const string AppUserModelId = "LocalBrowserBridge.WindowsAcceptance";',

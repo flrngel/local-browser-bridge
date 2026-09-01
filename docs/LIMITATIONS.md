@@ -74,7 +74,7 @@ not proof that an unobserved transient state never existed. The ledger records a
 was never tagged or published. The bounded observation and its limitations are
 preserved in the immutable [v0.12.34 negative-evidence commit](https://github.com/flrngel/local-browser-bridge/tree/aef8fc68018cdb6181ad3d0886acf4e71fcda96d/evidence/v0.12.34/computer/attempts/withdrawn-2509567-windows-pre-coordinator-interruption).
 
-Version 0.12.67 is the current source and schema-3 release-pipeline target. It
+Version 0.12.68 is the current source and schema-3 release-pipeline target. It
 retains the breakaway-enabled coordinator Job and atomic private Job-list child
 creation, but delays the persistent boundary until private staging and
 configuration verification, detached-worker Job binding and guard-ownership
@@ -105,7 +105,7 @@ bound completion receipt arrived after 11,765 ms, inside the app and runner's
 rejected it. The candidate was not retried and did not reach Windows or
 publication. Version 0.12.66 aligned all completion-receipt boundaries at 18
 seconds; it did not weaken receipt identity, chronology, create-once, or
-shared-seat requirements. Version 0.12.67 retains that repair.
+shared-seat requirements. Version 0.12.68 retains that repair.
 
 The exact v0.12.47 candidate passed both packaged macOS lanes and mandatory
 visual review, but its coordinator supplied an empty aggregate output path
@@ -165,9 +165,19 @@ The exact v0.12.62 candidate passed both fresh macOS lanes, but its sole Windows
 attempt retained only the persistent `reserved-no-retry` record. No matching
 coordinator, terminal result, evidence directory, candidate process, listener,
 or stock-Chrome record survived, so the protocol classifies the attempt as
-`candidate-execution-unknown`. Version 0.12.67 carries the same product fix with
-fresh package, candidate, reservation, and acceptance identity; no v0.12.62
-artifact or result is reusable.
+`candidate-execution-unknown`. Version 0.12.67 carried the same product fix with
+fresh package, candidate, reservation, and acceptance identity. That exact
+candidate passed the Windows trust and protocol-bound helper gates, published
+one foreground-arm request, and then received no mouse-down, mouse-up, or
+acknowledgement during its bounded 300-second interval. It failed closed before
+the invariant baseline or any product action and is terminal under its
+`reserved-no-retry` ledger. The sanitized record is retained on the immutable
+[`evidence/v0.12.67-windows-foreground-arm-timeout-33401392061-attempt-1`](https://github.com/flrngel/local-browser-bridge/tree/50070fdda84b329a5bcd9f6a5a7fceadf36add3c/evidence/v0.12.67/computer/attempts/withdrawn-98fcda7-windows-foreground-arm-timeout)
+branch. Version 0.12.68 removes the operator-dependent click from the Windows
+gate. It instead requires three fresh native publications that preserve the
+same external foreground/focus root, owner, cursor, and input desktop while
+excluding the fixture process; the runner neither activates the fixture nor
+injects global input. No v0.12.62 or v0.12.67 artifact or result is reusable.
 
 Coordinator records flush their file contents before an atomic create-once
 rename. That survives a dropped remote shell and ordinary process failure, but

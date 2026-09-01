@@ -950,8 +950,8 @@ fn background_invariant_failures_use_stage_bound_closed_vocabulary() {
 
 #[test]
 fn macos_v0_12_27_pointer_evidence_is_bounded_corroboration_not_causal_attribution() {
-    let rig = fs::read_to_string("evidence/v0.12.67/computer/helper-evidence-rig.mjs").unwrap();
-    let probe = fs::read_to_string("evidence/v0.12.67/computer/SystemProbe.swift").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.68/computer/helper-evidence-rig.mjs").unwrap();
+    let probe = fs::read_to_string("evidence/v0.12.68/computer/SystemProbe.swift").unwrap();
     assert!(rig.contains("failureProbeBaseline"));
     assert!(rig.contains("collectFailureDiagnostics"));
     assert!(rig.contains("systemInvariants(failureProbeBaseline.system, after)"));
@@ -997,7 +997,7 @@ fn macos_v0_12_27_pointer_evidence_is_bounded_corroboration_not_causal_attributi
     ] {
         assert!(
             rig.contains(required),
-            "missing v0.12.67 pointer contract: {required}"
+            "missing v0.12.68 pointer contract: {required}"
         );
     }
     assert!(!rig.contains("cursorUnchanged"));
@@ -1043,7 +1043,7 @@ fn macos_v0_12_27_pointer_evidence_is_bounded_corroboration_not_causal_attributi
 
 #[test]
 fn macos_v0_12_27_action_pointer_classifier_matches_the_sealed_action_schema() {
-    let rig = fs::read_to_string("evidence/v0.12.67/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.68/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let server = fs::read_to_string("src/server.rs")
@@ -1166,10 +1166,10 @@ fn macos_v0_12_27_action_pointer_classifier_matches_the_sealed_action_schema() {
 
 #[test]
 fn macos_v0_12_14_quiet_lane_stabilizes_the_native_seat_before_candidate_execution() {
-    let rig = fs::read_to_string("evidence/v0.12.67/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.68/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.67/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.68/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1266,13 +1266,13 @@ fn macos_v0_12_14_quiet_lane_stabilizes_the_native_seat_before_candidate_executi
 
 #[test]
 fn macos_v0_12_38_quiet_readiness_is_source_only_sanitized_and_non_evidence() {
-    let rig = fs::read_to_string("evidence/v0.12.67/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.68/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let finalizer = fs::read_to_string("scripts/finalize-macos-acceptance.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.67/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.68/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -1454,22 +1454,22 @@ fn macos_v0_12_38_quiet_readiness_is_source_only_sanitized_and_non_evidence() {
 
 #[test]
 fn macos_v0_12_27_app_share_handoff_is_exact_non_authoritative_and_fail_closed() {
-    let app = fs::read_to_string("evidence/v0.12.67/computer/AppShareHandoff.swift")
+    let app = fs::read_to_string("evidence/v0.12.68/computer/AppShareHandoff.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.67/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.68/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.67/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.68/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.67/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.68/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let normalized_readme = readme.split_whitespace().collect::<Vec<_>>().join(" ");
 
     for required in [
-        "private let productVersion = \"0.12.67\"",
+        "private let productVersion = \"0.12.68\"",
         "private let stableWindowTitle = \"LBB macOS Acceptance App Share\"",
         "private let readyButtonTitle = \"START APP-SHARE CHECK\"",
         "private let armWindowSeconds: TimeInterval = 300",
@@ -1778,7 +1778,7 @@ fn macos_v0_12_27_app_share_handoff_is_exact_non_authoritative_and_fail_closed()
 
 #[test]
 fn macos_v0_12_27_refreshes_post_handoff_share_action_authority_before_click() {
-    let rig = fs::read_to_string("evidence/v0.12.67/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.68/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let computer = fs::read_to_string("src/computer.rs")
@@ -1972,7 +1972,7 @@ fn macos_v0_12_27_refreshes_post_handoff_share_action_authority_before_click() {
 fn macos_pointer_arm_state_machine_execution_regressions_pass() {
     let output = match Command::new("node")
         .args([
-            "evidence/v0.12.67/computer/helper-evidence-rig.mjs",
+            "evidence/v0.12.68/computer/helper-evidence-rig.mjs",
             "--self-test",
         ])
         .output()
@@ -2001,7 +2001,7 @@ fn macos_pointer_arm_state_machine_execution_regressions_pass() {
 
 #[test]
 fn v0_12_27_marker_identity_is_exact_on_windows_and_posix() {
-    let rig = fs::read_to_string("evidence/v0.12.67/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.68/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -4982,7 +4982,7 @@ fn withdrawn_v0_12_9_macos_cursor_invariant_attempt_is_byte_exact_and_fail_close
 
 #[test]
 fn latest_macos_candidate_evidence_remains_version_bound_and_reduced() {
-    let entries = fs::read_dir("evidence/v0.12.67/computer")
+    let entries = fs::read_dir("evidence/v0.12.68/computer")
         .unwrap()
         .map(Result::unwrap)
         .map(|entry| {
@@ -5007,19 +5007,19 @@ fn latest_macos_candidate_evidence_remains_version_bound_and_reduced() {
         ])
     );
 
-    let rig = fs::read_to_string("evidence/v0.12.67/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.68/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     let fixture =
-        fs::read_to_string("evidence/v0.12.67/computer/HelperEvidenceFixture.swift").unwrap();
-    let readme = fs::read_to_string("evidence/v0.12.67/computer/README.md").unwrap();
+        fs::read_to_string("evidence/v0.12.68/computer/HelperEvidenceFixture.swift").unwrap();
+    let readme = fs::read_to_string("evidence/v0.12.68/computer/README.md").unwrap();
 
-    assert!(rig.contains("const EXPECTED_VERSION = \"0.12.67\";"));
+    assert!(rig.contains("const EXPECTED_VERSION = \"0.12.68\";"));
     assert!(rig.contains("const EXPECTED_ARCHIVE = `local-browser-bridge-v${EXPECTED_VERSION}-macos-universal.tar.gz`;"));
     assert!(rig.contains("status: \"passed-release-candidate\""));
     assert!(rig.contains("evidenceClass: \"exact-release-candidate-package-live-observation\""));
     assert!(rig.contains("candidateNotice:"));
-    assert!(fixture.contains("LBB v0.12.67 Persistent SCStream Evidence"));
+    assert!(fixture.contains("LBB v0.12.68 Persistent SCStream Evidence"));
     assert!(fixture.contains("var evidenceLane = \"\""));
     assert!(fixture.contains("\"evidence-lane=\\(evidenceLane)\".draw("));
     assert!(fixture.contains("environment[\"LBB_FIXTURE_EVIDENCE_LANE\"]"));
@@ -5032,12 +5032,12 @@ fn latest_macos_candidate_evidence_remains_version_bound_and_reduced() {
     assert!(readme.contains("`evidence-lane=quiet`"));
     assert!(readme.contains("all twelve lane screenshots to have distinct file SHA-256"));
     assert!(readme.contains("distinct canonical decoded-RGBA pixel SHA-256 digests"));
-    assert!(readme.contains("macOS v0.12.67 server and helper"));
-    assert!(readme.contains("local-browser-bridge-v0.12.67-macos-universal.tar.gz"));
-    assert!(!rig.replace("v0.12.67", "").contains("v0.12.1"));
-    assert!(!fixture.replace("v0.12.67", "").contains("v0.12.1"));
-    assert!(!rig.replace("v0.12.67", "").contains("v0.12.2"));
-    assert!(!fixture.replace("v0.12.67", "").contains("v0.12.2"));
+    assert!(readme.contains("macOS v0.12.68 server and helper"));
+    assert!(readme.contains("local-browser-bridge-v0.12.68-macos-universal.tar.gz"));
+    assert!(!rig.replace("v0.12.68", "").contains("v0.12.1"));
+    assert!(!fixture.replace("v0.12.68", "").contains("v0.12.1"));
+    assert!(!rig.replace("v0.12.68", "").contains("v0.12.2"));
+    assert!(!fixture.replace("v0.12.68", "").contains("v0.12.2"));
     let current_readme = readme
         .split("## Withdrawn v0.12.10 exact-candidate result")
         .next()
@@ -5084,10 +5084,10 @@ fn latest_macos_candidate_evidence_remains_version_bound_and_reduced() {
 
 #[test]
 fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
-    let rig = fs::read_to_string("evidence/v0.12.67/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.68/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.67/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.68/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let binder = fs::read_to_string("scripts/fetch-verify-release-candidate.sh")
@@ -5231,7 +5231,7 @@ fn macos_packaged_evidence_is_bound_to_an_out_of_band_canonical_manifest() {
 
 #[test]
 fn macos_packaged_evidence_streams_one_exact_bounded_pax_free_archive() {
-    let rig = fs::read_to_string("evidence/v0.12.67/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.68/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -5338,7 +5338,7 @@ fn macos_package_preparer_accepts_only_the_canonical_bounded_ustar_package() {
     }
 
     let repository = std::env::current_dir().unwrap();
-    let rig = repository.join("evidence/v0.12.67/computer/helper-evidence-rig.mjs");
+    let rig = repository.join("evidence/v0.12.68/computer/helper-evidence-rig.mjs");
     let temporary = tempfile::tempdir().unwrap();
     set_mode(temporary.path(), 0o700);
     let generator = temporary.path().join("make-package.py");
@@ -5416,7 +5416,7 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
         let case_root = temporary.path().join(scenario);
         fs::create_dir(&case_root).unwrap();
         set_mode(&case_root, 0o700);
-        let archive = case_root.join("local-browser-bridge-v0.12.67-macos-universal.tar.gz");
+        let archive = case_root.join("local-browser-bridge-v0.12.68-macos-universal.tar.gz");
         let generated = Command::new("python3")
             .arg(&generator)
             .arg(scenario)
@@ -5432,10 +5432,10 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
         let archive_sha256 = file_sha256(archive.to_str().unwrap());
         let zero_hash = "0".repeat(64);
         let manifest_text = format!(
-            "{zero_hash}  local-browser-bridge-v0.12.67-windows-x86_64.exe\n\
-             {zero_hash}  local-computer-helper-v0.12.67-windows-x86_64.exe\n\
-             {archive_sha256}  local-browser-bridge-v0.12.67-macos-universal.tar.gz\n\
-             {zero_hash}  local-browser-bridge-extension-v0.12.67.zip\n"
+            "{zero_hash}  local-browser-bridge-v0.12.68-windows-x86_64.exe\n\
+             {zero_hash}  local-computer-helper-v0.12.68-windows-x86_64.exe\n\
+             {archive_sha256}  local-browser-bridge-v0.12.68-macos-universal.tar.gz\n\
+             {zero_hash}  local-browser-bridge-extension-v0.12.68.zip\n"
         );
         let manifest = case_root.join("SHA256SUMS.txt");
         fs::write(&manifest, &manifest_text).unwrap();
@@ -5583,7 +5583,7 @@ with tarfile.open(archive_path, "w:gz", format=archive_format) as archive:
 
 #[test]
 fn macos_packaged_evidence_uses_a_clean_source_harness_and_fresh_lane_outputs() {
-    let rig = fs::read_to_string("evidence/v0.12.67/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.68/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -5640,7 +5640,7 @@ fn macos_packaged_evidence_uses_a_clean_source_harness_and_fresh_lane_outputs() 
 
 #[test]
 fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
-    let rig = fs::read_to_string("evidence/v0.12.67/computer/helper-evidence-rig.mjs").unwrap();
+    let rig = fs::read_to_string("evidence/v0.12.68/computer/helper-evidence-rig.mjs").unwrap();
     assert!(rig.contains("capturedFrameMatchesWindowGeometry"));
     assert!(rig.contains("share-resize-settled"));
     assert!(rig.contains("sample.sourceSequence > resizeTransition.sample.sourceSequence"));
@@ -5652,12 +5652,12 @@ fn macos_resize_evidence_requires_a_settled_geometry_bound_frame() {
 
 #[test]
 fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.67/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.68/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
     assert!(rig.contains("function childEnvironment(overrides = {})"));
     assert!(!rig.contains("...process.env"));
-    let fixture = fs::read_to_string("evidence/v0.12.67/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.68/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -5881,10 +5881,10 @@ fn macos_packaged_evidence_acts_types_and_explicitly_cancels_fail_closed() {
 
 #[test]
 fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() {
-    let rig = fs::read_to_string("evidence/v0.12.67/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.68/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.67/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.68/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
     let normalized_readme = readme.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -6016,10 +6016,10 @@ fn macos_packaged_evidence_closes_exact_target_under_a_live_share_fail_closed() 
 
 #[test]
 fn macos_system_probe_anchors_user_focus_to_the_ax_focused_onscreen_window() {
-    let probe = fs::read_to_string("evidence/v0.12.67/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.68/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.67/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.68/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
 
@@ -6047,21 +6047,21 @@ fn macos_system_probe_anchors_user_focus_to_the_ax_focused_onscreen_window() {
 
 #[test]
 fn macos_packaged_evidence_proves_same_pid_sibling_routing_without_unsafe_negative() {
-    let fixture = fs::read_to_string("evidence/v0.12.67/computer/HelperEvidenceFixture.swift")
+    let fixture = fs::read_to_string("evidence/v0.12.68/computer/HelperEvidenceFixture.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let probe = fs::read_to_string("evidence/v0.12.67/computer/SystemProbe.swift")
+    let probe = fs::read_to_string("evidence/v0.12.68/computer/SystemProbe.swift")
         .unwrap()
         .replace("\r\n", "\n");
-    let rig = fs::read_to_string("evidence/v0.12.67/computer/helper-evidence-rig.mjs")
+    let rig = fs::read_to_string("evidence/v0.12.68/computer/helper-evidence-rig.mjs")
         .unwrap()
         .replace("\r\n", "\n");
-    let readme = fs::read_to_string("evidence/v0.12.67/computer/README.md")
+    let readme = fs::read_to_string("evidence/v0.12.68/computer/README.md")
         .unwrap()
         .replace("\r\n", "\n");
 
     for required in [
-        "private let siblingFixtureTitle = \"LBB v0.12.67 Same-PID Sibling Receiver\"",
+        "private let siblingFixtureTitle = \"LBB v0.12.68 Same-PID Sibling Receiver\"",
         "var primaryWindowId = 0",
         "var siblingWindowId = 0",
         "var siblingTextLength = 0",
@@ -6672,7 +6672,7 @@ fn windows_helper_readiness_is_protocol_and_process_bound() {
     for required in [
         "$selfTestJob.StartProcess(",
         "GetDirectChildProcessIds($PID, $selfTestHostPath)",
-        "local-computer-helper-v0.12.67-windows-x86_64.exe",
+        "local-computer-helper-v0.12.68-windows-x86_64.exe",
         "$renamedHelperSelfTestJob.StartProcess(",
         "GetDirectChildProcessIds($PID, $renamedHelperSelfTestPath)",
         "The native exact-parent/full-image probe did not identify the renamed packaged-image self-test child.",
@@ -6863,8 +6863,9 @@ fn windows_fixture_wait_avoids_powershell_dynamic_scope_recursion() {
     }
 
     for required in [
-        "$script:runStage = \"wait-foreground-arm\"",
+        "$script:runStage = \"wait-stable-external-foreground\"",
         "failureDetails = [ordered]@{",
+        "reasonCode = Get-RunnerFailureReasonCode $script:runStage $failureText",
         "stage = $script:runStage",
         "fullyQualifiedErrorId = ConvertTo-SafeFailureText",
         "scriptStackTrace = ConvertTo-SafeFailureText",
@@ -7185,7 +7186,7 @@ fn windows_fixture_is_a_source_bound_dedicated_gui_process_with_exact_cleanup() 
 }
 
 #[test]
-fn windows_foreground_arm_requires_fresh_mouse_ack_and_stable_native_samples() {
+fn windows_foreground_baseline_requires_fresh_external_zero_input_samples() {
     let runner = fs::read_to_string("scripts/test-windows-computer-use.ps1")
         .unwrap()
         .replace("\r\n", "\n");
@@ -7198,83 +7199,83 @@ fn windows_foreground_arm_requires_fresh_mouse_ack_and_stable_native_samples() {
         "$PSVersionTable.PSEdition -cne \"Desktop\"",
         "$PSVersionTable.PSVersion.Major -ne 5",
         "Live Windows acceptance requires Windows PowerShell 5.1 (Desktop edition)",
-        "$foregroundArmMessage = 0x8126",
-        "$script:nativeProbeType::PostMessage(",
-        "[IntPtr]$foregroundArmRequestGeneration",
-        "ACTION REQUIRED: Through a separately authorized Windows Computer Use app share",
-        "function Test-ForegroundArmRequestDeliveryState {",
-        "$inputNotStarted -or $inputAlreadyComplete",
-        "$script:runStage = \"wait-foreground-arm-request-delivery\"",
-        "Save-StepRecord \"foreground arm request delivery\"",
-        "foregroundArmButtonEnabled",
-        "function Wait-ForStableForegroundArm {",
+        "function Wait-ForStableExternalForeground {",
         "[scriptblock]$StateReader = { Get-FixtureStateSnapshot }",
         "[scriptblock]$NativeReader = { $script:nativeProbeType::Capture() }",
         "[int]$ExpectedFixtureProcessId",
-        "[int]$RequestDeliveryTimeoutSeconds = 10",
+        "[int]$ExpectedInteractiveSessionId",
+        "[string]$RequestId",
         "[Int64]$AfterPublicationGeneration = 0",
-        "requestDeliveryTimeoutSeconds = $RequestDeliveryTimeoutSeconds",
-        "-RequestDeliveryTimeoutSeconds $foregroundArmRequestDeliveryTimeoutSeconds",
-        "-AfterPublicationGeneration ([Int64]$armRequestDelivery.statePublicationGeneration)",
-        "ValidateFixtureArmTopology",
-        "GetWindowThreadProcessIdWithOwner",
-        "IsWindow(IntPtr window)",
-        "IsChild(IntPtr parent, IntPtr child)",
-        "GetAncestor(IntPtr window, uint flags)",
         "[int]$RequiredStableSamples = 3",
-        "$requestMatched = [int]$state.foregroundArmRequestedGeneration -eq $RequestedGeneration",
-        "$acknowledgementMatched = [int]$state.foregroundArmAcknowledgedGeneration -eq $RequestedGeneration",
-        "$foregroundMatched = [Int64]$native.ForegroundHwnd -eq $SentinelHwnd",
-        "$focusMatched = [Int64]$native.FocusHwnd -eq $ArmButtonHwnd",
+        "$statePublicationAdvanced = $statePublicationGeneration -gt $lastAcceptedPublicationGeneration",
+        "$noFixtureInputObserved = (",
+        "[int]$state.foregroundArmRequestedGeneration -eq 0",
+        "[int]$state.foregroundArmAcknowledgedGeneration -eq 0",
+        "[int]$state.foregroundArmRequestCount -eq 0",
+        "[int]$state.foregroundArmAcknowledgementCount -eq 0",
+        "[int]$state.foregroundArmLeftMouseDownCount -eq 0",
+        "[int]$state.foregroundArmLeftMouseUpCount -eq 0",
+        "$state.foregroundArmButtonEnabled -eq $false",
+        "$nativeSampleSeqlockMatched = $native.NativeSampleSeqlockMatched -eq $true",
+        "$ownerIdentityStable = $native.OwnerIdentityStable -eq $true",
+        "[Int64]$native.FocusRootHwnd -eq [Int64]$native.ForegroundRootHwnd",
+        "[uint32]$native.ForegroundProcessId -ne [uint32]$ExpectedFixtureProcessId",
+        "[uint32]$native.FocusProcessId -ne [uint32]$ExpectedFixtureProcessId",
+        "[Int64]$native.ForegroundAfterHwnd -eq [Int64]$native.ForegroundHwnd",
+        "[Int64]$native.FocusAfterHwnd -eq [Int64]$native.FocusHwnd",
+        "[Int64]$native.ForegroundHwnd -ne $TargetHwnd",
+        "[uint32]$native.ForegroundSessionId -eq [uint32]$ExpectedInteractiveSessionId",
+        "[uint32]$native.FocusSessionId -eq [uint32]$ExpectedInteractiveSessionId",
         "$cursorAvailable = $native.CursorAvailable -eq $true",
-        "$leftMouseDownCountMatched",
-        "$leftMouseUpCountMatched",
-        "$nativeTopologyMatched",
-        "$statePublicationAdvanced",
+        "[string]$native.InputDesktop -cne \"unavailable\"",
         "$statePublicationGeneration -eq $lastAcceptedPublicationGeneration",
         "A repeated read of the same valid publication is neutral",
         "$signature -ceq $previousSignature",
-        "$timeoutWatch = [Diagnostics.Stopwatch]::StartNew()",
-        "foregroundStable = $stableSamples -ge $RequiredStableSamples",
-        "focusStable = $stableSamples -ge $RequiredStableSamples",
+        "mode = \"automatic-stable-external-foreground\"",
+        "operatorActionRequired = $false",
+        "action = \"none\"",
+        "requestId = $RequestId",
+        "clickAttemptsObserved = [Math]::Max(",
         "stableSamplesObserved = $stableSamples",
         "stablePublicationSamplesObserved = $stableSamples",
-        "baselineContinuityMatched = $false",
+        "globalInputUsed = $false",
+        "focusChangedByRunner = $false",
+        "cursorChangedByRunner = $false",
+        "syntheticInputUsed = $false",
         "rawWindowHandlesRecorded = $false",
+        "rawProcessIdentifiersRecorded = $false",
         "rawCursorCoordinatesRecorded = $false",
-        "snapshot resets arm stability instead of extending the arm timeout.",
-        "Timed out waiting for a fresh foreground-arm click and $RequiredStableSamples stable native samples.",
-        "Save-StepRecord \"foreground arm proof\" $script:foregroundArmProof",
-        "foregroundArmProof = $script:foregroundArmProof",
+        "interactiveSessionMatched = $interactiveSessionMatched",
+        "Timed out waiting for $RequiredStableSamples fresh stable external foreground publications.",
+        "$script:runStage = \"publish-foreground-baseline-request\"",
+        "Save-StepRecord \"automatic foreground baseline request\"",
+        "$script:runStage = \"wait-stable-external-foreground\"",
+        "Save-StepRecord \"automatic stable external foreground proof\" $script:foregroundArmProof",
+        "$script:runStage = \"bind-foreground-baseline\"",
         "$baselineProbe.foregroundHwnd -eq $armNativeSample.ForegroundHwnd.ToString()",
         "$baselineProbe.focusHwnd -eq $armNativeSample.FocusHwnd.ToString()",
         "$baselineProbe.cursor.x -eq $armNativeSample.CursorX",
         "$baselineProbe.inputDesktop -ceq [string]$armNativeSample.InputDesktop",
-        "$baselineProbe.foregroundArmRequestedGeneration -eq $foregroundArmRequestGeneration",
-        "$baselineProbe.foregroundArmAcknowledgedGeneration -eq $foregroundArmRequestGeneration",
-        "$baselineProbe.foregroundArmRequestCount -eq 1",
-        "$baselineProbe.foregroundArmAcknowledgementCount -eq 1",
-        "$baselineProbe.foregroundArmLeftMouseDownCount -eq 1",
-        "$baselineProbe.foregroundArmLeftMouseUpCount -eq 1",
-        "$baselineProbe.foregroundArmButtonEnabled -eq $true",
+        "$baselineProbe.targetActivatedCount -eq 0",
+        "$baselineProbe.sentinelActivatedCount -eq 0",
+        "$baselineProbe.sentinelDeactivatedCount -eq 0",
+        "$baselineProbe.foregroundArmRequestCount -eq 0",
+        "$baselineProbe.foregroundArmAcknowledgementCount -eq 0",
+        "$baselineProbe.foregroundArmLeftMouseDownCount -eq 0",
+        "$baselineProbe.foregroundArmLeftMouseUpCount -eq 0",
+        "$baselineProbe.foregroundArmButtonEnabled -eq $false",
         "$baselineProbe.statePublicationGeneration -gt [Int64]$foregroundArm.fixtureState.statePublicationGeneration",
-        "Capture-InvariantProbe -AfterStatePublicationGeneration ([Int64]$foregroundArm.fixtureState.statePublicationGeneration)",
-        "Capture-InvariantProbe -AfterStatePublicationGeneration $minimumPublicationGeneration",
-        "stale valid publication",
-        "$publicationSequence = @(11, 12, 13, 14, 14, 15, 15, 16)",
-        "$armProbe.stateReads -ne 8",
         "$script:foregroundArmProof.baselineContinuityMatched = $true",
-        "$baselineProbe.focusHwnd -eq [string]$script:fixtureReady.armButtonHwnd",
-        "$script:runStage = \"rebind-post-arm-helper-readiness\"",
+        "$script:runStage = \"rebind-post-baseline-helper-readiness\"",
         "Wait-ForBoundHelperWorker $helperProcess $initialHelperSessionId $postArmHelperDescription",
         "[int]$postArmWorker.processId -eq $initialWorkerPid",
         "Complete-HelperTopologyRoundTrip $postArmHelperDescription $initialHelperSessionId $initialWorkerPid \"computer.status\" $statusResponse",
-        "Save-StepResponse \"post-arm protocol-bound helper continuity\"",
+        "Save-StepResponse \"post-baseline protocol-bound helper continuity\"",
         "$targetPid -eq $fixtureProcess.Id",
     ] {
         assert!(
             runner.contains(required),
-            "Windows foreground-arm runner contract is missing: {required}"
+            "Windows automatic foreground-baseline runner contract is missing: {required}"
         );
     }
 
@@ -7291,23 +7292,22 @@ fn windows_foreground_arm_requires_fresh_mouse_ack_and_stable_native_samples() {
         .find("$script:runStage = \"select-exact-fixture-window\"")
         .unwrap();
     let request = runner
-        .find("$script:runStage = \"request-foreground-arm\"")
+        .find("$script:runStage = \"publish-foreground-baseline-request\"")
         .unwrap();
-    let delivery = runner
-        .find("$script:runStage = \"wait-foreground-arm-request-delivery\"")
+    let request_proof = runner
+        .find("Save-StepRecord \"automatic foreground baseline request\"")
         .unwrap();
-    let delivery_proof = runner
-        .find("Save-StepRecord \"foreground arm request delivery\"")
-        .unwrap();
-    let prompt = runner.find("Write-Host \"ACTION REQUIRED:").unwrap();
     let wait = runner
-        .find("$script:runStage = \"wait-foreground-arm\"")
+        .find("$script:runStage = \"wait-stable-external-foreground\"")
+        .unwrap();
+    let bind = runner
+        .find("$script:runStage = \"bind-foreground-baseline\"")
         .unwrap();
     let proof = runner
-        .find("Save-StepRecord \"foreground arm proof\"")
+        .find("Save-StepRecord \"automatic stable external foreground proof\"")
         .unwrap();
     let helper_rebind = runner
-        .find("$script:runStage = \"rebind-post-arm-helper-readiness\"")
+        .find("$script:runStage = \"rebind-post-baseline-helper-readiness\"")
         .unwrap();
     let continuity = runner
         .find("$script:foregroundArmProof.baselineContinuityMatched = $true")
@@ -7317,96 +7317,91 @@ fn windows_foreground_arm_requires_fresh_mouse_ack_and_stable_native_samples() {
         .unwrap();
     assert!(
         selection < request
-            && request < delivery
-            && delivery < delivery_proof
-            && delivery_proof < prompt
-            && prompt < wait
+            && request < request_proof
+            && request_proof < wait
+            && wait < bind
             && wait < continuity
+            && bind < continuity
             && continuity < proof
             && proof < helper_rebind
             && helper_rebind < baseline
     );
-    let pre_action_arm_boundary = &runner[selection..baseline];
+    let pre_action_baseline_boundary = &runner[selection..baseline];
     for forbidden in [
         "Invoke-LbbCommand ",
         "Invoke-LbbCommandResponse ",
         "Start-LbbCommandRequest ",
     ] {
         assert!(
-            !pre_action_arm_boundary.contains(forbidden),
-            "effectful product command appeared before foreground arming completed: {forbidden}"
+            !pre_action_baseline_boundary.contains(forbidden),
+            "effectful product command appeared before the automatic foreground baseline completed: {forbidden}"
         );
     }
 
     for required in [
         "[Parameter(ParameterSetName = \"SelfTest\", Mandatory = $true)]",
         "public static void RunSelfTest()",
-        "RecordForegroundArmRequest(0)",
-        "RecordForegroundArmRequest(41)",
-        "ForegroundArmRequestCount != 2",
-        "TryAcknowledgeForegroundArm(40)",
-        "TryAcknowledgeForegroundArm(41)",
-        "RecordForegroundArmRequest(42)",
-        "The foreground-arm generation state machine failed its self-test.",
-        "The foreground-arm input-attempt counters failed their self-test.",
-        "The foreground-arm button-enabled receipt failed its self-test.",
+        "The automatic baseline must expose zero arm and input-attempt state.",
+        "Passive non-authorizing sentinel input-attempt instrumentation failed its self-test.",
+        "The cross-runtime fixture JSON writer failed its self-test.",
+        "The fixture JSON writer accepted a non-finite number.",
         "Windows computer-use fixture self-test passed.",
-        "internal const int ForegroundArmMessage = 0x8126;",
+        "internal static class JsonValueWriter",
+        "internal sealed class TargetForm : Form",
+        "internal sealed class SentinelForm : Form",
+        "ShowWindow(window, SW_SHOWNOACTIVATE);",
+        "target.ShowNonActivating();",
+        "FixtureRuntime.IsGlobalForeground(Handle.ToInt64())",
+        "RecordSentinelForegroundDeactivation()",
         "armButton.Name = \"ForegroundArmButton\";",
         "armButton.Enabled = false;",
-        "armButton.Text = \"CLICK TO ARM\";",
-        "protected override bool ShowWithoutActivation",
+        "armButton.Text = \"NO ACTION REQUIRED\";",
+        "armButton.AccessibleName = \"Automatic Windows acceptance baseline status\";",
+        "armButton.AccessibleDescription = \"Disabled status surface; no click or operator action is required\";",
+        "statusLabel.Text = \"AUTOMATIC BASELINE\\r\\nno operator action required\";",
         "internal const string StableWindowTitle = \"LBB Foreground Sentinel\";",
-        "statusLabel.Text = \"ACTION REQUIRED\\r\\nClick once, then stop using this session\";",
-        "Text = StableWindowTitle;",
-        "statusLabel.Text = \"ARMED\\r\\nDo not use this session until the run finishes\";",
-        "armButton.MouseDown +=",
-        "armButton.MouseUp +=",
-        "eventArgs.Button != MouseButtons.Left",
-        "!armButton.ClientRectangle.Contains(eventArgs.Location)",
-        "armButton.LostFocus += delegate { pressedArmGeneration = 0; };",
-        "pressed != FixtureRuntime.ForegroundArmRequestedGeneration",
-        "NativeMethods.GetForegroundWindow() != Handle",
-        "NativeMethods.GetFocus() != armButton.Handle",
-        "FixtureRuntime.TryAcknowledgeForegroundArm(pressed)",
-        "FixtureRuntime.RecordForegroundArmLeftMouseDown()",
-        "FixtureRuntime.RecordForegroundArmLeftMouseUp()",
-        "FixtureRuntime.MarkForegroundArmButtonEnabled()",
-        "protected override void OnDeactivate(EventArgs eventArgs)",
-        "pressedArmGeneration = 0;",
-        "Interlocked.CompareExchange(ref foregroundArmAcknowledgedGeneration, generation, 0)",
-        "ready[\"armButtonHwnd\"]",
         "state[\"foregroundArmRequestedGeneration\"]",
         "state[\"foregroundArmAcknowledgedGeneration\"]",
+        "state[\"foregroundArmRequestCount\"]",
+        "state[\"foregroundArmAcknowledgementCount\"]",
         "state[\"foregroundArmLeftMouseDownCount\"]",
         "state[\"foregroundArmLeftMouseUpCount\"]",
         "state[\"foregroundArmButtonEnabled\"]",
         "state[\"statePublicationGeneration\"] = Interlocked.Increment(ref statePublicationGeneration);",
+        "protected override void WndProc(ref Message message)",
+        "RecordPassiveLeftMouseDown()",
+        "RecordPassiveLeftMouseUp()",
+        "Every target and sentinel top-level window must be explicitly nonactivating.",
+        "Activation counters must record only real OS-global foreground transitions.",
+        "The fixture retained a forbidden activation or synthetic-input path.",
     ] {
         assert!(
             fixture.contains(required),
-            "Windows foreground-arm fixture contract is missing: {required}"
+            "Windows automatic foreground fixture contract is missing: {required}"
         );
     }
 
-    let request_state_machine = fixture
-        .split("internal static bool RecordForegroundArmRequest(int generation)")
+    let fixture_program = fixture
+        .split("$fixtureSource = @'\n")
         .nth(1)
         .unwrap()
-        .split("internal static bool TryAcknowledgeForegroundArm")
+        .split("\n'@\n")
         .next()
         .unwrap();
-    let count_attempt = request_state_machine
-        .find("Interlocked.Increment(ref foregroundArmRequestCount);")
-        .unwrap();
-    let deduplicate = request_state_machine
-        .find("if (previous == generation)")
-        .unwrap();
-    assert!(
-        count_attempt < deduplicate,
-        "every positive foreground-arm request attempt must be counted before duplicate rejection"
-    );
+    for forbidden in ["Application.Run(target);", "JavaScriptSerializer"] {
+        assert!(
+            !fixture_program.contains(forbidden),
+            "the fixture retained an activation-prone or cross-runtime-incompatible implementation: {forbidden}"
+        );
+    }
 
+    let target = fixture
+        .split("internal sealed class TargetForm : Form")
+        .nth(1)
+        .unwrap()
+        .split("internal sealed class SentinelForm : Form")
+        .next()
+        .unwrap();
     let sentinel = fixture
         .split("internal sealed class SentinelForm : Form")
         .nth(1)
@@ -7414,61 +7409,27 @@ fn windows_foreground_arm_requires_fresh_mouse_ack_and_stable_native_samples() {
         .split("internal sealed class OccluderForm : Form")
         .next()
         .unwrap();
-    let mouse_down = sentinel
-        .split("armButton.MouseDown +=")
-        .nth(1)
-        .unwrap()
-        .split("armButton.LostFocus +=")
-        .next()
-        .unwrap();
-    for required in [
-        "eventArgs.Button != MouseButtons.Left",
-        "!armButton.ClientRectangle.Contains(eventArgs.Location)",
-        "NativeMethods.GetForegroundWindow() != Handle",
-        "NativeMethods.GetFocus() != armButton.Handle",
-    ] {
+    for (name, surface) in [("target", target), ("sentinel", sentinel)] {
         assert!(
-            mouse_down.contains(required),
-            "Windows foreground-arm mouse-down is missing: {required}"
+            surface.contains("protected override bool ShowWithoutActivation")
+                && surface.contains("parameters.ExStyle |= WS_EX_NOACTIVATE;"),
+            "the {name} fixture window must remain nonactivating"
         );
+        for forbidden in [
+            "BringToFront();",
+            ".Focus();",
+            ".Select();",
+            "MouseDown +=",
+            "MouseUp +=",
+            "PerformClick",
+        ] {
+            assert!(
+                !surface.contains(forbidden),
+                "the nonactivating {name} fixture window contains an input or focus path: {forbidden}"
+            );
+        }
     }
-    assert!(!sentinel.contains("Activate();"));
-    assert!(!sentinel.contains("Focus();"));
-    assert!(!sentinel.contains("armButton.Click +="));
-    assert!(!sentinel.contains("PerformClick"));
-    assert!(sentinel.contains("protected override bool ShowWithoutActivation"));
-    assert!(
-        !sentinel.contains("WS_EX_NOACTIVATE"),
-        "the sentinel must avoid activation only when first shown; the deliberate click must still activate and focus it"
-    );
-    let mouse_up = sentinel
-        .split("armButton.MouseUp +=")
-        .nth(1)
-        .unwrap()
-        .split("Controls.Add(armButton)")
-        .next()
-        .unwrap();
-    assert!(
-        !mouse_up.contains("armButton.Enabled = false"),
-        "the acknowledged button must keep recording a duplicate click attempt so the exactly-once proof fails closed"
-    );
-    assert_eq!(
-        sentinel.matches("TryAcknowledgeForegroundArm(").count(),
-        1,
-        "the fixture UI must acknowledge only from its mouse-release handler"
-    );
-    let production_runtime = fixture
-        .split("public static void RunSelfTest()")
-        .next()
-        .unwrap();
-    assert_eq!(
-        production_runtime
-            .matches("internal static bool TryAcknowledgeForegroundArm(")
-            .count(),
-        1,
-        "the production fixture runtime must expose one acknowledgement transition"
-    );
-    let arm_sources = format!("{runner}\n{fixture}");
+    let automatic_sources = format!("{runner}\n{fixture_program}");
     for forbidden in [
         "SetForegroundWindow",
         "AttachThreadInput",
@@ -7480,45 +7441,47 @@ fn windows_foreground_arm_requires_fresh_mouse_ack_and_stable_native_samples() {
         "LockSetForegroundWindow",
     ] {
         assert!(
-            !arm_sources.contains(forbidden),
-            "foreground-arm acceptance must not use a focus or global-input forcing API: {forbidden}"
+            !automatic_sources.contains(forbidden),
+            "automatic foreground-baseline acceptance must not use a focus or global-input forcing API: {forbidden}"
         );
     }
 
     for required in [
-        "$armProbe.stateReads -ne 8",
-        "$armProbe.nativeReads -ne 8",
-        "stale acknowledgement",
-        "missing click",
-        "duplicate request",
-        "duplicate acknowledgement",
-        "duplicate left mouse down",
-        "duplicate left mouse up",
-        "wrong button identity",
-        "native topology mismatch",
-        "foreground mismatch",
-        "focus mismatch",
+        "$baselineProbe.nativeReads -ne 7",
+        "$baselineStableResult.proof.completed -ne $true",
+        "$baselineStableResult.proof.stableSamplesObserved -ne 3",
+        "$baselineStableResult.proof.stablePublicationSamplesObserved -ne 3",
+        "target foreground",
+        "fixture foreground owner",
+        "fixture focus owner",
+        "zero foreground",
+        "zero focus",
+        "seqlock mismatch",
+        "owner identity unstable",
+        "focus root mismatch",
         "cursor unavailable",
         "input desktop unavailable",
+        "fixture input observed",
         "perpetual signature churn",
         "stale valid publication",
-        "The foreground-arm request-delivery predicate failed its synthetic",
-        "partial mouse down",
-        "duplicate input edges",
-        "button disabled",
-        "wrong button",
-        "The foreground-arm wait accepted a stale, unstable, or incomplete synthetic sequence.",
-        "The foreground-arm wait did not fail closed for the synthetic",
+        "Timed out waiting for 3 fresh stable external foreground publications.",
+        "The automatic external-foreground gate failed its synthetic success test.",
+        "The automatic external-foreground gate did not fail closed for the synthetic $baselineTimeoutCaseName case.",
+        "foreground-baseline-timeout",
+        "foreground-baseline-state-refused",
+        "foreground-baseline-continuity-failed",
+        "acceptance-test-failed",
+        "The runner failure reason-code mapping failed its closed-vocabulary self-test.",
     ] {
         assert!(
             runner.contains(required),
-            "Windows foreground-arm self-test is missing: {required}"
+            "Windows automatic foreground-baseline self-test is missing: {required}"
         );
     }
 }
 
 #[test]
-fn windows_foreground_arm_operator_markers_are_atomic_and_notification_only() {
+fn windows_foreground_baseline_markers_are_schema_v3_atomic_and_notification_only() {
     let runner = fs::read_to_string("scripts/test-windows-computer-use.ps1")
         .unwrap()
         .replace("\r\n", "\n");
@@ -7526,10 +7489,20 @@ fn windows_foreground_arm_operator_markers_are_atomic_and_notification_only() {
     let release_verifier =
         fs::read_to_string("scripts/verify-release-acceptance-evidence.sh").unwrap();
 
-    assert!(
-        release_verifier.contains(".expectedVisibleWindowTitle == \"LBB Foreground Sentinel\"")
-    );
-    assert!(!release_verifier.contains("\"LBB Windows Acceptance - ACTION REQUIRED\""));
+    assert!(release_verifier.contains(".kind == \"foreground-baseline\""));
+    assert!(release_verifier.contains(".mode == \"automatic-stable-external-foreground\""));
+    assert!(release_verifier.contains(".clickAttemptsObserved == 0"));
+    for step in [
+        "02-automatic-foreground-baseline-request.json",
+        "03-automatic-stable-external-foreground-proof.json",
+        "04-post-baseline-protocol-bound-helper-continuity.json",
+    ] {
+        assert!(
+            release_verifier.contains(step),
+            "release verifier omits the active automatic baseline step: {step}"
+        );
+    }
+    assert!(!release_verifier.contains(".expectedVisibleButtonText"));
 
     for required in [
         "function Write-NewOperatorMarker {",
@@ -7539,50 +7512,54 @@ fn windows_foreground_arm_operator_markers_are_atomic_and_notification_only() {
         "$stream.Flush($true)",
         "[IO.File]::Move($temporaryPath, $finalPath)",
         "Operator markers are create-once for this runner and cannot be overwritten by it.",
-        "function New-ForegroundArmRequestMarker {",
-        "schemaVersion = 2",
+        "function New-ForegroundBaselineRequestMarker {",
+        "function New-ForegroundBaselineReceivedMarker {",
+        "schemaVersion = 3",
         "productVersion = $ProductVersion",
-        "status = if ($operatorActionRequired) { \"action-required\" } else { \"already-armed\" }",
-        "preferredRelaySurface = \"windows-computer-use-app-share\"",
-        "fallbackRelaySurface = \"human-on-windows-session\"",
-        "expectedVisibleWindowTitle",
-        "expectedVisibleButtonText",
-        "expectedAccessibleName = \"Click to arm Windows acceptance\"",
-        "action = if ($operatorActionRequired) { \"single-left-click\" } else { \"none\" }",
-        "stopUiAfterAction = $true",
-        "requiresSeparateAuthorization = $true",
-        "markerGrantsAuthorization = $false",
-        "markerGrantsConsent = $false",
-        "externalOneShotConsentRequired = $true",
-        "visualConfirmationRequired = $true",
-        "maximumClickAttempts = if ($operatorActionRequired) { 1 } else { 0 }",
-        "retryOnUnknownOutcome = $false",
-        "inputStateAtPublication = $InputStateAtPublication",
-        "function New-ForegroundArmReceivedMarker {",
-        "An operator received marker requires the complete click and stable-native-sample proof.",
-        "exactClickCountsMatched = $true",
+        "kind = \"foreground-baseline\"",
+        "status = \"automatic\"",
+        "status = \"ready\"",
+        "mode = \"automatic-stable-external-foreground\"",
+        "operatorActionRequired = $false",
+        "action = \"none\"",
+        "requiredStableSamples = $RequiredStableSamples",
+        "clickAttemptsObserved = 0",
+        "stableSamplesObserved = [int]$Proof.stableSamplesObserved",
+        "stableSamplesRequired = [int]$Proof.stableSamplesRequired",
+        "nativeSampleSeqlockMatched = $true",
+        "ownerIdentityStable = $true",
+        "focusRootMatched = $true",
+        "fixtureProcessExcluded = $true",
+        "cursorStable = $true",
+        "inputDesktopStable = $true",
+        "globalInputUsed = $false",
+        "focusChangedByRunner = $false",
+        "cursorChangedByRunner = $false",
+        "syntheticInputUsed = $false",
         "notificationOnly = $true",
         "acceptedAsAuthority = $false",
         "rawWindowHandlesRecorded = $false",
+        "rawProcessIdentifiersRecorded = $false",
         "rawCursorCoordinatesRecorded = $false",
         "pathsRecorded = $false",
         "secretsRecorded = $false",
-        "The foreground-arm request marker failed its exact-schema self-test.",
-        "The operator marker writer failed its atomic create-once self-test.",
-        "The foreground-arm request marker did not suppress a duplicate-click prompt after an early valid acknowledgement.",
-        "The foreground-arm received marker accepted an incomplete or duplicate-click proof.",
+        "A foreground baseline received marker requires a complete automatic stable-external-foreground proof.",
+        "The automatic foreground-baseline request marker failed its exact-schema self-test.",
+        "The automatic foreground-baseline received marker failed its exact-proof self-test.",
+        "The operator marker writer failed its automatic-baseline atomic create-once self-test.",
+        "The foreground-baseline received marker accepted a nonzero click-attempt proof.",
     ] {
         assert!(
             runner.contains(required),
-            "Windows foreground-arm operator-marker contract is missing: {required}"
+            "Windows automatic foreground-baseline marker contract is missing: {required}"
         );
     }
 
     let request_factory = runner
-        .split("function New-ForegroundArmRequestMarker {")
+        .split("function New-ForegroundBaselineRequestMarker {")
         .nth(1)
         .unwrap()
-        .split("function New-ForegroundArmReceivedMarker {")
+        .split("function New-ForegroundBaselineReceivedMarker {")
         .next()
         .unwrap();
     for forbidden in [
@@ -7603,47 +7580,43 @@ fn windows_foreground_arm_operator_markers_are_atomic_and_notification_only() {
         .split("$sessionId = (Get-Process -Id $PID).SessionId")
         .nth(1)
         .unwrap();
-    let delivery_proof = live_runner
-        .find("Save-StepRecord \"foreground arm request delivery\"")
+    let initial_publication = live_runner
+        .find("$foregroundBaselineBoundary = Wait-ForFixtureProof")
         .unwrap();
     let request_marker = live_runner
-        .find("$foregroundArmRequestMarker = New-ForegroundArmRequestMarker")
+        .find("$foregroundBaselineRequestMarker = New-ForegroundBaselineRequestMarker")
         .unwrap();
-    let prompt = live_runner.find("Write-Host \"ACTION REQUIRED:").unwrap();
+    let request_step = live_runner
+        .find("Save-StepRecord \"automatic foreground baseline request\"")
+        .unwrap();
     let stable_wait = live_runner
-        .find("$foregroundArm = Wait-ForStableForegroundArm")
+        .find("$foregroundArm = Wait-ForStableExternalForeground")
         .unwrap();
     let received_marker = live_runner
-        .find("$foregroundArmReceivedMarker = New-ForegroundArmReceivedMarker")
+        .find("$foregroundBaselineReceivedMarker = New-ForegroundBaselineReceivedMarker")
+        .unwrap();
+    let received_publication = live_runner
+        .find("-FileName \"foreground-arm-received.json\"")
         .unwrap();
     let baseline = live_runner
         .find("$baselineProbe = Capture-InvariantProbe")
         .unwrap();
     assert!(
-        delivery_proof < request_marker
-            && request_marker < prompt
-            && prompt < stable_wait
+        initial_publication < request_marker
+            && request_marker < request_step
+            && request_step < stable_wait
             && stable_wait < received_marker
-            && received_marker < baseline,
-        "operator markers are not ordered around the existing click/native proof boundary"
-    );
-    assert_eq!(
-        live_runner.matches("$foregroundArmRequestMarker").count(),
-        2,
-        "the live runner must only construct and write the request marker"
-    );
-    assert_eq!(
-        live_runner.matches("$foregroundArmReceivedMarker").count(),
-        2,
-        "the live runner must only construct and write the received marker"
+            && received_marker < received_publication
+            && received_publication < baseline,
+        "automatic markers are not ordered around the stable external-foreground proof boundary"
     );
     for forbidden in [
-        "ReadAllText($foregroundArmRequestMarker",
-        "ReadAllBytes($foregroundArmRequestMarker",
-        "Get-Content $foregroundArmRequestMarker",
-        "ReadAllText($foregroundArmReceivedMarker",
-        "ReadAllBytes($foregroundArmReceivedMarker",
-        "Get-Content $foregroundArmReceivedMarker",
+        "ReadAllText($foregroundBaselineRequestMarker",
+        "ReadAllBytes($foregroundBaselineRequestMarker",
+        "Get-Content $foregroundBaselineRequestMarker",
+        "ReadAllText($foregroundBaselineReceivedMarker",
+        "ReadAllBytes($foregroundBaselineReceivedMarker",
+        "Get-Content $foregroundBaselineReceivedMarker",
     ] {
         assert!(
             !live_runner.contains(forbidden),
@@ -7656,7 +7629,7 @@ fn windows_foreground_arm_operator_markers_are_atomic_and_notification_only() {
     assert_eq!(runner.matches("Save-ObservationScreenshot $").count(), 18);
     assert_eq!(runner.matches("Save-SanitizedDesktopCrop \"").count(), 2);
     assert!(development.contains(
-        "exactly 88 files: three fixture records, 62 step records, 20 sanitized screenshots, two operator notifications, and `summary.json`"
+        "exactly 88 files: three fixture records, 62 step records, 20 sanitized screenshots, the two legacy-named automatic notifications, and `summary.json`"
     ));
 }
 
@@ -7671,6 +7644,9 @@ fn windows_acceptance_coordinator_is_single_attempt_non_ui_and_fail_closed() {
         "[ValidateSet(\"Start\", \"Follow\", \"SelfTest\")]",
         "$script:SuccessMessage = \"Windows computer-use acceptance coordinator self-test passed.\"",
         "$script:AttemptReservationSchemaVersion = 2",
+        "$script:ProductVersion = \"0.12.68\"",
+        "$script:ForegroundGateMode = \"automatic-stable-external-foreground\"",
+        "$script:AutomaticHandoffSchemaVersion = 2",
         "function Start-Coordinator {",
         "function Follow-Coordinator {",
         "function Invoke-SelfTest {",
@@ -7684,8 +7660,9 @@ fn windows_acceptance_coordinator_is_single_attempt_non_ui_and_fail_closed() {
         "retryAllowed = $false",
         "status = \"failed-closed\"",
         "uiActionAllowed = $false",
-        "stopUiAfterAction = $true",
-        "maximumClickAttempts = [int]$handoff.maximumClickAttempts",
+        "foregroundGateMode = $script:ForegroundGateMode",
+        "operatorActionRequired = $false",
+        "action = \"none\"",
         "runner.stdout.log",
         "runner.stderr.log",
         "watcher.stdout.log",
@@ -7720,8 +7697,13 @@ fn windows_acceptance_coordinator_is_single_attempt_non_ui_and_fail_closed() {
         "if (-not $acceptanceCompleted) {",
         "\"watcher-handoff-missing\"",
         "\"runner-summary-failed\"",
-        "consumerMustDeduplicateByRequestId = $true",
-        "externalAuthorizationVerifiedByWatcher = $false",
+        "function Get-RunnerSummaryFailureReasonCode {",
+        "\"foreground-baseline-timeout\" { return \"runner-foreground-baseline-timeout\" }",
+        "\"foreground-baseline-state-refused\" { return \"runner-foreground-baseline-state-refused\" }",
+        "\"foreground-baseline-continuity-failed\" { return \"runner-foreground-baseline-continuity-failed\" }",
+        "\"acceptance-test-failed\" { return \"runner-acceptance-test-failed\" }",
+        "$summaryFailureReasonCode = Get-RunnerSummaryFailureReasonCode $summary",
+        "Runner summary typed-failure projection self-test failed.",
         "Candidate input changes minted a second per-version attempt key.",
         "Follow accepted a post-boundary record without the persistent reservation.",
         "Follow persistent-boundary-only self-test failed.",
@@ -7746,10 +7728,18 @@ fn windows_acceptance_coordinator_is_single_attempt_non_ui_and_fail_closed() {
         .split("Write-CreateOnceJson $files.Final")
         .next()
         .unwrap();
+    let summary_reason = terminal_reason
+        .find("elseif (-not $summaryPassed) { $summaryFailureReasonCode }")
+        .unwrap();
+    let runner_nonzero = terminal_reason
+        .find("elseif ($runnerExit -ne 0) { \"runner-nonzero\" }")
+        .unwrap();
+    let watcher_missing = terminal_reason
+        .find("elseif (-not $watcherAccepted -or -not $handoffPublished) { \"watcher-handoff-missing\" }")
+        .unwrap();
     assert!(
-        terminal_reason.find("\"runner-summary-failed\"").unwrap()
-            < terminal_reason.find("\"watcher-handoff-missing\"").unwrap(),
-        "a concrete failed runner summary must not be masked as a missing watcher handoff"
+        summary_reason < runner_nonzero && runner_nonzero < watcher_missing,
+        "a typed failed runner summary must not be masked as a nonzero exit or missing automatic handoff"
     );
 
     let lower = coordinator.to_ascii_lowercase();
@@ -8110,6 +8100,28 @@ fn windows_acceptance_coordinator_publication_and_detached_environment_are_close
         .split("function Write-FollowFailureOutput {")
         .next()
         .unwrap();
+    for required in [
+        "status = \"running\"",
+        "foregroundGateMode = $script:ForegroundGateMode",
+        "operatorActionRequired = $false",
+        "action = \"none\"",
+        "retryOnUnknownOutcome = $false",
+        "Write-Output $startOutput",
+    ] {
+        assert!(
+            start.contains(required),
+            "Start does not truthfully expose its nonblocking automatic mode: {required}"
+        );
+    }
+    for forbidden in [
+        "Wait-ForegroundBaselineHandoff",
+        "status = \"automatic-ready\"",
+    ] {
+        assert!(
+            !start.contains(forbidden),
+            "Start must not wait for or claim completed foreground proof: {forbidden}"
+        );
+    }
     let config_publish = start
         .find("Write-CreateOnceJson $files.Config $config")
         .unwrap();
@@ -8876,7 +8888,7 @@ fn windows_acceptance_follow_is_non_authoritative_and_summary_bound() {
         "catch { $summaryPassed = $false }",
         "$summaryPassed -and",
         "summaryPassed = $summaryPassed",
-        "elseif (-not $summaryPassed) { \"runner-summary-failed\" }",
+        "elseif (-not $summaryPassed) { $summaryFailureReasonCode }",
     ] {
         assert!(
             terminal.contains(required),
@@ -8966,21 +8978,47 @@ fn windows_acceptance_follow_is_non_authoritative_and_summary_bound() {
     assert!(follow.contains("notificationOnly = [bool]$handoff.notificationOnly"));
     assert!(follow.contains("acceptedAsAuthority = [bool]$handoff.acceptedAsAuthority"));
     for required in [
-        "requiresSeparateAuthorization = [bool]$handoff.requiresSeparateAuthorization",
-        "markerGrantsAuthorization = [bool]$handoff.markerGrantsAuthorization",
-        "markerGrantsConsent = [bool]$handoff.markerGrantsConsent",
-        "externalOneShotConsentRequired = [bool]$handoff.externalOneShotConsentRequired",
-        "externalAuthorizationVerifiedByWatcher = [bool]$handoff.externalAuthorizationVerifiedByWatcher",
-        "consumerMustDeduplicateByRequestId = $true",
+        "status = \"automatic-ready\"",
+        "mode = [string]$handoff.mode",
+        "operatorActionRequired = [bool]$handoff.operatorActionRequired",
+        "action = [string]$handoff.action",
+        "clickAttemptsObserved = [int]$handoff.clickAttemptsObserved",
+        "stableSamplesObserved = [int]$handoff.stableSamplesObserved",
+        "stableSamplesRequired = [int]$handoff.stableSamplesRequired",
+        "nativeSampleSeqlockMatched = [bool]$handoff.nativeSampleSeqlockMatched",
+        "ownerIdentityStable = [bool]$handoff.ownerIdentityStable",
+        "focusRootMatched = [bool]$handoff.focusRootMatched",
+        "fixtureProcessExcluded = [bool]$handoff.fixtureProcessExcluded",
+        "interactiveSessionMatched = [bool]$handoff.interactiveSessionMatched",
+        "cursorStable = [bool]$handoff.cursorStable",
+        "inputDesktopStable = [bool]$handoff.inputDesktopStable",
+        "globalInputUsed = [bool]$handoff.globalInputUsed",
+        "focusChangedByRunner = [bool]$handoff.focusChangedByRunner",
+        "cursorChangedByRunner = [bool]$handoff.cursorChangedByRunner",
+        "syntheticInputUsed = [bool]$handoff.syntheticInputUsed",
+        "runnerIdentityMatched = [bool]$handoff.runnerIdentityMatched",
+        "requestFresh = [bool]$handoff.requestFresh",
+        "receivedBeforeDeadline = [bool]$handoff.receivedBeforeDeadline",
         "uiActionAllowed = $false",
         "notificationOnly = [bool]$handoff.notificationOnly",
         "acceptedAsAuthority = [bool]$handoff.acceptedAsAuthority",
+        "rawWindowHandlesRecorded = [bool]$handoff.rawWindowHandlesRecorded",
+        "rawProcessIdentifiersRecorded = [bool]$handoff.rawProcessIdentifiersRecorded",
+        "rawCursorCoordinatesRecorded = [bool]$handoff.rawCursorCoordinatesRecorded",
     ] {
         assert!(
             follow.contains(required),
-            "Follow handoff is not explicitly non-authoritative: {required}"
+            "Follow automatic-ready projection is incomplete: {required}"
         );
     }
+    let handoff_check = follow
+        .find("if ([IO.File]::Exists($files.Handoff))")
+        .unwrap();
+    let automatic_ready = follow.find("status = \"automatic-ready\"").unwrap();
+    assert!(
+        handoff_check < automatic_ready,
+        "Follow must not emit automatic-ready before validating a matching handoff proof"
+    );
     for forbidden in [
         "Write-CreateOnceJson",
         "Start-CapturedProcess",
@@ -9024,7 +9062,7 @@ fn windows_acceptance_follow_is_non_authoritative_and_summary_bound() {
     assert!(terminal_projection.contains("$final.evidenceDirectoryPresent -ne $true"));
     assert!(terminal_projection.contains("-ReasonCode \"final-record-not-successful\""));
     for required in [
-        "Follow non-authoritative repeated-handoff self-test failed.",
+        "Follow automatic foreground-baseline handoff self-test failed.",
         "Follow terminal-failure precedence self-test failed.",
         "Follow lone-final chain self-test accepted an impossible completion.",
         "Follow missing-intent chain self-test accepted an impossible handoff.",
@@ -9038,7 +9076,7 @@ fn windows_acceptance_follow_is_non_authoritative_and_summary_bound() {
 }
 
 #[test]
-fn windows_foreground_arm_handoff_watcher_is_strict_read_only_and_non_authoritative() {
+fn windows_foreground_baseline_watcher_validates_matching_schema_v3_proof_read_only() {
     let watcher = fs::read_to_string("scripts/wait-windows-foreground-arm-handoff.ps1")
         .unwrap()
         .replace("\r\n", "\n");
@@ -9047,90 +9085,148 @@ fn windows_foreground_arm_handoff_watcher_is_strict_read_only_and_non_authoritat
         .replace("\r\n", "\n");
 
     for required in [
-        "$script:ProductVersion = \"0.12.67\"",
-        "$script:MarkerSchemaVersion = 2",
+        "$script:ProductVersion = \"0.12.68\"",
+        "$script:ForegroundGateMode = \"automatic-stable-external-foreground\"",
+        "$script:MarkerSchemaVersion = 3",
+        "$script:HandoffSchemaVersion = 2",
         "function Assert-ExactPropertyOrder {",
-        "function Assert-ExactMarkerSchema {",
+        "function Assert-ExactRequestMarkerSchema {",
+        "function Assert-ExactReceivedMarkerSchema {",
         "function Resolve-OrdinaryEvidenceDirectory {",
-        "function Read-AtomicRequestMarker {",
+        "function Read-AtomicForegroundMarker {",
         "function Assert-BoundRunnerState {",
-        "function Assert-FreshMarkerBinding {",
+        "function Assert-FreshRequestBinding {",
+        "function Assert-ReceivedMarkerBinding {",
         "function New-SanitizedHandoff {",
-        "function Wait-ForegroundArmHandoff {",
-        "[object[]]$MarkerReaderArguments = @()",
-        "$atomicMarker = & $MarkerReader @MarkerReaderArguments",
-        "-MarkerReaderArguments @($markerPath, $operatorDirectory)",
-        "lbb-foreground-arm-watcher-self-test-",
+        "function Wait-ForegroundBaselineHandoff {",
+        "[object[]]$RequestReaderArguments = @()",
+        "[object[]]$ReceivedReaderArguments = @()",
+        "$atomicRequest = & $RequestReader @RequestReaderArguments",
+        "$atomicReceived = & $ReceivedReader @ReceivedReaderArguments",
+        "foreground-arm-request.json",
+        "foreground-arm-received.json",
+        "lbb-foreground-baseline-watcher-self-test-",
         "The zero-write live-style marker callback failed its self-test.",
-        "preferredRelaySurface = \"windows-computer-use-app-share\"",
-        "fallbackRelaySurface = \"human-on-windows-session\"",
-        "expectedAccessibleName = \"Click to arm Windows acceptance\"",
-        "externalAuthorizationVerifiedByWatcher = $false",
-        "markerGrantsAuthorization = $false",
-        "markerGrantsConsent = $false",
-        "externalOneShotConsentRequired = $true",
-        "visualConfirmationRequired = $true",
-        "retryOnUnknownOutcome = $false",
+        "kind = \"foreground-baseline-ready-handoff\"",
+        "status = \"automatic-ready\"",
+        "deadlineAtUtc = ConvertTo-CanonicalUtcString $Deadline",
+        "mode = $script:ForegroundGateMode",
+        "operatorActionRequired = $false",
+        "action = \"none\"",
+        "clickAttemptsObserved = [int]$ReceivedMarker.clickAttemptsObserved",
+        "stableSamplesObserved = [int]$ReceivedMarker.stableSamplesObserved",
+        "interactiveSessionMatched = [bool]$ReceivedMarker.interactiveSessionMatched",
+        "nativeSampleSeqlockMatched = [bool]$ReceivedMarker.nativeSampleSeqlockMatched",
+        "ownerIdentityStable = [bool]$ReceivedMarker.ownerIdentityStable",
+        "focusRootMatched = [bool]$ReceivedMarker.focusRootMatched",
+        "fixtureProcessExcluded = [bool]$ReceivedMarker.fixtureProcessExcluded",
+        "cursorStable = [bool]$ReceivedMarker.cursorStable",
+        "inputDesktopStable = [bool]$ReceivedMarker.inputDesktopStable",
+        "globalInputUsed = $false",
+        "focusChangedByRunner = $false",
+        "cursorChangedByRunner = $false",
+        "syntheticInputUsed = $false",
         "runnerIdentityMatched = $true",
-        "markerFresh = $true",
-        "processIdentifiersRecorded = $false",
+        "requestFresh = $true",
+        "receivedBeforeDeadline = $true",
+        "rawProcessIdentifiersRecorded = $false",
         "pathsRecorded = $false",
         "secretsRecorded = $false",
-        "The marker predates the bound runner instance.",
-        "The marker publication time is unacceptably far in the future.",
-        "The marker has expired.",
-        "The marker is stale for immediate operator handoff.",
+        "The request marker predates the bound runner instance.",
+        "The request marker publication time is unacceptably far in the future.",
+        "The automatic foreground-baseline request has expired.",
+        "The received marker does not match the automatic foreground-baseline request ID.",
+        "The received marker was published after the automatic foreground-baseline deadline.",
         "The bound Windows acceptance runner is not alive.",
         "The live runner PID does not match the exact expected start time.",
-        "Windows foreground-arm handoff watcher self-test passed.",
+        "Windows automatic foreground-baseline handoff watcher self-test passed.",
         "Write-Output ($handoff | ConvertTo-Json -Depth 8 -Compress)",
     ] {
         assert!(
             watcher.contains(required),
-            "Windows foreground-arm handoff watcher is missing: {required}"
+            "Windows automatic foreground-baseline watcher is missing: {required}"
         );
     }
 
-    for field in [
-        "schemaVersion",
-        "productVersion",
-        "kind",
-        "status",
-        "requestId",
-        "publishedAtUtc",
-        "timeoutSeconds",
-        "operatorActionRequired",
-        "preferredRelaySurface",
-        "fallbackRelaySurface",
-        "expectedVisibleWindowTitle",
-        "expectedVisibleButtonText",
-        "expectedAccessibleName",
-        "action",
-        "stopUiAfterAction",
-        "requiresSeparateAuthorization",
-        "markerGrantsAuthorization",
-        "markerGrantsConsent",
-        "externalOneShotConsentRequired",
-        "visualConfirmationRequired",
-        "maximumClickAttempts",
-        "retryOnUnknownOutcome",
-        "instruction",
-        "requestDelivered",
-        "buttonEnabled",
-        "nativeTopologyMatched",
-        "inputStateAtPublication",
-        "notificationOnly",
-        "acceptedAsAuthority",
-        "rawWindowHandlesRecorded",
-        "rawCursorCoordinatesRecorded",
-        "pathsRecorded",
-        "secretsRecorded",
+    for (schema, fields) in [
+        (
+            "$script:RequestFields = @(",
+            &[
+                "schemaVersion",
+                "productVersion",
+                "kind",
+                "status",
+                "requestId",
+                "publishedAtUtc",
+                "timeoutSeconds",
+                "mode",
+                "operatorActionRequired",
+                "action",
+                "globalInputUsed",
+                "focusChangedByRunner",
+                "cursorChangedByRunner",
+                "syntheticInputUsed",
+                "requiredStableSamples",
+                "notificationOnly",
+                "acceptedAsAuthority",
+                "rawWindowHandlesRecorded",
+                "rawProcessIdentifiersRecorded",
+                "rawCursorCoordinatesRecorded",
+                "pathsRecorded",
+                "secretsRecorded",
+            ][..],
+        ),
+        (
+            "$script:ReceivedFields = @(",
+            &[
+                "schemaVersion",
+                "productVersion",
+                "kind",
+                "status",
+                "requestId",
+                "receivedAtUtc",
+                "mode",
+                "operatorActionRequired",
+                "action",
+                "clickAttemptsObserved",
+                "stableSamplesObserved",
+                "stableSamplesRequired",
+                "nativeSampleSeqlockMatched",
+                "ownerIdentityStable",
+                "focusRootMatched",
+                "fixtureProcessExcluded",
+                "interactiveSessionMatched",
+                "cursorStable",
+                "inputDesktopStable",
+                "globalInputUsed",
+                "focusChangedByRunner",
+                "cursorChangedByRunner",
+                "syntheticInputUsed",
+                "notificationOnly",
+                "acceptedAsAuthority",
+                "rawWindowHandlesRecorded",
+                "rawProcessIdentifiersRecorded",
+                "rawCursorCoordinatesRecorded",
+                "pathsRecorded",
+                "secretsRecorded",
+            ][..],
+        ),
     ] {
-        assert!(
-            watcher.contains(&format!("    \"{field}\","))
-                || watcher.contains(&format!("    \"{field}\"\n")),
-            "watcher exact request schema omits {field}"
-        );
+        let schema = watcher
+            .split(schema)
+            .nth(1)
+            .unwrap()
+            .split("\n)")
+            .next()
+            .unwrap();
+        for field in fields {
+            assert!(
+                schema.lines().any(|line| {
+                    line == format!("    \"{field}\",") || line == format!("    \"{field}\"")
+                }),
+                "watcher exact marker schema omits {field}"
+            );
+        }
     }
 
     for forbidden in [
@@ -9162,10 +9258,20 @@ fn windows_foreground_arm_handoff_watcher_is_strict_read_only_and_non_authoritat
         .split("function New-SanitizedHandoff {")
         .nth(1)
         .unwrap()
-        .split("function Wait-ForegroundArmHandoff {")
+        .split("function Wait-ForegroundBaselineHandoff {")
         .next()
         .unwrap();
-    for forbidden in ["EvidenceDirectory", "RunnerProcessId", "RunnerStartedAtUtc"] {
+    for forbidden in [
+        "EvidenceDirectory",
+        "RunnerProcessId",
+        "RunnerStartedAtUtc",
+        "ForegroundHwnd",
+        "FocusHwnd",
+        "ForegroundProcessId",
+        "FocusProcessId",
+        "CursorX",
+        "CursorY",
+    ] {
         assert!(
             !handoff_factory.contains(forbidden),
             "sanitized handoff leaks coordinator identity: {forbidden}"
@@ -9182,19 +9288,32 @@ fn windows_foreground_arm_handoff_watcher_is_strict_read_only_and_non_authoritat
         .nth(1)
         .expect("watcher is missing its live-mode boundary");
     assert!(live_mode.contains(
-        "$markerReader = {\n    param([string]$boundMarkerPath, [string]$boundOperatorDirectory)\n    return Read-AtomicRequestMarker $boundMarkerPath $boundOperatorDirectory\n}"
+        "$markerReader = {\n    param([string]$boundMarkerPath, [string]$boundOperatorDirectory, [string]$boundMarkerType)\n    return Read-AtomicForegroundMarker $boundMarkerPath $boundOperatorDirectory $boundMarkerType\n}"
+    ));
+    assert!(live_mode.contains(
+        "-RequestReaderArguments @($requestMarkerPath, $operatorDirectory, \"Request\")"
+    ));
+    assert!(live_mode.contains(
+        "-ReceivedReaderArguments @($receivedMarkerPath, $operatorDirectory, \"Received\")"
     ));
     assert!(
         !live_mode.contains(".GetNewClosure()"),
         "the production watcher must not move its marker callback into a dynamic module"
     );
-    assert!(!watcher.contains(
-        "$markerReader = { return Read-AtomicRequestMarker $markerPath $operatorDirectory }.GetNewClosure()"
-    ));
+    assert!(!watcher.contains("Read-AtomicRequestMarker"));
     assert!(runner.contains("-ProductVersion $Version"));
-    assert!(runner.contains("-ProductVersion \"0.12.67\""));
-    assert!(runner.contains("maximumClickAttempts -ne 1"));
-    assert!(runner.contains("maximumClickAttempts -ne 0"));
+    assert!(runner.contains("-ProductVersion \"0.12.68\""));
+    for forbidden in [
+        "maximumClickAttempts",
+        "ACTION REQUIRED",
+        "CLICK TO ARM",
+        "single-left-click",
+    ] {
+        assert!(
+            !runner.contains(forbidden),
+            "automatic foreground baseline retained a manual-input concept: {forbidden}"
+        );
+    }
 }
 
 #[test]
