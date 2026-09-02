@@ -19,10 +19,11 @@ on:
         description: Exact successful candidate workflow run attempt
         required: true
         type: string
-      acceptance_receipt:
-        description: Canonical one-line schema-3 acceptance receipt JSON
-        required: true
-        type: string
+      dry_run:
+        description: Rehearse preflight only; stop after the remote-conflict check without tagging or publishing
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -152,27 +153,89 @@ jobs:
             "$VERIFIED_SOURCE_SHA" \
             "$work/candidate"
 
-      - name: Verify canonical schema-3 acceptance evidence
+      - name: Download and verify the attested CI acceptance receipt
         env:
-          ACCEPTANCE_RECEIPT: ${{ inputs.acceptance_receipt }}
           CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
           CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: v${{ inputs.version }}
           RELEASE_VERSION: ${{ inputs.version }}
           VERIFIED_SOURCE_SHA: ${{ inputs.source_sha }}
         shell: bash
         run: |
           set -euo pipefail
+          export LC_ALL=C
           umask 077
-          receipt="$RUNNER_TEMP/publication-preflight/acceptance-receipt.json"
-          printf '%s' "$ACCEPTANCE_RECEIPT" > "$receipt"
-          test "$(wc -l < "$receipt" | tr -d ' ')" = 0
-          test "$(jq -c . "$receipt")" = "$(<"$receipt")"
-          jq -e '.schemaVersion == 3' "$receipt" >/dev/null
-          bash scripts/verify-release-acceptance-evidence.sh \
-            "$receipt" \
-            "$RUNNER_TEMP/publication-preflight/candidate/payload"
+          work="$RUNNER_TEMP/publication-preflight"
+          receipt_dir="$work/receipt"
+          test ! -e "$receipt_dir"
+          mkdir -m 700 "$receipt_dir"
+          gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID/artifacts?per_page=100" \
+            > "$receipt_dir/artifacts.json"
+          receipt_artifact_id="$(jq -er \
+            --argjson run_id "$CANDIDATE_RUN_ID" \
+            --arg source "$VERIFIED_SOURCE_SHA" '
+              (.total_count < 100) and
+              ([.artifacts[] | select(
+                .name == "acceptance-receipt" and .expired == false and
+                .workflow_run.id == $run_id and .workflow_run.head_sha == $source
+              )] | length == 1) as $valid |
+              if $valid then
+                [.artifacts[] | select(
+                  .name == "acceptance-receipt" and .expired == false and
+                  .workflow_run.id == $run_id and .workflow_run.head_sha == $source
+                )][0].id | tostring
+              else error("acceptance receipt artifact is absent or ambiguous") end
+            ' "$receipt_dir/artifacts.json")"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$receipt_artifact_id/zip" > "$receipt_dir/receipt.zip"
+          mkdir -m 700 "$receipt_dir/payload"
+          unzip -q "$receipt_dir/receipt.zip" -d "$receipt_dir/payload"
+          test "$(find "$receipt_dir/payload" -mindepth 1 | wc -l | tr -d ' ')" = 1
+          receipt="$receipt_dir/payload/acceptance-receipt.json"
+          test -f "$receipt" && test ! -L "$receipt"
+          for attempt in 1 2 3 4 5; do
+            if gh attestation verify "$receipt" \
+              --repo "$GITHUB_REPOSITORY" \
+              --source-ref refs/heads/main \
+              --source-digest "$VERIFIED_SOURCE_SHA" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/deploy.yml" \
+              --deny-self-hosted-runners; then
+              break
+            fi
+            test "$attempt" -lt 5 || exit 1
+            sleep 2
+          done
+          candidate_binding="$work/candidate/candidate-binding.json"
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg version "$RELEASE_VERSION" \
+            --arg source "$VERIFIED_SOURCE_SHA" \
+            --arg run_id "$CANDIDATE_RUN_ID" \
+            --arg run_attempt "$CANDIDATE_RUN_ATTEMPT" \
+            --arg artifact_id "$(jq -r '.artifactId' "$candidate_binding")" \
+            --arg zip_sha "$(jq -r '.artifactZipSha256' "$candidate_binding")" \
+            --arg manifest_sha "$(jq -r '.checksumManifestSha256' "$candidate_binding")" '
+              type == "object" and
+              .schemaVersion == 4 and .repository == $repository and .version == $version and
+              .sourceSha == $source and .workflowPath == ".github/workflows/deploy.yml" and
+              .runId == $run_id and .runAttempt == $run_attempt and
+              .candidateArtifactId == $artifact_id and .candidateArtifactSha256 == $zip_sha and
+              .checksumManifestSha256 == $manifest_sha and
+              (.results | keys) == ["macos", "windows"] and
+              .results.macos.os == "macos" and .results.windows.os == "windows" and
+              all(.results[];
+                .ok == true and .mode == "artifact" and .version == $version and
+                .sourceSha == $source and .runId == $run_id and .runAttempt == $run_attempt and
+                .candidateArtifactId == $artifact_id and .candidateArtifactSha256 == $zip_sha and
+                .computerMode == "native" and
+                .lanes == ["server", "shell", "browser", "computer"] and
+                .summary.fail == 0 and .summary.skip == 0 and .summary.total >= 47 and
+                (.checks | length) > 0 and
+                all(.checks[]; (.required | not) or .status == "pass"))
+            ' "$receipt" >/dev/null
+          cp -- "$receipt" "$work/acceptance-receipt.json"
+          chmod 600 "$work/acceptance-receipt.json"
+          jq -r '.results[] | "\(.os): \(.summary.pass) pass, \(.summary.skip) skip, computer mode \(.computerMode // "n/a")"' "$receipt"
 
       - name: Create immutable publication approval bundle
         id: approval
@@ -222,6 +285,7 @@ jobs:
   release:
     name: Publish exact accepted release
     needs: preflight
+    if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment:

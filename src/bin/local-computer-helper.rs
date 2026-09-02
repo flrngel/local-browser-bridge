@@ -224,6 +224,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !cli.worker && !cli.request_permissions && !cli.benchmark {
         return supervise_worker().await;
     }
+    #[cfg(target_os = "windows")]
+    retain_process_mta()?;
 
     let mut controller = ComputerController::new();
     if cli.request_permissions {
@@ -351,6 +353,24 @@ where
         );
         std::future::pending::<()>().await;
     }
+}
+
+/// Keeps the process-wide COM multithreaded apartment alive for the whole
+/// capture-capable process lifetime.
+///
+/// Windows Graphics Capture tears its session down on COM-owned callback
+/// threads. When the only MTA-initialized thread was the short-lived WGC owner
+/// thread, its `RoUninitialize` on exit dissolves the apartment and unloads
+/// `GraphicsCapture.dll` while that teardown is still unwinding, which crashes
+/// the worker with an access violation after every one-shot capture on hosts
+/// without another MTA holder (observed on GitHub-hosted Windows runners). The
+/// usage cookie is intentionally never decremented.
+#[cfg(target_os = "windows")]
+fn retain_process_mta() -> Result<(), Box<dyn std::error::Error>> {
+    let cookie = unsafe { windows::Win32::System::Com::CoIncrementMTAUsage() }
+        .map_err(|error| format!("Could not retain the COM multithreaded apartment: {error}"))?;
+    std::mem::forget(cookie);
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]

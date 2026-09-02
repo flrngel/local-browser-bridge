@@ -24,7 +24,8 @@ use windows::Win32::UI::Accessibility::{
     UIA_AutomationIdPropertyId, UIA_BoundingRectanglePropertyId, UIA_ClassNamePropertyId,
     UIA_ControlTypePropertyId, UIA_ExpandCollapsePatternId, UIA_FrameworkIdPropertyId,
     UIA_InvokePatternId, UIA_IsEnabledPropertyId, UIA_IsPasswordPropertyId, UIA_NamePropertyId,
-    UIA_ProcessIdPropertyId, UIA_SelectionItemPatternId, UIA_TogglePatternId, UIA_ValuePatternId,
+    UIA_ProcessIdPropertyId, UIA_SelectionItemPatternId, UIA_TogglePatternId,
+    UIA_ValueIsReadOnlyPropertyId, UIA_ValuePatternId,
 };
 use windows::core::{BSTR, Interface};
 
@@ -190,6 +191,9 @@ unsafe fn element_cache(
         UIA_IsPasswordPropertyId,
         UIA_NamePropertyId,
         UIA_ProcessIdPropertyId,
+        // Required for `CachedIsReadOnly`; without it every ValuePattern
+        // element is filtered out and `setValue` targets are never observed.
+        UIA_ValueIsReadOnlyPropertyId,
     ] {
         unsafe { cache.AddProperty(property) }
             .map_err(|error| uia_error("CacheRequest.AddProperty", error))?;

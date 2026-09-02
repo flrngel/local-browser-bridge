@@ -84,8 +84,9 @@ conservative unknown-outcome boundary: never delete it or retry that product
 version. Fresh platform/browser acceptance is still required before
 publication; only the immutable
 [v0.12.37 GitHub Release](https://github.com/flrngel/local-browser-bridge/releases/tag/v0.12.37)
-and its bound evidence receipt can establish that the gate later passed. See
-the [Windows acceptance source-gate record](WINDOWS_ACCEPTANCE_HANDOFF.md).
+and its bound evidence receipt can establish that the gate later passed. The
+operator-machine harness described by that record was retired in favour of
+CI-hosted acceptance (see [Development](DEVELOPMENT.md#ci-hosted-acceptance)).
 
 The exact v0.12.63 candidate passed the 207-check macOS quiet lane and its
 visual review. Its deliberate lane completed the single exact-app-share action

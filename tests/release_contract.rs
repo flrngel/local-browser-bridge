@@ -1,6 +1,4 @@
 use std::fs;
-#[cfg(not(target_os = "windows"))]
-use std::process::Command;
 
 fn source(path: &str) -> String {
     fs::read_to_string(path).unwrap().replace("\r\n", "\n")
@@ -123,21 +121,9 @@ fn release_workflow_and_local_builder_package_both_processes() {
     assert!(local.contains("release_stage=\"$(mktemp -d)\""));
     assert!(local.contains("validation_stage=\"$(mktemp -d)\""));
     assert!(
-        local.contains("bash scripts/verify-macos-app-share-handoff-self-test.sh \"$version\"")
+        local.contains("xcrun swiftc -typecheck tests/fixtures/macos/CiAcceptanceFixture.swift")
     );
-    let handoff_self_test = source("scripts/verify-macos-app-share-handoff-self-test.sh");
-    assert!(handoff_self_test.contains("scratch=\"$(mktemp -d"));
-    assert!(!handoff_self_test.contains("release_stage"));
-    assert!(
-        source(".github/workflows/ci.yml")
-            .contains("verify-macos-app-share-handoff-self-test.sh 0.12.41 --historical-source")
-    );
-    assert!(
-        source(".github/workflows/ci.yml")
-            .contains("verify-macos-app-share-handoff-self-test.sh 0.12.68\n")
-    );
-    assert!(!source(".github/workflows/deploy.yml").contains("--historical-source"));
-    assert!(!local.contains("--historical-source"));
+    assert!(local.contains("node --check scripts/ci-acceptance.mjs"));
     assert!(
         local.contains("bash scripts/verify-release-assets.sh \"$version\" \"$release_stage\"")
     );
@@ -252,164 +238,6 @@ fn local_deploy_atomically_replaces_only_generated_release_assets_with_rollback(
 }
 
 #[test]
-fn windows_ci_validates_the_complete_browser_evidence_toolchain_before_candidate_builds() {
-    for path in [".github/workflows/ci.yml"] {
-        let workflow = source(path);
-        for script in [
-            "scripts/browser-evidence-candidate.ps1",
-            "scripts/record-computer-helper-chain.ps1",
-            "scripts/run-windows-computer-use-acceptance.ps1",
-            "scripts/sanitize-browser-evidence-screenshot.ps1",
-            "scripts/test-windows-browser-api.ps1",
-            "scripts/test-windows-computer-use.ps1",
-            "scripts/test-windows-stock-chrome.ps1",
-            "scripts/verify-windows-artifacts.ps1",
-            "scripts/verify-windows-release-candidate.ps1",
-            "scripts/wait-windows-foreground-arm-handoff.ps1",
-            "scripts/write-browser-evidence-record.ps1",
-            "scripts/write-stock-chrome-operator-response.ps1",
-            "tests/fixtures/windows/WindowsComputerUseFixture.ps1",
-        ] {
-            assert!(
-                workflow.contains(&format!("\"{script}\"")),
-                "Windows validation in {path} does not parse {script}"
-            );
-        }
-        for invocation in [
-            "./scripts/browser-evidence-candidate.ps1 -Mode SelfTest",
-            "./scripts/record-computer-helper-chain.ps1 -Mode SelfTest",
-            "./scripts/run-windows-computer-use-acceptance.ps1 -Mode SelfTest",
-            "./scripts/sanitize-browser-evidence-screenshot.ps1 -Mode SelfTest",
-            "./scripts/test-windows-browser-api.ps1 -SelfTest",
-            "./scripts/verify-windows-artifacts.ps1 -Version 0.0.0 -SelfTest",
-            "./scripts/wait-windows-foreground-arm-handoff.ps1 -Mode SelfTest",
-            "./tests/fixtures/windows/WindowsComputerUseFixture.ps1 -SelfTest",
-            "./scripts/write-browser-evidence-record.ps1 -Mode SelfTest",
-            "./scripts/write-stock-chrome-operator-response.ps1 -Mode SelfTest",
-        ] {
-            assert!(
-                workflow.contains(invocation),
-                "Windows validation in {path} does not run {invocation}"
-            );
-        }
-        for required in [
-            "$windowsPowerShell = [IO.Path]::GetFullPath([IO.Path]::Combine(",
-            "$env:SystemRoot, \"System32\", \"WindowsPowerShell\", \"v1.0\", \"powershell.exe\"",
-            "$PSVersionTable.PSVersion.Major",
-            "$PSVersionTable.PSVersion.Minor",
-            "$PSVersionTable.PSEdition",
-            "$ps51Identity[0] -cne \"5.1|Desktop\"",
-            "The exact system PowerShell self-test host is not Windows PowerShell 5.1 Desktop.",
-            "$watcherPathForPs51 = (Resolve-Path ./scripts/wait-windows-foreground-arm-handoff.ps1).Path",
-            "$watcherScript = [ScriptBlock]::Create([IO.File]::ReadAllText([IO.Path]::GetFullPath($env:LBB_PS51_WATCHER_SELF_TEST)))",
-            "& $watcherScript -Mode SelfTest",
-            "$watcherCallOperatorOutput.Count -ne 1",
-            "Windows PowerShell 5.1 automatic foreground-baseline call-operator self-test failed.",
-            "Remove-Item Env:\\LBB_PS51_WATCHER_SELF_TEST -ErrorAction SilentlyContinue",
-        ] {
-            assert!(
-                workflow.contains(required),
-                "Windows PowerShell 5.1 validation in {path} is missing {required}"
-            );
-        }
-        let identity_gate = workflow
-            .find("$ps51Identity[0] -cne \"5.1|Desktop\"")
-            .unwrap();
-        let first_self_test = workflow
-            .find("./scripts/browser-evidence-candidate.ps1 -Mode SelfTest")
-            .unwrap();
-        assert!(
-            identity_gate < first_self_test,
-            "Windows PowerShell identity must be proven before any PowerShell self-test in {path}"
-        );
-        assert!(
-            !workflow.contains("\n          powershell.exe -NoLogo"),
-            "Windows validation in {path} must not resolve an ambient powershell.exe"
-        );
-        for invocation in [
-            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/browser-evidence-candidate.ps1 -Mode SelfTest",
-            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/record-computer-helper-chain.ps1 -Mode SelfTest",
-            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/run-windows-computer-use-acceptance.ps1 -Mode SelfTest",
-            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/sanitize-browser-evidence-screenshot.ps1 -Mode SelfTest",
-            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-browser-api.ps1 -SelfTest",
-            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/write-browser-evidence-record.ps1 -Mode SelfTest",
-            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/write-stock-chrome-operator-response.ps1 -Mode SelfTest",
-            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-artifacts.ps1 -Version 0.0.0 -SelfTest",
-            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-stock-chrome.ps1 -SelfTest",
-            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-release-candidate.ps1 -SelfTest",
-            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/wait-windows-foreground-arm-handoff.ps1 -Mode SelfTest",
-            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./tests/fixtures/windows/WindowsComputerUseFixture.ps1 -SelfTest",
-        ] {
-            assert!(
-                workflow.contains(invocation),
-                "Windows validation in {path} does not run through the exact system PowerShell: {invocation}"
-            );
-        }
-    }
-
-    let candidate = source(".github/workflows/deploy.yml");
-    assert!(candidate.contains("./scripts/verify-windows-artifacts.ps1 -Version $version"));
-    assert!(candidate.contains("needs: verify"));
-    assert!(candidate.contains("ref: ${{ needs.verify.outputs.source_sha }}"));
-    assert!(
-        !candidate.contains("run-windows-computer-use-acceptance.ps1 -Mode SelfTest"),
-        "the candidate workflow must reuse the exact reviewed CI result instead of paying to repeat the native acceptance coordinator"
-    );
-}
-
-#[test]
-fn windows_ci_gates_the_acceptance_coordinator_under_exact_ps51() {
-    let invocation = "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/run-windows-computer-use-acceptance.ps1 -Mode SelfTest";
-    let success = "Windows computer-use acceptance coordinator self-test passed.";
-    for path in [".github/workflows/ci.yml"] {
-        let workflow = source(path);
-        for required in [
-            "\"scripts/run-windows-computer-use-acceptance.ps1\"",
-            "$coordinatorPathForPs51 = (Resolve-Path ./scripts/run-windows-computer-use-acceptance.ps1).Path",
-            "$previousCoordinatorPathForPs51 = $env:LBB_PS51_COORDINATOR_PARSE",
-            "[Management.Automation.Language.Parser]::ParseFile([IO.Path]::GetFullPath($env:LBB_PS51_COORDINATOR_PARSE), [ref]$tokens, [ref]$errors)",
-            "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -Command $coordinatorParserCommand",
-            "Windows PowerShell 5.1 computer-use acceptance coordinator parser failed.",
-            "Remove-Item Env:\\LBB_PS51_COORDINATOR_PARSE -ErrorAction SilentlyContinue",
-            invocation,
-            "$coordinatorSelfTestOutput.Count -ne 1",
-            "$coordinatorSelfTestOutput[0] -cne \"Windows computer-use acceptance coordinator self-test passed.\"",
-            "Windows PowerShell 5.1 computer-use acceptance coordinator self-test failed.",
-        ] {
-            assert!(
-                workflow.contains(required),
-                "Windows coordinator CI gate in {path} is missing: {required}"
-            );
-        }
-        assert_eq!(
-            workflow.matches(invocation).count(),
-            1,
-            "{path} must execute exactly one coordinator self-test through exact system Windows PowerShell 5.1"
-        );
-        assert_eq!(
-            workflow.matches(success).count(),
-            1,
-            "{path} must require the exact coordinator success message once"
-        );
-        assert!(
-            !workflow.contains("test-windows-computer-use.ps1 -SelfTest"),
-            "{path} must not bypass the topology-aware coordinator with a direct Job-sensitive runner self-test"
-        );
-        let identity_gate = workflow
-            .find("$ps51Identity[0] -cne \"5.1|Desktop\"")
-            .unwrap();
-        let coordinator_parser = workflow
-            .find("& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -Command $coordinatorParserCommand")
-            .unwrap();
-        let coordinator_gate = workflow.find(invocation).unwrap();
-        assert!(
-            identity_gate < coordinator_parser && coordinator_parser < coordinator_gate,
-            "{path} must prove exact system Windows PowerShell 5.1, parse the coordinator there, and only then run its self-test"
-        );
-    }
-}
-
-#[test]
 fn current_source_is_unblocked_and_package_versions_are_aligned() {
     match fs::symlink_metadata("RELEASE_BLOCKED") {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -419,62 +247,90 @@ fn current_source_is_unblocked_and_package_versions_are_aligned() {
         }
     }
 
-    for (path, required) in [
-        ("Cargo.toml", "version = \"0.12.68\""),
-        (
-            "Cargo.lock",
-            "name = \"local-browser-bridge\"\nversion = \"0.12.68\"",
-        ),
-        ("extension/manifest.json", "\"version\": \"0.12.68\""),
-        ("extension/lib.js", "export const VERSION = \"0.12.68\";"),
-        (
-            "scripts/run-windows-computer-use-acceptance.ps1",
-            "$script:ProductVersion = \"0.12.68\"",
-        ),
-        (
-            "scripts/finalize-macos-acceptance.mjs",
-            "const PRODUCT_VERSION = \"0.12.68\";",
-        ),
-        (
-            "scripts/record-computer-helper-chain.ps1",
-            "$script:Version = \"0.12.68\"",
-        ),
-        (
-            "scripts/test-windows-stock-chrome.ps1",
-            "$Version = \"0.12.68\"",
-        ),
-        (
-            "scripts/verify-release-acceptance-evidence.sh",
-            "readonly EVIDENCE_PRODUCT_VERSION=\"0.12.68\"",
-        ),
-        (
-            "scripts/verify-windows-release-candidate.ps1",
-            "$ProductVersion = \"0.12.68\"",
-        ),
-        (
-            "scripts/write-browser-evidence-record.ps1",
-            "$script:OperatorV2Version = \"0.12.68\"",
-        ),
-        (
-            "scripts/write-stock-chrome-operator-response.ps1",
-            "$script:Version = \"0.12.68\"",
-        ),
-    ] {
-        assert!(
-            source(path).contains(required),
-            "source or retained release-evidence version alignment is missing from {path}: {required}"
-        );
-    }
-
+    let version = source("Cargo.toml")
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("version = \"")
+                .and_then(|rest| rest.strip_suffix('"'))
+                .map(str::to_owned)
+        })
+        .expect("Cargo.toml package version");
     assert!(
-        source("evidence/v0.12.68/computer/AppShareHandoff.swift")
-            .contains("private let productVersion = \"0.12.68\"")
+        version.split('.').count() == 3
+            && version.split('.').all(|part| part.parse::<u64>().is_ok()),
+        "package version must be a release version: {version}"
     );
 
-    assert!(std::path::Path::new("evidence/v0.12.68/browser").is_dir());
-    assert!(std::path::Path::new("evidence/v0.12.68/computer").is_dir());
-    assert!(std::path::Path::new("evidence/v0.12.41/browser").is_dir());
-    assert!(std::path::Path::new("evidence/v0.12.41/computer").is_dir());
+    // Every pinned location is declared once and shared by the audit and the bump.
+    let pins = source("scripts/version-pins.txt");
+    let mut pinned_files = Vec::new();
+    for line in pins
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+    {
+        let fields: Vec<&str> = line.split('|').collect();
+        assert_eq!(fields.len(), 4, "malformed version pin: {line}");
+        let (file, prefix, suffix, scope) = (fields[0], fields[1], fields[2], fields[3]);
+        assert!(
+            matches!(scope, "line" | "any"),
+            "unknown pin scope in {line}"
+        );
+        let literal = format!("{prefix}{version}{suffix}");
+        let content = source(file);
+        let found = if scope == "line" {
+            content
+                .lines()
+                .any(|candidate| candidate.starts_with(&literal))
+        } else {
+            content.contains(&literal)
+        };
+        assert!(found, "{file} does not pin the package version: {literal}");
+        pinned_files.push(file.to_owned());
+    }
+    for required in [
+        "Cargo.toml",
+        "extension/manifest.json",
+        "extension/lib.js",
+        ".github/workflows/deploy.yml",
+        ".github/workflows/publish.yml",
+        "docs/DEVELOPMENT.md",
+        "docs/INSTALL_MACOS.md",
+        "docs/INSTALL_WINDOWS.md",
+    ] {
+        assert!(
+            pinned_files.iter().any(|file| file == required),
+            "{required} must be a declared version pin"
+        );
+    }
+    assert!(source("Cargo.lock").contains(&format!(
+        "name = \"local-browser-bridge\"\nversion = \"{version}\""
+    )));
+
+    let audit = source("scripts/audit-versions.sh");
+    let bump = source("scripts/bump-version.sh");
+    for script in [&audit, &bump] {
+        assert!(script.contains("scripts/version-pins.txt"));
+    }
+    assert!(bump.contains("rewrite_lock"));
+    assert!(bump.contains("cargo metadata --locked --offline --format-version 1"));
+    assert!(bump.contains("bash scripts/audit-versions.sh \"$new_version\""));
+    assert!(
+        source(".github/workflows/ci.yml").contains("bash scripts/bump-version.sh --self-test")
+    );
+    assert!(source("docs/DEVELOPMENT.md").contains("bash scripts/bump-version.sh"));
+
+    // The retired operator harness must not come back as a pinned consumer.
+    for retired in [
+        "scripts/run-windows-computer-use-acceptance.ps1",
+        "scripts/verify-release-acceptance-evidence.sh",
+        "scripts/finalize-macos-acceptance.mjs",
+        "scripts/verify-windows-release-candidate.ps1",
+    ] {
+        assert!(
+            !std::path::Path::new(retired).exists(),
+            "{retired} was retired with the operator harness"
+        );
+    }
 }
 
 #[test]
@@ -507,10 +363,9 @@ fn release_paths_retain_generic_fail_closed_blocker_enforcement() {
             "candidate dependency closure is missing: {dependency}"
         );
     }
-    assert!(
-        publication
-            .contains("release:\n    name: Publish exact accepted release\n    needs: preflight")
-    );
+    assert!(publication.contains(
+        "release:\n    name: Publish exact accepted release\n    needs: preflight\n    if: ${{ !inputs.dry_run }}"
+    ));
     let publication_gate = publication.find(workflow_condition).unwrap();
     let protected_environment = publication
         .find("environment:\n      name: release")
@@ -532,532 +387,6 @@ fn release_paths_retain_generic_fail_closed_blocker_enforcement() {
         assert!(
             local_gate < local.find(forbidden_before_gate).unwrap(),
             "local release blocker must precede: {forbidden_before_gate}"
-        );
-    }
-}
-
-#[test]
-fn windows_ci_compiles_executes_and_self_cleans_the_dedicated_fixture() {
-    for path in [".github/workflows/ci.yml"] {
-        let workflow = source(path);
-        for required in [
-            "$fixtureExecutableSelfTest = Join-Path $env:RUNNER_TEMP (\"lbb-windows-fixture-\" + [Guid]::NewGuid().ToString(\"N\") + \".exe\")",
-            "$fixtureSourcePath = (Resolve-Path ./tests/fixtures/windows/WindowsComputerUseFixture.ps1).Path",
-            "$fixtureSourceStream = [IO.File]::OpenRead($fixtureSourcePath)",
-            "$fixtureSourceHasher = [Security.Cryptography.SHA256]::Create()",
-            "$fixtureSourceSha256 = (($fixtureSourceHasher.ComputeHash($fixtureSourceStream) | ForEach-Object { $_.ToString(\"x2\") }) -join '')",
-            "$fixtureSourceHasher.Dispose()",
-            "$fixtureSourceStream.Dispose()",
-            "$fixtureBuildOutput = @(& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File $fixtureSourcePath -BuildExecutablePath $fixtureExecutableSelfTest -ExpectedSourceSha256 $fixtureSourceSha256)",
-            "$fixtureBuildOutput.Count -ne 1",
-            "$fixtureBuildOutput[0] -cne \"Windows computer-use fixture executable built.\"",
-            "throw \"Windows PowerShell 5.1 dedicated fixture build failed.\"",
-            "& $fixtureExecutableSelfTest --self-test",
-            "throw \"Dedicated Windows fixture executable self-test failed.\"",
-            "$fixtureCleanupDeadline = [DateTime]::UtcNow.AddSeconds(10)",
-            "if ([IO.Directory]::Exists($fixtureExecutableSelfTest))",
-            "throw \"The dedicated Windows fixture executable path was replaced by a directory.\"",
-            "$fixtureExecutableAttributes = [IO.File]::GetAttributes($fixtureExecutableSelfTest)",
-            "($fixtureExecutableAttributes -band [IO.FileAttributes]::ReparsePoint) -ne 0",
-            "[IO.File]::SetAttributes($fixtureExecutableSelfTest, [IO.FileAttributes]::Normal)",
-            "[IO.File]::Delete($fixtureExecutableSelfTest)",
-            "Start-Sleep -Milliseconds 100",
-            "[DateTime]::UtcNow -lt $fixtureCleanupDeadline",
-            "The dedicated Windows fixture executable self-test artifact remained after bounded cleanup.",
-        ] {
-            assert!(
-                workflow.contains(required),
-                "dedicated fixture CI gate in {path} is missing: {required}"
-            );
-        }
-
-        let ps_self_test = workflow
-            .find("& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./tests/fixtures/windows/WindowsComputerUseFixture.ps1 -SelfTest")
-            .unwrap();
-        let temp_executable = workflow
-            .find("$fixtureExecutableSelfTest = Join-Path $env:RUNNER_TEMP")
-            .unwrap();
-        let source_hash = workflow
-            .find("$fixtureSourceSha256 = (($fixtureSourceHasher.ComputeHash")
-            .unwrap();
-        let compile = workflow
-            .find("$fixtureBuildOutput = @(& $windowsPowerShell")
-            .unwrap();
-        let execute = workflow
-            .find("& $fixtureExecutableSelfTest --self-test")
-            .unwrap();
-        let cleanup = workflow[execute..]
-            .find("finally {")
-            .map(|offset| execute + offset)
-            .unwrap();
-        let remove = workflow
-            .find("[IO.File]::Delete($fixtureExecutableSelfTest)")
-            .unwrap();
-        let refuse_remnant = workflow
-            .find("The dedicated Windows fixture executable self-test artifact remained after bounded cleanup.")
-            .unwrap();
-        assert!(ps_self_test < temp_executable);
-        assert!(temp_executable < source_hash);
-        assert!(source_hash < compile);
-        assert!(compile < execute);
-        assert!(execute < cleanup);
-        assert!(cleanup < remove);
-        assert!(remove < refuse_remnant);
-
-        let dedicated_fixture_gate = &workflow[temp_executable..refuse_remnant];
-        assert!(
-            !dedicated_fixture_gate.contains("dist/"),
-            "the CI-only dedicated fixture executable in {path} must never enter dist"
-        );
-        assert!(
-            !dedicated_fixture_gate.contains("actions/upload-artifact"),
-            "the CI-only dedicated fixture executable in {path} must never be uploaded"
-        );
-    }
-}
-
-#[test]
-fn ci_runs_every_browser_evidence_self_test_under_windows_powershell_51() {
-    let workflow = source(".github/workflows/ci.yml");
-    for invocation in [
-        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/browser-evidence-candidate.ps1 -Mode SelfTest",
-        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/record-computer-helper-chain.ps1 -Mode SelfTest",
-        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/run-windows-computer-use-acceptance.ps1 -Mode SelfTest",
-        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/sanitize-browser-evidence-screenshot.ps1 -Mode SelfTest",
-        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-browser-api.ps1 -SelfTest",
-        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/write-browser-evidence-record.ps1 -Mode SelfTest",
-        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/write-stock-chrome-operator-response.ps1 -Mode SelfTest",
-        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-artifacts.ps1 -Version 0.0.0 -SelfTest",
-        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-stock-chrome.ps1 -SelfTest",
-        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-release-candidate.ps1 -SelfTest",
-        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/wait-windows-foreground-arm-handoff.ps1 -Mode SelfTest",
-        "& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./tests/fixtures/windows/WindowsComputerUseFixture.ps1 -SelfTest",
-    ] {
-        assert!(
-            workflow.contains(invocation),
-            "CI validation does not run under Windows PowerShell 5.1: {invocation}"
-        );
-    }
-}
-
-#[test]
-fn windows_release_tooling_hashes_without_module_discovery() {
-    for path in [
-        ".github/workflows/ci.yml",
-        ".github/workflows/deploy.yml",
-        "scripts/browser-evidence-candidate.ps1",
-        "scripts/record-computer-helper-chain.ps1",
-        "scripts/run-windows-computer-use-acceptance.ps1",
-        "scripts/sanitize-browser-evidence-screenshot.ps1",
-        "scripts/test-windows-browser-api.ps1",
-        "scripts/test-windows-computer-use.ps1",
-        "scripts/test-windows-stock-chrome.ps1",
-        "scripts/verify-windows-artifacts.ps1",
-        "scripts/verify-windows-release-candidate.ps1",
-        "scripts/wait-windows-foreground-arm-handoff.ps1",
-        "scripts/write-browser-evidence-record.ps1",
-        "scripts/write-stock-chrome-operator-response.ps1",
-        "tests/fixtures/windows/WindowsComputerUseFixture.ps1",
-    ] {
-        let tooling = source(path);
-        assert!(
-            !tooling.contains("Get-FileHash"),
-            "{path} must hash through the .NET cryptography API so a restricted PSModulePath cannot disable a release or acceptance gate"
-        );
-    }
-}
-
-#[test]
-fn macos_app_share_handoff_is_release_gated_and_pointer_watcher_is_adversarial_only() {
-    let watcher = source("scripts/wait-macos-app-share-concurrency-handoff.mjs");
-    let adversarial_watcher = source("scripts/wait-macos-pointer-concurrency-handoff.mjs");
-    let producer = source("evidence/v0.12.68/computer/helper-evidence-rig.mjs");
-    let playbook = source("evidence/v0.12.68/computer/README.md");
-    let finalizer = source("scripts/finalize-macos-acceptance.mjs");
-    let verifier = source("scripts/verify-release-acceptance-evidence.sh");
-    let handoff_self_test = source("scripts/verify-macos-app-share-handoff-self-test.sh");
-    let ci = source(".github/workflows/ci.yml");
-    let candidate = source(".github/workflows/deploy.yml");
-    let local = source("scripts/deploy.sh");
-
-    for integration in [&ci, &local] {
-        assert!(
-            integration
-                .contains("node --check scripts/wait-macos-app-share-concurrency-handoff.mjs"),
-            "CI/local validation does not syntax-check the exact-app-share watcher"
-        );
-        assert!(integration.contains(
-            "node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test"
-        ));
-    }
-    assert!(
-        ci.matches("node --check scripts/wait-macos-app-share-concurrency-handoff.mjs")
-            .count()
-            >= 2
-    );
-    assert!(
-        local
-            .matches("node --check scripts/wait-macos-app-share-concurrency-handoff.mjs")
-            .count()
-            >= 1
-    );
-
-    assert!(ci.contains("Validate the optional adversarial macOS pointer handoff watcher"));
-    assert_eq!(
-        ci.matches("node --check scripts/wait-macos-pointer-concurrency-handoff.mjs")
-            .count(),
-        1,
-        "the legacy pointer watcher must remain optional adversarial CI coverage"
-    );
-    for release_path in [&candidate, &local] {
-        assert!(
-            !release_path.contains("wait-macos-pointer-concurrency-handoff.mjs"),
-            "the legacy pointer watcher must not gate or satisfy release"
-        );
-    }
-    assert!(adversarial_watcher.contains("const PRODUCT_VERSION = \"0.12.68\";"));
-    assert!(
-        adversarial_watcher.contains("macOS pointer-concurrency handoff watcher self-test passed.")
-    );
-    for acceptance_gate in [&producer, &finalizer, &verifier] {
-        for forbidden_legacy_receipt in [
-            "macos-pointer-concurrency-handoff-request.json",
-            "macos-pointer-concurrency-handoff-complete.json",
-            "clickFreeMotionObserved",
-            "productBoundaryContaminated",
-            "independentBoundaryContaminated",
-        ] {
-            assert!(
-                !acceptance_gate.contains(forbidden_legacy_receipt),
-                "legacy pointer evidence can still satisfy release through {forbidden_legacy_receipt}"
-            );
-        }
-    }
-    for aggregate_contract in [
-        "const PRODUCT_VERSION = \"0.12.68\";",
-        "const RESULT_SCHEMA_VERSION = 9;",
-        "const AGGREGATE_SCHEMA_VERSION = 3;",
-        "const REQUEST_MARKER = \"operator/macos-app-share-concurrency-handoff-request.json\";",
-        "const START_MARKER = \"operator/macos-app-share-concurrency-handoff-start.json\";",
-        "const COMPLETE_MARKER = \"operator/macos-app-share-concurrency-handoff-complete.json\";",
-        "aggregate.aggregateChecks.inventoryFileCount !== 19",
-        "lane === \"deliberate-concurrency\"",
-        "deliberateConcurrency:",
-    ] {
-        assert!(
-            finalizer.contains(aggregate_contract),
-            "macOS finalizer is missing {aggregate_contract}"
-        );
-    }
-
-    for required in [
-        "const PRODUCT_VERSION = \"0.12.68\";",
-        "const SCHEMA_VERSION = 2;",
-        "const OPERATOR_DIRECTORY = \"operator\";",
-        "const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;",
-        "const PRODUCER_PRE_REQUEST_WORK_BUDGET_MS = 30 * 60_000;",
-        "const REQUEST_PUBLICATION_MAXIMUM_WAIT_MS =",
-        "const EVIDENCE_DIRECTORY_WAIT_TIMEOUT_MS = 60_000;",
-        "const MAX_ACTION_TO_COMPLETE_MS = 18_000;",
-        "createdAt: new Date(nowMs + 12_100).toISOString(),",
-        "productActionCompletedAt: new Date(nowMs + 12_000).toISOString(),",
-        "macos-app-share-concurrency-handoff-request.json",
-        "macos-app-share-concurrency-handoff-start.json",
-        "macos-app-share-concurrency-handoff-complete.json",
-        "dev.flrngel.local-browser-bridge.acceptance.app-share",
-        "LBB macOS Acceptance App Share",
-        "START APP-SHARE CHECK",
-        "lbb-app-share-start",
-        "--mode watch --evidence-dir <absolute-path> --runner-pid <pid>",
-        "open(path, constants.O_RDONLY | constants.O_NOFOLLOW)",
-        "stats.mode & 0o077n",
-        "stats.uid !== BigInt(process.getuid())",
-        "process.kill(pid, 0)",
-        "the request marker disappeared or changed after notification.",
-        "the bound request/start chain disappeared or changed before completion.",
-        "timed out waiting for the exact-app-share start receipt.",
-        "timed out waiting for the bound macOS app-share completion receipt.",
-        "ACTION REQUIRED: In the exact app share for",
-        "START RECEIVED: The bound button action was recorded.",
-        "COMPLETE: Exact-app-share orchestration and the quiet shared-seat product boundary",
-        "macOS app-share-concurrency handoff watcher self-test passed.",
-    ] {
-        assert!(
-            watcher.contains(required),
-            "macOS app-share handoff watcher is missing {required}"
-        );
-    }
-
-    for shared_contract in [
-        "macos-app-share-concurrency-handoff-request.json",
-        "macos-app-share-concurrency-handoff-start.json",
-        "macos-app-share-concurrency-handoff-complete.json",
-        "macos-app-share-concurrency-handoff-request",
-        "macos-app-share-concurrency-handoff-start",
-        "macos-app-share-concurrency-handoff-complete",
-        "dev.flrngel.local-browser-bridge.acceptance.app-share",
-        "LBB macOS Acceptance App Share",
-        "START APP-SHARE CHECK",
-        "requestSha256",
-        "startReceiptSha256",
-    ] {
-        assert!(watcher.contains(shared_contract));
-        assert!(
-            producer.contains(shared_contract),
-            "macOS app-share producer and watcher disagree on {shared_contract}"
-        );
-    }
-    assert!(producer.contains("const APP_SHARE_HANDOFF_MARKER_SCHEMA = 2;"));
-    for shared_timing_contract in [
-        "const QUIET_SEAT_MAXIMUM_WAIT_MS = 30 * 60_000;",
-        "const PRODUCER_PRE_REQUEST_WORK_BUDGET_MS = 30 * 60_000;",
-        "const REQUEST_PUBLICATION_MAXIMUM_WAIT_MS =",
-        "QUIET_SEAT_MAXIMUM_WAIT_MS + PRODUCER_PRE_REQUEST_WORK_BUDGET_MS;",
-    ] {
-        assert!(watcher.contains(shared_timing_contract));
-        assert!(
-            producer.contains(shared_timing_contract),
-            "macOS app-share producer and watcher disagree on {shared_timing_contract}"
-        );
-    }
-    assert!(producer.contains("const APP_SHARE_HANDOFF_COMPLETION_GRACE_MS = 18_000;"));
-    assert!(
-        producer
-            .contains("productCompleted - productStarted <= APP_SHARE_HANDOFF_COMPLETION_GRACE_MS")
-    );
-    assert!(producer.contains("created - startCreated <= APP_SHARE_HANDOFF_COMPLETION_GRACE_MS"));
-    assert!(finalizer.contains("const MAX_ACTION_TO_COMPLETE_MS = 18_000;"));
-    for producer_deadline_contract in [
-        "outputReservationStartedAtMilliseconds + REQUEST_PUBLICATION_MAXIMUM_WAIT_MS",
-        "remainingRequestPublicationTime(",
-        "pointerHandoffRequestPublicationDeadlineMilliseconds",
-        "request-publication absolute deadline self-test failed",
-    ] {
-        assert!(
-            producer.contains(producer_deadline_contract),
-            "macOS app-share producer is missing {producer_deadline_contract}"
-        );
-    }
-    assert!(producer.contains("const operatorDirectory = join(outputDir, \"operator\");"));
-    assert!(watcher.contains("join(evidenceDir, OPERATOR_DIRECTORY)"));
-
-    for playbook_boundary in [
-        "never concatenate the phases into one script",
-        "### Phase 1: bind the candidate, run quiet, then stop for review",
-        "### Phase 2: require quiet review, run deliberate, then stop for review",
-        "### Phase 3: require both reviews and finalize create-once",
-        "SOURCE_ROOT=\"$(cd \"$SOURCE_ROOT\" && pwd -P)\"",
-        "PRIVATE_PARENT=\"$(cd \"$PRIVATE_PARENT\" && pwd -P)\"",
-        "IFS= read -r QUIET_REVIEWED_RESULT_SHA256",
-        "IFS= read -r DELIBERATE_REVIEWED_RESULT_SHA256",
-        "QUIET_EXPECTED_INVENTORY=",
-        "DELIBERATE_EXPECTED_INVENTORY=",
-        "find . -mindepth 1 -print",
-        "QUIET_REVIEW_MANIFEST=",
-        "DELIBERATE_REVIEW_MANIFEST=",
-        "jq -er '.screenshots[] | \"\\(.sha256)  \\(.file)\"' helper-results.json",
-        ".status == \"passed-release-candidate\"",
-        ".schemaVersion == 3",
-        ".aggregateChecks.passingResultSchemaVersion == 9",
-        ".aggregateChecks.inventoryFileCount == 19",
-        "macos-app-share-concurrency-handoff-start.json",
-        ".appShareHandoff.startReceiptAcknowledged == true",
-        ".appShareHandoff.completePublicationAcknowledged == true",
-        ".appShareHandoff.productBoundaryQuiet == true",
-        ".appShareHandoff.independentBoundaryQuiet == true",
-        "MACOS_ACCEPTANCE_SHA256=",
-        "complete Phase 1 visual review first",
-        "complete Phase 2 visual review first",
-        "assert_quiet_readiness_record()",
-        "QUIET_READINESS_JSON=",
-        "DELIBERATE_READINESS_JSON=",
-        "--quiet-readiness",
-        ".kind == \"macos-quiet-seat-readiness\"",
-        ".status == \"ready\"",
-        ".acceptanceEvidence == false",
-        ".candidateInvocations == 0",
-        ".requiredStableMilliseconds == 30000",
-        ".maximumWaitMilliseconds == 1800000",
-        ".sampleIntervalMilliseconds == 500",
-        ".requiredStableTransitions == 60",
-        "(.stableDurationMilliseconds | type == \"number\" and . == floor",
-        "(.observedSamples | type == \"number\" and . == floor",
-        "(.stableTransitions | type == \"number\" and . == floor",
-        "(.resetCount | type == \"number\" and . == floor",
-        "all($counts[]; type == \"number\" and . == floor",
-        ".resetCauseCounts[.lastResetCause] >= 1",
-        ".monitoringUnknown == false",
-        ".probeFailureCategory == null",
-        ".rawProbeDataRetained == false",
-    ] {
-        assert!(
-            playbook.contains(playbook_boundary),
-            "macOS acceptance playbook is missing a review boundary: {playbook_boundary}"
-        );
-    }
-
-    let phase_1 = playbook
-        .split("### Phase 1: bind the candidate, run quiet, then stop for review")
-        .nth(1)
-        .unwrap()
-        .split("### Phase 2: require quiet review, run deliberate, then stop for review")
-        .next()
-        .unwrap();
-    let phase_1_readiness = phase_1.find("QUIET_READINESS_JSON=").unwrap();
-    let phase_1_assertion = phase_1
-        .find("assert_quiet_readiness_record \"$QUIET_READINESS_JSON\"")
-        .unwrap();
-    let phase_1_candidate = phase_1
-        .find("\"$SERVER\" \"$HELPER\" \"$QUIET_DIR\"")
-        .unwrap();
-    assert!(phase_1_readiness < phase_1_assertion && phase_1_assertion < phase_1_candidate);
-
-    let phase_2 = playbook
-        .split("### Phase 2: require quiet review, run deliberate, then stop for review")
-        .nth(1)
-        .unwrap()
-        .split("### Phase 3: require both reviews and finalize create-once")
-        .next()
-        .unwrap();
-    let phase_2_review = phase_2
-        .find(": \"${QUIET_REVIEWED_RESULT_SHA256:?complete Phase 1 visual review first}\"")
-        .unwrap();
-    let phase_2_readiness = phase_2.find("DELIBERATE_READINESS_JSON=").unwrap();
-    let phase_2_assertion = phase_2
-        .find("assert_quiet_readiness_record \"$DELIBERATE_READINESS_JSON\"")
-        .unwrap();
-    let phase_2_candidate = phase_2
-        .find("\"$SERVER\" \"$HELPER\" \"$DELIBERATE_DIR\"")
-        .unwrap();
-    assert!(
-        phase_2_review < phase_2_readiness
-            && phase_2_readiness < phase_2_assertion
-            && phase_2_assertion < phase_2_candidate
-    );
-    assert_eq!(
-        playbook.matches("--quiet-readiness").count(),
-        3,
-        "the generic readiness example plus exactly two fresh pre-lane calls are required"
-    );
-
-    for integration in [&ci, &local] {
-        assert!(
-            integration.contains("node --check evidence/v0.12.68/computer/helper-evidence-rig.mjs"),
-            "CI/local validation does not syntax-check the exact v0.12.68 macOS evidence rig"
-        );
-        assert!(
-            integration
-                .contains("node evidence/v0.12.68/computer/helper-evidence-rig.mjs --self-test")
-        );
-        assert!(
-            !integration.contains("evidence/v0.12.20/computer/"),
-            "active integration still targets the withdrawn v0.12.20 harness"
-        );
-    }
-    for integration in [&ci, &local] {
-        for source in ["HelperEvidenceFixture.swift", "SystemProbe.swift"] {
-            assert!(
-                integration.contains(&format!(
-                    "xcrun swiftc -typecheck evidence/v0.12.68/computer/{source}"
-                )),
-                "macOS workflow does not typecheck {source}"
-            );
-        }
-    }
-    for integration in [&ci, &candidate, &local] {
-        assert!(integration.contains("bash scripts/verify-macos-app-share-handoff-self-test.sh"));
-    }
-    for required in [
-        "xcrun swiftc -typecheck \"$source_path\"",
-        "xcrun swiftc \"$source_path\" -o \"$binary\"",
-        "\"$binary\" --self-test >\"$stdout_path\" 2>\"$stderr_path\"",
-        "(( status != 0 ))",
-        "[[ -s \"$stderr_path\" ]]",
-        "cmp -s \"$stdout_path\" \"$expected_path\"",
-        "macOS app-share handoff self-test passed",
-    ] {
-        assert!(
-            handoff_self_test.contains(required),
-            "shared app-share self-test verifier is missing: {required}"
-        );
-    }
-    assert!(ci.contains(
-        "xcrun swiftc -typecheck evidence/v0.12.68/computer/PhysicalPointerHandoff.swift"
-    ));
-    for release_path in [&candidate, &local] {
-        assert!(
-            !release_path.contains("PhysicalPointerHandoff.swift"),
-            "the physical-pointer adversarial helper must not become a release-path requirement"
-        );
-    }
-    assert!(candidate.contains("bash scripts/verify-release-acceptance-evidence.sh --self-test"));
-    assert!(candidate.contains("\"macOS native validation\""));
-
-    for field in [
-        "schemaVersion",
-        "kind",
-        "productVersion",
-        "requestId",
-        "createdAt",
-        "expiresAt",
-        "runnerPid",
-        "promptPid",
-        "expectedBundleIdentifier",
-        "expectedWindowTitle",
-        "expectedButtonText",
-        "expectedButtonAccessibilityIdentifier",
-        "expectedButtonEnabledAfterDelivery",
-        "exactAppObserved",
-        "exactWindowObserved",
-        "requestDelivered",
-        "panelOnScreen",
-        "panelNonactivating",
-        "notificationOnly",
-        "exactAppShareRequired",
-        "physicalHumanProvenanceRequired",
-        "acceptedAsProductAuthority",
-    ] {
-        assert!(
-            watcher.contains(&format!("\"{field}\"")),
-            "macOS app-share watcher omits request field {field}"
-        );
-    }
-    for field in [
-        "acceptedAsAuthority",
-        "buttonAccepted",
-        "buttonActionObserved",
-        "cryptographicToolIdentityClaimed",
-        "physicalHumanProvenanceClaimed",
-        "requestSha256",
-        "buttonRemainedDisabledDuringProductAction",
-        "handoffStateSequenceBound",
-        "productActionCompletedAt",
-        "productActionStartedAt",
-        "startReceiptSha256",
-    ] {
-        assert!(
-            watcher.contains(&format!("\"{field}\"")),
-            "macOS app-share watcher omits chained receipt field {field}"
-        );
-    }
-
-    for forbidden in [
-        "writeFile(",
-        "appendFile(",
-        "rename(",
-        "unlink(",
-        "rm(",
-        "mkdir(",
-        "process.stdin",
-        "readline",
-        "child_process",
-        "acceptedAsAuthority: true",
-        "acceptedAsProductAuthority: true",
-        "--ack",
-    ] {
-        assert!(
-            !watcher.contains(forbidden),
-            "read-only macOS app-share watcher contains forbidden primitive: {forbidden}"
         );
     }
 }
@@ -1180,7 +509,10 @@ fn two_phase_release_is_tagless_reviewed_low_cost_and_provenance_bound() {
     let ci_trigger = ci.split("permissions:").next().unwrap();
     assert!(ci_trigger.contains("on:\n  pull_request:\n  workflow_dispatch:"));
     assert!(!ci_trigger.contains("push:"));
-    assert_eq!(workflow_job_ids(&ci), vec!["rust", "windows", "macos"]);
+    assert_eq!(
+        workflow_job_ids(&ci),
+        vec!["rust", "windows", "macos", "acceptance"]
+    );
     for name in [
         "name: Rust, extension, and packaging",
         "name: Windows native validation",
@@ -1201,7 +533,14 @@ fn two_phase_release_is_tagless_reviewed_low_cost_and_provenance_bound() {
     assert!(!candidate_trigger.contains("push:"));
     assert_eq!(
         workflow_job_ids(&candidate),
-        vec!["verify", "windows", "macos", "assemble"]
+        vec![
+            "verify",
+            "windows",
+            "macos",
+            "assemble",
+            "acceptance",
+            "receipt"
+        ]
     );
     let candidate_verify = job_section(&candidate, "verify");
     assert!(candidate_verify.contains("pull-requests: read"));
@@ -1284,7 +623,8 @@ fn two_phase_release_is_tagless_reviewed_low_cost_and_provenance_bound() {
         candidate
             .matches("actions/attest-build-provenance@")
             .count(),
-        4
+        5,
+        "extension, Windows, macOS, checksum manifest, and acceptance receipt must each be attested"
     );
     assert_eq!(
         candidate
@@ -1298,7 +638,8 @@ fn two_phase_release_is_tagless_reviewed_low_cost_and_provenance_bound() {
             .lines()
             .filter(|line| line.trim() == "retention-days: 14")
             .count(),
-        1
+        2,
+        "the frozen candidate and its acceptance receipt share one retention window"
     );
     assert!(candidate.contains("name: release-candidate"));
     assert!(candidate.contains("for subject in dist/*; do verify_attestation \"$subject\"; done"));
@@ -1315,8 +656,8 @@ fn two_phase_release_is_tagless_reviewed_low_cost_and_provenance_bound() {
     assert!(!preflight.contains("environment:"));
     assert!(!preflight.contains("contents: write"));
     assert!(preflight.contains("bash scripts/fetch-verify-release-candidate.sh"));
-    assert!(preflight.contains("bash scripts/verify-release-acceptance-evidence.sh"));
-    assert!(preflight.contains("jq -e '.schemaVersion == 3'"));
+    assert!(preflight.contains(".name == \"acceptance-receipt\" and .expired == false"));
+    assert!(preflight.contains(".schemaVersion == 4"));
     assert!(preflight.contains("bash scripts/publish-release.sh prepare"));
     assert!(preflight.contains("bash scripts/publish-release.sh check-remote"));
     assert!(preflight.contains("retention-days: 1"));
@@ -1416,410 +757,6 @@ fn two_phase_release_is_tagless_reviewed_low_cost_and_provenance_bound() {
     assert!(verifier.contains("Release directory contains an unexpected file set."));
     assert!(verifier.contains("Checksum manifest must contain exactly four canonical lines."));
     assert!(verifier.contains("Checksum manifest bytes are not canonical LF-terminated ASCII."));
-}
-
-#[test]
-fn release_requires_canonical_schema_three_receipt_and_committed_evidence() {
-    let publication = source(".github/workflows/publish.yml");
-    let verifier = source("scripts/verify-release-acceptance-evidence.sh");
-    let publisher = source("scripts/publish-release.sh");
-
-    for required in [
-        "acceptance_receipt:\n        description: Canonical one-line schema-3 acceptance receipt JSON",
-        "ACCEPTANCE_RECEIPT: ${{ inputs.acceptance_receipt }}",
-        "CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}",
-        "CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}",
-        "RELEASE_TAG: v${{ inputs.version }}",
-        "VERIFIED_SOURCE_SHA: ${{ inputs.source_sha }}",
-        "test \"$(jq -c . \"$receipt\")\" = \"$(<\"$receipt\")\"",
-        "jq -e '.schemaVersion == 3' \"$receipt\"",
-        "bash scripts/verify-release-acceptance-evidence.sh",
-        "bash scripts/publish-release.sh prepare",
-        "acceptance_receipt_sha256: ${{ steps.approval.outputs.acceptance_receipt_sha256 }}",
-        "EXPECTED_RECEIPT_SHA256: ${{ needs.preflight.outputs.acceptance_receipt_sha256 }}",
-    ] {
-        assert!(
-            publication.contains(required),
-            "schema-3 publication gate is missing {required}"
-        );
-    }
-    for forbidden in [
-        "LBB_RELEASE_ACCEPTANCE_V1",
-        "LBB_RELEASE_ACCEPTANCE_V2",
-        "vars.LBB_RELEASE_ACCEPTANCE",
-        "secrets.LBB_RELEASE_ACCEPTANCE",
-        "VERIFIED_TAG_SHA",
-        "tagObjectSha",
-    ] {
-        assert!(
-            !publication.contains(forbidden),
-            "publication still depends on obsolete or mutable receipt state: {forbidden}"
-        );
-    }
-
-    let canonical_keys = [
-        "schemaVersion",
-        "version",
-        "releaseTag",
-        "sourceSha",
-        "workflowRunId",
-        "workflowRunAttempt",
-        "releaseCandidateArtifactId",
-        "releaseCandidateArtifactZipSha256",
-        "checksumManifestSha256",
-        "evidenceRef",
-        "evidenceCommitSha",
-        "macosPassed",
-        "macosAcceptanceSha256",
-        "macosQuietResultSha256",
-        "macosDeliberateConcurrencyResultSha256",
-        "windowsPassed",
-        "windowsResultSha256",
-        "stockChromePassed",
-        "stockChrome",
-        "stockChromeResultSha256",
-    ];
-    for key in canonical_keys {
-        assert!(
-            verifier.contains(&format!("\"{key}\"")),
-            "canonical schema-3 receipt omits {key}"
-        );
-    }
-    for required in [
-        "keys_unsorted == [",
-        ".schemaVersion == 3",
-        ".releaseTag == (\"v\" + .version)",
-        ".releaseTag == $release_tag",
-        ".sourceSha == $source_sha",
-        ".workflowRunId == $run_id",
-        ".workflowRunAttempt == $run_attempt",
-        ".checksumManifestSha256 == $manifest_sha256",
-        ".macosPassed == true",
-        ".windowsPassed == true",
-        ".stockChromePassed == true",
-        ".stockChrome == true",
-        "refs/heads/evidence/",
-        "macos/macos-acceptance.json",
-        "macos/quiet/helper-results.json",
-        "macos/deliberate-concurrency/helper-results.json",
-        "windows/computer/summary.json",
-        "windows/browser/browser-acceptance.json",
-        "workflowEvent: \"workflow_dispatch\"",
-        "workflowRef: \"refs/heads/main\"",
-        "workflowPath: \".github/workflows/deploy.yml\"",
-    ] {
-        assert!(
-            verifier.contains(required),
-            "schema-3 verifier is missing {required}"
-        );
-    }
-    assert!(!verifier.contains("tagObjectSha"));
-    assert!(!verifier.contains("VERIFIED_TAG_SHA"));
-
-    for receipt_binding in [
-        "acceptanceReceiptSha256",
-        "test \"$(sha256_file \"$directory/acceptance-receipt.json\")\" = \"$expected_receipt_sha\"",
-        "Canonical acceptance receipt SHA-256: \\`$receipt_sha256\\`",
-        "Candidate workflow: run \\`$CANDIDATE_RUN_ID\\`, attempt \\`$CANDIDATE_RUN_ATTEMPT\\`",
-        "Accepted source: [\\`$VERIFIED_SOURCE_SHA\\`]",
-        "assert_release_identity",
-    ] {
-        assert!(
-            publisher.contains(receipt_binding),
-            "immutable publication does not preserve receipt/source binding: {receipt_binding}"
-        );
-    }
-}
-
-#[test]
-fn release_evidence_verifier_fails_closed_on_artifact_or_commit_substitution() {
-    let verifier = source("scripts/verify-release-acceptance-evidence.sh");
-    for required in [
-        "actions/runs/$CANDIDATE_RUN_ID/attempts/$CANDIDATE_RUN_ATTEMPT",
-        "actions/runs/$CANDIDATE_RUN_ID/attempts/$CANDIDATE_RUN_ATTEMPT/jobs?per_page=100",
-        "actions/runs/$CANDIDATE_RUN_ID/artifacts?per_page=100",
-        "actions/artifacts/$artifact_id/zip",
-        "raw release-candidate artifact ZIP SHA-256 mismatch",
-        "cmp -s \"$extracted/$asset\" \"$candidate_dir/$asset\"",
-        "git ls-remote --refs origin \"$evidence_ref\"",
-        "git -c protocol.version=2 fetch --quiet --no-tags origin \"$evidence_ref\"",
-        "evidence commit must have the verified source as its sole parent",
-        "git diff-tree --no-commit-id --name-status -r -z",
-        "test \"$status\" = A",
-        "test \"$mode\" = 100644 && test \"$type\" = blob",
-        "evidence tree contains a symlink, executable, submodule, or non-blob",
-        "evidence commit contains an unreferenced or unexpected sidecar",
-        "scan_evidence_for_leaks",
-        "retained evidence contains a forbidden",
-        "raw release-candidate artifact ZIP byte count differs from GitHub metadata",
-        "receipt artifact ZIP SHA-256 differs from GitHub metadata",
-        "--format json > \"$attestation_json\"",
-        "runInvocationURI == $invocation",
-        "verify_png_dimensions()",
-        "verify_png_dimensions \"$lane_root/$filename\" \"$width\" \"$height\"",
-        "verify_png_dimensions \"$image\" \"$image_width\" \"$image_height\"",
-        "maximum_entry_bytes = 256 * 1024 * 1024",
-        "maximum_total_bytes = 512 * 1024 * 1024",
-        "release-candidate artifact ZIP exceeds its bounded uncompressed size",
-        "os.O_EXCL | getattr(os, \"O_NOFOLLOW\", 0)",
-        "maximum_member_bytes = 128 * 1024 * 1024",
-        "maximum_total_bytes = 256 * 1024 * 1024",
-        "macOS package contains global PAX metadata",
-        "macOS package does not have the exact independently inspected inventory",
-        "macOS deliberate-concurrency lane did not start after the quiet lane passed",
-        "aggregate lane start timestamp differs from its raw result",
-        "validate_macos_authority_assertion_contract()",
-        "app-share receipt retained the exact persistent share",
-        "post-handoff share action authority is fresh and exact",
-        "app-share handoff and frame refresh caused no target mutation",
-        "post-handoff share action authority remained fresh at dispatch",
-        "self-test accepted deliberate app-share authority that was not refreshed after receipt",
-        "self-test accepted deliberate app-share authority that was stale at dispatch",
-        "self-test accepted a missing deliberate authority assertion",
-        "self-test accepted a duplicate authority assertion name",
-        ".schemaVersion == 9",
-        ".aggregateChecks.passingResultSchemaVersion == 9",
-        ".aggregateChecks.inventoryFileCount == 19",
-        "macos-app-share-concurrency-handoff-request.json",
-        "macos-app-share-concurrency-handoff-start.json",
-        "macos-app-share-concurrency-handoff-complete.json",
-    ] {
-        assert!(
-            verifier.contains(required),
-            "release evidence substitution defense is missing {required}"
-        );
-    }
-    for lane_assertion in [
-        ".pointerEvidence.requestedLane == $lane",
-        ".pointerEvidence.quietObserved == true",
-        ".pointerEvidence.unknownObserved == false",
-        ".pointerEvidence.concurrentSharedSeatActivityObserved == false",
-        ".quietSeatStabilization.required == true",
-        ".quietSeatStabilization.completed == true",
-        ".quietSeatStabilization.completedBeforeCandidateExecution == true",
-        ".quietSeatStabilization.stableDurationMilliseconds >= 30000",
-        ".quietSeatStabilization.observedSamples >= 61",
-        ".quietSeatStabilization.stableTransitions >= 60",
-        ".quietSeatStabilization.monitoringUnknown == false",
-        "(if $lane == \"quiet\" then",
-        ".appShareHandoff == {",
-        "requested: false,",
-        "requestPublicationAcknowledged: false,",
-        "startReceiptAcknowledged: false,",
-        "completePublicationAcknowledged: false,",
-        "requested: true,",
-        "requestPublicationAcknowledged: true,",
-        "startReceiptAcknowledged: true,",
-        "completePublicationAcknowledged: true,",
-        "promptClosed: true,",
-        "exactAppBundleObserved: true,",
-        "exactWindowObserved: true,",
-        "exactButtonObserved: true,",
-        "buttonDisabledAfterAction: true,",
-        "acceptanceButtonActionObserved: true,",
-        "appShareSurfaceObservedAtProductBoundaries: true,",
-        "sharedHidInputObserved: null,",
-        "sharedHidInputObserved: false,",
-        "sampledSharedContextUnchanged: true,",
-        "authorityRefreshedAfterReceipt: false,",
-        "authorityFreshAtDispatch: false,",
-        "authorityRefreshedAfterReceipt: true,",
-        "authorityFreshAtDispatch: true,",
-        "actionDispatched: true,",
-        "targetPostconditionObserved: true,",
-        "productBoundaryQuiet: true,",
-        "independentBoundaryQuiet: true,",
-        "physicalHumanProvenanceClaimed: false,",
-        "cryptographicToolIdentityClaimed: false,",
-        "orchestrationNotProductControl: true,",
-        "markerNotificationOnly: false,",
-        "markerAcceptedAsProductAuthority: false,",
-        "rawAppIdentityRetainedInResult: false,",
-        "rawPointerDataRetained: false",
-    ] {
-        assert!(verifier.contains(lane_assertion));
-    }
-    assert!(verifier.contains("Release acceptance evidence verifier self-test passed."));
-}
-
-#[test]
-fn release_evidence_verifier_executes_adversarial_replay_and_decoder_tests() {
-    #[cfg(not(target_os = "windows"))]
-    {
-        let output = Command::new("bash")
-            .args([
-                "scripts/verify-release-acceptance-evidence.sh",
-                "--self-test",
-            ])
-            .output()
-            .expect("release evidence verifier self-test must start");
-        assert!(
-            output.status.success(),
-            "release evidence verifier self-test failed:\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            String::from_utf8_lossy(&output.stdout)
-                .contains("Release acceptance evidence verifier self-test passed.")
-        );
-    }
-
-    let verifier = source("scripts/verify-release-acceptance-evidence.sh");
-    for required in [
-        "self-test accepted release-candidate evidence replayed from another workflow attempt",
-        "self-test accepted a truncated Windows step inventory",
-        "self-test accepted a reordered Windows step inventory",
-        "self-test accepted Windows recovery evidence without an exact call-ID binding",
-        "self-test accepted multiple JSON records in the Windows recovery fault artifact",
-        "self-test accepted a noninteractive or unstable Windows recovery topology",
-        "self-test accepted an active result share in initial helper readiness",
-        "self-test accepted a missing result share in replacement helper readiness",
-        "self-test accepted stale IDs inside inactive Windows recovery share objects",
-        "self-test accepted an active result share in the fresh non-share observation",
-        "self-test accepted an active state share in the fresh non-share observation",
-        "self-test accepted a malformed share-start observation frame ID",
-        "self-test accepted a share-start frame replayed from the prior one-shot observation",
-        "self-test accepted a partial share-start frame-authority tuple",
-        "self-test rejected a share-start state replaced by a complete concurrent streamed frame",
-        "self-test accepted a share-start state with a mismatched frame rate",
-        "self-test accepted a replayed call ID across Windows recovery steps",
-        "self-test accepted a noncanonical inactive share state",
-        "self-test accepted a nil or non-v4 Windows recovery frame ID",
-        "self-test accepted a Windows recovery fault call ID from another causality chain",
-        "self-test accepted Windows recovery evidence with a cross-artifact replacement-session mismatch",
-        "self-test accepted a Windows recovery fault timestamp outside the summary interval",
-        "self-test accepted a transport-end recovery receipt without elapsed-bound causality",
-        "self-test accepted a producer-unreachable command-watchdog receipt as live-share causality",
-        "self-test accepted an automatic foreground-baseline receipt without the request ID",
-        "self-test accepted a foreground-baseline marker pair replayed from another request",
-        "self-test accepted a Windows invariant proof containing a raw window handle",
-        "self-test accepted an empty stock-Chrome method matrix",
-        "self-test accepted a macOS screenshot hash replayed across lanes",
-        "self-test accepted decoded macOS pixels replayed across lanes",
-        "encoding-replay.png",
-        "self-test failed to construct a byte-distinct PNG encoding replay",
-        "self-test accepted an undecodable zero-length PNG IDAT",
-    ] {
-        assert!(
-            verifier.contains(required),
-            "executable adversarial verifier self-test is missing: {required}"
-        );
-    }
-}
-
-#[test]
-fn release_evidence_gate_requires_exact_current_attempt_and_complete_ui_proofs() {
-    let verifier = source("scripts/verify-release-acceptance-evidence.sh");
-    for required in [
-        "assert_release_candidate_binding \"$summary\" '.releaseCandidateBinding'",
-        "assert_release_candidate_binding \"$final\" '.releaseCandidateBinding'",
-        "assert_release_candidate_binding \"$preflight\" '.releaseCandidateBinding'",
-        "assert_release_candidate_binding \"$postflight\" '.releaseCandidateBinding'",
-        "assert_release_candidate_binding \"$helper\" '.releaseCandidateBinding'",
-        "assert_release_candidate_binding \"$approval\" '.releaseCandidateBinding'",
-        "assert_release_candidate_binding \"$review\" '.releaseCandidateBinding'",
-        "assert_release_candidate_binding \"$operator\" '.releaseCandidateBinding'",
-        "assert_release_candidate_binding \"$sidecar\" '.releaseCandidateBinding'",
-        "workflowRunAttempt: $workflow_run_attempt",
-        "length == 62",
-        "62-foreground-cursor-focus-desktop-invariants.json",
-        "04-post-baseline-protocol-bound-helper-continuity.json",
-        "09-replacement-protocol-bound-helper-readiness.json",
-        "13-replacement-worker-fresh-share-screenshot.json",
-        "$freshShareShot.shareId == $freshShareStart.result.id",
-        "$freshShareStop.result.id == $freshShareStart.result.id",
-        ".[0].callId == $cause.faultCallId",
-        "$summary[0].interactiveSessionId | type == \"number\" and floor == . and . >= 1",
-        "$beforeTopology[0].stableConsecutivePolls | type == \"number\" and floor == . and . >= 2",
-        "($freshObserve.result.share | inactive_share)",
-        "($freshObserve.targetState.computerObservation.share | inactive_share)",
-        "def raw_inactive_share:",
-        "and .stopped == false",
-        "and .reason == \"inactive\"",
-        "($before.result.share | raw_inactive_share)",
-        "$freshShareStart.targetState.computer.share.pid == $freshShareStart.result.pid",
-        "$freshShareStart.targetState.computer.share.fps == $freshShareStart.result.fps",
-        "$freshShareStart.targetState.computerObservation.share.windowId == $freshShareStart.result.windowId",
-        "$freshShareStart.targetState.computerObservation.share.pid == $freshShareStart.result.pid",
-        "$freshShareStart.targetState.computerObservation.share.fps == $freshShareStart.result.fps",
-        "$freshShareStart.targetState.computerObservation.frameId",
-        "$freshShareStart.targetState.computerObservation.frameId != $proof.recoveredObserveFrameId",
-        "$freshShareStart.targetState.computerObservation.contentHash",
-        "$freshShareStart.targetState.computerObservation.share.sourceSequence",
-        "$freshShareStart.targetState.computerObservation.share.sequence",
-        "$freshShareStart.targetState.computerObservation.frameId != $freshShareShot.frameId",
-        "$freshShareShot.sourceSequence >=",
-        "$freshShareShot.sourceSequence >",
-        "$freshShareShot.sequence >=",
-        "$freshShareShot.sequence >",
-        "$freshObserve.result == ($freshObserve.targetState.computerObservation",
-        "del(.screenshotUrl,.contentHash,.screenshotWidth,.screenshotHeight)",
-        "$freshObserve.result | has(\"screenshotUrl\") | not",
-        "$freshObserve.targetState.computerObservation.screenshotWidth",
-        "def uuid_v4:",
-        "def inactive_share:",
-        "$freshShareShot.frameShareId == $freshShareShot.shareId",
-        "$freshShareShot.shareSourceSequence == $freshShareShot.sourceSequence",
-        "$freshShareStop.targetState.computer.share | keys",
-        "$freshShareStop.callId] | unique | length) == 5",
-        "self-test accepted a share-start state with a mismatched target PID",
-        "self-test accepted a share-start frame with a mismatched target window",
-        "self-test accepted a share-start frame with a mismatched target PID",
-        "self-test accepted a share-start frame with a mismatched frame rate",
-        "self-test accepted a non-metadata mismatch between observe result and state",
-        "self-test accepted state-only screenshot metadata in the observe result",
-        "self-test accepted malformed inactive share status fields",
-        "self-test accepted a stopped share as the inactive pre-share state",
-        "self-test accepted a sanitized share object where raw status was required",
-        "self-test accepted a one-shot share-start frame reused as the streamed screenshot",
-        "self-test accepted a streamed screenshot behind one-shot share counters",
-        "self-test accepted a streamed screenshot behind prior streamed counters",
-        "self-test accepted one frame with contradictory stream counters",
-        "self-test accepted one frame ID with contradictory content hashes",
-        "Windows recovery pre-fault",
-        "Windows recovery post-fault",
-        "test \"${#windows_screenshots[@]}\" = 20",
-        "stableSamplesRequired == 3",
-        "methodCount == 25",
-        "page.handleDialog",
-        "operatorRecordSha256",
-        "browser-04-stop-paused.png",
-        "browser-05-cancel-paused.png",
-        "browser-06-post-handback-resume.png",
-        ".retainedEvidence.inputFileCount == 21 and .retainedEvidence.finalFileCount == 22",
-        "external-surface-preflight.json",
-        "external-surface-postflight.json",
-        "scoped-action-approval.json",
-        "independent-visual-review.json",
-        ".response.deliveredBy == \"user-via-orchestrator\"",
-        ".operatorExchange.requestCount == (.operatorExchange.statusDecisionCount + .operatorExchange.freshFrameDecisionCount + 1)",
-        ".response.orchestratorSessionRef != .operatorExchange.executorSessionRef",
-        ".response.orchestratorSessionRef != .operatorExchange.reviewerSessionRef",
-        ".independentVisualReview.noUncertaintyReported == true",
-        ".independentVisualReview.visualJudgmentNotPixelSafetyProof == true",
-        "source-schema complete contract replay",
-        "zlib.decompressobj()",
-        "PNG IDAT does not decode to the claimed raster",
-        "PNG decoded pixels do not match the aggregate hash",
-        "pixel-bound PNG contains unexpected metadata or ancillary chunks",
-        "twelve globally file- and decoded-pixel-distinct screenshots",
-        ".pixelSha256",
-        ".aggregateChecks.screenshotPixelHashesMatched == true",
-        ".automatedTextInspectionPerformed == false",
-        ".independentVisualReviewRequired == true",
-        ".independentVisualReviewCompleted == true",
-        "stock-Chrome screenshot sidecar is not the exact independent digest-bound review schema",
-        "extract_macos_candidate_facts",
-        "LC_CODE_SIGNATURE",
-        ".package.serverSha256 == $package_facts[0].serverSha256",
-        ".package.helperSha256 == $package_facts[0].helperSha256",
-    ] {
-        assert!(
-            verifier.contains(required),
-            "release evidence gate is missing the exact proof: {required}"
-        );
-    }
 }
 
 #[test]
@@ -2452,4 +1389,123 @@ fn native_desktop_dependencies_are_not_built_on_unsupported_hosts() {
     assert!(ci.contains("runs-on: ubuntu-latest"));
     assert!(ci.contains("cargo clippy --locked --all-targets -- -D warnings"));
     assert!(ci.contains("cargo test --locked --all-targets"));
+}
+
+#[test]
+fn ci_hosted_acceptance_replaces_the_operator_harness_everywhere() {
+    let acceptance = source(".github/workflows/acceptance.yml");
+    let ci = source(".github/workflows/ci.yml");
+    let candidate = source(".github/workflows/deploy.yml");
+    let publication = source(".github/workflows/publish.yml");
+    let driver = source("scripts/ci-acceptance.mjs");
+
+    // One reusable workflow serves both the PR source lane and the frozen-candidate lane.
+    assert!(acceptance.contains("workflow_call:"));
+    for input in [
+        "mode:",
+        "candidate_run_id:",
+        "candidate_run_attempt:",
+        "version:",
+        "source_sha:",
+    ] {
+        assert!(
+            acceptance.contains(input),
+            "acceptance.yml is missing input {input}"
+        );
+    }
+    assert!(acceptance.contains("- os: windows-latest"));
+    assert!(acceptance.contains("- os: macos-26"));
+    assert!(acceptance.contains("fail-fast: false"));
+    assert!(acceptance.contains("CHROME_FOR_TESTING_BUILD:"));
+    assert!(acceptance.contains("npx --yes @puppeteer/browsers@"));
+    assert!(acceptance.contains("node scripts/ci-acceptance.mjs"));
+    assert!(acceptance.contains(".name == \"release-candidate\" and .expired == false"));
+    assert!(acceptance.contains("SHA256SUMS.txt"));
+    assert!(acceptance.contains("name: acceptance-${{ matrix.label }}"));
+    assert!(acceptance.contains("retention-days: 30"));
+    assert!(acceptance.contains("if: always()"));
+    assert!(!acceptance.contains("continue-on-error:"));
+
+    let ci_acceptance = job_section(&ci, "acceptance");
+    assert!(ci_acceptance.contains("uses: ./.github/workflows/acceptance.yml"));
+    assert!(ci_acceptance.contains("mode: source"));
+
+    let candidate_acceptance = job_section(&candidate, "acceptance");
+    assert!(candidate_acceptance.contains("needs: [verify, assemble]"));
+    assert!(candidate_acceptance.contains("uses: ./.github/workflows/acceptance.yml"));
+    assert!(candidate_acceptance.contains("mode: artifact"));
+    assert!(candidate_acceptance.contains("candidate_run_id: ${{ github.run_id }}"));
+    assert!(candidate_acceptance.contains("candidate_run_attempt: ${{ github.run_attempt }}"));
+    let receipt = job_section(&candidate, "receipt");
+    assert!(receipt.contains("needs: [verify, assemble, acceptance]"));
+    assert!(receipt.contains("schemaVersion: 4"));
+    assert!(receipt.contains("candidateArtifactSha256: $zip_sha"));
+    assert!(receipt.contains("all(.checks[]; (.required | not) or .status == \"pass\")"));
+    assert!(
+        receipt.contains(".results.macos.os == \"macos\" and .results.windows.os == \"windows\"")
+    );
+    // A macOS permission-probe regression (or any lane that returns early)
+    // must not be satisfiable by a receipt full of unrequired skips.
+    assert!(receipt.contains(".computerMode == \"native\""));
+    assert!(receipt.contains(".lanes == [\"server\", \"shell\", \"browser\", \"computer\"]"));
+    assert!(receipt.contains(".summary.fail == 0 and .summary.skip == 0"));
+    assert!(receipt.contains("subject-path: acceptance-receipt.json"));
+    assert!(receipt.contains("name: acceptance-receipt"));
+
+    // Publication verifies the attested receipt instead of an operator-typed one.
+    assert!(!publication.contains("acceptance_receipt:"));
+    assert!(publication.contains("dry_run:"));
+    assert!(publication.contains("type: boolean"));
+    let preflight = job_section(&publication, "preflight");
+    assert!(preflight.contains("gh attestation verify \"$receipt\""));
+    assert!(
+        preflight.contains("--signer-workflow \"$GITHUB_REPOSITORY/.github/workflows/deploy.yml\"")
+    );
+    assert!(preflight.contains("--source-ref refs/heads/main"));
+    assert!(preflight.contains("--source-digest \"$VERIFIED_SOURCE_SHA\""));
+    assert!(preflight.contains("--deny-self-hosted-runners"));
+    assert!(preflight.contains(".candidateArtifactSha256 == $zip_sha"));
+    assert!(preflight.contains("(.results | keys) == [\"macos\", \"windows\"]"));
+    assert!(
+        preflight.contains(".results.macos.os == \"macos\" and .results.windows.os == \"windows\"")
+    );
+    assert!(preflight.contains(".computerMode == \"native\""));
+    assert!(preflight.contains(".lanes == [\"server\", \"shell\", \"browser\", \"computer\"]"));
+    assert!(preflight.contains(".summary.fail == 0 and .summary.skip == 0"));
+    assert!(preflight.contains("all(.checks[]; (.required | not) or .status == \"pass\")"));
+    assert!(preflight.contains("bash scripts/publish-release.sh check-remote"));
+
+    // The driver records every check in the shared schema and fails closed.
+    for required in [
+        "schemaVersion: 1",
+        "status === \"pass\"",
+        "\"skip\"",
+        "permission-unavailable",
+        "COMPUTER_CAPTURE_FAILED",
+        "COMPUTER_INPUT_FAILED",
+        "SHELL_DISABLED",
+        "--load-extension=",
+        "--use-mock-keychain",
+        "--password-store=basic",
+        "chrome.storage.local.set(",
+        "browser.control.start",
+        "browser.control.stop",
+        "computer.share.start",
+        "computer.typeText",
+        "process.exit(ok ? 0 : 1)",
+    ] {
+        assert!(
+            driver.contains(required),
+            "ci-acceptance.mjs is missing {required}"
+        );
+    }
+    assert!(
+        driver
+            .contains("const gated = IS_MACOS && !(captureReady && semanticReady && inputReady);")
+    );
+    assert!(
+        !driver.contains("require("),
+        "the driver must stay dependency-free ESM"
+    );
+    assert!(!driver.contains("node_modules"));
 }
