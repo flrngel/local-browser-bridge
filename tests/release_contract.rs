@@ -721,8 +721,9 @@ fn two_phase_release_is_tagless_reviewed_low_cost_and_provenance_bound() {
         publisher
             .matches("assert_repository_release_policy")
             .count(),
-        5,
-        "the policy function plus preflight, protected-job entry, pre-tag, and pre-publication calls must remain present"
+        9,
+        "the policy dispatcher plus preflight, protected-job entry, pre-tag, and pre-publication calls \
+         (5) plus its self-test dispatch coverage (1 comment mention and 3 shadowed calls) must remain present"
     );
 
     let protected_publish = publisher.split("publish_approved() {").nth(1).unwrap();
@@ -756,6 +757,144 @@ fn two_phase_release_is_tagless_reviewed_low_cost_and_provenance_bound() {
     assert!(verifier.contains("Release directory contains an unexpected file set."));
     assert!(verifier.contains("Checksum manifest must contain exactly four canonical lines."));
     assert!(verifier.contains("Checksum manifest bytes are not canonical LF-terminated ASCII."));
+}
+
+#[test]
+fn release_policy_check_falls_back_to_structural_checks_without_release_policy_token() {
+    let publisher = source("scripts/publish-release.sh");
+    let publication = source(".github/workflows/publish.yml");
+
+    // Dispatch: an admin-backed full check when RELEASE_POLICY_TOKEN is
+    // set (a fine-grained PAT, this repository only, Administration:
+    // read), otherwise structural checks a normal token can prove.
+    let dispatcher = publisher
+        .split("assert_repository_release_policy() {")
+        .nth(1)
+        .unwrap()
+        .split("\n}\n")
+        .next()
+        .unwrap();
+    assert!(dispatcher.contains("RELEASE_POLICY_TOKEN"));
+    assert!(dispatcher.contains("release_policy_check_full"));
+    assert!(dispatcher.contains("release_policy_check_structural"));
+    assert!(publisher.contains("release_policy_check_full() {"));
+    assert!(publisher.contains("release_policy_check_structural() {"));
+
+    // The full check proves exactly what the policy check proved before
+    // this change, just authenticated with RELEASE_POLICY_TOKEN instead of
+    // the ambient GH_TOKEN -- overridden for those calls only.
+    let full_check = publisher
+        .split("release_policy_check_full() {")
+        .nth(1)
+        .unwrap()
+        .split("\n}\n")
+        .next()
+        .unwrap();
+    for full_contract in [
+        "repos/$REPOSITORY/immutable-releases",
+        "test \"$enabled\" = true",
+        "GH_TOKEN=\"$RELEASE_POLICY_TOKEN\"",
+        "release tags are not protected by one unbypassable update/deletion ruleset",
+    ] {
+        assert!(
+            full_check.contains(full_contract),
+            "full policy check is missing {full_contract}"
+        );
+    }
+
+    // The tag- and branch-ruleset matching predicates are shared jq filter
+    // constants, reused verbatim by both the live check and the offline
+    // self-test fixtures below, so they cannot silently drift apart.
+    assert!(publisher.contains("readonly TAG_RULESET_STRUCTURAL_FILTER="));
+    assert!(publisher.contains("readonly TAG_RULESET_FULL_FILTER="));
+    assert!(publisher.contains("readonly BRANCH_RULESET_STRUCTURAL_FILTER="));
+    assert!(
+        publisher.contains("(.conditions.ref_name.include | index(\"refs/heads/main\") != null)")
+    );
+    assert!(
+        publisher.contains(
+            "index(\"pull_request\") != null and index(\"required_status_checks\") != null"
+        )
+    );
+
+    // The structural fallback proves the tag ruleset (minus bypass actors,
+    // which an unauthenticated read cannot see) via TAG_RULESET_STRUCTURAL_FILTER,
+    // the main branch ruleset via BRANCH_RULESET_STRUCTURAL_FILTER, and
+    // prints a non-blocking sanity signal plus an explicit notice naming
+    // the optional RELEASE_POLICY_TOKEN secret.
+    let structural_check = publisher
+        .split("release_policy_check_structural() {")
+        .nth(1)
+        .unwrap()
+        .split("\n}\n")
+        .next()
+        .unwrap();
+    for structural_contract in [
+        "\"$TAG_RULESET_STRUCTURAL_FILTER\"",
+        "\"$BRANCH_RULESET_STRUCTURAL_FILTER\"",
+        "no active branch ruleset protects main",
+        "releases/latest",
+        "sanity signal only",
+        "RELEASE_POLICY_TOKEN",
+        "Administration: read",
+    ] {
+        assert!(
+            structural_check.contains(structural_contract),
+            "structural policy check is missing {structural_contract}"
+        );
+    }
+    // The structural filter itself must not require fields an
+    // unauthenticated read never receives; the full filter must require
+    // them. (The structural check's printed operator notice legitimately
+    // names both fields in prose, so this is checked on the filter
+    // constants, not the whole function body.)
+    let tag_structural_filter = publisher
+        .split("readonly TAG_RULESET_STRUCTURAL_FILTER='")
+        .nth(1)
+        .unwrap()
+        .split('\'')
+        .next()
+        .unwrap();
+    assert!(!tag_structural_filter.contains("bypass_actors"));
+    assert!(!tag_structural_filter.contains("current_user_can_bypass"));
+    let tag_full_filter = publisher
+        .split("readonly TAG_RULESET_FULL_FILTER='")
+        .nth(1)
+        .unwrap()
+        .split('\'')
+        .next()
+        .unwrap();
+    assert!(tag_full_filter.contains("bypass_actors"));
+    assert!(tag_full_filter.contains("current_user_can_bypass"));
+
+    // Post-publish, verify_published_release additionally cross-checks
+    // `gh release view` next to the existing gh release verify /
+    // verify-asset checks, and fails loudly if it disagrees.
+    let verification = publisher
+        .split("verify_published_release() {")
+        .nth(1)
+        .unwrap()
+        .split("\n}\n\ncheck_remote_state()")
+        .next()
+        .unwrap();
+    assert!(verification.contains(
+        "gh release view \"$RELEASE_TAG\" --repo \"$REPOSITORY\" --json isImmutable,isDraft"
+    ));
+    assert!(verification.contains(".isImmutable == true and .isDraft == false"));
+    assert!(verification.contains(
+        "gh release view reports the published release is not isImmutable or not published"
+    ));
+
+    // publish.yml must pass the optional secret into every step that
+    // invokes the script; an unset secret resolves to an empty string,
+    // which selects the structural fallback.
+    assert_eq!(
+        publication
+            .matches("RELEASE_POLICY_TOKEN: ${{ secrets.RELEASE_POLICY_TOKEN }}")
+            .count(),
+        3,
+        "prepare, check-remote, and publish steps must all forward the optional RELEASE_POLICY_TOKEN secret"
+    );
 }
 
 #[test]
