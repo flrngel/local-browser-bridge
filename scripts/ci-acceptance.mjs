@@ -868,7 +868,14 @@ async function shellLane(context) {
   } else {
     recorder.fail(lane, "run.unauthenticated-401", `expected 401, got ${unauthenticated.status}`);
   }
+}
 
+// Runs after the main server has been stopped: the Windows desktop host is a
+// single-instance process guarded by a named mutex, so a second host can only
+// start once the first one is gone.
+async function shellDisabledLane(context) {
+  const { recorder } = context;
+  const lane = "shell";
   let disabled = null;
   try {
     disabled = await startServer(context, { shell: false, label: "shell-disabled" });
@@ -1205,7 +1212,40 @@ async function startFixture(context, fixture) {
   );
   fixture.entry = entry;
   fixture.readState = () => readJsonWithRetry(fixture.statePath);
+  fixture.bringToFront = () => {
+    const script = `tell application "System Events" to set frontmost of (first process whose unix id is ${entry.child.pid}) to true`;
+    const result = spawnSync("osascript", ["-e", script], { encoding: "utf8", timeout: 20_000 });
+    return result.status === 0 ? null : (result.stderr || "osascript failed").trim();
+  };
+  fixture.bringToFront();
   return fixture;
+}
+
+// Polls computer.status until the fixture window is reported as focused,
+// re-requesting frontmost on macOS between polls.
+async function waitFixtureFocused(bridge, fixture, timeoutMs = 20_000) {
+  let lastWindows = [];
+  try {
+    return await waitUntil(
+      "fixture window focus",
+      async () => {
+        const status = await bridge.command("computer.status");
+        lastWindows = Array.isArray(status.result?.windows) ? status.result.windows : [];
+        const window = lastWindows.find((candidate) => candidate.title === FIXTURE_TITLE);
+        if (window?.focused === true) {
+          return window;
+        }
+        if (fixture.bringToFront) {
+          fixture.bringToFront();
+        }
+        return null;
+      },
+      { timeoutMs, intervalMs: 1_000 },
+    );
+  } catch (error) {
+    const summary = lastWindows.map((window) => ({ title: window.title, appName: window.appName, focused: window.focused }));
+    throw new Error(`${error.message}; windows=${JSON.stringify(summary).slice(0, 600)}`);
+  }
 }
 
 function fixtureTextState(state, field) {
@@ -1354,6 +1394,15 @@ async function computerLane(context) {
     return;
   }
   const windowId = String(fixtureWindow.id);
+
+  if (IS_MACOS && !gated) {
+    try {
+      const focused = await waitFixtureFocused(bridge, fixture);
+      recorder.pass(lane, "window.frontmost", { windowId: String(focused.id), focused: true });
+    } catch (error) {
+      recorder.fail(lane, "window.frontmost", error.message);
+    }
+  }
 
   const expectCode = (name, response, code, messagePattern) => {
     const summary = errorSummary(response);
@@ -1642,6 +1691,10 @@ async function main() {
       }
       if (lanes.includes("computer")) {
         await computerLane(context);
+      }
+      if (lanes.includes("shell")) {
+        await processes.stop(context.server?.entry);
+        await shellDisabledLane(context);
       }
     } catch (error) {
       fatal = error;
