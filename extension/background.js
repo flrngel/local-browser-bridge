@@ -118,6 +118,16 @@ const CONTROL_UI_ANCESTRY_MAX_DEPTH = 24;
 const CONTROL_UI_ANCESTRY_WORK_MAX = 512;
 const CONTROL_UI_BROWSER_PROOF_DEADLINE_MS = 1_500;
 const CONTROL_UI_HIT_POINT_MAX = 5;
+// One DOM.getDocument({depth: -1, pierce: true}) snapshot bounds the whole
+// document tree the proof indexes; the depth-0 release afterwards is best
+// effort and has its own short deadline.
+const CONTROL_UI_DOCUMENT_MAX_NODES = 200_000;
+const CONTROL_UI_DOCUMENT_RELEASE_MS = 250;
+// The content watchdog reopens the popover every 500 ms, so a root top-layer
+// event can land inside a show proof's final sample through no fault of the
+// page. A stale final sample is re-proven from a fresh renderer request a
+// bounded number of times before it fails closed.
+const CONTROL_UI_PROOF_ATTEMPTS = 3;
 const CONTROL_STORAGE_KEY = "browserControlLease";
 const CONTROL_REVOCATION_KEY = "browserControlRevocation";
 const CONTROL_CLEANUPS_KEY = "browserControlCleanups";
@@ -1805,63 +1815,171 @@ function spendControlUiAncestryWork(budget) {
   budget.remaining -= 1;
 }
 
-async function browserNodeAncestry(tabId, locator, authority, commandContext, budget) {
-  let current = { ...locator };
-  let startNodeId = null;
-  let startParentNodeId = null;
-  let closedShadowHostNodeId = null;
-  let closedShadowHostParentNodeId = null;
-  const seen = new Set();
-  for (let depth = 0; depth < CONTROL_UI_ANCESTRY_MAX_DEPTH; depth += 1) {
-    spendControlUiAncestryWork(budget);
-    const described = await debuggerCommand(
-      tabId,
-      "DOM.describeNode",
-      { ...current, depth: 0, pierce: true },
+// backendNodeId is the browser's stable identity for a DOM node: it survives
+// the nodeId re-binding that every DOM.getDocument call performs, so it is the
+// only identity that may be compared across two document snapshots.
+function sameBrowserNode(left, right) {
+  return Boolean(left && right)
+    && Number.isInteger(left.backendNodeId)
+    && left.backendNodeId === right.backendNodeId;
+}
+
+// Indexes one DOM.getDocument({depth: -1, pierce: true}) tree. Nesting is the
+// only parent authority: Chrome's DOM.describeNode never reports parentId and
+// page-world parentNode is page-forgeable, whereas the tree's children,
+// shadowRoots, templateContent, and pseudoElements arrays are produced by the
+// browser process from the real node tree. A nested same-process document is
+// indexed as its own ancestry root, exactly like every walk stops at its
+// #document, so a frame node can never resolve to the controlled document.
+function indexBrowserDocumentTree(root) {
+  const byNodeId = new Map();
+  const byBackendNodeId = new Map();
+  const pending = [{ node: root, parent: null }];
+  while (pending.length > 0) {
+    const { node, parent } = pending.pop();
+    if (!node
+      || !Number.isInteger(node.nodeId)
+      || !Number.isInteger(node.backendNodeId)
+      || byNodeId.has(node.nodeId)
+      || byBackendNodeId.has(node.backendNodeId)) {
+      throw new Error("The browser did not describe a unique bounded document tree");
+    }
+    if (byNodeId.size >= CONTROL_UI_DOCUMENT_MAX_NODES) {
+      throw new Error("The browser document tree exceeded the bounded control proof size");
+    }
+    const entry = { node, parent };
+    byNodeId.set(node.nodeId, entry);
+    byBackendNodeId.set(node.backendNodeId, entry);
+    for (const child of node.children ?? []) pending.push({ node: child, parent: entry });
+    for (const child of node.shadowRoots ?? []) pending.push({ node: child, parent: entry });
+    for (const child of node.pseudoElements ?? []) pending.push({ node: child, parent: entry });
+    if (node.templateContent) pending.push({ node: node.templateContent, parent: entry });
+    if (node.contentDocument) pending.push({ node: node.contentDocument, parent: null });
+  }
+  return { root, byNodeId, byBackendNodeId };
+}
+
+// One whole-document snapshot for one proof phase. Every nodeId the browser
+// reports afterwards (top-layer members, search results, hit tests) is bound
+// in this snapshot's generation until the next DOM.getDocument call, so the
+// snapshot is taken first and never mixed with nodeIds from before it.
+async function browserDocumentTree(lease, authority, commandContext, budget) {
+  const described = await debuggerCommand(
+    lease.tabId,
+    "DOM.getDocument",
+    { depth: -1, pierce: true },
+    authority,
+    commandContext,
+    null,
+    { deadlineAt: budget.deadlineAt, strictDeadline: true },
+  );
+  if (Date.now() > budget.deadlineAt) {
+    throw new Error("The browser control proof exceeded its shared ancestry deadline");
+  }
+  const root = described?.root;
+  if (!root || (root.nodeType !== 9 && root.nodeName !== "#document")) {
+    throw new Error("The controlled root document identity is unavailable");
+  }
+  const tree = indexBrowserDocumentTree(root);
+  const rootElements = (root.children ?? []).filter((child) => child?.nodeType === 1);
+  if (rootElements.length !== 1) {
+    throw new Error("The controlled document element identity is unavailable");
+  }
+  return { ...tree, rootElement: rootElements[0] };
+}
+
+// Releases the whole-document binding once a proof is over. Bound nodes
+// stream every later DOM mutation to the service worker as CDP events; the
+// depth-0 re-read keeps only the document bound. Best effort: it cannot
+// change the proof's verdict and must never mask its error.
+async function releaseBrowserDocumentTree(lease, authority, commandContext) {
+  try {
+    await debuggerCommand(
+      lease.tabId,
+      "DOM.getDocument",
+      { depth: 0 },
       authority,
       commandContext,
       null,
-      { deadlineAt: budget.deadlineAt, strictDeadline: true },
+      {
+        deadlineAt: Date.now() + CONTROL_UI_DOCUMENT_RELEASE_MS,
+        strictDeadline: true,
+        timeoutIsFatal: false,
+      },
     );
-    if (Date.now() > budget.deadlineAt) {
-      throw new Error("The browser control proof exceeded its shared ancestry deadline");
+  } catch {
+    // The binding is released by the next DOM.getDocument call anyway.
+  }
+}
+
+// Live, snapshot-free proof that `childNode` is still a direct child of
+// `parentNode`: one depth-1 describe of the parent, matched by the stable
+// backendNodeId and by the nodeId the first-phase snapshot bound. Chrome
+// unbinds a node it removes, so a host that was moved out and back carries a
+// new nodeId and is rejected here even though its backendNodeId survived.
+async function browserChildNode(lease, parentNode, childNode, authority, commandContext, budget) {
+  spendControlUiAncestryWork(budget);
+  const described = await debuggerCommand(
+    lease.tabId,
+    "DOM.describeNode",
+    { nodeId: parentNode.nodeId, depth: 1 },
+    authority,
+    commandContext,
+    null,
+    { deadlineAt: budget.deadlineAt, strictDeadline: true },
+  );
+  const parent = described?.node;
+  if (!sameBrowserNode(parent, parentNode) || parent.nodeId !== parentNode.nodeId) {
+    throw new Error("The controlled ancestry was re-bound during acknowledgement");
+  }
+  const children = Array.isArray(parent.children) ? parent.children : [];
+  const matches = children.filter((child) => sameBrowserNode(child, childNode));
+  if (matches.length !== 1 || matches[0].nodeId !== childNode.nodeId) {
+    throw new Error("The exact control host left the controlled root document during acknowledgement");
+  }
+  return matches[0];
+}
+
+function browserNodeAncestry(tree, locator, budget) {
+  let entry = Number.isInteger(locator?.nodeId)
+    ? tree.byNodeId.get(locator.nodeId)
+    : Number.isInteger(locator?.backendNodeId)
+      ? tree.byBackendNodeId.get(locator.backendNodeId)
+      : null;
+  if (!entry) throw new Error("The browser node was not part of the described document tree");
+  let startNode = null;
+  let startParentNode = null;
+  let closedShadowHostNode = null;
+  let closedShadowHostParentNode = null;
+  for (let depth = 0; depth < CONTROL_UI_ANCESTRY_MAX_DEPTH && entry; depth += 1) {
+    spendControlUiAncestryWork(budget);
+    const { node, parent } = entry;
+    if (startNode === null) {
+      startNode = node;
+      startParentNode = parent?.node ?? null;
     }
-    const node = described?.node;
-    if (!node || !Number.isInteger(node.nodeId) || seen.has(node.nodeId)) {
-      throw new Error("The browser could not describe a bounded unique browser-node ancestry");
-    }
-    seen.add(node.nodeId);
-    if (startNodeId === null) {
-      startNodeId = node.nodeId;
-      startParentNodeId = Number.isInteger(node.parentId) ? node.parentId : null;
-    }
-    if (node.shadowRootType === "closed" && closedShadowHostNodeId === null) {
-      if (!Number.isInteger(node.parentId)) {
-        throw new Error("The closed shadow root did not expose its host ancestry");
-      }
-      // The proof marker lives directly inside the bridge's closed shadow
-      // root. Pin that first/innermost host; a hostile page can later place
+    if (node.shadowRootType === "closed" && closedShadowHostNode === null) {
+      if (!parent) throw new Error("The closed shadow root did not expose its host ancestry");
+      // The proof marker lives directly inside the closed shadow root of the
+      // bridge. Pin that first/innermost host; a hostile page can later place
       // the genuine host inside its own outer closed root, whose host must
       // never replace the marker-bound identity.
-      closedShadowHostNodeId = node.parentId;
+      closedShadowHostNode = parent.node;
     }
-    if (node.nodeId === closedShadowHostNodeId) {
-      if (!Number.isInteger(node.parentId)) {
-        throw new Error("The exact closed-shadow host did not expose its parent ancestry");
-      }
-      closedShadowHostParentNodeId = node.parentId;
+    if (node === closedShadowHostNode) {
+      if (!parent) throw new Error("The exact closed-shadow host did not expose its parent ancestry");
+      closedShadowHostParentNode = parent.node;
     }
     if (node.nodeType === 9 || node.nodeName === "#document") {
       return {
-        startNodeId,
-        startParentNodeId,
-        closedShadowHostNodeId,
-        closedShadowHostParentNodeId,
-        documentNodeId: node.nodeId,
+        startNode,
+        startParentNode,
+        closedShadowHostNode,
+        closedShadowHostParentNode,
+        documentNode: node,
       };
     }
-    if (!Number.isInteger(node.parentId)) break;
-    current = { nodeId: node.parentId };
+    entry = parent;
   }
   throw new Error("The browser node did not resolve to a bounded document ancestry");
 }
@@ -1876,19 +1994,10 @@ function boundedTopLayerNodeIds(rawNodeIds) {
   return rawNodeIds;
 }
 
-async function assertControlHostIsDocumentTopLayerTail(
-  lease,
-  rawNodeIds,
-  rootDocumentNodeId,
-  hostNodeId,
-  ancestryCache,
-  authority,
-  commandContext,
-  budget,
-) {
+function assertControlHostIsDocumentTopLayerTail(tree, rawNodeIds, hostNode, budget) {
   const nodeIds = boundedTopLayerNodeIds(rawNodeIds);
   const hostIndexes = nodeIds
-    .map((nodeId, index) => nodeId === hostNodeId ? index : -1)
+    .map((nodeId, index) => nodeId === hostNode.nodeId ? index : -1)
     .filter((index) => index >= 0);
   if (hostIndexes.length !== 1) {
     throw new Error("The exact closed-shadow control host was not a unique browser-reported top-layer member");
@@ -1903,12 +2012,8 @@ async function assertControlHostIsDocumentTopLayerTail(
   // means a same-document surface outranks the warning, even if it leaves
   // holes at the bounded point samples.
   for (const nodeId of laterNodeIds) {
-    let ancestry = ancestryCache.get(nodeId);
-    if (!ancestry) {
-      ancestry = await browserNodeAncestry(lease.tabId, { nodeId }, authority, commandContext, budget);
-      ancestryCache.set(nodeId, ancestry);
-    }
-    if (ancestry.documentNodeId === rootDocumentNodeId) {
+    const ancestry = browserNodeAncestry(tree, { nodeId }, budget);
+    if (sameBrowserNode(ancestry.documentNode, tree.root)) {
       throw new Error("A later same-document browser top-layer surface outranked the control host");
     }
   }
@@ -1946,36 +2051,42 @@ async function verifyControlUiBrowserTopLayer(
     null,
     { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
   );
-  const rootDocument = await debuggerCommand(
-    lease.tabId,
-    "DOM.getDocument",
-    { depth: 0, pierce: true },
-    authority,
-    commandContext,
-    null,
-    { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
-  );
-  const rootDocumentNodeId = rootDocument?.root?.nodeId;
-  if (!Number.isInteger(rootDocumentNodeId) || typeof lease.frameId !== "string" || !lease.frameId) {
+  try {
+    return await verifyControlUiBrowserTopLayerBound(
+      lease,
+      state,
+      authority,
+      commandContext,
+      contentRequestLossGeneration,
+      hostId,
+      markerId,
+      proofBudget,
+    );
+  } finally {
+    await releaseBrowserDocumentTree(lease, authority, commandContext);
+  }
+}
+
+async function verifyControlUiBrowserTopLayerBound(
+  lease,
+  state,
+  authority,
+  commandContext,
+  contentRequestLossGeneration,
+  hostId,
+  markerId,
+  proofBudget,
+) {
+  if (typeof lease.frameId !== "string" || !lease.frameId) {
     throw new Error("The controlled root document identity is unavailable");
   }
-  const rootElement = await debuggerCommand(
-    lease.tabId,
-    "DOM.querySelector",
-    { nodeId: rootDocumentNodeId, selector: ":root" },
-    authority,
-    commandContext,
-    null,
-    { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
-  );
-  const rootElementNodeId = rootElement?.nodeId;
-  if (!Number.isInteger(rootElementNodeId)) {
-    throw new Error("The controlled document element identity is unavailable");
-  }
+  const tree = await browserDocumentTree(lease, authority, commandContext, proofBudget);
+  const rootDocument = tree.root;
+  const rootElement = tree.rootElement;
   const rootAttributes = await debuggerCommand(
     lease.tabId,
     "DOM.getAttributes",
-    { nodeId: rootElementNodeId },
+    { nodeId: rootElement.nodeId },
     authority,
     commandContext,
     null,
@@ -1994,7 +2105,6 @@ async function verifyControlUiBrowserTopLayer(
     { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
   );
   boundedTopLayerNodeIds(topLayer?.nodeIds);
-  const ancestryCache = new Map();
 
   const search = await debuggerCommand(
     lease.tabId,
@@ -2035,16 +2145,10 @@ async function verifyControlUiBrowserTopLayer(
       || !Number.isInteger(result.nodeIds[0])) {
       throw new Error("The browser did not resolve the unique closed-shadow identity marker");
     }
-    markerAncestry = await browserNodeAncestry(
-      lease.tabId,
-      { nodeId: result.nodeIds[0] },
-      authority,
-      commandContext,
-      proofBudget,
-    );
-    if (markerAncestry.documentNodeId !== rootDocumentNodeId
-      || !Number.isInteger(markerAncestry.closedShadowHostNodeId)
-      || markerAncestry.closedShadowHostParentNodeId !== rootElementNodeId) {
+    markerAncestry = browserNodeAncestry(tree, { nodeId: result.nodeIds[0] }, proofBudget);
+    if (!sameBrowserNode(markerAncestry.documentNode, rootDocument)
+      || !markerAncestry.closedShadowHostNode
+      || !sameBrowserNode(markerAncestry.closedShadowHostParentNode, rootElement)) {
       throw new Error("The closed-shadow control marker did not resolve to the controlled root document");
     }
   } finally {
@@ -2058,20 +2162,12 @@ async function verifyControlUiBrowserTopLayer(
       { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
     );
   }
-  await assertControlHostIsDocumentTopLayerTail(
-    lease,
-    topLayer.nodeIds,
-    rootDocumentNodeId,
-    markerAncestry.closedShadowHostNodeId,
-    ancestryCache,
-    authority,
-    commandContext,
-    proofBudget,
-  );
+  const hostNode = markerAncestry.closedShadowHostNode;
+  assertControlHostIsDocumentTopLayerTail(tree, topLayer.nodeIds, hostNode, proofBudget);
   const attributeResult = await debuggerCommand(
     lease.tabId,
     "DOM.getAttributes",
-    { nodeId: markerAncestry.closedShadowHostNodeId },
+    { nodeId: hostNode.nodeId },
     authority,
     commandContext,
     null,
@@ -2121,24 +2217,23 @@ async function verifyControlUiBrowserTopLayer(
           ? { backendNodeId: hit.backendNodeId }
           : null;
       if (!locator) throw new Error("The browser did not resolve a control-surface browser hit test");
-      const hitAncestry = await browserNodeAncestry(
-        lease.tabId,
-        locator,
-        authority,
-        commandContext,
-        proofBudget,
-      );
-      if (hitAncestry.documentNodeId !== rootDocumentNodeId
-        || (hitAncestry.startNodeId !== markerAncestry.closedShadowHostNodeId
-          && hitAncestry.closedShadowHostNodeId !== markerAncestry.closedShadowHostNodeId)) {
+      const hitAncestry = browserNodeAncestry(tree, locator, proofBudget);
+      if (!sameBrowserNode(hitAncestry.documentNode, rootDocument)
+        || (!sameBrowserNode(hitAncestry.startNode, hostNode)
+          && !sameBrowserNode(hitAncestry.closedShadowHostNode, hostNode))) {
         throw new Error("A browser paint-order hit test did not resolve to the exact control host");
       }
     }
   }
   // Root-target DOM.topLayerElementsUpdated is delivered independently of
-  // command completion. Treat the final ordered-list sample as a seqlock:
-  // any event delivered while the final browser proof is in flight makes the
-  // acknowledgement stale and must be retried or rejected.
+  // command completion. Treat the final sample as a seqlock: any event
+  // delivered while the final browser proof is in flight makes the
+  // acknowledgement stale and must be retried or rejected. The final sample
+  // is deliberately short so the seqlock window stays small: the fresh
+  // top-layer list, the live document -> root element -> host chain, and the
+  // attributes of both elements. Later top-layer nodes are attributed through the
+  // first-phase snapshot; a node it does not know was inserted afterwards and
+  // fails closed like any other unattributable surface.
   const finalProofRevision = controlUiTopLayerRevision;
   const finalTopLayer = await debuggerCommand(
     lease.tabId,
@@ -2149,22 +2244,26 @@ async function verifyControlUiBrowserTopLayer(
     null,
     { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
   );
-  const finalHostAncestry = await browserNodeAncestry(
-    lease.tabId,
-    { nodeId: markerAncestry.closedShadowHostNodeId },
+  const finalRootElement = await browserChildNode(
+    lease,
+    rootDocument,
+    rootElement,
     authority,
     commandContext,
     proofBudget,
   );
-  if (finalHostAncestry.startNodeId !== markerAncestry.closedShadowHostNodeId
-    || finalHostAncestry.startParentNodeId !== rootElementNodeId
-    || finalHostAncestry.documentNodeId !== rootDocumentNodeId) {
-    throw new Error("The exact control host left the controlled root document during acknowledgement");
-  }
+  const finalHostNode = await browserChildNode(
+    lease,
+    finalRootElement,
+    hostNode,
+    authority,
+    commandContext,
+    proofBudget,
+  );
   const finalHostAttributes = await debuggerCommand(
     lease.tabId,
     "DOM.getAttributes",
-    { nodeId: markerAncestry.closedShadowHostNodeId },
+    { nodeId: finalHostNode.nodeId },
     authority,
     commandContext,
     null,
@@ -2176,7 +2275,7 @@ async function verifyControlUiBrowserTopLayer(
   const finalRootAttributes = await debuggerCommand(
     lease.tabId,
     "DOM.getAttributes",
-    { nodeId: rootElementNodeId },
+    { nodeId: finalRootElement.nodeId },
     authority,
     commandContext,
     null,
@@ -2185,18 +2284,11 @@ async function verifyControlUiBrowserTopLayer(
   if (!browserRootAccessibilityReady(finalRootAttributes?.attributes)) {
     throw new Error("The controlled document element changed accessibility during acknowledgement");
   }
-  await assertControlHostIsDocumentTopLayerTail(
-    lease,
-    finalTopLayer?.nodeIds,
-    rootDocumentNodeId,
-    markerAncestry.closedShadowHostNodeId,
-    new Map(),
-    authority,
-    commandContext,
-    proofBudget,
-  );
+  assertControlHostIsDocumentTopLayerTail(tree, finalTopLayer?.nodeIds, finalHostNode, proofBudget);
   if (controlUiTopLayerRevision !== finalProofRevision) {
-    throw new Error("The browser top layer changed during the final control acknowledgement");
+    const stale = new Error("The browser top layer changed during the final control acknowledgement");
+    stale.code = "CONTROL_UI_TOP_LAYER_STALE";
+    throw stale;
   }
   if (controlUiContentLossGeneration !== contentRequestLossGeneration) {
     throw new Error("The control indicator reported a loss during the final acknowledgement");
@@ -2337,51 +2429,62 @@ async function showControlUiNow(lease) {
   const activeCaptureIds = controlCaptureIds(lease.tabId);
   beginControlUiTopLayerMutation();
   try {
-    const contentRequestLossGeneration = controlUiContentLossGeneration;
-    const state = await contentRequest(lease.tabId, {
-      method: "control.show",
-      sessionId: lease.sessionId,
-      controlEpoch: lease.epoch,
-      expiresAt: lease.expiresAt,
-      lastHeartbeatAt: lease.lastHeartbeatAt,
-      turn: lease.turn,
-      moveSequence: lease.moveSequence,
-      activeCaptureIds,
-      cursor: { ...lease.cursor, turn: lease.turn, moveSequence: lease.moveSequence },
-    }, { authority });
-    assertLeaseAuthority(authority, null, "control UI acknowledgement");
-    if (!controlUiAcknowledged(state, activeCaptureIds, lease.cursor.visible)) {
-      throw new Error("The page did not confirm a topmost control indicator");
+    for (let attempt = 1; ; attempt += 1) {
+      const contentRequestLossGeneration = controlUiContentLossGeneration;
+      const state = await contentRequest(lease.tabId, {
+        method: "control.show",
+        sessionId: lease.sessionId,
+        controlEpoch: lease.epoch,
+        expiresAt: lease.expiresAt,
+        lastHeartbeatAt: lease.lastHeartbeatAt,
+        turn: lease.turn,
+        moveSequence: lease.moveSequence,
+        activeCaptureIds,
+        cursor: { ...lease.cursor, turn: lease.turn, moveSequence: lease.moveSequence },
+      }, { authority });
+      assertLeaseAuthority(authority, null, "control UI acknowledgement");
+      if (!controlUiAcknowledged(state, activeCaptureIds, lease.cursor.visible)) {
+        throw new Error("The page did not confirm a topmost control indicator");
+      }
+      let verifiedProof;
+      try {
+        verifiedProof = await verifyControlUiBrowserTopLayer(
+          lease,
+          state,
+          authority,
+          null,
+          contentRequestLossGeneration,
+        );
+      } catch (error) {
+        // Only a final sample invalidated by a root top-layer event is
+        // re-proven, from a fresh renderer acknowledgement; every other
+        // failure, including a reported indicator loss, fails closed at once.
+        if (error?.code === "CONTROL_UI_TOP_LAYER_STALE" && attempt < CONTROL_UI_PROOF_ATTEMPTS) continue;
+        throw error;
+      }
+      if (lease.controlHostId !== state.hostId
+        || lease.controlMarkerId !== state.markerId
+        || lease.controlUiProofReady !== true) {
+        lease.controlHostId = state.hostId;
+        lease.controlMarkerId = state.markerId;
+        lease.controlUiProofReady = true;
+        await persistControlState();
+        assertLeaseAuthority(authority, null, "control host identity persistence");
+      }
+      if (controlUiTopLayerRevision !== verifiedProof.revision) {
+        // A root top-layer event can be delivered after the final verifier
+        // sample but before a newly rebound proof is persisted. proofReady was
+        // false during that window, so the event handler could not arm a dirty
+        // record itself; retain it now instead of erasing it with the older ack.
+        markControlUiProofDirty(lease);
+      }
+      clearControlUiTopLayerDirty(
+        lease,
+        verifiedProof.revision,
+        verifiedProof.contentLossGeneration,
+      );
+      return state;
     }
-    const verifiedProof = await verifyControlUiBrowserTopLayer(
-      lease,
-      state,
-      authority,
-      null,
-      contentRequestLossGeneration,
-    );
-    if (lease.controlHostId !== state.hostId
-      || lease.controlMarkerId !== state.markerId
-      || lease.controlUiProofReady !== true) {
-      lease.controlHostId = state.hostId;
-      lease.controlMarkerId = state.markerId;
-      lease.controlUiProofReady = true;
-      await persistControlState();
-      assertLeaseAuthority(authority, null, "control host identity persistence");
-    }
-    if (controlUiTopLayerRevision !== verifiedProof.revision) {
-      // A root top-layer event can be delivered after the verifier's final
-      // sample but before a newly rebound proof is persisted. proofReady was
-      // false during that window, so the event handler could not arm a dirty
-      // record itself; retain it now instead of erasing it with the older ack.
-      markControlUiProofDirty(lease);
-    }
-    clearControlUiTopLayerDirty(
-      lease,
-      verifiedProof.revision,
-      verifiedProof.contentLossGeneration,
-    );
-    return state;
   } catch (error) {
     return failControlUiClosed(lease, "show", error);
   } finally {

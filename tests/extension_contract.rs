@@ -3441,9 +3441,11 @@ fn control_indicator_reuse_and_loss_are_fail_closed() {
       const acknowledge = extractFunction(background, "controlUiAcknowledged");
       const show = extractFunction(background, "showControlUiNow");
       const acknowledgementBridge = new Function(`
+        const CONTROL_UI_PROOF_ATTEMPTS = 3;
         let controlLease = { tabId: 7, sessionId: "lease-a", epoch: 2, cursor: { visible: false } };
         let controlUiContentLossGeneration = 0;
-        let stopped = 0, browserVerifications = 0;
+        let controlUiTopLayerRevision = 0;
+        let stopped = 0, browserVerifications = 0, topmost = false, staleSamples = 0, plainFailures = 0;
         const base = {
           hostConnected: true, popoverOpen: true, topLayerReordered: true, earlyStopGuardReady: true,
           accessibilityReady: true, viewTransitionActive: false,
@@ -3456,11 +3458,25 @@ fn control_indicator_reuse_and_loss_are_fail_closed() {
         function controlCaptureIds() { return []; }
         function beginControlUiTopLayerMutation() {}
         function endControlUiTopLayerMutation() {}
-        async function contentRequest() { return { ...base }; }
+        async function contentRequest() { return { ...base, pillTopmost: topmost }; }
         function assertLeaseAuthority() {}
-        async function verifyControlUiBrowserTopLayer() { browserVerifications += 1; }
+        async function verifyControlUiBrowserTopLayer() {
+          browserVerifications += 1;
+          if (staleSamples > 0) {
+            staleSamples -= 1;
+            const stale = new Error("The browser top layer changed during the final control acknowledgement");
+            stale.code = "CONTROL_UI_TOP_LAYER_STALE";
+            throw stale;
+          }
+          if (plainFailures > 0) {
+            plainFailures -= 1;
+            throw new Error("A browser paint-order hit test did not resolve to the exact control host");
+          }
+          return { revision: controlUiTopLayerRevision, contentLossGeneration: controlUiContentLossGeneration };
+        }
         async function persistControlState() {}
         function clearControlUiTopLayerDirty() {}
+        function markControlUiProofDirty() {}
         async function failControlUiClosed() { stopped += 1; throw new Error("CONTROL_UI_RENDER_FAILED"); }
         ${acknowledge}
         ${show}
@@ -3472,6 +3488,9 @@ fn control_indicator_reuse_and_loss_are_fail_closed() {
           }, ["capture-a"], false),
           stopped: () => stopped,
           browserVerifications: () => browserVerifications,
+          arm: (nextTopmost, nextStale, nextPlain) => {
+            topmost = nextTopmost; staleSamples = nextStale; plainFailures = nextPlain; browserVerifications = 0;
+          },
         };
       `)();
       let actionCount = 0;
@@ -3480,6 +3499,26 @@ fn control_indicator_reuse_and_loss_are_fail_closed() {
         throw new Error("non-topmost indicator acknowledgement allowed an action to proceed");
       }
       if (!acknowledgementBridge.captureAccepted()) throw new Error("intentional capture-hidden acknowledgement was rejected");
+      // The content watchdog's own re-top can invalidate a final sample: two
+      // stale samples are re-proven from fresh renderer acknowledgements, a
+      // third fails closed, and any other proof failure never retries.
+      acknowledgementBridge.arm(true, 2, 0);
+      const retried = await acknowledgementBridge.show();
+      if (!retried || acknowledgementBridge.browserVerifications() !== 3 || acknowledgementBridge.stopped() !== 1) {
+        throw new Error("a stale final sample was not re-proven within the bounded attempts");
+      }
+      acknowledgementBridge.arm(true, 3, 0);
+      let exhausted = false;
+      try { await acknowledgementBridge.show(); } catch { exhausted = true; }
+      if (!exhausted || acknowledgementBridge.browserVerifications() !== 3 || acknowledgementBridge.stopped() !== 2) {
+        throw new Error("continuous stale samples did not fail closed after the bounded attempts");
+      }
+      acknowledgementBridge.arm(true, 0, 1);
+      let plain = false;
+      try { await acknowledgementBridge.show(); } catch { plain = true; }
+      if (!plain || acknowledgementBridge.browserVerifications() !== 1 || acknowledgementBridge.stopped() !== 3) {
+        throw new Error("a non-stale proof failure was retried");
+      }
     "#;
     let output = match Command::new("node")
         .args(["--input-type=module", "-e", script])
@@ -3538,8 +3577,10 @@ fn browser_process_top_layer_order_and_view_transition_gate_fail_closed() {
       const source = fs.readFileSync("extension/background.js", "utf8");
       const functions = [
         "attributesMap", "browserRootAccessibilityReady", "browserControlHostAttributesReady",
-        "spendControlUiAncestryWork", "browserNodeAncestry", "boundedTopLayerNodeIds",
-        "assertControlHostIsDocumentTopLayerTail", "verifyControlUiBrowserTopLayer",
+        "spendControlUiAncestryWork", "sameBrowserNode", "indexBrowserDocumentTree",
+        "browserDocumentTree", "releaseBrowserDocumentTree", "browserChildNode", "browserNodeAncestry",
+        "boundedTopLayerNodeIds", "assertControlHostIsDocumentTopLayerTail",
+        "verifyControlUiBrowserTopLayer", "verifyControlUiBrowserTopLayerBound",
       ]
         .map((name) => extractFunction(source, name)).join("\n");
       const bridge = new Function(`
@@ -3549,43 +3590,117 @@ fn browser_process_top_layer_order_and_view_transition_gate_fail_closed() {
         const CONTROL_UI_TOP_LAYER_MAX_NODES = 2048;
         const CONTROL_UI_TOP_LAYER_TAIL_MAX = 256;
         const CONTROL_UI_HIT_POINT_MAX = 5;
+        const CONTROL_UI_DOCUMENT_MAX_NODES = 200000;
+        const CONTROL_UI_DOCUMENT_RELEASE_MS = 250;
         const hostId = "__local_browser_bridge_control_11111111111111111111111111111111__";
         const markerId = "__local_browser_bridge_marker_22222222222222222222222222222222__";
-        let mode = "good", topReads = 0;
+        let mode = "good", topReads = 0, documentReads = 0;
         let discarded = 0, missingProofDeadline = 0, controlUiTopLayerRevision = 0;
         let controlUiContentLossGeneration = 0;
+        let describeCalls = 0, released = 0, lastRelease = null, callIndex = 0, enables = 0;
+        const finalPhase = () => topReads > 1;
+        // A mock contract violation must fail the harness, never count as a
+        // fail-closed rejection.
+        class MockError extends Error {}
+        // Real Chrome (CfT 138, CfT 145, stock 152): DOM.describeNode never
+        // reports parentId; only the DOM.getDocument tree nests nodes. Every
+        // node here carries the browser's stable backendNodeId next to the
+        // per-binding nodeId. Chrome unbinds a node it removes, so a node that
+        // moved between the two samples answers with a new nodeId.
+        const node = (nodeId, extra = {}, children = []) => ({
+          nodeId, backendNodeId: 1000 + nodeId, nodeType: 1, nodeName: "DIV", children, ...extra,
+        });
+        const range = (start, count) => Array.from({ length: count }, (_, index) => node(start + index));
+        function documentTree() {
+          const marker = node(100, { nodeName: "SPAN" });
+          const stop = node(110, { nodeName: "BUTTON" });
+          const shadow = node(101, { nodeType: 11, nodeName: "\u0023document-fragment", shadowRootType: "closed" }, [marker, stop]);
+          const host = node(9, { shadowRoots: [shadow] });
+          const wrapperShadow = node(102, { nodeType: 11, nodeName: "\u0023document-fragment", shadowRootType: "closed" });
+          const wrapper = node(8, { shadowRoots: [wrapperShadow] });
+          const cover = node(200);
+          const strip = node(10);
+          const childDocumentChildren = [...range(20, 48), ...range(300, 255)];
+          const childDocument = node(2, { nodeType: 9, nodeName: "\u0023document" }, childDocumentChildren);
+          const frame = node(5, { nodeName: "IFRAME", contentDocument: childDocument });
+          const rootChildren = [wrapper, cover, strip, frame];
+          if (mode === "mismatch") {
+            // The closed root holding the marker hangs off a page wrapper, not the host.
+            host.shadowRoots = [];
+            wrapper.shadowRoots = [shadow];
+            rootChildren.push(host);
+          } else if (["nested-closed-substitution", "closed-shadow-wrapper"].includes(mode)) {
+            wrapperShadow.children = [host];
+          } else if (mode === "light-dom-wrapper") {
+            wrapper.children = [host];
+          } else if (mode !== "host-missing") {
+            rootChildren.push(host);
+          }
+          const rootElement = node(3, { nodeName: "HTML" }, rootChildren);
+          const document = node(1, { nodeType: 9, nodeName: "\u0023document", children: [rootElement] });
+          if (mode === "duplicate-node-id") document.children.push(node(1));
+          if (mode === "oversized-tree") rootElement.children.push(...range(5000, 200000));
+          return document;
+        }
+        // The live final chain: one depth-1 describe of the document, then of
+        // the root element. Children carry no grandchildren and no parentId.
+        function liveChildren(nodeId) {
+          if (nodeId === 1) return [node(mode === "root-replacement" && finalPhase() ? 4 : 3, { nodeName: "HTML" })];
+          if (nodeId === 3) {
+            const children = [node(8), node(200), node(10), node(5, { nodeName: "IFRAME" })];
+            if (["adopt-host", "host-removed-final"].includes(mode) && finalPhase()) return children;
+            if (mode === "host-rebound-final" && finalPhase()) return [...children, { ...node(9), nodeId: 10009 }];
+            if (mode === "root-children-missing" && finalPhase()) return null;
+            return [...children, node(9)];
+          }
+          throw new MockError("ancestry was described from a node that is neither the document nor the root element: " + nodeId);
+        }
         async function debuggerCommand(_tabId, method, params, _authority, _context, sessionId, options) {
+          callIndex += 1;
           if (sessionId !== null || options?.strictDeadline !== true || !Number.isFinite(options?.deadlineAt)) {
             missingProofDeadline += 1;
           }
           if (method === "DOM.enable") {
+            enables += 1;
             if (mode === "content-loss-early") controlUiContentLossGeneration += 1;
             if (mode === "own-root-events") controlUiTopLayerRevision += 3;
             return {};
           }
-          if (method === "DOM.getDocument") return { root: { nodeId: 1 } };
-          if (method === "DOM.querySelector") {
-            if (params.nodeId !== 1 || params.selector !== ":root") throw new Error("unexpected root query");
-            return { nodeId: 3 };
+          if (method === "DOM.getDocument") {
+            if (params.depth === 0) {
+              if (options?.timeoutIsFatal !== false) throw new MockError("the binding release must not be lease-fatal");
+              released += 1;
+              lastRelease = callIndex;
+              return { root: { nodeId: 1, backendNodeId: 1001, nodeType: 9, nodeName: "\u0023document" } };
+            }
+            if (params.depth !== -1 || params.pierce !== true) throw new MockError("the proof must snapshot the whole pierced document");
+            documentReads += 1;
+            if (documentReads > 1) throw new MockError("the proof took a second whole-document snapshot");
+            if (mode === "document-unavailable") return {};
+            return { root: documentTree() };
           }
+          if (method === "DOM.querySelector") throw new MockError("the proof must derive the document element from the browser tree");
           if (method === "DOM.getTopLayerElements") {
             topReads += 1;
             if (mode === "revision-churn" && topReads > 1) controlUiTopLayerRevision += 1;
             if (mode === "content-loss-mid-proof" && topReads > 1) controlUiContentLossGeneration += 1;
             if (mode === "unavailable") return {};
-            if (mode === "churn" && topReads > 1) return { nodeIds: Array.from({ length: 48 }, (_, index) => 20 + index) };
+            if (mode === "churn" && topReads > 1) return { nodeIds: range(20, 48).map((item) => item.nodeId) };
             if (mode === "missing") return { nodeIds: [20, 21] };
             if (mode === "duplicate-host") return { nodeIds: [9, 9, 20] };
-            if (mode === "nested-closed-substitution") return { nodeIds: [8, ...Array.from({ length: 48 }, (_, index) => 20 + index)] };
-            if (mode === "budget") return { nodeIds: [9, ...Array.from({ length: 255 }, (_, index) => 300 + index)] };
+            if (mode === "nested-closed-substitution") return { nodeIds: [8, ...range(20, 48).map((item) => item.nodeId)] };
+            if (mode === "budget") return { nodeIds: [9, ...range(300, 255).map((item) => item.nodeId)] };
+            // Nodes moved into the root document between the samples were
+            // unbound on removal and answer with nodeIds the snapshot never saw.
+            if (mode === "tail-reparent" && topReads > 1) return { nodeIds: [9, ...Array.from({ length: 48 }, (_, index) => 20020 + index)] };
             // More than 32 benign child-document popovers are ordinary page
             // state. The proof spends no ancestry work on them: membership
             // binds the exact host, point hit tests decide actual coverage.
-            if (mode === "sparse-strip") return { nodeIds: [9, 10, ...Array.from({ length: 48 }, (_, index) => 20 + index)] };
-            return { nodeIds: [9, ...Array.from({ length: 48 }, (_, index) => 20 + index)] };
+            if (mode === "sparse-strip") return { nodeIds: [9, 10, ...range(20, 48).map((item) => item.nodeId)] };
+            return { nodeIds: [9, ...range(20, 48).map((item) => item.nodeId)] };
           }
           if (method === "DOM.getAttributes") {
-            if (params.nodeId === 3) {
+            if (params.nodeId === 3 || params.nodeId === 4) {
               if (mode === "root-hidden") return { attributes: ["hidden", ""] };
               if (mode === "root-inert") return { attributes: ["inert", ""] };
               if (mode === "root-aria-hidden" || (mode === "root-accessibility-churn" && topReads > 1)) {
@@ -3593,6 +3708,7 @@ fn browser_process_top_layer_order_and_view_transition_gate_fail_closed() {
               }
               return { attributes: [] };
             }
+            if (params.nodeId !== 9) throw new MockError("attributes were read from a node that is not the exact host: " + params.nodeId);
             const hostAttributes = [
               "id", hostId, "popover", "manual", "aria-hidden", "false",
               "aria-label", "Local Browser Bridge browser control",
@@ -3605,43 +3721,34 @@ fn browser_process_top_layer_order_and_view_transition_gate_fail_closed() {
             return { attributes: hostAttributes };
           }
           if (method === "DOM.performSearch") {
-            if (params.query !== "\u0023" + markerId) throw new Error("search leaked to page-forgeable host identity");
+            if (params.query !== "\u0023" + markerId) throw new MockError("search leaked to page-forgeable host identity");
             return { searchId: "search", resultCount: mode === "duplicate" ? 2 : 1 };
           }
-          if (method === "DOM.getSearchResults") return { nodeIds: [100] };
+          if (method === "DOM.getSearchResults") return { nodeIds: [mode === "marker-outside-tree" ? 999 : 100] };
           if (method === "DOM.describeNode") {
-            if (params.nodeId === 1) return { node: { nodeId: 1, nodeType: 9, nodeName: "DOCUMENT" } };
-            if (params.nodeId === 2) return { node: { nodeId: 2, nodeType: 9, nodeName: "DOCUMENT" } };
-            if (params.nodeId === 9) {
-              let parentId = 3;
-              if (["nested-closed-substitution", "closed-shadow-wrapper"].includes(mode)) parentId = 102;
-              else if (mode === "light-dom-wrapper") parentId = 8;
-              else if (mode === "root-replacement" && topReads > 1) parentId = 4;
-              else if (mode === "adopt-host" && topReads > 1) parentId = 2;
-              return { node: { nodeId: 9, parentId } };
+            // Chrome's real answer: the node, its backendNodeId, its direct
+            // children when depth is 1, and never a parentId.
+            describeCalls += 1;
+            if (!Number.isInteger(params.nodeId) || params.depth !== 1 || Object.keys(params).length !== 2) {
+              throw new MockError("ancestry was asked from DOM.describeNode in a shape Chrome never answers: " + JSON.stringify(params));
             }
-            if (params.nodeId === 3) return { node: { nodeId: 3, parentId: 1, nodeName: "HTML" } };
-            if (params.nodeId === 4) return { node: { nodeId: 4, parentId: 1, nodeName: "HTML" } };
-            if (params.nodeId === 8) return { node: { nodeId: 8, parentId: 3 } };
-            if (params.nodeId === 102) return { node: { nodeId: 102, parentId: 8, shadowRootType: "closed" } };
-            if (params.nodeId === 10) return { node: { nodeId: 10, parentId: 1 } };
-            if (Number.isInteger(params.nodeId) && params.nodeId >= 20 && params.nodeId < 100) {
-              return { node: { nodeId: params.nodeId, parentId: mode === "tail-reparent" && topReads > 1 ? 1 : 2 } };
-            }
-            if (Number.isInteger(params.nodeId) && params.nodeId >= 300 && params.nodeId < 555) {
-              return { node: { nodeId: params.nodeId, parentId: 2 } };
-            }
-            if (params.nodeId === 100) return { node: { nodeId: 100, parentId: 101 } };
-            if (params.nodeId === 101) return { node: { nodeId: 101, parentId: mode === "mismatch" ? 8 : 9, shadowRootType: "closed" } };
-            if (params.nodeId === 110) return { node: { nodeId: 110, parentId: 101 } };
-            if (params.nodeId === 200) return { node: { nodeId: 200, parentId: 1 } };
+            const children = liveChildren(params.nodeId);
+            const described = params.nodeId === 1
+              ? { nodeId: 1, backendNodeId: 1001, nodeType: 9, nodeName: "\u0023document" }
+              : { nodeId: 3, backendNodeId: 1003, nodeType: 1, nodeName: "HTML" };
+            if (children) described.children = children;
+            return { node: described };
           }
-          if (method === "DOM.getNodeForLocation") return {
-            nodeId: mode === "point-cover" ? 200 : 110,
-            frameId: mode === "wrong-frame-hit" ? "frame-child" : "frame-root",
-          };
+          if (method === "DOM.getNodeForLocation") {
+            if (mode === "hit-outside-tree") return { nodeId: 998, frameId: "frame-root" };
+            if (mode === "hit-by-backend-id") return { backendNodeId: 1110, frameId: "frame-root" };
+            return {
+              nodeId: mode === "point-cover" ? 200 : 110,
+              frameId: mode === "wrong-frame-hit" ? "frame-child" : "frame-root",
+            };
+          }
           if (method === "DOM.discardSearchResults") { discarded += 1; return {}; }
-          throw new Error("unexpected method " + method + JSON.stringify(params));
+          throw new MockError("unexpected method " + method + JSON.stringify(params));
         }
         function assertLeaseAuthority() {}
         ${functions}
@@ -3656,12 +3763,20 @@ fn browser_process_top_layer_order_and_view_transition_gate_fail_closed() {
           ],
         });
         return {
-          good: () => verifyControlUiBrowserTopLayer(
-            lease, state(), authority, null, controlUiContentLossGeneration,
-          ),
+          good: async () => {
+            mode = "good";
+            topReads = 0;
+            documentReads = 0;
+            const proof = await verifyControlUiBrowserTopLayer(
+              lease, state(), authority, null, controlUiContentLossGeneration,
+            );
+            if (documentReads !== 1) throw new Error("a proof must take exactly one whole-document snapshot");
+            return proof;
+          },
           accept: async (nextMode) => {
             mode = nextMode;
             topReads = 0;
+            documentReads = 0;
             await verifyControlUiBrowserTopLayer(
               lease, state(), authority, null, controlUiContentLossGeneration,
             );
@@ -3669,6 +3784,9 @@ fn browser_process_top_layer_order_and_view_transition_gate_fail_closed() {
           reject: async (nextMode, viewTransitionActive = false) => {
             mode = nextMode;
             topReads = 0;
+            documentReads = 0;
+            const releasedBefore = released;
+            const enablesBefore = enables;
             try {
               await verifyControlUiBrowserTopLayer(
                 lease,
@@ -3678,17 +3796,42 @@ fn browser_process_top_layer_order_and_view_transition_gate_fail_closed() {
                 controlUiContentLossGeneration,
               );
               return false;
-            } catch { return true; }
+            } catch (error) {
+              if (error instanceof MockError) throw error;
+              if (enables !== enablesBefore && released !== releasedBefore + 1) {
+                throw new Error(nextMode + " left the whole-document binding held after a failed proof");
+              }
+              return true;
+            }
+          },
+          stale: async (nextMode) => {
+            mode = nextMode;
+            topReads = 0;
+            documentReads = 0;
+            try {
+              await verifyControlUiBrowserTopLayer(lease, state(), authority, null, controlUiContentLossGeneration);
+              return false;
+            } catch (error) {
+              if (error instanceof MockError) throw error;
+              return error.code === "CONTROL_UI_TOP_LAYER_STALE";
+            }
           },
           discarded: () => discarded,
           missingProofDeadline: () => missingProofDeadline,
+          describeCalls: () => describeCalls,
+          released: () => released,
+          releasedLast: () => lastRelease === callIndex,
         };
       `)();
       await bridge.good();
+      if (bridge.released() !== 1 || !bridge.releasedLast()) throw new Error("the whole-document binding was not released as the proof's last CDP call");
+      if (bridge.describeCalls() !== 2) throw new Error("the final chain must be exactly the live document and root element children");
       await bridge.accept("own-root-events");
-      for (const mode of ["missing", "duplicate-host", "duplicate", "mismatch", "unavailable", "churn", "revision-churn", "content-loss-early", "content-loss-mid-proof", "nested-closed-substitution", "light-dom-wrapper", "closed-shadow-wrapper", "root-replacement", "host-hidden", "host-inert", "host-attributes-churn", "root-hidden", "root-inert", "root-aria-hidden", "root-accessibility-churn", "sparse-strip", "point-cover", "wrong-frame-hit", "adopt-host", "tail-reparent", "budget"]) {
+      await bridge.accept("hit-by-backend-id");
+      for (const mode of ["missing", "duplicate-host", "duplicate", "mismatch", "unavailable", "churn", "revision-churn", "content-loss-early", "content-loss-mid-proof", "nested-closed-substitution", "light-dom-wrapper", "closed-shadow-wrapper", "root-replacement", "host-hidden", "host-inert", "host-attributes-churn", "root-hidden", "root-inert", "root-aria-hidden", "root-accessibility-churn", "sparse-strip", "point-cover", "wrong-frame-hit", "adopt-host", "tail-reparent", "budget", "host-missing", "host-removed-final", "host-rebound-final", "root-children-missing", "marker-outside-tree", "hit-outside-tree", "document-unavailable", "duplicate-node-id", "oversized-tree"]) {
         if (!await bridge.reject(mode)) throw new Error(`${mode} browser top-layer state was accepted`);
       }
+      if (!await bridge.stale("revision-churn")) throw new Error("a stale final sample was not distinguishable from a hidden indicator");
       if (!await bridge.reject("good", true)) throw new Error("active view transition was accepted");
       if (bridge.discarded() < 3) throw new Error("DOM search handles were not discarded");
       if (bridge.missingProofDeadline() !== 0) throw new Error("a browser proof CDP call escaped the shared strict deadline");
@@ -3704,6 +3847,120 @@ fn browser_process_top_layer_order_and_view_transition_gate_fail_closed() {
     assert!(
         output.status.success(),
         "Node browser top-layer harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn browser_control_proof_takes_ancestry_from_the_browser_tree_not_describe_node() {
+    // Chrome for Testing 138 and 145 and stock Chrome 152 never populate
+    // DOM.describeNode(...).node.parentId, so a proof that walks parentId
+    // never reaches #document and revokes every real lease. The browser
+    // process nests DOM.getDocument({depth: -1, pierce: true}) for real and
+    // page script cannot rewrite that nesting, so it is the only ancestry
+    // source the proof may use.
+    let background = extension_source("background.js");
+    assert!(!background.contains("node.parentId"));
+    assert!(!background.contains("{ ...current, depth: 0, pierce: true }"));
+    assert!(background.contains("{ depth: -1, pierce: true }"));
+    assert!(background.contains("{ nodeId: parentNode.nodeId, depth: 1 }"));
+    assert!(background.contains("byBackendNodeId"));
+    assert!(background.contains("const CONTROL_UI_DOCUMENT_MAX_NODES"));
+
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const brace = source.indexOf("{", start);
+        let depth = 0, quote = "", escaped = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const functions = ["spendControlUiAncestryWork", "sameBrowserNode", "indexBrowserDocumentTree", "browserNodeAncestry"]
+        .map((name) => extractFunction(source, name)).join("\n");
+      const bridge = new Function(`
+        const CONTROL_UI_ANCESTRY_MAX_DEPTH = 24;
+        const CONTROL_UI_DOCUMENT_MAX_NODES = 64;
+        ${functions}
+        const budget = () => ({ remaining: 512, deadlineAt: Date.now() + 1000 });
+        const node = (nodeId, extra = {}, children = []) => ({
+          nodeId, backendNodeId: 1000 + nodeId, nodeType: 1, nodeName: "DIV", children, ...extra,
+        });
+        const marker = node(100, { nodeName: "SPAN" });
+        const shadow = node(101, { nodeType: 11, nodeName: "\u0023document-fragment", shadowRootType: "closed" }, [marker]);
+        // Every parentId below is a lie a compromised answer could carry: the
+        // host claims to hang off the document element while it is nested in
+        // a page wrapper. Nesting must win and parentId must be ignored.
+        const host = node(9, { shadowRoots: [shadow], parentId: 3 });
+        const wrapper = node(8, { parentId: 3 }, [host]);
+        const framed = node(30, { parentId: 3 });
+        const frameDocument = node(2, { nodeType: 9, nodeName: "\u0023document" }, [node(31, {}, [framed])]);
+        const frame = node(5, { nodeName: "IFRAME", contentDocument: frameDocument });
+        const template = node(40, { nodeName: "TEMPLATE", templateContent: node(41, { nodeType: 11 }, [node(42)]) });
+        const styled = node(50, { pseudoElements: [node(51, { nodeName: "::before" })] });
+        const rootElement = node(3, { nodeName: "HTML" }, [wrapper, frame, template, styled]);
+        const document = node(1, { nodeType: 9, nodeName: "\u0023document" }, [node(6, { nodeType: 10 }), rootElement]);
+        const tree = indexBrowserDocumentTree(document);
+        const walk = (locator) => browserNodeAncestry(tree, locator, budget());
+        return { tree, walk, walkIn: (other, locator) => browserNodeAncestry(other, locator, budget()), indexBrowserDocumentTree, node, sameBrowserNode };
+      `)();
+      const { tree, walk, node } = bridge;
+      const byNesting = walk({ nodeId: 100 });
+      if (byNesting.closedShadowHostNode.nodeId !== 9) throw new Error("the closed-shadow host was not the shadow root's tree parent");
+      if (byNesting.closedShadowHostParentNode.nodeId !== 8) throw new Error("a lying parentId replaced the host's real tree parent");
+      if (byNesting.documentNode.nodeId !== 1) throw new Error("the walk did not end at the controlled document");
+      const byBackendId = walk({ backendNodeId: 1100 });
+      if (byBackendId.startNode !== byNesting.startNode) throw new Error("backendNodeId did not resolve the same node");
+      if (walk({ nodeId: 30 }).documentNode.nodeId !== 2) throw new Error("a same-process frame node escaped its own document");
+      if (walk({ nodeId: 42 }).startParentNode.nodeId !== 41 || walk({ nodeId: 42 }).documentNode.nodeId !== 1) throw new Error("template content was not nested under its template");
+      if (walk({ nodeId: 51 }).startParentNode.nodeId !== 50) throw new Error("a pseudo element was not nested under its owner");
+      for (const locator of [{ nodeId: 999 }, { backendNodeId: 1999 }, {}, null]) {
+        let rejected = false;
+        try { walk(locator); } catch (error) { rejected = /not part of the described document tree/.test(error.message); }
+        if (!rejected) throw new Error(`a node outside the browser tree was walked: ${JSON.stringify(locator)}`);
+      }
+      for (const [label, root] of [
+        ["duplicate nodeId", node(1, { nodeType: 9 }, [node(1)])],
+        ["duplicate backendNodeId", node(1, { nodeType: 9 }, [{ ...node(2), backendNodeId: 1001 }])],
+        ["missing backendNodeId", node(1, { nodeType: 9 }, [{ nodeId: 2, nodeType: 1, children: [] }])],
+        ["oversized tree", node(1, { nodeType: 9 }, Array.from({ length: 64 }, (_, index) => node(10 + index)))],
+      ]) {
+        let rejected = false;
+        try { bridge.indexBrowserDocumentTree(root); } catch { rejected = true; }
+        if (!rejected) throw new Error(`${label} was indexed`);
+      }
+      const deep = node(1, { nodeType: 9 });
+      let cursor = deep;
+      for (let index = 0; index < 30; index += 1) { const next = node(200 + index); cursor.children.push(next); cursor = next; }
+      let deepRejected = false;
+      try { bridge.walkIn(bridge.indexBrowserDocumentTree(deep), { nodeId: 229 }); } catch (error) { deepRejected = /bounded document ancestry/.test(error.message); }
+      if (!deepRejected) throw new Error("an over-deep ancestry was not bounded");
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run browser tree ancestry harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "Node browser tree ancestry harness failed:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
