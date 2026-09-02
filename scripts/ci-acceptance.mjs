@@ -1237,6 +1237,11 @@ async function startFixture(context, fixture) {
     const result = spawnSync("osascript", ["-e", script], { encoding: "utf8", timeout: 20_000 });
     return result.status === 0 ? null : (result.stderr || "osascript failed").trim();
   };
+  fixture.focusDiagnostics = () => {
+    const script = `tell application "System Events" to tell (first process whose unix id is ${entry.child.pid}) to return (frontmost as text) & "|" & (name of window 1) & "|" & (value of attribute "AXFocused" of window 1 as text)`;
+    const result = spawnSync("osascript", ["-e", script], { encoding: "utf8", timeout: 20_000 });
+    return result.status === 0 ? result.stdout.trim() : `osascript: ${(result.stderr || "").trim()}`;
+  };
   fixture.bringToFront();
   return fixture;
 }
@@ -1418,7 +1423,8 @@ async function computerLane(context) {
   if (IS_MACOS && !gated) {
     try {
       const focused = await waitFixtureFocused(bridge, fixture);
-      recorder.pass(lane, "window.frontmost", { windowId: String(focused.id), focused: true });
+      await sleep(1_000);
+      recorder.pass(lane, "window.frontmost", { windowId: String(focused.id), focused: true, systemEvents: fixture.focusDiagnostics ? fixture.focusDiagnostics() : null });
     } catch (error) {
       recorder.fail(lane, "window.frontmost", error.message);
     }
@@ -1512,6 +1518,26 @@ async function computerLane(context) {
     }
   }
 
+  // A hosted macOS session can briefly report the fixture focused while the
+  // Accessibility receiver proof still sees the previous frontmost process.
+  // One re-front plus a fresh observation is allowed before an action counts
+  // as failed; the retry is recorded in the evidence.
+  const actWithFocus = async (name, act) => {
+    let frame = (await observeOnce()).frame;
+    let response = await act(frame);
+    let retried = false;
+    if (IS_MACOS && response.status === 503 && response.error?.code === "COMPUTER_BACKGROUND_UNAVAILABLE" && fixture.bringToFront) {
+      const before = fixture.focusDiagnostics ? fixture.focusDiagnostics() : null;
+      fixture.bringToFront();
+      await sleep(1_500);
+      frame = (await observeOnce()).frame;
+      response = await act(frame);
+      retried = { before, after: fixture.focusDiagnostics ? fixture.focusDiagnostics() : null };
+      console.log(`retry ${name} after re-front: ${JSON.stringify(retried)}`);
+    }
+    return { frame, response, retried };
+  };
+
   // -- semantic ------------------------------------------------------------
   observed = await observeOnce();
   const findSemantic = (elements, name) => elements.find((element) => element.name === name);
@@ -1530,15 +1556,16 @@ async function computerLane(context) {
       recorder.fail(lane, "invoke", "Increment Counter element was not observed", { names: observed.elements.slice(0, 40).map((element) => element.name) });
     } else {
       const action = (button.actions || []).includes("press") ? "press" : (button.actions || []).includes("invoke") ? "invoke" : undefined;
-      const invoke = await bridge.command("computer.invoke", { frameId: observed.frame.frameId, elementRef: button.ref, ...(action ? { action } : {}) });
+      const { response: invoke, retried } = await actWithFocus("invoke", (frame) =>
+        bridge.command("computer.invoke", { frameId: frame.frameId, elementRef: button.ref, ...(action ? { action } : {}) }));
       try {
         if (invoke.status !== 200) {
           throw new Error(truncate(errorSummary(invoke)));
         }
         const counted = await waitFixtureCounter(fixture, "invokeCount", (value) => value === 1);
-        recorder.pass(lane, "invoke", { ...counted, action: invoke.result?.action ?? action ?? null, effect: invoke.result?.effect ?? invoke.result?.backendEffect ?? null });
+        recorder.pass(lane, "invoke", { ...counted, action: invoke.result?.action ?? action ?? null, effect: invoke.result?.effect ?? invoke.result?.backendEffect ?? null, retried });
       } catch (error) {
-        recorder.fail(lane, "invoke", error.message);
+        recorder.fail(lane, "invoke", error.message, { retried, focus: fixture.focusDiagnostics ? fixture.focusDiagnostics() : null });
       }
     }
 
@@ -1547,15 +1574,16 @@ async function computerLane(context) {
     if (!field) {
       recorder.fail(lane, "setValue", "Fixture Value Input element was not observed", { names: observed.elements.slice(0, 40).map((element) => element.name) });
     } else {
-      const setValue = await bridge.command("computer.setValue", { frameId: observed.frame.frameId, elementRef: field.ref, value: SET_VALUE });
+      const { response: setValue, retried } = await actWithFocus("setValue", (frame) =>
+        bridge.command("computer.setValue", { frameId: frame.frameId, elementRef: field.ref, value: SET_VALUE }));
       try {
         if (setValue.status !== 200) {
           throw new Error(truncate(errorSummary(setValue)));
         }
         const proof = await waitFixtureText(fixture, "semanticValue", SET_VALUE);
-        recorder.pass(lane, "setValue", { ...proof, effect: setValue.result?.effect ?? null });
+        recorder.pass(lane, "setValue", { ...proof, effect: setValue.result?.effect ?? null, retried });
       } catch (error) {
-        recorder.fail(lane, "setValue", error.message);
+        recorder.fail(lane, "setValue", error.message, { retried, focus: fixture.focusDiagnostics ? fixture.focusDiagnostics() : null });
       }
     }
   }
@@ -1577,7 +1605,8 @@ async function computerLane(context) {
     recorder.fail(lane, "click", "Pixel Input Surface element was not observed", { names: observed.elements.slice(0, 40).map((element) => element.name) });
   } else {
     const point = center(surface);
-    const click = await bridge.command("computer.click", { frameId: observed.frame.frameId, ...point });
+    const { response: click, retried } = await actWithFocus("click", (frame) =>
+      bridge.command("computer.click", { frameId: frame.frameId, ...point }));
     try {
       if (click.status !== 200) {
         throw new Error(truncate(errorSummary(click)));
@@ -1585,9 +1614,9 @@ async function computerLane(context) {
       const counted = IS_WINDOWS
         ? await waitFixtureCounter(fixture, "messageCounters.mouseDown", (value) => typeof value === "number" && value >= 1)
         : await waitFixtureCounter(fixture, "clicks", (value) => value === 1);
-      recorder.pass(lane, "click", { point, ...counted, effect: click.result?.effect ?? null, provenance: click.result?.inputDeliveryProvenance ?? click.result?.provenance ?? null });
+      recorder.pass(lane, "click", { point, ...counted, effect: click.result?.effect ?? null, provenance: click.result?.inputDeliveryProvenance ?? click.result?.provenance ?? null, retried });
     } catch (error) {
-      recorder.fail(lane, "click", error.message, { point });
+      recorder.fail(lane, "click", error.message, { point, retried, focus: fixture.focusDiagnostics ? fixture.focusDiagnostics() : null });
     }
   }
 
@@ -1597,9 +1626,10 @@ async function computerLane(context) {
     recorder.fail(lane, "typeText", "Focused Text Input element was not observed");
   } else {
     const point = center(focusedInput);
-    const focusClick = await bridge.command("computer.click", { frameId: observed.frame.frameId, ...point });
-    observed = await observeOnce();
-    const typed = await bridge.command("computer.typeText", { frameId: observed.frame.frameId, text: TYPED_TEXT });
+    const { response: focusClick } = await actWithFocus("typeText.focus-click", (frame) =>
+      bridge.command("computer.click", { frameId: frame.frameId, ...point }));
+    const { response: typed, retried } = await actWithFocus("typeText", (frame) =>
+      bridge.command("computer.typeText", { frameId: frame.frameId, text: TYPED_TEXT }));
     try {
       if (focusClick.status !== 200) {
         throw new Error(`focus click: ${truncate(errorSummary(focusClick))}`);
@@ -1608,9 +1638,9 @@ async function computerLane(context) {
         throw new Error(truncate(errorSummary(typed)));
       }
       const proof = await waitFixtureText(fixture, "focusedText", TYPED_TEXT);
-      recorder.pass(lane, "typeText", { ...proof, effect: typed.result?.effect ?? null });
+      recorder.pass(lane, "typeText", { ...proof, effect: typed.result?.effect ?? null, retried });
     } catch (error) {
-      recorder.fail(lane, "typeText", error.message);
+      recorder.fail(lane, "typeText", error.message, { retried, focus: fixture.focusDiagnostics ? fixture.focusDiagnostics() : null });
     }
   }
   await observeOnce();
