@@ -9,6 +9,30 @@ readonly REPOSITORY="flrngel/local-browser-bridge"
 readonly CANDIDATE_WORKFLOW=".github/workflows/deploy.yml"
 readonly CANDIDATE_REF="refs/heads/main"
 
+# Shared ruleset-matching jq filters. Each is used by both the live policy
+# check that fetches ruleset JSON from GitHub and, on fixture JSON, by
+# `--self-test`, so a change to the matching logic cannot silently drift
+# out of sync with what the self-test exercises.
+readonly TAG_RULESET_STRUCTURAL_FILTER='
+  .target == "tag" and .enforcement == "active" and
+  .conditions.ref_name.include == ["refs/tags/v*"] and
+  .conditions.ref_name.exclude == [] and
+  ([.rules[].type] | index("update") != null and index("deletion") != null)
+'
+readonly TAG_RULESET_FULL_FILTER='
+  .target == "tag" and .enforcement == "active" and
+  .conditions.ref_name.include == ["refs/tags/v*"] and
+  .conditions.ref_name.exclude == [] and
+  ([.rules[].type] | index("update") != null and index("deletion") != null) and
+  (.bypass_actors | type == "array" and length == 0) and
+  .current_user_can_bypass == "never"
+'
+readonly BRANCH_RULESET_STRUCTURAL_FILTER='
+  .target == "branch" and .enforcement == "active" and
+  (.conditions.ref_name.include | index("refs/heads/main") != null) and
+  ([.rules[].type] | index("pull_request") != null and index("required_status_checks") != null)
+'
+
 die() {
   printf '%s: %s\n' "$SCRIPT_NAME" "$*" >&2
   exit 1
@@ -348,31 +372,92 @@ verify_attestation() {
 }
 
 assert_repository_release_policy() {
-  local enabled pages matches ruleset_id ruleset headers
-  echo "release policy check: verifying immutable-releases is enabled" >&2
-  enabled="$(gh api \
+  if test -n "${RELEASE_POLICY_TOKEN:-}"; then
+    release_policy_check_full
+  else
+    release_policy_check_structural
+  fi
+}
+
+# Full, admin-backed policy check. Requires RELEASE_POLICY_TOKEN: a
+# fine-grained personal access token, scoped to this repository only, with
+# the Administration:read permission. GITHUB_TOKEN (the default Actions
+# installation token) can never carry that permission -- a workflow's
+# `permissions:` block does not recognize "administration" as a grantable
+# key (confirmed: `gh workflow run` rejects it as an invalid permission
+# value) -- so this path only runs when the optional secret is configured.
+# GH_TOKEN is overridden to RELEASE_POLICY_TOKEN for these calls only; it is
+# not exported, so every other `gh` invocation in this script keeps using
+# the ambient GH_TOKEN.
+release_policy_check_full() {
+  local enabled pages matches ruleset
+  echo "release policy check (RELEASE_POLICY_TOKEN set): verifying immutable-releases is enabled" >&2
+  enabled="$(GH_TOKEN="$RELEASE_POLICY_TOKEN" gh api \
     -H 'Accept: application/vnd.github+json' \
     -H 'X-GitHub-Api-Version: 2026-03-10' \
     "repos/$REPOSITORY/immutable-releases" \
     --jq '.enabled')"
   test "$enabled" = true || die "repository immutable releases are not enabled"
 
-  # Rulesets are fetched with a plain, unauthenticated curl request instead
-  # of `gh api` (which always attaches GH_TOKEN when it is set): "List
-  # repository rulesets" and "Get a repository ruleset" both serve public
-  # data for a public repository to anonymous requests, but reject an
-  # *authenticated* Actions installation token that lacks the
-  # Administration permission -- and a workflow's `permissions:` block
-  # cannot grant that at all; it is not one of the keys GitHub Actions
-  # recognizes (confirmed: `gh workflow run` rejects "administration" as an
-  # invalid permission value). Presenting GH_TOKEN turns a request that
-  # would succeed unauthenticated into one GitHub evaluates strictly
-  # against the token's own insufficient scope, producing 403
-  # "Resource not accessible by integration" instead of falling back to
-  # public access. Unauthenticated requests share the caller IP's public,
-  # unauthenticated rate limit (60/hour); this call runs at most twice per
-  # publish attempt (preflight, then release), so that budget is ample.
-  echo "release policy check: verifying active tag rulesets (unauthenticated public read)" >&2
+  echo "release policy check (RELEASE_POLICY_TOKEN set): verifying active tag rulesets, including bypass actors" >&2
+  pages="$(mktemp)"
+  matches="$(mktemp)"
+  ruleset="$(mktemp)"
+  GH_TOKEN="$RELEASE_POLICY_TOKEN" gh api --paginate \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2026-03-10' \
+    "repos/$REPOSITORY/rulesets?per_page=100" > "$pages"
+  jq -s '[.[][] | select(.target == "tag" and .enforcement == "active")]' \
+    "$pages" > "$matches"
+  test "$(jq 'length' "$matches")" -ge 1 \
+    || die "no active tag ruleset protects release tags"
+
+  local protected_count=0 candidate_id ruleset_id
+  while IFS= read -r candidate_id; do
+    is_positive_integer "$candidate_id" || die "tag ruleset ID is invalid"
+    GH_TOKEN="$RELEASE_POLICY_TOKEN" gh api \
+      -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2026-03-10' \
+      "repos/$REPOSITORY/rulesets/$candidate_id" > "$ruleset"
+    if jq -e "$TAG_RULESET_FULL_FILTER" "$ruleset" >/dev/null; then
+      protected_count=$((protected_count + 1))
+      ruleset_id="$candidate_id"
+    fi
+  done < <(jq -r '.[].id' "$matches")
+  rm -f -- "$pages" "$matches" "$ruleset"
+  test "$protected_count" = 1 \
+    || die "release tags are not protected by one unbypassable update/deletion ruleset"
+  is_positive_integer "$ruleset_id" || die "release tag ruleset binding is invalid"
+}
+
+# Structural fallback policy check. Runs with no token, or with the ambient
+# GITHUB_TOKEN, neither of which can carry the Administration permission
+# needed to read a ruleset's bypass_actors/current_user_can_bypass fields or
+# call GET /repos/{owner}/{repo}/immutable-releases (both 403 "Resource not
+# accessible by integration" for an authenticated token that lacks it, and
+# GitHub Actions has no `permissions:` key that grants it). So this path
+# proves what an unauthenticated, public read can prove instead: the tag
+# ruleset that protects release tags exists, targets the release tag
+# pattern, is active, and forbids update/deletion; the branch ruleset that
+# protects main is active and requires a reviewed pull request plus status
+# checks; and, as a non-blocking sanity signal only, the most recently
+# published release already reports itself immutable. None of this proves
+# nobody can bypass either ruleset -- that requires RELEASE_POLICY_TOKEN.
+#
+# Rulesets are fetched with a plain, unauthenticated curl request instead of
+# `gh api` (which always attaches GH_TOKEN when it is set): "List repository
+# rulesets" and "Get a repository ruleset" both serve public data for a
+# public repository to anonymous requests, but reject an *authenticated*
+# Actions installation token that lacks the Administration permission.
+# Presenting GH_TOKEN turns a request that would succeed unauthenticated
+# into one GitHub evaluates strictly against the token's own insufficient
+# scope, producing 403 instead of falling back to public access.
+# Unauthenticated requests share the caller IP's public, unauthenticated
+# rate limit (60/hour); this call runs at most twice per publish attempt
+# (preflight, then release), so that budget is ample.
+release_policy_check_structural() {
+  local pages matches ruleset headers
+  echo "release policy check (no RELEASE_POLICY_TOKEN): verifying active tag and branch rulesets (unauthenticated public read)" >&2
   pages="$(mktemp)"
   matches="$(mktemp)"
   ruleset="$(mktemp)"
@@ -385,12 +470,13 @@ assert_repository_release_policy() {
     -o "$pages"
   ! grep -qi '^link:.*rel="next"' "$headers" \
     || die "repository has more rulesets than fit on one page"
+  rm -f -- "$headers"
+
   jq '[.[] | select(.target == "tag" and .enforcement == "active")]' \
     "$pages" > "$matches"
   test "$(jq 'length' "$matches")" -ge 1 \
     || die "no active tag ruleset protects release tags"
-
-  local protected_count=0 candidate_id
+  local protected_count=0 candidate_id ruleset_id
   while IFS= read -r candidate_id; do
     is_positive_integer "$candidate_id" || die "tag ruleset ID is invalid"
     curl -fsS \
@@ -398,22 +484,68 @@ assert_repository_release_policy() {
       -H 'X-GitHub-Api-Version: 2026-03-10' \
       "https://api.github.com/repos/$REPOSITORY/rulesets/$candidate_id" \
       -o "$ruleset"
-    if jq -e '
-        .target == "tag" and .enforcement == "active" and
-        .conditions.ref_name.include == ["refs/tags/v*"] and
-        .conditions.ref_name.exclude == [] and
-        ([.rules[].type] | index("update") != null and index("deletion") != null) and
-        (.bypass_actors | type == "array" and length == 0) and
-        .current_user_can_bypass == "never"
-      ' "$ruleset" >/dev/null; then
+    if jq -e "$TAG_RULESET_STRUCTURAL_FILTER" "$ruleset" >/dev/null; then
       protected_count=$((protected_count + 1))
       ruleset_id="$candidate_id"
     fi
   done < <(jq -r '.[].id' "$matches")
-  rm -f -- "$pages" "$matches" "$ruleset" "$headers"
   test "$protected_count" = 1 \
-    || die "release tags are not protected by one unbypassable update/deletion ruleset"
+    || die "release tags are not protected by one active update/deletion ruleset"
   is_positive_integer "$ruleset_id" || die "release tag ruleset binding is invalid"
+
+  jq '[.[] | select(.target == "branch" and .enforcement == "active")]' \
+    "$pages" > "$matches"
+  test "$(jq 'length' "$matches")" -ge 1 \
+    || die "no active branch ruleset protects main"
+  local branch_protected_count=0 branch_ruleset_id
+  while IFS= read -r candidate_id; do
+    is_positive_integer "$candidate_id" || die "branch ruleset ID is invalid"
+    curl -fsS \
+      -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2026-03-10' \
+      "https://api.github.com/repos/$REPOSITORY/rulesets/$candidate_id" \
+      -o "$ruleset"
+    if jq -e "$BRANCH_RULESET_STRUCTURAL_FILTER" "$ruleset" >/dev/null; then
+      branch_protected_count=$((branch_protected_count + 1))
+      branch_ruleset_id="$candidate_id"
+    fi
+  done < <(jq -r '.[].id' "$matches")
+  rm -f -- "$pages" "$matches" "$ruleset"
+  test "$branch_protected_count" = 1 \
+    || die "main is not protected by one active pull_request/required_status_checks ruleset"
+  is_positive_integer "$branch_ruleset_id" || die "main branch ruleset binding is invalid"
+
+  echo "release policy check (no RELEASE_POLICY_TOKEN): checking the latest published release for an immutable-release sanity signal (unauthenticated public read)" >&2
+  local latest latest_tag latest_immutable
+  latest="$(mktemp)"
+  if curl -fsS \
+      -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2026-03-10' \
+      "https://api.github.com/repos/$REPOSITORY/releases/latest" \
+      -o "$latest"; then
+    latest_tag="$(jq -r '.tag_name' "$latest")"
+    latest_immutable="$(jq -r '.immutable' "$latest")"
+    if test "$latest_immutable" = true; then
+      printf 'release policy check: sanity signal only, not a proof -- latest published release %s reports isImmutable=true\n' \
+        "$latest_tag" >&2
+    else
+      printf 'release policy check: WARNING: sanity signal only -- latest published release %s reports isImmutable=%s (expected true)\n' \
+        "$latest_tag" "$latest_immutable" >&2
+    fi
+  else
+    echo "release policy check: no prior published release found; skipping the immutable-release sanity signal" >&2
+  fi
+  rm -f -- "$latest"
+
+  cat >&2 <<'NOTICE'
+release policy check: bypass-actor verification was skipped. The active
+tag and branch rulesets above were verified structurally, but proving that
+nobody can bypass either ruleset requires reading bypass_actors and
+current_user_can_bypass, which need the Administration permission that
+GITHUB_TOKEN can never hold. Set the optional RELEASE_POLICY_TOKEN
+repository secret -- a fine-grained personal access token scoped to this
+repository only, with Administration: read -- to run the full check.
+NOTICE
 }
 
 assert_tag() {
@@ -668,6 +800,13 @@ verify_published_release() {
   done
   test "$verified" = true \
     || die "GitHub immutable-release attestation does not bind the unique package subject to the annotated tag object"
+
+  local view_json
+  view_json="$scratch/release-view.json"
+  gh release view "$RELEASE_TAG" --repo "$REPOSITORY" --json isImmutable,isDraft > "$view_json"
+  jq -e '.isImmutable == true and .isDraft == false' "$view_json" >/dev/null \
+    || die "gh release view reports the published release is not isImmutable or not published"
+
   rm -rf -- "$scratch"
   printf 'Immutable GitHub Release verified: https://github.com/%s/releases/tag/%s\n' "$REPOSITORY" "$RELEASE_TAG"
 }
@@ -757,6 +896,81 @@ self_test() {
   grep -Fq 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$notes"
   grep -Fq 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' "$notes"
   rm -f -- "$notes"
+
+  # Release policy check: dispatch. Shadow the two live, network-calling
+  # implementations with markers so the self-test exercises the real
+  # `assert_repository_release_policy` dispatcher without touching the
+  # network, then restore both real implementations afterward so the rest
+  # of self_test (and, per the module-level `exit 0` right after
+  # self_test's caller, nothing else in this process) ever runs against the
+  # shadowed versions.
+  local real_full real_structural selected
+  real_full="$(declare -f release_policy_check_full)"
+  real_structural="$(declare -f release_policy_check_structural)"
+  release_policy_check_full() { echo full; }
+  release_policy_check_structural() { echo structural; }
+  selected="$(RELEASE_POLICY_TOKEN="a-fine-grained-pat" assert_repository_release_policy)"
+  test "$selected" = full \
+    || die "self-test: a non-empty RELEASE_POLICY_TOKEN must select the full, admin-backed policy check"
+  selected="$(RELEASE_POLICY_TOKEN="" assert_repository_release_policy)"
+  test "$selected" = structural \
+    || die "self-test: an empty RELEASE_POLICY_TOKEN must select the structural policy check"
+  selected="$(unset RELEASE_POLICY_TOKEN; assert_repository_release_policy)"
+  test "$selected" = structural \
+    || die "self-test: an unset RELEASE_POLICY_TOKEN must select the structural policy check"
+  eval "$real_full"
+  eval "$real_structural"
+
+  # Release policy check: ruleset-matching filters, against fixture JSON
+  # shaped like real GitHub ruleset responses (authenticated-with-admin for
+  # the full filter, unauthenticated-public for the structural filters,
+  # which never carry bypass_actors/current_user_can_bypass).
+  local fixture
+  fixture="$(mktemp)"
+
+  printf '%s' '{"target":"tag","enforcement":"active","conditions":{"ref_name":{"include":["refs/tags/v*"],"exclude":[]}},"rules":[{"type":"update"},{"type":"deletion"}],"bypass_actors":[],"current_user_can_bypass":"never"}' \
+    > "$fixture"
+  jq -e "$TAG_RULESET_STRUCTURAL_FILTER" "$fixture" >/dev/null \
+    || die "self-test: TAG_RULESET_STRUCTURAL_FILTER must accept a fully protected tag ruleset"
+  jq -e "$TAG_RULESET_FULL_FILTER" "$fixture" >/dev/null \
+    || die "self-test: TAG_RULESET_FULL_FILTER must accept a fully protected tag ruleset"
+
+  printf '%s' '{"target":"tag","enforcement":"active","conditions":{"ref_name":{"include":["refs/tags/v*"],"exclude":[]}},"rules":[{"type":"update"},{"type":"deletion"}]}' \
+    > "$fixture"
+  jq -e "$TAG_RULESET_STRUCTURAL_FILTER" "$fixture" >/dev/null \
+    || die "self-test: TAG_RULESET_STRUCTURAL_FILTER must accept an unauthenticated tag ruleset response lacking bypass fields"
+  jq -e "$TAG_RULESET_FULL_FILTER" "$fixture" >/dev/null \
+    && die "self-test: TAG_RULESET_FULL_FILTER must reject a tag ruleset response missing bypass_actors/current_user_can_bypass"
+
+  printf '%s' '{"target":"tag","enforcement":"active","conditions":{"ref_name":{"include":["refs/tags/v*"],"exclude":[]}},"rules":[{"type":"update"}],"bypass_actors":[],"current_user_can_bypass":"never"}' \
+    > "$fixture"
+  jq -e "$TAG_RULESET_STRUCTURAL_FILTER" "$fixture" >/dev/null \
+    && die "self-test: TAG_RULESET_STRUCTURAL_FILTER must reject a tag ruleset missing the deletion rule"
+  jq -e "$TAG_RULESET_FULL_FILTER" "$fixture" >/dev/null \
+    && die "self-test: TAG_RULESET_FULL_FILTER must reject a tag ruleset missing the deletion rule"
+
+  printf '%s' '{"target":"tag","enforcement":"active","conditions":{"ref_name":{"include":["refs/tags/v*"],"exclude":[]}},"rules":[{"type":"update"},{"type":"deletion"}],"bypass_actors":[{"actor_id":1}],"current_user_can_bypass":"always"}' \
+    > "$fixture"
+  jq -e "$TAG_RULESET_FULL_FILTER" "$fixture" >/dev/null \
+    && die "self-test: TAG_RULESET_FULL_FILTER must reject a tag ruleset with a bypass actor"
+
+  printf '%s' '{"target":"branch","enforcement":"active","conditions":{"ref_name":{"include":["refs/heads/main"],"exclude":[]}},"rules":[{"type":"pull_request"},{"type":"required_status_checks"}]}' \
+    > "$fixture"
+  jq -e "$BRANCH_RULESET_STRUCTURAL_FILTER" "$fixture" >/dev/null \
+    || die "self-test: BRANCH_RULESET_STRUCTURAL_FILTER must accept a fully protected main branch ruleset"
+
+  printf '%s' '{"target":"branch","enforcement":"active","conditions":{"ref_name":{"include":["refs/heads/main"],"exclude":[]}},"rules":[{"type":"pull_request"}]}' \
+    > "$fixture"
+  jq -e "$BRANCH_RULESET_STRUCTURAL_FILTER" "$fixture" >/dev/null \
+    && die "self-test: BRANCH_RULESET_STRUCTURAL_FILTER must reject a branch ruleset missing required_status_checks"
+
+  printf '%s' '{"target":"branch","enforcement":"active","conditions":{"ref_name":{"include":["refs/heads/develop"],"exclude":[]}},"rules":[{"type":"pull_request"},{"type":"required_status_checks"}]}' \
+    > "$fixture"
+  jq -e "$BRANCH_RULESET_STRUCTURAL_FILTER" "$fixture" >/dev/null \
+    && die "self-test: BRANCH_RULESET_STRUCTURAL_FILTER must reject a ruleset that does not target refs/heads/main"
+
+  rm -f -- "$fixture"
+
   printf '%s\n' "Release publication helper self-test passed."
 }
 

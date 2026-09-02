@@ -251,6 +251,7 @@ jobs:
           CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
           CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
           GH_TOKEN: ${{ github.token }}
+          RELEASE_POLICY_TOKEN: ${{ secrets.RELEASE_POLICY_TOKEN }}
           RELEASE_TAG: v${{ inputs.version }}
           RELEASE_VERSION: ${{ inputs.version }}
           VERIFIED_SOURCE_SHA: ${{ inputs.source_sha }}
@@ -267,6 +268,7 @@ jobs:
           CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
           CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
           GH_TOKEN: ${{ github.token }}
+          RELEASE_POLICY_TOKEN: ${{ secrets.RELEASE_POLICY_TOKEN }}
           EXPECTED_RECEIPT_SHA256: ${{ steps.approval.outputs.acceptance_receipt_sha256 }}
           RELEASE_TAG: v${{ inputs.version }}
           RELEASE_VERSION: ${{ inputs.version }}
@@ -346,6 +348,7 @@ jobs:
           CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
           CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
           GH_TOKEN: ${{ github.token }}
+          RELEASE_POLICY_TOKEN: ${{ secrets.RELEASE_POLICY_TOKEN }}
           EXPECTED_RECEIPT_SHA256: ${{ needs.preflight.outputs.acceptance_receipt_sha256 }}
           RELEASE_TAG: v${{ inputs.version }}
           RELEASE_VERSION: ${{ inputs.version }}
