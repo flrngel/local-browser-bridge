@@ -483,6 +483,35 @@ jobs:
                 results: { windows: $windows[0], macos: $macos[0] }
               }
             ' > acceptance-receipt.json
+          # Print a compact expected-vs-actual summary unconditionally (not
+          # just on failure): this gate has failed silently before with no
+          # other output in the step (jq -e prints nothing for a false
+          # result, only for error()), which cost a full ~15 minute deploy
+          # cycle to even see which field mismatched. This dump is cheap,
+          # local jq processing of the file this step just wrote -- no
+          # extra network calls, no verbose HTTP tracing -- so it is safe to
+          # always print.
+          jq \
+            --arg version "$VERIFIED_VERSION" \
+            --arg source "$VERIFIED_SOURCE_SHA" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg artifact_id "$artifact_id" \
+            --arg zip_sha "$zip_sha" '
+              {
+                expected: {
+                  version: $version, sourceSha: $source, runId: $run_id,
+                  runAttempt: $run_attempt, candidateArtifactId: $artifact_id,
+                  candidateArtifactSha256: $zip_sha
+                },
+                actual: (.results | with_entries(.value |= {
+                  ok, mode, version, sourceSha, runId, runAttempt,
+                  candidateArtifactId, candidateArtifactSha256, computerMode,
+                  lanes, summary,
+                  requiredChecksNotPassing: [.checks[]? | select(.required and .status != "pass")]
+                }))
+              }
+            ' acceptance-receipt.json
           jq -e \
             --arg version "$VERIFIED_VERSION" \
             --arg source "$VERIFIED_SOURCE_SHA" \
