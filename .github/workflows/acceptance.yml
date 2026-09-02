@@ -177,7 +177,18 @@ jobs:
           else
             sha256() { shasum -a 256 "$@"; }
           fi
-          zip_sha="$(sha256 "$work/release-candidate.zip" | awk '{ print $1 }')"
+          # Read via stdin, not a filename argument: GNU coreutils sha256sum
+          # (and its MSYS/Git-for-Windows port used on windows-latest)
+          # prepends a literal backslash to the whole output line and
+          # escapes backslashes in the filename whenever the filename needs
+          # escaping -- which a Windows path always does, since `\` is its
+          # separator. That corrupted the recorded candidateArtifactSha256
+          # with a leading `\` on the windows lane (observed on 0.12.69,
+          # deploy run 33632019936: receipt gate rejected the candidate
+          # because windows recorded "\9ee18c77..." instead of "9ee18c77...").
+          # Piping the file through stdin gives a filename-free "-" instead,
+          # which is never escaped, on both sha256sum and shasum.
+          zip_sha="$(sha256 < "$work/release-candidate.zip" | awk '{ print $1 }')"
           mkdir "$work/payload"
           unzip -q "$work/release-candidate.zip" -d "$work/payload"
           test "$(find "$work/payload" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 5
