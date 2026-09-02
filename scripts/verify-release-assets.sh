@@ -70,7 +70,7 @@ for executable in "$windows_server" "$windows_helper"; do
   fi
 done
 
-expected_extension_files=(background.js content.js dom-core.js frame-agent.js lib.js manifest.json popup.css popup.html popup.js stop-guard.js LICENSE)
+expected_extension_files=(background.js content.js dom-core.js frame-agent.js lib.js manifest.json popup.css popup.html popup.js LICENSE)
 extension_archive_sha256_before="$(shasum -a 256 "$extension_archive" | awk '{ print $1 }')"
 python3 - "$extension_archive" "$version" "$project_root/LICENSE" "${expected_extension_files[@]}" <<'PY'
 import json

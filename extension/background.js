@@ -77,7 +77,7 @@ const PAUSE_ALLOWED_COMMANDS = new Set([
 // While a JavaScript dialog is pending, the renderer main thread is frozen:
 // every content-script or Runtime call would only time out and revoke the
 // lease. Only these commands are dispatched, because each one stays off the
-// renderer (browser-process state, a best-effort overlay hide, or the
+// renderer (browser-process state, a best-effort content unbind, or the
 // browser-side CDP dialog resolution itself); everything else fails fast
 // with BLOCKED_BY_DIALOG before any content or CDP call. This mirrors the
 // server's dialog gate exactly.
@@ -108,26 +108,6 @@ const CONTROL_TTL_DEFAULT_MS = 5 * 60_000;
 const CONTROL_TTL_MIN_MS = 15_000;
 const CONTROL_TTL_MAX_MS = 15 * 60_000;
 const CONTROL_HEARTBEAT_MS = 10_000;
-// The renderer samples every 500ms and bounds its browser-process round trip
-// at 2s. This deadline adds scheduler margin while still revoking if those
-// exact-session acknowledgements stop arriving altogether.
-const CONTROL_UI_BROWSER_WATCHDOG_DEADLINE_MS = 3_000;
-const CONTROL_UI_TOP_LAYER_MAX_NODES = 2_048;
-const CONTROL_UI_TOP_LAYER_TAIL_MAX = 256;
-const CONTROL_UI_ANCESTRY_MAX_DEPTH = 24;
-const CONTROL_UI_ANCESTRY_WORK_MAX = 512;
-const CONTROL_UI_BROWSER_PROOF_DEADLINE_MS = 1_500;
-const CONTROL_UI_HIT_POINT_MAX = 5;
-// One DOM.getDocument({depth: -1, pierce: true}) snapshot bounds the whole
-// document tree the proof indexes; the depth-0 release afterwards is best
-// effort and has its own short deadline.
-const CONTROL_UI_DOCUMENT_MAX_NODES = 200_000;
-const CONTROL_UI_DOCUMENT_RELEASE_MS = 250;
-// The content watchdog reopens the popover every 500 ms, so a root top-layer
-// event can land inside a show proof's final sample through no fault of the
-// page. A stale final sample is re-proven from a fresh renderer request a
-// bounded number of times before it fails closed.
-const CONTROL_UI_PROOF_ATTEMPTS = 3;
 const CONTROL_STORAGE_KEY = "browserControlLease";
 const CONTROL_REVOCATION_KEY = "browserControlRevocation";
 const CONTROL_CLEANUPS_KEY = "browserControlCleanups";
@@ -156,10 +136,6 @@ const FRAME_AGENT_WORLD_NAME = "__lbb_frame_agent__";
 // deadline and every command inside it is bounded by what is left of it.
 const FRAME_OBSERVE_BUDGET_MS = 4_000;
 const FRAME_OBSERVE_MIN_TIMEOUT_MS = 100;
-// stop-guard.js must come from the manifest at document_start. Recovery
-// injection deliberately cannot synthesize that ordering for an old page;
-// content.js reports the guard missing and control start fails closed until a
-// normal navigation installs it early.
 const CONTENT_SCRIPT_FILES = ["dom-core.js", "content.js"];
 // Session id -> frame record for every OOPIF target auto-attached under the
 // current lease. Cleared only by synchronouslyTakeControlLease, so no frame
@@ -202,13 +178,6 @@ let connectionStatusWrite = Promise.resolve();
 let badgeWrite = Promise.resolve();
 let browserActionQueue = Promise.resolve();
 let protocolStatusGeneration = 0;
-let controlUiTopLayerMutationDepth = 0;
-let controlUiTopLayerRevision = 0;
-let controlUiContentLossGeneration = 0;
-let controlUiTopLayerDirty = null;
-let controlUiTopLayerVerificationTimer = null;
-let controlUiProofWrite = Promise.resolve();
-let controlUiBrowserProofChain = Promise.resolve();
 const expectedInternalSettings = new Map();
 const retiredProtocolSockets = new WeakSet();
 const clearOwnedProtocolSockets = new WeakSet();
@@ -221,7 +190,6 @@ const pendingDebuggerAttaches = new Map();
 const pendingDebuggerDetaches = new Map();
 const pendingControlTeardowns = new Map();
 const pendingControlCleanups = new Map();
-const activeControlCaptures = new Map();
 
 function withTimeout(promise, timeoutMs, label, code = "DEBUGGER_TIMEOUT") {
   let timer;
@@ -1525,7 +1493,7 @@ function acceptTopLevelNavigationSignal({ tabId, url = "", loaderId = "", frameI
     lease.lastNavigationCommit = { url: lease.documentUrl, at: Date.now() };
     lease.viewport = null;
     void persistControlState()
-      .then(() => showControlUi().catch(() => {}))
+      .then(() => bindControlSession().catch(() => {}))
       .catch(() => revokeUnexpectedNavigation("navigation_state_persist_failed"));
   }
   return true;
@@ -1539,12 +1507,6 @@ async function authorizeTopLevelNavigation(lease, authority, kind, expectedUrl, 
     if (!verdict.allowed) throw new Error(`SITE_BLOCKED: ${verdict.reason}`);
   }
   lease.documentEpoch = Math.max(0, Number(lease.documentEpoch) || 0) + 1;
-  // Navigation invalidates the old document's closed-shadow marker. The
-  // lease remains alive only for the bounded navigation/rebind window;
-  // showControlUi must browser-verify the new document before passive checks
-  // may treat its proof as authoritative.
-  lease.controlUiProofReady = false;
-  clearControlUiTopLayerDirty(lease);
   lease.pendingNavigation = {
     kind,
     expectedUrl: expectedUrl || null,
@@ -1666,11 +1628,9 @@ function publicControlState() {
       revocationPending: Boolean(cleanup),
       cleanup: cleanup ? { ...cleanup } : null,
       cleanups,
-      activeCaptureIds: [],
       revocation: lastControlRevocation ? { ...lastControlRevocation } : null,
     };
   }
-  const activeCaptureIds = [...(activeControlCaptures.get(controlLease.tabId) ?? [])];
   return {
     active: true,
     humanPaused: Boolean(humanControlPause?.paused),
@@ -1679,8 +1639,6 @@ function publicControlState() {
     revocationPending: Boolean(cleanup),
     cleanup: cleanup ? { ...cleanup } : null,
     cleanups,
-    activeCaptureIds,
-    captureDepth: activeCaptureIds.length,
     documentEpoch: controlLease.documentEpoch,
     documentUrl: safeUrlForDisplay(controlLease.documentUrl ?? ""),
     navigationPending: Boolean(controlLease.pendingNavigation),
@@ -1736,866 +1694,34 @@ async function clearHeldInputIntent(map, key, record) {
   }
 }
 
-function controlCaptureIds(tabId) {
-  return [...(activeControlCaptures.get(tabId) ?? [])];
-}
-
-function beginControlCapture(tabId, captureId) {
-  const captures = activeControlCaptures.get(tabId) ?? new Set();
-  captures.add(captureId);
-  activeControlCaptures.set(tabId, captures);
-  return [...captures];
-}
-
-function endControlCapture(tabId, captureId) {
-  const captures = activeControlCaptures.get(tabId);
-  captures?.delete(captureId);
-  if (!captures?.size) activeControlCaptures.delete(tabId);
-  return controlCaptureIds(tabId);
-}
-
-function controlUiAcknowledged(state, expectedCaptureIds, expectedCursorVisible) {
-  if (!state?.hostConnected
-    || !state.popoverOpen
-    || !state.topLayerReordered
-    || state.earlyStopGuardReady !== true
-    || state.accessibilityReady !== true
-    || state.viewTransitionActive !== false
-    || !state.hostVisible) return false;
-  const expected = [...expectedCaptureIds].map(String).sort();
-  const actual = Array.isArray(state.activeCaptureIds)
-    ? state.activeCaptureIds.map(String).sort()
-    : [];
-  if (expected.length !== actual.length || expected.some((id, index) => id !== actual[index])) return false;
-  if (Number(state.captureDepth) !== expected.length) return false;
-  if (state.cursorVisible !== Boolean(expectedCursorVisible)) return false;
-  if (expected.length > 0) {
-    return state.capturing === true && state.pillVisible === false && state.stopVisible === false;
-  }
-  return state.capturing === false
-    && state.pillVisible === true
-    && state.stopVisible === true
-    && state.pillTopmost === true
-    && state.stopTopmost === true;
-}
-
-function attributesMap(attributes) {
-  if (!Array.isArray(attributes) || attributes.length % 2 !== 0) return null;
-  const mapped = new Map();
-  for (let index = 0; index < attributes.length; index += 2) {
-    mapped.set(String(attributes[index]), String(attributes[index + 1]));
-  }
-  return mapped;
-}
-
-function browserRootAccessibilityReady(attributes) {
-  const mapped = attributesMap(attributes);
-  if (!mapped || mapped.has("hidden") || mapped.has("inert")) return false;
-  return String(mapped.get("aria-hidden") || "").trim().toLowerCase() !== "true";
-}
-
-function browserControlHostAttributesReady(attributes, hostId) {
-  const mapped = attributesMap(attributes);
-  return Boolean(mapped
-    && !mapped.has("hidden")
-    && !mapped.has("inert")
-    && mapped.get("id") === hostId
-    && mapped.get("popover") === "manual"
-    && mapped.get("aria-hidden") === "false"
-    && mapped.get("aria-label") === "Local Browser Bridge browser control");
-}
-
-function spendControlUiAncestryWork(budget) {
-  if (!budget
-    || !Number.isInteger(budget.remaining)
-    || budget.remaining <= 0
-    || !Number.isFinite(budget.deadlineAt)
-    || Date.now() > budget.deadlineAt) {
-    throw new Error("The browser control proof exceeded its shared ancestry budget");
-  }
-  budget.remaining -= 1;
-}
-
-// backendNodeId is the browser's stable identity for a DOM node: it survives
-// the nodeId re-binding that every DOM.getDocument call performs (including
-// one issued concurrently by another extension path), so it is the only
-// identity the proof compares.
-function sameBrowserNode(left, right) {
-  return Boolean(left && right)
-    && Number.isInteger(left.backendNodeId)
-    && left.backendNodeId === right.backendNodeId;
-}
-
-// Indexes one DOM.getDocument({depth: -1, pierce: true}) tree. Nesting is the
-// only parent authority: Chrome's DOM.describeNode never reports parentId and
-// page-world parentNode is page-forgeable, whereas the tree's children,
-// shadowRoots, templateContent, and pseudoElements arrays are produced by the
-// browser process from the real node tree. A nested same-process document is
-// indexed as its own ancestry root, exactly like every walk stops at its
-// #document, so a frame node can never resolve to the controlled document.
-function indexBrowserDocumentTree(root) {
-  const byNodeId = new Map();
-  const byBackendNodeId = new Map();
-  const pending = [{ node: root, parent: null }];
-  while (pending.length > 0) {
-    const { node, parent } = pending.pop();
-    if (!node
-      || !Number.isInteger(node.nodeId)
-      || !Number.isInteger(node.backendNodeId)
-      || byNodeId.has(node.nodeId)
-      || byBackendNodeId.has(node.backendNodeId)) {
-      throw new Error("The browser did not describe a unique bounded document tree");
-    }
-    if (byNodeId.size >= CONTROL_UI_DOCUMENT_MAX_NODES) {
-      throw new Error("The browser document tree exceeded the bounded control proof size");
-    }
-    const entry = { node, parent };
-    byNodeId.set(node.nodeId, entry);
-    byBackendNodeId.set(node.backendNodeId, entry);
-    for (const child of node.children ?? []) pending.push({ node: child, parent: entry });
-    for (const child of node.shadowRoots ?? []) pending.push({ node: child, parent: entry });
-    for (const child of node.pseudoElements ?? []) pending.push({ node: child, parent: entry });
-    if (node.templateContent) pending.push({ node: node.templateContent, parent: entry });
-    if (node.contentDocument) pending.push({ node: node.contentDocument, parent: null });
-  }
-  return { root, byNodeId, byBackendNodeId };
-}
-
-// One whole-document snapshot per proof. It is the structural authority
-// (parent links and the attributes sampled with them); every nodeId the
-// browser hands out afterwards is normalized to its backendNodeId before it is
-// looked up here, so a concurrent re-binding cannot make a real node look
-// foreign or a foreign node look known.
-async function browserDocumentTree(lease, authority, commandContext, budget) {
-  const described = await debuggerCommand(
-    lease.tabId,
-    "DOM.getDocument",
-    { depth: -1, pierce: true },
-    authority,
-    commandContext,
-    null,
-    { deadlineAt: budget.deadlineAt, strictDeadline: true },
-  );
-  if (Date.now() > budget.deadlineAt) {
-    throw new Error("The browser control proof exceeded its shared ancestry deadline");
-  }
-  const root = described?.root;
-  if (!root || (root.nodeType !== 9 && root.nodeName !== "#document")) {
-    throw new Error("The controlled root document identity is unavailable");
-  }
-  const tree = indexBrowserDocumentTree(root);
-  const rootElements = (root.children ?? []).filter((child) => child?.nodeType === 1);
-  if (rootElements.length !== 1) {
-    throw new Error("The controlled document element identity is unavailable");
-  }
-  return { ...tree, rootElement: rootElements[0] };
-}
-
-// Releases the whole-document binding once a proof is over. Bound nodes
-// stream every later DOM mutation to the service worker as CDP events; the
-// depth-0 re-read keeps only the document bound. Best effort: it cannot
-// change the proof's verdict and must never mask its error.
-async function releaseBrowserDocumentTree(lease, authority, commandContext) {
-  try {
-    await debuggerCommand(
-      lease.tabId,
-      "DOM.getDocument",
-      { depth: 0 },
-      authority,
-      commandContext,
-      null,
-      {
-        deadlineAt: Date.now() + CONTROL_UI_DOCUMENT_RELEASE_MS,
-        strictDeadline: true,
-        timeoutIsFatal: false,
-      },
-    );
-  } catch {
-    // The binding is released by the next DOM.getDocument call anyway.
-  }
-}
-
-// Normalizes a browser-reported node locator to the stable backendNodeId.
-// nodeIds are never reused within a debugger session, so a per-proof cache
-// keyed by nodeId is safe; a nodeId Chrome no longer knows fails closed.
-async function browserBackendNodeId(lease, locator, cache, authority, commandContext, budget) {
-  if (Number.isInteger(locator?.backendNodeId)) return locator.backendNodeId;
-  if (!Number.isInteger(locator?.nodeId)) {
-    throw new Error("The browser did not report a resolvable node identity");
-  }
-  if (cache.has(locator.nodeId)) return cache.get(locator.nodeId);
-  spendControlUiAncestryWork(budget);
-  const described = await debuggerCommand(
-    lease.tabId,
-    "DOM.describeNode",
-    { nodeId: locator.nodeId, depth: 0 },
-    authority,
-    commandContext,
-    null,
-    { deadlineAt: budget.deadlineAt, strictDeadline: true },
-  );
-  const backendNodeId = described?.node?.backendNodeId;
-  if (!Number.isInteger(backendNodeId)) {
-    throw new Error("The browser did not report a stable identity for a reported node");
-  }
-  cache.set(locator.nodeId, backendNodeId);
-  return backendNodeId;
-}
-
-// Live, snapshot-free proof that `childNode` is still a direct child of
-// `parentNode`: one depth-1 describe of the parent by its stable identity,
-// which also carries both nodes' current attributes for the final checks.
-async function browserChildNode(lease, parentNode, childNode, authority, commandContext, budget) {
-  spendControlUiAncestryWork(budget);
-  const described = await debuggerCommand(
-    lease.tabId,
-    "DOM.describeNode",
-    { backendNodeId: parentNode.backendNodeId, depth: 1 },
-    authority,
-    commandContext,
-    null,
-    { deadlineAt: budget.deadlineAt, strictDeadline: true },
-  );
-  const parent = described?.node;
-  if (!sameBrowserNode(parent, parentNode)) {
-    throw new Error("The controlled ancestry could not be described during acknowledgement");
-  }
-  const children = Array.isArray(parent.children) ? parent.children : [];
-  const matches = children.filter((child) => sameBrowserNode(child, childNode));
-  if (matches.length !== 1) {
-    throw new Error("The exact control host left the controlled root document during acknowledgement");
-  }
-  return { parent, child: matches[0] };
-}
-
-function browserNodeAncestry(tree, locator, budget) {
-  let entry = Number.isInteger(locator?.backendNodeId)
-    ? tree.byBackendNodeId.get(locator.backendNodeId)
-    : Number.isInteger(locator?.nodeId)
-      ? tree.byNodeId.get(locator.nodeId)
-      : null;
-  if (!entry) throw new Error("The browser node was not part of the described document tree");
-  let startNode = null;
-  let startParentNode = null;
-  let closedShadowHostNode = null;
-  let closedShadowHostParentNode = null;
-  for (let depth = 0; depth < CONTROL_UI_ANCESTRY_MAX_DEPTH && entry; depth += 1) {
-    spendControlUiAncestryWork(budget);
-    const { node, parent } = entry;
-    if (startNode === null) {
-      startNode = node;
-      startParentNode = parent?.node ?? null;
-    }
-    if (node.shadowRootType === "closed" && closedShadowHostNode === null) {
-      if (!parent) throw new Error("The closed shadow root did not expose its host ancestry");
-      // The proof marker lives directly inside the closed shadow root of the
-      // bridge. Pin that first/innermost host; a hostile page can later place
-      // the genuine host inside its own outer closed root, whose host must
-      // never replace the marker-bound identity.
-      closedShadowHostNode = parent.node;
-    }
-    if (node === closedShadowHostNode) {
-      if (!parent) throw new Error("The exact closed-shadow host did not expose its parent ancestry");
-      closedShadowHostParentNode = parent.node;
-    }
-    if (node.nodeType === 9 || node.nodeName === "#document") {
-      return {
-        startNode,
-        startParentNode,
-        closedShadowHostNode,
-        closedShadowHostParentNode,
-        documentNode: node,
-      };
-    }
-    entry = parent;
-  }
-  throw new Error("The browser node did not resolve to a bounded document ancestry");
-}
-
-function boundedTopLayerNodeIds(rawNodeIds) {
-  if (!Array.isArray(rawNodeIds)
-    || rawNodeIds.length === 0
-    || rawNodeIds.length > CONTROL_UI_TOP_LAYER_MAX_NODES
-    || rawNodeIds.some((nodeId) => !Number.isInteger(nodeId))) {
-    throw new Error("The browser did not expose a bounded ordered top-layer list");
-  }
-  return rawNodeIds;
-}
-
-async function assertControlHostIsDocumentTopLayerTail(
-  lease,
-  tree,
-  rawNodeIds,
-  hostNode,
-  identityCache,
-  authority,
-  commandContext,
-  budget,
-) {
-  const nodeIds = boundedTopLayerNodeIds(rawNodeIds);
-  const members = [];
-  for (const nodeId of nodeIds) {
-    members.push(await browserBackendNodeId(lease, { nodeId }, identityCache, authority, commandContext, budget));
-  }
-  const hostIndexes = members
-    .map((backendNodeId, index) => backendNodeId === hostNode.backendNodeId ? index : -1)
-    .filter((index) => index >= 0);
-  if (hostIndexes.length !== 1) {
-    throw new Error("The exact closed-shadow control host was not a unique browser-reported top-layer member");
-  }
-  const laterMembers = members.slice(hostIndexes[0] + 1);
-  if (laterMembers.length > CONTROL_UI_TOP_LAYER_TAIL_MAX) {
-    throw new Error("The browser top-layer tail exceeded the bounded control proof budget");
-  }
-  // Chromium concatenates each local document LIFO list. Child-document
-  // nodes may follow the controlled document in the raw response and are
-  // harmless; any later node that resolves back to the exact root document
-  // means a same-document surface outranks the warning, even if it leaves
-  // holes at the bounded point samples. A later node the snapshot does not
-  // know was inserted after it and fails closed like any other
-  // unattributable surface.
-  for (const backendNodeId of laterMembers) {
-    const ancestry = browserNodeAncestry(tree, { backendNodeId }, budget);
-    if (sameBrowserNode(ancestry.documentNode, tree.root)) {
-      throw new Error("A later same-document browser top-layer surface outranked the control host");
-    }
-  }
-  return members;
-}
-
-// Every browser proof (show, passive indicator check, capture begin/end)
-// runs alone: two interleaved proofs would each re-bind the other's nodeIds
-// with their own DOM.getDocument snapshot and release.
-function verifyControlUiBrowserTopLayer(
-  lease,
-  state,
-  authority,
-  commandContext = null,
-  contentRequestLossGeneration = null,
-) {
-  const queued = controlUiBrowserProofChain.then(() => verifyControlUiBrowserTopLayerAlone(
-    lease,
-    state,
-    authority,
-    commandContext,
-    contentRequestLossGeneration,
-  ));
-  controlUiBrowserProofChain = queued.catch(() => {});
-  return queued;
-}
-
-async function verifyControlUiBrowserTopLayerAlone(
-  lease,
-  state,
-  authority,
-  commandContext,
-  contentRequestLossGeneration,
-) {
-  const hostId = String(state?.hostId || "");
-  const markerId = String(state?.markerId || "");
-  if (!/^__local_browser_bridge_control_[0-9a-f]{32}__$/.test(hostId)
-    || !/^__local_browser_bridge_marker_[0-9a-f]{32}__$/.test(markerId)
-    || state.viewTransitionActive !== false) {
-    throw new Error("The page did not publish a verifiable control host or view-transition state");
-  }
-  if (!Number.isSafeInteger(contentRequestLossGeneration)
-    || controlUiContentLossGeneration !== contentRequestLossGeneration) {
-    throw new Error("The control indicator changed after its content proof began");
-  }
-  const proofBudget = {
-    remaining: CONTROL_UI_ANCESTRY_WORK_MAX,
-    deadlineAt: Date.now() + CONTROL_UI_BROWSER_PROOF_DEADLINE_MS,
-  };
-  await debuggerCommand(
-    lease.tabId,
-    "DOM.enable",
-    {},
-    authority,
-    commandContext,
-    null,
-    { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
-  );
-  try {
-    return await verifyControlUiBrowserTopLayerBound(
-      lease,
-      state,
-      authority,
-      commandContext,
-      contentRequestLossGeneration,
-      hostId,
-      markerId,
-      proofBudget,
-    );
-  } finally {
-    await releaseBrowserDocumentTree(lease, authority, commandContext);
-  }
-}
-
-async function verifyControlUiBrowserTopLayerBound(
-  lease,
-  state,
-  authority,
-  commandContext,
-  contentRequestLossGeneration,
-  hostId,
-  markerId,
-  proofBudget,
-) {
-  if (typeof lease.frameId !== "string" || !lease.frameId) {
-    throw new Error("The controlled root document identity is unavailable");
-  }
-  const tree = await browserDocumentTree(lease, authority, commandContext, proofBudget);
-  const rootDocument = tree.root;
-  const rootElement = tree.rootElement;
-  const identityCache = new Map();
-  if (!browserRootAccessibilityReady(rootElement.attributes)) {
-    throw new Error("The controlled document element hid or disabled the control surface");
-  }
-  const topLayer = await debuggerCommand(
-    lease.tabId,
-    "DOM.getTopLayerElements",
-    {},
-    authority,
-    commandContext,
-    null,
-    { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
-  );
-  boundedTopLayerNodeIds(topLayer?.nodeIds);
-
-  const search = await debuggerCommand(
-    lease.tabId,
-    "DOM.performSearch",
-    { query: `#${markerId}`, includeUserAgentShadowDOM: true },
-    authority,
-    commandContext,
-    null,
-    { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
-  );
-  if (typeof search?.searchId !== "string" || search.resultCount !== 1) {
-    if (typeof search?.searchId === "string") {
-      await debuggerCommand(
-        lease.tabId,
-        "DOM.discardSearchResults",
-        { searchId: search.searchId },
-        authority,
-        commandContext,
-        null,
-        { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
-      );
-    }
-    throw new Error("The bridge closed-shadow identity marker was missing or duplicated");
-  }
-  let markerAncestry = null;
-  try {
-    const result = await debuggerCommand(
-      lease.tabId,
-      "DOM.getSearchResults",
-      { searchId: search.searchId, fromIndex: 0, toIndex: 1 },
-      authority,
-      commandContext,
-      null,
-      { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
-    );
-    if (!Array.isArray(result?.nodeIds)
-      || result.nodeIds.length !== 1
-      || !Number.isInteger(result.nodeIds[0])) {
-      throw new Error("The browser did not resolve the unique closed-shadow identity marker");
-    }
-    const markerBackendNodeId = await browserBackendNodeId(
-      lease,
-      { nodeId: result.nodeIds[0] },
-      identityCache,
-      authority,
-      commandContext,
-      proofBudget,
-    );
-    markerAncestry = browserNodeAncestry(tree, { backendNodeId: markerBackendNodeId }, proofBudget);
-    if (!sameBrowserNode(markerAncestry.documentNode, rootDocument)
-      || !markerAncestry.closedShadowHostNode
-      || !sameBrowserNode(markerAncestry.closedShadowHostParentNode, rootElement)) {
-      throw new Error("The closed-shadow control marker did not resolve to the controlled root document");
-    }
-  } finally {
-    await debuggerCommand(
-      lease.tabId,
-      "DOM.discardSearchResults",
-      { searchId: search.searchId },
-      authority,
-      commandContext,
-      null,
-      { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
-    );
-  }
-  const hostNode = markerAncestry.closedShadowHostNode;
-  await assertControlHostIsDocumentTopLayerTail(
-    lease,
-    tree,
-    topLayer.nodeIds,
-    hostNode,
-    identityCache,
-    authority,
-    commandContext,
-    proofBudget,
-  );
-  if (!browserControlHostAttributesReady(hostNode.attributes, hostId)) {
-    throw new Error("The exact bridge control host attributes were not intact");
-  }
-
-  if (state.capturing !== true) {
-    const width = Number(state?.viewport?.width);
-    const height = Number(state?.viewport?.height);
-    const points = state?.controlHitPoints;
-    const distinctPoints = Array.isArray(points)
-      ? new Set(points.map((point) => `${point?.x}:${point?.y}`))
-      : new Set();
-    if (!Number.isFinite(width)
-      || !Number.isFinite(height)
-      || width <= 0
-      || height <= 0
-      || !Array.isArray(points)
-      || points.length !== CONTROL_UI_HIT_POINT_MAX
-      || distinctPoints.size !== CONTROL_UI_HIT_POINT_MAX) {
-      throw new Error("The control surface did not publish the exact browser hit-test points");
-    }
-    for (const point of points) {
-      const x = Number(point?.x);
-      const y = Number(point?.y);
-      if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= width || y >= height) {
-        throw new Error("The control surface published an invalid browser hit-test point");
-      }
-      const hit = await debuggerCommand(
-        lease.tabId,
-        "DOM.getNodeForLocation",
-        { x, y, includeUserAgentShadowDOM: true, ignorePointerEventsNone: true },
-        authority,
-        commandContext,
-        null,
-        { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
-      );
-      if (hit?.frameId !== lease.frameId) {
-        throw new Error("A browser paint-order hit test resolved outside the controlled document");
-      }
-      const locator = Number.isInteger(hit?.backendNodeId)
-        ? { backendNodeId: hit.backendNodeId }
-        : Number.isInteger(hit?.nodeId)
-          ? { nodeId: hit.nodeId }
-          : null;
-      if (!locator) throw new Error("The browser did not resolve a control-surface browser hit test");
-      const hitBackendNodeId = await browserBackendNodeId(
-        lease,
-        locator,
-        identityCache,
-        authority,
-        commandContext,
-        proofBudget,
-      );
-      const hitAncestry = browserNodeAncestry(tree, { backendNodeId: hitBackendNodeId }, proofBudget);
-      if (!sameBrowserNode(hitAncestry.documentNode, rootDocument)
-        || (!sameBrowserNode(hitAncestry.startNode, hostNode)
-          && !sameBrowserNode(hitAncestry.closedShadowHostNode, hostNode))) {
-        throw new Error("A browser paint-order hit test did not resolve to the exact control host");
-      }
-    }
-  }
-  // Root-target DOM.topLayerElementsUpdated is delivered independently of
-  // command completion. Treat the final sample as a seqlock: any event
-  // delivered while the final browser proof is in flight makes the
-  // acknowledgement stale and must be retried or rejected. The final sample
-  // is deliberately short so the seqlock window stays small: the fresh
-  // top-layer list and the live document -> root element -> host chain,
-  // whose two depth-1 describes also carry the current attributes of both
-  // elements. Later top-layer nodes are attributed through the snapshot.
-  const finalProofRevision = controlUiTopLayerRevision;
-  const finalTopLayer = await debuggerCommand(
-    lease.tabId,
-    "DOM.getTopLayerElements",
-    {},
-    authority,
-    commandContext,
-    null,
-    { deadlineAt: proofBudget.deadlineAt, strictDeadline: true },
-  );
-  const documentChain = await browserChildNode(
-    lease,
-    rootDocument,
-    rootElement,
-    authority,
-    commandContext,
-    proofBudget,
-  );
-  if ((documentChain.parent.children ?? []).filter((child) => child?.nodeType === 1).length !== 1) {
-    throw new Error("The controlled document element changed during acknowledgement");
-  }
-  const rootChain = await browserChildNode(
-    lease,
-    rootElement,
-    hostNode,
-    authority,
-    commandContext,
-    proofBudget,
-  );
-  const finalHostNode = rootChain.child;
-  if (!browserControlHostAttributesReady(finalHostNode.attributes, hostId)) {
-    throw new Error("The exact control host attributes changed during acknowledgement");
-  }
-  if (!browserRootAccessibilityReady(rootChain.parent.attributes)) {
-    throw new Error("The controlled document element changed accessibility during acknowledgement");
-  }
-  await assertControlHostIsDocumentTopLayerTail(
-    lease,
-    tree,
-    finalTopLayer?.nodeIds,
-    finalHostNode,
-    identityCache,
-    authority,
-    commandContext,
-    proofBudget,
-  );
-  if (controlUiTopLayerRevision !== finalProofRevision) {
-    const stale = new Error("The browser top layer changed during the final control acknowledgement");
-    stale.code = "CONTROL_UI_TOP_LAYER_STALE";
-    throw stale;
-  }
-  if (controlUiContentLossGeneration !== contentRequestLossGeneration) {
-    throw new Error("The control indicator reported a loss during the final acknowledgement");
-  }
-  assertLeaseAuthority(authority, commandContext, "browser top-layer acknowledgement");
-  return {
-    revision: finalProofRevision,
-    contentLossGeneration: contentRequestLossGeneration,
-  };
-}
-
-function beginControlUiTopLayerMutation() {
-  controlUiTopLayerMutationDepth += 1;
-}
-
-function endControlUiTopLayerMutation() {
-  controlUiTopLayerMutationDepth = Math.max(0, controlUiTopLayerMutationDepth - 1);
-  if (controlUiTopLayerDirty) armControlUiTopLayerDeadline();
-}
-
-function clearControlUiTopLayerDirty(
-  lease = controlLease,
-  verifiedRevision = null,
-  verifiedContentLossGeneration = null,
-) {
-  if (!controlUiTopLayerDirty
-    || !lease
-    || controlUiTopLayerDirty.sessionId !== lease.sessionId
-    || controlUiTopLayerDirty.epoch !== lease.epoch) return false;
-  if (Number.isSafeInteger(verifiedRevision)
-    && controlUiTopLayerDirty.revision > verifiedRevision) return false;
-  if (Number.isSafeInteger(verifiedContentLossGeneration)
-    && controlUiTopLayerDirty.contentLossGeneration !== verifiedContentLossGeneration) return false;
-  controlUiTopLayerDirty = null;
-  if (controlUiTopLayerVerificationTimer) clearTimeout(controlUiTopLayerVerificationTimer);
-  controlUiTopLayerVerificationTimer = null;
-  return true;
-}
-
-function armControlUiTopLayerDeadline() {
-  const dirty = controlUiTopLayerDirty;
-  if (!dirty || controlUiTopLayerVerificationTimer) return;
-  const remaining = Math.max(0, CONTROL_UI_BROWSER_WATCHDOG_DEADLINE_MS - (Date.now() - dirty.at));
-  controlUiTopLayerVerificationTimer = setTimeout(async () => {
-    controlUiTopLayerVerificationTimer = null;
-    const lease = controlLease;
-    if (controlUiTopLayerDirty !== dirty
-      || !lease
-      || dirty.sessionId !== lease.sessionId
-      || dirty.epoch !== lease.epoch) {
-      // A replacement lease/dirty record may have arrived while this timer
-      // was queued. Never let the stale callback consume the one global timer
-      // slot without arming the current exact record.
-      armControlUiTopLayerDeadline();
-      return;
-    }
-    if (lease.pendingNavigation
-      || !lease.navigationReady
-      || lease.pendingDialog
-      || controlCaptureIds(lease.tabId).length > 0) {
-      // Navigation, a browser-native dialog, and an intentional screenshot
-      // capture all suspend page input and have their own completion/rebind
-      // boundaries. Disarm this document proof without extending its original
-      // timestamp; the boundary must establish a fresh proof before ordinary
-      // controlled actions resume.
-      lease.controlUiProofReady = false;
-      clearControlUiTopLayerDirty(lease);
-      return;
-    }
-    const expired = Date.now() - dirty.at >= CONTROL_UI_BROWSER_WATCHDOG_DEADLINE_MS;
-    if (!expired) {
-      armControlUiTopLayerDeadline();
-      return;
-    }
-    clearControlUiTopLayerDirty(lease);
-    await stopControl("control_ui_hidden", { requireExplicitStart: true }).catch(() => {});
-  }, remaining);
-}
-
-function markControlUiProofDirty(lease = controlLease, contentLoss = false) {
-  if (!lease
-    || lease.pendingNavigation
-    || !lease.navigationReady
-    || lease.pendingDialog) return;
-  if (contentLoss) controlUiContentLossGeneration += 1;
-  if (!controlUiTopLayerDirty
-    || controlUiTopLayerDirty.sessionId !== lease.sessionId
-    || controlUiTopLayerDirty.epoch !== lease.epoch) {
-    controlUiTopLayerDirty = {
-      sessionId: lease.sessionId,
-      epoch: lease.epoch,
-      revision: controlUiTopLayerRevision,
-      contentLossGeneration: controlUiContentLossGeneration,
-      at: Date.now(),
-    };
-  } else {
-    controlUiTopLayerDirty.revision = Math.max(
-      controlUiTopLayerDirty.revision,
-      controlUiTopLayerRevision,
-    );
-    controlUiTopLayerDirty.contentLossGeneration = controlUiContentLossGeneration;
-  }
-  armControlUiTopLayerDeadline();
-}
-
-function scheduleControlUiTopLayerVerification() {
-  const lease = controlLease;
-  if (!lease?.controlHostId
-    || !lease.controlMarkerId
-    || lease.controlUiProofReady !== true
-    || lease.pendingNavigation
-    || !lease.navigationReady
-    || lease.pendingDialog
-    || controlCaptureIds(lease.tabId).length > 0) return;
-  markControlUiProofDirty(lease);
-}
-
-async function failControlUiClosed(lease, phase, cause) {
-  // A dialog-frozen renderer cannot update or acknowledge the overlay, so an
-  // unacknowledged indicator under a dialog is the dialog, not a lost lease.
-  assertDialogNotBlocking(phase);
-  if (lease
-    && controlLease?.sessionId === lease.sessionId
-    && controlLease?.epoch === lease.epoch) {
-    await stopControl("control_ui_hidden", { requireExplicitStart: true }).catch(() => {});
-  }
-  const error = new Error(`CONTROL_UI_RENDER_FAILED: ${phase} was not visibly acknowledged; browser control was revoked`);
-  error.code = "CONTROL_UI_RENDER_FAILED";
-  error.cause = cause;
-  throw error;
-}
-
-// A show whose document is leaving or already gone proves nothing about the
-// indicator: the navigation boundary owns the next proof (proofReady is
-// false until it passes), so its failure is discarded instead of revoking.
-function sameControlCaptureIds(left, right) {
-  const expected = [...left].map(String).sort();
-  const actual = [...right].map(String).sort();
-  return expected.length === actual.length && expected.every((id, index) => id === actual[index]);
-}
-
-function controlUiShowSuperseded(lease, authority) {
-  return Boolean(lease.pendingNavigation)
-    || (Number.isSafeInteger(authority?.documentEpoch)
-      && authority.documentEpoch !== lease.documentEpoch);
-}
-
-async function showControlUiNow(lease) {
+// Mirrors the lease into the controlled document's content script. Nothing
+// is rendered: the visible, page-independent signals that this tab is under
+// remote control are Chrome's own debugger infobar and its Cancel button, the
+// named Local Browser Bridge tab group, and Release control in the popup.
+// This binding only lets the content script refuse a command that does not
+// carry the exact current session and epoch.
+async function bindControlSession(lease = controlLease) {
   if (!lease
     || controlLease?.sessionId !== lease.sessionId
     || controlLease?.epoch !== lease.epoch) return null;
   const authority = captureLeaseAuthority(lease);
-  beginControlUiTopLayerMutation();
-  try {
-    for (let attempt = 1; ; attempt += 1) {
-      const activeCaptureIds = controlCaptureIds(lease.tabId);
-      const contentRequestLossGeneration = controlUiContentLossGeneration;
-      const state = await contentRequest(lease.tabId, {
-        method: "control.show",
-        sessionId: lease.sessionId,
-        controlEpoch: lease.epoch,
-        expiresAt: lease.expiresAt,
-        lastHeartbeatAt: lease.lastHeartbeatAt,
-        turn: lease.turn,
-        moveSequence: lease.moveSequence,
-        activeCaptureIds,
-        cursor: { ...lease.cursor, turn: lease.turn, moveSequence: lease.moveSequence },
-      }, { authority });
-      assertLeaseAuthority(authority, null, "control UI acknowledgement");
-      if (!controlUiAcknowledged(state, activeCaptureIds, lease.cursor.visible)) {
-        // A screenshot capture that began or ended while this request was in
-        // flight changes the indicator shape the page must report (hidden
-        // pill during capture, visible pill outside it). Sample again from
-        // the current capture set instead of reading the mismatch as a
-        // hidden indicator; the capture path proves its own boundaries.
-        if (!sameControlCaptureIds(activeCaptureIds, controlCaptureIds(lease.tabId))
-          && attempt < CONTROL_UI_PROOF_ATTEMPTS
-          && !controlUiShowSuperseded(lease, authority)) continue;
-        throw new Error("The page did not confirm a topmost control indicator");
-      }
-      let verifiedProof;
-      try {
-        verifiedProof = await verifyControlUiBrowserTopLayer(
-          lease,
-          state,
-          authority,
-          null,
-          contentRequestLossGeneration,
-        );
-      } catch (error) {
-        // Only a final sample invalidated by a root top-layer event is
-        // re-proven, from a fresh renderer acknowledgement; every other
-        // failure, including a reported indicator loss, fails closed at once.
-        if (error?.code === "CONTROL_UI_TOP_LAYER_STALE"
-          && attempt < CONTROL_UI_PROOF_ATTEMPTS
-          && !controlUiShowSuperseded(lease, authority)) continue;
-        throw error;
-      }
-      if (lease.controlHostId !== state.hostId
-        || lease.controlMarkerId !== state.markerId
-        || lease.controlUiProofReady !== true) {
-        lease.controlHostId = state.hostId;
-        lease.controlMarkerId = state.markerId;
-        lease.controlUiProofReady = true;
-        await persistControlState();
-        assertLeaseAuthority(authority, null, "control host identity persistence");
-      }
-      if (controlUiTopLayerRevision !== verifiedProof.revision) {
-        // A root top-layer event can be delivered after the final verifier
-        // sample but before a newly rebound proof is persisted. proofReady was
-        // false during that window, so the event handler could not arm a dirty
-        // record itself; retain it now instead of erasing it with the older ack.
-        markControlUiProofDirty(lease);
-      }
-      clearControlUiTopLayerDirty(
-        lease,
-        verifiedProof.revision,
-        verifiedProof.contentLossGeneration,
-      );
-      return state;
-    }
-  } catch (error) {
-    if (controlUiShowSuperseded(lease, authority)) return null;
-    return failControlUiClosed(lease, "show", error);
-  } finally {
-    endControlUiTopLayerMutation();
-  }
+  return contentRequest(lease.tabId, {
+    method: "control.bind",
+    sessionId: lease.sessionId,
+    controlEpoch: lease.epoch,
+    expiresAt: lease.expiresAt,
+    lastHeartbeatAt: lease.lastHeartbeatAt,
+    turn: lease.turn,
+    moveSequence: lease.moveSequence,
+  }, { authority });
 }
 
-function showControlUi(lease = controlLease) {
-  const queued = controlUiProofWrite.then(() => showControlUiNow(lease));
-  controlUiProofWrite = queued.catch(() => {});
-  return queued;
-}
-
-async function hideControlUi(tabId, sessionId = null) {
+async function releaseControlSession(tabId, sessionId = null) {
   if (!Number.isInteger(tabId)) return;
   await withTimeout(
-    contentRequest(tabId, { method: "control.hide", sessionId }),
+    contentRequest(tabId, { method: "control.release", sessionId }),
     1_500,
-    "control UI hide",
+    "control session release",
   ).catch(() => {});
 }
 
@@ -2858,7 +1984,6 @@ async function initializeControlState() {
       documentEpoch: Math.max(1, Number(candidate.documentEpoch) || 1),
       navigationReady: false,
       pendingNavigation: null,
-      controlUiProofReady: false,
       policy: controlPolicy(recoveryConfig, recoveryTab),
     };
     controlEpoch = Math.max(controlEpoch, candidate.epoch);
@@ -2871,17 +1996,17 @@ async function initializeControlState() {
 // restart-under-a-dialog path can be driven directly. pendingDialog is
 // persisted with the lease, so a restart can land here with the controlled
 // page still frozen behind a dialog: the document identity is answered by the
-// browser process and is still verified, but the overlay render acknowledgement that ends
-// recovery can never be acknowledged. That refusal is the dialog, not a lost
-// lease, so the recovered lease is kept and the first heartbeat after the
-// dialog is resolved rechecks the indicator. A recovery that could not verify
-// the document at all keeps the fail-closed revocation, dialog or not.
+// browser process and is still verified, but the frozen renderer can never
+// answer the content binding. That refusal is the dialog, not a lost lease, so
+// the recovered lease is kept and the first heartbeat after the dialog is
+// resolved rebinds it. A recovery that could not verify the document at all
+// keeps the fail-closed revocation, dialog or not.
 async function finishRecoveredLease(recoveryTab, recoveryConfig) {
   try {
     await initializeLeaseDocument(controlLease, recoveryTab, recoveryConfig);
     await persistControlState();
     scheduleHeartbeat();
-    await showControlUi();
+    await bindControlSession();
     return true;
   } catch (error) {
     if (error?.code === "BLOCKED_BY_DIALOG" && controlLease?.navigationReady) {
@@ -2897,9 +2022,7 @@ async function finishRecoveredLease(recoveryTab, recoveryConfig) {
 function synchronouslyTakeControlLease(reason, requireExplicitStart) {
   controlEpoch += 1;
   const lease = controlLease;
-  clearControlUiTopLayerDirty(lease);
   controlLease = null;
-  activeControlCaptures.clear();
   // Single choke point for frame teardown too. The verified
   // chrome.debugger.detach that follows tears the child sessions down with
   // the page target, so no second unverified detach path is added here.
@@ -3063,7 +2186,7 @@ async function stopControl(reason = "released", { requireExplicitStart = false, 
     pendingControlCleanups.set(lease.tabId, cleanup);
     lastControlRevocation = { ...lastControlRevocation, cleanupPending: true };
     await Promise.all([persistControlState().catch(() => {}), pausePersistPromise]);
-    const hidePromise = hideControlUi(lease.tabId, lease.sessionId);
+    const releasePromise = releaseControlSession(lease.tabId, lease.sessionId);
     let inputsReleased = true;
     let detachConfirmed = !detach;
     if (detach) {
@@ -3094,7 +2217,7 @@ async function stopControl(reason = "released", { requireExplicitStart = false, 
       lastControlRevocation = { ...lastControlRevocation, cleanupPending: true };
       setTimeout(() => void retryPendingControlCleanups(), 1_000);
     }
-    await Promise.all([hidePromise, persistControlState()]);
+    await Promise.all([releasePromise, persistControlState()]);
     send({ type: "event", name: "browser.control.revoked", data: publicControlState().revocation });
     if (pausePersistError) {
       await noteHumanPausePersistenceFailure(pausePersistError, lease.tabId, reason);
@@ -3240,7 +2363,7 @@ async function hardRevokeDetached(tabId, reason) {
     return;
   }
   forgetHeldInputs(tabId);
-  await hideControlUi(tabId, lease.sessionId);
+  await releaseControlSession(tabId, lease.sessionId);
   await Promise.all([persistControlState(), pausePersistPromise]);
   send({ type: "event", name: "browser.control.revoked", data: { ...lastControlRevocation } });
   if (pausePersistError) {
@@ -3269,7 +2392,7 @@ async function heartbeatControl() {
     await verifyDocumentAuthority(lease.tabId, authority, null, "control heartbeat");
     if (lease.pendingDialog) {
       // The dialog freezes the renderer: the Runtime.evaluate probe and the
-      // overlay refresh would both time out and revoke a healthy lease, so
+      // content rebind would both time out and revoke a healthy lease, so
       // only the browser-side attachment and document identity are checked
       // until the dialog is resolved.
       assertLeaseAuthority(authority, null, "heartbeat commit");
@@ -3285,8 +2408,8 @@ async function heartbeatControl() {
     assertLeaseAuthority(authority, null, "heartbeat commit");
     controlLease.lastHeartbeatAt = Date.now();
     await persistControlState();
-    assertLeaseAuthority(authority, null, "heartbeat UI refresh");
-    await showControlUi(controlLease);
+    assertLeaseAuthority(authority, null, "heartbeat content rebind");
+    await bindControlSession(controlLease);
   } catch (error) {
     // A dialog racing the heartbeat is not a failed lease.
     if (error?.code === "BLOCKED_BY_DIALOG") return;
@@ -3318,7 +2441,7 @@ async function startControl(tabId, {
     if (explicit) lastControlRevocation = null;
     await persistControlState();
     assertLeaseAuthority(authority, commandContext, "control lease renewal commit");
-    await showControlUi();
+    await bindControlSession();
     assertLeaseAuthority(authority, commandContext, "control lease renewal response");
     return publicControlState();
   }
@@ -3435,7 +2558,6 @@ async function startControl(tabId, {
     documentUrl: null,
     navigationReady: false,
     pendingNavigation: null,
-    controlUiProofReady: false,
     pendingDialog: null,
     policy: controlPolicy(controlConfig, tab),
     viewport: null,
@@ -3467,7 +2589,7 @@ async function startControl(tabId, {
   }
   assertLeaseAuthority(authority, commandContext, "control initialization commit");
   scheduleHeartbeat();
-  await showControlUi();
+  await bindControlSession();
   assertLeaseAuthority(authority, commandContext, "control start event");
   send({ type: "event", name: "browser.control.started", data: publicControlState() });
   return publicControlState();
@@ -3488,16 +2610,16 @@ async function requireControl(tabId, reason, commandContext = null) {
   }
   if (controlLease?.tabId === tabId) {
     // JavaScript dialogs freeze the renderer, so page.handleDialog is the one
-    // controlled action that cannot obtain a fresh content render/hit-test acknowledgement
-    // before resolving the dialog in the browser process. Every other same-tab
-    // reuse must prove the visible page-owned surface again immediately before
-    // the action continues.
+    // controlled action that cannot reach the content script at all. Every
+    // other same-tab reuse rebinds the exact session and epoch into the
+    // current document before the action continues, so a document that
+    // replaced the one the lease started in cannot be acted on by accident.
     if (controlLease.pendingDialog) {
       if (reason !== "page.handleDialog") throw pendingDialogError(reason);
     } else {
-      await showControlUi(controlLease);
+      await bindControlSession(controlLease);
     }
-    assertCommandActive(commandContext, "control reuse indicator commit");
+    assertCommandActive(commandContext, "control reuse binding commit");
     return controlLease;
   }
   await startControl(tabId, { explicit: false, reason, ownerSessionId: requestedOwner, commandContext });
@@ -3523,124 +2645,31 @@ async function captureTab(tab, commandContext = null, existingAuthority = null) 
   const authority = existingAuthority ?? captureLeaseAuthority();
   assertLeaseAuthority(authority, commandContext, "screenshot preparation");
   await verifyDocumentAuthority(tab.id, authority, commandContext, "screenshot preparation");
-  const captureId = crypto.randomUUID();
-  const lease = controlLease;
-  const activeCaptureIds = beginControlCapture(tab.id, captureId);
-  try {
-    let beginState;
-    beginControlUiTopLayerMutation();
-    try {
-      const contentRequestLossGeneration = controlUiContentLossGeneration;
-      try {
-        beginState = await contentRequest(
-          tab.id,
-          { method: "control.capture.begin", captureId, activeCaptureIds },
-          { authority, commandContext },
-        );
-      } catch (error) {
-        await failControlUiClosed(lease, "capture_begin", error);
-      }
-      if (!controlUiAcknowledged(beginState, activeCaptureIds, lease.cursor.visible)) {
-        await failControlUiClosed(
-          lease,
-          "capture_begin",
-          new Error("The page did not confirm that the control overlay was hidden"),
-        );
-      }
-      try {
-        const verifiedProof = await verifyControlUiBrowserTopLayer(
-          lease,
-          beginState,
-          authority,
-          commandContext,
-          contentRequestLossGeneration,
-        );
-        clearControlUiTopLayerDirty(
-          lease,
-          verifiedProof.revision,
-          verifiedProof.contentLossGeneration,
-        );
-      } catch (error) {
-        await failControlUiClosed(lease, "capture_begin_top_layer", error);
-      }
-    } finally {
-      endControlUiTopLayerMutation();
-    }
-    assertLeaseAuthority(authority, commandContext, "screenshot capture");
-    const capture = await debuggerCommand(tab.id, "Page.captureScreenshot", {
-      format: "jpeg",
-      quality: 78,
-      fromSurface: true,
-      captureBeyondViewport: false,
-    }, authority, commandContext);
-    if (!capture?.data) throw new Error("SCREENSHOT_FAILED: The browser returned no screenshot data");
-    await verifyDocumentAuthority(tab.id, authority, commandContext, "screenshot completion");
-    return `data:image/jpeg;base64,${capture.data}`;
-  } finally {
-    const remainingCaptureIds = endControlCapture(tab.id, captureId);
-    let restored = false;
-    // A dialog that opened during the capture freezes the renderer: neither
-    // the capture-end message nor the overlay render acknowledgement can be answered, so
-    // both would only burn their content timeout. The overlay is rechecked by
-    // the next heartbeat or observation once the dialog is resolved, and the
-    // capture itself is discarded as BLOCKED_BY_DIALOG by the caller.
-    const dialogBlocked = Boolean(controlLease?.pendingDialog);
-    if (!dialogBlocked) {
-      beginControlUiTopLayerMutation();
-      try {
-        const contentRequestLossGeneration = controlUiContentLossGeneration;
-        const endState = await contentRequest(tab.id, {
-          method: "control.capture.end",
-          captureId,
-          activeCaptureIds: remainingCaptureIds,
-          controlSessionId: authority.sessionId,
-          controlEpoch: authority.epoch,
-        }, { authority, commandContext });
-        restored = controlUiAcknowledged(endState, remainingCaptureIds, lease.cursor.visible);
-        if (restored) {
-          const verifiedProof = await verifyControlUiBrowserTopLayer(
-            lease,
-            endState,
-            authority,
-            commandContext,
-            contentRequestLossGeneration,
-          );
-          clearControlUiTopLayerDirty(
-            lease,
-            verifiedProof.revision,
-            verifiedProof.contentLossGeneration,
-          );
-        }
-      } catch {
-        restored = false;
-      } finally {
-        endControlUiTopLayerMutation();
-      }
-    }
-    const leaseStillActive = controlLease?.sessionId === authority.sessionId
-      && controlLease?.epoch === authority.epoch;
-    if (leaseStillActive && !restored && !dialogBlocked) {
-      try {
-        await showControlUi(controlLease);
-        restored = true;
-      } catch (error) {
-        await failControlUiClosed(lease, "capture_restore", error);
-      }
-    }
-  }
+  // The bridge injects nothing into the page, so the screenshot is the page as
+  // a human sees it: there is no bridge surface to hide first and restore
+  // afterwards, and the browser-owned debugger infobar is browser chrome that
+  // never appears in a renderer capture.
+  const capture = await debuggerCommand(tab.id, "Page.captureScreenshot", {
+    format: "jpeg",
+    quality: 78,
+    fromSurface: true,
+    captureBeyondViewport: false,
+  }, authority, commandContext);
+  if (!capture?.data) throw new Error("SCREENSHOT_FAILED: The browser returned no screenshot data");
+  await verifyDocumentAuthority(tab.id, authority, commandContext, "screenshot completion");
+  return `data:image/jpeg;base64,${capture.data}`;
 }
 
 // One CDP command's timeout. The default is the lease-fatal
 // DEBUGGER_TIMEOUT_MS; a caller that carries a `deadlineAt` (only the
-// read-only frame-observation or browser control proof does) is bounded by
-// what is left of that shared deadline instead, so adversarial page structure
-// cannot stretch one pass past its budget one command at a time.
+// read-only frame observation does) is bounded by what is left of that shared
+// deadline instead, so adversarial page structure cannot stretch one pass past
+// its budget one command at a time.
 function commandTimeoutMs(options) {
   const deadlineAt = Number(options?.deadlineAt);
   if (!Number.isFinite(deadlineAt)) return DEBUGGER_TIMEOUT_MS;
   const remaining = deadlineAt - Date.now();
-  const minimum = options?.strictDeadline === true ? 1 : FRAME_OBSERVE_MIN_TIMEOUT_MS;
-  return Math.min(DEBUGGER_TIMEOUT_MS, Math.max(minimum, Math.floor(remaining)));
+  return Math.min(DEBUGGER_TIMEOUT_MS, Math.max(FRAME_OBSERVE_MIN_TIMEOUT_MS, Math.floor(remaining)));
 }
 
 // `sessionId` is the one optional trailing argument that makes this the
@@ -3650,11 +2679,6 @@ function commandTimeoutMs(options) {
 async function debuggerCommand(tabId, method, params, authority = null, commandContext = null, sessionId = null, options = null) {
   if (authority) assertLeaseAuthority(authority, commandContext, `CDP ${method} dispatch`);
   else assertCommandActive(commandContext, `CDP ${method} dispatch`);
-  if (options?.strictDeadline === true && Date.now() >= Number(options.deadlineAt)) {
-    const error = new Error(`CONTROL_UI_PROOF_TIMEOUT: ${method} exceeded the shared browser proof deadline`);
-    error.code = "CONTROL_UI_PROOF_TIMEOUT";
-    throw error;
-  }
   const target = sessionId ? { tabId, sessionId } : { tabId };
   const operation = chrome.debugger.sendCommand(target, method, params);
   operation.catch(() => {});
@@ -3676,11 +2700,6 @@ async function debuggerCommand(tabId, method, params, authority = null, commandC
       unknown.cause = error;
       throw unknown;
     }
-    throw error;
-  }
-  if (options?.strictDeadline === true && Date.now() > Number(options.deadlineAt)) {
-    const error = new Error(`CONTROL_UI_PROOF_TIMEOUT: ${method} exceeded the shared browser proof deadline`);
-    error.code = "CONTROL_UI_PROOF_TIMEOUT";
     throw error;
   }
   if (authority) assertLeaseAuthorityAfterDispatch(authority, commandContext, `CDP ${method}`);
@@ -4992,12 +4011,10 @@ async function moveVirtualCursor(tabId, targetX, targetY, commandContext = null,
       commandContext,
     );
     dispatchedPointCount += 1;
+    // Pointer state is lease bookkeeping only: it seeds the start point of the
+    // next path and is reported in browser.control.status. Nothing is drawn
+    // into the page; the trusted mouseMoved above is the whole effect.
     lease.cursor = { x: point.x, y: point.y, visible: true, updatedAt: Date.now() };
-    await contentRequest(tabId, {
-      method: "control.cursor",
-      cursor: { ...lease.cursor, turn: lease.turn, moveSequence: sequence },
-      expiresAt: lease.expiresAt,
-    }, { authority, commandContext });
   };
   try {
     if (!presentation.animate) {
@@ -5514,7 +4531,6 @@ async function observeControlledPage(tab, commandContext) {
   assertLeaseAuthority(authority, commandContext, "observation turn");
   await verifyDocumentAuthority(tab.id, authority, commandContext, "observation snapshot");
   lease.turn += 1;
-  await showControlUi(lease);
   assertLeaseAuthority(authority, commandContext, "page snapshot");
   const snapshot = await contentRequest(
     tab.id,
@@ -6163,88 +5179,22 @@ async function resolvePendingApprovalFromPopup(id, sender, approved) {
   return popupState();
 }
 
-async function handleControlUiMessage(message, sender) {
-  const messageLossGeneration = controlUiContentLossGeneration;
+// The controlled document asks the background for the current lease when a
+// fresh content world starts. It is a read of authoritative service-worker
+// state: the page can neither start nor stop control through this channel.
+async function handleControlSessionMessage(message, sender) {
   await initializeControlState();
-  if (!Number.isInteger(sender.tab?.id)) throw new Error("Invalid control UI request");
+  if (!Number.isInteger(sender.tab?.id)) throw new Error("Invalid control session request");
   if (message.action === "reconcile") {
     if (controlLease?.expiresAt <= Date.now()) await stopControl("lease_expired", { requireExplicitStart: true });
     return controlLease?.tabId === sender.tab.id ? publicControlState() : { active: false };
   }
-  if (message.action === "indicatorLost") {
-    if (!controlLease
-      || controlLease.tabId !== sender.tab.id
-      || message.sessionId !== controlLease.sessionId
-      || controlCaptureIds(controlLease.tabId).length > 0) return publicControlState();
-    if (controlLease.pendingNavigation
-      || !controlLease.navigationReady
-      || controlLease.controlUiProofReady !== true
-      || controlUiTopLayerMutationDepth > 0) {
-      markControlUiProofDirty(controlLease, true);
-      return publicControlState();
-    }
-    return stopControl("control_ui_hidden", { requireExplicitStart: true });
-  }
-  if (message.action === "indicatorCheck") {
-    if (!controlLease
-      || controlLease.tabId !== sender.tab.id
-      || message.sessionId !== controlLease.sessionId) return publicControlState();
-    if (controlCaptureIds(controlLease.tabId).length > 0) return publicControlState();
-    const lease = controlLease;
-    const state = message.browserState;
-    if (lease.pendingNavigation
-      || !lease.navigationReady
-      || controlUiTopLayerMutationDepth > 0) return publicControlState();
-    if (lease.controlUiProofReady !== true
-      || state?.hostId !== lease.controlHostId
-      || state?.markerId !== lease.controlMarkerId) {
-      markControlUiProofDirty(lease, true);
-      // A fresh document_idle content world can arrive well before a slow
-      // page reaches tabs.onUpdated "complete". Rebind immediately through
-      // the serialized full renderer + browser-process proof instead of
-      // revoking an authorized navigation for slow subresources.
-      await showControlUi(lease);
-      return publicControlState();
-    }
-    const points = state?.controlHitPoints;
-    const distinctPoints = Array.isArray(points)
-      ? new Set(points.map((point) => `${point?.x}:${point?.y}`))
-      : new Set();
-    if (state?.capturing !== false
-      || !Array.isArray(points)
-      || points.length !== CONTROL_UI_HIT_POINT_MAX
-      || distinctPoints.size !== CONTROL_UI_HIT_POINT_MAX) {
-      await stopControl("control_ui_hidden", { requireExplicitStart: true }).catch(() => {});
-      throw new Error("CONTROL_UI_RENDER_FAILED: passive control acknowledgement was malformed");
-    }
-    const authority = captureLeaseAuthority(lease);
-    try {
-      const verifiedProof = await verifyControlUiBrowserTopLayer(
-        lease,
-        state,
-        authority,
-        null,
-        messageLossGeneration,
-      );
-      clearControlUiTopLayerDirty(
-        lease,
-        verifiedProof.revision,
-        verifiedProof.contentLossGeneration,
-      );
-      return publicControlState();
-    } catch (error) {
-      await stopControl("control_ui_hidden", { requireExplicitStart: true }).catch(() => {});
-      throw error;
-    }
-  }
-  if (message.action !== "stop") throw new Error("Invalid control UI request");
-  if (!controlLease || controlLease.tabId !== sender.tab.id) return publicControlState();
-  return stopControl("released_by_user", { requireExplicitStart: true });
+  throw new Error("Invalid control session request");
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (sender.id === chrome.runtime.id && message?.type === "LBB_CONTROL_UI") {
-    handleControlUiMessage(message, sender)
+  if (sender.id === chrome.runtime.id && message?.type === "LBB_CONTROL") {
+    handleControlSessionMessage(message, sender)
       .then((result) => sendResponse({ ok: true, result }))
       .catch((error) => sendResponse({ ok: false, error: error.message }));
     return true;
@@ -6361,11 +5311,6 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     handleFrameSessionEvent(source, method, params);
     return;
   }
-  if (method === "DOM.topLayerElementsUpdated") {
-    controlUiTopLayerRevision += 1;
-    scheduleControlUiTopLayerVerification();
-    return;
-  }
   if (method === "Target.attachedToTarget") {
     void recordAttachedTarget(source.tabId, params?.sessionId, params?.targetInfo).catch(() => {});
   }
@@ -6418,8 +5363,6 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
       at: Date.now(),
     };
     controlLease.pendingDialog = pendingDialog;
-    controlLease.controlUiProofReady = false;
-    clearControlUiTopLayerDirty(controlLease);
     void persistControlState().catch(() => {});
     send({ type: "event", name: "page.dialogOpened", data: { tabId: source.tabId, ...pendingDialog } });
   }
@@ -6431,7 +5374,7 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     // input release the dialog blocked is retried as soon as the renderer can
     // acknowledge it again.
     void retryDialogBlockedInputRelease(source.tabId).catch(() => {});
-    void showControlUi(controlLease).catch(() => {});
+    void bindControlSession(controlLease).catch(() => {});
   }
 });
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
@@ -6453,11 +5396,10 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     controlLease.cursor = { ...controlLease.cursor, visible: false, updatedAt: Date.now() };
     void persistControlState();
   }
-  if (changeInfo.status === "complete") void showControlUi().catch(() => {});
+  if (changeInfo.status === "complete") void bindControlSession().catch(() => {});
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
   void initializeControlState().then(async () => {
-    activeControlCaptures.delete(tabId);
     await confirmPendingControlCleanup(tabId, "target_closed");
     if (bridgeCreatedTabs.delete(tabId)) await persistControlState();
     if (controlLease?.tabId === tabId) await hardRevokeDetached(tabId, "target_closed");

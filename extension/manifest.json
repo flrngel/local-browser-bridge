@@ -24,11 +24,6 @@
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*", "file://*/*"],
-      "js": ["stop-guard.js"],
-      "run_at": "document_start"
-    },
-    {
-      "matches": ["http://*/*", "https://*/*", "file://*/*"],
       "js": ["dom-core.js", "content.js"],
       "run_at": "document_idle"
     }
