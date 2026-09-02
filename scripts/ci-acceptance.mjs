@@ -192,6 +192,17 @@ function readJsonWithRetry(file, attempts = 10) {
   throw lastError;
 }
 
+function redactSecrets(text, secrets) {
+  let output = String(text);
+  for (const secret of secrets) {
+    if (secret) {
+      output = output.split(secret).join("<redacted>");
+    }
+  }
+  // The Agent Fetch capability is derived from the token and is itself a credential.
+  return output.replace(/\/api\/v1\/fetch\/[A-Za-z0-9_-]+/g, "/api/v1/fetch/<redacted>");
+}
+
 function truncate(value, limit = 400) {
   const text = typeof value === "string" ? value : JSON.stringify(value);
   if (text === undefined) {
@@ -228,9 +239,27 @@ function summarizeCommandResult(result) {
 // ---------------------------------------------------------------------------
 
 class Recorder {
-  constructor(out) {
+  constructor(out, secrets = []) {
     this.out = out;
+    this.secrets = secrets;
     this.checks = [];
+  }
+
+  // Evidence and thrown-error reasons can carry a fetched URL or an error
+  // message that echoes the bridge token or the Agent Fetch capability URL
+  // (itself a credential); this receipt is published, so redact the same
+  // way the child-process logs already are before it is ever recorded.
+  redact(value) {
+    if (typeof value === "string") {
+      return redactSecrets(value, this.secrets);
+    }
+    if (value !== null && typeof value === "object") {
+      if (Array.isArray(value)) {
+        return value.map((item) => this.redact(item));
+      }
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, this.redact(item)]));
+    }
+    return value;
   }
 
   record(lane, name, status, { required = true, reason = null, evidence = null } = {}) {
@@ -239,8 +268,8 @@ class Recorder {
       lane,
       status,
       required,
-      reason: reason === null || reason === undefined ? null : truncate(reason, 600),
-      evidence: evidence === null || evidence === undefined ? null : evidence,
+      reason: reason === null || reason === undefined ? null : truncate(this.redact(reason), 600),
+      evidence: evidence === null || evidence === undefined ? null : this.redact(evidence),
       at: new Date().toISOString(),
     };
     this.checks.push(entry);
@@ -286,14 +315,7 @@ class Processes {
   }
 
   redact(text) {
-    let output = String(text);
-    for (const secret of this.secrets) {
-      if (secret) {
-        output = output.split(secret).join("<redacted>");
-      }
-    }
-    // The Agent Fetch capability is derived from the token and is itself a credential.
-    return output.replace(/\/api\/v1\/fetch\/[A-Za-z0-9_-]+/g, "/api/v1/fetch/<redacted>");
+    return redactSecrets(text, this.secrets);
   }
 
   spawn(label, command, args, { cwd, env, logName } = {}) {
@@ -1362,8 +1384,8 @@ async function computerLane(context) {
   const inputReady = probe.inputReady === true;
   const gated = IS_MACOS && !(captureReady && semanticReady && inputReady);
   context.computerMode = gated ? "permission-gated-refusal" : "native";
-  const positive = (name, ok, evidence, reason, gatedBy) => {
-    if (gated && !gatedBy) {
+  const positive = (name, ok, evidence, reason) => {
+    if (gated) {
       recorder.skip(lane, name, "permission-unavailable", { evidence: probe });
       return;
     }
@@ -1714,7 +1736,7 @@ async function main() {
   }
   mkdirSync(options.out, { recursive: true });
   const token = base64Url(randomBytes(32));
-  const recorder = new Recorder(options.out);
+  const recorder = new Recorder(options.out, [token]);
   const processes = new Processes(options.out, [token]);
   const startedAt = new Date().toISOString();
   const context = {

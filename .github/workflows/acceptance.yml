@@ -156,11 +156,17 @@ jobs:
           artifact_id="$(jq -er \
             --argjson run_id "$ACCEPTANCE_CANDIDATE_RUN_ID" \
             --arg source "$ACCEPTANCE_SOURCE_SHA" '
-              [.artifacts[] | select(
+              (.total_count < 100) and
+              ([.artifacts[] | select(
                 .name == "release-candidate" and .expired == false and
                 .workflow_run.id == $run_id and .workflow_run.head_sha == $source
-              )] | if length == 1 then .[0].id | tostring
-                   else error("candidate artifact is absent or ambiguous") end
+              )] | length == 1) as $valid |
+              if $valid then
+                [.artifacts[] | select(
+                  .name == "release-candidate" and .expired == false and
+                  .workflow_run.id == $run_id and .workflow_run.head_sha == $source
+                )][0].id | tostring
+              else error("candidate artifact is absent or ambiguous") end
             ' "$work/artifacts.json")"
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$work/release-candidate.zip"
           if command -v sha256sum >/dev/null 2>&1; then

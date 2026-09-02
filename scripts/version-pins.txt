@@ -10,3 +10,5 @@ extension/lib.js|export const VERSION = "|";|line
 .github/workflows/deploy.yml|(for example, |)|any
 .github/workflows/publish.yml|(for example, |)|any
 docs/DEVELOPMENT.md|VERSION="|"|line
+docs/INSTALL_MACOS.md|--version ||any
+docs/INSTALL_WINDOWS.md|-Version ||any

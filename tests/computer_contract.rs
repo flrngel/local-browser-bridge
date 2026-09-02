@@ -3937,3 +3937,80 @@ fn semantic_backends_revalidate_exact_targets_and_report_effects() {
             < signature.find("UIA_ValuePatternId").unwrap()
     );
 }
+
+#[test]
+fn windows_helper_readiness_is_protocol_and_process_bound() {
+    let helper = fs::read_to_string("src/bin/local-computer-helper.rs").unwrap();
+    let server = fs::read_to_string("src/server.rs").unwrap();
+
+    // The helper shuts down only on an explicit Ctrl+C, never on stdin EOF
+    // or another spurious signal-registration failure.
+    assert!(helper.contains("shutdown_signal(tokio::signal::ctrl_c())"));
+    assert!(helper.contains("std::future::pending::<()>().await"));
+
+    // Every hello frame must carry the process identity of the worker and
+    // of the process that controls it.
+    assert!(helper.contains("object.insert(\"processId\".to_owned(), json!(std::process::id()))"));
+    assert!(helper.contains("object.insert(\n            \"controllerProcessId\".to_owned(),"));
+
+    // The server must refuse to treat a connection as protocol-compatible
+    // (and therefore ready) unless both identities were actually present in
+    // the hello frame, not merely defaulted.
+    assert!(server.contains("&& process_id.is_some()"));
+    assert!(server.contains("&& controller_process_id.is_some()"));
+    assert!(server.contains("process_id: process_id.unwrap_or(0)"));
+    assert!(server.contains("controller_process_id: controller_process_id.unwrap_or(0)"));
+}
+
+#[test]
+fn windows_uia_cache_request_pins_the_value_read_only_property() {
+    let uia_windows = fs::read_to_string("src/computer/uia_windows.rs").unwrap();
+    let element_cache = uia_windows
+        .split("unsafe fn element_cache(")
+        .nth(1)
+        .unwrap()
+        .split("pub fn snapshot(")
+        .next()
+        .unwrap();
+    // Without UIA_ValueIsReadOnlyPropertyId in the cache request,
+    // `IUIAutomationValuePattern::CachedIsReadOnly` returns
+    // E_INVALIDOPERATION, `.ok()` swallows it, and `signature()`'s
+    // `.filter(...)` drops every ValuePattern element, so `setValue` is
+    // never advertised on Windows. Regression for that bug.
+    assert!(element_cache.contains("UIA_ValueIsReadOnlyPropertyId"));
+    assert!(element_cache.contains("cache.AddProperty(property)"));
+    let signature = uia_windows.split("unsafe fn signature").nth(1).unwrap();
+    assert!(signature.contains("pattern.CachedIsReadOnly()"));
+}
+
+#[test]
+fn windows_helper_retains_the_com_apartment_for_the_worker_lifetime() {
+    let helper = fs::read_to_string("src/bin/local-computer-helper.rs").unwrap();
+    // Windows Graphics Capture tears its session down on a COM-owned
+    // callback thread. If the process-wide multithreaded apartment is
+    // released when the short-lived WGC owner thread exits (its own
+    // `RoUninitialize`), COM unloads GraphicsCapture.dll while that
+    // teardown is still unwinding and the worker crashes with an access
+    // violation after every one-shot capture. `CoIncrementMTAUsage` keeps
+    // the MTA alive for the rest of the process so that race cannot
+    // reoccur; the cookie must never be released.
+    assert!(helper.contains("fn retain_process_mta() -> Result<(), Box<dyn std::error::Error>>"));
+    assert!(helper.contains("windows::Win32::System::Com::CoIncrementMTAUsage()"));
+    assert!(helper.contains("std::mem::forget(cookie)"));
+
+    // It must run for every capture-capable process (worker, permission
+    // probe, benchmark) but not for the supervisor itself, which never
+    // touches WGC.
+    let supervisor_guard = helper
+        .split("if !cli.worker && !cli.request_permissions && !cli.benchmark {")
+        .nth(1)
+        .unwrap()
+        .split("retain_process_mta()?;")
+        .next()
+        .unwrap();
+    assert!(supervisor_guard.contains("return supervise_worker().await;"));
+    assert!(
+        helper.find("return supervise_worker().await;").unwrap()
+            < helper.find("retain_process_mta()?;").unwrap()
+    );
+}

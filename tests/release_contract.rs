@@ -294,6 +294,8 @@ fn current_source_is_unblocked_and_package_versions_are_aligned() {
         ".github/workflows/deploy.yml",
         ".github/workflows/publish.yml",
         "docs/DEVELOPMENT.md",
+        "docs/INSTALL_MACOS.md",
+        "docs/INSTALL_WINDOWS.md",
     ] {
         assert!(
             pinned_files.iter().any(|file| file == required),
@@ -1439,6 +1441,14 @@ fn ci_hosted_acceptance_replaces_the_operator_harness_everywhere() {
     assert!(receipt.contains("schemaVersion: 4"));
     assert!(receipt.contains("candidateArtifactSha256: $zip_sha"));
     assert!(receipt.contains("all(.checks[]; (.required | not) or .status == \"pass\")"));
+    assert!(
+        receipt.contains(".results.macos.os == \"macos\" and .results.windows.os == \"windows\"")
+    );
+    // A macOS permission-probe regression (or any lane that returns early)
+    // must not be satisfiable by a receipt full of unrequired skips.
+    assert!(receipt.contains(".computerMode == \"native\""));
+    assert!(receipt.contains(".lanes == [\"server\", \"shell\", \"browser\", \"computer\"]"));
+    assert!(receipt.contains(".summary.fail == 0 and .summary.skip == 0"));
     assert!(receipt.contains("subject-path: acceptance-receipt.json"));
     assert!(receipt.contains("name: acceptance-receipt"));
 
@@ -1451,8 +1461,17 @@ fn ci_hosted_acceptance_replaces_the_operator_harness_everywhere() {
     assert!(
         preflight.contains("--signer-workflow \"$GITHUB_REPOSITORY/.github/workflows/deploy.yml\"")
     );
+    assert!(preflight.contains("--source-ref refs/heads/main"));
+    assert!(preflight.contains("--source-digest \"$VERIFIED_SOURCE_SHA\""));
+    assert!(preflight.contains("--deny-self-hosted-runners"));
     assert!(preflight.contains(".candidateArtifactSha256 == $zip_sha"));
     assert!(preflight.contains("(.results | keys) == [\"macos\", \"windows\"]"));
+    assert!(
+        preflight.contains(".results.macos.os == \"macos\" and .results.windows.os == \"windows\"")
+    );
+    assert!(preflight.contains(".computerMode == \"native\""));
+    assert!(preflight.contains(".lanes == [\"server\", \"shell\", \"browser\", \"computer\"]"));
+    assert!(preflight.contains(".summary.fail == 0 and .summary.skip == 0"));
     assert!(preflight.contains("all(.checks[]; (.required | not) or .status == \"pass\")"));
     assert!(preflight.contains("bash scripts/publish-release.sh check-remote"));
 

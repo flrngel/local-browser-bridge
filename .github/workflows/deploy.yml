@@ -413,11 +413,17 @@ jobs:
           artifact_id="$(jq -er \
             --argjson run_id "$GITHUB_RUN_ID" \
             --arg source "$VERIFIED_SOURCE_SHA" '
-              [.artifacts[] | select(
+              (.total_count < 100) and
+              ([.artifacts[] | select(
                 .name == "release-candidate" and .expired == false and
                 .workflow_run.id == $run_id and .workflow_run.head_sha == $source
-              )] | if length == 1 then .[0].id | tostring
-                   else error("candidate artifact is absent or ambiguous") end
+              )] | length == 1) as $valid |
+              if $valid then
+                [.artifacts[] | select(
+                  .name == "release-candidate" and .expired == false and
+                  .workflow_run.id == $run_id and .workflow_run.head_sha == $source
+                )][0].id | tostring
+              else error("candidate artifact is absent or ambiguous") end
             ' artifacts.json)"
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > release-candidate.zip
           zip_sha="$(sha256sum release-candidate.zip | awk '{ print $1 }')"
@@ -457,10 +463,14 @@ jobs:
             --arg artifact_id "$artifact_id" \
             --arg zip_sha "$zip_sha" '
               (.results | keys) == ["macos", "windows"] and
+              .results.macos.os == "macos" and .results.windows.os == "windows" and
               all(.results[];
                 .ok == true and .mode == "artifact" and .version == $version and
                 .sourceSha == $source and .runId == $run_id and .runAttempt == $run_attempt and
                 .candidateArtifactId == $artifact_id and .candidateArtifactSha256 == $zip_sha and
+                .computerMode == "native" and
+                .lanes == ["server", "shell", "browser", "computer"] and
+                .summary.fail == 0 and .summary.skip == 0 and .summary.total >= 47 and
                 (.checks | length) > 0 and
                 all(.checks[]; (.required | not) or .status == "pass"))
             ' acceptance-receipt.json >/dev/null

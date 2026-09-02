@@ -66,6 +66,8 @@ self_test() {
   printf 'description: Exact package version from Cargo.toml (for example, 1.2.3)\n' > "$scratch/.github/workflows/deploy.yml"
   printf 'description: Exact accepted package version (for example, 1.2.3)\n' > "$scratch/.github/workflows/publish.yml"
   printf 'VERSION="1.2.3"\nother 1.2.3 text\n' > "$scratch/docs/DEVELOPMENT.md"
+  printf 'curl ... | bash -s -- --version 1.2.3\n' > "$scratch/docs/INSTALL_MACOS.md"
+  printf '& $installer -Version 1.2.3\n' > "$scratch/docs/INSTALL_WINDOWS.md"
 
   rewrite_pins 1.2.3 1.2.4 "$scratch" "$pins_file"
   rewrite_lock 1.2.4 "$scratch"
@@ -80,6 +82,8 @@ self_test() {
   grep -q '(for example, 1.2.4)' "$scratch/.github/workflows/publish.yml"
   grep -q '^VERSION="1.2.4"$' "$scratch/docs/DEVELOPMENT.md"
   grep -q '^other 1.2.3 text$' "$scratch/docs/DEVELOPMENT.md"
+  grep -q -- '--version 1.2.4' "$scratch/docs/INSTALL_MACOS.md"
+  grep -q -- '-Version 1.2.4' "$scratch/docs/INSTALL_WINDOWS.md"
   if rewrite_pins 9.9.9 1.2.5 "$scratch" "$pins_file" 2>/dev/null; then
     echo "bump-version self-test: a missing pin must fail" >&2
     rm -rf "$scratch"

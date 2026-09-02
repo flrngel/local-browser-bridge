@@ -130,10 +130,11 @@ Server, shell, and browser checks are required on both platforms. The computer
 lane is required on Windows. On macOS it is required unless the permission
 probe reports that Screen Recording, Accessibility, or input routing is
 unavailable; in that case the positive checks are recorded as `skip` with
-reason `permission-unavailable` and the documented refusals
-(`COMPUTER_CAPTURE_FAILED`, `COMPUTER_SEMANTIC_UNAVAILABLE`,
-`COMPUTER_INPUT_FAILED`) become the required checks. `--lanes` restricts a
-local run, for example `--lanes server,shell`.
+reason `permission-unavailable` and the documented refusals become the
+required checks instead: `COMPUTER_CAPTURE_FAILED` for capture,
+`semanticAvailable: false` for Accessibility, and `COMPUTER_INPUT_FAILED`
+for input routing. `--lanes` restricts a local run, for example
+`--lanes server,shell`.
 
 `.github/workflows/acceptance.yml` is the reusable workflow around that
 driver. CI calls it in `source` mode on every pull request;
