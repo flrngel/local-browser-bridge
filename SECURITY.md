@@ -1,99 +1,101 @@
 # Security model
 
-Local Browser Bridge gives an automated system access to pages in a real signed-in browser profile. Treat it like remote-control software even though every transport is local.
+Local Browser Bridge gives an automated system access to pages in a real
+signed-in browser profile, and optionally to one native desktop window and a
+native shell. Treat it like remote-control software, even though every
+transport is local. This page is the model to accept before running it; the
+underlying implementation invariants that back these claims are in
+[docs/internals/security-invariants.md](docs/internals/security-invariants.md).
 
-Browser **Full Access mode is enabled by default**, and the native computer helper is optional. Full Access intentionally removes most browser action-level safety controls. The computer helper executes its bounded native input commands immediately while it is running; browser Safe mode does not govern desktop applications. Only run either capability for a local agent you trust.
+## Threat model, in five points
 
-## Trust boundaries
+1. **Trust boundary is loopback, not the internet.** The server binds only to
+   `127.0.0.1` and rejects any other `Host` header before authentication runs.
+   It has no cloud relay and no remote attack surface by design — the risk is
+   local: another process, user, or page on this same machine.
+2. **The bearer token is the master key.** Anyone who holds it can dispatch
+   any command, including shell commands if enabled, and can cancel any
+   in-flight command from any client (there is no per-client cancel scope).
+3. **Full Access is the default.** It removes most action-level interlocks —
+   sensitive-field entry, click approvals, arbitrary main-world JavaScript —
+   and trusts the connected agent with the signed-in browser session. Safe
+   mode narrows this to an allowlist plus approvals; it is a heuristic, not a
+   policy engine.
+4. **The computer helper and shell share your session, not an isolated one.**
+   Native input is best-effort target-routed input at one application window
+   — it is cooperative with the person at the keyboard, not a separate
+   desktop or input queue. Shell access, when enabled, is full current-user
+   command execution with no sandbox.
+5. **A human always has an out.** Chrome's own debugging warning and Cancel
+   button, the in-page Stop control, and the extension popup's Release
+   control/Resume all work independently of the API and cannot be bypassed
+   by a compromised or malicious agent process.
 
-- The HTTP/WebSocket server binds only to loopback and rejects non-loopback Host headers.
-- The sole bearer token authorizes both command dispatch and exact `callId` cancellation. Any token holder can cancel any currently in-flight bearer command, so `callId` is an idempotency/request identity, not a secret or a separate authorization capability; there is no global or unauthenticated cancel.
-- A controlled-page command with an unknown outcome cannot reuse earlier observation authority. The server synchronously latches exact-session recovery before waking an explicit cancel, before a dropped HTTP handler releases the shared action lock (including no-`callId` and legacy dashboard actions), and on any post-dispatch connector outcome-unknown result. It removes the public observation and screenshot and refuses later page mutations until an explicit `page.observe` succeeds. This boundary does not depend on the connector queue delivering its cancel. The extension separately advances and persists the lease turn, clears its frame snapshot at cancellation and again at the final queue barrier, and revokes the otherwise preserved lease if persistence fails. Its worker-wide browser-action queue does not admit the next socket or popup-approved action until the canceled command's late Chrome reconciliation and freshness finalization are complete, even though the canceled caller may receive its outcome earlier.
-- The extension authenticates with a canonical URL-safe encoding of 32 random bytes stored outside the repository. Empty, weak, malformed, or permissive persisted tokens are rotated atomically. Only the exact computed default `.local-browser-bridge` parent under the current user's absolute profile path is bridge-managed and may be created or permission-hardened; missing or invalid profile metadata fails closed instead of falling back to the working directory, and a matching name elsewhere is still custom. Every custom parent is validated as already private and is never created or rewritten. Unix requires current-user mode `0700` on the parent and mode `0600` on a single-link token opened without following symlinks; special entries are inspected nonblocking before replacement. Windows requires a protected TokenUser-only DACL on both paths, rejects a reparse-point final parent and reparse children, multiply linked token files, alternate-stream/device-name ambiguity, and resolves each exact-case child through a retained parent handle. Profile-path opening can traverse an ancestor junction, so the final ordinary parent's identity and DACL are rechecked before success. A private typed capability retains the exact write-through temporary handle across flush and atomic native `NtSetInformationFile(FileRenameInformation)` replacement relative to that parent; every pre-commit cleanup marks that same internally created handle for deletion rather than reopening a pathname.
-- The extension popup persists its copy of that token in trusted-context-only `chrome.storage.local`; disabling Bridge control pauses the connector but does not erase the credential. **Clear saved token** is restricted to the extension's own popup URL, synchronously invalidates the controller identity, cancels not-yet-dispatched work, revokes control, disconnects, clears any pending approval and its badge, removes the storage entry, then verifies both the not-configured state and `tokenConfigured: false` before reporting success. Like request cancellation, this is not rollback after a Chrome side-effect boundary has already been crossed.
-- Connector WebSockets carry no bearer, query, or raw token. The extension and helper use a three-second, size-bounded mutual HMAC-SHA256 handshake that binds role, connector, a fresh client nonce, a fresh server nonce, and the server-created session ID. A connector verifies server proof before sending its own proof or reading browser/native state; the server attaches it to the active hub only after constant-time client-proof verification.
-- The extension additionally requires an exact Chrome-extension Origin, and the helper requires exact Origin `lbb-computer-helper://local`. Provisional unauthenticated sockets are concurrency-bounded and cannot replace an active connector.
-- The control URL places the master token only in a fragment, which the page removes immediately before exchanging it for an expiring random session capability kept in the dashboard's port-specific `sessionStorage`. No localhost cookie is used or exposed to unrelated services on other ports. State, event, browser screenshot, and computer screenshot reads require that session or a bearer token. State changes additionally require a same-origin `Origin` and an unpredictable CSRF header. No API exposes CORS permission.
-- Returned tab URLs strip query strings and fragments.
-- The bridge control page cannot be selected as a target, preventing recursive self-control.
-- The server and control UI are compiled into one Rust binary; no Node.js runtime or package installation is involved.
-- The extension contains no remote code, download API, cookie API, native messaging host, telemetry, or update endpoint.
-- The native computer helper is a separate, visibly connected program. It opens no listener and connects outbound to the server with token-free mutual authentication and an exact private Origin. On Windows, the user-facing process supervises a disposable same-binary worker in a kill-on-close Job Object; hard operation deadlines, unknown outcomes, transport loss, and unconfirmed capture shutdown terminate that worker before authority is reacquired. This contains a wedged provider process but does not create a separate desktop, account, or security principal.
-- One-shot native observation and live sharing are separate. Live sharing binds a persistent ScreenCaptureKit stream on macOS or Windows Graphics Capture session on Windows to one exact `(process, native window)` target, disables the system cursor, and forwards bounded PNG frames through a single latest-frame slot under a requested 1–10 FPS cap.
-- The operating system owns native capture indication and stopping behavior. The helper does not suppress macOS capture UI or request borderless WGC, but it also does not present either platform's system content picker; window selection occurs in the authenticated bridge control page.
-- The server intersects helper-advertised capabilities with a fixed allowlist. The helper itself exposes no shell, filesystem, process-launch, clipboard, downloader, or telemetry method.
-- The server has a separate local shell capability that is disabled by default and requires `--enable-shell` or `LBB_ENABLE_SHELL=1`. When enabled, it is deliberately full current-user code execution, not an exact-window or helper capability. Commands and output are bounded and omitted from the activity log, but an authenticated caller can still read, change, launch, or delete anything available to that user.
-- The GET-only Agent Fetch URL contains a domain-separated capability derived from the master token. It shares POST's command replay and requires `callId` for actions, rejects browser-declared cross-site use, and returns no-store/no-referrer headers. URLs can still leak through client history or diagnostics, so the capability and query values must not contain or be sent to untrusted services.
-- Every native input action is bound to an exact-window frame. A share-derived frame remains usable for at most three seconds only while `(share id, pid, native window id, geometry)` still exactly matches the current share; a current one-shot observation has the same age and exact-window checks without borrowing share authority. All other stale frames fail closed.
-- Native action proof has three separate layers. `inputDelivery` records the sealed exact-target route and whether the helper used the shared input seat, global HID, or a cursor-mutation API. An operating-system return value can report only API or queue acceptance where such a signal exists. Only a target-owned read-back or postcondition can confirm the requested effect; neither route provenance nor API acceptance does so.
-- The helper does not intentionally post global HID input, request a hardware-cursor mutation, leave the platform's foreground/window-focus oracle changed after an accepted action, switch the OS-front process, raise the target with `AXRaise`, change the active desktop/Space, or silently fall back to foreground control. macOS focus-capable input may nevertheless use a private, transient target `AXFrontmost` focus lease: the saved user's AX state is released, the exact target becomes `AXFrontmost=true`, and both are restored while WindowServer's user-front process/window remains unchanged. The machine contract therefore reports `activatesTargetApplication: true` on macOS. On Windows there is no explicit target-activation API in the backend, and the before/after oracle also includes the GUI-thread focus window. These samples are not an atomic rollback guarantee or proof that no shorter visible or focus-state interruption occurred.
-- `cursorPositionUnchanged` is a diagnostic sample of one shared global pointer, not action-source authority. On macOS, `hidSystemPointerActivityObserved` and `pointerActivityMonitorHealthy` can corroborate a cursor delta as concurrent shared-session activity. HID-system activity can come from a physical device, virtual HID, remote input, or another platform route; it is never physical-device provenance. `helperGlobalPointerPreservation`, `sharedPointerBoundaryCorroborated`/`sharedPointerBoundaryState`, and `sharedPointerActivityState` state the conservative conclusion. Unknown route or monitor state fails closed. A contaminated shared-pointer interval can still accompany a successful exact-target action because it reports concurrency, not helper ownership of that motion.
-- The macOS target-event route depends on undocumented, unsupported private SkyLight interfaces. Source and packaged Mach-O audits forbid known global cursor/HID APIs and freeze the expected targeted symbol set, but they cannot turn a private interface into a supported Apple contract. Missing or changed symbols refuse the action; there is no global-input fallback.
-- Browser and native computer actions share one serialization lock so two local callers cannot intentionally interleave mutations through this server.
-- Canceled `tabs.activate`, `tabs.new`, and `tabs.close` calls remain outcome-unknown but do not consume DOM generation, screenshot, element-ref, or browser-control-turn authority. Never replace their `callId` and retry: reconcile with `tabs.list` first. Every created tab commits its bridge provenance before optional group decoration, and a late canceled creation blocks the global browser-action queue—including trusted popup approval dispatch—until that provenance is durable; this also lets Safe mode list an omitted-URL `about:blank` tab. Their browser-process side effect cannot make an old page observation authorize the same tab operation because tab commands accept only a numeric tab ID, or a bounded policy-checked URL for `tabs.new`, and are not derived from page observation state.
+## What each credential grants
 
-The random token authenticates local protocol clients; it is not a sandbox. Malware or another user process that can read the token file or operate the authenticated control page may gain the same authority. Operating-system screen-capture and Accessibility permissions remain the final native boundary. Exact-window capture and best-effort target-routed input still run cooperatively inside the user's current login session. They do not block concurrent user activity and do not create a separate security principal or input seat; true independent concurrency requires another login/session or a managed VM.
+| Credential | Grants | Rotate by |
+|---|---|---|
+| Bearer token | Full command dispatch (browser, computer, shell if enabled), and cancellation of any in-flight command | Restart the server without `LBB_TOKEN`/an existing token file, or delete `~/.local-browser-bridge/token` |
+| Dashboard session + CSRF | Same as bearer, scoped to one browser tab's `sessionStorage`, obtained by exchanging the token | Expires after 12 hours idle; close the dashboard tab |
+| Agent Fetch capability URL | Same command authority as the bearer token, via GET only | Rotating the bearer token also revokes this, since it is derived from the token |
 
-## Release and update trust
+All three are credentials. Never paste them into logs, screenshots, issue
+reports, or a page you do not trust.
 
-- The server makes one bounded HTTPS request to the fixed GitHub Releases API at startup. It sends only a generic product/version `User-Agent`, accepts only a canonical `vMAJOR.MINOR.PATCH` stable release whose exact official-repository URL matches and whose API record is immutable, and does not download or install files.
-- `--no-update-check` or `LBB_DISABLE_UPDATE_CHECK=1` prevents that request. `--check-updates` performs the same metadata-only check and exits.
-- The extension never performs update checks. Unpacked extensions do not silently update on Windows or macOS; the control UI reports a server/extension mismatch so the user can replace both from one release.
-- The in-page pill is defense in depth. Its public host and private closed-shadow marker are freshly randomized per document; shadow-scoped `!important` rules reset critical host, pseudo-element, and backdrop properties, and accessibility state fails closed. Snapshot-mutation suppression uses only the retained host and its exact closed-shadow-owned objects; a public-ID clone, a page-owned light child, or an element merely nested under either cannot keep a page snapshot fresh. Content acknowledgement requires the genuine host to remain the exact direct child of `document.documentElement`, checks bounded shadow-inclusive ancestry as defense in depth, and performs render/layout/computed-style plus document/closed-shadow hit tests. The browser process resolves `:root`, pins the marker's innermost closed-shadow host, requires that host's immediate parent to be the exact root element, requires unique `DOM.getTopLayerElements` membership with no later same-root node, and—outside intentional capture—requires five `DOM.getNodeForLocation(ignorePointerEventsNone:true)` samples through the same host and frame. Initial and fresh-final checks repeat exact host/root ancestry and both elements' `hidden`/`inert`/ARIA-critical attributes under a shared 1.5 s/512-step budget. A top-layer revision seqlock handles Chrome events—including the bridge's own re-top events—while a separate content-loss generation captured before the renderer request changes only for loss/mismatch signals and prevents a same-revision loss from being absorbed. The content script attempts a new sample every 500 ms only when no earlier re-top/browser acknowledgement is active; browser acknowledgements are bounded at 2 s, while any unacknowledged root top-layer mutation or indicator-loss record retains an absolute 3 s service-worker deadline plus scheduler/transport timing. Navigation, a browser-native dialog, and intentional capture suspend input under separate completion/rebind boundaries rather than extending that dirty timestamp. These experimental CDP DOM methods require Chrome 140+ and are conformance-gated. Two scheduled animation-frame opportunities or the 250 ms fallback are not compositor or physical-pixel proof, and the final browser check is not atomic with later input. Chrome's browser-owned debugger warning/Cancel and the trusted extension popup therefore remain the authoritative independent handback surfaces.
-- Tagged release builds run on separate GitHub-hosted Windows and macOS workers. Every binary/archive and checksum manifest receives GitHub build provenance, and release immutability prevents later asset or tag replacement.
-- Both executables embed the project license and the generated notices for the exact locked production dependency graph behind `--licenses`. The macOS archive carries both notice files, and the extension ZIP carries the project license; CI regenerates and compares the dependency report before release.
-- Unless a release explicitly states otherwise, artifacts are not Microsoft publisher-signed or Apple Developer ID-signed/notarized. The macOS helper app is ad-hoc signed so its bundle is structurally valid, not to claim a verified publisher identity. Platform warnings and permission re-prompts are therefore possible. Checksums and GitHub provenance detect release tampering but do not replace OS publisher signing or malware notarization.
+## Full Access vs. Safe mode
 
-## Modes and human approval
+Full Access (default) can act in any controllable tab, enter sensitive text,
+and run arbitrary JavaScript in the page's main world; it cannot read
+`HttpOnly` cookie values directly, but page-origin requests can still use
+them. Safe mode restricts control to an allowlist, blocks sensitive fields,
+and requires one-time popup approval for risky clicks and tab closes — its
+risk detection is a conservative text heuristic that can miss ambiguous
+labels or canvas UI, so keep the allowlist narrow and supervise consequential
+tasks either way. Switch modes in the extension popup.
 
-In Full Access mode, all controllable HTTP(S) tabs and optionally file tabs are available; approval and sensitive-field interlocks are bypassed. In Safe mode, only allowlisted HTTP(S) tabs are available, risky click labels and tab closing create a two-minute pending approval, and sensitive fields are blocked. Approval can continue only from the target browser's extension popup because the extension declares no `externally_connectable` pages. Each approval is bound to the exact authenticated server session and extension connection ID; popup approval/rejection requires that transport to remain ready, and token, port, enable, policy, extension-lifecycle, or unexpected-socket rotation clears the payload and badge before a new identity can use them.
+## Shell is full user authority
 
-Risk detection in Safe mode is a conservative text heuristic, not a complete policy engine. Sites can use ambiguous labels, icons, canvas UI, or deceptive content. Keep the allowlist narrow when using Safe mode and supervise consequential tasks.
+`--enable-shell` / `LBB_ENABLE_SHELL=1` grants an authenticated client the
+same command authority as the signed-in user: read, modify, launch, or delete
+anything that account can touch. It is off by default, bounded in size/time/
+output, and never logs command text — but it is not a sandbox, not scoped to
+a directory, and not confined by the browser or computer-use model. See
+[Shell](docs/SHELL.md).
+
+## The computer helper is a shared seat
+
+Native input can avoid moving the shared hardware cursor and can leave the
+foreground application unchanged before/after a supported action. On macOS,
+focus-capable input may still briefly use a private, transient
+`AXFrontmost` lease — the machine-readable capability record reports
+`activatesTargetApplication: true` on macOS for exactly this reason, and
+these before/after samples are not proof of zero visible or focus-state
+interruption. None of this creates a second desktop, input queue, or
+security principal; see [Limitations](docs/LIMITATIONS.md) for the full
+argument. The helper exposes no shell, filesystem, clipboard, or
+process-launch method.
 
 ## Sensitive data
 
-- Password, payment-card, and one-time-code fields are rejected only in Safe mode.
-- The server never logs fill text.
-- Tab URLs returned to the server omit query strings and fragments.
-- Screenshot and page text remain in server memory and are not written to disk. Their HTTP endpoints require an authenticated dashboard session or bearer token.
-- Browser content is treated as untrusted and inserted into the control UI with `textContent`, not HTML.
-- Native exact-window screenshots and the latest live-share frame remain in server memory, are served only from loopback under the control page's same-origin policy, and are replaced by newer observations. Exact-window filters avoid unrelated covering windows, although a selected target can itself contain sensitive content and protected surfaces can be blank.
-- Native accessibility password values are never read or writable through semantic control. They are marked `sensitive` and `valueRedacted`, and the server independently removes any value or `setValue` action supplied for such an element.
+Password, payment-card, and one-time-code fields are rejected only in Safe
+mode. The server never logs fill text or shell command text. Tab URLs are
+returned with query strings and fragments stripped. Screenshots and page text
+live only in server memory, never on disk, and are served only to an
+authenticated session or bearer client. Native accessibility password values
+are never read or writable through semantic control.
 
-Full Access can run arbitrary JavaScript in the target page's main world and act with that page's signed-in session. It cannot directly read HttpOnly cookie values, but page-origin requests can still use those cookies. Treat any token holder and any agent that can operate the localhost UI as trusted browser operators.
+## Release trust
 
-Native computer input is hybrid semantic/pixel control bound to one exact application window. Semantic refs are tied to the captured frame and re-resolved before use, but a ref still does not detect prompt injection, prove human intent, or make an action harmless. Accessibility and background pixel delivery remain application-framework dependent and can be refused by secure input, protected content, games, custom-rendered controls, or elevated Windows targets. Observe after every action and supervise consequential workflows.
-
-For the current on-screen, minimized-window, cross-Space, keyboard-routing, and isolation boundaries, see [Limitations](docs/LIMITATIONS.md).
-
-## Native permission rationale
-
-- Screen Recording is required on macOS 13 or later to capture desktop pixels and start the ScreenCaptureKit live stream.
-- Accessibility is required on macOS to expose semantic elements, invoke supported actions, set control values, and help route input to an exact process/window. Pixel delivery also dynamically resolves undocumented SkyLight symbols; platform updates can disable that route, in which case the helper reports input unavailable rather than using global HID input.
-- Windows input must run in the signed-in interactive session; the helper is not installed as a service and requests no administrator elevation for normal use.
-- Windows UI Automation traversal is cache-backed and bounded to 1,500 visited controls, 25 levels, 500 actionable controls, and 750 milliseconds between provider calls. A provider call itself is not cancellable, so the disposable worker's 12-second hard deadline is the outer containment boundary.
-- The macOS release uses a named `.app` bundle because TCC grants attach to application identity. Run that packaged helper rather than copying its inner executable to an arbitrary location.
-
-## Permission rationale
-
-- `tabs`: list, activate, navigate, and capture allowed tabs.
-- `scripting` + HTTP(S)/file host permissions: inject the isolated observation/action content script. File access also requires the user-controlled Chrome extension setting.
-- `storage`: persist token, port, allowlist, and pending approval.
-- `alarms`: reconnect transport, expire leases, and run heartbeat recovery after Manifest V3 service-worker suspension.
-- `tabGroups`: visibly group only tabs created by the bridge; grouping never grants authority.
-- `debugger`: hold one explicit controlled-tab lease so Chrome shows its native debugging warning, then dispatch trusted mouse/key input, insert text, or evaluate page JavaScript. Chrome Cancel, timeout, disconnect, Stop, expiry, target loss, or explicit release detaches and revokes authority.
-
-### Cross-origin frame attachment
-
-The controlled-tab lease enables `Target.setAutoAttach` on the page target, then repeats it on a child session only after a routing probe proves that the session returns its own frame ID. This is required because CDP auto-attach covers direct targets rather than an entire descendant tree. The debugger attachment can therefore extend to nested out-of-process iframe targets as well as the page itself. The blast radius is bounded deliberately:
-
-- Any auto-attached target whose `targetInfo.type` is not `iframe` — workers and every other relative — is `Target.detachFromTarget`ed immediately, as is any target arriving without a matching lease or live parent session, past the 16-frame cap or five-level depth cap, or for a blank document. The fifth accepted level is armed only so a direct sixth-level target can be reported as `depth_exceeded` and detached; that refused target is never recursively armed.
-- Child sessions never get their own debugger attachment. They live under the single `chrome.debugger.attach` for the leased tab, and the existing verified `chrome.debugger.detach` plus its confirmation tears every one of them down. No second, unverified teardown path was added.
-- Child-session events are separated from page-target events before any handler runs. An out-of-process iframe's own `Page.frameNavigated` has no parent frame, so without that separation a third-party iframe navigating would be read as a top-level navigation of the controlled tab.
-- The in-frame agent runs in a dedicated isolated world created with `Page.createIsolatedWorld` and `grantUniveralAccess: false`, never the page's main world, so a hostile frame cannot redefine `getBoundingClientRect` or `elementFromPoint` under the target proofs. The agent is read-only: it contains no click, focus, event dispatch, value write, or extension messaging surface, and it never synthesizes input. Trusted input is always dispatched on the page target at a translated top-level point.
-- The agent is keyed by a nonce minted per lease, and every frame session is cleared at the same choke point that releases the lease, so an agent left over from an older lease refuses every request. Exactly one agent is ever built per isolated world: re-evaluating the source into a world that already has one re-keys it instead of registering a second document observer.
-- Frame observation is read-only and bounded, so a third-party iframe cannot spend the lease. The whole frame pass shares a 4 s budget, each of its CDP commands is bounded by what is left of it, and exhausting it skips the affected frames (`frame_timeout`, `budget_time`) instead of revoking browser control. Only a change to the lease itself still fails the observation.
+Windows executables are not yet Microsoft publisher-signed; the macOS package
+is ad-hoc signed but not Developer ID-signed or notarized — expect a
+SmartScreen or Gatekeeper warning, and keep both protections enabled. Tagged
+releases build on separate GitHub-hosted workers with build provenance and an
+immutable checksum manifest; verify both before running a downloaded binary.
+See [Verify a release](docs/VERIFY_RELEASE.md) for the exact commands.
 
 ## Reporting
 
-Do not include real tokens, screenshots, page text, or authenticated URLs in a public report. Reproduce with the included `/demo` page or mock extension.
+Do not include real tokens, screenshots, page text, or authenticated URLs in
+a public report. Reproduce with the included `/demo` page or a mock
+extension, and open a private security advisory on GitHub rather than a
+public issue for anything exploitable.
