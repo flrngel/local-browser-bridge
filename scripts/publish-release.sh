@@ -9,6 +9,27 @@ readonly REPOSITORY="flrngel/local-browser-bridge"
 readonly CANDIDATE_WORKFLOW=".github/workflows/deploy.yml"
 readonly CANDIDATE_REF="refs/heads/main"
 
+# Shared release-asset-inventory jq filter. Checks a GitHub release JSON
+# object's `.assets` array has no unexpected or duplicate names. Used by
+# both the live check against a real release object and, on fixture JSON,
+# by --self-test.
+#
+# The nested `| unique | length == (.assets | length)` form is a classic
+# jq precedence trap: `|` binds looser than `==`, so
+# `A | B == (.x | length)` parses as `A | (B == (.x | length))` -- by the
+# time the right-hand `.x` is evaluated, the pipe has already replaced the
+# input with A's result, so `.assets` there indexes an array, not the
+# release object, and jq raises "Cannot index array with string \"assets\"".
+# This crashed the very first real (non-dry-run) publish attempt, because
+# no earlier attempt had ever reached this code path. The extra parens
+# below scope the left-hand pipe so `==` compares two independently
+# evaluated filters, both applied to the original release object.
+readonly RELEASE_ASSET_INVENTORY_FILTER='
+  (.assets | type == "array") and
+  (([.assets[].name] | unique | length) == (.assets | length)) and
+  all(.assets[]; (.name as $name | $expected | index($name)) != null)
+'
+
 # Shared ruleset-matching jq filters. Each is used by both the live policy
 # check that fetches ruleset JSON from GitHub and, on fixture JSON, by
 # `--self-test`, so a change to the matching logic cannot silently drift
@@ -655,11 +676,8 @@ assert_release_assets() {
   local allow_missing="$3"
   local expected_names name count size digest
   expected_names="$(release_files | jq -Rsc 'split("\n")[:-1]')"
-  jq -e --argjson expected "$expected_names" '
-    (.assets | type == "array") and
-    ([.assets[].name] | unique | length == (.assets | length)) and
-    all(.assets[]; (.name as $name | $expected | index($name)) != null)
-  ' "$release_json" >/dev/null || die "draft contains an unexpected or duplicate release asset"
+  jq -e --argjson expected "$expected_names" "$RELEASE_ASSET_INVENTORY_FILTER" \
+    "$release_json" >/dev/null || die "draft contains an unexpected or duplicate release asset"
   if test "$allow_missing" = false; then
     jq -e --argjson expected "$expected_names" '([.assets[].name] | sort) == ($expected | sort)' \
       "$release_json" >/dev/null || die "release does not contain the exact five assets"
@@ -968,6 +986,25 @@ self_test() {
     > "$fixture"
   jq -e "$BRANCH_RULESET_STRUCTURAL_FILTER" "$fixture" >/dev/null \
     && die "self-test: BRANCH_RULESET_STRUCTURAL_FILTER must reject a ruleset that does not target refs/heads/main"
+
+  # Release asset inventory: fixture JSON shaped like a live GitHub release
+  # object, exercising the exact filter that crashed the first real publish
+  # attempt on a jq pipe-precedence bug (see RELEASE_ASSET_INVENTORY_FILTER).
+  printf '%s' '{"assets":[]}' > "$fixture"
+  jq -e --argjson expected '["a.txt"]' "$RELEASE_ASSET_INVENTORY_FILTER" "$fixture" >/dev/null \
+    || die "self-test: RELEASE_ASSET_INVENTORY_FILTER must accept an empty assets array"
+
+  printf '%s' '{"assets":[{"name":"a.txt"}]}' > "$fixture"
+  jq -e --argjson expected '["a.txt"]' "$RELEASE_ASSET_INVENTORY_FILTER" "$fixture" >/dev/null \
+    || die "self-test: RELEASE_ASSET_INVENTORY_FILTER must accept one expected asset"
+
+  printf '%s' '{"assets":[{"name":"a.txt"},{"name":"a.txt"}]}' > "$fixture"
+  jq -e --argjson expected '["a.txt"]' "$RELEASE_ASSET_INVENTORY_FILTER" "$fixture" >/dev/null \
+    && die "self-test: RELEASE_ASSET_INVENTORY_FILTER must reject a duplicate asset name"
+
+  printf '%s' '{"assets":[{"name":"unexpected.txt"}]}' > "$fixture"
+  jq -e --argjson expected '["a.txt"]' "$RELEASE_ASSET_INVENTORY_FILTER" "$fixture" >/dev/null \
+    && die "self-test: RELEASE_ASSET_INVENTORY_FILTER must reject an asset name outside the expected set"
 
   rm -f -- "$fixture"
 
