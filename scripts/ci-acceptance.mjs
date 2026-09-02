@@ -947,37 +947,57 @@ async function browserLane(context) {
     return;
   }
 
+  const bootstrapExpression = `chrome.storage.local.set({token:${JSON.stringify(bridge.token)},port:${server.port},enabled:true,fullAccess:true}).then(() => 'storage-set')`;
+  // Never reads the token back; only the non-secret connection facts.
+  const readbackExpression = "chrome.storage.local.get(['port','enabled','fullAccess','connectionStatus','connectionDetail']).then((value) => JSON.stringify(value))";
   let worker;
   try {
     worker = await cdp.findExtensionWorker("Local Browser Bridge");
     const extensionVersion = await cdp.evaluate(worker, "chrome.runtime.getManifest().version");
-    await cdp.evaluate(
-      worker,
-      `chrome.storage.local.set({token:${JSON.stringify(bridge.token)},port:${server.port},enabled:true,fullAccess:true}).then(() => 'storage-set')`,
-    );
+    await cdp.evaluate(worker, bootstrapExpression);
     recorder.pass(lane, "extension.bootstrap", { extensionVersion, workerUrl: worker.url.replace(/chrome-extension:\/\/[a-p]{32}/, "chrome-extension://<id>") });
   } catch (error) {
     recorder.fail(lane, "extension.bootstrap", error.message);
     return;
   }
 
-  try {
-    const state = await waitUntil(
-      "extension connection",
-      async () => {
-        const current = await bridge.state();
-        return current.body?.connected && current.body.extension ? current.body : null;
-      },
-      { timeoutMs: 45_000, intervalMs: 500 },
-    );
-    const extensionVersion = state.extension?.version;
-    if (extensionVersion === version) {
-      recorder.pass(lane, "extension.connected", { extensionVersion, fullAccess: state.extension?.fullAccess ?? null });
-    } else {
-      recorder.fail(lane, "extension.connected", `extension version ${extensionVersion} does not match ${version}`);
+  // The service worker can be suspended between the storage write and its
+  // reconnect; re-wake it and rewrite the settings a bounded number of times.
+  const connectionAttempts = [];
+  let connectedState = null;
+  for (let attempt = 1; attempt <= 4 && !connectedState; attempt += 1) {
+    try {
+      connectedState = await waitUntil(
+        "extension connection",
+        async () => {
+          const current = await bridge.state();
+          return current.body?.connected && current.body.extension ? current.body : null;
+        },
+        { timeoutMs: 15_000, intervalMs: 500 },
+      );
+    } catch {
+      connectedState = null;
     }
-  } catch (error) {
-    recorder.fail(lane, "extension.connected", error.message);
+    if (!connectedState) {
+      try {
+        worker = await cdp.findExtensionWorker("Local Browser Bridge", 15_000);
+        const readback = await cdp.evaluate(worker, readbackExpression);
+        connectionAttempts.push({ attempt, readback: truncate(readback, 300) });
+        await cdp.evaluate(worker, bootstrapExpression);
+      } catch (error) {
+        connectionAttempts.push({ attempt, error: error.message });
+      }
+    }
+  }
+  if (connectedState) {
+    const extensionVersion = connectedState.extension?.version;
+    if (extensionVersion === version) {
+      recorder.pass(lane, "extension.connected", { extensionVersion, fullAccess: connectedState.extension?.fullAccess ?? null, connectionAttempts });
+    } else {
+      recorder.fail(lane, "extension.connected", `extension version ${extensionVersion} does not match ${version}`, { connectionAttempts });
+    }
+  } else {
+    recorder.fail(lane, "extension.connected", "the extension never connected to the bridge", { connectionAttempts });
     return;
   }
 
