@@ -143,9 +143,9 @@ fn macos_focus_lease_is_disclosed_without_overclaiming_zero_interruption() {
     let macos = fs::read_to_string("src/computer/platform_macos.rs").unwrap();
     let readme = fs::read_to_string("README.md").unwrap();
     let security = fs::read_to_string("SECURITY.md").unwrap();
-    let install = fs::read_to_string("docs/INSTALL.md").unwrap();
+    let install = fs::read_to_string("docs/VERIFY_RELEASE.md").unwrap();
     let capabilities = fs::read_to_string("docs/CAPABILITIES.md").unwrap();
-    let protocol = fs::read_to_string("docs/PROTOCOL.md").unwrap();
+    let protocol = fs::read_to_string("docs/internals/PROTOCOL.md").unwrap();
 
     assert!(controller.contains("\"activatesTargetApplication\": cfg!(target_os = \"macos\")"));
     assert!(controller.contains("may-use-transient-ax-frontmost-focus-lease"));
@@ -349,7 +349,7 @@ fn background_backend_has_no_global_or_foreground_input_fallback() {
 
 #[test]
 fn browser_and_native_key_grammars_are_documented_as_distinct_subsets() {
-    let protocol = fs::read_to_string("docs/PROTOCOL.md").unwrap();
+    let protocol = fs::read_to_string("docs/internals/PROTOCOL.md").unwrap();
     let capabilities = fs::read_to_string("docs/CAPABILITIES.md").unwrap();
     let macos = fs::read_to_string("src/computer/platform_macos.rs").unwrap();
     let windows = fs::read_to_string("src/computer/platform_windows.rs").unwrap();
@@ -875,7 +875,7 @@ fn asynchronous_share_failures_are_bound_to_the_producing_epoch() {
     let helper = fs::read_to_string("src/bin/local-computer-helper.rs").unwrap();
     let controller = fs::read_to_string("src/computer.rs").unwrap();
     let server = fs::read_to_string("src/server.rs").unwrap();
-    let protocol = fs::read_to_string("docs/PROTOCOL.md").unwrap();
+    let protocol = fs::read_to_string("docs/internals/PROTOCOL.md").unwrap();
 
     assert!(controller.contains("pub fn active_share_id(&self) -> Option<&str>"));
     assert!(helper.contains("let producing_share_id = controller.active_share_id()"));

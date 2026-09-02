@@ -293,7 +293,6 @@ fn current_source_is_unblocked_and_package_versions_are_aligned() {
         "extension/lib.js",
         ".github/workflows/deploy.yml",
         ".github/workflows/publish.yml",
-        "docs/DEVELOPMENT.md",
         "docs/INSTALL_MACOS.md",
         "docs/INSTALL_WINDOWS.md",
     ] {
@@ -317,7 +316,7 @@ fn current_source_is_unblocked_and_package_versions_are_aligned() {
     assert!(
         source(".github/workflows/ci.yml").contains("bash scripts/bump-version.sh --self-test")
     );
-    assert!(source("docs/DEVELOPMENT.md").contains("bash scripts/bump-version.sh"));
+    assert!(source("docs/maintainers/RELEASE.md").contains("bash scripts/bump-version.sh"));
 
     // The retired operator harness must not come back as a pinned consumer.
     for retired in [

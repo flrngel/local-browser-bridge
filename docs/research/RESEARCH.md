@@ -2,7 +2,7 @@
 
 Research date: 2026-08-22
 
-Native desktop-agent research is documented separately in [COMPUTER_USE_RESEARCH.md](COMPUTER_USE_RESEARCH.md) and the current [SOTA audit](SOTA_AUDIT.md), including active repository comparisons, pinned code-reading revisions, academic benchmarks, community evidence, and the helper-process decision.
+Native desktop-agent research is documented separately in [COMPUTER_USE_RESEARCH.md](COMPUTER_USE_RESEARCH.md) and the current [SOTA audit](../SOTA_AUDIT.md), including active repository comparisons, pinned code-reading revisions, academic benchmarks, community evidence, and the helper-process decision.
 
 ## Product research
 

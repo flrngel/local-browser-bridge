@@ -49,9 +49,7 @@ Windows namespace-swap tests prebuild two test-owned local NTFS mount-point junc
 
 The Manifest V3 extension connects outbound to the server. A mutual-HMAC handshake binds the extension role, nonces, and server-created connector session without putting the raw token in the WebSocket URL. Before its first storage read, the service worker restricts `chrome.storage.local` to Chrome's `TRUSTED_CONTEXTS`, so injected content scripts cannot read the persisted bridge token or control state through the extension storage API.
 
-An explicit browser-control lease attaches `chrome.debugger` to one tab. The held attachment supplies trusted CDP input and causes Chrome to show its browser-owned debugging warning. An isolated content script supplies structured DOM observation and the extension-owned page pill, Stop control, and synthetic pointer. The public host and a private marker retained inside its closed shadow root are randomized per document; shadow-important rules reset critical visual host, pseudo-element, and backdrop properties. Snapshot invalidation excludes only the retained host and exact objects owned by that closed shadow root: the public ID, ancestor selectors, and page-owned light children confer no exclusion. JavaScript attribute/ancestor checks and the independent browser-process proof handle accessibility state. Control start, reuse, capture restoration, and passive checks first re-top and perform bounded render/layout/computed-style plus document/closed-shadow hit tests.
-
-The renderer requires the host to remain the direct child of `document.documentElement`. The service worker independently resolves that exact `:root`, pins the private marker's innermost closed-shadow host, and requires the host's immediate browser-process parent to equal the root element, all read from one whole-document `DOM.getDocument({depth: -1, pierce: true})` snapshot whose nesting is the only parent authority (Chrome's `DOM.describeNode` never reports `parentId`). Within a shared 1.5 s/512-ancestry-work proof it samples `DOM.getTopLayerElements`, rejects any later node resolving to the same document, checks initial and fresh-final host/root ancestry and `hidden`/`inert`/ARIA-critical attributes, and—outside intentional capture—requires five `DOM.getNodeForLocation(ignorePointerEventsNone:true)` paint-order hits through that host and frame. A top-layer event revision seqlock accepts a clean final state after the bridge's own re-top events; a separate content-loss generation captured before the renderer request changes only for loss/mismatch signals and rejects same-revision loss across the entire proof. The content watchdog attempts a sample every 500 ms when its previous acknowledgement is idle; browser acknowledgement is bounded at 2 s, and a root top-layer event or indicator loss not cleared by its exact proof has an absolute 3 s service-worker deadline plus scheduler/transport timing. Navigation, native dialogs, and intentional capture suspend ordinary input and must rebind/reprove at their completion boundary. The DOM methods are experimental Chrome 140+ dependencies and the proof is neither compositor/physical-pixel proof nor atomic with later input, so Chrome's browser-owned warning and Cancel remain authoritative.
+An explicit browser-control lease attaches `chrome.debugger` to one tab. The held attachment supplies trusted CDP input and causes Chrome to show its browser-owned debugging warning. The extension injects nothing into the controlled page: no badge, pill, banner, or in-page Stop button. The visible, page-independent signals that a tab is under remote control are Chrome's own debugger infobar and its Cancel button, the named **Local Browser Bridge** tab group the extension places the tab in for the duration of the lease, and **Release control** in the extension popup for that same tab. Starting or renewing the lease sends the content script a `control.bind` message carrying the exact session id and epoch; the content script keeps that pair only to refuse a mutating command that does not present it again, and to fail closed if the lease expires or goes unheard from for too long. `control.release` clears it. This binding is read-only bookkeeping — the content script can neither start nor stop control, and observing or acting on the page never depends on the page rendering or reporting anything back.
 
 Cross-origin iframes use recursively verified child CDP sessions on supported Chromium 140+ browsers. They remain children of the single tab attachment and share its count, depth, time, and lease bounds. Input is dispatched through the page target after coordinates are translated into top-level viewport space.
 
@@ -133,141 +131,15 @@ Release verification checks both source and each architecture slice of the packa
 
 The browser extension remains the preferred actuator for Chromium web content. It has renderer-aware CDP input and browser-owned revocation that generic native window messages cannot reproduce.
 
-## Acceptance-only app-share orchestration
+## Release acceptance tooling
 
-The macOS release harness includes a separate nonactivating acceptance app. It
-is not shipped as a product backend and exposes no bridge command. Its exact
-bundle identifier, stable window title, and unique accessibility button give a
-separately authorized Computer Use app share one deliberately narrow surface:
-press the start button once, then stop interacting.
-
-The runner publishes a create-once request bound to its process and deadline.
-The app opens that exact file without following links, verifies its digest and
-identity, disables the button, and writes a create-once start receipt. The app
-remains alive while the bridge performs the real bounded action against a
-different target. After the runner proves the target-owned postcondition and
-records matching foreground, focus, active Space, cursor, and HID endpoint
-samples, it asks the app to write the bound completion receipt. A read-only
-watcher validates the three-record chain but never writes authority into the
-run.
-
-The request/start/complete chain is orchestration evidence, not a
-notification-only signal and not product authority. Its schema names the
-bounded observations narrowly: `acceptanceButtonActionObserved`,
-`appShareSurfaceObservedAtProductBoundaries`, `sharedHidInputObserved`, and
-`sampledSharedContextUnchanged`. The quiet lane records
-`sharedHidInputObserved: null` because no app-share transaction exists there;
-the deliberate lane records `false` when its cumulative HID boundary shows no
-pointer or keyboard activity. The completion receipt's
-`handoffStateSequenceBound: true` binds the ordered state sequence; it does not
-claim continuous observation of the handoff window.
-
-The chain records that the exact acceptance surface and sampled shared context
-matched at the required product boundaries. Endpoint samples plus cumulative
-HID pointer/keyboard counters cannot prove zero transient programmatic changes,
-a continuous monitor, atomic identity of the app-share provider, or zero
-transient focus/window manipulation. The chain also cannot identify the
-controller cryptographically, prove physical-human input, authorize product
-control, or create a separate OS input seat. All product authority and effect
-proof still comes from the authenticated bridge protocol, sealed exact-target
-route, and application-owned postcondition. Version 0.12.22 introduced this
-exact app-share surface; v0.12.23 retained it and separated the sealed
-action-pointer classifier from the keyboard-aware independent-system
-classifier. The exact v0.12.23 deliberate run then proved its app-share start
-receipt and 89/89 completed assertions before a pre-handoff stream frame was
-reused after 43.807 seconds; `computer.click` correctly refused it with HTTP 409
-`COMPUTER_STALE_FRAME` before dispatch. Version 0.12.24 therefore added a
-strictly newer frame with the same share, target, and geometry after the
-`ACTION` receipt and within the reserved deadline before deriving click
-authority; version 0.12.37 retains that boundary unchanged. The v0.12.20
-physical-pointer lane is retained only as historical, optional adversarial
-coverage; its artifacts cannot satisfy the v0.12.37 release contract.
-
-## Windows acceptance coordinator
-
-The Windows acceptance coordinator completed its source gate in v0.12.29 and is
-retained for v0.12.37 release acceptance. It is release tooling, not a product
-control surface. `Start` enters an exact clean system-PowerShell bootstrap,
-resolves only the prospective per-version ledger path, then creates and
-revalidates owner-private state, stages and hashes every bound input, and
-publishes exact configuration and Start records with flush-before-move
-create-once publication. It then launches one retained worker from an explicit
-ordinary-environment allowlist, completes the detached worker's Job binding and
-guard-ownership handoff, and lets that bound worker prepare the exact runner
-arguments, environment, and ephemeral token. Only after that preparation does
-the worker atomically create the schema-2 persistent reservation bound to the
-opaque `coordinatorInstanceId`. The reservation is immediately followed by the
-Intent record and the sole runner process launch.
-
-Before lifetime-Job recovery the worker acquires the stable session-wide
-admission mutex and starts one monotonic deadline. It opens only the exact prior
-named Job with query/terminate rights, terminates and queries that handle until
-its active process count is zero, closes it once, and polls the namespace under
-the same deadline until the name is absent. It then clears last error, calls
-`CreateJobObject` exactly once, and accepts only a non-null handle with last
-error zero. Any nonzero result, including `ERROR_ALREADY_EXISTS`, is closed and
-rejected without adoption, termination, configuration, retention, or retry.
-The atomic detached-worker guard Job and fresh named lifetime Job receive
-`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK`. Those
-outer Jobs contain the coordinator worker and its inherited runner and watcher,
-while permitting only explicit child breakaway. Each runner-owned fixture,
-server, or helper process is created suspended and atomically bound to the
-runner's private non-breakaway kill-on-close Job before resume. The earlier Job
-topology passed its Windows PowerShell 5.1 native gate and independent no-P0/P1
-review. The v0.12.36 reservation ordering and schema-2 instance binding also
-passed the exact system Windows PowerShell 5.1 self-test for coordinator
-SHA-256 `ec58a63f965c1824bd7608f9cf901f261bae9db176862ea182e01b4cdd49ac1b`
-and an independent no-P0/P1 review. Version 0.12.37 retains that coordinator
-boundary and separately repairs atomic creation of the trust verifier's private
-destination. Fresh exact-source Windows PowerShell 5.1 self-tests, PR CI, and
-packaged candidate acceptance remain mandatory before release; since the
-operator harness was retired, that acceptance is produced by
-`.github/workflows/acceptance.yml` on hosted runners (see
-[Development](DEVELOPMENT.md#ci-hosted-acceptance)).
-Separate worker, runner, and watcher output files survive an abandoned remote
-shell. The records do not claim sudden-power-loss durability; ambiguity after a
-machine or storage failure is outcome-unknown and forbids retry.
-
-The worker records launch intent before starting the exact runner and binds the
-worker and runner by PID plus start time. It does not start the read-only watcher
-merely because the evidence directory exists; it waits until the exact atomic
-`operator/foreground-arm-request.json` marker exists. The watcher validates the
-fresh notification and live runner, then the coordinator preserves its
-non-authority fields. `Follow` is a read-only projection: waiting, handoff,
-failure, and completion outputs all set `uiActionAllowed: false`,
-`notificationOnly: true`, and `acceptedAsAuthority: false`. A separate fresh
-one-shot authorization and visual state check are still required before the one
-allowed external click. Repeated `Follow` calls do not create new authority and
-must be deduplicated by request ID.
-
-The coordinator's GUID-scoped non-product self-test covers owner-only ACLs,
-atomic state, the environment allowlist and token isolation, the stable session
-mutex, and eight native lifetime scenarios: clean named creation, exact prior
-owner/descendant recovery, delayed extra-handle namespace release, bounded
-extra-handle timeout, same-name create-race refusal, pre-transfer guard close,
-transferred-guard descendant cleanup with an unrelated control process, and
-stream unlocking/exact cleanup. It also covers exact process identity and
-liveness, complete predecessor chains, repeated handoff and request-ID
-deduplication, and terminal-failure precedence without starting a candidate or
-opening UI. The v0.12.34 topology regression additionally launches the actual guarded
-worker, adds the named lifetime Job, runs the real system-PowerShell 5.1 runner,
-and compiles and executes the source-bound fixture through the atomic private
-Job-list path. Version 0.12.37 retains that topology and adds reservation-order,
-owned/foreign coordinator-instance, and pre/post-boundary state regressions.
-
-The first v0.12.30 packaged attempt passed its trust/source gates and both
-macOS lanes, then stopped before the Windows runner launched because the
-production staged worker-support loader called an undefined hex helper. Since
-v0.12.31, the coordinator uses an inline PowerShell 5.1-compatible digest
-conversion and exercises that exact staged-loader branch in a fresh self-test
-process; v0.12.37 retains that repair unchanged.
-
-This tooling assumes the independently verified GitHub-attested candidate is
-trusted. The runner and candidate execute as the same Windows account that owns
-the coordinator, ledger, and evidence ACLs; this is not a restricted-token or
-AppContainer boundary against malicious same-account code. Those records are
-release-orchestration evidence, not cryptographic writer authentication against
-that account.
+Release candidates are verified by CI-hosted acceptance — a reusable GitHub
+Actions workflow that exercises the packaged candidate on `windows-latest`
+and `macos-26` runners — before publication, entirely separate from the
+product code above: it exposes no bridge command and ships to no user. See
+[Release process](maintainers/RELEASE.md) for the current procedure and
+[Release-attempt history](history/release-attempts.md) for what the prior
+two-machine operator harness found before CI-hosted acceptance replaced it.
 
 ## Capture is not isolation
 
@@ -282,7 +154,7 @@ PiP automation, virtual displays, VM orchestration, RDP loopback, and separate O
 
 ## Stop and cleanup
 
-- Chrome Cancel, the in-page Stop button, popup release, timeout, target loss, or connector loss revokes the browser lease.
+- Chrome Cancel, popup Release control, timeout, target loss, or connector loss revokes the browser lease.
 - `POST /api/v1/command/cancel` is bearer- and `callId`-scoped. It drops the exact action future and sends one original-session connector cancel; it preserves the browser lease when safe and reports the original call as outcome-unknown. For a started controlled-page command, the server independently latches exact-session recovery and removes observation/screenshot authority before returning 202, so a dropped connector cancel cannot reopen the old turn. The same exact-session fence runs before a disconnected HTTP handler releases the action lock and on post-dispatch connector outcome-unknown errors, including no-`callId` and legacy dashboard requests. The extension synchronously advances and persists its turn, clears its frame snapshot both immediately and at the final queue barrier, and serializes that persistence before the next command. Its global browser-action tail also waits for late Chrome reconciliation (including durable `tabs.new` provenance) and freshness finalization before a socket or popup-approved action can enter; explicit `page.observe` is the only normal controlled-page recovery.
 - A valid `computer.share.stop`, helper shutdown, target closure, capture failure, or connector replacement stops the native share and clears frame authority.
 - `computer.share.start` is guarded from immediately before exact-session dispatch through its first exact-ID observation. Cancellation or task drop anywhere in that interval revokes the originating transport out of band. A malformed/rejected start, failed first observation, or unproven stop first quarantines publication and transfers cleanup to a detached task that issues an exact-session stop; if raw `active: false` cannot be proven, only that originating transport is revoked. Caller cancellation cannot cancel this cleanup, and a replacement helper is never selected or cleared.
@@ -294,39 +166,16 @@ PiP automation, virtual displays, VM orchestration, RDP loopback, and separate O
 
 The server performs a metadata-only check against the fixed public GitHub Releases API. It accepts only a canonical stable release marked immutable by GitHub and never downloads or installs an update. Release artifacts are built as a Windows server executable, Windows helper executable, macOS universal archive with helper app, matching extension ZIP, checksum manifest, and GitHub provenance. Project and locked dependency licenses are embedded in both executables; the macOS archive and extension package also carry their applicable notice files.
 
-Version 0.12.30 introduced the separation between immutable candidate
-construction and publication; version 0.12.37 retains it.
-The candidate workflow runs manually against one reviewed `main` source SHA,
-creates no tag or deployment, and emits a schema-3 binding for the exact
-five-file artifact set, source, workflow run, workflow attempt, manifest, and
-attestations. Platform and stock-Chrome acceptance records bind to that
-candidate. A separate workflow verifies the candidate and complete acceptance
-receipt before its only protected-environment job can create the annotated tag,
-publish the exact assets, make the Release immutable, and redownload and verify
-the public bytes. The environment therefore represents publication approval,
-not every speculative candidate build. The v0.12.30 candidate passed both
-macOS lanes but failed closed before Windows product execution. Version 0.12.31
-passed only its quiet macOS lane before a deliberate-lane fresh-frame timeout.
-Version 0.12.32 passed candidate trust and package inspection, then failed its
-source-compiled app-share self-test before permission probes, quiet-seat
-stabilization, or any candidate process launch. None reached stock Chrome,
-tagging, or publication. Version 0.12.33 restored the exact one-line self-test
-contract and passed both fresh macOS lanes, then its one Windows attempt failed
-closed at `build-dedicated-fixture`: the source-bound compiler child could not
-run correctly while nested inside the coordinator and runner Job hierarchy.
-No candidate product process, Chrome action, tag, or publication followed.
-Version 0.12.34 made both the detached-worker guard Job and named lifetime Job
-explicitly breakaway-aware and created each runner-owned child atomically in
-its private kill-on-close Job before resuming it. A source-only self-test uses
-the actual guard-to-lifetime worker launcher, then compiles and executes the
-real fixture through that topology. Its trust gate and both macOS lanes passed,
-but its persistent reservation was created before private coordinator state and
-made an interrupted Windows session non-retryable. Version 0.12.37 retains the
-Job topology and moves a schema-2 reservation bound to the opaque coordinator
-instance into the worker's last pre-intent boundary. Fresh platform, browser,
-and publication evidence is still required.
+Candidate construction and publication are two separate workflows: one builds
+and packages a versioned candidate from a reviewed `main` commit with no tag
+or deployment; a second, run only after platform and browser acceptance
+passes, creates the annotated tag, publishes the exact assets, makes the
+Release immutable, and redownloads and verifies the public bytes. See
+[maintainers/RELEASE.md](maintainers/RELEASE.md) for the current procedure.
 
-See [Security](../SECURITY.md) for trust details, [Protocol](PROTOCOL.md) for envelopes and commands, and [Limitations](LIMITATIONS.md) for platform-specific boundaries.
+See [Security](../SECURITY.md) for trust details,
+[internals/PROTOCOL.md](internals/PROTOCOL.md) for envelopes and commands,
+and [Limitations](LIMITATIONS.md) for platform-specific boundaries.
 
 ## Primary platform references
 

@@ -3,7 +3,8 @@
 This guide builds the current source tree. A local build is a development
 artifact: it is not a published GitHub Release, has no release attestation, and
 has not passed the repository's packaged acceptance gates. End users who want a
-stable, verified package should use the [installation guide](INSTALL.md).
+stable, verified package should use the [Windows](INSTALL_WINDOWS.md) or
+[macOS](INSTALL_MACOS.md) installation guide.
 
 The product has no Node.js runtime dependency. Its primary implementation is
 Rust; macOS builds also compile and link the repository's locked Swift capture
@@ -455,6 +456,6 @@ GitHub-hosted Windows and macOS runners, packages the exact extension, generates
 creates an immutable GitHub Release, downloads every public asset again, and
 re-verifies its contents and attestations.
 
-See [Development](DEVELOPMENT.md) for protocol and live-evidence work. Install
+See [Development](maintainers/DEVELOPMENT.md) for protocol and live-evidence work. Install
 only artifacts that actually appear on the public Releases page when release
 provenance is required.

@@ -5,6 +5,16 @@ the latest release, so do not infer that the version in `Cargo.toml` is
 available for download. A version is installable only when it appears on the
 public [GitHub Releases page](https://github.com/flrngel/local-browser-bridge/releases/latest).
 
+The Desktop Host, local shell, Agent Fetch, and the one-command uninstaller
+described here and in the platform guides ship starting with release 0.12.69.
+If the latest published release is older, the macOS installer fails with a
+layout or "unknown argument" error before copying anything; the Windows
+installer has no such check and installs the older release silently instead —
+see
+[Troubleshooting](TROUBLESHOOTING.md#macos-installer-fails-with-an-unexpected-layout-or-unknown-argument-error)
+and
+[Troubleshooting](TROUBLESHOOTING.md#windows-installer-succeeds-but-no-tray-icon-appears-or-enableshell-fails-at-launch).
+
 For a development build from the current source, use [Building from
 source](BUILD.md) instead.
 

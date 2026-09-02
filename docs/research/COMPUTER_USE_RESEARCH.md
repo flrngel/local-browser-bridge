@@ -1,6 +1,6 @@
 # Session-visible browser control and non-interrupting computer use
 
-Research snapshot: 2026-08-23. Historical version references below identify when a design property entered the project. [Capabilities](CAPABILITIES.md) and [Limitations](LIMITATIONS.md) are authoritative for the current implementation boundary.
+Research snapshot: 2026-08-23. Historical version references below identify when a design property entered the project. [Capabilities](../CAPABILITIES.md) and [Limitations](../LIMITATIONS.md) are authoritative for the current implementation boundary.
 
 ## The corrected target
 
@@ -249,7 +249,7 @@ Windows live sharing uses a persistent exact-HWND WGC session, while input uses 
 
 ## Pointer attribution and action proof
 
-The exact v0.12.9 packaged macOS attempt exposed why two global coordinates are not an ownership proof. Its first semantic `computer.setValue` used Accessibility, 40 precondition assertions had passed, and the retained result then observed a cursor-position delta. The run correctly failed closed, but its evidence could not identify whether the helper, a person, virtual input, a remote session, the target application, or another process moved the shared cursor. The candidate was withdrawn; Windows and stock-Chrome acceptance were not started. The exact record is preserved in the [withdrawn attempt](../evidence/v0.12.9/computer/attempts/withdrawn-db624da-macos-semantic-hardware-cursor-change/README.md). The successor v0.12.10 run proved 69 earlier assertions but then received no separately authorized movement during its bounded handoff, so it stopped before the final action; that exact [negative record](../evidence/v0.12.10/computer/attempts/withdrawn-de59840-macos-deliberate-pointer-timeout/README.md) is preserved separately. Version 0.12.11 fixed that handoff but was [withdrawn before execution](../evidence/v0.12.11/computer/attempts/withdrawn-414dd7f-macos-dual-lane-receipt-gap/README.md) when review found that one receipt digest could not authenticate the two fresh, non-mergeable macOS lanes required by policy. Version 0.12.12 then produced three evidence-only negative attempts, all before product dispatch: one arm-deadline/probe-budget race and two pre-dispatch contamination outcomes. Version 0.12.20 passed its quiet lane but its mandatory physical-pointer lane timed out before product dispatch, demonstrating that an unrelated physical gesture is a brittle release dependency rather than proof of app-scoped concurrency.
+The exact v0.12.9 packaged macOS attempt exposed why two global coordinates are not an ownership proof. Its first semantic `computer.setValue` used Accessibility, 40 precondition assertions had passed, and the retained result then observed a cursor-position delta. The run correctly failed closed, but its evidence could not identify whether the helper, a person, virtual input, a remote session, the target application, or another process moved the shared cursor. The candidate was withdrawn; Windows and stock-Chrome acceptance were not started. The exact record is preserved in the [withdrawn attempt](../../evidence/v0.12.9/computer/attempts/withdrawn-db624da-macos-semantic-hardware-cursor-change/README.md). The successor v0.12.10 run proved 69 earlier assertions but then received no separately authorized movement during its bounded handoff, so it stopped before the final action; that exact [negative record](../../evidence/v0.12.10/computer/attempts/withdrawn-de59840-macos-deliberate-pointer-timeout/README.md) is preserved separately. Version 0.12.11 fixed that handoff but was [withdrawn before execution](../../evidence/v0.12.11/computer/attempts/withdrawn-414dd7f-macos-dual-lane-receipt-gap/README.md) when review found that one receipt digest could not authenticate the two fresh, non-mergeable macOS lanes required by policy. Version 0.12.12 then produced three evidence-only negative attempts, all before product dispatch: one arm-deadline/probe-budget race and two pre-dispatch contamination outcomes. Version 0.12.20 passed its quiet lane but its mandatory physical-pointer lane timed out before product dispatch, demonstrating that an unrelated physical gesture is a brittle release dependency rather than proof of app-scoped concurrency.
 
 Version 0.12.22 kept the same fail-closed action boundaries while moving the deliberate orchestration proof onto one exact non-product app-share surface and giving the Windows sentinel one stable title. Version 0.12.23 retained both surfaces and separated the sealed action-pointer classifier from the keyboard-aware independent-system classifier.
 
@@ -303,144 +303,7 @@ True independent input requires a separately managed environment such as:
 
 UFO²'s RDP-loopback PiP design is the closest reviewed architecture, but its paper is not evidence that the pinned public UFO source ships that complete mode. Apple High Performance Screen Sharing also cannot be treated as a transparent local background seat. An `isolated-session` backend may be added later only as a separate capability with visible prerequisites and lifecycle. It must never be aliased to `background-window` or silently enabled.
 
-## Release acceptance criteria
-
-Release evidence must independently prove:
-
-- real Chrome loaded from `chrome://extensions`, with the extension package actually selected;
-- native Chrome debugger warning remains visible throughout the lease;
-- in-page pill, browser cursor, and trusted Stop are visible and functional;
-- Chrome Cancel produces `canceled_by_user`, revokes the lease, blocks fallback, and requires popup Resume followed by a new explicit lease;
-- stale WebSocket session/sequence, browser turn/generation/move sequence, and computer frame IDs fail closed;
-- each browser command class and each helper action has a machine-readable result plus a screenshot where visual evidence is meaningful;
-- exact-window live frames carry monotonic sequence, correct dimensions/scales, share state, and the settled synthetic pointer;
-- each native action distinguishes a sealed exact-target route from operating-system API acceptance and an application-owned postcondition;
-- `cursorPositionUnchanged` remains diagnostic, while the advertised helper-global-pointer, shared-pointer-boundary, monitor-health, activity, foreground/focus, and Space conclusions are recorded truthfully;
-- Windows compiles and runs the shared contracts, while representative Windows UIA/background runtime coverage remains explicitly identified if it is not executed on a real Windows host.
-
-The exact v0.12.8 packaged macOS candidate passed 187/187 assertions and
-produced six reviewed screenshots. Its same-candidate Windows run published a
-fresh foreground-arm request but received no click and no received marker; it
-timed out at `wait-foreground-arm` before the invariant baseline or any product
-action. Stock-Chrome acceptance never started, the publication job was
-canceled, and no v0.12.8 Release exists. Version 0.12.9 then started a fresh
-cycle and was also withdrawn: its one exact packaged macOS run failed closed at
-the first semantic action after observing a cursor-position delta that the old
-record could not attribute. Windows and stock-Chrome acceptance were not
-started, and no v0.12.9 Release exists. Version 0.12.10 then passed 69 exact
-packaged macOS assertions but timed out after 300 seconds with no separately
-authorized movement, stopped before the final action, and was withdrawn before
-Windows or stock-Chrome acceptance.
-
-Version 0.12.13 then completed 192 of 193 quiet-lane assertions before the
-unchanged whole-run oracle detected unrelated shared-seat `mouseMoved`/cursor
-activity. The candidate was withdrawn without running deliberate macOS,
-Windows, or stock-Chrome acceptance; the failure was recorded as contamination,
-not attributed to the helper.
-
-Version 0.12.26 attempt 1 bound and ran only the macOS quiet lane. The lane
-failed closed during `computer.typeText` after the independent monitor observed
-shared-seat HID pointer activity; the contamination was not attributed to the
-helper. Attempt 2 rebuilt the candidate but stopped before execution because a
-byte-identical extension returned one valid attestation per workflow attempt
-and the verifier incorrectly required every returned statement to name the
-current attempt. Both attempts were preserved and canceled; Windows, stock
-Chrome, and publication never started. Version 0.12.27 tightened exact-attempt
-attestation selection and atomic `dist/` replacement, passed both packaged
-macOS lanes, and then exposed an external Windows-launcher durability gap. The
-repository runner process exited before creating evidence, while its streams,
-exit fact, and process-start telemetry were not retained. Candidate-byte
-execution could neither be proved nor excluded because the runner probes both
-EXEs first, so the version was withdrawn without a UI action, Chrome run, or
-Release. Version 0.12.28 then checkpointed provisional checked-in coordinator
-source with flush-before-move create-once state, an owner-private allowlisted
-worker environment, kill-on-close process-tree containment, persistent separate
-stream files, and exact worker/runner PID-plus-start-time binding; it remained a
-blocked source checkpoint and never became a candidate. Version 0.12.29
-completes the Windows-native coordinator source gate. The stable admission mutex
-precedes recovery; one monotonic deadline spans exact prior-Job termination,
-zero-active observation, namespace disappearance, and one final
-`CreateJobObject` call. A non-null handle is accepted only with last error zero;
-every nonzero result, including `ERROR_ALREADY_EXISTS`, is closed and rejected
-without adopting or retrying it. The Job is configured kill-on-close and the
-worker bound before Worker or Intent state is published. Its eight GUID-scoped
-native SelfTest scenarios passed under exact 64-bit system Windows PowerShell
-5.1, and independent review found no P0/P1 issue. The read-only watcher still
-starts only after the atomic foreground-arm request marker exists; repeated
-`Follow` remains notification-only with `uiActionAllowed: false`. No packaged
-0.12.29 candidate was built, downloaded, or executed, and no macOS, Windows
-candidate, stock-Chrome, tag, or Release gate occurred. Product, protocol, and
-platform behavior are unchanged.
-
-Version 0.12.30 retained that Windows source milestone and changed the release
-orchestration boundary. Candidate construction is tagless and creates no GitHub
-environment deployment. Its schema-3 binding identifies the reviewed `main`
-source, exact workflow run and attempt, five-file artifact set, manifest, and
-attestations before any live acceptance begins. A separate publication workflow
-verifies the candidate and complete platform/browser receipt before entering
-the protected `release` environment; only that protected job may create the
-annotated tag, publish the exact assets, make the Release immutable, and verify
-the public bytes. This removes speculative candidates from the approval
-environment without weakening packaged acceptance. Its first candidate passed
-both macOS lanes, then failed closed before the Windows runner launched because
-the staged worker-support loader referenced an undefined hex helper. Version
-0.12.31 fixed that loader and passed its quiet macOS lane, but the deliberate
-lane timed out during its bounded post-`ACTION` fresh-frame refresh before
-product dispatch. Version 0.12.32 enlarged and made that refresh abortable; its
-one trusted candidate then failed a source-compiled app-share self-test on an
-extra stdout line before permissions, quiet-seat stabilization, or candidate
-process launch. Stock Chrome and publication did not run for any of these
-candidates. Version 0.12.33 removed the stray line and enforced the same exact
-self-test stdout, empty stderr, and zero exit in CI, candidate construction, and
-the packaged acceptance rig. Its two fresh macOS lanes passed, but its one
-Windows attempt failed before fixture construction completed because the
-compiler child remained nested in the coordinator Job chain. No product binary,
-Chrome action, tag, or publication followed. Version 0.12.34 repaired that Job
-topology and passed both macOS lanes, but its Windows coordinator wrote the
-persistent no-retry reservation before private coordinator state existed; the
-invoking session was then interrupted. The exact observation and its limits are
-preserved in the immutable [v0.12.34 negative-evidence commit](https://github.com/flrngel/local-browser-bridge/tree/aef8fc68018cdb6181ad3d0886acf4e71fcda96d/evidence/v0.12.34/computer/attempts/withdrawn-2509567-windows-pre-coordinator-interruption).
-Version 0.12.37 retains the breakaway-plus-atomic-Job-list pattern, tests the
-exact nested fixture build in its source gate, and moves the schema-2
-per-version reservation into the bound worker's final pre-intent boundary.
-
-Version 0.12.37 requires two fresh, sequential, non-mergeable runs of one exact
-packaged macOS candidate. Before candidate execution in either lane, the source-bound
-native SystemProbe requires a 30-second sampled quiet epoch with at least 60
-stable 500 ms transitions. Pointer, foreground/focus/front-window, cursor, or
-active-Space activity resets all progress under one immutable 30-minute deadline;
-unknown monitoring is immediately fatal. This preflight reduces ambient
-contamination but does not replace any later invariant. The quiet lane must
-remain quiet for every evidence cell. Only after it passes may the
-`deliberate-concurrency` lane run. That lane launches one nonactivating
-acceptance app with an exact bundle identifier, stable window title, and unique
-accessibility button. A separately authorized exact-app-share controller presses
-that button once and then stops. The app verifies the runner request digest,
-disables the button, writes a create-once start receipt, remains present across
-the real bounded product action, and writes a completion receipt only after the
-runner proves the target postcondition plus quiet product and independent
-boundaries. After the start receipt and before click dispatch, the runner must
-obtain a strictly newer streamed frame from the same share, exact target, and
-unchanged geometry within the reserved deadline. Foreground, focus, Space,
-cursor, and cumulative HID pointer/keyboard
-counters must match at the required endpoints; ambiguity is fatal. The receipt
-chain records an ordered app-share orchestration sequence, not a
-notification-only signal, physical-human provenance, cryptographic controller identity, a
-separate OS seat, or product-control authority. Its result uses
-`acceptanceButtonActionObserved`,
-`appShareSurfaceObservedAtProductBoundaries`, `sharedHidInputObserved`, and
-`sampledSharedContextUnchanged`; the completion marker uses
-`handoffStateSequenceBound`. Quiet records `sharedHidInputObserved: null` because
-there is no app-share transaction, while deliberate records `false` for no HID
-boundary activity during its transaction. These endpoint samples and cumulative
-counters cannot prove zero transient programmatic changes, a continuous monitor,
-atomic provider identity, or zero transient focus/window manipulation. A
-create-once aggregate binds both byte-distinct result files, all twelve screenshots, the
-three app-share markers, the clean source-bound harness, and the exact workflow
-artifact. Neither lane may be retried, merged, or substituted. The same
-candidate must also complete fresh interactive-Windows, stock-Chrome,
-evidence-commit, and immutable-release gates. A source contract, API return, or
-single screenshot cannot substitute for those version-specific packaged
-results.
-
-Transport success alone is diagnostic evidence. A platform/action combination is supported only after its exact-target route is sealed, any API acceptance is labelled only as such, a representative application-owned outcome is observed when confirmation is claimed, and the advertised non-interruption and pointer-attribution boundaries hold.
+For what release acceptance actually requires today, see
+[Release process](../maintainers/RELEASE.md); for the release-by-release
+history behind that requirement, see
+[Release-attempt history](../history/release-attempts.md).
