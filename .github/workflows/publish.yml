@@ -39,7 +39,6 @@ jobs:
     timeout-minutes: 45
     permissions:
       actions: read
-      administration: read
       attestations: read
       contents: read
     outputs:
@@ -302,7 +301,6 @@ jobs:
       url: https://github.com/${{ github.repository }}/releases/tag/v${{ inputs.version }}
     permissions:
       actions: read
-      administration: read
       attestations: read
       contents: write
     steps:

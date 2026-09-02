@@ -348,7 +348,8 @@ verify_attestation() {
 }
 
 assert_repository_release_policy() {
-  local enabled pages matches ruleset_id ruleset
+  local enabled pages matches ruleset_id ruleset headers
+  echo "release policy check: verifying immutable-releases is enabled" >&2
   enabled="$(gh api \
     -H 'Accept: application/vnd.github+json' \
     -H 'X-GitHub-Api-Version: 2026-03-10' \
@@ -356,14 +357,35 @@ assert_repository_release_policy() {
     --jq '.enabled')"
   test "$enabled" = true || die "repository immutable releases are not enabled"
 
+  # Rulesets are fetched with a plain, unauthenticated curl request instead
+  # of `gh api` (which always attaches GH_TOKEN when it is set): "List
+  # repository rulesets" and "Get a repository ruleset" both serve public
+  # data for a public repository to anonymous requests, but reject an
+  # *authenticated* Actions installation token that lacks the
+  # Administration permission -- and a workflow's `permissions:` block
+  # cannot grant that at all; it is not one of the keys GitHub Actions
+  # recognizes (confirmed: `gh workflow run` rejects "administration" as an
+  # invalid permission value). Presenting GH_TOKEN turns a request that
+  # would succeed unauthenticated into one GitHub evaluates strictly
+  # against the token's own insufficient scope, producing 403
+  # "Resource not accessible by integration" instead of falling back to
+  # public access. Unauthenticated requests share the caller IP's public,
+  # unauthenticated rate limit (60/hour); this call runs at most twice per
+  # publish attempt (preflight, then release), so that budget is ample.
+  echo "release policy check: verifying active tag rulesets (unauthenticated public read)" >&2
   pages="$(mktemp)"
   matches="$(mktemp)"
   ruleset="$(mktemp)"
-  gh api --paginate \
+  headers="$(mktemp)"
+  curl -fsS \
     -H 'Accept: application/vnd.github+json' \
     -H 'X-GitHub-Api-Version: 2026-03-10' \
-    "repos/$REPOSITORY/rulesets?per_page=100" > "$pages"
-  jq -s '[.[][] | select(.target == "tag" and .enforcement == "active")]' \
+    -D "$headers" \
+    "https://api.github.com/repos/$REPOSITORY/rulesets?per_page=100" \
+    -o "$pages"
+  ! grep -qi '^link:.*rel="next"' "$headers" \
+    || die "repository has more rulesets than fit on one page"
+  jq '[.[] | select(.target == "tag" and .enforcement == "active")]' \
     "$pages" > "$matches"
   test "$(jq 'length' "$matches")" -ge 1 \
     || die "no active tag ruleset protects release tags"
@@ -371,10 +393,11 @@ assert_repository_release_policy() {
   local protected_count=0 candidate_id
   while IFS= read -r candidate_id; do
     is_positive_integer "$candidate_id" || die "tag ruleset ID is invalid"
-    gh api \
+    curl -fsS \
       -H 'Accept: application/vnd.github+json' \
       -H 'X-GitHub-Api-Version: 2026-03-10' \
-      "repos/$REPOSITORY/rulesets/$candidate_id" > "$ruleset"
+      "https://api.github.com/repos/$REPOSITORY/rulesets/$candidate_id" \
+      -o "$ruleset"
     if jq -e '
         .target == "tag" and .enforcement == "active" and
         .conditions.ref_name.include == ["refs/tags/v*"] and
@@ -387,7 +410,7 @@ assert_repository_release_policy() {
       ruleset_id="$candidate_id"
     fi
   done < <(jq -r '.[].id' "$matches")
-  rm -f -- "$pages" "$matches" "$ruleset"
+  rm -f -- "$pages" "$matches" "$ruleset" "$headers"
   test "$protected_count" = 1 \
     || die "release tags are not protected by one unbypassable update/deletion ruleset"
   is_positive_integer "$ruleset_id" || die "release tag ruleset binding is invalid"
