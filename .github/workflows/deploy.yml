@@ -397,8 +397,13 @@ jobs:
         with:
           pattern: acceptance-*
           path: acceptance
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-candidate
+          path: candidate
       - name: Combine the per-OS acceptance results into one receipt
         env:
+          GH_DEBUG: api
           GH_TOKEN: ${{ github.token }}
           VERIFIED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
           VERIFIED_VERSION: ${{ needs.verify.outputs.version }}
@@ -409,8 +414,17 @@ jobs:
           for lane in windows macos; do
             test -f "acceptance/acceptance-$lane/acceptance.json"
           done
+          # The candidate bytes come from actions/download-artifact above, not a
+          # direct `gh api .../zip` download: while this run is still in
+          # progress, the raw REST artifact-zip endpoint has been observed to
+          # 404 for an artifact this same run produced (reproduced twice on
+          # d06ce94, run 33621985863), even though the identical listing call
+          # and the pattern-based download-artifact step just above it both
+          # succeed. download-artifact talks to the same Actions Results
+          # service the upload used, so it is not subject to that gap.
+          test "$(find candidate -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 5
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" > artifacts.json
-          artifact_id="$(jq -er \
+          candidate_artifact="$(jq -er \
             --argjson run_id "$GITHUB_RUN_ID" \
             --arg source "$VERIFIED_SOURCE_SHA" '
               (.total_count < 100) and
@@ -422,14 +436,13 @@ jobs:
                 [.artifacts[] | select(
                   .name == "release-candidate" and .expired == false and
                   .workflow_run.id == $run_id and .workflow_run.head_sha == $source
-                )][0].id | tostring
+                )][0]
               else error("candidate artifact is absent or ambiguous") end
             ' artifacts.json)"
-          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > release-candidate.zip
-          zip_sha="$(sha256sum release-candidate.zip | awk '{ print $1 }')"
-          mkdir payload
-          unzip -q release-candidate.zip -d payload
-          manifest_sha="$(sha256sum payload/SHA256SUMS.txt | awk '{ print $1 }')"
+          artifact_id="$(jq -er '.id | tostring' <<<"$candidate_artifact")"
+          zip_sha="$(jq -er '.digest' <<<"$candidate_artifact" | sed 's/^sha256://')"
+          [[ "$zip_sha" =~ ^[0-9a-f]{64}$ ]]
+          manifest_sha="$(sha256sum candidate/SHA256SUMS.txt | awk '{ print $1 }')"
           jq -n \
             --arg repository "$GITHUB_REPOSITORY" \
             --arg version "$VERIFIED_VERSION" \
