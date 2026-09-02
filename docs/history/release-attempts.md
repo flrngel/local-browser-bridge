@@ -119,3 +119,43 @@ harness ordering — the unchanged package later passed 207/207.
 No product defect was found in the server, extension, shell, Agent Fetch,
 installers, tray host, or Agent Skill code added in this span, because no
 acceptance lane ever reached them.
+
+## v0.12.69 (first CI-hosted-acceptance attempt; superseded by v0.12.70)
+
+v0.12.69 was the first version to run the two-phase workflow described in
+[Release process](../maintainers/RELEASE.md) end to end. `deploy.yml` built
+and accepted the candidate on the first attempt (run `33644452397`, source
+`2c3e303dc0f6cf3f3c02a489589a3e57e30f3524`). `publish.yml`'s `dry_run: true`
+rehearsal (run `33645973402`) also passed. The real publish (run
+`33646112534`) created the annotated `v0.12.69` tag and a draft release, then
+crashed inside `assert_release_assets` with `jq: error: Cannot index array
+with string "assets"` before uploading any asset.
+
+Root cause: a classic jq operator-precedence bug, not a product defect.
+`assert_release_assets`'s asset-inventory filter read
+`[.assets[].name] | unique | length == (.assets | length)`. jq's `|` binds
+looser than `==`, so this parsed as
+`[...] | (unique | (length == (.assets | length)))` — by the time the
+right-hand `.assets` was evaluated, the pipe had already replaced the input
+with the (already-`unique`'d) array of names, so `.assets` indexed an array
+instead of the release object. The other `| length == N` occurrences in the
+same script compare to a literal number and were unaffected, since a literal
+does not depend on the input the outer pipe changes. This code path had
+never run in a real (non-dry-run) publish before, because every earlier
+real-publish attempt in this repository's history had failed earlier, in the
+release policy check. Fixed in
+[PR #66](https://github.com/flrngel/local-browser-bridge/pull/66), which
+also extracted the corrected predicate into a named,
+self-test-covered constant.
+
+The `v0.12.69` tag is protected by the "Protect immutable release tags"
+ruleset (no bypass actors, update and deletion both forbidden) and by then
+already pointed at `2c3e303`. By the time the fix above landed on `main`
+(merge commit `af699f8`), `main` had moved past `2c3e303`, and `publish.yml`'s
+preflight step requires `source_sha` to exactly equal the current `main` tip
+— so `v0.12.69` could no longer be published from either the original source
+(stale relative to `main`) or a fresh one (would conflict with the existing
+immutable tag). The empty-asset draft release was deleted (`gh release
+delete v0.12.69`, without `--cleanup-tag`); the tag itself was left in place,
+inert and immutable, exactly as the ruleset requires. **v0.12.70** supersedes
+it and carries the same shipped changes.

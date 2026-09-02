@@ -9,14 +9,14 @@ Symptom → likely cause → fix. For the full error-code table, see
 
 The resolved release predates the feature this guide describes. The
 Desktop Host, local shell, Agent Fetch, and one-command uninstaller all ship
-starting with release 0.12.69; `install-macos.sh` checks the downloaded
+starting with release 0.12.70; `install-macos.sh` checks the downloaded
 archive's contents before it copies anything, so installing an older release
 with a guide that assumes these features fails this way, before any files
 land on disk. Check the
 [releases page](https://github.com/flrngel/local-browser-bridge/releases) for
 the latest version — both installers already resolve `latest` by default, so
 this is not a matter of passing a version flag; if the newest release is
-still older than 0.12.69, [build from source](BUILD.md) instead. See
+still older than 0.12.70, [build from source](BUILD.md) instead. See
 [Install macOS](INSTALL_MACOS.md).
 
 ### Windows installer succeeds, but no tray icon appears or EnableShell fails at launch
@@ -24,14 +24,14 @@ still older than 0.12.69, [build from source](BUILD.md) instead. See
 Unlike the macOS script, `install-windows.ps1` does not check what a release
 actually contains — it downloads and installs whatever `-Version` (or
 `latest`) resolves to and reports success either way. Installing a release
-older than 0.12.69 this way copies the binaries and creates working
+older than 0.12.70 this way copies the binaries and creates working
 shortcuts, but there is no Desktop Host yet: the shortcuts run the console
 server binary instead, so no tray icon appears, and if you passed
 `-EnableShell` that same process (and the sign-in Startup shortcut) exits
 immediately with `Unknown argument: --enable-shell` because the older server
 does not understand that flag. Check the
 [releases page](https://github.com/flrngel/local-browser-bridge/releases):
-if the newest release is still older than 0.12.69, [build from
+if the newest release is still older than 0.12.70, [build from
 source](BUILD.md) instead of installing. See
 [Install Windows](INSTALL_WINDOWS.md).
 
