@@ -45,9 +45,11 @@ curl http://127.0.0.1:17373/health
 ```
 
 `extensionConnected` flips to `true` once the extension connects. Then copy
-the **Agent Fetch base URL** from the dashboard and make your first call:
+the **Agent Fetch base URL** from the dashboard, set it as a variable, and
+make your first call:
 
 ```bash
+export AGENT_FETCH_BASE_URL="paste-it-here"
 curl "$AGENT_FETCH_BASE_URL/tabs.list"
 ```
 
