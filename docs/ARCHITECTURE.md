@@ -49,9 +49,7 @@ Windows namespace-swap tests prebuild two test-owned local NTFS mount-point junc
 
 The Manifest V3 extension connects outbound to the server. A mutual-HMAC handshake binds the extension role, nonces, and server-created connector session without putting the raw token in the WebSocket URL. Before its first storage read, the service worker restricts `chrome.storage.local` to Chrome's `TRUSTED_CONTEXTS`, so injected content scripts cannot read the persisted bridge token or control state through the extension storage API.
 
-An explicit browser-control lease attaches `chrome.debugger` to one tab. The held attachment supplies trusted CDP input and causes Chrome to show its browser-owned debugging warning. An isolated content script supplies structured DOM observation and the extension-owned page pill, Stop control, and synthetic pointer. The public host and a private marker retained inside its closed shadow root are randomized per document; shadow-important rules reset critical visual host, pseudo-element, and backdrop properties. Snapshot invalidation excludes only the retained host and exact objects owned by that closed shadow root: the public ID, ancestor selectors, and page-owned light children confer no exclusion. JavaScript attribute/ancestor checks and the independent browser-process proof handle accessibility state. Control start, reuse, capture restoration, and passive checks first re-top and perform bounded render/layout/computed-style plus document/closed-shadow hit tests.
-
-The renderer requires the host to remain the direct child of `document.documentElement`. The service worker independently resolves that exact `:root`, pins the private marker's innermost closed-shadow host, and requires the host's immediate browser-process parent to equal the root element, all read from one whole-document `DOM.getDocument({depth: -1, pierce: true})` snapshot whose nesting is the only parent authority (Chrome's `DOM.describeNode` never reports `parentId`). Within a shared 1.5 s/512-ancestry-work proof it samples `DOM.getTopLayerElements`, rejects any later node resolving to the same document, checks initial and fresh-final host/root ancestry and `hidden`/`inert`/ARIA-critical attributes, and—outside intentional capture—requires five `DOM.getNodeForLocation(ignorePointerEventsNone:true)` paint-order hits through that host and frame. A top-layer event revision seqlock accepts a clean final state after the bridge's own re-top events; a separate content-loss generation captured before the renderer request changes only for loss/mismatch signals and rejects same-revision loss across the entire proof. The content watchdog attempts a sample every 500 ms when its previous acknowledgement is idle; browser acknowledgement is bounded at 2 s, and a root top-layer event or indicator loss not cleared by its exact proof has an absolute 3 s service-worker deadline plus scheduler/transport timing. Navigation, native dialogs, and intentional capture suspend ordinary input and must rebind/reprove at their completion boundary. The DOM methods are experimental Chrome 140+ dependencies and the proof is neither compositor/physical-pixel proof nor atomic with later input, so Chrome's browser-owned warning and Cancel remain authoritative.
+An explicit browser-control lease attaches `chrome.debugger` to one tab. The held attachment supplies trusted CDP input and causes Chrome to show its browser-owned debugging warning. The extension injects nothing into the controlled page: no badge, pill, banner, or in-page Stop button. The visible, page-independent signals that a tab is under remote control are Chrome's own debugger infobar and its Cancel button, the named **Local Browser Bridge** tab group the extension places the tab in for the duration of the lease, and **Release control** in the extension popup for that same tab. Starting or renewing the lease sends the content script a `control.bind` message carrying the exact session id and epoch; the content script keeps that pair only to refuse a mutating command that does not present it again, and to fail closed if the lease expires or goes unheard from for too long. `control.release` clears it. This binding is read-only bookkeeping — the content script can neither start nor stop control, and observing or acting on the page never depends on the page rendering or reporting anything back.
 
 Cross-origin iframes use recursively verified child CDP sessions on supported Chromium 140+ browsers. They remain children of the single tab attachment and share its count, depth, time, and lease bounds. Input is dispatched through the page target after coordinates are translated into top-level viewport space.
 
@@ -135,13 +133,13 @@ The browser extension remains the preferred actuator for Chromium web content. I
 
 ## Release acceptance tooling
 
-Release candidates are verified by dedicated macOS and Windows acceptance
-tooling before publication, entirely separate from the product code above —
-neither exposes a bridge command, and neither ships to users. That tooling is
-being replaced by CI-hosted acceptance; see
-[maintainers/RELEASE.md](maintainers/RELEASE.md) for the current procedure
-and [history/release-attempts.md](history/release-attempts.md) for what the
-prior harness found and why it changed.
+Release candidates are verified by CI-hosted acceptance — a reusable GitHub
+Actions workflow that exercises the packaged candidate on `windows-latest`
+and `macos-26` runners — before publication, entirely separate from the
+product code above: it exposes no bridge command and ships to no user. See
+[Release process](maintainers/RELEASE.md) for the current procedure and
+[Release-attempt history](history/release-attempts.md) for what the prior
+two-machine operator harness found before CI-hosted acceptance replaced it.
 
 ## Capture is not isolation
 
@@ -156,7 +154,7 @@ PiP automation, virtual displays, VM orchestration, RDP loopback, and separate O
 
 ## Stop and cleanup
 
-- Chrome Cancel, the in-page Stop button, popup release, timeout, target loss, or connector loss revokes the browser lease.
+- Chrome Cancel, popup Release control, timeout, target loss, or connector loss revokes the browser lease.
 - `POST /api/v1/command/cancel` is bearer- and `callId`-scoped. It drops the exact action future and sends one original-session connector cancel; it preserves the browser lease when safe and reports the original call as outcome-unknown. For a started controlled-page command, the server independently latches exact-session recovery and removes observation/screenshot authority before returning 202, so a dropped connector cancel cannot reopen the old turn. The same exact-session fence runs before a disconnected HTTP handler releases the action lock and on post-dispatch connector outcome-unknown errors, including no-`callId` and legacy dashboard requests. The extension synchronously advances and persists its turn, clears its frame snapshot both immediately and at the final queue barrier, and serializes that persistence before the next command. Its global browser-action tail also waits for late Chrome reconciliation (including durable `tabs.new` provenance) and freshness finalization before a socket or popup-approved action can enter; explicit `page.observe` is the only normal controlled-page recovery.
 - A valid `computer.share.stop`, helper shutdown, target closure, capture failure, or connector replacement stops the native share and clears frame authority.
 - `computer.share.start` is guarded from immediately before exact-session dispatch through its first exact-ID observation. Cancellation or task drop anywhere in that interval revokes the originating transport out of band. A malformed/rejected start, failed first observation, or unproven stop first quarantines publication and transfers cleanup to a detached task that issues an exact-session stop; if raw `active: false` cannot be proven, only that originating transport is revoked. Caller cancellation cannot cancel this cleanup, and a replacement helper is never selected or cleared.

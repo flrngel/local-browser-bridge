@@ -94,10 +94,12 @@ release, verifies it, stops only programs running from the install folder,
 replaces every component together, and reuses the stable extension folder.
 In `chrome://extensions`, select **Reload** on the existing extension card.
 
-To install a specific stable version (0.12.69 or later; see the note above):
+To install a specific stable version instead of latest, substitute its number
+(0.12.69 or later for the Desktop Host, shell, and Agent Fetch; see the note
+above) for the example below:
 
 ```powershell
-$installer = [scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-windows.ps1')); & $installer -Version 0.12.69
+$installer = [scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-windows.ps1')); & $installer -Version 0.12.68
 ```
 
 ## One-command uninstall

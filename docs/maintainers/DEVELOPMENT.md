@@ -73,7 +73,7 @@ variable across all three executables.
 3. Select **Load unpacked** and choose `extension/`.
 4. Enter the server token and port in the extension popup.
 5. Use `/demo` for ordinary element, key, scroll, dialog, and navigation checks.
-6. Confirm the Chrome-owned debugger warning, page pill, trusted Stop, revocation, and reconnect behavior.
+6. Confirm Chrome's own debugger warning and Cancel action, the named **Local Browser Bridge** tab group, popup Release/Resume, revocation, and reconnect behavior.
 
 Use Chromium 140 or later for the nested cross-origin fixtures. A passing same-process iframe test does not prove the OOPIF route.
 

@@ -1,15 +1,13 @@
 # Release process
 
-> **This page describes the target release flow being built on the
-> `feat/ci-hosted-acceptance` branch, which had not merged to `main` at the
-> time this page was written.** It replaces the prior two-machine operator
-> acceptance harness (tagged `archive/operator-acceptance-harness-0.12.68`
-> before removal; see [Release-attempt history](../history/release-attempts.md)
-> for why it was replaced). If `feat/ci-hosted-acceptance` has landed since,
-> verify the workflow file names, inputs, and script names below against
-> `.github/workflows/acceptance.yml`, `.github/workflows/deploy.yml`,
-> `.github/workflows/publish.yml`, and `scripts/ci-acceptance.mjs` before
-> relying on this page for a real release, and update it if they differ.
+> This page describes CI-hosted acceptance, which replaced the prior
+> two-machine operator acceptance harness (tagged
+> `archive/operator-acceptance-harness-0.12.68` before removal; see
+> [Release-attempt history](../history/release-attempts.md) for why it was
+> replaced). It is verified against `.github/workflows/acceptance.yml`,
+> `.github/workflows/deploy.yml`, `.github/workflows/publish.yml`, and
+> `scripts/ci-acceptance.mjs`; re-check those files after changing any of
+> them and update this page if they differ.
 
 In this repository, "deploy" means finishing the entire release operation:
 build a candidate, let acceptance verify the packaged artifact, and only then
