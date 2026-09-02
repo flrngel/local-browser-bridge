@@ -342,8 +342,8 @@ async fn connect_fake_extension_with_dialog_race(
                     "id": id, "type": "result", "ok": true,
                     "result": { "tabId": 7, "active": true }
                 }),
-                // Tab 9 stands in for a tab a human paused with the in-page
-                // Stop button: the extension refuses control until the human
+                // Tab 9 stands in for a tab a human paused with Chrome's
+                // Cancel: the extension refuses control until the human
                 // resumes it, and no retry by the caller can change that.
                 "browser.control.start" if message["params"]["tabId"] == json!(9) => json!({
                     "id": id, "type": "result", "ok": false,
@@ -4091,7 +4091,7 @@ async fn attaches_recovery_taxonomy_to_failed_commands() {
     handle.await.unwrap();
 }
 
-/// The live 0.11.0 defect: a human clicked the in-page Stop button, and the
+/// The live 0.11.0 defect: a human stopped remote control, and the
 /// commands that came back `HUMAN_CONTROL_PAUSED` were reported to REST
 /// clients as HTTP 500 "server error" — telling them to retry or alert when
 /// the only thing that resolves it is a human resuming control.

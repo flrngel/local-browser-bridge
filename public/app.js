@@ -358,7 +358,7 @@ function renderBrowserControl(state) {
     setTextIfChanged(ui["browser-control-summary"], "Remote browser control was paused by a person. Only Resume remote control in the extension popup can authorize it again.");
     setStateBadge(ui["browser-control-badge"], "Paused by you", "warning-state");
   } else if (active) {
-    setTextIfChanged(ui["browser-control-summary"], `${browserName} control is attached to tab ${control.tabId}. The browser's native debugging notice and the in-tab Stop indicator should remain visible.`);
+    setTextIfChanged(ui["browser-control-summary"], `${browserName} control is attached to tab ${control.tabId}. The browser's native debugging notice should remain visible, and the tab is in a named "Local Browser Bridge" group.`);
     setStateBadge(ui["browser-control-badge"], "Control active", "active");
   } else if (control.revocation?.requiresExplicitStart) {
     setTextIfChanged(ui["browser-control-summary"], `Control was revoked (${titleCase(control.revocation.reason)}). Select Start control to create a new explicit lease.`);

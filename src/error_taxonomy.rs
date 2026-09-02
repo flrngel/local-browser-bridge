@@ -306,7 +306,7 @@ pub fn classify(legacy_code: &str) -> Taxonomy {
         "TARGET_CHANGED" | "TARGET_MISSING" | "COMPUTER_NO_WINDOW" => TaxonomyCode::TargetChanged,
         "BAD_COORDINATES" | "TARGET_OUT_OF_VIEWPORT" => TaxonomyCode::OutOfBounds,
         "ELEMENT_DISABLED" | "POINTER_NOT_ARRIVED" => TaxonomyCode::NotInteractable,
-        "TARGET_OCCLUDED" | "CONTROL_UI_OCCLUSION" => TaxonomyCode::Obscured,
+        "TARGET_OCCLUDED" => TaxonomyCode::Obscured,
         "DOCUMENT_CHANGED" | "NAVIGATION_PENDING" | "FRAME_DETACHED" => {
             TaxonomyCode::DocumentChanged
         }
@@ -318,8 +318,7 @@ pub fn classify(legacy_code: &str) -> Taxonomy {
         | "STALE_CONTROL_SESSION"
         | "STALE_CONTROL_TURN"
         | "STALE_MOVE_SEQUENCE"
-        | "INPUT_RELEASE_FAILED"
-        | "CONTROL_UI_RENDER_FAILED" => TaxonomyCode::LeaseLost,
+        | "INPUT_RELEASE_FAILED" => TaxonomyCode::LeaseLost,
         "HUMAN_CONTROL_PAUSED"
         | "HUMAN_PAUSE_STATE_INVALID"
         | "HUMAN_PAUSE_PERSIST_FAILED"
@@ -414,7 +413,6 @@ pub(crate) const LEGACY_CODES: &[(&str, TaxonomyCode)] = &[
     ("TARGET_CHANGED", TaxonomyCode::TargetChanged),
     ("TARGET_MISSING", TaxonomyCode::TargetChanged),
     ("TARGET_OCCLUDED", TaxonomyCode::Obscured),
-    ("CONTROL_UI_OCCLUSION", TaxonomyCode::Obscured),
     ("TARGET_OUT_OF_VIEWPORT", TaxonomyCode::OutOfBounds),
     ("BAD_COORDINATES", TaxonomyCode::OutOfBounds),
     ("ELEMENT_DISABLED", TaxonomyCode::NotInteractable),
@@ -440,10 +438,6 @@ pub(crate) const LEGACY_CODES: &[(&str, TaxonomyCode)] = &[
     ("STALE_CONTROL_TURN", TaxonomyCode::LeaseLost),
     ("STALE_MOVE_SEQUENCE", TaxonomyCode::LeaseLost),
     ("INPUT_RELEASE_FAILED", TaxonomyCode::LeaseLost),
-    // The extension revokes the lease itself when its in-page Stop control
-    // cannot be proven visible, so the recovery is a fresh control session,
-    // not an opaque connector fault.
-    ("CONTROL_UI_RENDER_FAILED", TaxonomyCode::LeaseLost),
     // Human authority and policy boundaries.
     ("HUMAN_CONTROL_PAUSED", TaxonomyCode::NeedsUser),
     ("HUMAN_PAUSE_STATE_INVALID", TaxonomyCode::NeedsUser),

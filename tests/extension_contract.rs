@@ -17,7 +17,6 @@ const EXTENSION_FILES: &[&str] = &[
     "popup.css",
     "popup.html",
     "popup.js",
-    "stop-guard.js",
 ];
 
 fn normalize_newlines(source: String) -> String {
@@ -172,21 +171,18 @@ fn package_contains_only_declared_local_assets() {
         "scripts/verify-release-assets.sh does not verify exactly: {declared}"
     );
 
-    // The stop guard is isolated at document_start; the heavier shared DOM
-    // core and content agent remain document_idle. The frame agent is never a
-    // content script and never web accessible.
+    // The bridge injects nothing into the page, so there is exactly one
+    // content-script stage: the shared DOM core and the read-only content
+    // agent at document_idle. The frame agent is never a content script and
+    // never web accessible.
+    assert_eq!(manifest["content_scripts"].as_array().unwrap().len(), 1);
     assert_eq!(
         strings(&manifest["content_scripts"][0]["js"]),
-        BTreeSet::from_iter(["stop-guard.js"].map(str::to_owned))
-    );
-    assert_eq!(manifest["content_scripts"][0]["run_at"], "document_start");
-    assert_eq!(
-        strings(&manifest["content_scripts"][1]["js"]),
         BTreeSet::from_iter(["content.js", "dom-core.js"].map(str::to_owned))
     );
-    assert_eq!(manifest["content_scripts"][1]["run_at"], "document_idle");
-    assert_eq!(manifest["content_scripts"][1]["js"][0], "dom-core.js");
-    assert_eq!(manifest["content_scripts"][1]["js"][1], "content.js");
+    assert_eq!(manifest["content_scripts"][0]["run_at"], "document_idle");
+    assert_eq!(manifest["content_scripts"][0]["js"][0], "dom-core.js");
+    assert_eq!(manifest["content_scripts"][0]["js"][1], "content.js");
     assert!(manifest.get("web_accessible_resources").is_none());
 }
 
@@ -237,9 +233,9 @@ fn observations_are_non_activating_bounded_and_composed() {
         + capture_start;
     let capture = &background[capture_start..capture_end];
     assert!(capture.contains("Page.captureScreenshot"));
-    assert!(capture.contains("control.capture.begin"));
-    assert!(capture.contains("control.capture.end"));
-    assert!(capture.contains("finally"));
+    // Nothing is injected into the page, so a screenshot needs no hide and
+    // restore handshake with the renderer before and after the capture.
+    assert!(!capture.contains("control.capture"));
     assert!(!capture.contains("chrome.tabs.update"));
     assert!(background.contains("DEBUGGER_TIMEOUT"));
     assert!(background.contains("finally"));
@@ -1961,7 +1957,9 @@ fn trusted_pointer_has_dynamic_motion_and_two_phase_target_validation() {
     assert!(background.contains("springRate"));
     assert!(background.contains("moveSequence"));
     assert!(background.contains("turn"));
-    assert!(background.contains("control.cursor"));
+    // The pointer path is dispatched as real trusted CDP input only; nothing
+    // draws a cursor into the page.
+    assert!(!background.contains("control.cursor"));
     assert!(background.contains("Input.dispatchMouseEvent"));
     assert!(background.contains("method: \"commitClick\""));
     assert!(background.contains("method: \"commitPoint\""));
@@ -2132,6 +2130,9 @@ fn background_pointer_teleports_once_without_focus_or_animation_latency() {
       }
 
       const moveVirtualCursor = extractFunction(source, "moveVirtualCursor");
+      if (moveVirtualCursor.includes("contentRequest")) {
+        throw new Error("moveVirtualCursor must not round-trip through the content script; nothing is drawn into the page");
+      }
       const bridge = new Function("deferred", `
         const lease = {
           tabId: 9, sessionId: "lease-9", epoch: 3, documentEpoch: 2,
@@ -2141,9 +2142,9 @@ fn background_pointer_teleports_once_without_focus_or_animation_latency() {
         };
         let animate = false;
         let deferOperations = true;
-        let debuggerCalls = 0, contentCalls = 0, pauses = 0, persists = 0;
-        const debuggerPoints = [], contentPoints = [];
-        const debuggerGates = [], contentGates = [];
+        let debuggerCalls = 0, pauses = 0, persists = 0;
+        const debuggerPoints = [];
+        const debuggerGates = [];
         function requireControl() { return Promise.resolve(lease); }
         function captureLeaseAuthority() {
           return { tabId: 9, sessionId: "lease-9", epoch: 3, documentEpoch: 2 };
@@ -2180,97 +2181,84 @@ fn background_pointer_teleports_once_without_focus_or_animation_latency() {
           debuggerGates.push(gate);
           return gate.promise;
         }
-        function contentRequest(_tabId, payload) {
-          contentCalls += 1;
-          contentPoints.push({ x: payload.cursor.x, y: payload.cursor.y });
-          if (!deferOperations) return Promise.resolve();
-          const gate = deferred();
-          contentGates.push(gate);
-          return gate.promise;
-        }
         function pause() { pauses += 1; return Promise.resolve(); }
         function persistControlState() { persists += 1; return Promise.resolve(); }
         ${moveVirtualCursor}
         return {
           move: () => moveVirtualCursor(9, 400, 300),
           releaseDebugger: () => debuggerGates.shift().resolve(),
-          releaseContent: () => contentGates.shift().resolve(),
-          rejectContent: (error) => contentGates.shift().reject(error),
+          rejectDebugger: (error) => debuggerGates.shift().reject(error),
           foreground() {
             animate = true; deferOperations = false;
-            debuggerCalls = 0; contentCalls = 0; pauses = 0; persists = 0;
-            debuggerPoints.length = 0; contentPoints.length = 0;
+            debuggerCalls = 0; pauses = 0; persists = 0;
+            debuggerPoints.length = 0;
           },
           transitioningForeground() {
             animate = true; deferOperations = true;
-            debuggerCalls = 0; contentCalls = 0; pauses = 0; persists = 0;
-            debuggerPoints.length = 0; contentPoints.length = 0;
+            debuggerCalls = 0; pauses = 0; persists = 0;
+            debuggerPoints.length = 0;
           },
           failingForeground() {
             animate = true; deferOperations = true;
-            debuggerCalls = 0; contentCalls = 0; pauses = 0; persists = 0;
-            debuggerPoints.length = 0; contentPoints.length = 0;
+            debuggerCalls = 0; pauses = 0; persists = 0;
+            debuggerPoints.length = 0;
           },
           background() { animate = false; },
           state: () => ({
-            debuggerCalls, contentCalls, pauses, persists, cursor: lease.cursor,
-            debuggerPoints: [...debuggerPoints], contentPoints: [...contentPoints],
+            debuggerCalls, pauses, persists, cursor: lease.cursor,
+            debuggerPoints: [...debuggerPoints],
           }),
         };
       `)(deferred);
 
+      // Background (unfocused tab/window): one final CDP move, no per-frame
+      // content round trip — there is nothing in the page left to update.
       const backgroundMove = bridge.move();
       while (bridge.state().debuggerCalls === 0) await Promise.resolve();
-      if (bridge.state().debuggerCalls !== 1 || bridge.state().contentCalls !== 0) {
+      if (bridge.state().debuggerCalls !== 1) {
         throw new Error("background movement dispatched more than its single final CDP move");
       }
       bridge.releaseDebugger();
-      while (bridge.state().contentCalls === 0) await Promise.resolve();
-      if (bridge.state().contentCalls !== 1) {
-        throw new Error("background movement sent more than one cursor state");
-      }
-      bridge.releaseContent();
       const skipped = await backgroundMove;
       const backgroundState = bridge.state();
       if (skipped.arrival !== "skipped_background" || skipped.points !== 1
         || skipped.durationMs !== 0 || backgroundState.debuggerCalls !== 1
-        || backgroundState.contentCalls !== 1 || backgroundState.pauses !== 0
-        || backgroundState.persists !== 1 || backgroundState.cursor.x !== 400
-        || backgroundState.cursor.y !== 300) {
+        || backgroundState.pauses !== 0 || backgroundState.persists !== 1
+        || backgroundState.cursor.x !== 400 || backgroundState.cursor.y !== 300) {
         throw new Error("background movement did not acknowledge one persisted final arrival");
       }
 
+      // A tab that loses foreground presentation mid-animation collapses to
+      // one final CDP move at the target instead of continuing the path.
       bridge.transitioningForeground();
       const transitionedMove = bridge.move();
       while (bridge.state().debuggerCalls === 0) await Promise.resolve();
-      bridge.releaseDebugger();
-      while (bridge.state().contentCalls === 0) await Promise.resolve();
+      // Flip presentation before releasing the first frame: the next
+      // presentation read happens synchronously once this gate resolves, so
+      // this ordering is deterministic rather than a timing race.
       bridge.background();
-      bridge.releaseContent();
+      bridge.releaseDebugger();
       while (bridge.state().debuggerCalls < 2) await Promise.resolve();
       bridge.releaseDebugger();
-      while (bridge.state().contentCalls < 2) await Promise.resolve();
-      bridge.releaseContent();
       const transitioned = await transitionedMove;
       const transitionedState = bridge.state();
       const finalDebuggerPoint = transitionedState.debuggerPoints.at(-1);
-      const finalContentPoint = transitionedState.contentPoints.at(-1);
       if (transitioned.arrival !== "skipped_background" || transitioned.points !== 2
-        || transitionedState.debuggerCalls !== 2 || transitionedState.contentCalls !== 2
-        || transitionedState.pauses !== 0 || finalDebuggerPoint.x !== 400
-        || finalDebuggerPoint.y !== 300 || finalContentPoint.x !== 400
-        || finalContentPoint.y !== 300) {
+        || transitionedState.debuggerCalls !== 2 || transitionedState.pauses !== 0
+        || finalDebuggerPoint.x !== 400 || finalDebuggerPoint.y !== 300) {
         throw new Error("foreground-to-background transition did not collapse to one final arrival");
       }
 
+      // A CDP failure after at least one point already landed is an unknown
+      // outcome, never a silently retryable failure.
       bridge.failingForeground();
       const failedMove = bridge.move();
       while (bridge.state().debuggerCalls === 0) await Promise.resolve();
       bridge.releaseDebugger();
-      while (bridge.state().contentCalls === 0) await Promise.resolve();
-      const contentFailure = new Error("PAGE_UNAVAILABLE: renderer rejected the cursor update");
-      contentFailure.code = "PAGE_UNAVAILABLE";
-      bridge.rejectContent(contentFailure);
+      while (bridge.state().debuggerCalls < 2) await Promise.resolve();
+      const dispatchFailure = new Error("INPUT_DISPATCH_FAILED: the browser rejected the pointer move");
+      dispatchFailure.code = "INPUT_DISPATCH_FAILED";
+      bridge.rejectDebugger(dispatchFailure);
       let failureWasUnknown = false;
       let dependentClickStarted = false;
       try {
@@ -2279,7 +2267,7 @@ fn background_pointer_teleports_once_without_focus_or_animation_latency() {
       } catch (error) {
         failureWasUnknown = error.code === "ACTION_OUTCOME_UNKNOWN";
       }
-      if (!failureWasUnknown || dependentClickStarted || bridge.state().debuggerCalls !== 1) {
+      if (!failureWasUnknown || dependentClickStarted || bridge.state().debuggerCalls !== 2) {
         throw new Error("post-CDP cursor failure remained retryable or allowed the dependent click");
       }
 
@@ -2287,7 +2275,7 @@ fn background_pointer_teleports_once_without_focus_or_animation_latency() {
       const arrived = await bridge.move();
       const foregroundState = bridge.state();
       if (arrived.arrival !== "arrived" || arrived.points !== 12
-        || foregroundState.debuggerCalls !== 12 || foregroundState.contentCalls !== 12
+        || foregroundState.debuggerCalls !== 12
         || foregroundState.pauses !== 11 || foregroundState.persists !== 1) {
         throw new Error("foreground movement did not retain the full animated path");
       }
@@ -2318,192 +2306,6 @@ fn snapshots_invalidate_on_mutation_scroll_and_resize() {
     assert!(core.contains("the viewport resized"));
     assert!(content.contains("snapshotRevision !== revisions.read()"));
     assert!(content.contains("snapshotInvalidated: true"));
-}
-
-#[test]
-fn snapshot_exclusion_uses_exact_control_identity_and_rejects_page_owned_mutations() {
-    let content = extension_source("content.js");
-    let core = extension_source("dom-core.js");
-    let is_control_start = content.find("function isControlNode(").unwrap();
-    let is_control_end = content[is_control_start..]
-        .find("\n  function reinsertControlUiWhenLost(")
-        .map(|offset| is_control_start + offset)
-        .unwrap();
-    let is_control = &content[is_control_start..is_control_end];
-    assert!(is_control.contains("node === host"));
-    assert!(is_control.contains("node === shadow"));
-    assert!(is_control.contains("shadow?.contains?.(node)"));
-    assert!(!is_control.contains("CONTROL_HOST_ID"));
-    assert!(!is_control.contains(".closest("));
-    assert!(core.contains("changed.length > 0 && changed.every((node) => isExcludedNode(node))"));
-    assert!(core.contains("target became part of the bridge control surface"));
-
-    let script = r#"
-      import fs from "node:fs";
-      function extractFunction(source, name) {
-        const marker = `function ${name}(`;
-        let start = source.indexOf(marker);
-        if (start < 0) throw new Error(`missing ${name}`);
-        if (source.slice(start - 6, start) === "async ") start -= 6;
-        const parameters = source.indexOf("(", start);
-        let parameterDepth = 0, quote = "", escaped = false;
-        let lineComment = false, blockComment = false, parameterEnd = -1;
-        for (let index = parameters; index < source.length; index += 1) {
-          const character = source[index];
-          const next = source[index + 1];
-          if (lineComment) {
-            if (character === "\n") lineComment = false;
-          } else if (blockComment) {
-            if (character === "*" && next === "/") { blockComment = false; index += 1; }
-          } else if (quote) {
-            if (escaped) escaped = false;
-            else if (character === "\\") escaped = true;
-            else if (character === quote) quote = "";
-          } else if (character === "/" && next === "/") { lineComment = true; index += 1; }
-          else if (character === "/" && next === "*") { blockComment = true; index += 1; }
-          else if (["\"", "'", "`"].includes(character)) quote = character;
-          else if (character === "(") parameterDepth += 1;
-          else if (character === ")" && --parameterDepth === 0) { parameterEnd = index; break; }
-        }
-        if (parameterEnd < 0) throw new Error(`unterminated parameters for ${name}`);
-        const brace = source.indexOf("{", parameterEnd);
-        let depth = 0;
-        quote = ""; escaped = false; lineComment = false; blockComment = false;
-        for (let index = brace; index < source.length; index += 1) {
-          const character = source[index];
-          const next = source[index + 1];
-          if (lineComment) {
-            if (character === "\n") lineComment = false;
-          } else if (blockComment) {
-            if (character === "*" && next === "/") { blockComment = false; index += 1; }
-          } else if (quote) {
-            if (escaped) escaped = false;
-            else if (character === "\\") escaped = true;
-            else if (character === quote) quote = "";
-          } else if (character === "/" && next === "/") { lineComment = true; index += 1; }
-          else if (character === "/" && next === "*") { blockComment = true; index += 1; }
-          else if (["\"", "'", "`"].includes(character)) quote = character;
-          else if (character === "{") depth += 1;
-          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
-        }
-        throw new Error(`unterminated ${name}`);
-      }
-
-      const contentSource = fs.readFileSync("extension/content.js", "utf8");
-      const coreSource = fs.readFileSync("extension/dom-core.js", "utf8");
-      const isControlNodeSource = extractFunction(contentSource, "isControlNode");
-      const createRevisionTrackerSource = extractFunction(coreSource, "createRevisionTracker");
-      const validateRecordSource = extractFunction(coreSource, "validateRecord");
-      const bridge = new Function(`
-        let controlUi = null;
-        let mutationCallback = null;
-        const document = {};
-        class MutationObserver {
-          constructor(callback) { mutationCallback = callback; }
-          observe() {}
-        }
-        function addEventListener() {}
-        ${isControlNodeSource}
-        ${createRevisionTrackerSource}
-        return {
-          configure(value) { controlUi = value; },
-          isControlNode,
-          tracker() {
-            const value = createRevisionTracker({ isExcludedNode: isControlNode });
-            return { value, emit: (mutations) => mutationCallback(mutations) };
-          },
-        };
-      `)();
-
-      const host = { id: "bridge-public-id" };
-      const shadowOwned = { name: "real closed-shadow child" };
-      const shadow = { contains: (node) => node === shadowOwned };
-      bridge.configure({ host, shadow });
-      const fakeContainer = {
-        id: host.id,
-        style: { display: "contents" },
-        closest: () => fakeContainer,
-      };
-      const observed = { parentElement: fakeContainer };
-      const pageLightChild = { parentElement: host };
-      const fakeForm = { id: host.id, action: "/transfer", closest: () => fakeContainer };
-      const pageRoot = {};
-      if (!bridge.isControlNode(host) || !bridge.isControlNode(shadow)
-        || !bridge.isControlNode(shadowOwned)) {
-        throw new Error("exact retained control objects were not excluded");
-      }
-      for (const pageNode of [fakeContainer, observed, pageLightChild, fakeForm]) {
-        if (bridge.isControlNode(pageNode)) {
-          throw new Error("page-owned node spoofed the exact control identity");
-        }
-      }
-
-      const revisions = bridge.tracker();
-      const attributes = (target) => ({ type: "attributes", target });
-      const characterData = (target) => ({ type: "characterData", target });
-      const childList = (target, addedNodes = [], removedNodes = []) => ({
-        type: "childList", target, addedNodes, removedNodes,
-      });
-      revisions.emit([attributes(host), characterData(shadowOwned)]);
-      revisions.emit([childList(pageRoot, [host]), childList(pageRoot, [], [host])]);
-      if (revisions.value.read() !== 0) {
-        throw new Error("exact-owned control mutations invalidated the page snapshot");
-      }
-
-      revisions.emit([attributes(fakeContainer)]);
-      revisions.emit([
-        childList(pageRoot, [], [observed]),
-        childList(fakeContainer, [observed]),
-      ]);
-      revisions.emit([childList(host, [pageLightChild])]);
-      revisions.emit([attributes(fakeForm)]);
-      revisions.emit([characterData(observed)]);
-      if (revisions.value.read() !== 5
-        || revisions.value.reason() !== "the document mutated") {
-        throw new Error(`page-owned fake-ID/context mutations stayed fresh: ${revisions.value.read()}`);
-      }
-
-      const replacementHost = { id: host.id };
-      const replacementOwned = {};
-      const replacementShadow = { contains: (node) => node === replacementOwned };
-      bridge.configure({ host: replacementHost, shadow: replacementShadow });
-      if (bridge.isControlNode(host) || bridge.isControlNode(shadowOwned)
-        || !bridge.isControlNode(replacementHost) || !bridge.isControlNode(replacementOwned)) {
-        throw new Error("replacing the control surface retained an old object identity");
-      }
-      bridge.configure(null);
-      if (bridge.isControlNode(replacementHost) || bridge.isControlNode(replacementOwned)) {
-        throw new Error("clearing the control surface retained an object identity");
-      }
-
-      let excludedAfterObservation = false;
-      const validate = new Function("isExcludedNode", `
-        ${validateRecordSource}
-        return validateRecord;
-      `)(() => excludedAfterObservation);
-      excludedAfterObservation = true;
-      let rejected = false;
-      try {
-        validate({ element: observed });
-      } catch (error) {
-        rejected = error.message.startsWith("TARGET_CHANGED: target became part");
-      }
-      if (!rejected) throw new Error("a newly excluded observed target remained actionable");
-    "#;
-    let output = match Command::new("node")
-        .args(["--input-type=module", "-e", script])
-        .output()
-    {
-        Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
-        Err(error) => panic!("failed to run exact snapshot exclusion harness: {error}"),
-    };
-    assert!(
-        output.status.success(),
-        "Node exact snapshot exclusion harness failed:\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
 }
 
 #[test]
@@ -2911,1136 +2713,87 @@ fn stale_popup_approval_refreshes_the_replacement_card_immediately() {
 }
 
 #[test]
-fn control_is_visible_and_user_stoppable_in_page_and_popup() {
+fn control_injects_no_page_surface_and_is_stoppable_by_chrome_and_the_popup() {
     let content = extension_source("content.js");
+    let background = extension_source("background.js");
+    let core = extension_source("dom-core.js");
     let popup = extension_source("popup.html");
     let popup_script = extension_source("popup.js");
 
-    assert!(content.contains("Local Browser Bridge is using this tab"));
-    assert!(content.contains("setAttribute(\"popover\", \"manual\")"));
-    assert!(content.contains("showPopover"));
-    assert!(content.contains("LBB_CONTROL_UI"));
-    assert!(content.contains("stop.textContent = \"Stop\""));
-    assert!(content.contains("lastControlState"));
-    assert!(content.contains("!controlUi.host.isConnected"));
-    assert!(content.contains("queueMicrotask"));
-    assert!(popup.contains("The browser shows its native debugging notice"));
-    assert!(popup.contains("id=\"start-control\""));
-    assert!(popup.contains("id=\"release-control\""));
-    assert!(popup_script.contains("startControlCurrent"));
-    assert!(popup_script.contains("releaseControl"));
+    // The bridge renders nothing into the controlled page. The visible,
+    // page-independent signals that a remote agent holds the tab are Chrome's
+    // own debugger infobar with its Cancel button, the named Local Browser
+    // Bridge tab group, and Release control in the extension popup.
+    for banned in [
+        "using this tab",
+        "popover",
+        "showPopover",
+        "attachShadow",
+        "createElement",
+        "documentElement.append",
+        "textContent = \"Stop\"",
+    ] {
+        for (name, source) in [("content.js", &content), ("dom-core.js", &core)] {
+            assert!(
+                !source.contains(banned),
+                "extension/{name} still builds an in-page control surface: {banned}"
+            );
+        }
+    }
+    assert!(!background.contains("showControlUi"));
+    assert!(!background.contains("control.show"));
+    assert!(!background.contains("CONTROL_UI"));
+
+    // What the content script keeps is the read-only session mirror: it can
+    // refuse a command whose session or epoch is not the current lease's, and
+    // it rebinds itself on a fresh document without waiting for load.
+    assert!(content.contains("function bindControl(message)"));
+    assert!(content.contains("case \"control.bind\""));
+    assert!(content.contains("case \"control.release\""));
+    assert!(content.contains("CONTROL_REVOKED"));
     assert!(content.contains("CONTROL_LAST_SEEN_GRACE_MS"));
     assert!(content.contains("controlExpiresAt"));
     assert!(content.contains("controlLastSeenAt"));
     assert!(content.contains("expireStaleControl"));
     assert!(content.contains("addEventListener(\"pageshow\""));
     assert!(content.contains("action: \"reconcile\""));
-}
+    assert!(content.contains("scheduleInitialControlReconcile();"));
+    assert!(content.contains("queueMicrotask"));
+    assert!(!content.contains("if (document.readyState === \"complete\") queueMicrotask"));
 
-#[test]
-fn document_start_stop_guard_precedes_hostile_capture_and_verifies_exact_stop() {
-    let manifest = manifest();
-    let background = extension_source("background.js");
-    let content = extension_source("content.js");
-    assert_eq!(manifest["content_scripts"][0]["js"][0], "stop-guard.js");
-    assert_eq!(manifest["content_scripts"][0]["run_at"], "document_start");
-    assert!(background.contains("state.earlyStopGuardReady !== true"));
-    assert!(content.contains("earlyStopGuardReady = globalThis.__LOCAL_BROWSER_BRIDGE_STOP_GUARD__?.install?.(handleControlStopActivation) === true"));
+    // The page can only read the lease over that channel; it can neither start
+    // nor stop control through it.
+    assert!(background.contains("async function handleControlSessionMessage"));
+    assert!(background.contains("message?.type === \"LBB_CONTROL\""));
+    let session_handler = background
+        .split("async function handleControlSessionMessage")
+        .nth(1)
+        .and_then(|rest| rest.split("\nchrome.runtime.onMessage").next())
+        .expect("handleControlSessionMessage is missing");
+    assert!(!session_handler.contains("stopControl(\"released_by_user\""));
+    assert!(!session_handler.contains("startControl("));
 
-    let script = r#"
-      import fs from "node:fs";
-      import vm from "node:vm";
-      class Target {
-        constructor() { this.listeners = new Map(); }
-        addEventListener(type, listener) {
-          const listeners = this.listeners.get(type) || [];
-          listeners.push(listener);
-          this.listeners.set(type, listeners);
-        }
-        emit(event) {
-          for (const listener of this.listeners.get(event.type) || []) {
-            listener(event);
-            if (event.immediateStopped) break;
-          }
-        }
-        count() { return [...this.listeners.values()].reduce((sum, listeners) => sum + listeners.length, 0); }
-      }
-      function event(type, trusted = true) {
-        return { type, isTrusted: trusted, immediateStopped: false, stopImmediatePropagation() { this.immediateStopped = true; } };
-      }
-      const windowTarget = new Target(), documentTarget = new Target();
-      const context = vm.createContext({ window: windowTarget, document: documentTarget });
-      const guardSource = fs.readFileSync("extension/stop-guard.js", "utf8");
-      vm.runInContext(guardSource, context);
-      const guard = context.__LOCAL_BROWSER_BRIDGE_STOP_GUARD__;
-      let forwarded = 0;
-      if (!guard.install(() => { forwarded += 1; })) throw new Error("guard installation failed");
-      windowTarget.addEventListener("pointerdown", (value) => value.stopImmediatePropagation(), true);
-      documentTarget.addEventListener("pointerdown", (value) => value.stopImmediatePropagation(), true);
-      const trusted = event("pointerdown");
-      windowTarget.emit(trusted);
-      if (!trusted.immediateStopped) documentTarget.emit(trusted);
-      if (forwarded !== 1) throw new Error("hostile capture suppressed or duplicated the early guard");
-      const beforeReinject = windowTarget.count() + documentTarget.count();
-      vm.runInContext(guardSource, context);
-      if (windowTarget.count() + documentTarget.count() !== beforeReinject) throw new Error("guard reinjection duplicated listeners");
-      windowTarget.emit(event("click", false));
-      if (forwarded !== 1) throw new Error("untrusted activation reached the guard handler");
-
-      function extractFunction(source, name) {
-        const marker = `function ${name}(`;
-        let start = source.indexOf(marker);
-        if (start < 0) throw new Error(`missing ${name}`);
-        if (source.slice(start - 6, start) === "async ") start -= 6;
-        const brace = source.indexOf("{", start);
-        let depth = 0, quote = "", escaped = false;
-        for (let index = brace; index < source.length; index += 1) {
-          const character = source[index];
-          if (quote) {
-            if (escaped) escaped = false;
-            else if (character === "\\") escaped = true;
-            else if (character === quote) quote = "";
-          } else if (["\"", "'", "`"].includes(character)) quote = character;
-          else if (character === "{") depth += 1;
-          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
-        }
-        throw new Error(`unterminated ${name}`);
-      }
-      const contentSource = fs.readFileSync("extension/content.js", "utf8");
-      const functions = ["stopPointOwnedByControl", "trustedKeyboardStopActivation", "handleControlStopActivation"]
-        .map((name) => extractFunction(contentSource, name)).join("\n");
-      const verifier = new Function(`
-        const handledStopActivationEvents = new WeakSet();
-        const revokedControlSessions = new Set();
-        let activeControlSessionId = "lease-a";
-        let lastStopPointerActivation = null;
-        let requests = 0;
-        const host = { isConnected: true, matches: () => true };
-        const stop = { isConnected: true, contains: (node) => node === stop };
-        const shadow = { activeElement: null, elementFromPoint: () => stop };
-        let documentHit = host;
-        const document = { activeElement: host, elementFromPoint: () => documentHit };
-        const innerWidth = 1000, innerHeight = 800;
-        let controlUi = { host, stop, shadow };
-        function rendered() { return true; }
-        function requestControlStop() { requests += 1; return Promise.resolve(); }
-        ${functions}
-        return {
-          pointer: (value) => handleControlStopActivation(value),
-          keyboard: () => { shadow.activeElement = stop; return handleControlStopActivation({ type: "keydown", key: "Enter", isTrusted: true }); },
-          occlude: () => { documentHit = {}; },
-          clearSession: () => { activeControlSessionId = ""; },
-          requests: () => requests,
-        };
-      `)();
-      const pointer = { type: "pointerdown", isTrusted: true, button: 0, clientX: 10, clientY: 10 };
-      if (!verifier.pointer(pointer) || verifier.requests() !== 1) throw new Error("exact Stop pointer was not accepted");
-      verifier.pointer(pointer);
-      verifier.pointer({ type: "click", isTrusted: true, button: 0, clientX: 10, clientY: 10 });
-      if (verifier.requests() !== 1) throw new Error("one pointer activation dispatched Stop more than once");
-      verifier.occlude();
-      if (verifier.pointer({ type: "pointerdown", isTrusted: true, button: 0, clientX: 20, clientY: 20 })) {
-        throw new Error("non-owned Stop coordinates were accepted");
-      }
-      if (!verifier.keyboard() || verifier.requests() !== 2) throw new Error("trusted focused keyboard Stop was rejected");
-      verifier.clearSession();
-      if (verifier.keyboard() || verifier.requests() !== 2) throw new Error("keyboard Stop escaped exact session binding");
-    "#;
-    let output = match Command::new("node")
-        .args(["--input-type=module", "-e", script])
-        .output()
-    {
-        Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
-        Err(error) => panic!("failed to run early Stop guard harness: {error}"),
-    };
-    assert!(
-        output.status.success(),
-        "Node early Stop guard harness failed:\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn control_indicator_reuse_and_loss_are_fail_closed() {
-    let background = extension_source("background.js");
-    let content = extension_source("content.js");
-
-    assert!(content.contains("function randomHex128()"));
-    assert!(content.contains("crypto.getRandomValues(new Uint8Array(16))"));
-    assert!(!content.contains("const CONTROL_HOST_ID = \"__local_browser_bridge_control__\""));
-    assert!(content.contains("const CONTROL_UI_WATCHDOG_INTERVAL_MS = 500"));
-    assert!(content.contains("action: \"indicatorLost\""));
-    assert!(content.contains("controlUiLossReportPendingSessionId === sessionId"));
-    assert!(content.contains("captureDepth > 0"));
-    assert!(content.contains("controlUiRetopDepth > 0"));
-    assert!(content.contains("ensureControlUiLatestTopLayer"));
-    assert!(content.contains("document.elementFromPoint(x, y) !== controlUi.host"));
-    assert!(content.contains("controlUi.shadow.elementFromPoint(x, y)"));
-    for reset in [
-        "all: initial !important",
-        "opacity: 1 !important",
-        "filter: none !important",
-        "mask: none !important",
-        "-webkit-mask: none !important",
-        "clip-path: none !important",
-        "transform: none !important",
-        "content-visibility: visible !important",
-        "mix-blend-mode: normal !important",
-    ] {
-        assert!(
-            content.contains(reset),
-            "missing hostile page-style reset: {reset}"
-        );
-    }
-    assert!(content.contains("Number(style.opacity) === 1"));
-    assert!(content.contains(":host::before, :host::after"));
-    assert!(content.contains("content: none !important; display: none !important"));
-    assert!(content.contains(":host::backdrop"));
-    assert!(content.contains("background: transparent !important"));
-    assert!(content.contains("accessibilityReady: controlAccessibilityReady()"));
-    assert!(content.contains("host.parentElement !== document.documentElement"));
-    assert!(content.contains("host.parentNode !== document.documentElement"));
-    assert!(content.contains(
-        "current.hidden || current.inert || current.getAttribute(\"aria-hidden\") === \"true\""
-    ));
-    assert!(content.contains("root = current.getRootNode?.()"));
-    assert!(background.contains("state.pillTopmost === true"));
-    assert!(background.contains("state.stopTopmost === true"));
-    assert!(background.contains("await showControlUi(controlLease)"));
-    assert!(background.contains("reason !== \"page.handleDialog\""));
-    assert!(background.contains("message.sessionId !== controlLease.sessionId"));
-    assert!(background.contains("stopControl(\"control_ui_hidden\""));
-
-    let script = r#"
-      import fs from "node:fs";
-      function extractFunction(source, name) {
-        const marker = `function ${name}(`;
-        let start = source.indexOf(marker);
-        if (start < 0) throw new Error(`missing ${name}`);
-        if (source.slice(start - 6, start) === "async ") start -= 6;
-        const brace = source.indexOf("{", start);
-        let depth = 0, quote = "", escaped = false, lineComment = false, blockComment = false;
-        for (let index = brace; index < source.length; index += 1) {
-          const character = source[index];
-          const next = source[index + 1] ?? "";
-          if (lineComment) {
-            if (character === "\n") lineComment = false;
-          } else if (blockComment) {
-            if (character === "*" && next === "/") { blockComment = false; index += 1; }
-          } else if (quote) {
-            if (escaped) escaped = false;
-            else if (character === "\\") escaped = true;
-            else if (character === quote) quote = "";
-          } else if (character === "/" && next === "/") { lineComment = true; index += 1; }
-          else if (character === "/" && next === "*") { blockComment = true; index += 1; }
-          else if (["\"", "'", "`"].includes(character)) quote = character;
-          else if (character === "{") depth += 1;
-          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
-        }
-        throw new Error(`unterminated ${name}`);
-      }
-
-      const content = fs.readFileSync("extension/content.js", "utf8");
-      const report = extractFunction(content, "reportControlUiLoss");
-      const browserCheck = extractFunction(content, "requestBrowserStackCheck");
-      const lost = extractFunction(content, "failClosedOnLostControlUi");
-      const lossBridge = new Function(`
-        const CONTROL_BROWSER_ACK_TIMEOUT_MS = 2000;
-        let activeControlSessionId = "lease-a";
-        let captureDepth = 0;
-        let controlUiRetopDepth = 0;
-        let controlUiLossReportPendingSessionId = "";
-        let visible = true;
-        let sends = 0;
-        let retops = 0;
-        let hides = 0;
-        let waitForRender = async () => {};
-        let sender = async (message) => ({ ok: true, result: { active: message.action === "indicatorCheck" } });
-        const chrome = { runtime: { sendMessage: (...args) => { sends += 1; return sender(...args); } } };
-        function hideControl({ sessionId }) {
-          if (activeControlSessionId === sessionId) { activeControlSessionId = ""; hides += 1; }
-        }
-        function controlUiVisiblyAvailable() { return visible; }
-        function controlUiRenderState() {
-          return {
-            hostId: "__local_browser_bridge_control_11111111111111111111111111111111__",
-            markerId: "__local_browser_bridge_marker_22222222222222222222222222222222__",
-            viewTransitionActive: false,
-            viewport: { width: 1000, height: 800 },
-            controlHitPoints: [{ x: 10, y: 10 }],
-            capturing: captureDepth > 0,
-          };
-        }
-        function ensureControlUiLatestTopLayer() { retops += 1; return true; }
-        function applyCaptureVisibility() {}
-        function waitForRenderOpportunity() { return waitForRender(); }
-        ${report}
-        ${browserCheck}
-        ${lost}
-        return {
-          check: failClosedOnLostControlUi,
-          setVisible: (value) => { visible = value; },
-          setCapturing: (value) => { captureDepth = value ? 1 : 0; },
-          setWaiter: (value) => { waitForRender = value; },
-          setSender: (value) => { sender = value; },
-          resetActive: () => { activeControlSessionId = "lease-a"; },
-          sends: () => sends,
-          hides: () => hides,
-          retops: () => retops,
-        };
-      `)();
-      if (await lossBridge.check() || lossBridge.sends() !== 1) throw new Error("visible indicator missed browser-stack acknowledgement");
-      if (lossBridge.retops() !== 1) throw new Error("clean watchdog sample did not re-top the indicator");
-      let releaseRender;
-      lossBridge.setWaiter(() => new Promise((resolve) => { releaseRender = resolve; }));
-      const captureOverlap = lossBridge.check();
-      await Promise.resolve();
-      lossBridge.setCapturing(true);
-      releaseRender();
-      if (await captureOverlap || lossBridge.sends() !== 1) {
-        throw new Error("capture beginning during render acknowledgement falsely reported indicator loss");
-      }
-      lossBridge.setWaiter(async () => {});
-      lossBridge.setVisible(false);
-      if (await lossBridge.check() || lossBridge.sends() !== 1) throw new Error("intentional capture failed closed");
-      lossBridge.setCapturing(false);
-      const retopsBeforeOcclusion = lossBridge.retops();
-      let release;
-      lossBridge.setSender(() => new Promise((resolve) => { release = resolve; }));
-      const first = lossBridge.check();
-      await Promise.resolve();
-      if (lossBridge.retops() !== retopsBeforeOcclusion) throw new Error("hit-testable occlusion was re-topped before revocation");
-      if (await lossBridge.check() || lossBridge.sends() !== 2) throw new Error("loss report was duplicated");
-      release({ ok: true, result: { active: false } });
-      if (!await first) throw new Error("indicator loss was not acknowledged");
-      if (lossBridge.hides() !== 1) throw new Error("inactive loss acknowledgement did not clear local UI state");
-      lossBridge.resetActive();
-      lossBridge.setSender(async () => { throw new Error("transient"); });
-      if (await lossBridge.check()) throw new Error("failed revocation was acknowledged");
-      const afterFailure = lossBridge.sends();
-      lossBridge.setSender(async () => ({ ok: true, result: { active: false } }));
-      if (!await lossBridge.check() || lossBridge.sends() !== afterFailure + 1) throw new Error("loss report did not retry");
-
-      const background = fs.readFileSync("extension/background.js", "utf8");
-      const requireControl = extractFunction(background, "requireControl");
-      const reuseBridge = new Function(`
-        let controlLease = { tabId: 7, sessionId: "lease-a", epoch: 2, expiresAt: Date.now() + 10000, ownerSessionId: "owner", pendingDialog: null };
-        let paints = 0;
-        function assertCommandActive() {}
-        async function initializeControlState() {}
-        function assertHumanControlAvailable() {}
-        async function initializeProtocolIdentity() {}
-        async function stopControl() { throw new Error("unexpected stop"); }
-        function currentControlOwner() { return "owner"; }
-        async function showControlUi() { paints += 1; }
-        function pendingDialogError() { return new Error("BLOCKED_BY_DIALOG"); }
-        async function startControl() { throw new Error("unexpected start"); }
-        ${requireControl}
-        return {
-          reuse: (reason) => requireControl(7, reason, null),
-          setDialog: (value) => { controlLease.pendingDialog = value; },
-          paints: () => paints,
-        };
-      `)();
-      await reuseBridge.reuse("page.click");
-      if (reuseBridge.paints() !== 1) throw new Error("same-tab reuse skipped fresh paint acknowledgement");
-      reuseBridge.setDialog({ type: "alert" });
-      await reuseBridge.reuse("page.handleDialog");
-      if (reuseBridge.paints() !== 1) throw new Error("dialog handler touched the frozen renderer");
-      let blocked = false;
-      try { await reuseBridge.reuse("page.click"); } catch (error) { blocked = error.message === "BLOCKED_BY_DIALOG"; }
-      if (!blocked) throw new Error("non-dialog action bypassed a pending dialog");
-
-      const handler = extractFunction(background, "handleControlUiMessage");
-      const handlerBridge = new Function(`
-        let controlLease = {
-          tabId: 7, sessionId: "lease-a", expiresAt: Date.now() + 10000,
-          navigationReady: true, pendingNavigation: null, controlUiProofReady: true,
-        };
-        let controlUiTopLayerMutationDepth = 0;
-        let controlUiContentLossGeneration = 0;
-        const reasons = [];
-        async function initializeControlState() {}
-        function controlCaptureIds() { return []; }
-        async function stopControl(reason) { reasons.push(reason); controlLease = null; return { active: false }; }
-        function publicControlState() { return { active: Boolean(controlLease) }; }
-        ${handler}
-        return { handle: (message) => handleControlUiMessage(message, { tab: { id: 7 } }), reasons };
-      `)();
-      const stale = await handlerBridge.handle({ action: "indicatorLost", sessionId: "lease-old" });
-      if (!stale.active || handlerBridge.reasons.length) throw new Error("stale indicator report revoked a newer lease");
-      const exact = await handlerBridge.handle({ action: "indicatorLost", sessionId: "lease-a" });
-      if (exact.active || handlerBridge.reasons[0] !== "control_ui_hidden") throw new Error("exact indicator loss did not fail closed");
-
-      const hitFunctions = ["controlElementHitPoints", "controlElementTopmost", "ensureControlUiLatestTopLayer"]
-        .map((name) => extractFunction(content, name)).join("\n");
-      const hitBridge = new Function(`
-        const CONTROL_ACCESSIBLE_LABEL = "Local Browser Bridge browser control";
-        let open = true;
-        const events = [];
-        const host = {
-          isConnected: true,
-          hidden: false,
-          inert: false,
-          setAttribute: () => {},
-          matches: () => open,
-          hidePopover: () => { events.push("hide"); open = false; },
-          showPopover: () => { events.push("show"); open = true; },
-        };
-        const pill = {
-          getBoundingClientRect: () => ({ left: 10, top: 10, width: 120, height: 40 }),
-          contains: (node) => node?.owner === "pill" || node?.owner === "stop",
-        };
-        const stop = {
-          getBoundingClientRect: () => ({ left: 95, top: 15, width: 30, height: 30 }),
-          contains: (node) => node?.owner === "stop",
-        };
-        let documentHit = host;
-        let shadowOwner = "pill";
-        const shadow = { elementFromPoint: () => ({ owner: shadowOwner }) };
-        const document = { elementFromPoint: () => documentHit };
-        let controlUi = { host, shadow, pill, stop };
-        function rendered() { return true; }
-        ${hitFunctions}
-        return {
-          pillTopmost: () => controlElementTopmost(pill),
-          stopTopmost: () => { shadowOwner = "stop"; return controlElementTopmost(stop); },
-          cover: () => { documentHit = { hostile: true }; },
-          uncover: () => { documentHit = host; },
-          foreignShadow: () => { shadowOwner = "foreign"; },
-          retop: ensureControlUiLatestTopLayer,
-          close: () => { open = false; },
-          events,
-        };
-      `)();
-      if (!hitBridge.pillTopmost() || !hitBridge.stopTopmost()) throw new Error("owned control points were not accepted");
-      hitBridge.cover();
-      if (hitBridge.pillTopmost()) throw new Error("later document top-layer coverage was not detected");
-      hitBridge.uncover();
-      hitBridge.foreignShadow();
-      if (hitBridge.pillTopmost()) throw new Error("foreign closed-shadow hit was accepted");
-      hitBridge.retop();
-      if (hitBridge.events.slice(-2).join(",") !== "hide,show") throw new Error("open host was not moved to the top-layer tail");
-      hitBridge.close();
-      hitBridge.retop();
-      if (hitBridge.events.at(-1) !== "show") throw new Error("closed host was not reopened");
-
-      const hostSafety = extractFunction(content, "controlHostSafelyRendered");
-      const hostSafetyBridge = new Function(`
-        const host = {};
-        let controlUi = { host };
-        let style = {
-          display: "block", position: "fixed", visibility: "visible", opacity: "1", filter: "none",
-          backdropFilter: "none", webkitBackdropFilter: "none", maskImage: "none", webkitMaskImage: "none",
-          clipPath: "none", transform: "none", translate: "none", rotate: "none", scale: "none",
-          contentVisibility: "visible", mixBlendMode: "normal",
-        };
-        let pseudoStyle = { display: "none", content: "none" };
-        let backdropStyle = {
-          backgroundColor: "rgba(0, 0, 0, 0)", backgroundImage: "none", opacity: "1", filter: "none",
-          backdropFilter: "none", webkitBackdropFilter: "none", pointerEvents: "none",
-        };
-        function rendered() { return true; }
-        function getComputedStyle(_host, pseudo) {
-          if (pseudo === "::backdrop") return backdropStyle;
-          return pseudo ? pseudoStyle : style;
-        }
-        ${hostSafety}
-        return {
-          safe: controlHostSafelyRendered,
-          hostile: (property, value) => { style = { ...style, [property]: value }; },
-          hostilePseudo: () => { pseudoStyle = { display: "block", content: "normal" }; },
-          resetPseudo: () => { pseudoStyle = { display: "none", content: "none" }; },
-          hostileBackdrop: () => { backdropStyle = { ...backdropStyle, backgroundColor: "rgb(0, 0, 0)" }; },
-          reset: () => { style = { ...style, opacity: "1", filter: "none", maskImage: "none", clipPath: "none", transform: "none", contentVisibility: "visible" }; },
-        };
-      `)();
-      if (!hostSafetyBridge.safe()) throw new Error("safe computed host surface was rejected");
-      for (const [property, value] of [
-        ["opacity", "0.01"], ["filter", "opacity(0)"], ["maskImage", "linear-gradient(transparent, transparent)"],
-        ["clipPath", "inset(100%)"], ["transform", "matrix(0.001, 0, 0, 0.001, 0, 0)"], ["contentVisibility", "hidden"],
-      ]) {
-        hostSafetyBridge.reset();
-        hostSafetyBridge.hostile(property, value);
-        if (hostSafetyBridge.safe()) throw new Error(`hostile generic popover ${property} style was accepted`);
-      }
-      hostSafetyBridge.reset();
-      hostSafetyBridge.hostilePseudo();
-      if (hostSafetyBridge.safe()) throw new Error("hostile popover pseudo-element coverage was accepted");
-      hostSafetyBridge.resetPseudo();
-      hostSafetyBridge.hostileBackdrop();
-      if (hostSafetyBridge.safe()) throw new Error("hostile popover backdrop coverage was accepted");
-
-      const accessibility = extractFunction(content, "controlAccessibilityReady");
-      const accessibilityBridge = new Function(`
-        const CONTROL_ACCESSIBLE_LABEL = "Local Browser Bridge browser control";
-        const CONTROL_ACCESSIBILITY_ANCESTRY_MAX = 64;
-        const document = {};
-        const attributes = new Map([
-          ["aria-hidden", "false"], ["aria-label", CONTROL_ACCESSIBLE_LABEL],
-        ]);
-        const root = {
-          hidden: false, inert: false, parentElement: null,
-          getAttribute: () => null, getRootNode: () => document,
-        };
-        document.documentElement = root;
-        const outerAttributes = new Map();
-        const outerHost = {
-          hidden: false, inert: false, parentElement: root,
-          getAttribute: (name) => outerAttributes.get(name) ?? null,
-          getRootNode: () => document,
-        };
-        let shadowRoot = null;
-        const host = {
-          isConnected: true, hidden: false, inert: false, parentElement: root, parentNode: root,
-          getAttribute: (name) => attributes.get(name) ?? null,
-          getRootNode: () => shadowRoot ?? document,
-        };
-        let controlUi = { host };
-        ${accessibility}
-        return {
-          ready: controlAccessibilityReady,
-          hideHost: () => attributes.set("aria-hidden", "true"),
-          resetHost: () => attributes.set("aria-hidden", "false"),
-          inertRoot: () => { root.inert = true; },
-          resetRoot: () => { root.inert = false; root.getAttribute = () => null; },
-          hideRoot: () => { root.inert = false; root.getAttribute = (name) => name === "aria-hidden" ? "true" : null; },
-          nest: (mode) => {
-            shadowRoot = { mode, host: outerHost };
-            host.parentElement = null;
-            host.parentNode = shadowRoot;
-          },
-          wrap: () => { shadowRoot = null; host.parentElement = outerHost; host.parentNode = outerHost; },
-          unnest: () => { shadowRoot = null; host.parentElement = root; host.parentNode = root; },
-          inertOuter: (value) => { outerHost.inert = value; },
-          hideOuter: (value) => {
-            if (value) outerAttributes.set("aria-hidden", "true");
-            else outerAttributes.delete("aria-hidden");
-          },
-        };
-      `)();
-      if (!accessibilityBridge.ready()) throw new Error("accessible exact indicator was rejected");
-      accessibilityBridge.hideHost();
-      if (accessibilityBridge.ready()) throw new Error("page aria-hidden on the randomized host was accepted");
-      accessibilityBridge.resetHost();
-      accessibilityBridge.inertRoot();
-      if (accessibilityBridge.ready()) throw new Error("inert document ancestor was accepted");
-      accessibilityBridge.resetRoot();
-      accessibilityBridge.nest("open");
-      if (accessibilityBridge.ready()) throw new Error("open-shadow reparented host was accepted");
-      accessibilityBridge.nest("closed");
-      if (accessibilityBridge.ready()) throw new Error("closed-shadow reparented host was accepted");
-      accessibilityBridge.wrap();
-      if (accessibilityBridge.ready()) throw new Error("light-DOM wrapper reparented host was accepted");
-      accessibilityBridge.unnest();
-      accessibilityBridge.hideRoot();
-      if (accessibilityBridge.ready()) throw new Error("aria-hidden document ancestor was accepted");
-
-      const acknowledge = extractFunction(background, "controlUiAcknowledged");
-      const supersededHelper = extractFunction(background, "controlUiShowSuperseded");
-      const sameCaptures = extractFunction(background, "sameControlCaptureIds");
-      const show = extractFunction(background, "showControlUiNow");
-      const acknowledgementBridge = new Function(`
-        const CONTROL_UI_PROOF_ATTEMPTS = 3;
-        let controlLease = { tabId: 7, sessionId: "lease-a", epoch: 2, cursor: { visible: false } };
-        let controlUiContentLossGeneration = 0;
-        let controlUiTopLayerRevision = 0;
-        let stopped = 0, browserVerifications = 0, topmost = false, staleSamples = 0, plainFailures = 0;
-        const base = {
-          hostConnected: true, popoverOpen: true, topLayerReordered: true, earlyStopGuardReady: true,
-          accessibilityReady: true, viewTransitionActive: false,
-          hostId: "__local_browser_bridge_control_11111111111111111111111111111111__", hostVisible: true,
-          markerId: "__local_browser_bridge_marker_22222222222222222222222222222222__",
-          pillVisible: true, stopVisible: true, pillTopmost: false, stopTopmost: true,
-          cursorVisible: false, capturing: false, captureDepth: 0, activeCaptureIds: [],
-        };
-        function captureLeaseAuthority() { return {}; }
-        let captures = [], captureStartsDuringRequest = false, contentRequests = 0;
-        function controlCaptureIds() { return [...captures]; }
-        function beginControlUiTopLayerMutation() {}
-        function endControlUiTopLayerMutation() {}
-        async function contentRequest(_tabId, message) {
-          contentRequests += 1;
-          if (captureStartsDuringRequest) {
-            // A screenshot capture begins while the show request is in flight:
-            // the page answers with the capture-shaped indicator.
-            captureStartsDuringRequest = false;
-            captures = ["capture-a"];
-          }
-          if (captures.length > 0) {
-            return {
-              ...base, pillVisible: false, stopVisible: false, pillTopmost: false, stopTopmost: false,
-              capturing: true, captureDepth: captures.length, activeCaptureIds: [...captures],
-            };
-          }
-          return { ...base, pillTopmost: topmost };
-        }
-        function assertLeaseAuthority() {}
-        async function verifyControlUiBrowserTopLayer() {
-          browserVerifications += 1;
-          if (staleSamples > 0) {
-            staleSamples -= 1;
-            const stale = new Error("The browser top layer changed during the final control acknowledgement");
-            stale.code = "CONTROL_UI_TOP_LAYER_STALE";
-            throw stale;
-          }
-          if (plainFailures > 0) {
-            plainFailures -= 1;
-            throw new Error("A browser paint-order hit test did not resolve to the exact control host");
-          }
-          return { revision: controlUiTopLayerRevision, contentLossGeneration: controlUiContentLossGeneration };
-        }
-        async function persistControlState() {}
-        function clearControlUiTopLayerDirty() {}
-        function markControlUiProofDirty() {}
-        async function failControlUiClosed() { stopped += 1; throw new Error("CONTROL_UI_RENDER_FAILED"); }
-        ${acknowledge}
-        ${supersededHelper}
-        ${sameCaptures}
-        ${show}
-        return {
-          show: () => showControlUiNow(controlLease),
-          captureAccepted: () => controlUiAcknowledged({
-            ...base, pillVisible: false, stopVisible: false, pillTopmost: false, stopTopmost: false,
-            capturing: true, captureDepth: 1, activeCaptureIds: ["capture-a"],
-          }, ["capture-a"], false),
-          stopped: () => stopped,
-          browserVerifications: () => browserVerifications,
-          arm: (nextTopmost, nextStale, nextPlain) => {
-            topmost = nextTopmost; staleSamples = nextStale; plainFailures = nextPlain; browserVerifications = 0;
-          },
-          navigate: (pending) => { controlLease.pendingNavigation = pending ? {} : null; },
-          captureRace: () => { captures = []; captureStartsDuringRequest = true; contentRequests = 0; },
-          contentRequests: () => contentRequests,
-          endCapture: () => { captures = []; },
-        };
-      `)();
-      let actionCount = 0;
-      try { await acknowledgementBridge.show(); actionCount += 1; } catch {}
-      if (actionCount !== 0 || acknowledgementBridge.stopped() !== 1 || acknowledgementBridge.browserVerifications() !== 0) {
-        throw new Error("non-topmost indicator acknowledgement allowed an action to proceed");
-      }
-      if (!acknowledgementBridge.captureAccepted()) throw new Error("intentional capture-hidden acknowledgement was rejected");
-      // The content watchdog's own re-top can invalidate a final sample: two
-      // stale samples are re-proven from fresh renderer acknowledgements, a
-      // third fails closed, and any other proof failure never retries.
-      acknowledgementBridge.arm(true, 2, 0);
-      const retried = await acknowledgementBridge.show();
-      if (!retried || acknowledgementBridge.browserVerifications() !== 3 || acknowledgementBridge.stopped() !== 1) {
-        throw new Error("a stale final sample was not re-proven within the bounded attempts");
-      }
-      acknowledgementBridge.arm(true, 3, 0);
-      let exhausted = false;
-      try { await acknowledgementBridge.show(); } catch { exhausted = true; }
-      if (!exhausted || acknowledgementBridge.browserVerifications() !== 3 || acknowledgementBridge.stopped() !== 2) {
-        throw new Error("continuous stale samples did not fail closed after the bounded attempts");
-      }
-      acknowledgementBridge.arm(true, 0, 1);
-      let plain = false;
-      try { await acknowledgementBridge.show(); } catch { plain = true; }
-      if (!plain || acknowledgementBridge.browserVerifications() !== 1 || acknowledgementBridge.stopped() !== 3) {
-        throw new Error("a non-stale proof failure was retried");
-      }
-      // A show overtaken by an authorized navigation proves nothing about the
-      // leaving document: it is discarded, never retried, and never revokes.
-      acknowledgementBridge.navigate(true);
-      acknowledgementBridge.arm(true, 1, 0);
-      const superseded = await acknowledgementBridge.show();
-      if (superseded !== null || acknowledgementBridge.browserVerifications() !== 1 || acknowledgementBridge.stopped() !== 3) {
-        throw new Error("a show overtaken by navigation was retried or revoked the lease");
-      }
-      acknowledgementBridge.navigate(false);
-      // A capture that begins while a show request is in flight is sampled
-      // again from the new capture set instead of being read as a hidden
-      // indicator; the capture-shaped acknowledgement then proves normally.
-      acknowledgementBridge.captureRace();
-      acknowledgementBridge.arm(true, 0, 0);
-      const raced = await acknowledgementBridge.show();
-      if (!raced || raced.capturing !== true || acknowledgementBridge.contentRequests() !== 2 || acknowledgementBridge.stopped() !== 3) {
-        throw new Error("a show overtaken by a capture was not re-sampled from the new capture set");
-      }
-      acknowledgementBridge.endCapture();
-    "#;
-    let output = match Command::new("node")
-        .args(["--input-type=module", "-e", script])
-        .output()
-    {
-        Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
-        Err(error) => panic!("failed to run indicator fail-closed harness: {error}"),
-    };
-    assert!(
-        output.status.success(),
-        "Node indicator fail-closed harness failed:\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn browser_process_top_layer_order_and_view_transition_gate_fail_closed() {
-    let background = extension_source("background.js");
-    let content = extension_source("content.js");
-    assert!(background.contains("\"DOM.getTopLayerElements\""));
-    assert!(background.contains("\"DOM.performSearch\""));
+    // Chrome's Cancel and the popup's Release both latch the same global
+    // human pause that only a trusted popup Resume can clear.
     assert!(background.contains(
-        "exact closed-shadow control host was not a unique browser-reported top-layer member"
+        "const HUMAN_PAUSE_REASONS = new Set([\"released_by_user\", \"canceled_by_user\"])"
     ));
-    assert!(background.contains("\"DOM.getNodeForLocation\""));
-    assert!(background.contains("ignorePointerEventsNone: true"));
-    assert!(background.contains("hit?.frameId !== lease.frameId"));
-    assert!(background.contains("state.viewTransitionActive !== false"));
-    assert!(content.contains("document.activeViewTransition"));
-    assert!(content.contains(":active-view-transition"));
-    assert!(content.contains("pseudo.startsWith(\"::view-transition\")"));
-
-    let script = r#"
-      import fs from "node:fs";
-      function extractFunction(source, name) {
-        const marker = `function ${name}(`;
-        let start = source.indexOf(marker);
-        if (start < 0) throw new Error(`missing ${name}`);
-        if (source.slice(start - 6, start) === "async ") start -= 6;
-        const brace = source.indexOf("{", start);
-        let depth = 0, quote = "", escaped = false;
-        for (let index = brace; index < source.length; index += 1) {
-          const character = source[index];
-          if (quote) {
-            if (escaped) escaped = false;
-            else if (character === "\\") escaped = true;
-            else if (character === quote) quote = "";
-          } else if (["\"", "'", "`"].includes(character)) quote = character;
-          else if (character === "{") depth += 1;
-          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
-        }
-        throw new Error(`unterminated ${name}`);
-      }
-      const source = fs.readFileSync("extension/background.js", "utf8");
-      const functions = [
-        "attributesMap", "browserRootAccessibilityReady", "browserControlHostAttributesReady",
-        "spendControlUiAncestryWork", "sameBrowserNode", "indexBrowserDocumentTree",
-        "browserDocumentTree", "releaseBrowserDocumentTree", "browserBackendNodeId", "browserChildNode",
-        "browserNodeAncestry", "boundedTopLayerNodeIds", "assertControlHostIsDocumentTopLayerTail",
-        "verifyControlUiBrowserTopLayer", "verifyControlUiBrowserTopLayerAlone", "verifyControlUiBrowserTopLayerBound",
-      ]
-        .map((name) => extractFunction(source, name)).join("\n");
-      const bridge = new Function(`
-        const CONTROL_UI_ANCESTRY_MAX_DEPTH = 24;
-        const CONTROL_UI_ANCESTRY_WORK_MAX = 512;
-        const CONTROL_UI_BROWSER_PROOF_DEADLINE_MS = 1500;
-        const CONTROL_UI_TOP_LAYER_MAX_NODES = 2048;
-        const CONTROL_UI_TOP_LAYER_TAIL_MAX = 256;
-        const CONTROL_UI_HIT_POINT_MAX = 5;
-        const CONTROL_UI_DOCUMENT_MAX_NODES = 200000;
-        const CONTROL_UI_DOCUMENT_RELEASE_MS = 250;
-        const hostId = "__local_browser_bridge_control_11111111111111111111111111111111__";
-        const markerId = "__local_browser_bridge_marker_22222222222222222222222222222222__";
-        let mode = "good", topReads = 0, documentReads = 0;
-        let discarded = 0, missingProofDeadline = 0, controlUiTopLayerRevision = 0;
-        let controlUiContentLossGeneration = 0;
-        let controlUiBrowserProofChain = Promise.resolve();
-        let describeCalls = 0, released = 0, lastRelease = null, callIndex = 0, enables = 0;
-        const finalPhase = () => topReads > 1;
-        // A mock contract violation must fail the harness, never count as a
-        // fail-closed rejection.
-        class MockError extends Error {}
-        // Real Chrome (CfT 138, CfT 145, stock 152): DOM.describeNode never
-        // reports parentId; only the DOM.getDocument tree nests nodes. Every
-        // node here carries the browser's stable backendNodeId next to the
-        // per-binding nodeId. Chrome unbinds a node it removes, so a node that
-        // moved between the two samples answers with a new nodeId.
-        const node = (nodeId, extra = {}, children = []) => ({
-          nodeId, backendNodeId: 1000 + nodeId, nodeType: 1, nodeName: "DIV", attributes: [], children, ...extra,
-        });
-        const hostAttributes = () => {
-          const attributes = [
-            "id", hostId, "popover", "manual", "aria-hidden", "false",
-            "aria-label", "Local Browser Bridge browser control",
-          ];
-          if (mode === "host-hidden") attributes.push("hidden", "");
-          if (mode === "host-inert") attributes.push("inert", "");
-          if (mode === "host-attributes-churn" && finalPhase()) {
-            attributes[attributes.indexOf("aria-hidden") + 1] = "true";
-          }
-          return attributes;
-        };
-        const rootAttributes = () => {
-          if (mode === "root-hidden") return ["hidden", ""];
-          if (mode === "root-inert") return ["inert", ""];
-          if (mode === "root-aria-hidden" || (mode === "root-accessibility-churn" && finalPhase())) {
-            return ["aria-hidden", "true"];
-          }
-          return [];
-        };
-        const range = (start, count) => Array.from({ length: count }, (_, index) => node(start + index));
-        function documentTree() {
-          const marker = node(100, { nodeName: "SPAN" });
-          const stop = node(110, { nodeName: "BUTTON" });
-          const shadow = node(101, { nodeType: 11, nodeName: "\u0023document-fragment", shadowRootType: "closed" }, [marker, stop]);
-          const host = node(9, { shadowRoots: [shadow], attributes: hostAttributes() });
-          const wrapperShadow = node(102, { nodeType: 11, nodeName: "\u0023document-fragment", shadowRootType: "closed" });
-          const wrapper = node(8, { shadowRoots: [wrapperShadow] });
-          const cover = node(200);
-          const strip = node(10);
-          const childDocumentChildren = [...range(20, 48), ...range(300, 255)];
-          const childDocument = node(2, { nodeType: 9, nodeName: "\u0023document" }, childDocumentChildren);
-          const frame = node(5, { nodeName: "IFRAME", contentDocument: childDocument });
-          const rootChildren = [wrapper, cover, strip, frame];
-          if (mode === "mismatch") {
-            // The closed root holding the marker hangs off a page wrapper, not the host.
-            host.shadowRoots = [];
-            wrapper.shadowRoots = [shadow];
-            rootChildren.push(host);
-          } else if (["nested-closed-substitution", "closed-shadow-wrapper"].includes(mode)) {
-            wrapperShadow.children = [host];
-          } else if (mode === "light-dom-wrapper") {
-            wrapper.children = [host];
-          } else if (mode !== "host-missing") {
-            rootChildren.push(host);
-          }
-          const rootElement = node(3, { nodeName: "HTML", attributes: rootAttributes() }, rootChildren);
-          const document = node(1, { nodeType: 9, nodeName: "\u0023document", children: [rootElement] });
-          if (mode === "duplicate-node-id") document.children.push(node(1));
-          if (mode === "oversized-tree") rootElement.children.push(...range(5000, 200000));
-          return document;
-        }
-        // The live final chain: one depth-1 describe of the document, then of
-        // the root element, both addressed by backendNodeId. Children carry
-        // their attributes, no grandchildren, and never a parentId.
-        function liveChildren(backendNodeId) {
-          if (backendNodeId === 1001) {
-            if (mode === "root-replacement" && finalPhase()) return [node(4, { nodeName: "HTML", attributes: rootAttributes() })];
-            return [node(3, { nodeName: "HTML", attributes: rootAttributes() })];
-          }
-          if (backendNodeId === 1003) {
-            const children = [node(8), node(200), node(10), node(5, { nodeName: "IFRAME" })];
-            if (["adopt-host", "host-removed-final"].includes(mode) && finalPhase()) return children;
-            // Chrome unbinds a removed node; a host moved out and back in
-            // answers with a new nodeId but the same stable identity.
-            if (mode === "host-rebound-final" && finalPhase()) return [...children, { ...node(9, { attributes: hostAttributes() }), nodeId: 10009 }];
-            if (mode === "root-children-missing" && finalPhase()) return null;
-            return [...children, node(9, { attributes: hostAttributes() })];
-          }
-          throw new MockError("ancestry was described from a node that is neither the document nor the root element: " + backendNodeId);
-        }
-        // Identity normalization: Chrome answers DOM.describeNode({nodeId,
-        // depth: 0}) with the stable backendNodeId and never a parentId. The
-        // nodeIds a concurrent DOM.getDocument re-bound (10000+) still name
-        // the same nodes; 20020+ are nodes inserted after the snapshot.
-        function identityOf(nodeId) {
-          if (mode === "tail-reparent" && nodeId >= 20020) return 1000 + nodeId;
-          if (nodeId === 999 || nodeId === 998) return 1000 + nodeId;
-          if (nodeId >= 10000 && mode === "rebound-between-samples") return 1000 + (nodeId - 10000);
-          return 1000 + nodeId;
-        }
-        // A concurrent whole-document read from another extension path
-        // re-binds every nodeId between the two samples.
-        const bound = (nodeId) => mode === "rebound-between-samples" && finalPhase() ? nodeId + 10000 : nodeId;
-        async function debuggerCommand(_tabId, method, params, _authority, _context, sessionId, options) {
-          callIndex += 1;
-          if (sessionId !== null || options?.strictDeadline !== true || !Number.isFinite(options?.deadlineAt)) {
-            missingProofDeadline += 1;
-          }
-          if (method === "DOM.enable") {
-            enables += 1;
-            if (mode === "content-loss-early") controlUiContentLossGeneration += 1;
-            if (mode === "own-root-events") controlUiTopLayerRevision += 3;
-            return {};
-          }
-          if (method === "DOM.getDocument") {
-            if (params.depth === 0) {
-              if (options?.timeoutIsFatal !== false) throw new MockError("the binding release must not be lease-fatal");
-              released += 1;
-              lastRelease = callIndex;
-              return { root: { nodeId: 1, backendNodeId: 1001, nodeType: 9, nodeName: "\u0023document" } };
-            }
-            if (params.depth !== -1 || params.pierce !== true) throw new MockError("the proof must snapshot the whole pierced document");
-            documentReads += 1;
-            if (documentReads > 1) throw new MockError("the proof took a second whole-document snapshot");
-            if (mode === "document-unavailable") return {};
-            return { root: documentTree() };
-          }
-          if (method === "DOM.querySelector") throw new MockError("the proof must derive the document element from the browser tree");
-          if (method === "DOM.getTopLayerElements") {
-            topReads += 1;
-            if (mode === "revision-churn" && topReads > 1) controlUiTopLayerRevision += 1;
-            if (mode === "content-loss-mid-proof" && topReads > 1) controlUiContentLossGeneration += 1;
-            if (mode === "unavailable") return {};
-            if (mode === "churn" && topReads > 1) return { nodeIds: range(20, 48).map((item) => item.nodeId) };
-            if (mode === "missing") return { nodeIds: [20, 21] };
-            if (mode === "duplicate-host") return { nodeIds: [9, 9, 20] };
-            if (mode === "nested-closed-substitution") return { nodeIds: [8, ...range(20, 48).map((item) => item.nodeId)] };
-            if (mode === "budget") return { nodeIds: [9, ...range(300, 255).map((item) => item.nodeId)] };
-            // Nodes inserted into the root document after the snapshot answer
-            // with identities the snapshot never saw.
-            if (mode === "tail-reparent" && topReads > 1) return { nodeIds: [9, ...Array.from({ length: 48 }, (_, index) => 20020 + index)] };
-            // More than 32 benign child-document popovers are ordinary page
-            // state. The proof spends no ancestry work on them: membership
-            // binds the exact host, point hit tests decide actual coverage.
-            if (mode === "sparse-strip") return { nodeIds: [9, 10, ...range(20, 48).map((item) => item.nodeId)] };
-            return { nodeIds: [bound(9), ...range(20, 48).map((item) => bound(item.nodeId))] };
-          }
-          if (method === "DOM.getAttributes") throw new MockError("attributes must come from the snapshot or the live depth-1 chain");
-          if (method === "DOM.performSearch") {
-            if (params.query !== "\u0023" + markerId) throw new MockError("search leaked to page-forgeable host identity");
-            return { searchId: "search", resultCount: mode === "duplicate" ? 2 : 1 };
-          }
-          if (method === "DOM.getSearchResults") return { nodeIds: [mode === "marker-outside-tree" ? 999 : 100] };
-          if (method === "DOM.describeNode") {
-            // Chrome's real answers: by nodeId at depth 0 the node and its
-            // stable backendNodeId; by backendNodeId at depth 1 the node with
-            // its direct children and attributes. Never a parentId, never a
-            // pierced ancestry.
-            describeCalls += 1;
-            const keys = Object.keys(params).sort().join(",");
-            if (keys === "depth,nodeId" && params.depth === 0) {
-              if (!Number.isInteger(params.nodeId)) throw new MockError("describeNode without a nodeId");
-              return { node: { nodeId: params.nodeId, backendNodeId: identityOf(params.nodeId), nodeType: 1, nodeName: "DIV" } };
-            }
-            if (keys === "backendNodeId,depth" && params.depth === 1) {
-              const children = liveChildren(params.backendNodeId);
-              const described = params.backendNodeId === 1001
-                ? { nodeId: bound(1), backendNodeId: 1001, nodeType: 9, nodeName: "\u0023document" }
-                : { nodeId: bound(3), backendNodeId: 1003, nodeType: 1, nodeName: "HTML", attributes: rootAttributes() };
-              if (children) described.children = children;
-              return { node: described };
-            }
-            throw new MockError("ancestry was asked from DOM.describeNode in a shape Chrome never answers: " + JSON.stringify(params));
-          }
-          if (method === "DOM.getNodeForLocation") {
-            if (mode === "hit-outside-tree") return { nodeId: 998, frameId: "frame-root" };
-            if (mode === "hit-by-backend-id") return { backendNodeId: 1110, frameId: "frame-root" };
-            if (mode === "hit-by-node-id") return { nodeId: 110, frameId: "frame-root" };
-            return {
-              nodeId: mode === "point-cover" ? 200 : 110,
-              backendNodeId: mode === "point-cover" ? 1200 : 1110,
-              frameId: mode === "wrong-frame-hit" ? "frame-child" : "frame-root",
-            };
-          }
-          if (method === "DOM.discardSearchResults") { discarded += 1; return {}; }
-          throw new MockError("unexpected method " + method + JSON.stringify(params));
-        }
-        function assertLeaseAuthority() {}
-        ${functions}
-        const lease = { tabId: 7, frameId: "frame-root" };
-        const authority = {};
-        const state = () => ({
-          hostId, markerId, viewTransitionActive: false, capturing: false,
-          viewport: { width: 1000, height: 800 },
-          controlHitPoints: [
-            { x: 10, y: 10 }, { x: 20, y: 10 }, { x: 30, y: 10 },
-            { x: 40, y: 10 }, { x: 50, y: 10 },
-          ],
-        });
-        return {
-          good: async () => {
-            mode = "good";
-            topReads = 0;
-            documentReads = 0;
-            const proof = await verifyControlUiBrowserTopLayer(
-              lease, state(), authority, null, controlUiContentLossGeneration,
-            );
-            if (documentReads !== 1) throw new Error("a proof must take exactly one whole-document snapshot");
-            return proof;
-          },
-          accept: async (nextMode) => {
-            mode = nextMode;
-            topReads = 0;
-            documentReads = 0;
-            await verifyControlUiBrowserTopLayer(
-              lease, state(), authority, null, controlUiContentLossGeneration,
-            );
-          },
-          reject: async (nextMode, viewTransitionActive = false) => {
-            mode = nextMode;
-            topReads = 0;
-            documentReads = 0;
-            const releasedBefore = released;
-            const enablesBefore = enables;
-            try {
-              await verifyControlUiBrowserTopLayer(
-                lease,
-                { ...state(), viewTransitionActive },
-                authority,
-                null,
-                controlUiContentLossGeneration,
-              );
-              return false;
-            } catch (error) {
-              if (error instanceof MockError) throw error;
-              if (enables !== enablesBefore && released !== releasedBefore + 1) {
-                throw new Error(nextMode + " left the whole-document binding held after a failed proof");
-              }
-              return true;
-            }
-          },
-          stale: async (nextMode) => {
-            mode = nextMode;
-            topReads = 0;
-            documentReads = 0;
-            try {
-              await verifyControlUiBrowserTopLayer(lease, state(), authority, null, controlUiContentLossGeneration);
-              return false;
-            } catch (error) {
-              if (error instanceof MockError) throw error;
-              return error.code === "CONTROL_UI_TOP_LAYER_STALE";
-            }
-          },
-          discarded: () => discarded,
-          missingProofDeadline: () => missingProofDeadline,
-          describeCalls: () => describeCalls,
-          released: () => released,
-          releasedLast: () => lastRelease === callIndex,
-        };
-      `)();
-      await bridge.good();
-      if (bridge.released() !== 1 || !bridge.releasedLast()) throw new Error("the whole-document binding was not released as the proof's last CDP call");
-      if (bridge.describeCalls() < 2) throw new Error("the final chain must describe the live document and root element children");
-      await bridge.accept("own-root-events");
-      await bridge.accept("hit-by-backend-id");
-      await bridge.accept("hit-by-node-id");
-      await bridge.accept("host-rebound-final");
-      await bridge.accept("rebound-between-samples");
-      for (const mode of ["missing", "duplicate-host", "duplicate", "mismatch", "unavailable", "churn", "revision-churn", "content-loss-early", "content-loss-mid-proof", "nested-closed-substitution", "light-dom-wrapper", "closed-shadow-wrapper", "root-replacement", "host-hidden", "host-inert", "host-attributes-churn", "root-hidden", "root-inert", "root-aria-hidden", "root-accessibility-churn", "sparse-strip", "point-cover", "wrong-frame-hit", "adopt-host", "tail-reparent", "budget", "host-missing", "host-removed-final", "root-children-missing", "marker-outside-tree", "hit-outside-tree", "document-unavailable", "duplicate-node-id", "oversized-tree"]) {
-        if (!await bridge.reject(mode)) throw new Error(`${mode} browser top-layer state was accepted`);
-      }
-      if (!await bridge.stale("revision-churn")) throw new Error("a stale final sample was not distinguishable from a hidden indicator");
-      if (!await bridge.reject("good", true)) throw new Error("active view transition was accepted");
-      if (bridge.discarded() < 3) throw new Error("DOM search handles were not discarded");
-      if (bridge.missingProofDeadline() !== 0) throw new Error("a browser proof CDP call escaped the shared strict deadline");
-    "#;
-    let output = match Command::new("node")
-        .args(["--input-type=module", "-e", script])
-        .output()
-    {
-        Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
-        Err(error) => panic!("failed to run browser top-layer harness: {error}"),
-    };
+    assert!(background.contains("hardRevokeDetached(source.tabId, reason)"));
+    assert!(background.contains("case \"releaseControl\":"));
     assert!(
-        output.status.success(),
-        "Node browser top-layer harness failed:\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        background.contains("stopControl(\"released_by_user\", { requireExplicitStart: true })")
     );
-}
+    assert!(background.contains("resumeHumanControlFromPopup"));
 
-#[test]
-fn browser_control_proof_takes_ancestry_from_the_browser_tree_not_describe_node() {
-    // Chrome for Testing 138 and 145 and stock Chrome 152 never populate
-    // DOM.describeNode(...).node.parentId, so a proof that walks parentId
-    // never reaches #document and revokes every real lease. The browser
-    // process nests DOM.getDocument({depth: -1, pierce: true}) for real and
-    // page script cannot rewrite that nesting, so it is the only ancestry
-    // source the proof may use.
-    let background = extension_source("background.js");
-    assert!(!background.contains("node.parentId"));
-    assert!(!background.contains("{ ...current, depth: 0, pierce: true }"));
-    assert!(background.contains("{ depth: -1, pierce: true }"));
-    assert!(background.contains("{ backendNodeId: parentNode.backendNodeId, depth: 1 }"));
-    assert!(background.contains("{ nodeId: locator.nodeId, depth: 0 }"));
-    assert!(!background.contains("\"DOM.getAttributes\""));
-    assert!(background.contains("byBackendNodeId"));
-    assert!(background.contains("const CONTROL_UI_DOCUMENT_MAX_NODES"));
+    // The tab group is the second visible signal and stays.
+    assert!(background.contains("chrome.tabs.group({ tabIds: tab.id })"));
+    assert!(background.contains("title: \"Local Browser Bridge\""));
 
-    let script = r#"
-      import fs from "node:fs";
-      function extractFunction(source, name) {
-        const marker = `function ${name}(`;
-        let start = source.indexOf(marker);
-        if (start < 0) throw new Error(`missing ${name}`);
-        if (source.slice(start - 6, start) === "async ") start -= 6;
-        const brace = source.indexOf("{", start);
-        let depth = 0, quote = "", escaped = false;
-        for (let index = brace; index < source.length; index += 1) {
-          const character = source[index];
-          if (quote) {
-            if (escaped) escaped = false;
-            else if (character === "\\") escaped = true;
-            else if (character === quote) quote = "";
-          } else if (["\"", "'", "`"].includes(character)) quote = character;
-          else if (character === "{") depth += 1;
-          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
-        }
-        throw new Error(`unterminated ${name}`);
-      }
-      const source = fs.readFileSync("extension/background.js", "utf8");
-      const functions = ["spendControlUiAncestryWork", "sameBrowserNode", "indexBrowserDocumentTree", "browserNodeAncestry"]
-        .map((name) => extractFunction(source, name)).join("\n");
-      const bridge = new Function(`
-        const CONTROL_UI_ANCESTRY_MAX_DEPTH = 24;
-        const CONTROL_UI_DOCUMENT_MAX_NODES = 64;
-        ${functions}
-        const budget = () => ({ remaining: 512, deadlineAt: Date.now() + 1000 });
-        const node = (nodeId, extra = {}, children = []) => ({
-          nodeId, backendNodeId: 1000 + nodeId, nodeType: 1, nodeName: "DIV", children, ...extra,
-        });
-        const marker = node(100, { nodeName: "SPAN" });
-        const shadow = node(101, { nodeType: 11, nodeName: "\u0023document-fragment", shadowRootType: "closed" }, [marker]);
-        // Every parentId below is a lie a compromised answer could carry: the
-        // host claims to hang off the document element while it is nested in
-        // a page wrapper. Nesting must win and parentId must be ignored.
-        const host = node(9, { shadowRoots: [shadow], parentId: 3 });
-        const wrapper = node(8, { parentId: 3 }, [host]);
-        const framed = node(30, { parentId: 3 });
-        const frameDocument = node(2, { nodeType: 9, nodeName: "\u0023document" }, [node(31, {}, [framed])]);
-        const frame = node(5, { nodeName: "IFRAME", contentDocument: frameDocument });
-        const template = node(40, { nodeName: "TEMPLATE", templateContent: node(41, { nodeType: 11 }, [node(42)]) });
-        const styled = node(50, { pseudoElements: [node(51, { nodeName: "::before" })] });
-        const rootElement = node(3, { nodeName: "HTML" }, [wrapper, frame, template, styled]);
-        const document = node(1, { nodeType: 9, nodeName: "\u0023document" }, [node(6, { nodeType: 10 }), rootElement]);
-        const tree = indexBrowserDocumentTree(document);
-        const walk = (locator) => browserNodeAncestry(tree, locator, budget());
-        return { tree, walk, walkIn: (other, locator) => browserNodeAncestry(other, locator, budget()), indexBrowserDocumentTree, node, sameBrowserNode };
-      `)();
-      const { tree, walk, node } = bridge;
-      const byNesting = walk({ nodeId: 100 });
-      if (byNesting.closedShadowHostNode.nodeId !== 9) throw new Error("the closed-shadow host was not the shadow root's tree parent");
-      if (byNesting.closedShadowHostParentNode.nodeId !== 8) throw new Error("a lying parentId replaced the host's real tree parent");
-      if (byNesting.documentNode.nodeId !== 1) throw new Error("the walk did not end at the controlled document");
-      const byBackendId = walk({ backendNodeId: 1100 });
-      if (byBackendId.startNode !== byNesting.startNode) throw new Error("backendNodeId did not resolve the same node");
-      if (walk({ nodeId: 30 }).documentNode.nodeId !== 2) throw new Error("a same-process frame node escaped its own document");
-      if (walk({ nodeId: 42 }).startParentNode.nodeId !== 41 || walk({ nodeId: 42 }).documentNode.nodeId !== 1) throw new Error("template content was not nested under its template");
-      if (walk({ nodeId: 51 }).startParentNode.nodeId !== 50) throw new Error("a pseudo element was not nested under its owner");
-      for (const locator of [{ nodeId: 999 }, { backendNodeId: 1999 }, {}, null]) {
-        let rejected = false;
-        try { walk(locator); } catch (error) { rejected = /not part of the described document tree/.test(error.message); }
-        if (!rejected) throw new Error(`a node outside the browser tree was walked: ${JSON.stringify(locator)}`);
-      }
-      for (const [label, root] of [
-        ["duplicate nodeId", node(1, { nodeType: 9 }, [node(1)])],
-        ["duplicate backendNodeId", node(1, { nodeType: 9 }, [{ ...node(2), backendNodeId: 1001 }])],
-        ["missing backendNodeId", node(1, { nodeType: 9 }, [{ nodeId: 2, nodeType: 1, children: [] }])],
-        ["oversized tree", node(1, { nodeType: 9 }, Array.from({ length: 64 }, (_, index) => node(10 + index)))],
-      ]) {
-        let rejected = false;
-        try { bridge.indexBrowserDocumentTree(root); } catch { rejected = true; }
-        if (!rejected) throw new Error(`${label} was indexed`);
-      }
-      const deep = node(1, { nodeType: 9 });
-      let cursor = deep;
-      for (let index = 0; index < 30; index += 1) { const next = node(200 + index); cursor.children.push(next); cursor = next; }
-      let deepRejected = false;
-      try { bridge.walkIn(bridge.indexBrowserDocumentTree(deep), { nodeId: 229 }); } catch (error) { deepRejected = /bounded document ancestry/.test(error.message); }
-      if (!deepRejected) throw new Error("an over-deep ancestry was not bounded");
-    "#;
-    let output = match Command::new("node")
-        .args(["--input-type=module", "-e", script])
-        .output()
-    {
-        Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
-        Err(error) => panic!("failed to run browser tree ancestry harness: {error}"),
-    };
-    assert!(
-        output.status.success(),
-        "Node browser tree ancestry harness failed:\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert!(popup.contains("Chrome shows its own debugging notice"));
+    assert!(popup.contains("id=\"start-control\""));
+    assert!(popup.contains("id=\"release-control\""));
+    assert!(popup_script.contains("startControlCurrent"));
+    assert!(popup_script.contains("releaseControl"));
 }
 
 #[test]
@@ -4102,546 +2855,6 @@ fn page_key_uses_exact_cdp_virtual_keys_and_documented_scalar_boundary() {
     assert!(
         output.status.success(),
         "Node page-key grammar harness failed:\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn root_top_layer_events_use_bounded_dirty_acknowledgement() {
-    let background = extension_source("background.js");
-    let event_start = background
-        .find("chrome.debugger.onEvent.addListener")
-        .unwrap();
-    let event_end = background[event_start..]
-        .find("chrome.tabs.onUpdated.addListener")
-        .unwrap()
-        + event_start;
-    let event = &background[event_start..event_end];
-    assert!(
-        event.find("if (source.sessionId)").unwrap()
-            < event
-                .find("method === \"DOM.topLayerElementsUpdated\"")
-                .unwrap()
-    );
-    assert!(event.contains("scheduleControlUiTopLayerVerification()"));
-    assert!(background.contains(
-        "controlUiTopLayerMutationDepth > 0) {\n      markControlUiProofDirty(controlLease, true);"
-    ));
-    let show_start = background.find("async function showControlUiNow").unwrap();
-    let show_end = background[show_start..]
-        .find("\nfunction showControlUi(")
-        .unwrap()
-        + show_start;
-    let show = &background[show_start..show_end];
-    assert!(
-        show.find("const contentRequestLossGeneration").unwrap()
-            < show.find("const state = await contentRequest").unwrap()
-    );
-    assert!(show.contains("controlUiTopLayerRevision !== verifiedProof.revision"));
-    assert!(show.contains("markControlUiProofDirty(lease)"));
-    assert!(show.contains("verifiedProof.contentLossGeneration"));
-    let message_start = background
-        .find("async function handleControlUiMessage")
-        .unwrap();
-    let message_end = background[message_start..]
-        .find("\nchrome.runtime.onMessage.addListener")
-        .unwrap()
-        + message_start;
-    let message_handler = &background[message_start..message_end];
-    assert!(
-        message_handler.find("const messageLossGeneration").unwrap()
-            < message_handler
-                .find("await initializeControlState()")
-                .unwrap()
-    );
-
-    let script = r#"
-      import fs from "node:fs";
-      function extractFunction(source, name) {
-        const marker = `function ${name}(`;
-        let start = source.indexOf(marker);
-        if (start < 0) throw new Error(`missing ${name}`);
-        if (source.slice(start - 6, start) === "async ") start -= 6;
-        const brace = source.indexOf("{", start);
-        let depth = 0, quote = "", escaped = false;
-        for (let index = brace; index < source.length; index += 1) {
-          const character = source[index];
-          if (quote) {
-            if (escaped) escaped = false;
-            else if (character === "\\") escaped = true;
-            else if (character === quote) quote = "";
-          } else if (["\"", "'", "`"].includes(character)) quote = character;
-          else if (character === "{") depth += 1;
-          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
-        }
-        throw new Error(`unterminated ${name}`);
-      }
-      const source = fs.readFileSync("extension/background.js", "utf8");
-      const functions = [
-        "beginControlUiTopLayerMutation", "endControlUiTopLayerMutation",
-        "clearControlUiTopLayerDirty", "armControlUiTopLayerDeadline",
-        "markControlUiProofDirty", "scheduleControlUiTopLayerVerification",
-      ]
-        .map((name) => extractFunction(source, name)).join("\n");
-      const bridge = new Function(`
-        const CONTROL_UI_BROWSER_WATCHDOG_DEADLINE_MS = 3000;
-        let controlUiTopLayerMutationDepth = 0;
-        let controlUiTopLayerRevision = 0;
-        let controlUiContentLossGeneration = 0;
-        let controlUiTopLayerDirty = null;
-        let controlUiTopLayerVerificationTimer = null;
-        let controlLease = {
-          tabId: 7, sessionId: "lease-a", epoch: 3,
-          controlHostId: "host-a", controlMarkerId: "marker-a", controlUiProofReady: true,
-          pendingNavigation: null, navigationReady: true, pendingDialog: null,
-        };
-        let now = 1000, revokeCalls = 0, replacement = 0;
-        const reasons = [];
-        const timers = [];
-        const Date = { now: () => now };
-        function setTimeout(handler, delay) {
-          const timer = { handler, at: now + delay, canceled: false };
-          timers.push(timer);
-          return timer;
-        }
-        function clearTimeout(timer) { if (timer) timer.canceled = true; }
-        function controlCaptureIds() { return []; }
-        async function stopControl(reason) {
-          revokeCalls += 1;
-          reasons.push(reason);
-          controlLease = null;
-        }
-        ${functions}
-        return {
-          begin: beginControlUiTopLayerMutation,
-          end: endControlUiTopLayerMutation,
-          event: () => { controlUiTopLayerRevision += 1; scheduleControlUiTopLayerVerification(); },
-          proof: () => ({
-            revision: controlUiTopLayerRevision,
-            contentLossGeneration: controlUiContentLossGeneration,
-          }),
-          ack: (proof = {
-            revision: controlUiTopLayerRevision,
-            contentLossGeneration: controlUiContentLossGeneration,
-          }) => clearControlUiTopLayerDirty(controlLease, proof.revision, proof.contentLossGeneration),
-          indicatorLost: () => markControlUiProofDirty(controlLease, true),
-          mismatch: () => markControlUiProofDirty(controlLease, true),
-          setNavigation: (value) => { controlLease.pendingNavigation = value ? {} : null; },
-          setProofReady: (value) => { controlLease.controlUiProofReady = value; },
-          replaceLease: () => {
-            replacement += 1;
-            controlLease = {
-              tabId: 7, sessionId: "lease-replacement-" + replacement, epoch: 3 + replacement,
-              controlHostId: "host-b", controlMarkerId: "marker-b", controlUiProofReady: true,
-              pendingNavigation: null, navigationReady: true, pendingDialog: null,
-            };
-          },
-          advance: async (milliseconds) => {
-            now += milliseconds;
-            let ran;
-            do {
-              ran = false;
-              for (const timer of timers) {
-                if (!timer.canceled && !timer.ran && timer.at <= now) {
-                  timer.ran = true;
-                  await timer.handler();
-                  ran = true;
-                }
-              }
-              for (let index = 0; index < 4; index += 1) await Promise.resolve();
-            } while (ran);
-          },
-          state: () => ({
-            revokeCalls, reasons: [...reasons],
-            timerCount: timers.filter((timer) => !timer.canceled && !timer.ran).length,
-            dirty: Boolean(controlUiTopLayerDirty),
-            lease: controlLease?.sessionId ?? null,
-          }),
-        };
-      `)();
-
-      const preShowLossGeneration = bridge.proof().contentLossGeneration;
-      bridge.begin();
-      bridge.event(); bridge.event(); bridge.event();
-      if (!bridge.state().dirty || bridge.state().timerCount !== 1) {
-        throw new Error("own top-layer mutation did not retain one absolute dirty deadline");
-      }
-      const postShowBrowserProof = bridge.proof();
-      postShowBrowserProof.contentLossGeneration = preShowLossGeneration;
-      if (!bridge.ack(postShowBrowserProof)) {
-        throw new Error("clean show poisoned its content-loss generation with own root events");
-      }
-      bridge.end();
-      if (bridge.state().timerCount !== 0) throw new Error("successful own mutation left a stale deadline");
-
-      bridge.event(); bridge.event();
-      if (bridge.state().timerCount !== 1) throw new Error("root event burst did not coalesce to one deadline");
-      bridge.ack();
-      await bridge.advance(3000);
-      if (bridge.state().revokeCalls !== 0) throw new Error("clean watchdog acknowledgement did not clear dirty state");
-
-      // A browser event delivered after the verifier's final list sample but
-      // before its clear must survive as a newer exact dirty revision.
-      bridge.event();
-      const sampledProof = bridge.proof();
-      bridge.event();
-      if (bridge.ack(sampledProof) || !bridge.state().dirty) {
-        throw new Error("a newer top-layer event was erased by an older proof");
-      }
-      bridge.ack();
-
-      // indicatorLost does not change Chrome's top-layer revision. A loss
-      // delivered after the final proof sample must still get its own serial,
-      // survive the older acknowledgement, and retain the absolute deadline.
-      const beforeLossProof = bridge.proof();
-      bridge.indicatorLost();
-      if (bridge.ack(beforeLossProof) || !bridge.state().dirty) {
-        throw new Error("same-revision indicator loss was erased by an older proof");
-      }
-      await bridge.advance(3000);
-      let state = bridge.state();
-      if (state.revokeCalls !== 1 || state.reasons[0] !== "control_ui_hidden") {
-        throw new Error(`same-revision indicator loss missed its deadline: ${JSON.stringify(state)}`);
-      }
-      bridge.replaceLease();
-
-      // Mutation depth cannot postpone the absolute deadline. A renderer/CDP
-      // proof that stalls after a hostile event is revoked at the same bound.
-      bridge.begin();
-      bridge.event();
-      await bridge.advance(3000);
-      state = bridge.state();
-      if (state.revokeCalls !== 2 || state.reasons[1] !== "control_ui_hidden") {
-        throw new Error(`stalled in-mutation browser proof did not revoke: ${JSON.stringify(state)}`);
-      }
-      bridge.end();
-
-      // A stale timer may observe a replacement dirty record, but it must arm
-      // that record's deadline—not clear it or revoke the replacement using
-      // the old lease identity.
-      bridge.replaceLease();
-      bridge.event();
-      bridge.replaceLease();
-      bridge.event();
-      await bridge.advance(3000);
-      state = bridge.state();
-      if (state.revokeCalls !== 3 || state.lease !== null) {
-        throw new Error(`replacement dirty record lost its exact deadline: ${JSON.stringify(state)}`);
-      }
-
-      const navigation = new Function(`
-        const CONTROL_UI_BROWSER_WATCHDOG_DEADLINE_MS = 3000;
-        let controlUiTopLayerMutationDepth = 0, controlUiTopLayerDirty = null;
-        let controlUiTopLayerRevision = 0, controlUiContentLossGeneration = 0;
-        let controlUiTopLayerVerificationTimer = null, stopped = 0;
-        let now = 1000;
-        const Date = { now: () => now };
-        const timers = [];
-        function setTimeout(handler, delay) { const timer = { handler, at: now + delay }; timers.push(timer); return timer; }
-        function clearTimeout(timer) { if (timer) timer.canceled = true; }
-        function controlCaptureIds() { return []; }
-        async function stopControl() { stopped += 1; }
-        let controlLease = {
-          tabId: 7, sessionId: "lease-nav", epoch: 5,
-          controlHostId: "old-host", controlMarkerId: "old-marker", controlUiProofReady: false,
-          pendingNavigation: {}, navigationReady: true, pendingDialog: null,
-        };
-        ${functions}
-        return {
-          event: () => { controlUiTopLayerRevision += 1; scheduleControlUiTopLayerVerification(); },
-          mismatch: () => markControlUiProofDirty(controlLease, true),
-          commit: () => { controlLease.pendingNavigation = null; },
-          state: () => ({ stopped, dirty: Boolean(controlUiTopLayerDirty), timers: timers.filter((timer) => !timer.canceled).length }),
-        };
-      `)();
-      navigation.event(); navigation.mismatch();
-      if (navigation.state().dirty || navigation.state().timers) throw new Error("old marker armed during pending navigation");
-      navigation.commit();
-      navigation.event();
-      if (navigation.state().dirty) throw new Error("root event armed before a new exact marker was browser-verified");
-      navigation.mismatch();
-      if (!navigation.state().dirty || navigation.state().timers !== 1) {
-        throw new Error("stable unverified marker mismatch had no bounded rebind deadline");
-      }
-    "#;
-    let output = match Command::new("node")
-        .args(["--input-type=module", "-e", script])
-        .output()
-    {
-        Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
-        Err(error) => panic!("failed to run top-layer event harness: {error}"),
-    };
-    assert!(
-        output.status.success(),
-        "Node top-layer event harness failed:\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn navigation_indicator_messages_wait_for_and_trigger_exact_rebind() {
-    let background = extension_source("background.js");
-    let content = extension_source("content.js");
-    assert!(background.contains("await showControlUi(lease);\n      return publicControlState();"));
-    assert!(content.contains("scheduleInitialControlReconcile();"));
-    assert!(!content.contains("if (document.readyState === \"complete\") queueMicrotask"));
-    let script = r#"
-      import fs from "node:fs";
-      function extractFunction(source, name) {
-        const marker = `function ${name}(`;
-        let start = source.indexOf(marker);
-        if (start < 0) throw new Error(`missing ${name}`);
-        if (source.slice(start - 6, start) === "async ") start -= 6;
-        const brace = source.indexOf("{", start);
-        let depth = 0, quote = "", escaped = false;
-        for (let index = brace; index < source.length; index += 1) {
-          const character = source[index];
-          if (quote) {
-            if (escaped) escaped = false;
-            else if (character === "\\") escaped = true;
-            else if (character === quote) quote = "";
-          } else if (["\"", "'", "`"].includes(character)) quote = character;
-          else if (character === "{") depth += 1;
-          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
-        }
-        throw new Error(`unterminated ${name}`);
-      }
-      const source = fs.readFileSync("extension/background.js", "utf8");
-      const contentSource = fs.readFileSync("extension/content.js", "utf8");
-      const scheduleInitialControlReconcile = extractFunction(contentSource, "scheduleInitialControlReconcile");
-      const initial = new Function(`
-        const document = { readyState: "interactive" };
-        let reconciles = 0;
-        function reconcileControl() { reconciles += 1; }
-        ${scheduleInitialControlReconcile}
-        return { schedule: scheduleInitialControlReconcile, count: () => reconciles, state: () => document.readyState };
-      `)();
-      initial.schedule();
-      await Promise.resolve();
-      if (initial.state() !== "interactive" || initial.count() !== 1) {
-        throw new Error("document_idle content waited for readyState complete before reconcile");
-      }
-      const handler = extractFunction(source, "handleControlUiMessage");
-      const bridge = new Function(`
-        const CONTROL_UI_HIT_POINT_MAX = 5;
-        let controlUiTopLayerMutationDepth = 0;
-        let controlUiContentLossGeneration = 0;
-        let showCalls = 0, verifyCalls = 0, stopCalls = 0, dirtyCalls = 0;
-        const reasons = [];
-        let controlLease = {
-          tabId: 7, sessionId: "lease-a", epoch: 3, expiresAt: Date.now() + 60000,
-          navigationReady: true, pendingNavigation: {}, controlUiProofReady: false,
-          controlHostId: "old-host", controlMarkerId: "old-marker",
-        };
-        async function initializeControlState() {}
-        function controlCaptureIds() { return []; }
-        function publicControlState() { return { active: Boolean(controlLease), proofReady: controlLease?.controlUiProofReady === true }; }
-        function markControlUiProofDirty() { dirtyCalls += 1; }
-        async function showControlUi(lease) {
-          showCalls += 1;
-          lease.controlHostId = "new-host";
-          lease.controlMarkerId = "new-marker";
-          lease.controlUiProofReady = true;
-        }
-        function captureLeaseAuthority() { return {}; }
-        async function verifyControlUiBrowserTopLayer() {
-          verifyCalls += 1;
-          return { revision: 0, contentLossGeneration: 0 };
-        }
-        function clearControlUiTopLayerDirty() {}
-        async function stopControl(reason) { reasons.push(reason); stopCalls += 1; controlLease = null; return { active: false }; }
-        ${handler}
-        const points = [
-          { x: 1, y: 1 }, { x: 2, y: 1 }, { x: 3, y: 1 }, { x: 4, y: 1 }, { x: 5, y: 1 },
-        ];
-        return {
-          handle: (message) => handleControlUiMessage(message, { tab: { id: 7 } }),
-          commit() { controlLease.pendingNavigation = null; },
-          validState: () => ({
-            hostId: "new-host", markerId: "new-marker", capturing: false,
-            viewTransitionActive: false, viewport: { width: 100, height: 100 }, controlHitPoints: points,
-          }),
-          malformedState: () => ({
-            hostId: "new-host", markerId: "new-marker", capturing: true,
-            viewTransitionActive: false, viewport: { width: 100, height: 100 }, controlHitPoints: [],
-          }),
-          state: () => ({ showCalls, verifyCalls, stopCalls, dirtyCalls, reasons: [...reasons], lease: controlLease }),
-        };
-      `)();
-
-      const pendingLoss = await bridge.handle({ action: "indicatorLost", sessionId: "lease-a" });
-      const pendingCheck = await bridge.handle({ action: "indicatorCheck", sessionId: "lease-a", browserState: bridge.validState() });
-      if (!pendingLoss.active || !pendingCheck.active || bridge.state().stopCalls || bridge.state().showCalls) {
-        throw new Error("old-document indicator messages revoked or rebound during authorized navigation");
-      }
-      bridge.commit();
-      // No tabs.onUpdated complete signal is delivered here. The fresh
-      // document_idle watchdog itself must perform the exact rebind, so slow
-      // subresources cannot consume the 3s proof deadline.
-      const rebound = await bridge.handle({ action: "indicatorCheck", sessionId: "lease-a", browserState: bridge.validState() });
-      if (!rebound.active || !rebound.proofReady || bridge.state().showCalls !== 1 || bridge.state().stopCalls) {
-        throw new Error("fresh document_idle indicator did not rebind the browser proof");
-      }
-      const checked = await bridge.handle({ action: "indicatorCheck", sessionId: "lease-a", browserState: bridge.validState() });
-      if (!checked.active || bridge.state().verifyCalls !== 1) throw new Error("rebound watchdog skipped browser verification");
-
-      let malformed = false;
-      try { await bridge.handle({ action: "indicatorCheck", sessionId: "lease-a", browserState: bridge.malformedState() }); }
-      catch (error) { malformed = error.message.includes("malformed"); }
-      const finalState = bridge.state();
-      if (!malformed || finalState.stopCalls !== 1 || finalState.reasons[0] !== "control_ui_hidden") {
-        throw new Error("capture-shaped passive acknowledgement did not fail closed");
-      }
-    "#;
-    let output = match Command::new("node")
-        .args(["--input-type=module", "-e", script])
-        .output()
-    {
-        Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
-        Err(error) => panic!("failed to run navigation indicator rebind harness: {error}"),
-    };
-    assert!(
-        output.status.success(),
-        "Node navigation indicator rebind harness failed:\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn capture_visibility_survives_overlay_reinsertion_and_nested_capture() {
-    let background = extension_source("background.js");
-    let content = extension_source("content.js");
-    assert!(background.contains("const captureId = crypto.randomUUID()"));
-    assert!(background.contains("method: \"control.capture.begin\", captureId"));
-    assert!(background.contains("method: \"control.capture.end\""));
-    assert!(background.contains("activeCaptureIds: remainingCaptureIds"));
-    assert!(
-        background
-            .contains("controlUiAcknowledged(beginState, activeCaptureIds, lease.cursor.visible)")
-    );
-    assert!(
-        background
-            .contains("controlUiAcknowledged(endState, remainingCaptureIds, lease.cursor.visible)")
-    );
-    assert!(background.contains("controlSessionId: authority.sessionId"));
-    assert!(background.contains("controlEpoch: authority.epoch"));
-    assert!(background.contains("}, { authority, commandContext });"));
-    assert!(background.contains("await showControlUi(controlLease)"));
-    assert!(content.contains("captureDepth"));
-    assert!(content.contains("__LOCAL_BROWSER_BRIDGE_CAPTURE_DEPTH__"));
-    assert!(content.contains("activeCaptureIds"));
-    assert!(content.contains("captureStartedAt"));
-    assert!(content.contains("reconcileCaptureIds(message.activeCaptureIds)"));
-    assert!(content.contains("expireStaleCaptures"));
-    assert!(content.contains("applyCaptureVisibility()"));
-    assert!(content.contains("captureDepth > 0 ? \"hidden\" : \"visible\""));
-    assert!(content.contains("controlUi.cursor.style.visibility = \"visible\""));
-    assert!(background.contains("state.cursorVisible !== Boolean(expectedCursorVisible)"));
-
-    let capture_end_case = content.find("case \"control.capture.end\"").unwrap();
-    let capture_end_body = &content[capture_end_case
-        ..content[capture_end_case..]
-            .find("default:")
-            .map(|offset| capture_end_case + offset)
-            .unwrap_or(content.len())];
-    assert!(
-        capture_end_body
-            .find("assertActiveControl(message.controlSessionId, message.controlEpoch)")
-            .unwrap()
-            < capture_end_body.find("setCaptureMode(false").unwrap()
-    );
-
-    let script = r#"
-      import fs from "node:fs";
-      function extractFunction(source, name) {
-        const marker = `function ${name}(`;
-        let start = source.indexOf(marker);
-        if (source.slice(start - 6, start) === "async ") start -= 6;
-        const signatureEnd = source.indexOf(") {", start);
-        const brace = signatureEnd + 2;
-        let depth = 0, quote = "", escaped = false;
-        for (let index = brace; index < source.length; index += 1) {
-          const character = source[index];
-          if (quote) {
-            if (escaped) escaped = false;
-            else if (character === "\\") escaped = true;
-            else if (character === quote) quote = "";
-          } else if (["\"", "'", "`"].includes(character)) quote = character;
-          else if (character === "{") depth += 1;
-          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
-        }
-        throw new Error(`unterminated ${name}`);
-      }
-      const source = fs.readFileSync("extension/content.js", "utf8");
-      const functions = ["assertActiveControl", "setCaptureMode", "handle"]
-        .map((name) => extractFunction(source, name)).join("\n");
-      const bridge = new Function(`
-        let activeControlSessionId = "session-a";
-        let activeControlEpoch = 1;
-        const activeCaptureIds = new Set();
-        const captureStartedAt = new Map();
-        function reconcileCaptureIds(ids) {
-          activeCaptureIds.clear();
-          for (const id of ids || []) activeCaptureIds.add(String(id));
-        }
-        function syncCaptureGlobals() {}
-        async function confirmControlUiRender() {
-          return { activeCaptureIds: [...activeCaptureIds] };
-        }
-        ${functions}
-        return {
-          handle,
-          switchLease(sessionId, epoch) {
-            activeControlSessionId = sessionId;
-            activeControlEpoch = epoch;
-            activeCaptureIds.clear();
-          },
-          captures: () => [...activeCaptureIds],
-        };
-      `)();
-      await bridge.handle({
-        method: "control.capture.begin", controlSessionId: "session-a",
-        controlEpoch: 1, captureId: "capture-a", activeCaptureIds: ["capture-a"],
-      });
-      bridge.switchLease("session-b", 2);
-      await bridge.handle({
-        method: "control.capture.begin", controlSessionId: "session-b",
-        controlEpoch: 2, captureId: "capture-b", activeCaptureIds: ["capture-b"],
-      });
-      let rejected = false;
-      try {
-        await bridge.handle({
-          method: "control.capture.end", controlSessionId: "session-a",
-          controlEpoch: 1, captureId: "capture-a", activeCaptureIds: [],
-        });
-      } catch (error) {
-        rejected = String(error.message).includes("CONTROL_REVOKED");
-      }
-      if (!rejected || bridge.captures().join() !== "capture-b") {
-        throw new Error("a stale capture finalizer altered the replacement lease capture set");
-      }
-      await bridge.handle({
-        method: "control.capture.end", controlSessionId: "session-b",
-        controlEpoch: 2, captureId: "capture-b", activeCaptureIds: [],
-      });
-      if (bridge.captures().length !== 0) throw new Error("the active lease could not end its capture");
-    "#;
-    let output = match Command::new("node")
-        .args(["--input-type=module", "-e", script])
-        .output()
-    {
-        Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
-        Err(error) => panic!("failed to run capture lease harness: {error}"),
-    };
-    assert!(
-        output.status.success(),
-        "Node capture lease harness failed:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -5012,7 +3225,6 @@ fn canceled_deferred_cdp_mutation_invalidates_turn_and_generation_before_recover
           return withCommandCancellation(cdpGate.promise, context, "deferred Input.insertText");
         }
         function assertDialogNotBlocking() {}
-        function showControlUi() { return Promise.resolve(); }
         function contentRequest(tabId, message) {
           if (message.method !== "snapshot") throw new Error("unexpected content request");
           return Promise.resolve({
@@ -5217,7 +3429,6 @@ fn canceled_observe_cannot_republish_a_frame_snapshot_after_its_persist_await() 
           }
         }
         function verifyDocumentAuthority() { return Promise.resolve(); }
-        function showControlUi() { return Promise.resolve(); }
         function contentRequest() {
           return Promise.resolve({
             generation: "g-canceled", viewport: { width: 800, height: 600 },
@@ -6240,7 +4451,7 @@ fn human_stop_wins_deferred_tab_mutations_and_debugger_attach() {
         .find("async function resolvePendingApprovalFromPopup")
         .unwrap();
     let approval_end = background[approval_start..]
-        .find("async function handleControlUiMessage")
+        .find("async function handleControlSessionMessage")
         .unwrap()
         + approval_start;
     assert!(
@@ -6470,104 +4681,6 @@ fn restored_unknown_attach_needs_repeated_detach_confirmation() {
 }
 
 #[test]
-fn control_ui_render_capture_and_stop_failures_are_fail_closed() {
-    let background = extension_source("background.js");
-    let content = extension_source("content.js");
-
-    let show_start = background.find("async function showControlUiNow").unwrap();
-    let show_end = background[show_start..]
-        .find("\n}\n\nfunction showControlUi")
-        .unwrap()
-        + 2
-        + show_start;
-    let show = &background[show_start..show_end];
-    assert!(show.contains("activeCaptureIds"));
-    assert!(show.contains("controlUiAcknowledged"));
-    assert!(show.contains("failControlUiClosed"));
-    assert!(!show.contains(".catch(() => {})"));
-
-    for acknowledgement in [
-        "hostConnected",
-        "popoverOpen",
-        "topLayerReordered",
-        "hostVisible",
-        "pillVisible",
-        "stopVisible",
-        "pillTopmost",
-        "stopTopmost",
-        "captureDepth",
-        "activeCaptureIds",
-    ] {
-        assert!(content.contains(acknowledgement));
-    }
-    assert!(content.contains("await waitForRenderOpportunity()"));
-    assert!(
-        content.contains("Stop failed—use the browser's Cancel action or the extension popup.")
-    );
-    assert!(content.contains("Retry Stop"));
-
-    let script = r#"
-      import fs from "node:fs";
-      function extractFunction(source, name) {
-        const marker = `function ${name}(`;
-        let start = source.indexOf(marker);
-        if (source.slice(start - 6, start) === "async ") start -= 6;
-        const brace = source.indexOf("{", start);
-        let depth = 0, quote = "", escaped = false;
-        for (let index = brace; index < source.length; index += 1) {
-          const character = source[index];
-          if (quote) {
-            if (escaped) escaped = false;
-            else if (character === "\\") escaped = true;
-            else if (character === quote) quote = "";
-          } else if (["\"", "'", "`"].includes(character)) quote = character;
-          else if (character === "{") depth += 1;
-          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
-        }
-        throw new Error(`unterminated ${name}`);
-      }
-      const source = fs.readFileSync("extension/content.js", "utf8");
-      const requestControlStop = extractFunction(source, "requestControlStop");
-      const stop = { disabled: false };
-      let hidden = false;
-      let failureVisible = false;
-      const bridge = new Function("stop", `
-        let activeControlSessionId = "control-session";
-        let controlUi = { stop };
-        const chrome = { runtime: { sendMessage: async () => { throw new Error("forced rejection"); } } };
-        function hideControl() { hidden = true; }
-        let hidden = false;
-        function showControlStopFailure() { failureVisible = true; stop.disabled = false; }
-        let failureVisible = false;
-        ${requestControlStop}
-        return {
-          request: () => requestControlStop(stop),
-          state: () => ({ hidden, failureVisible, disabled: stop.disabled }),
-        };
-      `)(stop);
-      const result = await bridge.request();
-      const state = bridge.state();
-      if (result.stopped || state.hidden || !state.failureVisible || state.disabled) {
-        throw new Error("rejected Stop hid or disabled the live safety indicator");
-      }
-    "#;
-    let output = match Command::new("node")
-        .args(["--input-type=module", "-e", script])
-        .output()
-    {
-        Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
-        Err(error) => panic!("failed to run Stop rejection harness: {error}"),
-    };
-    assert!(
-        output.status.success(),
-        "Node Stop rejection harness failed:\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
 fn start_then_stop_records_explicit_revocation_without_runtime_reference_errors() {
     let script = r#"
       import fs from "node:fs";
@@ -6584,10 +4697,8 @@ fn start_then_stop_records_explicit_revocation_without_runtime_reference_errors(
         let controlEpoch = 0;
         let controlLease = null;
         let lastControlRevocation = null;
-        const activeControlCaptures = new Map();
         function stopHeartbeat() {}
         function clearFrameSessions() {}
-        function clearControlUiTopLayerDirty() {}
         ${fn}
         return {
           start() {
@@ -7860,8 +5971,8 @@ fn pending_dialogs_fail_fast_and_never_revoke_the_lease_by_timeout() {
     );
 
     // The heartbeat keeps its browser-side attachment and document checks
-    // but skips the renderer-touching Runtime.evaluate probe and overlay
-    // refresh while the dialog is pending, and a dialog-stalled authorized
+    // but skips the renderer-touching Runtime.evaluate probe and content
+    // rebind while the dialog is pending, and a dialog-stalled authorized
     // navigation is not a navigation timeout.
     let heartbeat_start = background.find("async function heartbeatControl").unwrap();
     let heartbeat_end = background[heartbeat_start..].find("\n}\n").unwrap() + heartbeat_start;
@@ -8073,11 +6184,11 @@ fn pending_dialogs_fail_fast_and_never_revoke_the_lease_by_timeout() {
       }
 
       // The heartbeat commits without the Runtime.evaluate renderer probe or
-      // the overlay refresh while the dialog is pending, and never revokes.
+      // the content rebind while the dialog is pending, and never revokes.
       const heartbeatControl = extractFunction(source, "heartbeatControl");
       const heartbeat = new Function(`
         let controlLease = null;
-        let stopCalls = 0, probeCalls = 0, persistCalls = 0, showCalls = 0, verifyCalls = 0;
+        let stopCalls = 0, probeCalls = 0, persistCalls = 0, bindCalls = 0, verifyCalls = 0;
         function initializeControlState() { return Promise.resolve(); }
         function captureLeaseAuthority(lease) { return { sessionId: lease.sessionId, epoch: lease.epoch }; }
         function verifyDocumentAuthority() { verifyCalls += 1; return Promise.resolve(); }
@@ -8087,13 +6198,13 @@ fn pending_dialogs_fail_fast_and_never_revoke_the_lease_by_timeout() {
         }
         function assertLeaseAuthority() {}
         function persistControlState() { persistCalls += 1; return Promise.resolve(); }
-        function showControlUi() { showCalls += 1; return Promise.resolve(); }
+        function bindControlSession() { bindCalls += 1; return Promise.resolve(); }
         function stopControl() { stopCalls += 1; controlLease = null; return Promise.resolve(); }
         ${heartbeatControl}
         return {
           setLease(lease) { controlLease = lease; },
           beat: () => heartbeatControl(),
-          state: () => ({ stopCalls, probeCalls, persistCalls, showCalls, verifyCalls, lease: controlLease }),
+          state: () => ({ stopCalls, probeCalls, persistCalls, bindCalls, verifyCalls, lease: controlLease }),
         };
       `)();
       const lease = {
@@ -8106,14 +6217,14 @@ fn pending_dialogs_fail_fast_and_never_revoke_the_lease_by_timeout() {
       heartbeat.setLease(lease);
       await heartbeat.beat();
       let state = heartbeat.state();
-      if (state.probeCalls !== 0 || state.showCalls !== 0 || state.stopCalls !== 0
+      if (state.probeCalls !== 0 || state.bindCalls !== 0 || state.stopCalls !== 0
         || state.persistCalls !== 1 || state.verifyCalls !== 1 || !state.lease.lastHeartbeatAt) {
         throw new Error(`the dialog heartbeat touched the renderer or revoked: ${JSON.stringify(state)}`);
       }
       lease.pendingDialog = null;
       await heartbeat.beat();
       state = heartbeat.state();
-      if (state.probeCalls !== 1 || state.showCalls !== 1 || state.stopCalls !== 0) {
+      if (state.probeCalls !== 1 || state.bindCalls !== 1 || state.stopCalls !== 0) {
         throw new Error(`the dialog-free heartbeat lost its renderer probe: ${JSON.stringify(state)}`);
       }
       // An authorized navigation stalled behind a beforeunload dialog is not
@@ -8186,21 +6297,12 @@ fn a_dialog_that_opens_mid_observation_is_never_paid_for_with_the_lease() {
             < observe.find("return { snapshot, screenshot").unwrap()
     );
 
-    // The overlay boundary revokes too, so it carries the same guard, and the
-    // capture teardown does not spend two content timeouts against a frozen
-    // renderer before reaching it.
-    let ui_start = background
-        .find("async function failControlUiClosed")
-        .unwrap();
-    let ui_end = background[ui_start..].find("\n}\n").unwrap() + ui_start;
-    let ui = &background[ui_start..ui_end];
-    assert!(ui.find("assertDialogNotBlocking(phase)").unwrap() < ui.find("stopControl").unwrap());
+    // The capture itself never talks to the renderer, so a dialog that opens
+    // inside it cannot burn a content timeout on the way out.
     let capture_start = background.find("async function captureTab").unwrap();
     let capture_end = background[capture_start..].find("\n}\n").unwrap() + capture_start;
     let capture = &background[capture_start..capture_end];
-    assert!(capture.contains("const dialogBlocked = Boolean(controlLease?.pendingDialog)"));
-    assert!(capture.contains("if (!dialogBlocked) {"));
-    assert!(capture.contains("leaseStillActive && !restored && !dialogBlocked"));
+    assert!(!capture.contains("contentRequest"));
 
     // A dialog-caused refusal is a plain retriable refusal, never laundered
     // into ACTION_OUTCOME_UNKNOWN by the after-dispatch wrapper.
@@ -8237,7 +6339,6 @@ fn a_dialog_that_opens_mid_observation_is_never_paid_for_with_the_lease() {
       const assertDialogNotBlocking = extractFunction(source, "assertDialogNotBlocking");
       const failChangedDocument = extractFunction(source, "failChangedDocument");
       const verifyDocumentAuthority = extractFunction(source, "verifyDocumentAuthority");
-      const failControlUiClosed = extractFunction(source, "failControlUiClosed");
       const captureTab = extractFunction(source, "captureTab");
       const clearPendingDialog = extractFunction(source, "clearPendingDialog");
 
@@ -8257,7 +6358,6 @@ fn a_dialog_that_opens_mid_observation_is_never_paid_for_with_the_lease() {
       const boundary = new Function(`
         const crypto = { randomUUID: () => "capture-1" };
         let controlLease = null;
-        let controlUiContentLossGeneration = 0;
         let stopCalls = 0, contentCalls = 0, reportedLoaderId = "L1", releaseRetries = 0;
         function retryDialogBlockedInputRelease() { releaseRetries += 1; return Promise.resolve(); }
         let onScreenshot = () => {};
@@ -8267,17 +6367,7 @@ fn a_dialog_that_opens_mid_observation_is_never_paid_for_with_the_lease() {
         }
         function assertLeaseAuthority() {}
         function assertLeaseAuthorityAfterDispatch() {}
-        function beginControlCapture() { return ["capture-1"]; }
-        function endControlCapture() { return []; }
-        function beginControlUiTopLayerMutation() {}
-        function endControlUiTopLayerMutation() {}
-        function controlUiAcknowledged() { return true; }
-        function verifyControlUiBrowserTopLayer() {
-          return Promise.resolve({ revision: 0, contentLossGeneration: 0 });
-        }
-        function clearControlUiTopLayerDirty() {}
         function contentRequest() { contentCalls += 1; return Promise.resolve({}); }
-        function showControlUi() { return Promise.resolve({}); }
         function persistControlState() { return Promise.resolve(); }
         function getTab() { return Promise.resolve({ id: 9, url: "https://example.test/" }); }
         function effectiveTabUrl(tab) { return tab.url; }
@@ -8299,7 +6389,6 @@ fn a_dialog_that_opens_mid_observation_is_never_paid_for_with_the_lease() {
         ${assertDialogNotBlocking}
         ${failChangedDocument}
         ${verifyDocumentAuthority}
-        ${failControlUiClosed}
         ${captureTab}
         ${clearPendingDialog}
         return {
@@ -8333,10 +6422,10 @@ fn a_dialog_that_opens_mid_observation_is_never_paid_for_with_the_lease() {
       if (boundary.stops() !== 0 || boundary.lease() !== raced || !raced.pendingDialog) {
         throw new Error("a dialog opened mid-capture revoked the lease");
       }
-      // The frozen renderer is not asked to acknowledge the teardown either:
-      // only the capture-begin message was ever sent.
-      if (boundary.contents() !== 1) {
-        throw new Error(`the capture teardown talked to a dialog-frozen renderer ${boundary.contents()} times`);
+      // The frozen renderer is never asked to acknowledge anything: the
+      // capture path holds no content handshake at all.
+      if (boundary.contents() !== 0) {
+        throw new Error(`the capture talked to a dialog-frozen renderer ${boundary.contents()} times`);
       }
 
       // 2. The same identity failure with NO dialog still revokes: the
@@ -8393,7 +6482,6 @@ fn a_dialog_that_opens_mid_observation_is_never_paid_for_with_the_lease() {
         }
         function assertLeaseAuthority() {}
         function verifyDocumentAuthority() { return Promise.resolve({}); }
-        function showControlUi() { return Promise.resolve({}); }
         function persistControlState() { return Promise.resolve(); }
         function contentRequest() {
           snapshotCalls += 1;
@@ -8642,8 +6730,7 @@ fn a_dialog_revokes_the_lease_through_neither_input_release_nor_worker_recovery(
 
       // The worker-restart recovery: the persisted lease carries its
       // pendingDialog, the browser-side document identity still verifies, and
-      // only the overlay repaint is impossible.
-      const failControlUiClosed = extractFunction(source, "failControlUiClosed");
+      // only the content rebind is impossible.
       const finishRecoveredLease = extractFunction(source, "finishRecoveredLease");
       const recovery = new Function(`
         let controlLease = null;
@@ -8656,12 +6743,12 @@ fn a_dialog_revokes_the_lease_through_neither_input_release_nor_worker_recovery(
         function persistControlState() { persistCalls += 1; return Promise.resolve(); }
         function scheduleHeartbeat() { heartbeatCalls += 1; }
         function stopControl() { stopCalls += 1; controlLease = null; return Promise.resolve(); }
-        function showControlUi() {
-          return failControlUiClosed(controlLease, "show", new Error("the page did not confirm a painted control indicator"));
+        function bindControlSession() {
+          if (controlLease?.pendingDialog) return Promise.reject(pendingDialogError("control session rebind"));
+          return Promise.reject(new Error("PAGE_UNAVAILABLE: the content script did not answer"));
         }
         ${pendingDialogError}
         ${assertDialogNotBlocking}
-        ${failControlUiClosed}
         ${finishRecoveredLease}
         return {
           reset(lease, blocked) { controlLease = lease; stopCalls = 0; persistCalls = 0; heartbeatCalls = 0; identityBlocked = blocked === true; },
@@ -8672,7 +6759,7 @@ fn a_dialog_revokes_the_lease_through_neither_input_release_nor_worker_recovery(
       `)();
 
       // 5. Restart with the dialog still open: the lease survives and keeps
-      //    its heartbeat, and the indicator is repainted after the dialog.
+      //    its heartbeat, and the content rebinds after the dialog.
       const restarted = { tabId: 9, sessionId: "lease-2", epoch: 2, navigationReady: false, pendingDialog: { type: "alert" } };
       recovery.reset(restarted, false);
       if (await recovery.finish() !== true || recovery.lease() !== restarted) {
@@ -8682,11 +6769,11 @@ fn a_dialog_revokes_the_lease_through_neither_input_release_nor_worker_recovery(
         throw new Error(`the dialog-blocked recovery revoked or stopped watching: ${JSON.stringify(recovery.state())}`);
       }
 
-      // 6. The same unacknowledged indicator with no dialog still revokes.
+      // 6. The same unreachable content script with no dialog still revokes.
       const dark = { tabId: 9, sessionId: "lease-3", epoch: 3, navigationReady: false, pendingDialog: null };
       recovery.reset(dark, false);
       if (await recovery.finish() !== false || recovery.lease() !== null || recovery.state().stopCalls < 1) {
-        throw new Error("a dialog-free unacknowledged indicator survived a recovery");
+        throw new Error("a dialog-free unreachable content script survived a recovery");
       }
 
       // 7. And a recovery that could not verify the document at all is the
@@ -9064,7 +7151,7 @@ fn frame_agent_and_content_share_one_dom_core() {
     }
     // The content script consumes the core instead of re-implementing it.
     let content = &sources[1].1;
-    assert!(content.contains("globalThis.__LBB_DOM_CORE__({ isExcludedNode: isControlNode })"));
+    assert!(content.contains("globalThis.__LBB_DOM_CORE__()"));
     assert!(content.contains("core.createRevisionTracker({"));
     // The content script no longer owns any of the moved core constants.
     assert!(!content.contains("GEOMETRY_TOLERANCE_PX"));

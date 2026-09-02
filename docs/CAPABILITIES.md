@@ -21,13 +21,13 @@ This page states what the current code can do, what the user must configure, and
 | Same-process frame observation | Available | Chrome or Edge 140+ |
 | Recursive cross-origin iframe observation and trusted point input | Available | Chrome or Edge 140+; bounded to 16 iframe targets and five levels |
 | Dialog handling, condition waits, and bounded action batches | Available | Commands remain tied to the current lease and observation epoch |
-| Browser-owned warning and extension-owned page indicator | Available | Chrome owns the authoritative warning/Cancel; the page pill combines a direct-root-child/innermost-host-bound private marker, initial/final host/root accessibility checks, five browser-process point hits, bounded top-layer ancestry, separate top-layer revision/content-loss generations, a 500 ms sampling attempt, and an absolute 3 s dirty-proof deadline |
+| Visible control indicators | Available | Chrome's own debugging warning and Cancel action, the named **Local Browser Bridge** tab group, and the extension popup's Release/Resume controls; the extension injects nothing into the controlled page |
 | Full Access | Available and default | Broad authority over regular pages in the selected profile |
 | Safe mode | Available | Site allowlist, sensitive-field blocking, and selected one-time approvals |
 | Per-command API cancellation | Available | Bearer-authenticated in-flight `callId`; returns outcome-unknown and requires observation, never automatic retry |
 | Saved-token removal | Available | Trusted popup action revokes control, disconnects, removes the token from extension storage, and verifies the cleared state |
 
-The extension never replaces trusted debugger input with an untrusted page-generated click. Chrome Cancel, the in-page **Stop** button, popup release, lease expiry, tab closure, or connector loss revokes control.
+The extension never replaces trusted debugger input with an untrusted page-generated click. Chrome Cancel, popup release, lease expiry, tab closure, or connector loss revokes control.
 
 Canceling one bearer API command stops only that command context and preserves the user's browser-control lease when it can be kept safely. Cancellation is cooperative and can race a dispatched side effect, so the original command is completed as outcome-unknown rather than reported as rolled back. A controlled-page command with an unknown outcome immediately clears the server's observation/screenshot and latches exact-session recovery; later page mutations are refused until an explicit `page.observe` succeeds, even if the extension never receives the cancel. This also covers a disconnected caller with or without `callId`, legacy dashboard actions, and connector timeouts. The extension advances and persists the lease turn before its next queued command, re-clears frame state at the queue barrier, and revokes the lease on persistence failure.
 

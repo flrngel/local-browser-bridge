@@ -5,9 +5,12 @@
 // is stale. It is loaded twice with different hosts:
 //
 //   * `content.js` runs it in the top document's content-script isolated
-//     world and injects the control-overlay exclusion predicate;
+//     world;
 //   * `frame-agent.js` runs it inside a cross-origin subframe, in a dedicated
-//     CDP isolated world, with no exclusion predicate at all.
+//     CDP isolated world.
+//
+// The bridge injects nothing into the page, so every element the core sees is
+// page-owned and observable: there is no exclusion predicate.
 //
 // Nothing here reaches the extension messaging surface, dispatches an event,
 // activates a control, or writes a value: it is a read-only description and
@@ -18,7 +21,7 @@
 // Top-level declarations are functions only, so re-injecting the file into a
 // world that already ran it can never throw a redeclaration error.
 
-function createDomCore({ isExcludedNode = () => false } = {}) {
+function createDomCore() {
   const GEOMETRY_TOLERANCE_PX = 2;
 
   const candidateSelector = [
@@ -173,20 +176,13 @@ function createDomCore({ isExcludedNode = () => false } = {}) {
     if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) {
       throw new Error("BAD_COORDINATES: target point is outside the current viewport");
     }
-    const surface = document.elementsFromPoint(x, y);
-    if (surface.some((element, index) => index === 0 && isExcludedNode(element))) {
-      throw new Error("CONTROL_UI_OCCLUSION: release control with the visible Stop button or choose another point");
-    }
     const element = deepElementFromPoint(x, y);
-    if (!(element instanceof Element) || isExcludedNode(element)) throw new Error("TARGET_MISSING: no page element is available at that point");
+    if (!(element instanceof Element)) throw new Error("TARGET_MISSING: no page element is available at that point");
     return element;
   }
 
   function validateRecord(record, { requireHitTest = false } = {}) {
     const { element } = record;
-    if (isExcludedNode(element)) {
-      throw new Error("TARGET_CHANGED: target became part of the bridge control surface; observe again");
-    }
     if (!visible(element)) throw new Error("TARGET_CHANGED: target is no longer visible; observe again");
     const currentSignature = targetSignature(element);
     const currentBounds = boundsOf(element);
@@ -219,13 +215,13 @@ function createDomCore({ isExcludedNode = () => false } = {}) {
     const seen = new Set();
     const visit = (scope) => {
       for (const element of scope.querySelectorAll(candidateSelector)) {
-        if (!seen.has(element) && !isExcludedNode(element)) {
+        if (!seen.has(element)) {
           seen.add(element);
           found.push(element);
         }
       }
       for (const element of scope.querySelectorAll("*")) {
-        if (element.shadowRoot && !isExcludedNode(element)) visit(element.shadowRoot);
+        if (element.shadowRoot) visit(element.shadowRoot);
       }
     };
     visit(root);
@@ -258,13 +254,9 @@ function createDomCore({ isExcludedNode = () => false } = {}) {
 
 // Document-revision tracking. A snapshot is only ever valid while the
 // revision it was taken at is still current, so every mutation, scroll, and
-// resize that is not purely the bridge's own overlay bumps the revision and
-// records the coaching reason the next stale action reports.
-function createRevisionTracker({
-  isExcludedNode = () => false,
-  onMutationBatch = () => {},
-  isTracking = () => true,
-} = {}) {
+// resize bumps the revision and records the coaching reason the next stale
+// action reports.
+function createRevisionTracker({ isTracking = () => true } = {}) {
   let documentRevision = 0;
   let invalidationReason = "the page has not been observed";
 
@@ -273,15 +265,8 @@ function createRevisionTracker({
     if (isTracking()) invalidationReason = reason;
   }
 
-  function isOnlyExcludedMutation(mutation) {
-    if (mutation.type !== "childList") return isExcludedNode(mutation.target);
-    const changed = [...mutation.addedNodes, ...mutation.removedNodes];
-    return changed.length > 0 && changed.every((node) => isExcludedNode(node));
-  }
-
   const mutationObserver = new MutationObserver((mutations) => {
-    onMutationBatch();
-    if (mutations.some((mutation) => !isOnlyExcludedMutation(mutation))) invalidate("the document mutated");
+    if (mutations.length > 0) invalidate("the document mutated");
   });
   mutationObserver.observe(document, {
     subtree: true,

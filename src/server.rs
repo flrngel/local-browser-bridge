@@ -4280,7 +4280,7 @@ fn sanitize_pending_dialog(data: &Value) -> Value {
 /// fast server-side with `BLOCKED_BY_DIALOG` and is never relayed to the
 /// extension. Every exempt method stays off the renderer main thread:
 /// `status`, `tabs.list`, and `browser.control.status` read browser-process
-/// state, `browser.control.stop`'s overlay hide is best-effort, and
+/// state, `browser.control.stop`'s content unbind is best-effort, and
 /// `page.handleDialog` resolves the dialog through browser-side CDP.
 fn dialog_tolerant_method(method: &str) -> bool {
     matches!(
@@ -11442,8 +11442,8 @@ mod tests {
 
     #[test]
     fn a_human_pause_is_locked_and_never_a_server_error() {
-        // The live 0.11.0 regression: a human clicked the in-page Stop
-        // button, and browser.control.start and page.observe both answered
+        // The live 0.11.0 regression: a human stopped remote control, and
+        // browser.control.start and page.observe both answered
         // HTTP 500. A held human pause is a lock only a human can release.
         let paused = connector_error("HUMAN_CONTROL_PAUSED");
         assert_eq!(paused.status, StatusCode::LOCKED);

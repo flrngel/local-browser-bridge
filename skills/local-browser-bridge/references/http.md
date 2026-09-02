@@ -138,7 +138,7 @@ When a failure comes back from a connector—the browser extension or the comput
 | `overloaded`, `unavailable` | 503 Service Unavailable | The connector is missing or shedding load; reconnect or wait |
 | `timeout`, `outcome_unknown` | 504 Gateway Timeout | The connector never delivered an outcome; observe before acting again |
 
-A connector failure therefore never answers 500: an unclassified code is the connector's fault (502), not the bridge's. So a human pressing the in-page Stop button makes commands answer **423 `HUMAN_CONTROL_PAUSED` with taxonomy `needs_user`** and hint `handback`, not a 500 that would read as a retriable server error.
+A connector failure therefore never answers 500: an unclassified code is the connector's fault (502), not the bridge's. So a human using Chrome's **Cancel** action or the extension popup's **Release control** makes commands answer **423 `HUMAN_CONTROL_PAUSED` with taxonomy `needs_user`** and hint `handback`, not a 500 that would read as a retriable server error.
 
 Three connector codes deliberately answer a narrower status than their class, because the class is right about the recovery and the status is more precise about the cause: `BAD_COORDINATES` answers 400 (the number itself is wrong, not the observation), `COMPUTER_PERMISSION_REQUIRED` answers 403 (a missing operating-system permission is a standing refusal, not a lock a handback resumes), and `NO_PENDING_DIALOG` answers 409 (the request is well formed; only the page state does not match). There are no other exceptions.
 
