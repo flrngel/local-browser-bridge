@@ -2130,6 +2130,9 @@ fn background_pointer_teleports_once_without_focus_or_animation_latency() {
       }
 
       const moveVirtualCursor = extractFunction(source, "moveVirtualCursor");
+      if (moveVirtualCursor.includes("contentRequest")) {
+        throw new Error("moveVirtualCursor must not round-trip through the content script; nothing is drawn into the page");
+      }
       const bridge = new Function("deferred", `
         const lease = {
           tabId: 9, sessionId: "lease-9", epoch: 3, documentEpoch: 2,
@@ -2139,9 +2142,9 @@ fn background_pointer_teleports_once_without_focus_or_animation_latency() {
         };
         let animate = false;
         let deferOperations = true;
-        let debuggerCalls = 0, contentCalls = 0, pauses = 0, persists = 0;
-        const debuggerPoints = [], contentPoints = [];
-        const debuggerGates = [], contentGates = [];
+        let debuggerCalls = 0, pauses = 0, persists = 0;
+        const debuggerPoints = [];
+        const debuggerGates = [];
         function requireControl() { return Promise.resolve(lease); }
         function captureLeaseAuthority() {
           return { tabId: 9, sessionId: "lease-9", epoch: 3, documentEpoch: 2 };
@@ -2178,97 +2181,84 @@ fn background_pointer_teleports_once_without_focus_or_animation_latency() {
           debuggerGates.push(gate);
           return gate.promise;
         }
-        function contentRequest(_tabId, payload) {
-          contentCalls += 1;
-          contentPoints.push({ x: payload.cursor.x, y: payload.cursor.y });
-          if (!deferOperations) return Promise.resolve();
-          const gate = deferred();
-          contentGates.push(gate);
-          return gate.promise;
-        }
         function pause() { pauses += 1; return Promise.resolve(); }
         function persistControlState() { persists += 1; return Promise.resolve(); }
         ${moveVirtualCursor}
         return {
           move: () => moveVirtualCursor(9, 400, 300),
           releaseDebugger: () => debuggerGates.shift().resolve(),
-          releaseContent: () => contentGates.shift().resolve(),
-          rejectContent: (error) => contentGates.shift().reject(error),
+          rejectDebugger: (error) => debuggerGates.shift().reject(error),
           foreground() {
             animate = true; deferOperations = false;
-            debuggerCalls = 0; contentCalls = 0; pauses = 0; persists = 0;
-            debuggerPoints.length = 0; contentPoints.length = 0;
+            debuggerCalls = 0; pauses = 0; persists = 0;
+            debuggerPoints.length = 0;
           },
           transitioningForeground() {
             animate = true; deferOperations = true;
-            debuggerCalls = 0; contentCalls = 0; pauses = 0; persists = 0;
-            debuggerPoints.length = 0; contentPoints.length = 0;
+            debuggerCalls = 0; pauses = 0; persists = 0;
+            debuggerPoints.length = 0;
           },
           failingForeground() {
             animate = true; deferOperations = true;
-            debuggerCalls = 0; contentCalls = 0; pauses = 0; persists = 0;
-            debuggerPoints.length = 0; contentPoints.length = 0;
+            debuggerCalls = 0; pauses = 0; persists = 0;
+            debuggerPoints.length = 0;
           },
           background() { animate = false; },
           state: () => ({
-            debuggerCalls, contentCalls, pauses, persists, cursor: lease.cursor,
-            debuggerPoints: [...debuggerPoints], contentPoints: [...contentPoints],
+            debuggerCalls, pauses, persists, cursor: lease.cursor,
+            debuggerPoints: [...debuggerPoints],
           }),
         };
       `)(deferred);
 
+      // Background (unfocused tab/window): one final CDP move, no per-frame
+      // content round trip — there is nothing in the page left to update.
       const backgroundMove = bridge.move();
       while (bridge.state().debuggerCalls === 0) await Promise.resolve();
-      if (bridge.state().debuggerCalls !== 1 || bridge.state().contentCalls !== 0) {
+      if (bridge.state().debuggerCalls !== 1) {
         throw new Error("background movement dispatched more than its single final CDP move");
       }
       bridge.releaseDebugger();
-      while (bridge.state().contentCalls === 0) await Promise.resolve();
-      if (bridge.state().contentCalls !== 1) {
-        throw new Error("background movement sent more than one cursor state");
-      }
-      bridge.releaseContent();
       const skipped = await backgroundMove;
       const backgroundState = bridge.state();
       if (skipped.arrival !== "skipped_background" || skipped.points !== 1
         || skipped.durationMs !== 0 || backgroundState.debuggerCalls !== 1
-        || backgroundState.contentCalls !== 1 || backgroundState.pauses !== 0
-        || backgroundState.persists !== 1 || backgroundState.cursor.x !== 400
-        || backgroundState.cursor.y !== 300) {
+        || backgroundState.pauses !== 0 || backgroundState.persists !== 1
+        || backgroundState.cursor.x !== 400 || backgroundState.cursor.y !== 300) {
         throw new Error("background movement did not acknowledge one persisted final arrival");
       }
 
+      // A tab that loses foreground presentation mid-animation collapses to
+      // one final CDP move at the target instead of continuing the path.
       bridge.transitioningForeground();
       const transitionedMove = bridge.move();
       while (bridge.state().debuggerCalls === 0) await Promise.resolve();
-      bridge.releaseDebugger();
-      while (bridge.state().contentCalls === 0) await Promise.resolve();
+      // Flip presentation before releasing the first frame: the next
+      // presentation read happens synchronously once this gate resolves, so
+      // this ordering is deterministic rather than a timing race.
       bridge.background();
-      bridge.releaseContent();
+      bridge.releaseDebugger();
       while (bridge.state().debuggerCalls < 2) await Promise.resolve();
       bridge.releaseDebugger();
-      while (bridge.state().contentCalls < 2) await Promise.resolve();
-      bridge.releaseContent();
       const transitioned = await transitionedMove;
       const transitionedState = bridge.state();
       const finalDebuggerPoint = transitionedState.debuggerPoints.at(-1);
-      const finalContentPoint = transitionedState.contentPoints.at(-1);
       if (transitioned.arrival !== "skipped_background" || transitioned.points !== 2
-        || transitionedState.debuggerCalls !== 2 || transitionedState.contentCalls !== 2
-        || transitionedState.pauses !== 0 || finalDebuggerPoint.x !== 400
-        || finalDebuggerPoint.y !== 300 || finalContentPoint.x !== 400
-        || finalContentPoint.y !== 300) {
+        || transitionedState.debuggerCalls !== 2 || transitionedState.pauses !== 0
+        || finalDebuggerPoint.x !== 400 || finalDebuggerPoint.y !== 300) {
         throw new Error("foreground-to-background transition did not collapse to one final arrival");
       }
 
+      // A CDP failure after at least one point already landed is an unknown
+      // outcome, never a silently retryable failure.
       bridge.failingForeground();
       const failedMove = bridge.move();
       while (bridge.state().debuggerCalls === 0) await Promise.resolve();
       bridge.releaseDebugger();
-      while (bridge.state().contentCalls === 0) await Promise.resolve();
-      const contentFailure = new Error("PAGE_UNAVAILABLE: renderer rejected the cursor update");
-      contentFailure.code = "PAGE_UNAVAILABLE";
-      bridge.rejectContent(contentFailure);
+      while (bridge.state().debuggerCalls < 2) await Promise.resolve();
+      const dispatchFailure = new Error("INPUT_DISPATCH_FAILED: the browser rejected the pointer move");
+      dispatchFailure.code = "INPUT_DISPATCH_FAILED";
+      bridge.rejectDebugger(dispatchFailure);
       let failureWasUnknown = false;
       let dependentClickStarted = false;
       try {
@@ -2277,7 +2267,7 @@ fn background_pointer_teleports_once_without_focus_or_animation_latency() {
       } catch (error) {
         failureWasUnknown = error.code === "ACTION_OUTCOME_UNKNOWN";
       }
-      if (!failureWasUnknown || dependentClickStarted || bridge.state().debuggerCalls !== 1) {
+      if (!failureWasUnknown || dependentClickStarted || bridge.state().debuggerCalls !== 2) {
         throw new Error("post-CDP cursor failure remained retryable or allowed the dependent click");
       }
 
@@ -2285,7 +2275,7 @@ fn background_pointer_teleports_once_without_focus_or_animation_latency() {
       const arrived = await bridge.move();
       const foregroundState = bridge.state();
       if (arrived.arrival !== "arrived" || arrived.points !== 12
-        || foregroundState.debuggerCalls !== 12 || foregroundState.contentCalls !== 12
+        || foregroundState.debuggerCalls !== 12
         || foregroundState.pauses !== 11 || foregroundState.persists !== 1) {
         throw new Error("foreground movement did not retain the full animated path");
       }

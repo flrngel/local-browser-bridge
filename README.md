@@ -72,8 +72,8 @@ See [Capabilities](docs/CAPABILITIES.md) and
 - List and open tabs in an existing Chrome or Edge profile
 - Read page text, screenshots, selections, frames, and interactive elements
 - Click, fill, select, hover, scroll, type, navigate, and run page JavaScript
-- Keep Chrome's native debugging warning and an extension-owned in-page
-  **Stop** control visible during an active control lease
+- Keep Chrome's native debugging warning visible and the controlled tab in a
+  named **Local Browser Bridge** tab group during an active control lease
 - Use Full Access for broad control or Safe mode for URL allowlists and action
   approvals
 
@@ -201,8 +201,8 @@ Use the built-in demo before opening a consequential site:
    short control lease.
 4. Observe the demo page and try a harmless field fill, click, or scroll through
    your AI client or the documented local API.
-5. End the lease with the controlled page's **Stop** button, Chrome's **Cancel**
-   action, or **Release control** in the extension popup.
+5. End the lease with Chrome's **Cancel** action on its debugging notice, or
+   **Release control** in the extension popup.
 
 Full Access is the current default. For a first run, turn **Full Access mode**
 off in the extension popup to use Safe mode, or use a dedicated browser profile.
@@ -214,8 +214,9 @@ Enable Full Access only for a client you trust with the selected tabs.
   authenticated dashboard without exposing its credential in a console.
 - The extension popup shows the same version and reports **Connected**.
 - The dashboard lists the intended browser connector and tabs.
-- Starting control shows **Local Browser Bridge is using this tab** on the
-  controlled target page and Chrome's browser-owned debugging warning.
+- Starting control shows Chrome's own browser-owned debugging warning above
+  the tab, and the controlled tab joins a named **Local Browser Bridge** tab
+  group. Nothing is injected into the page itself.
 - If the helper is running, the dashboard reports **Computer connected**.
 
 The authenticated URL and extension token are credentials. Do not place them
