@@ -1601,15 +1601,35 @@ async function computerLane(context) {
     return;
   }
   // The WinForms pixel surface exposes no UI Automation pattern, so on Windows
-  // the pointer click lands on the fixture's logging text box instead; both
-  // count the delivered WM_LBUTTONDOWN in `messageCounters.mouseDown`.
-  const surface = findSemantic(observed.elements, "Pixel Input Surface") ?? (IS_WINDOWS ? findSemantic(observed.elements, "Focused Text Input") : undefined);
-  if (!surface) {
+  // its centre is derived from the fixture-published screen bounds and the
+  // observed window origin/transport scale instead of a semantic element.
+  const surface = findSemantic(observed.elements, "Pixel Input Surface");
+  const surfacePoint = (frame) => {
+    if (surface) {
+      return center(surface);
+    }
+    if (!IS_WINDOWS) {
+      return null;
+    }
+    const bounds = fixture.readState()?.surfaceScreenBounds;
+    const originX = frame.screenX ?? frame.windowX;
+    const originY = frame.screenY ?? frame.windowY;
+    if (!bounds || typeof originX !== "number" || typeof originY !== "number") {
+      return null;
+    }
+    return {
+      x: Math.round((bounds.x + bounds.width / 2 - originX) * (frame.transportScaleX ?? 1)),
+      y: Math.round((bounds.y + bounds.height / 2 - originY) * (frame.transportScaleY ?? 1)),
+    };
+  };
+  if (!surfacePoint(observed.frame)) {
     recorder.fail(lane, "click", "no pixel click target was observed", { names: observed.elements.slice(0, 40).map((element) => element.name) });
   } else {
-    const point = center(surface);
-    const { response: click, retried } = await actWithFocus("click", (frame) =>
-      bridge.command("computer.click", { frameId: frame.frameId, ...point }));
+    let point = null;
+    const { response: click, retried } = await actWithFocus("click", (frame) => {
+      point = surfacePoint(frame);
+      return bridge.command("computer.click", { frameId: frame.frameId, ...point });
+    });
     try {
       if (click.status !== 200) {
         throw new Error(truncate(errorSummary(click)));
@@ -1617,7 +1637,7 @@ async function computerLane(context) {
       const counted = IS_WINDOWS
         ? await waitFixtureCounter(fixture, "messageCounters.mouseDown", (value) => typeof value === "number" && value >= 1)
         : await waitFixtureCounter(fixture, "clicks", (value) => value === 1);
-      recorder.pass(lane, "click", { target: surface.name, point, ...counted, effect: click.result?.effect ?? null, provenance: click.result?.inputDeliveryProvenance ?? click.result?.provenance ?? null, retried });
+      recorder.pass(lane, "click", { target: surface ? surface.name : "Pixel Input Surface (fixture geometry)", point, ...counted, effect: click.result?.effect ?? null, provenance: click.result?.inputDeliveryProvenance ?? click.result?.provenance ?? null, retried });
     } catch (error) {
       recorder.fail(lane, "click", error.message, { point, retried, focus: fixture.focusDiagnostics ? fixture.focusDiagnostics() : null });
     }

@@ -33,10 +33,6 @@ on:
         required: false
         default: ""
         type: string
-  # TEMPORARY: exercises artifact mode against the existing 0.12.68 candidate
-  # from this branch; removed before merge.
-  push:
-    branches: [feat/ci-hosted-acceptance]
 
 permissions:
   contents: read
@@ -46,11 +42,11 @@ env:
   # Chrome for Testing build used for the browser lane. Branded Chrome >= 137
   # ignores --load-extension, so the lane always uses this pinned CfT build.
   CHROME_FOR_TESTING_BUILD: 145.0.7632.77
-  ACCEPTANCE_MODE: ${{ inputs.mode || 'artifact' }}
-  ACCEPTANCE_CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id || '33462607975' }}
-  ACCEPTANCE_CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt || '1' }}
-  ACCEPTANCE_VERSION: ${{ inputs.version || '0.12.68' }}
-  ACCEPTANCE_SOURCE_SHA: ${{ inputs.source_sha || '6f0740966ebcf1efdbfb8b795371798900cae2e9' }}
+  ACCEPTANCE_MODE: ${{ inputs.mode }}
+  ACCEPTANCE_CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+  ACCEPTANCE_CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
+  ACCEPTANCE_VERSION: ${{ inputs.version }}
+  ACCEPTANCE_SOURCE_SHA: ${{ inputs.source_sha }}
 
 jobs:
   acceptance:
