@@ -51,7 +51,16 @@ them. Safe mode restricts control to an allowlist, blocks sensitive fields,
 and requires one-time popup approval for risky clicks and tab closes — its
 risk detection is a conservative text heuristic that can miss ambiguous
 labels or canvas UI, so keep the allowlist narrow and supervise consequential
-tasks either way. Switch modes in the extension popup.
+tasks either way. Switch modes in the extension popup. A pending approval can
+only be granted or rejected from that same target browser's own extension
+popup, is bound to the exact server session and extension connection that
+queued it, and is discarded — clearing its badge — if the token, port, or
+mode rotates before someone acts on it. Neither mode, nor a
+`page.observe`/`computer.observe` semantic ref, detects prompt injection or
+proves human intent — page and window content reaching the agent this way is
+untrusted and can try to steer it, so treat every observation as data, not
+instruction, and re-observe after each action rather than trusting a plan
+made before it.
 
 ## Shell is full user authority
 
@@ -73,7 +82,10 @@ these before/after samples are not proof of zero visible or focus-state
 interruption. None of this creates a second desktop, input queue, or
 security principal; see [Limitations](docs/LIMITATIONS.md) for the full
 argument. The helper exposes no shell, filesystem, clipboard, or
-process-launch method.
+process-launch method, and the server independently intersects whatever
+capabilities a connected helper advertises against a fixed allowlist — a
+compromised or modified helper cannot grant itself a method the server does
+not already recognize.
 
 ## Sensitive data
 
@@ -83,6 +95,23 @@ returned with query strings and fragments stripped. Screenshots and page text
 live only in server memory, never on disk, and are served only to an
 authenticated session or bearer client. Native accessibility password values
 are never read or writable through semantic control.
+
+## Extension permissions
+
+The extension requests exactly six Chrome permissions, each for one purpose:
+
+| Permission | Why |
+|---|---|
+| `tabs` | List, activate, navigate, and identify controllable tabs |
+| `scripting` | Inject the isolated observation/action content script into HTTP(S)/file pages |
+| `storage` | Persist the token, port, allowlist, and any pending Safe-mode approval |
+| `alarms` | Reconnect the transport, expire leases, and recover the connection after the service worker is suspended |
+| `tabGroups` | Visibly group tabs the bridge created; grouping never grants authority |
+| `debugger` | Hold one explicit controlled-tab lease so Chrome shows its native debugging warning, then dispatch trusted input and evaluate page JavaScript |
+
+It declares no `cookies`, `downloads`, or `nativeMessaging` permission, ships
+no remote code (its content-security-policy is `script-src 'self'`), and
+sends no telemetry.
 
 ## Release trust
 

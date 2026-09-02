@@ -13,6 +13,13 @@ AI client must be able to reach `127.0.0.1` on this machine.
 
 ## Install in one command
 
+> These commands install the Desktop Host, local shell, and Agent Fetch,
+> which ship starting with release 0.12.69. If the latest published release
+> is older: on macOS the installer fails before copying any files; on
+> Windows it installs the older release and reports success anyway, with no
+> tray icon. See [Troubleshooting](docs/TROUBLESHOOTING.md#macos-installer-fails-with-an-unexpected-layout-or-unknown-argument-error)
+> / [Troubleshooting](docs/TROUBLESHOOTING.md#windows-installer-succeeds-but-no-tray-icon-appears-or-enableshell-fails-at-launch).
+
 macOS:
 
 ```bash

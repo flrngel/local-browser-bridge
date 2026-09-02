@@ -6,8 +6,8 @@ Rust, package manager, or manual checksum work.
 > This guide documents the Desktop Host, local shell, and Agent Fetch, which
 > ship starting with release 0.12.69. If the latest published release is
 > older, `install-macos.sh` fails with "A package has an unexpected layout" or
-> "Unknown argument" — see
-> [Troubleshooting](TROUBLESHOOTING.md#installer-fails-with-an-unexpected-layout-or-unknown-argument-error).
+> "Unknown argument" before it copies any files — see
+> [Troubleshooting](TROUBLESHOOTING.md#macos-installer-fails-with-an-unexpected-layout-or-unknown-argument-error).
 
 ## One-command install
 
@@ -188,6 +188,8 @@ them into logs, screenshots, issue reports, or untrusted pages.
 - **Need the manual procedure:** use [Manual and independent verification](VERIFY_RELEASE.md).
 - **Installer exits with "A package has an unexpected layout" or "Unknown
   argument":** the resolved release predates 0.12.69 and does not contain the
-  Desktop Host or shell yet. Check the
-  [releases page](https://github.com/flrngel/local-browser-bridge/releases)
-  for the latest version and pass it explicitly with `--version`.
+  Desktop Host or shell yet — this check runs before any files are copied.
+  Check the
+  [releases page](https://github.com/flrngel/local-browser-bridge/releases);
+  if the newest release is still older than 0.12.69, [build from
+  source](BUILD.md) instead.

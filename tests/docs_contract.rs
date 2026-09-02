@@ -136,6 +136,36 @@ fn every_shell_method_is_documented() {
     }
 }
 
+/// Splits `docs/CONFIGURATION.md` into the body text following each
+/// binary's own `## \`name\` ...` heading, up to (not including) the next
+/// `## ` heading. Text under any other heading (File locations, Ports, ...)
+/// belongs to no binary and is excluded, so a flag or variable mentioned
+/// only in shared prose there cannot count as documented for one binary.
+fn configuration_sections(text: &str) -> BTreeMap<&'static str, String> {
+    const BINARIES: [&str; 3] = [
+        "local-browser-bridge",
+        "local-browser-bridge-desktop",
+        "local-computer-helper",
+    ];
+    let mut sections: BTreeMap<&'static str, String> = BTreeMap::new();
+    let mut current: Option<&'static str> = None;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("## ") {
+            current = BINARIES
+                .iter()
+                .find(|name| rest.trim_start().starts_with(&format!("`{name}`")))
+                .copied();
+            continue;
+        }
+        if let Some(name) = current {
+            let section = sections.entry(name).or_default();
+            section.push_str(line);
+            section.push('\n');
+        }
+    }
+    sections
+}
+
 #[test]
 fn every_cli_flag_is_documented_in_configuration() {
     // Flags deliberately hidden from --help and reserved for internal use
@@ -144,6 +174,12 @@ fn every_cli_flag_is_documented_in_configuration() {
     const INTERNAL_ONLY: &[&str] = &["--worker"];
 
     let configuration = read("docs/CONFIGURATION.md");
+    let sections = configuration_sections(&configuration);
+    let console_server_scope = sections
+        .get("local-browser-bridge")
+        .cloned()
+        .unwrap_or_default();
+
     for (path, label) in [
         ("src/main.rs", "local-browser-bridge"),
         (
@@ -155,13 +191,26 @@ fn every_cli_flag_is_documented_in_configuration() {
         let source = read(path);
         let flags = extract_cli_match_flags(&source);
         assert!(!flags.is_empty(), "found no CLI flags in {path}");
+        let mut scope = sections
+            .get(label)
+            .cloned()
+            .unwrap_or_else(|| panic!("docs/CONFIGURATION.md has no `## `{label}`` section"));
+        if label == "local-browser-bridge-desktop" {
+            // The desktop host's own section documents its flags by
+            // explicit inheritance from the console server's table ("all
+            // its flags except ..."), so a shared flag is documented there,
+            // not repeated in the desktop section.
+            scope.push_str(&console_server_scope);
+        }
         for flag in &flags {
             if INTERNAL_ONLY.contains(&flag.as_str()) {
                 continue;
             }
             assert!(
-                configuration.contains(flag.as_str()),
-                "docs/CONFIGURATION.md is missing `{flag}` (present in {path}, {label})"
+                scope.contains(flag.as_str()),
+                "docs/CONFIGURATION.md's `{label}` section (plus its documented \
+                 inheritance) is missing `{flag}` (present in {path}); a flag \
+                 documented only under a different binary's heading does not count"
             );
         }
     }
@@ -169,22 +218,141 @@ fn every_cli_flag_is_documented_in_configuration() {
 
 #[test]
 fn documented_env_vars_are_named_in_source() {
-    // The inverse direction: every LBB_* variable CONFIGURATION.md claims to
-    // read must actually be read by some shipped binary, so the reference
-    // never documents an aspirational variable as if it exists today.
+    // The inverse direction: every LBB_* variable CONFIGURATION.md claims a
+    // given binary reads must actually be read by that binary's own source
+    // file, so a variable documented under the wrong binary's heading (or
+    // one no shipped binary reads at all) fails here.
     let configuration = read("docs/CONFIGURATION.md");
-    let combined = read("src/main.rs")
-        + &read("src/bin/local-browser-bridge-desktop.rs")
-        + &read("src/bin/local-computer-helper.rs");
-    for line in configuration.lines() {
-        let trimmed = line.trim_start_matches('|').trim();
-        if let Some(rest) = trimmed.strip_prefix("`LBB_") {
-            let name = format!("LBB_{}", rest.split('`').next().unwrap_or(""));
-            assert!(
-                combined.contains(&name),
-                "docs/CONFIGURATION.md documents {name}, but no shipped binary reads it"
-            );
+    let sections = configuration_sections(&configuration);
+    for (path, label) in [
+        ("src/main.rs", "local-browser-bridge"),
+        (
+            "src/bin/local-browser-bridge-desktop.rs",
+            "local-browser-bridge-desktop",
+        ),
+        ("src/bin/local-computer-helper.rs", "local-computer-helper"),
+    ] {
+        let source = read(path);
+        let scope = sections
+            .get(label)
+            .unwrap_or_else(|| panic!("docs/CONFIGURATION.md has no `## `{label}`` section"));
+        for line in scope.lines() {
+            let trimmed = line.trim_start_matches('|').trim();
+            if let Some(rest) = trimmed.strip_prefix("`LBB_") {
+                let name = format!("LBB_{}", rest.split('`').next().unwrap_or(""));
+                assert!(
+                    source.contains(&name),
+                    "docs/CONFIGURATION.md's `{label}` section documents {name}, \
+                     but {path} does not read it"
+                );
+            }
         }
+    }
+}
+
+#[test]
+fn health_response_keys_are_documented() {
+    let server = read("src/server.rs");
+    let start = server
+        .find("async fn health(")
+        .expect("could not find `async fn health(` in src/server.rs");
+    let object_start = server[start..]
+        .find("json!({")
+        .map(|offset| start + offset + "json!({".len())
+        .expect("could not find the health handler's json!({...}) body");
+    let object_end = server[object_start..]
+        .find("})")
+        .map(|offset| object_start + offset)
+        .expect("could not find the closing `})` of the health handler's body");
+    let mut keys = Vec::new();
+    for line in server[object_start..object_end].lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix('"') {
+            if let Some(end) = rest.find('"') {
+                keys.push(rest[..end].to_owned());
+            }
+        }
+    }
+    assert_eq!(
+        keys.len(),
+        5,
+        "GET /health's response shape changed; update docs/API_REFERENCE.md and this test"
+    );
+    let api_reference = read("docs/API_REFERENCE.md");
+    for key in &keys {
+        assert!(
+            api_reference.contains(&format!("\"{key}\"")),
+            "docs/API_REFERENCE.md's /health example is missing key `{key}` (present in the handler)"
+        );
+    }
+}
+
+#[test]
+fn taxonomy_codes_are_documented() {
+    let error_taxonomy = read("src/error_taxonomy.rs");
+    let start = error_taxonomy
+        .find("pub fn as_str(self) -> &'static str {")
+        .expect("could not find TaxonomyCode::as_str in src/error_taxonomy.rs");
+    let mut codes = Vec::new();
+    for line in error_taxonomy[start..].lines().skip(1) {
+        let trimmed = line.trim();
+        if trimmed.starts_with("pub fn") {
+            break;
+        }
+        let Some(arrow) = trimmed.find("=>") else {
+            continue;
+        };
+        let Some(rest) = trimmed[arrow + 2..].trim().strip_prefix('"') else {
+            continue;
+        };
+        let Some(end) = rest.find('"') else {
+            continue;
+        };
+        codes.push(rest[..end].to_owned());
+    }
+    assert_eq!(
+        codes.len(),
+        20,
+        "TaxonomyCode's variant count changed; update docs/API_REFERENCE.md and this test"
+    );
+    let api_reference = read("docs/API_REFERENCE.md");
+    for code in &codes {
+        assert!(
+            api_reference.contains(&format!("`{code}`")),
+            "docs/API_REFERENCE.md's error taxonomy is missing code `{code}` (present in TaxonomyCode)"
+        );
+    }
+}
+
+#[test]
+fn health_example_version_matches_cargo_toml() {
+    // The three flagship `GET /health` transcripts show a literal version
+    // number. Nothing else ties that number to the package's actual
+    // version, so it silently goes stale at the next bump unless this test
+    // fails first.
+    let cargo_toml = read("Cargo.toml");
+    let marker = "version = \"";
+    let start = cargo_toml
+        .find(marker)
+        .map(|offset| offset + marker.len())
+        .expect("could not find `version = \"...\"` in Cargo.toml");
+    let end = cargo_toml[start..]
+        .find('"')
+        .map(|offset| start + offset)
+        .expect("unterminated version string in Cargo.toml");
+    let version = &cargo_toml[start..end];
+    let needle = format!("\"version\":\"{version}\"");
+    for path in [
+        "README.md",
+        "docs/API_REFERENCE.md",
+        "docs/AGENT_INTEGRATION.md",
+    ] {
+        let text = read(path);
+        assert!(
+            text.contains(&needle),
+            "{path}'s /health example does not show the current crate version \
+             {version} ({needle}); update the pinned example after every version bump"
+        );
     }
 }
 
@@ -270,23 +438,56 @@ fn markdown_files(root: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Blanks out the content of fenced (```) code blocks, keeping every other
+/// line as-is, so a `](` inside a code example is never mistaken for a
+/// markdown link.
+fn strip_fenced_code_blocks(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut in_fence = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+        } else if !in_fence {
+            result.push_str(line);
+        }
+        result.push('\n');
+    }
+    result
+}
+
 /// Extracts every `](target)` link target from a markdown source string, in
 /// order. Does not attempt to parse reference-style links or image syntax
-/// beyond the leading `!`, which callers can ignore.
+/// beyond the leading `!`, which callers can ignore. The target's closing
+/// `)` is found by tracking paren depth so a target with its own balanced
+/// parentheses (a parenthetical aside around a bare URL, for example) is not
+/// truncated at the first `)`.
 fn extract_link_targets(text: &str) -> Vec<String> {
+    let text = strip_fenced_code_blocks(text);
     let mut targets = Vec::new();
-    let bytes = text.as_bytes();
     let mut index = 0;
     while let Some(offset) = text[index..].find("](") {
         let start = index + offset + 2;
-        if let Some(end_offset) = text[start..].find(')') {
-            let end = start + end_offset;
-            targets.push(text[start..end].to_owned());
-            index = end + 1;
-        } else {
-            break;
+        let mut depth: i32 = 1;
+        let mut end = None;
+        for (byte_offset, character) in text[start..].char_indices() {
+            match character {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(start + byte_offset);
+                        break;
+                    }
+                }
+                _ => {}
+            }
         }
-        if index >= bytes.len() {
+        let Some(end) = end else {
+            break;
+        };
+        targets.push(text[start..end].to_owned());
+        index = end + 1;
+        if index >= text.len() {
             break;
         }
     }
@@ -297,9 +498,11 @@ fn extract_link_targets(text: &str) -> Vec<String> {
 fn doc_tree_has_no_dead_relative_links_or_anchors() {
     let mut files = Vec::new();
     markdown_files(Path::new("docs"), &mut files);
+    markdown_files(Path::new("skills"), &mut files);
     files.push(PathBuf::from("README.md"));
     files.push(PathBuf::from("SECURITY.md"));
     files.push(PathBuf::from("AGENTS.md"));
+    files.push(PathBuf::from("evidence/README.md"));
 
     let mut heading_cache: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
     let mut failures = Vec::new();

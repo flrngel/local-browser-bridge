@@ -20,7 +20,7 @@ with 403 `HOST_REJECTED` before routing or authentication.
 | `/api/state` | GET | session or bearer | Full state snapshot (also pushed over `/api/events`) |
 | `/api/screenshot` | GET | session or bearer | Latest browser screenshot (PNG) |
 | `/api/computer/screenshot` | GET | session or bearer | Latest computer-helper screenshot (PNG) |
-| `/api/events` | GET (SSE) | session or bearer | Server-sent `state` events as the revision changes |
+| `/api/events` | GET (SSE) | session or bearer | Server-sent events, one per state change, plus a periodic heartbeat |
 | `/api/action` | POST | session + CSRF | Legacy dashboard-only command dispatch; agents should use `/api/v1/command` |
 | `/api/update/check` | POST | session + CSRF | Trigger the dashboard's on-demand update check |
 | `/api/v1/command` | POST | bearer | Primary command dispatch for agents |
@@ -87,9 +87,17 @@ can pin decisions to an exact frame.
 
 ### `GET /api/events` (SSE)
 
-Pushes `event: state` / `data: {"revision":N}` every time state changes. Poll
-`/api/state` after receiving a push if you need the full object; the event
-itself carries only the revision number.
+The first event on the stream is always `event: state`. After that, each
+push is named for what changed — `approval`, `connection`, `dialog`, `error`,
+`hello`, `observation`, `shell`, `tabs`, `update`, `warning`,
+`computer-error`, and other change-specific names — never `state` again. An
+`EventSource` client that only registers
+`addEventListener("state", …)` will see exactly one event and then go quiet;
+use `source.onmessage` (or listen for every name you care about) to catch
+every push. Every event's `data` is `{"revision":N}` regardless of its name;
+poll `/api/state` after receiving one if you need the full object. The
+connection also carries a `: heartbeat` comment every 15 seconds so a client
+can tell an idle stream from a dead one.
 
 ### `GET /api/screenshot`, `GET /api/computer/screenshot`
 
@@ -112,9 +120,10 @@ token, not a bare bearer token — a bearer-only request gets 403
 ```
 
 Requires `Authorization: Bearer <token>` and `Content-Type: application/json`.
-Returns `{"ok": true, "result": {...}, "callId": "...", "state": {...}}` on
-success, or `{"ok": false, "error": {...}, "taxonomy": {...}}` on failure (see
-[Error taxonomy](#error-taxonomy)). See
+Returns `{"ok": true, "result": {...}, "state": {...}}` on success, or
+`{"ok": false, "error": {...}, "taxonomy": {...}}` on failure (see
+[Error taxonomy](#error-taxonomy)). Either shape carries a `callId` key only
+when the request supplied one. See
 [Agent integration](AGENT_INTEGRATION.md) for `callId` semantics, replay, and
 cancellation.
 
@@ -143,8 +152,8 @@ present).
 ```text
 GET {BASE}/status
 GET {BASE}/tabs.list
-GET {BASE}/page.navigate?callId=nav-1&url=https%3A%2F%2Fexample.com
-GET {BASE}/page.click?callId=click-1&params=%7B%22ref%22%3A%22g4.e2%22%2C%22generation%22%3A%22g4%22%7D
+GET {BASE}/page.navigate?callId=nav-1&tabId=12&url=https%3A%2F%2Fexample.com
+GET {BASE}/page.click?callId=click-1&params=%7B%22tabId%22%3A12%2C%22ref%22%3A%22g4.e2%22%2C%22generation%22%3A%22g4%22%7D
 GET {BASE}/cancel?callId=nav-1
 ```
 
@@ -153,8 +162,12 @@ Every method except `status`, `tabs.list`, `browser.control.status`,
 requires `callId`. The GET transport shares POST's atomic admission, replay
 cache, and outcome-unknown fencing, so retrying the exact URL cannot dispatch
 the action twice; reusing a `callId` with different parameters returns
-`CALL_ID_REUSED`. The handler rejects any query key other than the method's
-own parameters, `callId`, and `params`.
+`CALL_ID_REUSED`. Query keys the method does not recognize are silently
+ignored rather than rejected — except on `{BASE}/cancel`, which accepts only
+`callId` and 400s on anything else. An ignored key still counts toward
+the `callId`'s replay fingerprint, though: add or drop one between retries of
+the same `callId` and the second request 409s with `CALL_ID_REUSED` even
+though the recognized parameters are identical.
 
 Responses carry `Cache-Control: no-store` and `Referrer-Policy: no-referrer`,
 a browser-declared cross-site fetch is rejected, and only the exact loopback
@@ -164,7 +177,10 @@ the client supports headers and bodies.
 
 ## Browser methods (`ACTION_METHODS`, `src/server.rs`)
 
-25 methods, dispatched by both `POST /api/v1/command` and Agent Fetch:
+25 methods, dispatched by both `POST /api/v1/command` and Agent Fetch. A
+method that takes `tabId` falls back to `state.targetTabId` (the tab your
+last `page.observe` or `browser.control` call touched) when it is omitted,
+and 400s `Select a target tab first` if there is no fallback either.
 
 | Method | Parameters | Notes |
 |---|---|---|
@@ -188,7 +204,7 @@ the client supports headers and bodies.
 | `page.clickAt` | `tabId`, `generation`, `x`, `y`, optional `button`, `clickCount`, `coordinateSpace`, lease bindings | Full Access only |
 | `page.typeText` | `tabId`, `generation`, `text`, optional lease bindings | Full Access only; inserts text into the focused control |
 | `page.evaluate` | `tabId`, `expression`, optional lease bindings | Full Access only; awaits a Promise up to 12s, returns a by-value result |
-| `page.waitFor` | `tabId`, one or more of `text`, `textGone`, `urlPrefix`, `mutationQuietMs`, optional `timeoutMs` | Read-only; needs no lease; keeps working during a human pause |
+| `page.waitFor` | `tabId`, one or more of `text`, `textGone`, `urlPrefix`, `mutationQuietMs`, optional `timeoutMs` (default 5,000, clamped to 100–12,000) | Read-only; needs no lease; keeps working during a human pause |
 | `page.batch` | `tabId`, `generation`, `actions`, optional lease bindings | 1–10 sequential click/fill/select/key/scroll steps bound to one generation |
 | `page.handleDialog` | `tabId`, `accept`, optional `promptText` | Accepts or dismisses the recorded JavaScript dialog |
 
@@ -206,7 +222,7 @@ wire-level specification, [internals/PROTOCOL.md](internals/PROTOCOL.md).
 | `computer.share.start` | `windowId`, optional `fps` | Starts one persistent capture stream; default max cadence 4 FPS, range 1–10 |
 | `computer.share.status` | none | Capture backend/OS-indication policy, sequences/drop counts, target, FPS cap, backpressure |
 | `computer.share.stop` | none | Stops the active share and returns its ID |
-| `computer.observe` | optional `windowId` | Captures one exact application window (one-shot) |
+| `computer.observe` | optional `windowId` (or `displayId`, accepted as an alias for it) | Captures one exact application window (one-shot) |
 | `computer.move` | `frameId`, `x`, `y`, optional `durationMs`, `coordinateSpace` | Bounded synthetic trajectory; never moves the hardware cursor |
 | `computer.click` | `frameId`, `x`, `y`, optional `button`, `clickCount`, `durationMs`, `coordinateSpace` | Moves the synthetic pointer, then sends exact-window input |
 | `computer.drag` | `frameId`, `fromX`, `fromY`, `toX`, `toY`, optional `durationMs`, `coordinateSpace` | Left-button drag; 50–2000ms |
@@ -300,9 +316,9 @@ server where noted:
 | 415 | `UNSUPPORTED_MEDIA_TYPE` (verified) |
 | 429 | `AUTH_BUSY` |
 | 502 | `COMPUTER_INVALID_OBSERVATION` |
-| 503 | `EXTENSION_HANDSHAKE_PENDING` (verified) / `COMPUTER_HANDSHAKE_PENDING` (verified) / `EXTENSION_DISCONNECTED` / `COMPUTER_DISCONNECTED` / `COMPUTER_SHARE_SESSION_EXHAUSTED` |
+| 503 | `EXTENSION_HANDSHAKE_PENDING` (verified) / `COMPUTER_HANDSHAKE_PENDING` (verified) / `EXTENSION_DISCONNECTED` / `COMPUTER_DISCONNECTED` / `COMPUTER_SHARE_SESSION_EXHAUSTED` / `SHELL_UNAVAILABLE` |
 | 504 | `COMMAND_OUTCOME_UNKNOWN` |
-| 500 | `INVALID_SANITIZER_STATE` — the only 500 the API can answer; a broken internal invariant, never a connector's fault |
+| 500 | `INVALID_SANITIZER_STATE` / `SHELL_FAILED` / `INTERNAL_ERROR` — a broken internal invariant, never a connector's fault |
 
 A connector failure never answers 500: an unclassified connector code is the
 connector's fault (502), not the bridge's.

@@ -5,15 +5,34 @@ Symptom → likely cause → fix. For the full error-code table, see
 
 ## Installation
 
-### Installer fails with "an unexpected layout" or "Unknown argument" error
+### macOS installer fails with "an unexpected layout" or "Unknown argument" error
 
 The resolved release predates the feature this guide describes. The
 Desktop Host, local shell, Agent Fetch, and one-command uninstaller all ship
-starting with release 0.12.69; installing an older release with a guide that
-assumes them fails this way. Check the
+starting with release 0.12.69; `install-macos.sh` checks the downloaded
+archive's contents before it copies anything, so installing an older release
+with a guide that assumes these features fails this way, before any files
+land on disk. Check the
 [releases page](https://github.com/flrngel/local-browser-bridge/releases) for
-the latest version and pass it explicitly (`--version` on macOS,
-`-Version` on Windows). See [Install macOS](INSTALL_MACOS.md) /
+the latest version — both installers already resolve `latest` by default, so
+this is not a matter of passing a version flag; if the newest release is
+still older than 0.12.69, [build from source](BUILD.md) instead. See
+[Install macOS](INSTALL_MACOS.md).
+
+### Windows installer succeeds, but no tray icon appears or EnableShell fails at launch
+
+Unlike the macOS script, `install-windows.ps1` does not check what a release
+actually contains — it downloads and installs whatever `-Version` (or
+`latest`) resolves to and reports success either way. Installing a release
+older than 0.12.69 this way copies the binaries and creates working
+shortcuts, but there is no Desktop Host yet: the shortcuts run the console
+server binary instead, so no tray icon appears, and if you passed
+`-EnableShell` that same process (and the sign-in Startup shortcut) exits
+immediately with `Unknown argument: --enable-shell` because the older server
+does not understand that flag. Check the
+[releases page](https://github.com/flrngel/local-browser-bridge/releases):
+if the newest release is still older than 0.12.69, [build from
+source](BUILD.md) instead of installing. See
 [Install Windows](INSTALL_WINDOWS.md).
 
 ### Port 17373 is already in use
@@ -49,10 +68,12 @@ that tab returns 409 `CONTROL_REVOKED`. This means the in-page control
 indicator (the pill/Stop overlay) failed its host/root ancestry proof after
 being injected — see
 [internals/PROTOCOL.md](internals/PROTOCOL.md#browser-control-lease-model)
-for what that proof checks. Confirm the browser is Chrome or Edge 140 or
-later (an older browser lacks the required experimental DOM methods), reload
-the target tab, and retry. If it persists on a supported browser version,
-update the extension to the latest release — the ancestry check has been an
+for what that proof checks. This is not a Chrome-version problem: on some
+releases the extension's ancestry walk relies on a `DOM.describeNode` field
+Chrome does not populate, so the proof fails on every supported browser
+version, not only old ones. Reload the target tab and retry in case a
+transient page state caused it, but if it fails consistently, update the
+extension to the latest release — the ancestry check has been an
 active area of extension fixes.
 
 ### Extension connects, but `page.observe`/`page.click` never see a newly opened tab

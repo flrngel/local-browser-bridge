@@ -25,7 +25,9 @@ here instead of repeating the tables.
 
 ## `local-browser-bridge-desktop` (tray / menu-bar host)
 
-Same flags and environment variables as the console server, plus:
+Same environment variables as the console server, and all its flags **except
+`--check-updates`** — passing that one to the desktop host exits with
+`Unknown argument`, not a metadata check — plus:
 
 | Flag | Effect |
 |---|---|
@@ -45,11 +47,14 @@ Same flags and environment variables as the console server, plus:
 | `--licenses` | Print project and third-party license notices, then exit |
 | `-V`, `--version` | Print the installed version and exit |
 | `-h`, `--help` | Print usage and exit |
+| `--worker` (Windows only) | Run as the input-worker subprocess; not for direct use |
+| `--controller-process-id=<pid>` (Windows only) | Nonzero parent process ID the worker supervises; not for direct use |
 
 | Environment variable | Default | Purpose |
 |---|---|---|
 | `LBB_PORT` | `17373` | Server port the helper connects to |
-| `LBB_TOKEN` | none | Explicit bridge token; without it the helper reads the same token file the server uses |
+| `LBB_TOKEN` | none | Explicit bridge token; without it the helper reads the token file at `LBB_TOKEN_PATH`, or the same default path the server uses |
+| `LBB_TOKEN_PATH` | computed profile path (see below) | Token file location, read only when `LBB_TOKEN` is unset |
 
 Without options, the helper connects to Local Browser Bridge on loopback and
 waits. It never opens a listening socket.
@@ -58,7 +63,7 @@ waits. It never opens a listening socket.
 
 | Item | Default path |
 |---|---|
-| Bridge token | `~/.local-browser-bridge/token` (the directory is created with mode `0700`, the file with mode `0600`; see [Security](../SECURITY.md)) |
+| Bridge token | `~/.local-browser-bridge/token` (on Unix, the directory is created with mode `0700` and the file with mode `0600`; on Windows, both get a protected TokenUser-only DACL instead — see [security-invariants.md](internals/security-invariants.md)) |
 | macOS install root | `$HOME/Applications/Local Browser Bridge` |
 | Windows install root | `%LOCALAPPDATA%\Programs\Local Browser Bridge` |
 | macOS LaunchAgent | current-user LaunchAgent, restarts the app only after an abnormal exit |

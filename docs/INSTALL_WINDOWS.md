@@ -5,8 +5,10 @@ access, Node.js, Rust, package manager, or manual checksum work.
 
 > This guide documents the Desktop Host, local shell, and Agent Fetch, which
 > ship starting with release 0.12.69. If the latest published release is
-> older, `install-windows.ps1` fails before it copies any files — see
-> [Troubleshooting](TROUBLESHOOTING.md#installer-fails-with-an-unexpected-layout-or-unknown-argument-error).
+> older, `install-windows.ps1` does not detect that — it downloads and
+> installs the older release successfully, silently ignoring flags this guide
+> tells you to pass. See
+> [Troubleshooting](TROUBLESHOOTING.md#windows-installer-succeeds-but-no-tray-icon-appears-or-enableshell-fails-at-launch).
 
 ## One-command install
 
@@ -178,7 +180,10 @@ them into logs, screenshots, issue reports, or untrusted pages.
 - **Helper cannot control an elevated app:** keep the bridge non-elevated and
   use a non-elevated target; Windows integrity boundaries are intentional.
 - **Need the manual procedure:** use [Manual and independent verification](VERIFY_RELEASE.md).
-- **Installer fails before copying any files:** the resolved release predates
-  0.12.69 and does not contain the Desktop Host or shell yet. Check the
-  [releases page](https://github.com/flrngel/local-browser-bridge/releases)
-  for the latest version and pass it explicitly with `-Version`.
+- **Installer reports success but there is no tray icon, or `-EnableShell`
+  makes it exit `Unknown argument`:** the resolved release predates 0.12.69
+  and does not contain the Desktop Host or shell yet — the installer has no
+  way to detect this and installs it anyway. Check the
+  [releases page](https://github.com/flrngel/local-browser-bridge/releases);
+  if the newest release is still older than 0.12.69, [build from
+  source](BUILD.md) instead.
