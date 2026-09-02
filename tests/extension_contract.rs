@@ -4697,10 +4697,8 @@ fn start_then_stop_records_explicit_revocation_without_runtime_reference_errors(
         let controlEpoch = 0;
         let controlLease = null;
         let lastControlRevocation = null;
-        const activeControlCaptures = new Map();
         function stopHeartbeat() {}
         function clearFrameSessions() {}
-        function clearControlUiTopLayerDirty() {}
         ${fn}
         return {
           start() {

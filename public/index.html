@@ -79,7 +79,7 @@
           </div>
           <span id="browser-control-badge" class="state-badge inactive">Inactive</span>
         </div>
-        <p class="control-boundary"><strong>Two visible signals:</strong> while the debugger-backed lease is active, the browser owns its native debugging notice. The extension separately shows “Local Browser Bridge is using this tab” inside the page. Stop here, press the in-tab Stop button, or use the browser's Cancel action to revoke control.</p>
+        <p class="control-boundary"><strong>Two visible signals:</strong> while the debugger-backed lease is active, the browser owns its native debugging notice, and the controlled tab joins a named "Local Browser Bridge" tab group. Nothing is injected into the page itself. Stop here, use the extension popup's Release control, or use the browser's Cancel action to revoke control.</p>
         <div class="control-layout">
           <dl id="browser-control-details" class="metadata-list" aria-label="Browser control session details">
             <div><dt>Session</dt><dd>Not started</dd></div>
