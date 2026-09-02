@@ -53,7 +53,7 @@ and provides dashboard, setup, token, helper, logs, update, and quit actions.
 The folder also contains four maintenance launchers:
 
 - **Open Local Browser Bridge.command** opens the menu-bar app;
-- **Finish Browser Extension Setup.command** repeats the extension setup; and
+- **Finish Browser Extension Setup.command** repeats the extension setup;
 - **Start Computer Helper.command** opens optional desktop control; and
 - **Uninstall Local Browser Bridge.command** runs the version-matched safe
   uninstaller.
