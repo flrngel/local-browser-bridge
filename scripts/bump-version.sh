@@ -67,6 +67,9 @@ self_test() {
   printf 'description: Exact accepted package version (for example, 1.2.3)\n' > "$scratch/.github/workflows/publish.yml"
   printf 'curl ... | bash -s -- --version 1.2.3\n' > "$scratch/docs/INSTALL_MACOS.md"
   printf '& $installer -Version 1.2.3\n' > "$scratch/docs/INSTALL_WINDOWS.md"
+  printf '{"version":"1.2.3"}\n' > "$scratch/README.md"
+  printf '{"version":"1.2.3"}\n' > "$scratch/docs/API_REFERENCE.md"
+  printf '{"version":"1.2.3"}\n' > "$scratch/docs/AGENT_INTEGRATION.md"
 
   rewrite_pins 1.2.3 1.2.4 "$scratch" "$pins_file"
   rewrite_lock 1.2.4 "$scratch"
@@ -81,6 +84,9 @@ self_test() {
   grep -q '(for example, 1.2.4)' "$scratch/.github/workflows/publish.yml"
   grep -q -- '--version 1.2.4' "$scratch/docs/INSTALL_MACOS.md"
   grep -q -- '-Version 1.2.4' "$scratch/docs/INSTALL_WINDOWS.md"
+  grep -q '"version":"1.2.4"' "$scratch/README.md"
+  grep -q '"version":"1.2.4"' "$scratch/docs/API_REFERENCE.md"
+  grep -q '"version":"1.2.4"' "$scratch/docs/AGENT_INTEGRATION.md"
   if rewrite_pins 9.9.9 1.2.5 "$scratch" "$pins_file" 2>/dev/null; then
     echo "bump-version self-test: a missing pin must fail" >&2
     rm -rf "$scratch"

@@ -67,7 +67,7 @@ $ curl -s -i http://127.0.0.1:17373/health
 HTTP/1.1 200 OK
 [response headers omitted]
 
-{"computerConnected":false,"extensionConnected":false,"ok":true,"shellEnabled":true,"version":"0.12.68"}
+{"computerConnected":false,"extensionConnected":false,"ok":true,"shellEnabled":true,"version":"0.12.69"}
 ```
 
 `extensionConnected` and `computerConnected` tell you whether the browser

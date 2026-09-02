@@ -99,7 +99,7 @@ To install a specific stable version instead of latest, substitute its number
 above) for the example below:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-macos.sh | bash -s -- --version 0.12.68
+curl -fsSL https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-macos.sh | bash -s -- --version 0.12.69
 ```
 
 ## One-command uninstall
