@@ -153,19 +153,22 @@ jobs:
           gh api \
             "repos/$GITHUB_REPOSITORY/actions/runs/$ACCEPTANCE_CANDIDATE_RUN_ID/artifacts?per_page=100" \
             > "$work/artifacts.json"
+          # `EXPR and (BOUND) as $x | if $x then VALUE else error end` is not
+          # safe for extracting VALUE across jq versions: jq's `and`/`or`
+          # always reduce to a plain boolean, so on jq < 1.8 the `and`
+          # discards VALUE and this would yield the literal string "true"
+          # instead of an artifact ID. Bind `as` to a plain bracketed term
+          # and keep the boolean check self-contained inside `if`, which is
+          # unambiguous on every jq version.
           artifact_id="$(jq -er \
             --argjson run_id "$ACCEPTANCE_CANDIDATE_RUN_ID" \
             --arg source "$ACCEPTANCE_SOURCE_SHA" '
-              (.total_count < 100) and
               ([.artifacts[] | select(
                 .name == "release-candidate" and .expired == false and
                 .workflow_run.id == $run_id and .workflow_run.head_sha == $source
-              )] | length == 1) as $valid |
-              if $valid then
-                [.artifacts[] | select(
-                  .name == "release-candidate" and .expired == false and
-                  .workflow_run.id == $run_id and .workflow_run.head_sha == $source
-                )][0].id | tostring
+              )]) as $matches |
+              if (.total_count < 100) and ($matches | length == 1) then
+                $matches[0].id | tostring
               else error("candidate artifact is absent or ambiguous") end
             ' "$work/artifacts.json")"
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$work/release-candidate.zip"

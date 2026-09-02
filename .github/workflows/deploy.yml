@@ -414,29 +414,33 @@ jobs:
           for lane in windows macos; do
             test -f "acceptance/acceptance-$lane/acceptance.json"
           done
-          # The candidate bytes come from actions/download-artifact above, not a
-          # direct `gh api .../zip` download: while this run is still in
-          # progress, the raw REST artifact-zip endpoint has been observed to
-          # 404 for an artifact this same run produced (reproduced twice on
-          # d06ce94, run 33621985863), even though the identical listing call
-          # and the pattern-based download-artifact step just above it both
-          # succeed. download-artifact talks to the same Actions Results
-          # service the upload used, so it is not subject to that gap.
+          # The candidate bytes come from actions/download-artifact above, not
+          # a `gh api .../zip` download, so this step never needs its own
+          # network fetch of the (potentially large) candidate archive.
           test "$(find candidate -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 5
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" > artifacts.json
+          # NOTE: `EXPR and (BOUND) as $x | if $x then VALUE else error end`
+          # is not safe for extracting VALUE: jq's `and`/`or` always reduce to
+          # a plain boolean, so on jq < 1.8 (ubuntu-latest's preinstalled jq,
+          # confirmed 1.7) the whole `and`-expression discards VALUE and
+          # yields the literal boolean `true`, which downstream code then
+          # mistook for a real artifact ID (reproduced twice against 0.12.69,
+          # run 33621985863 attempts 1-2: `gh api .../artifacts/true/zip` ->
+          # 404). jq >= 1.8 changed this precedence and returns VALUE, which
+          # is why the byte-identical pattern in acceptance.yml has always
+          # worked on windows-latest/macos-26 (newer jq there) while this job
+          # (ubuntu-latest) has not. Bind `as` to a plain bracketed term
+          # instead, and keep the boolean check self-contained inside `if`,
+          # which is unambiguous on every jq version.
           candidate_artifact="$(jq -er \
             --argjson run_id "$GITHUB_RUN_ID" \
             --arg source "$VERIFIED_SOURCE_SHA" '
-              (.total_count < 100) and
               ([.artifacts[] | select(
                 .name == "release-candidate" and .expired == false and
                 .workflow_run.id == $run_id and .workflow_run.head_sha == $source
-              )] | length == 1) as $valid |
-              if $valid then
-                [.artifacts[] | select(
-                  .name == "release-candidate" and .expired == false and
-                  .workflow_run.id == $run_id and .workflow_run.head_sha == $source
-                )][0]
+              )]) as $matches |
+              if (.total_count < 100) and ($matches | length == 1) then
+                $matches[0]
               else error("candidate artifact is absent or ambiguous") end
             ' artifacts.json)"
           artifact_id="$(jq -er '.id | tostring' <<<"$candidate_artifact")"
