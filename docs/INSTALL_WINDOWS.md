@@ -3,6 +3,11 @@
 The recommended install is one PowerShell command. It needs no administrator
 access, Node.js, Rust, package manager, or manual checksum work.
 
+> This guide documents the Desktop Host, local shell, and Agent Fetch, which
+> ship starting with release 0.12.69. If the latest published release is
+> older, `install-windows.ps1` fails before it copies any files — see
+> [Troubleshooting](TROUBLESHOOTING.md#installer-fails-with-an-unexpected-layout-or-unknown-argument-error).
+
 ## One-command install
 
 Open **Windows PowerShell** as your normal signed-in user and run:
@@ -87,10 +92,10 @@ release, verifies it, stops only programs running from the install folder,
 replaces every component together, and reuses the stable extension folder.
 In `chrome://extensions`, select **Reload** on the existing extension card.
 
-To install a specific stable version:
+To install a specific stable version (0.12.69 or later; see the note above):
 
 ```powershell
-$installer = [scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-windows.ps1')); & $installer -Version 0.12.68
+$installer = [scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-windows.ps1')); & $installer -Version 0.12.69
 ```
 
 ## One-command uninstall
@@ -158,7 +163,7 @@ The executables are not yet Microsoft publisher-signed, so SmartScreen may
 show **Unknown publisher**. Keep SmartScreen enabled. The installer does not
 disable it, add exclusions, request elevation, open a firewall port, or accept
 a mutable/prerelease release. For independent GitHub attestation verification,
-use [Verify a published release](INSTALL.md#independent-provenance-check).
+use [Verify a published release](VERIFY_RELEASE.md#independent-provenance-check).
 
 The complete dashboard URL and extension token are credentials. Do not paste
 them into logs, screenshots, issue reports, or untrusted pages.
@@ -172,4 +177,8 @@ them into logs, screenshots, issue reports, or untrusted pages.
   Desktop Host and that an older console-server Startup item was removed.
 - **Helper cannot control an elevated app:** keep the bridge non-elevated and
   use a non-elevated target; Windows integrity boundaries are intentional.
-- **Need the manual procedure:** use [Manual and independent verification](INSTALL.md).
+- **Need the manual procedure:** use [Manual and independent verification](VERIFY_RELEASE.md).
+- **Installer fails before copying any files:** the resolved release predates
+  0.12.69 and does not contain the Desktop Host or shell yet. Check the
+  [releases page](https://github.com/flrngel/local-browser-bridge/releases)
+  for the latest version and pass it explicitly with `-Version`.

@@ -3,6 +3,12 @@
 The recommended install is one Terminal command. It needs no Homebrew, Node.js,
 Rust, package manager, or manual checksum work.
 
+> This guide documents the Desktop Host, local shell, and Agent Fetch, which
+> ship starting with release 0.12.69. If the latest published release is
+> older, `install-macos.sh` fails with "A package has an unexpected layout" or
+> "Unknown argument" — see
+> [Troubleshooting](TROUBLESHOOTING.md#installer-fails-with-an-unexpected-layout-or-unknown-argument-error).
+
 ## One-command install
 
 Open Terminal as your normal signed-in user and run:
@@ -88,10 +94,10 @@ latest release, replaces every component together, and reloads the current-user
 LaunchAgent. In `chrome://extensions`, select **Reload** on the existing
 extension card.
 
-To install a specific stable version:
+To install a specific stable version (0.12.69 or later; see the note above):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-macos.sh | bash -s -- --version 0.12.68
+curl -fsSL https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-macos.sh | bash -s -- --version 0.12.69
 ```
 
 ## One-command uninstall
@@ -165,7 +171,7 @@ notarized, so macOS may show an unknown-developer warning. Keep Gatekeeper
 enabled. The installer does not clear quarantine globally, weaken privacy
 settings, request administrator access, or accept a mutable/prerelease release.
 For independent GitHub attestation verification, use
-[Verify a published release](INSTALL.md#independent-provenance-check).
+[Verify a published release](VERIFY_RELEASE.md#independent-provenance-check).
 
 The complete dashboard URL and extension token are credentials. Do not paste
 them into logs, screenshots, issue reports, or untrusted pages.
@@ -179,4 +185,9 @@ them into logs, screenshots, issue reports, or untrusted pages.
 - **Port 17373 is busy:** stop the other listener before rerunning the installer.
 - **No menu-bar icon appears:** open `Local Browser Bridge.app` from the install
   folder and inspect **Open Logs** from its menu if startup failed.
-- **Need the manual procedure:** use [Manual and independent verification](INSTALL.md).
+- **Need the manual procedure:** use [Manual and independent verification](VERIFY_RELEASE.md).
+- **Installer exits with "A package has an unexpected layout" or "Unknown
+  argument":** the resolved release predates 0.12.69 and does not contain the
+  Desktop Host or shell yet. Check the
+  [releases page](https://github.com/flrngel/local-browser-bridge/releases)
+  for the latest version and pass it explicitly with `--version`.
