@@ -2409,7 +2409,12 @@ fn native_desktop_dependencies_are_not_built_on_unsupported_hosts() {
         .next()
         .unwrap();
     assert!(
-        windows_section.contains("windows-wgc = { package = \"windows\", version = \"0.62.2\"")
+        windows_section.contains("windows = { version = \"0.62.2\""),
+        "the windows crate must stay a single unified dependency"
+    );
+    assert!(
+        !windows_section.contains("package = \"windows\""),
+        "the windows crate must not be depended on twice under different names"
     );
     for feature in [
         "Graphics_Capture",

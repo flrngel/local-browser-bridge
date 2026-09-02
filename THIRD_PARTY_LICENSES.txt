@@ -370,23 +370,15 @@ webpki-roots 1.0.9 — CDLA-Permissive-2.0
 Source: https://github.com/rustls/webpki-roots
 widestring 1.2.1 — MIT OR Apache-2.0
 Source: https://github.com/VoidStarKat/widestring-rs
-windows 0.58.0 — MIT OR Apache-2.0
-Source: https://github.com/microsoft/windows-rs
 windows 0.62.2 — MIT OR Apache-2.0
 Source: https://github.com/microsoft/windows-rs
 windows-collections 0.3.2 — MIT OR Apache-2.0
-Source: https://github.com/microsoft/windows-rs
-windows-core 0.58.0 — MIT OR Apache-2.0
 Source: https://github.com/microsoft/windows-rs
 windows-core 0.62.2 — MIT OR Apache-2.0
 Source: https://github.com/microsoft/windows-rs
 windows-future 0.3.2 — MIT OR Apache-2.0
 Source: https://github.com/microsoft/windows-rs
-windows-implement 0.58.0 — MIT OR Apache-2.0
-Source: https://github.com/microsoft/windows-rs
 windows-implement 0.60.2 — MIT OR Apache-2.0
-Source: https://github.com/microsoft/windows-rs
-windows-interface 0.58.0 — MIT OR Apache-2.0
 Source: https://github.com/microsoft/windows-rs
 windows-interface 0.59.3 — MIT OR Apache-2.0
 Source: https://github.com/microsoft/windows-rs
@@ -394,23 +386,15 @@ windows-link 0.2.1 — MIT OR Apache-2.0
 Source: https://github.com/microsoft/windows-rs
 windows-numerics 0.3.1 — MIT OR Apache-2.0
 Source: https://github.com/microsoft/windows-rs
-windows-result 0.2.0 — MIT OR Apache-2.0
-Source: https://github.com/microsoft/windows-rs
 windows-result 0.4.1 — MIT OR Apache-2.0
-Source: https://github.com/microsoft/windows-rs
-windows-strings 0.1.0 — MIT OR Apache-2.0
 Source: https://github.com/microsoft/windows-rs
 windows-strings 0.5.1 — MIT OR Apache-2.0
 Source: https://github.com/microsoft/windows-rs
 windows-sys 0.61.2 — MIT OR Apache-2.0
 Source: https://github.com/microsoft/windows-rs
-windows-targets 0.52.6 — MIT OR Apache-2.0
-Source: https://github.com/microsoft/windows-rs
 windows-threading 0.2.1 — MIT OR Apache-2.0
 Source: https://github.com/microsoft/windows-rs
 windows-version 0.1.7 — MIT OR Apache-2.0
-Source: https://github.com/microsoft/windows-rs
-windows_x86_64_msvc 0.52.6 — MIT OR Apache-2.0
 Source: https://github.com/microsoft/windows-rs
 writeable 0.6.4 — Unicode-3.0
 Source: https://github.com/unicode-org/icu4x
@@ -1345,26 +1329,18 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 Apache License 2.0
 Used by: windows-collections 0.3.2
-Used by: windows-core 0.58.0
 Used by: windows-core 0.62.2
 Used by: windows-future 0.3.2
-Used by: windows-implement 0.58.0
 Used by: windows-implement 0.60.2
-Used by: windows-interface 0.58.0
 Used by: windows-interface 0.59.3
 Used by: windows-link 0.2.1
 Used by: windows-numerics 0.3.1
-Used by: windows-result 0.2.0
 Used by: windows-result 0.4.1
-Used by: windows-strings 0.1.0
 Used by: windows-strings 0.5.1
 Used by: windows-sys 0.61.2
-Used by: windows-targets 0.52.6
 Used by: windows-threading 0.2.1
 Used by: windows-version 0.1.7
-Used by: windows 0.58.0
 Used by: windows 0.62.2
-Used by: windows_x86_64_msvc 0.52.6
 
                                  Apache License
                            Version 2.0, January 2004

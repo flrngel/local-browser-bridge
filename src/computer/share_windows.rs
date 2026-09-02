@@ -17,32 +17,32 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use image::RgbaImage;
-use windows_wgc::Foundation::TypedEventHandler;
-use windows_wgc::Graphics::Capture::{
+use windows::Foundation::TypedEventHandler;
+use windows::Graphics::Capture::{
     Direct3D11CaptureFrame, Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession,
 };
-use windows_wgc::Graphics::DirectX::Direct3D11::IDirect3DDevice;
-use windows_wgc::Graphics::DirectX::DirectXPixelFormat;
-use windows_wgc::Graphics::SizeInt32;
-use windows_wgc::Win32::Foundation::{HMODULE, HWND, RECT, S_FALSE};
-use windows_wgc::Win32::Graphics::Direct3D::{
+use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
+use windows::Graphics::DirectX::DirectXPixelFormat;
+use windows::Graphics::SizeInt32;
+use windows::Win32::Foundation::{HMODULE, HWND, RECT, S_FALSE};
+use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1,
 };
-use windows_wgc::Win32::Graphics::Direct3D11::{
+use windows::Win32::Graphics::Direct3D11::{
     D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAP_READ,
     D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
     D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
 };
-use windows_wgc::Win32::Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
-use windows_wgc::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
-use windows_wgc::Win32::Graphics::Dxgi::IDXGIDevice;
-use windows_wgc::Win32::System::WinRT::Direct3D11::{
+use windows::Win32::Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
+use windows::Win32::Graphics::Dxgi::IDXGIDevice;
+use windows::Win32::System::WinRT::Direct3D11::{
     CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess,
 };
-use windows_wgc::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
-use windows_wgc::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize, RoUninitialize};
-use windows_wgc::Win32::UI::WindowsAndMessaging::{GetWindowThreadProcessId, IsIconic, IsWindow};
-use windows_wgc::core::{IInspectable, Interface, Ref, factory};
+use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
+use windows::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize, RoUninitialize};
+use windows::Win32::UI::WindowsAndMessaging::{GetWindowThreadProcessId, IsIconic, IsWindow};
+use windows::core::{IInspectable, Interface, Ref, factory};
 
 use super::{ComputerError, WindowDescriptor};
 
@@ -1491,8 +1491,8 @@ fn validate_texture_desc(
 
 fn startup_failure(
     operation: &str,
-    error: windows_wgc::core::Error,
-    cleanup_error: Option<windows_wgc::core::Error>,
+    error: windows::core::Error,
+    cleanup_error: Option<windows::core::Error>,
 ) -> ComputerError {
     if let Some(cleanup_error) = cleanup_error {
         fatal_stop_error(format!(
@@ -1506,7 +1506,7 @@ fn startup_failure(
 fn startup_runtime_failure(
     runtime: &mut CaptureRuntime,
     operation: &str,
-    error: windows_wgc::core::Error,
+    error: windows::core::Error,
 ) -> ComputerError {
     match runtime.shutdown() {
         Ok(()) => windows_capture_error_with_operation(operation, error),
@@ -1516,13 +1516,13 @@ fn startup_runtime_failure(
     }
 }
 
-fn windows_capture_error(error: windows_wgc::core::Error) -> ComputerError {
+fn windows_capture_error(error: windows::core::Error) -> ComputerError {
     capture_error(format!("Windows Graphics Capture failed: {error}"))
 }
 
 fn windows_capture_error_with_operation(
     operation: &str,
-    error: windows_wgc::core::Error,
+    error: windows::core::Error,
 ) -> ComputerError {
     capture_error(format!(
         "Windows Graphics Capture {operation} failed: {error}"

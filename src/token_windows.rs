@@ -19,7 +19,7 @@ use windows::Wdk::Storage::FileSystem::{
     NtCreateFile, NtSetInformationFile,
 };
 use windows::Win32::Foundation::{
-    BOOL, BOOLEAN, CloseHandle, ERROR_SUCCESS, HANDLE, NTSTATUS, RtlNtStatusToDosError,
+    CloseHandle, ERROR_SUCCESS, HANDLE, NTSTATUS, OBJ_DONT_REPARSE, RtlNtStatusToDosError,
     STATUS_REPARSE_POINT_ENCOUNTERED, UNICODE_STRING,
 };
 use windows::Win32::Security::Authorization::{SE_FILE_OBJECT, SetSecurityInfo};
@@ -54,12 +54,11 @@ use windows::Win32::System::Ioctl::FSCTL_SET_REPARSE_POINT;
 #[cfg(test)]
 use windows::Win32::System::SystemServices::IO_REPARSE_TAG_MOUNT_POINT;
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
-use windows::core::{Error as WindowsError, PCWSTR, PWSTR};
+use windows::core::{BOOL, Error as WindowsError, PCWSTR, PWSTR};
 
 const SECURITY_DESCRIPTOR_REVISION: u32 = 1;
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
 const MAX_TOKEN_FILE_BYTES: i64 = 128;
-const OBJ_DONT_REPARSE: u32 = 0x0000_1000;
 
 pub(super) struct TokenDirectory {
     file: File,
@@ -371,8 +370,8 @@ fn ensure_safe_replacement_target(directory: &TokenDirectory, name: &[u16]) -> i
     let attributes: FILE_ATTRIBUTE_TAG_INFO = query_file_information(handle, FileAttributeTagInfo)?;
     let standard: FILE_STANDARD_INFO = query_file_information(handle, FileStandardInfo)?;
     if attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0
-        || standard.Directory.0 != 0
-        || standard.DeletePending.0 != 0
+        || standard.Directory
+        || standard.DeletePending
         || standard.NumberOfLinks != 1
     {
         return Err(io::Error::new(
@@ -486,7 +485,7 @@ fn open_relative_file(
         RootDirectory: handle_for(&directory.file),
         ObjectName: ptr::addr_of!(unicode_name),
         Attributes: OBJ_DONT_REPARSE,
-        SecurityDescriptor: security_descriptor,
+        SecurityDescriptor: security_descriptor.cast(),
         SecurityQualityOfService: ptr::null(),
     };
     let mut status_block = IO_STATUS_BLOCK::default();
@@ -548,7 +547,7 @@ fn rename_relative_file(
     let mut buffer = AlignedBuffer::new(buffer_bytes)?;
     let information = buffer.as_mut_ptr().cast::<FILE_RENAME_INFORMATION>();
     unsafe {
-        (*information).Anonymous.ReplaceIfExists = BOOLEAN(1);
+        (*information).Anonymous.ReplaceIfExists = true;
         (*information).RootDirectory = handle_for(&directory.file);
         (*information).FileNameLength = u32::try_from(name_bytes).map_err(|_| {
             io::Error::new(
@@ -585,9 +584,7 @@ fn rename_relative_file(
 }
 
 fn delete_file_handle(file: &File) -> io::Result<()> {
-    let disposition = FILE_DISPOSITION_INFO {
-        DeleteFile: BOOLEAN(1),
-    };
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
     unsafe {
         SetFileInformationByHandle(
             handle_for(file),
@@ -832,13 +829,13 @@ fn handle_has_expected_kind(handle: HANDLE, expect_directory: bool) -> io::Resul
     }
 
     let standard: FILE_STANDARD_INFO = query_file_information(handle, FileStandardInfo)?;
-    if standard.Directory.0 != u8::from(expect_directory) {
+    if standard.Directory != expect_directory {
         return Ok(false);
     }
     if expect_directory {
         return Ok(true);
     }
-    Ok(standard.DeletePending.0 == 0
+    Ok(!standard.DeletePending
         && standard.NumberOfLinks == 1
         && (0..=MAX_TOKEN_FILE_BYTES).contains(&standard.EndOfFile))
 }
@@ -966,15 +963,7 @@ fn security_descriptor_owner_matches(
 fn read_security_descriptor(handle: HANDLE) -> io::Result<AlignedBuffer> {
     let requested = OWNER_SECURITY_INFORMATION.0 | DACL_SECURITY_INFORMATION.0;
     let mut required = 0_u32;
-    let probe = unsafe {
-        GetKernelObjectSecurity(
-            handle,
-            requested,
-            PSECURITY_DESCRIPTOR::default(),
-            0,
-            &mut required,
-        )
-    };
+    let probe = unsafe { GetKernelObjectSecurity(handle, requested, None, 0, &mut required) };
     if required == 0 {
         return Err(probe.err().map(windows_error).unwrap_or_else(|| {
             io::Error::other("Windows returned an empty security descriptor size")
@@ -986,7 +975,7 @@ fn read_security_descriptor(handle: HANDLE) -> io::Result<AlignedBuffer> {
         GetKernelObjectSecurity(
             handle,
             requested,
-            descriptor.as_security_descriptor(),
+            Some(descriptor.as_security_descriptor()),
             required,
             &mut required,
         )
@@ -1001,8 +990,8 @@ fn install_private_dacl(handle: HANDLE, security: &PrivateSecurity) -> io::Resul
             handle,
             SE_FILE_OBJECT,
             DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-            PSID::default(),
-            PSID::default(),
+            None,
+            None,
             Some(security.acl_ptr()),
             None,
         )
@@ -1095,10 +1084,10 @@ impl PrivateSecurity {
         );
         unsafe { InitializeSecurityDescriptor(descriptor_ptr, SECURITY_DESCRIPTOR_REVISION) }
             .map_err(windows_error)?;
-        unsafe { SetSecurityDescriptorOwner(descriptor_ptr, identity.sid(), BOOL(0)) }
+        unsafe { SetSecurityDescriptorOwner(descriptor_ptr, Some(identity.sid()), false) }
             .map_err(windows_error)?;
         unsafe {
-            SetSecurityDescriptorDacl(descriptor_ptr, BOOL(1), Some(acl.as_ptr().cast()), BOOL(0))
+            SetSecurityDescriptorDacl(descriptor_ptr, true, Some(acl.as_ptr().cast()), false)
         }
         .map_err(windows_error)?;
         unsafe {
@@ -1242,8 +1231,8 @@ pub(super) fn install_permissive_null_dacl_for_test(path: &Path) -> io::Result<(
             handle_for(&file),
             SE_FILE_OBJECT,
             DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-            PSID::default(),
-            PSID::default(),
+            None,
+            None,
             None,
             None,
         )
