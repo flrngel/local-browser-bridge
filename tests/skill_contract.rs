@@ -58,7 +58,7 @@ fn skill_inventory_is_small_plain_and_installable() {
 
 #[test]
 fn generated_references_reconstruct_the_canonical_protocol_byte_for_byte() {
-    let canonical = fs::read("docs/PROTOCOL.md").unwrap();
+    let canonical = fs::read("docs/internals/PROTOCOL.md").unwrap();
     let combined: Vec<u8> = REFERENCES
         .iter()
         .flat_map(|reference| fs::read(format!("{SKILL_ROOT}/references/{reference}")).unwrap())
@@ -76,7 +76,7 @@ fn documentation_exposes_standard_and_fallback_install_paths() {
     );
     assert!(readme.contains("bash scripts/install-agent-skill.sh --target agents"));
     assert!(readme.contains("agents that do not support skills"));
-    assert!(readme.contains("docs/PROTOCOL.md"));
+    assert!(readme.contains("docs/internals/PROTOCOL.md"));
 }
 
 #[cfg(not(target_os = "windows"))]

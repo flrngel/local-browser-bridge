@@ -2799,7 +2799,7 @@ fn control_injects_no_page_surface_and_is_stoppable_by_chrome_and_the_popup() {
 #[test]
 fn page_key_uses_exact_cdp_virtual_keys_and_documented_scalar_boundary() {
     let content = extension_source("content.js");
-    let protocol = fs::read_to_string("docs/PROTOCOL.md").unwrap();
+    let protocol = fs::read_to_string("docs/internals/PROTOCOL.md").unwrap();
     assert!(content.contains("const token = randomHex128();"));
     assert!(!content.contains("crypto.randomUUID()"));
     assert!(protocol.contains("neither a control nor whitespace character"));

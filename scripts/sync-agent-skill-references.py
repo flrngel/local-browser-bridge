@@ -11,7 +11,7 @@ import tempfile
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SOURCE = REPO_ROOT / "docs" / "PROTOCOL.md"
+SOURCE = REPO_ROOT / "docs" / "internals" / "PROTOCOL.md"
 REFERENCE_DIR = REPO_ROOT / "skills" / "local-browser-bridge" / "references"
 BOUNDARIES = (
     ("transport.md", b"# Bridge protocol\n"),
@@ -26,9 +26,9 @@ def expected_references() -> dict[str, bytes]:
     try:
         source.decode("utf-8")
     except UnicodeDecodeError as error:
-        raise RuntimeError("docs/PROTOCOL.md must be UTF-8") from error
+        raise RuntimeError("docs/internals/PROTOCOL.md must be UTF-8") from error
     if b"\r\n" in source or not source.endswith(b"\n"):
-        raise RuntimeError("docs/PROTOCOL.md must use LF endings and end with one newline")
+        raise RuntimeError("docs/internals/PROTOCOL.md must use LF endings and end with one newline")
 
     offsets: list[int] = []
     for _, marker in BOUNDARIES:
@@ -66,7 +66,7 @@ def main() -> int:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="fail if a generated reference differs from docs/PROTOCOL.md",
+        help="fail if a generated reference differs from docs/internals/PROTOCOL.md",
     )
     args = parser.parse_args()
 
