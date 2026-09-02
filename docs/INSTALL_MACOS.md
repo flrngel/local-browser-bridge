@@ -4,7 +4,7 @@ The recommended install is one Terminal command. It needs no Homebrew, Node.js,
 Rust, package manager, or manual checksum work.
 
 > This guide documents the Desktop Host, local shell, and Agent Fetch, which
-> ship starting with release 0.12.69. If the latest published release is
+> ship starting with release 0.12.70. If the latest published release is
 > older, `install-macos.sh` fails with "A package has an unexpected layout" or
 > "Unknown argument" before it copies any files — see
 > [Troubleshooting](TROUBLESHOOTING.md#macos-installer-fails-with-an-unexpected-layout-or-unknown-argument-error).
@@ -95,11 +95,11 @@ LaunchAgent. In `chrome://extensions`, select **Reload** on the existing
 extension card.
 
 To install a specific stable version instead of latest, substitute its number
-(0.12.69 or later for the Desktop Host, shell, and Agent Fetch; see the note
+(0.12.70 or later for the Desktop Host, shell, and Agent Fetch; see the note
 above) for the example below:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-macos.sh | bash -s -- --version 0.12.69
+curl -fsSL https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-macos.sh | bash -s -- --version 0.12.70
 ```
 
 ## One-command uninstall
@@ -189,9 +189,9 @@ them into logs, screenshots, issue reports, or untrusted pages.
   folder and inspect **Open Logs** from its menu if startup failed.
 - **Need the manual procedure:** use [Manual and independent verification](VERIFY_RELEASE.md).
 - **Installer exits with "A package has an unexpected layout" or "Unknown
-  argument":** the resolved release predates 0.12.69 and does not contain the
+  argument":** the resolved release predates 0.12.70 and does not contain the
   Desktop Host or shell yet — this check runs before any files are copied.
   Check the
   [releases page](https://github.com/flrngel/local-browser-bridge/releases);
-  if the newest release is still older than 0.12.69, [build from
+  if the newest release is still older than 0.12.70, [build from
   source](BUILD.md) instead.

@@ -4,7 +4,7 @@ The recommended install is one PowerShell command. It needs no administrator
 access, Node.js, Rust, package manager, or manual checksum work.
 
 > This guide documents the Desktop Host, local shell, and Agent Fetch, which
-> ship starting with release 0.12.69. If the latest published release is
+> ship starting with release 0.12.70. If the latest published release is
 > older, `install-windows.ps1` does not detect that — it downloads and
 > installs the older release successfully, silently ignoring flags this guide
 > tells you to pass. See
@@ -95,11 +95,11 @@ replaces every component together, and reuses the stable extension folder.
 In `chrome://extensions`, select **Reload** on the existing extension card.
 
 To install a specific stable version instead of latest, substitute its number
-(0.12.69 or later for the Desktop Host, shell, and Agent Fetch; see the note
+(0.12.70 or later for the Desktop Host, shell, and Agent Fetch; see the note
 above) for the example below:
 
 ```powershell
-$installer = [scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-windows.ps1')); & $installer -Version 0.12.69
+$installer = [scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-windows.ps1')); & $installer -Version 0.12.70
 ```
 
 ## One-command uninstall
@@ -183,9 +183,9 @@ them into logs, screenshots, issue reports, or untrusted pages.
   use a non-elevated target; Windows integrity boundaries are intentional.
 - **Need the manual procedure:** use [Manual and independent verification](VERIFY_RELEASE.md).
 - **Installer reports success but there is no tray icon, or `-EnableShell`
-  makes it exit `Unknown argument`:** the resolved release predates 0.12.69
+  makes it exit `Unknown argument`:** the resolved release predates 0.12.70
   and does not contain the Desktop Host or shell yet — the installer has no
   way to detect this and installs it anyway. Check the
   [releases page](https://github.com/flrngel/local-browser-bridge/releases);
-  if the newest release is still older than 0.12.69, [build from
+  if the newest release is still older than 0.12.70, [build from
   source](BUILD.md) instead.
