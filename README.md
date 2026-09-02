@@ -78,8 +78,11 @@ Details, limits, troubleshooting: [Browser control](docs/BROWSER_CONTROL.md) ·
 
 Good fit: the AI client runs on this same Windows or macOS computer, you want
 to keep using an existing signed-in browser profile, and you want visible,
-human-revocable control — Chrome's own debugging warning stays up, and a
-person can always hit **Stop** — instead of hidden automation.
+human-revocable control — Chrome's own "Local Browser Bridge started
+debugging this browser" warning stays up, the controlled tab sits in a named
+Local Browser Bridge tab group, and a person can always hit **Cancel** on
+that warning or **Release control** in the extension popup — instead of
+hidden automation.
 
 Not a fit: the AI client only runs in a remote/cloud browser that cannot
 reach `127.0.0.1`, you need a bundled agent or hosted relay, or your
@@ -98,10 +101,11 @@ package today (see [Security](SECURITY.md)). Full support matrix:
   sandbox.
 - The computer helper shares your login session; on macOS, focus-capable
   input can briefly borrow and restore app focus.
-- A human can always revoke browser control (Chrome's **Cancel**, the
-  in-page **Stop**, or the extension popup) or stop the helper, and every
-  failed command carries a machine-readable error taxonomy so an agent knows
-  whether to retry, re-observe, or hand back.
+- A human can always revoke browser control — Chrome's own debugging
+  warning and its **Cancel** button, or **Release control** in the extension
+  popup — or stop the helper, and every failed command carries a
+  machine-readable error taxonomy so an agent knows whether to retry,
+  re-observe, or hand back.
 
 Full model: [Security](SECURITY.md); deeper implementation invariants:
 [docs/internals/security-invariants.md](docs/internals/security-invariants.md).

@@ -139,13 +139,13 @@ Browser actions need an explicit lease and a fresh observation:
 5. Release the lease with `browser.control.stop` when done, or let its TTL
    (default 5 minutes, `ttlMs` 15s–15min) expire.
 
-A human can end your control at any time — Chrome's own **Cancel** button, the
-in-page **Stop** overlay, or **Release control** in the extension popup all
+A human can end your control at any time — Chrome's own **Cancel** button on
+its debugging warning, or **Release control** in the extension popup, both
 revoke it immediately, and every subsequent action returns 409
 `CONTROL_REVOKED` (or the observation-quarantine codes below) until a fresh
 `browser.control.start`.
 
-**`HUMAN_CONTROL_PAUSED`**: pressing the in-page Stop button also latches a
+**`HUMAN_CONTROL_PAUSED`**: either of those actions also latches a
 global pause that survives service-worker and browser restarts. While
 latched, every remote browser mutation — including a new
 `browser.control.start` — is rejected 423 `HUMAN_CONTROL_PAUSED` (taxonomy

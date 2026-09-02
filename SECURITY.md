@@ -26,8 +26,9 @@ underlying implementation invariants that back these claims are in
    — it is cooperative with the person at the keyboard, not a separate
    desktop or input queue. Shell access, when enabled, is full current-user
    command execution with no sandbox.
-5. **A human always has an out.** Chrome's own debugging warning and Cancel
-   button, the in-page Stop control, and the extension popup's Release
+5. **A human always has an out.** Nothing is injected into the controlled
+   page. Chrome's own debugging warning and Cancel button, the named Local
+   Browser Bridge tab group, and the extension popup's Release
    control/Resume all work independently of the API and cannot be bypassed
    by a compromised or malicious agent process.
 

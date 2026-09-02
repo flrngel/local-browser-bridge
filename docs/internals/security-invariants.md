@@ -124,33 +124,19 @@ reconcile with `tabs.list` first.
   cursor/HID APIs and freeze the expected targeted symbol set, but they
   cannot turn a private interface into a supported Apple contract.
 
-## In-page indicator (defense in depth)
+## Control indicators (no in-page presence)
 
-The in-page pill is defense in depth on top of Chrome's own debugging
-warning, which remains authoritative. Its public host and private
-closed-shadow marker are freshly randomized per document; shadow-scoped
-`!important` rules reset critical host, pseudo-element, and backdrop
-properties, and accessibility state fails closed. Snapshot-mutation
-suppression uses only the retained host and its exact closed-shadow-owned
-objects; a public-ID clone, a page-owned light child, or an element merely
-nested under either cannot keep a page snapshot fresh. The browser process
-resolves `:root`, pins the marker's innermost closed-shadow host, requires
-that host's immediate parent to be the exact root element, requires unique
-`DOM.getTopLayerElements` membership with no later same-root node, and —
-outside intentional capture — requires five
-`DOM.getNodeForLocation(ignorePointerEventsNone:true)` samples through the
-same host and frame under a shared 1.5s/512-step budget. A top-layer revision
-seqlock handles Chrome events, including the bridge's own re-top events,
-while a separate content-loss generation captured before the renderer
-request changes only for loss/mismatch signals. The content script attempts
-a new sample every 500ms only when no earlier re-top/browser acknowledgement
-is active; an unacknowledged root top-layer mutation or indicator-loss
-record retains an absolute 3s service-worker deadline plus scheduler/
-transport timing. These experimental CDP DOM methods require Chrome 140+.
-Two scheduled animation-frame opportunities are not compositor or
-physical-pixel proof, and the final browser check is not atomic with later
-input — Chrome's own warning and Cancel, and the trusted extension popup,
-remain the authoritative independent handback surfaces.
+The extension injects nothing into the controlled page — there is no page
+DOM, shadow root, or CSS surface for a hostile document to spoof, hide, or
+race. The only visible, page-independent signals that a tab is under remote
+control are Chrome's own "Local Browser Bridge started debugging this
+browser" warning and Cancel button (authoritative, and the sole browser-owned
+signal), the named **Local Browser Bridge** tab group the extension places
+the controlled tab in for the duration of the lease, and **Release
+control**/**Resume** in the extension popup. All three exist entirely outside
+the page's own rendering and script execution context, so none of them
+depend on the same experimental CDP DOM methods, animation-frame timing, or
+proof budgets that an in-page indicator would need.
 
 ## Cross-origin frame attachment (blast radius)
 

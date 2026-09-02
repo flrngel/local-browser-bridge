@@ -36,12 +36,12 @@ narrow and supervise consequential tasks either way.
 While held:
 
 - Chrome shows its own **Local Browser Bridge started debugging this browser**
-  warning — the authoritative, page-independent indicator. It cannot be hidden
-  and its **Cancel** action always ends the lease.
-- The extension injects a separate in-page pill and **Stop** button as
-  defense in depth. Its host element and an inner marker are randomized per
-  document and defended against page-owned DOM tricks (see
-  [Security](../SECURITY.md)), but Chrome's own warning remains authoritative.
+  warning — the authoritative, page-independent indicator. Nothing is
+  injected into the page itself. It cannot be hidden and its **Cancel**
+  action always ends the lease.
+- The controlled tab is placed in a named **Local Browser Bridge** tab group
+  (visible in the tab strip) for the duration of the lease, and the
+  extension popup shows **Release control** for the same tab.
 - The default lease is 5 minutes; `ttlMs` accepts 15 seconds through 15
   minutes, with a 10-second heartbeat verifying the attachment.
 
@@ -54,18 +54,18 @@ event:
 | `controlSessionId` (lease) | Lease starts, stops, or is revoked |
 | `turn` | Each `page.observe` |
 | `generation` (DOM snapshot) | Navigation, mutation, scroll, resize |
-| `moveSequence` (pointer) | Each synthetic pointer move |
+| `moveSequence` (pointer) | Each trusted pointer move the extension dispatches |
 
-Anything that ends the lease — Chrome **Cancel**, the in-page **Stop**, popup
-**Release control**, TTL expiry, tab closure, or connector loss — is a hard
-revocation: the next action fails and a fresh `browser.control.start` is
-required.
+Anything that ends the lease — Chrome **Cancel**, popup **Release control**,
+TTL expiry, tab closure, or connector loss — is a hard revocation: the next
+action fails and a fresh `browser.control.start` is required.
 
-**Human pause is different from revocation.** The in-page **Stop** button and
-Chrome **Cancel** also latch a global pause that survives service-worker and
-browser restarts. While latched, every remote mutation — including a new
-`browser.control.start` — returns 423 `HUMAN_CONTROL_PAUSED`. Only clicking
-**Resume** in the extension's own popup clears it.
+**Human pause is different from revocation.** Chrome **Cancel** on the
+debugging warning, and **Release control** in the popup, also latch a global
+pause that survives service-worker and browser restarts. While latched,
+every remote mutation — including a new `browser.control.start` — returns
+423 `HUMAN_CONTROL_PAUSED`. Only clicking **Resume** in the extension's own
+popup clears it.
 
 ## Observe, act, re-observe
 

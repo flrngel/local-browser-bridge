@@ -61,33 +61,20 @@ shortcut was not left behind alongside the new one.
    connection can linger client-side; reload the extension
    (`chrome://extensions` → **Reload**).
 
-### `CONTROL_UI_RENDER_FAILED`, or page actions fail `CONTROL_REVOKED` right after `browser.control.start`
-
-`browser.control.start` returns 502, or every subsequent `page.*` call on
-that tab returns 409 `CONTROL_REVOKED`. This means the in-page control
-indicator (the pill/Stop overlay) failed its host/root ancestry proof after
-being injected — see
-[internals/PROTOCOL.md](internals/PROTOCOL.md#browser-control-lease-model)
-for what that proof checks. This is not a Chrome-version problem: on some
-releases the extension's ancestry walk relies on a `DOM.describeNode` field
-Chrome does not populate, so the proof fails on every supported browser
-version, not only old ones. Reload the target tab and retry in case a
-transient page state caused it, but if it fails consistently, update the
-extension to the latest release — the ancestry check has been an
-active area of extension fixes.
-
 ### Extension connects, but `page.observe`/`page.click` never see a newly opened tab
 
 Reload tabs that were open before the extension was installed or updated —
-the trusted Stop guard installs at `document_start` and cannot retroactively
-attach to an already-loaded page.
+Chrome does not retroactively inject a content script into an already-loaded
+page, and the observation/control content script (`dom-core.js`/
+`content.js`) that binds the lease and reads the DOM is no exception.
 
 ## Control and permissions
 
 ### `423 HUMAN_CONTROL_PAUSED`
 
-A human pressed the in-page **Stop** button or Chrome's **Cancel**, which
-latches a pause that survives restarts. No API call clears it — only a human
+A human pressed **Release control** in the extension popup or Chrome's
+**Cancel** on its debugging warning, which latches a pause that survives
+restarts. No API call clears it — only a human
 clicking **Resume** in the extension's own popup. Stop retrying and surface
 this to the human operator. See
 [Browser control](BROWSER_CONTROL.md#the-lease-model).
