@@ -2490,6 +2490,12 @@ async function failControlUiClosed(lease, phase, cause) {
 // A show whose document is leaving or already gone proves nothing about the
 // indicator: the navigation boundary owns the next proof (proofReady is
 // false until it passes), so its failure is discarded instead of revoking.
+function sameControlCaptureIds(left, right) {
+  const expected = [...left].map(String).sort();
+  const actual = [...right].map(String).sort();
+  return expected.length === actual.length && expected.every((id, index) => id === actual[index]);
+}
+
 function controlUiShowSuperseded(lease, authority) {
   return Boolean(lease.pendingNavigation)
     || (Number.isSafeInteger(authority?.documentEpoch)
@@ -2501,10 +2507,10 @@ async function showControlUiNow(lease) {
     || controlLease?.sessionId !== lease.sessionId
     || controlLease?.epoch !== lease.epoch) return null;
   const authority = captureLeaseAuthority(lease);
-  const activeCaptureIds = controlCaptureIds(lease.tabId);
   beginControlUiTopLayerMutation();
   try {
     for (let attempt = 1; ; attempt += 1) {
+      const activeCaptureIds = controlCaptureIds(lease.tabId);
       const contentRequestLossGeneration = controlUiContentLossGeneration;
       const state = await contentRequest(lease.tabId, {
         method: "control.show",
@@ -2519,6 +2525,14 @@ async function showControlUiNow(lease) {
       }, { authority });
       assertLeaseAuthority(authority, null, "control UI acknowledgement");
       if (!controlUiAcknowledged(state, activeCaptureIds, lease.cursor.visible)) {
+        // A screenshot capture that began or ended while this request was in
+        // flight changes the indicator shape the page must report (hidden
+        // pill during capture, visible pill outside it). Sample again from
+        // the current capture set instead of reading the mismatch as a
+        // hidden indicator; the capture path proves its own boundaries.
+        if (!sameControlCaptureIds(activeCaptureIds, controlCaptureIds(lease.tabId))
+          && attempt < CONTROL_UI_PROOF_ATTEMPTS
+          && !controlUiShowSuperseded(lease, authority)) continue;
         throw new Error("The page did not confirm a topmost control indicator");
       }
       let verifiedProof;

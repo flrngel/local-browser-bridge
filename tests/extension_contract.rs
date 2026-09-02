@@ -3440,6 +3440,7 @@ fn control_indicator_reuse_and_loss_are_fail_closed() {
 
       const acknowledge = extractFunction(background, "controlUiAcknowledged");
       const supersededHelper = extractFunction(background, "controlUiShowSuperseded");
+      const sameCaptures = extractFunction(background, "sameControlCaptureIds");
       const show = extractFunction(background, "showControlUiNow");
       const acknowledgementBridge = new Function(`
         const CONTROL_UI_PROOF_ATTEMPTS = 3;
@@ -3456,10 +3457,26 @@ fn control_indicator_reuse_and_loss_are_fail_closed() {
           cursorVisible: false, capturing: false, captureDepth: 0, activeCaptureIds: [],
         };
         function captureLeaseAuthority() { return {}; }
-        function controlCaptureIds() { return []; }
+        let captures = [], captureStartsDuringRequest = false, contentRequests = 0;
+        function controlCaptureIds() { return [...captures]; }
         function beginControlUiTopLayerMutation() {}
         function endControlUiTopLayerMutation() {}
-        async function contentRequest() { return { ...base, pillTopmost: topmost }; }
+        async function contentRequest(_tabId, message) {
+          contentRequests += 1;
+          if (captureStartsDuringRequest) {
+            // A screenshot capture begins while the show request is in flight:
+            // the page answers with the capture-shaped indicator.
+            captureStartsDuringRequest = false;
+            captures = ["capture-a"];
+          }
+          if (captures.length > 0) {
+            return {
+              ...base, pillVisible: false, stopVisible: false, pillTopmost: false, stopTopmost: false,
+              capturing: true, captureDepth: captures.length, activeCaptureIds: [...captures],
+            };
+          }
+          return { ...base, pillTopmost: topmost };
+        }
         function assertLeaseAuthority() {}
         async function verifyControlUiBrowserTopLayer() {
           browserVerifications += 1;
@@ -3481,6 +3498,7 @@ fn control_indicator_reuse_and_loss_are_fail_closed() {
         async function failControlUiClosed() { stopped += 1; throw new Error("CONTROL_UI_RENDER_FAILED"); }
         ${acknowledge}
         ${supersededHelper}
+        ${sameCaptures}
         ${show}
         return {
           show: () => showControlUiNow(controlLease),
@@ -3494,6 +3512,9 @@ fn control_indicator_reuse_and_loss_are_fail_closed() {
             topmost = nextTopmost; staleSamples = nextStale; plainFailures = nextPlain; browserVerifications = 0;
           },
           navigate: (pending) => { controlLease.pendingNavigation = pending ? {} : null; },
+          captureRace: () => { captures = []; captureStartsDuringRequest = true; contentRequests = 0; },
+          contentRequests: () => contentRequests,
+          endCapture: () => { captures = []; },
         };
       `)();
       let actionCount = 0;
@@ -3531,6 +3552,16 @@ fn control_indicator_reuse_and_loss_are_fail_closed() {
         throw new Error("a show overtaken by navigation was retried or revoked the lease");
       }
       acknowledgementBridge.navigate(false);
+      // A capture that begins while a show request is in flight is sampled
+      // again from the new capture set instead of being read as a hidden
+      // indicator; the capture-shaped acknowledgement then proves normally.
+      acknowledgementBridge.captureRace();
+      acknowledgementBridge.arm(true, 0, 0);
+      const raced = await acknowledgementBridge.show();
+      if (!raced || raced.capturing !== true || acknowledgementBridge.contentRequests() !== 2 || acknowledgementBridge.stopped() !== 3) {
+        throw new Error("a show overtaken by a capture was not re-sampled from the new capture set");
+      }
+      acknowledgementBridge.endCapture();
     "#;
     let output = match Command::new("node")
         .args(["--input-type=module", "-e", script])
