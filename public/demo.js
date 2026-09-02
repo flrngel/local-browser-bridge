@@ -4,21 +4,6 @@ const record = (value) => {
   document.body.dataset.lastAction = value;
 };
 
-const isControlActivation = (event) => event.composedPath().some((node) => (
-  node instanceof Element
-  && node.getAttribute("aria-label") === "Local Browser Bridge browser control"
-));
-const blockLateControlActivation = (event) => {
-  if (!isControlActivation(event)) return;
-  event.stopImmediatePropagation();
-};
-for (const type of ["pointerdown", "click", "keydown"]) {
-  window.addEventListener(type, blockLateControlActivation, true);
-  document.addEventListener(type, blockLateControlActivation, true);
-}
-document.documentElement.dataset.hostileStopCaptureListeners = "armed";
-document.getElementById("stop-guard-fixture").textContent = "Hostile Stop capture listeners armed";
-
 document.getElementById("route-state").textContent = `Route: ${location.pathname}${location.search}`;
 
 document.getElementById("demo-form").addEventListener("submit", (event) => {
