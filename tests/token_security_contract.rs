@@ -214,7 +214,7 @@ fn windows_token_replacement_is_atomic_and_write_through() {
     assert!(windows.contains("NtSetInformationFile("));
     assert!(windows.contains("FileRenameInformation"));
     assert!(windows.contains("(*information).RootDirectory = handle_for(&directory.file)"));
-    assert!(windows.contains("(*information).Anonymous.ReplaceIfExists = BOOLEAN(1)"));
+    assert!(windows.contains("(*information).Anonymous.ReplaceIfExists = true;"));
     assert!(windows.contains("size_of::<FILE_RENAME_INFORMATION>()"));
     assert!(windows.contains(".checked_add(name_bytes)"));
     assert!(windows.contains("let source_identity: FILE_ID_INFO"));

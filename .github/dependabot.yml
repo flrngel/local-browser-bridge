@@ -8,6 +8,12 @@ updates:
       time: "06:00"
       timezone: America/Los_Angeles
     open-pull-requests-limit: 2
+    # Cargo treats 0.y.z minor bumps as breaking, so Dependabot reports them as
+    # semver-major. Those need API migrations (rand, hmac, windows, ...) and are
+    # handled by hand; only compatible bumps are grouped automatically.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       cargo-version-updates:
         applies-to: version-updates
