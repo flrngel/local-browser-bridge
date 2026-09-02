@@ -220,8 +220,10 @@ SHA-256 `ec58a63f965c1824bd7608f9cf901f261bae9db176862ea182e01b4cdd49ac1b`
 and an independent no-P0/P1 review. Version 0.12.37 retains that coordinator
 boundary and separately repairs atomic creation of the trust verifier's private
 destination. Fresh exact-source Windows PowerShell 5.1 self-tests, PR CI, and
-packaged candidate acceptance remain mandatory before release. See
-[WINDOWS_ACCEPTANCE_HANDOFF.md](WINDOWS_ACCEPTANCE_HANDOFF.md).
+packaged candidate acceptance remain mandatory before release; since the
+operator harness was retired, that acceptance is produced by
+`.github/workflows/acceptance.yml` on hosted runners (see
+[Development](DEVELOPMENT.md#ci-hosted-acceptance)).
 Separate worker, runner, and watcher output files survive an abandoned remote
 shell. The records do not claim sudden-power-loss durability; ambiguity after a
 machine or storage failure is outcome-unknown and forbids retry.

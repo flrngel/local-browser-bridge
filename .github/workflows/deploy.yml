@@ -152,15 +152,14 @@ jobs:
         run: |
           cargo install cargo-audit --locked --version 0.22.2
           cargo audit
-      - name: Self-test the acceptance and package contracts
+      - name: Self-test the release and package contracts
         shell: bash
         run: |
           bash -n scripts/*.sh
           bash -n scripts/fetch-verify-release-candidate.sh
           bash scripts/fetch-verify-release-candidate.sh --self-test
-          bash -n scripts/verify-release-acceptance-evidence.sh
-          bash scripts/verify-release-acceptance-evidence.sh --self-test
           bash scripts/publish-release.sh --self-test
+          node --check scripts/ci-acceptance.mjs
           bash scripts/package-extension.sh
       - name: Attest extension build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -245,7 +244,6 @@ jobs:
         shell: bash
         run: |
           version="$(bash scripts/audit-versions.sh "$VERIFIED_VERSION")"
-          bash scripts/verify-macos-app-share-handoff-self-test.sh "$version"
           cargo build --locked --release --bins --target aarch64-apple-darwin
           cargo build --locked --release --bins --target x86_64-apple-darwin
           mkdir -p dist stage \
@@ -363,5 +361,117 @@ jobs:
         with:
           name: release-candidate
           path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  acceptance:
+    name: Accept the frozen candidate on hosted runners
+    needs: [verify, assemble]
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/acceptance.yml
+    with:
+      mode: artifact
+      candidate_run_id: ${{ github.run_id }}
+      candidate_run_attempt: ${{ github.run_attempt }}
+      version: ${{ needs.verify.outputs.version }}
+      source_sha: ${{ needs.verify.outputs.source_sha }}
+
+  receipt:
+    name: Attest the acceptance receipt
+    needs: [verify, assemble, acceptance]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: acceptance-*
+          path: acceptance
+      - name: Combine the per-OS acceptance results into one receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFIED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          VERIFIED_VERSION: ${{ needs.verify.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          for lane in windows macos; do
+            test -f "acceptance/acceptance-$lane/acceptance.json"
+          done
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" > artifacts.json
+          artifact_id="$(jq -er \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            --arg source "$VERIFIED_SOURCE_SHA" '
+              [.artifacts[] | select(
+                .name == "release-candidate" and .expired == false and
+                .workflow_run.id == $run_id and .workflow_run.head_sha == $source
+              )] | if length == 1 then .[0].id | tostring
+                   else error("candidate artifact is absent or ambiguous") end
+            ' artifacts.json)"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > release-candidate.zip
+          zip_sha="$(sha256sum release-candidate.zip | awk '{ print $1 }')"
+          mkdir payload
+          unzip -q release-candidate.zip -d payload
+          manifest_sha="$(sha256sum payload/SHA256SUMS.txt | awk '{ print $1 }')"
+          jq -n \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg version "$VERIFIED_VERSION" \
+            --arg source "$VERIFIED_SOURCE_SHA" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg artifact_id "$artifact_id" \
+            --arg zip_sha "$zip_sha" \
+            --arg manifest_sha "$manifest_sha" \
+            --slurpfile windows acceptance/acceptance-windows/acceptance.json \
+            --slurpfile macos acceptance/acceptance-macos/acceptance.json '
+              {
+                schemaVersion: 4,
+                repository: $repository,
+                version: $version,
+                sourceSha: $source,
+                workflowPath: ".github/workflows/deploy.yml",
+                runId: $run_id,
+                runAttempt: $run_attempt,
+                candidateArtifactId: $artifact_id,
+                candidateArtifactSha256: $zip_sha,
+                checksumManifestSha256: $manifest_sha,
+                results: { windows: $windows[0], macos: $macos[0] }
+              }
+            ' > acceptance-receipt.json
+          jq -e \
+            --arg version "$VERIFIED_VERSION" \
+            --arg source "$VERIFIED_SOURCE_SHA" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg artifact_id "$artifact_id" \
+            --arg zip_sha "$zip_sha" '
+              (.results | keys) == ["macos", "windows"] and
+              all(.results[];
+                .ok == true and .mode == "artifact" and .version == $version and
+                .sourceSha == $source and .runId == $run_id and .runAttempt == $run_attempt and
+                .candidateArtifactId == $artifact_id and .candidateArtifactSha256 == $zip_sha and
+                (.checks | length) > 0 and
+                all(.checks[]; (.required | not) or .status == "pass"))
+            ' acceptance-receipt.json >/dev/null
+          jq -r '.results[] | "\(.os): \(.summary.pass) pass, \(.summary.skip) skip, computer mode \(.computerMode // "n/a")"' acceptance-receipt.json
+      - name: Attest the acceptance receipt
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: acceptance-receipt.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: acceptance-receipt
+          path: acceptance-receipt.json
           if-no-files-found: error
           retention-days: 14

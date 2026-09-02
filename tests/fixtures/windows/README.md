@@ -30,14 +30,6 @@ matching schema-v3 `operator/foreground-arm-received.json` ready notification
 and proves one more fresh publication plus accepted-sample-to-baseline
 continuity before any product action.
 
-For remote coordination, `scripts/wait-windows-foreground-arm-handoff.ps1 -Mode Watch`
-is read-only. It reports `automatic-ready` only after both
-create-once markers, the exact request identity and deadline, all stable native
-proof flags, fixture-process exclusion, three samples, and zero-input fields
-match. The watcher is notification-only and grants no product authority. No
-app-share discovery, visual relay, manual click, or external authorization is
-part of the Windows foreground-baseline gate.
-
 Every state write carries a monotonic publication generation. The runner
 requires distinct advancing publications for the initial zero-input boundary,
 each stable native sample, the bound baseline, and every later invariant
@@ -67,4 +59,4 @@ Character contents, tokens, environment variables, command lines, executable pat
 
 After the private Job Object has stopped every runner-owned process and the fixture process handle is closed, cleanup inspects only the exact runner-owned build directory. It refuses reparse points or any entry other than the expected executable, deletes that executable, and removes the now-empty directory nonrecursively. It never broadens cleanup or recursively removes an unexpected tree. Any failure leaves the run invalid. The sanitized `summary.json` records the source and executable hashes, source/executable stability, entry-point self-test, exact image/session/direct-child/ready-PID checks, direct Windows-application execution, and successful executable removal without retaining a path.
 
-Use the repository-level `scripts/test-windows-computer-use.ps1` runner for live acceptance. It first binds canonical server/helper filenames and versions to one independently hashed frozen-candidate manifest and the trust wrapper's exact `candidate-binding.json`. Its retained schema-2 summary therefore names the source, annotated tag, workflow run and attempt, artifact, raw artifact ZIP, manifest, attested assets, and dedicated fixture process binding that were actually exercised. It launches every child inside a private kill-on-close Windows Job Object, drives the authenticated loopback API, captures exact-target screenshots, checks independent non-interruption probes, and performs exact descendant/share/listener/build cleanup even after a failed assertion. The dedicated executable adds no retained file: a successful `-Suite All -ShowOccluder` run still contains exactly 88 files. See [Development](../../../docs/DEVELOPMENT.md#deterministic-windows-live-acceptance).
+CI-hosted acceptance (`scripts/ci-acceptance.mjs`) builds this fixture with the system Windows PowerShell 5.1 host, launches it with `--evidence-directory`, and verifies helper actions through `fixture-state.json` (`invokeCount`, `semanticValue`, `focusedText`, `messageCounters`). See [Development](../../../docs/DEVELOPMENT.md#ci-hosted-acceptance).

@@ -1,0 +1,228 @@
+name: Product acceptance
+
+# Reusable, retryable acceptance of the real product on GitHub-hosted Windows
+# and macOS runners. In `source` mode it builds the binaries from the checked
+# out source; in `artifact` mode it downloads the frozen `release-candidate`
+# artifact of one deploy.yml run, verifies SHA256SUMS.txt, and exercises the
+# packaged bytes. Every check lands in acceptance-<os>/acceptance.json.
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: source or artifact
+        required: true
+        type: string
+      candidate_run_id:
+        description: deploy.yml run that froze the release-candidate artifact (artifact mode)
+        required: false
+        default: ""
+        type: string
+      candidate_run_attempt:
+        description: exact attempt of that run (artifact mode)
+        required: false
+        default: ""
+        type: string
+      version:
+        description: package version under test (defaults to the checked-out Cargo.toml version)
+        required: false
+        default: ""
+        type: string
+      source_sha:
+        description: exact source commit the candidate was built from (artifact mode)
+        required: false
+        default: ""
+        type: string
+  # TEMPORARY: exercises artifact mode against the existing 0.12.68 candidate
+  # from this branch; removed before merge.
+  push:
+    branches: [feat/ci-hosted-acceptance]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Chrome for Testing build used for the browser lane. Branded Chrome >= 137
+  # ignores --load-extension, so the lane always uses this pinned CfT build.
+  CHROME_FOR_TESTING_BUILD: 145.0.7632.77
+  ACCEPTANCE_MODE: ${{ inputs.mode || 'artifact' }}
+  ACCEPTANCE_CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id || '33462607975' }}
+  ACCEPTANCE_CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt || '1' }}
+  ACCEPTANCE_VERSION: ${{ inputs.version || '0.12.68' }}
+  ACCEPTANCE_SOURCE_SHA: ${{ inputs.source_sha || '6f0740966ebcf1efdbfb8b795371798900cae2e9' }}
+
+jobs:
+  acceptance:
+    name: Acceptance (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: windows
+          - os: macos-26
+            label: macos
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Resolve the version under test
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$ACCEPTANCE_VERSION"
+          if [[ -z "$version" ]]; then
+            version="$(bash scripts/audit-versions.sh)"
+          fi
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install pinned Chrome for Testing
+        id: chrome
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/chrome"
+          output="$(npx --yes @puppeteer/browsers@2.13.2 install "chrome@$CHROME_FOR_TESTING_BUILD" --path "$RUNNER_TEMP/chrome")"
+          printf '%s\n' "$output"
+          executable="$(printf '%s\n' "$output" | tail -n 1 | sed "s/^chrome@$CHROME_FOR_TESTING_BUILD //")"
+          test -n "$executable"
+          echo "path=$executable" >> "$GITHUB_OUTPUT"
+
+      - name: Install the supported Rust toolchain
+        if: env.ACCEPTANCE_MODE == 'source'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            rustup target add x86_64-pc-windows-msvc
+          fi
+
+      - name: Build the server, desktop host, and helper from source
+        if: env.ACCEPTANCE_MODE == 'source'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            cargo build --locked --release --bins --target x86_64-pc-windows-msvc
+            cp target/x86_64-pc-windows-msvc/release/local-browser-bridge-desktop.exe \
+               target/x86_64-pc-windows-msvc/release/local-computer-helper.exe \
+               "$RUNNER_TEMP/bin/"
+          else
+            cargo build --locked --release --bins
+            cp target/release/local-browser-bridge \
+               target/release/local-browser-bridge-desktop \
+               target/release/local-computer-helper \
+               "$RUNNER_TEMP/bin/"
+          fi
+          echo "PRODUCT_DIR=$RUNNER_TEMP/bin" >> "$GITHUB_ENV"
+
+      - name: Download and verify the frozen release candidate
+        if: env.ACCEPTANCE_MODE == 'artifact'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          [[ "$ACCEPTANCE_CANDIDATE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$ACCEPTANCE_CANDIDATE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$ACCEPTANCE_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          work="$RUNNER_TEMP/candidate"
+          mkdir -p "$work"
+          gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$ACCEPTANCE_CANDIDATE_RUN_ID/attempts/$ACCEPTANCE_CANDIDATE_RUN_ATTEMPT" \
+            > "$work/run.json"
+          jq -e \
+            --arg source "$ACCEPTANCE_SOURCE_SHA" \
+            --argjson attempt "$ACCEPTANCE_CANDIDATE_RUN_ATTEMPT" '
+              .path == ".github/workflows/deploy.yml" and .head_branch == "main" and
+              .head_sha == $source and .run_attempt == $attempt
+            ' "$work/run.json" >/dev/null
+          gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$ACCEPTANCE_CANDIDATE_RUN_ID/artifacts?per_page=100" \
+            > "$work/artifacts.json"
+          artifact_id="$(jq -er \
+            --argjson run_id "$ACCEPTANCE_CANDIDATE_RUN_ID" \
+            --arg source "$ACCEPTANCE_SOURCE_SHA" '
+              [.artifacts[] | select(
+                .name == "release-candidate" and .expired == false and
+                .workflow_run.id == $run_id and .workflow_run.head_sha == $source
+              )] | if length == 1 then .[0].id | tostring
+                   else error("candidate artifact is absent or ambiguous") end
+            ' "$work/artifacts.json")"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$work/release-candidate.zip"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256() { sha256sum "$@"; }
+          else
+            sha256() { shasum -a 256 "$@"; }
+          fi
+          zip_sha="$(sha256 "$work/release-candidate.zip" | awk '{ print $1 }')"
+          mkdir "$work/payload"
+          unzip -q "$work/release-candidate.zip" -d "$work/payload"
+          test "$(find "$work/payload" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 5
+          (cd "$work/payload" && sha256 --check --strict SHA256SUMS.txt)
+          echo "PRODUCT_DIR=$work/payload" >> "$GITHUB_ENV"
+          echo "LBB_CANDIDATE_ARTIFACT_ID=$artifact_id" >> "$GITHUB_ENV"
+          echo "LBB_CANDIDATE_ZIP_SHA256=$zip_sha" >> "$GITHUB_ENV"
+          echo "Verified release-candidate artifact $artifact_id ($zip_sha)."
+
+      - name: Run product acceptance
+        env:
+          LBB_ACCEPTANCE_CHROME: ${{ steps.chrome.outputs.path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/ci-acceptance.mjs \
+            --mode "$ACCEPTANCE_MODE" \
+            --dir "$PRODUCT_DIR" \
+            --out "$RUNNER_TEMP/acceptance" \
+            --version "${{ steps.version.outputs.version }}" \
+            --source-sha "${ACCEPTANCE_SOURCE_SHA:-$GITHUB_SHA}"
+
+      - name: Summarize
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/acceptance/acceptance.json"
+          if [[ ! -f "$report" ]]; then
+            echo "acceptance.json was not produced" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "## Acceptance (${{ matrix.label }}, $ACCEPTANCE_MODE)"
+            jq -r '"- ok: \(.ok) — \(.summary.pass) pass, \(.summary.fail) fail (\(.summary.requiredFail) required), \(.summary.skip) skip; computer mode: \(.computerMode // "n/a")"' "$report"
+            echo
+            echo "| lane | check | status | required | reason |"
+            echo "|---|---|---|---|---|"
+            jq -r '.checks[] | "| \(.lane) | \(.name) | \(.status) | \(.required) | \((.reason // "") | gsub("\\|"; "/") | .[0:120]) |"' "$report"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: acceptance-${{ matrix.label }}
+          path: |
+            ${{ runner.temp }}/acceptance/acceptance.json
+            ${{ runner.temp }}/acceptance/*.png
+            ${{ runner.temp }}/acceptance/*.jpg
+            ${{ runner.temp }}/acceptance/logs/*.log
+          if-no-files-found: error
+          retention-days: 30

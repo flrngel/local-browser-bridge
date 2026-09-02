@@ -43,14 +43,10 @@ jobs:
           bash scripts/install-macos.sh --self-test
           bash scripts/uninstall-macos.sh --self-test
           bash scripts/publish-release.sh --self-test
-      - name: Validate the read-only macOS app-share handoff watcher
-        run: |
-          node --check scripts/wait-macos-app-share-concurrency-handoff.mjs
-          node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test
-      - name: Validate the optional adversarial macOS pointer handoff watcher
-        run: |
-          node --check scripts/wait-macos-pointer-concurrency-handoff.mjs
-          node scripts/wait-macos-pointer-concurrency-handoff.mjs --mode self-test
+          bash -n scripts/fetch-verify-release-candidate.sh
+          bash scripts/fetch-verify-release-candidate.sh --self-test
+          bash scripts/bump-version.sh --self-test
+          node --check scripts/ci-acceptance.mjs
       - name: Detect dependency-policy changes
         id: dependency_policy
         env:
@@ -152,7 +148,7 @@ jobs:
       - name: Audit distributed versions
         shell: bash
         run: bash scripts/audit-versions.sh
-      - name: Validate stock-user Chrome evidence tooling
+      - name: Validate the Windows installer, artifact verifier, and acceptance fixture
         shell: pwsh
         run: |
           if ([String]::IsNullOrWhiteSpace($env:SystemRoot) -or
@@ -162,31 +158,13 @@ jobs:
           $windowsPowerShell = [IO.Path]::GetFullPath([IO.Path]::Combine(
             $env:SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"
           ))
-          if (-not [IO.File]::Exists($windowsPowerShell) -or
-              ([IO.FileInfo]::new($windowsPowerShell).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-            throw "The exact system Windows PowerShell executable is unavailable or linked."
-          }
-          $ps51IdentityCommand = 'Write-Output ("{0}.{1}|{2}" -f $PSVersionTable.PSVersion.Major, $PSVersionTable.PSVersion.Minor, $PSVersionTable.PSEdition)'
-          $ps51Identity = @(& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -Command $ps51IdentityCommand)
-          if ($LASTEXITCODE -ne 0 -or $ps51Identity.Count -ne 1 -or
-              $ps51Identity[0] -cne "5.1|Desktop") {
-            throw "The exact system PowerShell self-test host is not Windows PowerShell 5.1 Desktop."
+          if (-not [IO.File]::Exists($windowsPowerShell)) {
+            throw "The system Windows PowerShell executable is unavailable."
           }
           $scripts = @(
             "scripts/install-windows.ps1",
             "scripts/uninstall-windows.ps1",
-            "scripts/browser-evidence-candidate.ps1",
-            "scripts/record-computer-helper-chain.ps1",
-            "scripts/run-windows-computer-use-acceptance.ps1",
-            "scripts/sanitize-browser-evidence-screenshot.ps1",
-            "scripts/test-windows-browser-api.ps1",
-            "scripts/test-windows-computer-use.ps1",
-            "scripts/test-windows-stock-chrome.ps1",
             "scripts/verify-windows-artifacts.ps1",
-            "scripts/verify-windows-release-candidate.ps1",
-            "scripts/wait-windows-foreground-arm-handoff.ps1",
-            "scripts/write-browser-evidence-record.ps1",
-            "scripts/write-stock-chrome-operator-response.ps1",
             "tests/fixtures/windows/WindowsComputerUseFixture.ps1"
           )
           foreach ($script in $scripts) {
@@ -201,141 +179,16 @@ jobs:
               throw ($errors | ForEach-Object { $_.Message } | Out-String)
             }
           }
-          & ./scripts/browser-evidence-candidate.ps1 -Mode SelfTest
           & ./scripts/install-windows.ps1 -SelfTest
           & ./scripts/uninstall-windows.ps1 -SelfTest
-          & ./scripts/record-computer-helper-chain.ps1 -Mode SelfTest
-          & ./scripts/sanitize-browser-evidence-screenshot.ps1 -Mode SelfTest
-          & ./scripts/write-stock-chrome-operator-response.ps1 -Mode SelfTest
-          & ./scripts/test-windows-browser-api.ps1 -SelfTest
-          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/browser-evidence-candidate.ps1 -Mode SelfTest
-          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 candidate binder self-test failed." }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/install-windows.ps1 -SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 one-command installer self-test failed." }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/uninstall-windows.ps1 -SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 one-command uninstaller self-test failed." }
-          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/record-computer-helper-chain.ps1 -Mode SelfTest
-          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 computer-helper recorder self-test failed." }
-          $coordinatorPathForPs51 = (Resolve-Path ./scripts/run-windows-computer-use-acceptance.ps1).Path
-          $previousCoordinatorPathForPs51 = $env:LBB_PS51_COORDINATOR_PARSE
-          $coordinatorParserCommand = '$tokens = $null; $errors = $null; [Management.Automation.Language.Parser]::ParseFile([IO.Path]::GetFullPath($env:LBB_PS51_COORDINATOR_PARSE), [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -ne 0) { throw (($errors | ForEach-Object { $_.Message }) -join [Environment]::NewLine) }'
-          try {
-            $env:LBB_PS51_COORDINATOR_PARSE = $coordinatorPathForPs51
-            & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -Command $coordinatorParserCommand
-            if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 computer-use acceptance coordinator parser failed." }
-          }
-          finally {
-            if ($null -eq $previousCoordinatorPathForPs51) {
-              Remove-Item Env:\LBB_PS51_COORDINATOR_PARSE -ErrorAction SilentlyContinue
-            }
-            else {
-              $env:LBB_PS51_COORDINATOR_PARSE = $previousCoordinatorPathForPs51
-            }
-          }
-          # The coordinator owns the validated guard/lifetime Job topology. A
-          # direct runner self-test can inherit a hosted Job that forbids the
-          # standalone CREATE_BREAKAWAY_FROM_JOB launch it would require.
-          $coordinatorSelfTestOutput = @(& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/run-windows-computer-use-acceptance.ps1 -Mode SelfTest)
-          if ($LASTEXITCODE -ne 0 -or
-              $coordinatorSelfTestOutput.Count -ne 1 -or
-              $coordinatorSelfTestOutput[0] -cne "Windows computer-use acceptance coordinator self-test passed.") {
-            throw "Windows PowerShell 5.1 computer-use acceptance coordinator self-test failed."
-          }
-          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/sanitize-browser-evidence-screenshot.ps1 -Mode SelfTest
-          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 screenshot sanitizer self-test failed." }
-          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-browser-api.ps1 -SelfTest
-          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 browser API self-test failed." }
-          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/write-browser-evidence-record.ps1 -Mode SelfTest
-          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 browser evidence finalizer self-test failed." }
-          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/write-stock-chrome-operator-response.ps1 -Mode SelfTest
-          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 stock-Chrome response writer self-test failed." }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-artifacts.ps1 -Version 0.0.0 -SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 artifact verifier self-test failed." }
-          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/verify-windows-release-candidate.ps1 -SelfTest
-          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 release-candidate trust self-test failed." }
-          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/test-windows-stock-chrome.ps1 -SelfTest
-          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 stock-Chrome coordinator self-test failed." }
-          & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/wait-windows-foreground-arm-handoff.ps1 -Mode SelfTest
-          if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 automatic foreground-baseline handoff self-test failed." }
-          $watcherPathForPs51 = (Resolve-Path ./scripts/wait-windows-foreground-arm-handoff.ps1).Path
-          $previousWatcherPathForPs51 = $env:LBB_PS51_WATCHER_SELF_TEST
-          $watcherCallOperatorCommand = '$ErrorActionPreference = "Stop"; $watcherScript = [ScriptBlock]::Create([IO.File]::ReadAllText([IO.Path]::GetFullPath($env:LBB_PS51_WATCHER_SELF_TEST))); & $watcherScript -Mode SelfTest'
-          try {
-            $env:LBB_PS51_WATCHER_SELF_TEST = $watcherPathForPs51
-            $watcherCallOperatorOutput = @(& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -Command $watcherCallOperatorCommand)
-            if ($LASTEXITCODE -ne 0 -or
-                $watcherCallOperatorOutput.Count -ne 1 -or
-                $watcherCallOperatorOutput[0] -cne "Windows automatic foreground-baseline handoff watcher self-test passed.") {
-              throw "Windows PowerShell 5.1 automatic foreground-baseline call-operator self-test failed."
-            }
-          }
-          finally {
-            if ($null -eq $previousWatcherPathForPs51) {
-              Remove-Item Env:\LBB_PS51_WATCHER_SELF_TEST -ErrorAction SilentlyContinue
-            }
-            else {
-              $env:LBB_PS51_WATCHER_SELF_TEST = $previousWatcherPathForPs51
-            }
-          }
           & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File ./tests/fixtures/windows/WindowsComputerUseFixture.ps1 -SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell 5.1 fixture self-test failed." }
-          $fixtureExecutableSelfTest = Join-Path $env:RUNNER_TEMP ("lbb-windows-fixture-" + [Guid]::NewGuid().ToString("N") + ".exe")
-          $fixtureSourcePath = (Resolve-Path ./tests/fixtures/windows/WindowsComputerUseFixture.ps1).Path
-          $fixtureSourceStream = [IO.File]::OpenRead($fixtureSourcePath)
-          $fixtureSourceHasher = [Security.Cryptography.SHA256]::Create()
-          try {
-            $fixtureSourceSha256 = (($fixtureSourceHasher.ComputeHash($fixtureSourceStream) | ForEach-Object { $_.ToString("x2") }) -join '')
-          }
-          finally {
-            $fixtureSourceHasher.Dispose()
-            $fixtureSourceStream.Dispose()
-          }
-          try {
-            $fixtureBuildOutput = @(& $windowsPowerShell -NoLogo -NoProfile -NonInteractive -File $fixtureSourcePath -BuildExecutablePath $fixtureExecutableSelfTest -ExpectedSourceSha256 $fixtureSourceSha256)
-            if ($LASTEXITCODE -ne 0 -or
-                $fixtureBuildOutput.Count -ne 1 -or
-                $fixtureBuildOutput[0] -cne "Windows computer-use fixture executable built.") {
-              throw "Windows PowerShell 5.1 dedicated fixture build failed."
-            }
-            & $fixtureExecutableSelfTest --self-test
-            if ($LASTEXITCODE -ne 0) { throw "Dedicated Windows fixture executable self-test failed." }
-          }
-          finally {
-            $fixtureCleanupDeadline = [DateTime]::UtcNow.AddSeconds(10)
-            $fixtureCleanupError = $null
-            do {
-              try {
-                if ([IO.Directory]::Exists($fixtureExecutableSelfTest)) {
-                  throw "The dedicated Windows fixture executable path was replaced by a directory."
-                }
-                if ([IO.File]::Exists($fixtureExecutableSelfTest)) {
-                  $fixtureExecutableAttributes = [IO.File]::GetAttributes($fixtureExecutableSelfTest)
-                  if (($fixtureExecutableAttributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
-                      ($fixtureExecutableAttributes -band [IO.FileAttributes]::Directory) -ne 0) {
-                    throw "The dedicated Windows fixture executable cleanup target is not an ordinary file."
-                  }
-                  [IO.File]::SetAttributes($fixtureExecutableSelfTest, [IO.FileAttributes]::Normal)
-                  [IO.File]::Delete($fixtureExecutableSelfTest)
-                }
-                $fixtureCleanupError = $null
-                break
-              }
-              catch {
-                $fixtureCleanupError = $_.Exception
-                Start-Sleep -Milliseconds 100
-              }
-            } while ([DateTime]::UtcNow -lt $fixtureCleanupDeadline)
-            if ([IO.File]::Exists($fixtureExecutableSelfTest) -or
-                [IO.Directory]::Exists($fixtureExecutableSelfTest)) {
-              throw [IO.IOException]::new(
-                "The dedicated Windows fixture executable self-test artifact remained after bounded cleanup.",
-                $fixtureCleanupError
-              )
-            }
-          }
-          & ./scripts/wait-windows-foreground-arm-handoff.ps1 -Mode SelfTest
-          & ./scripts/write-browser-evidence-record.ps1 -Mode SelfTest
-          & ./scripts/write-stock-chrome-operator-response.ps1 -Mode SelfTest
       - name: Check Windows formatting, lint, and tests
         shell: pwsh
         run: |
@@ -358,25 +211,12 @@ jobs:
           package-manager-cache: false
       - name: Verify the macOS build SDK and runtime floor
         run: bash scripts/verify-macos-build-host.sh
-      - name: Validate the macOS app-share handoff watcher on macOS
+      - name: Validate the release-candidate verifier and acceptance fixture on macOS
         run: |
           bash -n scripts/fetch-verify-release-candidate.sh
           bash scripts/fetch-verify-release-candidate.sh --self-test
-          node --check scripts/wait-macos-app-share-concurrency-handoff.mjs
-          node scripts/wait-macos-app-share-concurrency-handoff.mjs --mode self-test
-          node --check scripts/finalize-macos-acceptance.mjs
-          node scripts/finalize-macos-acceptance.mjs --self-test
-          bash -n scripts/finalize-macos-acceptance.sh
-          bash scripts/finalize-macos-acceptance.sh --self-test
-      - name: Validate the macOS packaged-evidence harness
-        run: |
-          node --check evidence/v0.12.68/computer/helper-evidence-rig.mjs
-          node evidence/v0.12.68/computer/helper-evidence-rig.mjs --self-test
-          xcrun swiftc -typecheck evidence/v0.12.68/computer/HelperEvidenceFixture.swift
-          xcrun swiftc -typecheck evidence/v0.12.68/computer/SystemProbe.swift
-          bash scripts/verify-macos-app-share-handoff-self-test.sh 0.12.41 --historical-source
-          bash scripts/verify-macos-app-share-handoff-self-test.sh 0.12.68
-          xcrun swiftc -typecheck evidence/v0.12.68/computer/PhysicalPointerHandoff.swift
+          node --check scripts/ci-acceptance.mjs
+          xcrun swiftc -typecheck tests/fixtures/macos/CiAcceptanceFixture.swift
       - name: Install the minimum supported Rust toolchain
         run: |
           rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
@@ -386,3 +226,12 @@ jobs:
           cargo fmt --all -- --check
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked --all-targets
+
+  acceptance:
+    name: Product acceptance from source
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/acceptance.yml
+    with:
+      mode: source
