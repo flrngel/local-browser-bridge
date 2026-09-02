@@ -88,7 +88,7 @@ fn uninstallers_are_one_command_owned_and_fail_closed() {
     let windows = source("scripts/uninstall-windows.ps1");
     let macos = source("scripts/uninstall-macos.sh");
     let readme = source("README.md");
-    let install = source("docs/INSTALL.md");
+    let install = source("docs/VERIFY_RELEASE.md");
 
     for required in [
         "[switch]$DryRun",
