@@ -403,7 +403,6 @@ jobs:
           path: candidate
       - name: Combine the per-OS acceptance results into one receipt
         env:
-          GH_DEBUG: api
           GH_TOKEN: ${{ github.token }}
           VERIFIED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
           VERIFIED_VERSION: ${{ needs.verify.outputs.version }}
@@ -418,7 +417,19 @@ jobs:
           # a `gh api .../zip` download, so this step never needs its own
           # network fetch of the (potentially large) candidate archive.
           test "$(find candidate -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" = 5
+          # No GH_DEBUG here: an earlier attempt set GH_DEBUG=api on this
+          # exact step and it then failed silently on ubuntu-latest -- the
+          # HTTP trace showed a fully successful 200 response, printed in
+          # full, immediately followed by exit code 1 with no further output
+          # at all (run 33627449540, job "Attest the acceptance receipt").
+          # Reproduced locally with gh 2.96.0 that this call succeeds both
+          # with and without GH_DEBUG=api, so the flag is not needed for
+          # correctness and is not worth the risk of whatever runner-specific
+          # gh behavior it triggered. Validate the response shape directly
+          # instead, which gives a clear, specific failure if this ever
+          # breaks again without needing verbose tracing.
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" > artifacts.json
+          jq -e 'type == "object" and has("total_count") and has("artifacts")' artifacts.json >/dev/null
           # NOTE: `EXPR and (BOUND) as $x | if $x then VALUE else error end`
           # is not safe for extracting VALUE: jq's `and`/`or` always reduce to
           # a plain boolean, so on jq < 1.8 (ubuntu-latest's preinstalled jq,
