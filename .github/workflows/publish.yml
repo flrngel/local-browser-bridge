@@ -113,19 +113,23 @@ jobs:
           gh api \
             "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID/artifacts?per_page=100" \
             > "$scratch/artifacts.json"
+          # `EXPR and (BOUND) as $x | if $x then VALUE else error end` is not
+          # safe for extracting VALUE across jq versions: jq's `and`/`or`
+          # always reduce to a plain boolean, so on jq < 1.8 (this job runs
+          # on ubuntu-latest, confirmed jq 1.7) the `and` discards VALUE and
+          # this would yield the literal string "true" instead of an
+          # artifact ID. Bind `as` to a plain bracketed term and keep the
+          # boolean check self-contained inside `if`, which is unambiguous
+          # on every jq version.
           artifact_id="$(jq -er \
             --argjson run_id "$CANDIDATE_RUN_ID" \
             --arg source "$VERIFIED_SOURCE_SHA" '
-              (.total_count < 100) and
               ([.artifacts[] | select(
                 .name == "release-candidate" and .expired == false and
                 .workflow_run.id == $run_id and .workflow_run.head_sha == $source
-              )] | length == 1) as $valid |
-              if $valid then
-                [.artifacts[] | select(
-                  .name == "release-candidate" and .expired == false and
-                  .workflow_run.id == $run_id and .workflow_run.head_sha == $source
-                )][0].id | tostring
+              )]) as $matches |
+              if (.total_count < 100) and ($matches | length == 1) then
+                $matches[0].id | tostring
               else error("candidate artifact is absent or ambiguous") end
             ' "$scratch/artifacts.json")"
           printf 'candidate_artifact_id=%s\n' "$artifact_id" >> "$GITHUB_OUTPUT"
@@ -172,19 +176,23 @@ jobs:
           gh api \
             "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID/artifacts?per_page=100" \
             > "$receipt_dir/artifacts.json"
+          # `EXPR and (BOUND) as $x | if $x then VALUE else error end` is not
+          # safe for extracting VALUE across jq versions: jq's `and`/`or`
+          # always reduce to a plain boolean, so on jq < 1.8 (this job runs
+          # on ubuntu-latest, confirmed jq 1.7) the `and` discards VALUE and
+          # this would yield the literal string "true" instead of an
+          # artifact ID. Bind `as` to a plain bracketed term and keep the
+          # boolean check self-contained inside `if`, which is unambiguous
+          # on every jq version.
           receipt_artifact_id="$(jq -er \
             --argjson run_id "$CANDIDATE_RUN_ID" \
             --arg source "$VERIFIED_SOURCE_SHA" '
-              (.total_count < 100) and
               ([.artifacts[] | select(
                 .name == "acceptance-receipt" and .expired == false and
                 .workflow_run.id == $run_id and .workflow_run.head_sha == $source
-              )] | length == 1) as $valid |
-              if $valid then
-                [.artifacts[] | select(
-                  .name == "acceptance-receipt" and .expired == false and
-                  .workflow_run.id == $run_id and .workflow_run.head_sha == $source
-                )][0].id | tostring
+              )]) as $matches |
+              if (.total_count < 100) and ($matches | length == 1) then
+                $matches[0].id | tostring
               else error("acceptance receipt artifact is absent or ambiguous") end
             ' "$receipt_dir/artifacts.json")"
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$receipt_artifact_id/zip" > "$receipt_dir/receipt.zip"
