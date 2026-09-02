@@ -41,7 +41,7 @@ header and the CSRF token from `/api/session`.
 No authentication beyond the Host check. Returns:
 
 ```json
-{"computerConnected":false,"extensionConnected":false,"ok":true,"shellEnabled":true,"version":"0.12.68"}
+{"computerConnected":false,"extensionConnected":false,"ok":true,"shellEnabled":true,"version":"0.12.69"}
 ```
 
 Use this as the readiness probe before sending any command.

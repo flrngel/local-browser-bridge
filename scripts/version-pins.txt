@@ -11,3 +11,6 @@ extension/lib.js|export const VERSION = "|";|line
 .github/workflows/publish.yml|(for example, |)|any
 docs/INSTALL_MACOS.md|--version ||any
 docs/INSTALL_WINDOWS.md|-Version ||any
+README.md|"version":"|"|any
+docs/API_REFERENCE.md|"version":"|"|any
+docs/AGENT_INTEGRATION.md|"version":"|"|any

@@ -48,7 +48,7 @@ connect**.
 
 ```bash
 curl http://127.0.0.1:17373/health
-# {"computerConnected":false,"extensionConnected":false,"ok":true,"shellEnabled":false,"version":"0.12.68"}
+# {"computerConnected":false,"extensionConnected":false,"ok":true,"shellEnabled":false,"version":"0.12.69"}
 ```
 
 `extensionConnected` flips to `true` once the extension connects. Then copy

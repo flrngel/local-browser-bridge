@@ -99,7 +99,7 @@ To install a specific stable version instead of latest, substitute its number
 above) for the example below:
 
 ```powershell
-$installer = [scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-windows.ps1')); & $installer -Version 0.12.68
+$installer = [scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-windows.ps1')); & $installer -Version 0.12.69
 ```
 
 ## One-command uninstall
