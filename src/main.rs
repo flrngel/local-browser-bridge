@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use local_browser_bridge::{
-    BridgeServer, ServerConfig, UpdateState, VERSION, check_for_update, default_token_path,
-    load_or_create_token, print_license_report,
+    BridgeServer, ServerConfig, Settings, UpdateState, VERSION, check_for_update,
+    default_settings_path, default_token_path, load_or_create_token, load_settings,
+    print_license_report,
 };
 
 #[derive(Default)]
@@ -15,6 +16,7 @@ struct Cli {
     check_updates: bool,
     no_update_check: bool,
     enable_shell: bool,
+    no_shell: bool,
 }
 
 #[tokio::main]
@@ -61,10 +63,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    let settings_path = default_settings_path().ok();
+    let settings = match settings_path.as_ref() {
+        Some(path) => load_settings(path).await,
+        None => Settings::default(),
+    };
+    // Precedence: an explicit CLI flag or the legacy env var always wins;
+    // with neither given, the settings file decides (default on), so a
+    // fresh install just works without a second setup step.
+    let shell_enabled = if cli.enable_shell || shell_enabled_from_env()? {
+        true
+    } else if cli.no_shell {
+        false
+    } else {
+        settings.shell_enabled
+    };
+
     let mut config = ServerConfig::new(port, token.clone());
     config.call_timeout = Duration::from_secs(15);
     config.check_for_updates = !cli.no_update_check && !update_check_disabled_from_env()?;
-    config.shell_enabled = cli.enable_shell || shell_enabled_from_env()?;
+    config.shell_enabled = shell_enabled;
+    config.desktop_control_enabled = settings.desktop_control_enabled;
+    config.settings_path = settings_path;
     let server = BridgeServer::bind(config).await?;
     let address = server.local_addr()?;
     let fetch_base_url = server.agent_fetch_base_url();
@@ -81,10 +101,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => println!("Token source: LBB_TOKEN"),
     }
     println!("Standalone Rust server; Node.js is not required. Press Ctrl+C to stop.");
-    if cli.enable_shell || shell_enabled_from_env()? {
+    if shell_enabled {
         println!("Local shell: ENABLED (full current-user command access).");
     } else {
-        println!("Local shell: disabled; restart with --enable-shell to grant access.");
+        println!(
+            "Local shell: disabled; restart with --enable-shell, or enable it from the dashboard, to grant access."
+        );
     }
     if cli.no_update_check || update_check_disabled_from_env()? {
         println!("Update check: disabled; no GitHub request was made.");
@@ -111,6 +133,7 @@ fn parse_args(arguments: impl Iterator<Item = String>) -> Result<Cli, String> {
             "--check-updates" => cli.check_updates = true,
             "--no-update-check" => cli.no_update_check = true,
             "--enable-shell" => cli.enable_shell = true,
+            "--no-shell" => cli.no_shell = true,
             _ => {
                 return Err(format!(
                     "Unknown argument: {argument}. Use --help for usage."
@@ -129,10 +152,12 @@ Options:\n\
   --check-updates     Check official GitHub release metadata and exit\n\
   --no-update-check   Start without the one-time background metadata check\n\
   --enable-shell      Grant API clients full current-user native shell access\n\
+  --no-shell          Force shell access off, overriding the settings file\n\
   --licenses          Print project and third-party license notices, then exit\n\
   -V, --version       Print the installed version and exit\n\
   -h, --help          Print this help\n\n\
-The update checker never downloads or installs files."
+Without --enable-shell or --no-shell, shell access follows settings.json\n\
+(default: enabled). The update checker never downloads or installs files."
     );
 }
 

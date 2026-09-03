@@ -233,6 +233,176 @@ async fn shell_run_stays_disabled_without_explicit_server_authority() {
     handle.await.unwrap();
 }
 
+#[tokio::test]
+async fn settings_endpoint_flips_shell_state_and_state_reflects_it() {
+    let token = create_token();
+    let (base_url, _fetch_base_url, shutdown, handle) = start_shell_server(&token, false).await;
+    let client = Client::new();
+
+    let before: Value = client
+        .get(format!("{base_url}/api/state"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(before["state"]["shell"]["enabled"], false);
+    assert_eq!(before["state"]["setup"]["shellEnabled"], false);
+    assert_eq!(
+        before["state"]["setup"]["extensionId"],
+        "gjaniambdhcnffbapkknllilikeoopdg"
+    );
+
+    let session: Value = client
+        .get(format!("{base_url}/api/session"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let session_token = session["sessionToken"].as_str().unwrap();
+    let csrf = session["csrfToken"].as_str().unwrap();
+
+    let flipped = client
+        .post(format!("{base_url}/api/settings"))
+        .header("Authorization", format!("Session {session_token}"))
+        .header("Origin", &base_url)
+        .header("X-CSRF-Token", csrf)
+        .json(&json!({ "shellEnabled": true }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(flipped.status(), 200);
+    let flipped: Value = flipped.json().await.unwrap();
+    assert_eq!(flipped["ok"], true);
+    // The endpoint's own response is already the freshly refreshed state...
+    assert_eq!(flipped["state"]["shell"]["enabled"], true);
+    assert_eq!(flipped["state"]["setup"]["shellEnabled"], true);
+
+    // ...and this is the trap the contract calls out: a subsequent,
+    // independent `/api/state` read must not still serve the value that was
+    // cached once at server start.
+    let after: Value = client
+        .get(format!("{base_url}/api/state"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(after["state"]["shell"]["enabled"], true);
+    assert_eq!(after["state"]["setup"]["shellEnabled"], true);
+    assert_eq!(after["state"]["setup"]["ready"], false);
+
+    let unknown_key = client
+        .post(format!("{base_url}/api/settings"))
+        .header("Authorization", format!("Session {session_token}"))
+        .header("Origin", &base_url)
+        .header("X-CSRF-Token", csrf)
+        .json(&json!({ "shellEnabled": true, "bogus": true }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unknown_key.status(), 400);
+
+    let wrong_type = client
+        .post(format!("{base_url}/api/settings"))
+        .header("Authorization", format!("Session {session_token}"))
+        .header("Origin", &base_url)
+        .header("X-CSRF-Token", csrf)
+        .json(&json!({ "desktopControlEnabled": "yes" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong_type.status(), 400);
+
+    let no_session = client
+        .post(format!("{base_url}/api/settings"))
+        .bearer_auth(&token)
+        .json(&json!({ "shellEnabled": false }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(no_session.status(), 403);
+
+    shutdown.send(()).unwrap();
+    handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn pairing_endpoint_hands_dashboard_session_the_port_and_token() {
+    let token = create_token();
+    let (base_url, _fetch_base_url, shutdown, handle) = start_shell_server(&token, false).await;
+    let client = Client::new();
+
+    let session: Value = client
+        .get(format!("{base_url}/api/session"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let session_token = session["sessionToken"].as_str().unwrap();
+    let csrf = session["csrfToken"].as_str().unwrap();
+
+    let paired = client
+        .post(format!("{base_url}/api/pairing"))
+        .header("Authorization", format!("Session {session_token}"))
+        .header("Origin", &base_url)
+        .header("X-CSRF-Token", csrf)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(paired.status(), 200);
+    let paired: Value = paired.json().await.unwrap();
+    assert_eq!(paired["ok"], true);
+    assert_eq!(paired["token"], token.as_str());
+    assert!(paired["port"].as_u64().unwrap() > 0);
+
+    // A bare bearer token (no dashboard session) must not work: this
+    // endpoint hands out the bearer token itself, so it cannot be reachable
+    // with anything weaker than the full session + CSRF + same-origin proof
+    // every other mutating dashboard route requires.
+    let no_session = client
+        .post(format!("{base_url}/api/pairing"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(no_session.status(), 403);
+
+    // Missing CSRF header is rejected too.
+    let no_csrf = client
+        .post(format!("{base_url}/api/pairing"))
+        .header("Authorization", format!("Session {session_token}"))
+        .header("Origin", &base_url)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(no_csrf.status(), 403);
+
+    // Cross-origin (mismatched Origin header) is rejected too.
+    let cross_origin = client
+        .post(format!("{base_url}/api/pairing"))
+        .header("Authorization", format!("Session {session_token}"))
+        .header("Origin", "http://evil.example")
+        .header("X-CSRF-Token", csrf)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cross_origin.status(), 403);
+
+    shutdown.send(()).unwrap();
+    handle.await.unwrap();
+}
+
 async fn connect_fake_extension(
     base_url: &str,
     token: &str,

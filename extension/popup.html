@@ -50,15 +50,16 @@
 
     <section>
       <h2>Local server</h2>
+      <p class="muted token-copy">Usually you do not need this: open the Local Browser Bridge page in your browser and click Connect there, and this extension links up on its own. Use this form only if that page asks you to enter the connection details by hand.</p>
       <form id="connection-form">
         <label for="port">Port</label>
         <input id="port" type="number" min="1" max="65535" required>
-        <label for="token">Extension token</label>
-        <input id="token" type="password" placeholder="Leave blank to keep the saved token" autocomplete="off">
+        <label for="token">Connection code</label>
+        <input id="token" type="password" placeholder="Leave blank to keep the saved one" autocomplete="off">
         <button type="submit">Save and connect</button>
         <button id="clear-token" class="reject" type="button">Clear saved token</button>
       </form>
-      <p class="muted token-copy">Clearing the saved token disconnects the extension. Paste the server token again to reconnect.</p>
+      <p class="muted token-copy">Clearing the saved token disconnects the extension. Open the Local Browser Bridge page and click Connect again to reconnect.</p>
     </section>
 
     <section id="approval-section" hidden>

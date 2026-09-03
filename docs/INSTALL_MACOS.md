@@ -115,7 +115,7 @@ To install a specific stable version instead of latest, substitute its
 number (0.12.70 or later for the Desktop Host, shell, and Agent Fetch):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-macos.sh | bash -s -- --version 0.12.70
+curl -fsSL https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-macos.sh | bash -s -- --version 0.13.0
 ```
 
 ### One-command uninstall

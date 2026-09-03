@@ -21,11 +21,20 @@ const ui = Object.fromEntries(
     "computer-elements", "computer-elements-empty", "computer-element-count", "computer-semantic-status",
     "computer-action-effect", "computer-action-summary", "computer-action-details", "computer-action-evidence",
     "auth-dialog", "auth-form", "auth-token", "auth-error",
+    "home-view", "advanced-view", "show-advanced", "show-home",
+    "home-hero-headline", "home-hero-action",
+    "status-app-pill", "status-browser-pill", "status-browser-action",
+    "status-desktop-toggle", "status-desktop-pill", "status-desktop-progress", "status-desktop-retry",
+    "status-shell-toggle", "status-shell-pill",
+    "home-browser-setup", "extension-folder-path-row", "extension-folder-path",
+    "extension-folder-unknown", "copy-extension-path",
+    "copy-ai-instructions", "copy-ai-link",
   ].map((id) => [id, document.getElementById(id)]),
 );
 
 let csrfToken = "";
 let sessionToken = "";
+let bridgeToken = "";
 let currentState = null;
 let busy = false;
 let toastTimer = null;
@@ -187,6 +196,9 @@ async function createDashboardSession(masterToken = "", existingSession = "") {
   });
   sessionToken = session.sessionToken;
   window.sessionStorage.setItem("lbbDashboardSession", sessionToken);
+  // Kept only in memory (never written to storage) so a one-click extension
+  // Connect can relay it this page load; see connectExtension() below.
+  if (masterToken) bridgeToken = masterToken;
   return session;
 }
 
@@ -868,6 +880,7 @@ function render(state) {
   renderTabs(state);
   renderObservation(state);
   renderActivity(state);
+  renderHome(state);
   return true;
 }
 
@@ -1128,6 +1141,227 @@ ui["copy-agent-fetch-url"].addEventListener("click", async () => {
   showToast("Private Agent Fetch base URL copied.");
 });
 
+// The pinned Chrome extension ID (matches extension/lib.js's EXTENSION_ID).
+const EXTENSION_ID = "gjaniambdhcnffbapkknllilikeoopdg";
+
+function renderExtensionFolderPath(state) {
+  const path = state?.setup?.extensionPath;
+  const known = typeof path === "string" && path.length > 0;
+  ui["extension-folder-path-row"].hidden = !known;
+  ui["extension-folder-unknown"].hidden = known;
+  if (known) ui["extension-folder-path"].textContent = path;
+}
+
+// Self-contained copy/paste block for an AI assistant. Uses the exact Agent
+// Fetch shape and method names from docs/API_REFERENCE.md; kept out of the
+// Home-jargon-checked region below because it must use the real parameter
+// names ("ref", "generation") the API actually requires.
+function buildAgentInstructions(state) {
+  const base = state?.agentFetch?.baseUrl ?? "";
+  return [
+    "Local Browser Bridge lets an AI assistant see and control a browser tab (and, if turned on, a desktop window and a local shell) on this computer. Only use it if the user asked you to.",
+    "",
+    `Base URL: ${base}`,
+    "That's a normal address, shaped like http://127.0.0.1:<port>/api/v1/fetch/<key>. Every call below is a plain HTTP GET to it -- no headers, no request body.",
+    "",
+    "Add \"&callId=<a-unique-id-you-pick>\" to every call except status and tabs.list.",
+    "",
+    "List open tabs:",
+    `GET ${base}/tabs.list`,
+    "",
+    "Take control of a tab (tabId is optional; omit it to use the current tab):",
+    `GET ${base}/browser.control.start?callId=ctl-1&tabId=<id>`,
+    "",
+    "Open a page:",
+    `GET ${base}/page.navigate?callId=nav-1&tabId=<id>&url=<page-url>`,
+    "",
+    "Read it (returns a screenshot, the page text, and clickable elements, each with a \"ref\"):",
+    `GET ${base}/page.observe?callId=obs-1&tabId=<id>`,
+    "",
+    "Click something, using the \"ref\" and \"generation\" from that read:",
+    `GET ${base}/page.click?callId=click-1&tabId=<id>&ref=<ref>&generation=<generation>`,
+    "",
+    "This URL is like a password: anyone who has it can control this computer. Keep it private.",
+  ].join("\n");
+}
+
+// HOME:STRINGS:START
+function setView(view) {
+  const advanced = view === "advanced";
+  ui["home-view"].hidden = advanced;
+  ui["advanced-view"].hidden = !advanced;
+  try { localStorage.setItem("lbbView", view); } catch {}
+}
+
+async function postSettings(body) {
+  try {
+    const payload = await request("/api/settings", { method: "POST", body: JSON.stringify(body) });
+    render(payload.state);
+  } catch (error) {
+    showToast(error.message, "error");
+    await loadState();
+  }
+}
+
+let connectAttemptFailed = false;
+
+function failConnectAttempt() {
+  connectAttemptFailed = true;
+  if (currentState) renderHome(currentState);
+  ui["home-browser-setup"].scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// Runs the browser extension one-click pairing. On a first visit (loaded
+// with a URL fragment) bridgeToken is already in memory; on a return visit
+// the session is restored from sessionStorage and bridgeToken is empty, so
+// this asks the same-origin, session-authenticated /api/pairing endpoint for
+// the values it needs -- fetched only now, on click, never on page load, and
+// never persisted anywhere.
+async function connectExtension() {
+  if (typeof chrome === "undefined" || !chrome.runtime?.sendMessage) {
+    failConnectAttempt();
+    return;
+  }
+  let port = currentState?.setup?.port;
+  let pairToken = bridgeToken;
+  if (!pairToken || !port) {
+    try {
+      const pairing = await request("/api/pairing", { method: "POST" });
+      port = pairing.port;
+      pairToken = pairing.token;
+      bridgeToken = pairToken;
+    } catch {
+      failConnectAttempt();
+      return;
+    }
+  }
+  if (!port) {
+    failConnectAttempt();
+    return;
+  }
+  try {
+    const response = await new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(
+        EXTENSION_ID,
+        { type: "lbb.pair", port, token: pairToken },
+        (result) => {
+          if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+          else resolve(result);
+        },
+      );
+    });
+    if (response?.ok && response?.pending) {
+      showToast("Check the new browser tab to finish connecting.");
+      return;
+    }
+    failConnectAttempt();
+  } catch {
+    // Fall through to the manual steps below; never leave a dead button.
+    failConnectAttempt();
+  }
+}
+
+function renderHome(state) {
+  const setup = state.setup ?? {};
+
+  setStateBadge(ui["status-app-pill"], "Running", "active");
+
+  const browserConnected = Boolean(setup.browserConnected);
+  setStateBadge(ui["status-browser-pill"], browserConnected ? "Connected" : "Not connected", browserConnected ? "active" : "warning-state");
+  ui["status-browser-action"].hidden = browserConnected;
+  // Only show the manual add-on steps once a Connect attempt has actually
+  // failed or found no way to reach the extension -- not on every render
+  // while the user simply has not clicked Connect yet.
+  if (browserConnected) connectAttemptFailed = false;
+  ui["home-browser-setup"].hidden = browserConnected || !connectAttemptFailed;
+  renderExtensionFolderPath(state);
+
+  const desktopEnabled = Boolean(setup.desktopControlEnabled);
+  const desktopConnected = Boolean(setup.desktopControlConnected);
+  const desktopSetup = setup.desktopControlSetup ?? {};
+  ui["status-desktop-toggle"].checked = desktopEnabled;
+  if (!desktopEnabled) {
+    setStateBadge(ui["status-desktop-pill"], "Off", "inactive");
+    ui["status-desktop-progress"].hidden = true;
+    ui["status-desktop-retry"].hidden = true;
+  } else if (desktopConnected) {
+    setStateBadge(ui["status-desktop-pill"], "On", "active");
+    ui["status-desktop-progress"].hidden = true;
+    ui["status-desktop-retry"].hidden = true;
+  } else if (desktopSetup.state === "failed") {
+    setStateBadge(ui["status-desktop-pill"], "Setup failed", "danger-state");
+    setTextIfChanged(ui["status-desktop-progress"], desktopSetup.message || "Setup failed.");
+    ui["status-desktop-progress"].hidden = false;
+    ui["status-desktop-retry"].hidden = false;
+  } else if (desktopSetup.state === "downloading") {
+    setStateBadge(ui["status-desktop-pill"], "Setting up…", "warning-state");
+    setTextIfChanged(ui["status-desktop-progress"], `${desktopSetup.message || "Getting ready"}… ${desktopSetup.percent ?? 0}%`);
+    ui["status-desktop-progress"].hidden = false;
+    ui["status-desktop-retry"].hidden = true;
+  } else {
+    // Nothing is downloading (macOS never downloads a helper at all, and a
+    // Windows install may simply not have started it yet) -- so no percent
+    // is shown here; that would claim progress that is not happening.
+    setStateBadge(ui["status-desktop-pill"], "Not running yet", "warning-state");
+    setTextIfChanged(ui["status-desktop-progress"], "Screen control is on, but its helper app isn't running yet. Start Local Computer Helper to finish connecting.");
+    ui["status-desktop-progress"].hidden = false;
+    ui["status-desktop-retry"].hidden = true;
+  }
+
+  const shellEnabled = Boolean(setup.shellEnabled);
+  ui["status-shell-toggle"].checked = shellEnabled;
+  setStateBadge(ui["status-shell-pill"], shellEnabled ? "On" : "Off", shellEnabled ? "active" : "inactive");
+
+  ui["home-hero-action"].onclick = null;
+  if (setup.ready) {
+    setTextIfChanged(ui["home-hero-headline"], "Ready to use");
+    ui["home-hero-action"].hidden = true;
+  } else if (!browserConnected) {
+    setTextIfChanged(ui["home-hero-headline"], "Connect the browser add-on to get started");
+    ui["home-hero-action"].hidden = false;
+    ui["home-hero-action"].textContent = "Connect";
+    ui["home-hero-action"].onclick = () => void connectExtension();
+  } else if (desktopSetup.state === "failed") {
+    setTextIfChanged(ui["home-hero-headline"], "Screen control setup failed");
+    ui["home-hero-action"].hidden = false;
+    ui["home-hero-action"].textContent = "Retry";
+    ui["home-hero-action"].onclick = () => void postSettings({ desktopControlEnabled: true });
+  } else if (desktopSetup.state === "downloading") {
+    setTextIfChanged(ui["home-hero-headline"], "Setting up screen control…");
+    ui["home-hero-action"].hidden = true;
+  } else {
+    setTextIfChanged(ui["home-hero-headline"], "Waiting for the screen control helper to start…");
+    ui["home-hero-action"].hidden = true;
+  }
+}
+
+ui["show-advanced"].addEventListener("click", () => setView("advanced"));
+ui["show-home"].addEventListener("click", () => setView("home"));
+ui["status-desktop-toggle"].addEventListener("change", (event) => void postSettings({ desktopControlEnabled: event.target.checked }));
+ui["status-shell-toggle"].addEventListener("change", (event) => void postSettings({ shellEnabled: event.target.checked }));
+ui["status-desktop-retry"].addEventListener("click", () => void postSettings({ desktopControlEnabled: true }));
+ui["status-browser-action"].addEventListener("click", () => void connectExtension());
+ui["copy-ai-instructions"].addEventListener("click", async () => {
+  await navigator.clipboard.writeText(buildAgentInstructions(currentState));
+  showToast("Instructions copied. Paste them into your AI assistant.");
+});
+ui["copy-ai-link"].addEventListener("click", async () => {
+  const url = currentState?.agentFetch?.baseUrl ?? "";
+  if (!url) return;
+  await navigator.clipboard.writeText(url);
+  showToast("Link copied.");
+});
+ui["copy-extension-path"].addEventListener("click", async () => {
+  await navigator.clipboard.writeText(ui["extension-folder-path"].textContent);
+  showToast("Folder path copied.");
+});
+(() => {
+  let savedView = "";
+  try { savedView = localStorage.getItem("lbbView") ?? ""; } catch {}
+  setView(savedView === "advanced" ? "advanced" : "home");
+})();
+// HOME:STRINGS:END
+
 async function streamEvents(onEvent) {
   for (;;) {
     try {
@@ -1189,7 +1423,7 @@ async function boot() {
     }, remaining);
   };
   const eventNames = new Set([
-    "state", "connection", "hello", "tabs", "observation", "approval", "warning", "error", "update",
+    "state", "connection", "hello", "tabs", "observation", "approval", "warning", "error", "update", "settings",
     "browser-control", "computer-connection", "computer-hello", "computer-observation", "computer-status",
     "computer-share", "computer-share-frame", "computer-share-error", "computer-warning", "computer-error",
   ]);

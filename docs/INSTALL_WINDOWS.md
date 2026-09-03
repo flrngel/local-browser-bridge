@@ -117,7 +117,7 @@ To install a specific stable version instead of latest, substitute its
 number (0.12.70 or later for the Desktop Host, shell, and Agent Fetch):
 
 ```powershell
-$installer = [scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-windows.ps1')); & $installer -Version 0.12.70
+$installer = [scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/flrngel/local-browser-bridge/main/scripts/install-windows.ps1')); & $installer -Version 0.13.0
 ```
 
 ### One-command uninstall

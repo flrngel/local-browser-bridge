@@ -274,6 +274,26 @@ remove_token() {
   fi
 }
 
+remove_settings() {
+  local settings_dir settings_path
+  settings_dir="$(/usr/bin/dirname "$token_path")"
+  settings_path="$settings_dir/settings.json"
+  if [[ -e "$settings_dir" || -L "$settings_dir" ]]; then
+    assert_ordinary_directory "$settings_dir"
+  fi
+  if [[ -e "$settings_path" || -L "$settings_path" ]]; then
+    [[ -f "$settings_path" && ! -L "$settings_path" ]] || fail "Refusing a linked or non-file settings path: $settings_path"
+    remove_file "$settings_path"
+  fi
+  if [[ -d "$settings_dir" && ! -L "$settings_dir" ]]; then
+    if ((dry_run)); then
+      [[ -z "$(/usr/bin/find "$settings_dir" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]] && say_action "remove empty state directory: $settings_dir"
+    else
+      /bin/rmdir -- "$settings_dir" 2>/dev/null || true
+    fi
+  fi
+}
+
 reset_privacy_permissions() {
   ((keep_permissions || !removed_install || dry_run)) && return 0
   [[ "$(/usr/bin/uname -s)" == Darwin ]] || return 0
@@ -298,11 +318,8 @@ finish_browser_cleanup() {
   fi
   local browser_step='Open chrome://extensions or edge://extensions.'
   ((opened)) && browser_step='The installed browser extensions page is open.'
-  /usr/bin/osascript - "$browser_step" <<'APPLESCRIPT' || true
-on run argv
-  display dialog (item 1 of argv) & "\n\nThe unpacked extension files are gone. If a Local Browser Bridge card remains, click Remove once. Browser profile files were intentionally left untouched." with title "Finish Local Browser Bridge Removal" buttons {"OK"} default button "OK" with icon note
-end run
-APPLESCRIPT
+  echo "$browser_step"
+  echo "The unpacked extension files are gone. If a Local Browser Bridge card remains, click Remove once. Browser profile files were intentionally left untouched."
 }
 
 invoke_self_test() {
@@ -378,6 +395,7 @@ if [[ -e "$install_root" || -L "$install_root" ]]; then preflight_install_entrie
 remove_launch_agent
 remove_install_root
 remove_token
+remove_settings
 reset_privacy_permissions
 finish_browser_cleanup
 

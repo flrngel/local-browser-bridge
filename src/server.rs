@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::future::Future;
 use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -71,6 +73,11 @@ const MAX_PUBLISHED_ELEMENTS: usize = 250;
 const MAX_PUBLISHED_FRAME_ELEMENTS: usize = 50;
 const FRAME_SUMMARY_COUNTER_MAX: u64 = 10_000;
 const PUBLIC_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/public");
+/// The pinned unpacked Chrome extension ID, derived from `extension/manifest.json`'s
+/// pinned `key`. Published on `/api/state` so the Home view can build the
+/// `chrome-extension://<id>/...` links a normal person needs without reading
+/// `chrome://extensions`.
+const PINNED_EXTENSION_ID: &str = "gjaniambdhcnffbapkknllilikeoopdg";
 
 pub const ACTION_METHODS: &[&str] = &[
     "status",
@@ -118,6 +125,13 @@ pub struct ServerConfig {
     pub call_timeout: Duration,
     pub check_for_updates: bool,
     pub shell_enabled: bool,
+    pub desktop_control_enabled: bool,
+    pub settings_path: Option<PathBuf>,
+    /// The real, resolved directory a human should point their browser's
+    /// "Load unpacked" picker at. `None` when this process does not know
+    /// where the extension lives (e.g. it was not installed by the desktop
+    /// self-installer) — the dashboard must never guess a path in that case.
+    pub extension_dir: Option<PathBuf>,
 }
 
 impl ServerConfig {
@@ -128,6 +142,9 @@ impl ServerConfig {
             call_timeout: Duration::from_secs(15),
             check_for_updates: true,
             shell_enabled: false,
+            desktop_control_enabled: true,
+            settings_path: None,
+            extension_dir: None,
         }
     }
 }
@@ -152,6 +169,7 @@ pub struct BridgeStatusSnapshot {
     pub browser_control_active: bool,
     pub computer_share_active: bool,
     pub shell_enabled: bool,
+    pub desktop_control_enabled: bool,
     pub update_state: UpdateState,
     pub latest_version: Option<String>,
 }
@@ -183,10 +201,44 @@ impl BridgeStatusMonitor {
                 .and_then(|computer| computer.share.get("active"))
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
-            shell_enabled: self.state.shell_enabled,
+            shell_enabled: self.state.shell_enabled.load(Ordering::Relaxed),
+            desktop_control_enabled: self.state.desktop_control_enabled.load(Ordering::Relaxed),
             update_state: data.public.update.status.clone(),
             latest_version: data.public.update.latest_version.clone(),
         }
+    }
+
+    /// Flips shell access at runtime (e.g. a desktop-host menu toggle) and
+    /// wakes any open dashboard. The atomic store is synchronous and always
+    /// correct on the next read; the broadcast is best-effort so a caller
+    /// outside a Tokio context (there is none today, but none is assumed)
+    /// still leaves the state itself right.
+    pub fn set_shell_enabled(&self, on: bool) {
+        self.state.shell_enabled.store(on, Ordering::Relaxed);
+        self.state.notify_setup_changed_in_background();
+    }
+
+    /// Flips desktop-control (native computer) availability at runtime. See
+    /// `set_shell_enabled` for the same synchronous-store/best-effort-notify
+    /// shape.
+    pub fn set_desktop_control_enabled(&self, on: bool) {
+        self.state
+            .desktop_control_enabled
+            .store(on, Ordering::Relaxed);
+        self.state.notify_setup_changed_in_background();
+    }
+
+    /// Records the native computer helper's own setup progress (downloading,
+    /// idle, failed, ready) so the Home view can show one honest sentence
+    /// instead of a developer console.
+    pub async fn set_helper_setup(&self, state: &str, percent: u8, message: &str) {
+        {
+            let mut helper_setup = self.state.helper_setup.write().await;
+            helper_setup.state = state.to_owned();
+            helper_setup.percent = percent;
+            helper_setup.message = message.to_owned();
+        }
+        self.state.bump("settings").await;
     }
 }
 
@@ -200,13 +252,21 @@ impl BridgeServer {
         }
         let listener = TcpListener::bind(("127.0.0.1", config.port)).await?;
         let bound_port = listener.local_addr()?.port();
-        let state = AppState::new(
+        let mut state = AppState::new(
             config.token,
             bound_port,
             config.call_timeout,
             config.check_for_updates,
             config.shell_enabled,
+            config.desktop_control_enabled,
+            config.settings_path,
+            config.extension_dir,
         );
+        // `bind` is always awaited from inside a Tokio runtime (production,
+        // the desktop host, and every test use `#[tokio::main]`/`#[tokio::test]`),
+        // so this is always `Some` outside the handful of unit tests that
+        // build an `AppState` directly.
+        state.runtime = Some(tokio::runtime::Handle::current());
         let router = build_router(state.clone());
         if config.check_for_updates {
             let update_state = state.clone();
@@ -267,7 +327,17 @@ impl BridgeServer {
 struct AppState {
     token: Arc<String>,
     fetch_key: Arc<String>,
-    shell_enabled: bool,
+    shell_enabled: Arc<AtomicBool>,
+    desktop_control_enabled: Arc<AtomicBool>,
+    helper_setup: Arc<RwLock<HelperSetup>>,
+    settings_path: Option<PathBuf>,
+    extension_dir: Option<PathBuf>,
+    /// Captured in `BridgeServer::bind` (always inside a Tokio runtime), so
+    /// a sync setter called from a caller with no runtime of its own (a
+    /// desktop-host tray thread, say) can still reliably spawn its
+    /// best-effort SSE wake-up. `None` only for the handful of unit tests
+    /// that build an `AppState` directly without going through `bind`.
+    runtime: Option<tokio::runtime::Handle>,
     bound_port: u16,
     hub: ExtensionHub,
     computer_hub: ExtensionHub,
@@ -281,6 +351,28 @@ struct AppState {
     update_lock: Arc<tokio::sync::Mutex<()>>,
     browser_auth_slots: Arc<Semaphore>,
     computer_auth_slots: Arc<Semaphore>,
+}
+
+/// The native computer helper's own setup progress, reported by whatever
+/// process manages installing/launching it (the desktop host, today).
+/// `state` is one of `"ready"`, `"idle"`, `"downloading"`, or `"failed"`;
+/// nothing has reported otherwise until a helper manager exists, so the
+/// default is `"ready"` (desktop control simply waits for a connection).
+#[derive(Clone, Debug)]
+struct HelperSetup {
+    state: String,
+    percent: u8,
+    message: String,
+}
+
+impl Default for HelperSetup {
+    fn default() -> Self {
+        Self {
+            state: "ready".to_owned(),
+            percent: 0,
+            message: String::new(),
+        }
+    }
 }
 
 /// Once a successful `computer.share.start` result crosses the connector
@@ -341,12 +433,16 @@ impl Drop for ShareStartValidationGuard {
 }
 
 impl AppState {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         token: String,
         bound_port: u16,
         call_timeout: Duration,
         check_for_updates: bool,
         shell_enabled: bool,
+        desktop_control_enabled: bool,
+        settings_path: Option<PathBuf>,
+        extension_dir: Option<PathBuf>,
     ) -> Self {
         let (events, _) = broadcast::channel(256);
         let mut data = StateData::default();
@@ -365,7 +461,12 @@ impl AppState {
         Self {
             token: Arc::new(token),
             fetch_key: Arc::new(fetch_key),
-            shell_enabled,
+            shell_enabled: Arc::new(AtomicBool::new(shell_enabled)),
+            desktop_control_enabled: Arc::new(AtomicBool::new(desktop_control_enabled)),
+            helper_setup: Arc::new(RwLock::new(HelperSetup::default())),
+            settings_path,
+            extension_dir,
+            runtime: None,
             bound_port,
             hub: ExtensionHub::new(call_timeout),
             computer_hub: ExtensionHub::computer(call_timeout),
@@ -820,9 +921,72 @@ impl AppState {
         true
     }
 
+    /// Best-effort wake-up for a shell/desktop-control toggle made through a
+    /// sync entry point (`BridgeStatusMonitor::set_shell_enabled` and
+    /// friends). The toggle itself already landed in the atomic by the time
+    /// this runs, so every subsequent `/api/state` read is correct even on
+    /// the rare `self.runtime` is `None` path (a unit test that built an
+    /// `AppState` directly rather than through `bind`); only the immediate
+    /// `/api/events` push would be missed there.
+    fn notify_setup_changed_in_background(&self) {
+        let Some(runtime) = self.runtime.as_ref() else {
+            return;
+        };
+        let state = self.clone();
+        runtime.spawn(async move {
+            state.bump("settings").await;
+        });
+    }
+
+    /// Persists the current shell/desktop-control toggles to `settings.json`
+    /// when a settings path is configured, preserving whatever this process
+    /// never touches (`startAtLogin`) instead of resetting it to the default.
+    async fn persist_settings(&self) {
+        let Some(path) = self.settings_path.as_ref() else {
+            return;
+        };
+        let mut settings = crate::settings::load_settings(path).await;
+        settings.shell_enabled = self.shell_enabled.load(Ordering::Relaxed);
+        settings.desktop_control_enabled = self.desktop_control_enabled.load(Ordering::Relaxed);
+        let _ = crate::settings::save_settings(path, &settings).await;
+    }
+
     async fn public_state(&self) -> Value {
         let data = self.data.read().await;
         let mut value = serde_json::to_value(&data.public).unwrap_or_else(|_| json!({}));
+        let shell_enabled = self.shell_enabled.load(Ordering::Relaxed);
+        let desktop_control_enabled = self.desktop_control_enabled.load(Ordering::Relaxed);
+        let desktop_control_connected = data.public.computer_connected;
+        let browser_connected = data.public.connected;
+        let helper_setup = self.helper_setup.read().await;
+        if let Some(object) = value.as_object_mut() {
+            // `shell` and `setup` are always rebuilt here from the live
+            // atomics, never from a cached struct field, so a toggle can
+            // never leave `/api/state` serving a stale value.
+            object.insert("shell".to_owned(), shell::status(shell_enabled));
+            object.insert(
+                "setup".to_owned(),
+                json!({
+                    "ready": browser_connected
+                        && (!desktop_control_enabled || desktop_control_connected),
+                    "browserConnected": browser_connected,
+                    "desktopControlEnabled": desktop_control_enabled,
+                    "desktopControlConnected": desktop_control_connected,
+                    "desktopControlSetup": {
+                        "state": helper_setup.state,
+                        "percent": helper_setup.percent,
+                        "message": helper_setup.message,
+                    },
+                    "shellEnabled": shell_enabled,
+                    "extensionId": PINNED_EXTENSION_ID,
+                    "extensionPath": self
+                        .extension_dir
+                        .as_ref()
+                        .map(|path| path.display().to_string()),
+                    "port": self.bound_port,
+                }),
+            );
+        }
         if let Some(observation) = value.get_mut("observation").and_then(Value::as_object_mut) {
             observation.insert(
                 "screenshotUrl".to_owned(),
@@ -1252,6 +1416,11 @@ struct PublicState {
     update: UpdateStatus,
     shell: Value,
     agent_fetch: Value,
+    /// Placeholder only: `AppState::public_state` always rebuilds this key
+    /// from the live shell/desktop-control atomics before a response is
+    /// sent, the same way it does for `shell` above, so it can never go
+    /// stale after a toggle.
+    setup: Value,
 }
 
 #[derive(Clone, Serialize)]
@@ -2361,6 +2530,8 @@ fn build_router(state: AppState) -> Router {
         .route("/api/events", get(api_events))
         .route("/api/action", post(api_action))
         .route("/api/update/check", post(api_update_check))
+        .route("/api/settings", post(api_settings))
+        .route("/api/pairing", post(api_pairing))
         .route("/api/v1/command", post(api_command))
         .route("/api/v1/command/cancel", post(api_command_cancel))
         .route("/api/v1/fetch/{key}/cancel", get(api_fetch_cancel))
@@ -2425,7 +2596,7 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
         "ok": true,
         "extensionConnected": state.hub.connected(),
         "computerConnected": state.computer_hub.connected(),
-        "shellEnabled": state.shell_enabled,
+        "shellEnabled": state.shell_enabled.load(Ordering::Relaxed),
         "version": VERSION,
     }))
 }
@@ -2595,6 +2766,83 @@ async fn api_update_check(
     let update = state.refresh_update().await;
     let public = state.public_state().await;
     Ok(Json(json!({ "ok": true, "update": update, "state": public })).into_response())
+}
+
+/// `{"shellEnabled": bool?, "desktopControlEnabled": bool?}`, both optional.
+/// Applies whichever keys are present, persists them to `settings.json` when
+/// a settings path is configured, and returns the refreshed public state so
+/// the caller never has to poll `/api/state` separately to see its own edit.
+const SETTINGS_FIELDS: &[&str] = &["shellEnabled", "desktopControlEnabled"];
+
+async fn api_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    state.assert_ui_mutation(&headers)?;
+    let body = parse_json_body(&body)?;
+    let object = body
+        .as_object()
+        .ok_or_else(|| ApiError::bad_request("Request body must be a JSON object"))?;
+    for key in object.keys() {
+        if !SETTINGS_FIELDS.contains(&key.as_str()) {
+            return Err(ApiError::bad_request(format!(
+                "Unknown settings field: {key}"
+            )));
+        }
+    }
+    let shell_enabled = optional_bool(object.get("shellEnabled"), "shellEnabled")?;
+    let desktop_control_enabled =
+        optional_bool(object.get("desktopControlEnabled"), "desktopControlEnabled")?;
+
+    if let Some(on) = shell_enabled {
+        state.shell_enabled.store(on, Ordering::Relaxed);
+    }
+    if let Some(on) = desktop_control_enabled {
+        state.desktop_control_enabled.store(on, Ordering::Relaxed);
+    }
+    if shell_enabled.is_some() || desktop_control_enabled.is_some() {
+        state.bump("settings").await;
+        state.persist_settings().await;
+    }
+
+    let public = state.public_state().await;
+    Ok(Json(json!({ "ok": true, "state": public })).into_response())
+}
+
+/// Hands the already-authenticated same-origin dashboard the values it
+/// needs to drive the extension's own one-click pairing flow, so "Connect"
+/// keeps working on a return visit even though the dashboard's in-memory
+/// copy of the bearer token is empty after a session is restored from
+/// `sessionStorage` (only the session token/CSRF survive that; the bearer
+/// token does not).
+///
+/// This does not widen exposure: the browser extension is designed to hold
+/// this exact token already (it authenticates the `/bridge` WebSocket with
+/// it), and reaching this handler at all requires the same proof every other
+/// mutating dashboard endpoint requires — a live dashboard session, the CSRF
+/// header, and a same-origin `Origin` header — so a caller who can reach
+/// this endpoint could already mint a session-scoped bearer-equivalent via
+/// every other authenticated route. Never log the token.
+async fn api_pairing(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    state.assert_ui_mutation(&headers)?;
+    Ok(Json(json!({
+        "ok": true,
+        "port": state.bound_port,
+        "token": state.token.as_str(),
+    }))
+    .into_response())
+}
+
+fn optional_bool(value: Option<&Value>, name: &str) -> Result<Option<bool>, ApiError> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(_) => Err(ApiError::bad_request(format!("{name} must be a boolean"))),
+    }
 }
 
 async fn api_command(
@@ -4327,9 +4575,9 @@ impl AppState {
     ) -> Result<Value, ApiError> {
         if SHELL_METHODS.contains(&method) {
             if method == "shell.status" {
-                return Ok(shell::status(self.shell_enabled));
+                return Ok(shell::status(self.shell_enabled.load(Ordering::Relaxed)));
             }
-            if !self.shell_enabled {
+            if !self.shell_enabled.load(Ordering::Relaxed) {
                 return Err(ApiError::forbidden(
                     "SHELL_DISABLED",
                     "Local shell access is disabled; restart the server with --enable-shell to grant it",
@@ -9634,7 +9882,16 @@ mod tests {
 
     #[test]
     fn expired_dashboard_session_cannot_mutate_even_with_its_old_csrf_token() {
-        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false, false);
+        let state = AppState::new(
+            create_token(),
+            17_373,
+            Duration::from_secs(1),
+            false,
+            false,
+            true,
+            None,
+            None,
+        );
         let session_id = create_token();
         state.sessions.lock().unwrap().insert(
             session_id.clone(),
@@ -9960,7 +10217,16 @@ mod tests {
         // action task is still asleep. Waking it can release action_lock on a
         // different runtime thread, so doing these steps in the opposite
         // order would create a stale-authority admission window.
-        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false, false);
+        let state = AppState::new(
+            create_token(),
+            17_373,
+            Duration::from_secs(1),
+            false,
+            false,
+            true,
+            None,
+            None,
+        );
         state.latch_browser_freshness_recovery(&owner);
         assert!(
             state
@@ -10046,7 +10312,16 @@ mod tests {
     #[tokio::test]
     async fn old_browser_owner_cannot_clear_replacement_observation() {
         const PIXEL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
-        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false, false);
+        let state = AppState::new(
+            create_token(),
+            17_373,
+            Duration::from_secs(1),
+            false,
+            false,
+            true,
+            None,
+            None,
+        );
         let observation = Observation {
             tab_id: 7,
             captured_at: "2026-08-21T00:00:00Z".to_owned(),
@@ -10129,7 +10404,16 @@ mod tests {
     #[tokio::test]
     async fn old_owner_cancellation_cannot_clear_replacement_computer_authority() {
         const PIXEL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
-        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false, false);
+        let state = AppState::new(
+            create_token(),
+            17_373,
+            Duration::from_secs(1),
+            false,
+            false,
+            true,
+            None,
+            None,
+        );
         let observation = sanitize_computer_observation(Some(&json!({
             "id": "replacement-frame",
             "capturedAt": "2026-08-21T00:00:00Z",
@@ -10234,7 +10518,16 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_native_result_from_old_connection_cannot_revoke_replacement_helper() {
-        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false, false);
+        let state = AppState::new(
+            create_token(),
+            17_373,
+            Duration::from_secs(1),
+            false,
+            false,
+            true,
+            None,
+            None,
+        );
         let old_connection = Uuid::new_v4();
         let (_old_id, _old_receiver, _old_shutdown) =
             state.computer_hub.attach_with_id(old_connection);
@@ -10286,7 +10579,16 @@ mod tests {
     #[test]
     fn dropped_ownerless_in_flight_guard_caches_unknown_immediately() {
         let now = Instant::now();
-        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false, false);
+        let state = AppState::new(
+            create_token(),
+            17_373,
+            Duration::from_secs(1),
+            false,
+            false,
+            true,
+            None,
+            None,
+        );
         let replay = state.command_replay.clone();
         assert!(matches!(
             replay.lock().unwrap().admit("call-1", "fp-1", now),
@@ -10346,7 +10648,16 @@ mod tests {
 
     #[tokio::test]
     async fn dropped_no_call_id_handler_latches_gate_before_action_lock_wakes_fresh_waiter() {
-        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false, false);
+        let state = AppState::new(
+            create_token(),
+            17_373,
+            Duration::from_secs(1),
+            false,
+            false,
+            true,
+            None,
+            None,
+        );
 
         let action_state = state.clone();
         let guard_state = state.clone();
@@ -10394,7 +10705,16 @@ mod tests {
 
     #[tokio::test]
     async fn dropped_unregistered_computer_owner_fences_mid_action_and_post_action_waiters() {
-        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false, false);
+        let state = AppState::new(
+            create_token(),
+            17_373,
+            Duration::from_secs(1),
+            false,
+            false,
+            true,
+            None,
+            None,
+        );
         {
             let mut data = state.data.write().await;
             data.public.computer = Some(ComputerInfo {
@@ -10559,7 +10879,16 @@ mod tests {
     #[test]
     fn owner_bound_guard_without_a_live_runtime_stays_fail_closed_in_flight() {
         let now = Instant::now();
-        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false, false);
+        let state = AppState::new(
+            create_token(),
+            17_373,
+            Duration::from_secs(1),
+            false,
+            false,
+            true,
+            None,
+            None,
+        );
         assert!(matches!(
             state
                 .command_replay
@@ -10629,7 +10958,16 @@ mod tests {
     #[tokio::test]
     async fn aborting_owner_fences_fresh_computer_waiter_across_action_and_replay_boundary() {
         let now = Instant::now();
-        let state = AppState::new(create_token(), 17_373, Duration::from_secs(1), false, false);
+        let state = AppState::new(
+            create_token(),
+            17_373,
+            Duration::from_secs(1),
+            false,
+            false,
+            true,
+            None,
+            None,
+        );
         {
             let mut data = state.data.write().await;
             data.public.computer = Some(ComputerInfo {

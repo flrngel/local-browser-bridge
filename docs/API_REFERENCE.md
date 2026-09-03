@@ -23,6 +23,8 @@ with 403 `HOST_REJECTED` before routing or authentication.
 | `/api/events` | GET (SSE) | session or bearer | Server-sent events, one per state change, plus a periodic heartbeat |
 | `/api/action` | POST | session + CSRF | Legacy dashboard-only command dispatch; agents should use `/api/v1/command` |
 | `/api/update/check` | POST | session + CSRF | Trigger the dashboard's on-demand update check |
+| `/api/settings` | POST | session + CSRF | Turn shell access / desktop control on or off; persists to `settings.json` |
+| `/api/pairing` | POST | session + CSRF | Hand the dashboard the port + bridge token so it can pair the extension without a human re-pasting them |
 | `/api/v1/command` | POST | bearer | Primary command dispatch for agents |
 | `/api/v1/command/cancel` | POST | bearer | Cancel one in-flight `callId` |
 | `/api/v1/fetch/{key}/cancel` | GET | Agent Fetch capability | Cancel one in-flight `callId` via GET |
@@ -41,7 +43,7 @@ header and the CSRF token from `/api/session`.
 No authentication beyond the Host check. Returns:
 
 ```json
-{"computerConnected":false,"extensionConnected":false,"ok":true,"shellEnabled":true,"version":"0.12.70"}
+{"computerConnected":false,"extensionConnected":false,"ok":true,"shellEnabled":true,"version":"0.13.0"}
 ```
 
 Use this as the readiness probe before sending any command.
@@ -80,6 +82,7 @@ against a running server:
 | `update` | Update-check state: `{checkedAt, currentVersion, latestVersion, message, releaseUrl, status}` |
 | `activity` | Recent activity-log entries (human messages, no taxonomy, no secrets) |
 | `revision` | Monotonic revision number; also the payload of each `/api/events` push |
+| `setup` | Single source for the dashboard's Home view: `{ready, browserConnected, desktopControlEnabled, desktopControlConnected, desktopControlSetup: {state, percent, message}, shellEnabled, extensionId, extensionPath, port}`. `ready` is `browserConnected && (!desktopControlEnabled || desktopControlConnected)`. `extensionPath` is the real, resolved directory to "Load unpacked" — a string when this process knows where the extension lives, otherwise omitted/`null` (never a guessed path). Always rebuilt from live state, so it is never stale on any call path. |
 
 `/api/state` also exposes a SHA-256 `contentHash` plus `screenshotWidth`/
 `screenshotHeight` inside `observation` and `computerObservation`, so a client
@@ -112,6 +115,53 @@ Dashboard-internal endpoints. `/api/action` is the legacy predecessor of
 Fetch guarantees described below. Both require a dashboard session and CSRF
 token, not a bare bearer token — a bearer-only request gets 403
 `CSRF_REJECTED`.
+
+### `POST /api/settings`
+
+Turns shell access and/or desktop control on or off — the same effect as the
+dashboard's own switches, and the same auth as `/api/update/check` (dashboard
+session + CSRF token, not a bare bearer token). Body, both keys optional:
+
+```json
+{"shellEnabled": true, "desktopControlEnabled": false}
+```
+
+Applies whichever keys are present, persists them to `settings.json` when a
+settings file path is configured (see
+[Configuration](CONFIGURATION.md#settings-file)), and returns the refreshed
+state so the caller never has to poll `/api/state` separately to see its own
+edit:
+
+```json
+{"ok": true, "state": {"...": "the full /api/state shape"}}
+```
+
+400 `BAD_REQUEST` for a body that is not a JSON object, an unrecognized
+top-level key, or a non-boolean value. This endpoint never requires a
+restart — the change is live immediately.
+
+### `POST /api/pairing`
+
+Same auth as `/api/settings` (dashboard session + CSRF token, not a bare
+bearer token). Returns the port and bridge token the same-origin dashboard
+needs to drive the extension's one-click "Connect" flow:
+
+```json
+{"ok": true, "port": 17373, "token": "..."}
+```
+
+This exists because the dashboard only ever sees the bearer token once, at
+the moment a human pastes or is handed it; a session restored later from
+`sessionStorage` carries the session token and CSRF token but not the
+bearer token, so without this endpoint "Connect" degrades to manual
+instructions on every return visit. It does not widen exposure: the browser
+extension already holds this exact token to authenticate its own `/bridge`
+WebSocket, and reaching this endpoint requires the same proof every other
+mutating dashboard route requires (a live session, the CSRF header, and a
+same-origin `Origin` header). The token is never logged.
+
+Both toggles start on. See [Shell](SHELL.md) before deciding whether to
+leave shell access on — it grants full current-user command execution.
 
 ## `POST /api/v1/command`
 

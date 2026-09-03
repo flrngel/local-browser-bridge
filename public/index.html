@@ -9,8 +9,110 @@
     <script src="/app.js" type="module"></script>
   </head>
   <body>
+    <!-- HOME:START -->
+    <div id="home-view">
+      <header class="home-header">
+        <p class="eyebrow">LOCAL BROWSER BRIDGE</p>
+        <h1>Local Browser Bridge</h1>
+        <p class="home-tagline">It lets your AI assistant see, click, and use apps on this computer, with your permission.</p>
+      </header>
+
+      <section class="home-hero panel" id="home-hero" aria-live="polite">
+        <h2 id="home-hero-headline">Checking setup…</h2>
+        <button id="home-hero-action" type="button" class="button primary" hidden>Connect</button>
+      </section>
+
+      <section class="home-status-list" aria-label="Setup status">
+        <div class="home-status-row panel">
+          <div class="home-status-text">
+            <h3>This app</h3>
+            <p>Running in the background</p>
+          </div>
+          <div class="home-status-controls">
+            <span id="status-app-pill" class="state-badge active">Running</span>
+          </div>
+        </div>
+
+        <div class="home-status-row panel">
+          <div class="home-status-text">
+            <h3>Browser add-on</h3>
+            <p>Lets your AI see and click pages in Chrome</p>
+          </div>
+          <div class="home-status-controls">
+            <span id="status-browser-pill" class="state-badge warning-state">Not connected</span>
+            <button id="status-browser-action" type="button" class="button primary">Connect</button>
+          </div>
+        </div>
+
+        <div class="home-status-row panel">
+          <div class="home-status-text">
+            <h3>Screen control</h3>
+            <p>Lets your AI look at and use one app window you pick</p>
+            <p id="status-desktop-progress" class="home-progress" hidden></p>
+          </div>
+          <div class="home-status-controls">
+            <label class="switch">
+              <input type="checkbox" id="status-desktop-toggle" aria-label="Screen control on or off">
+              <span aria-hidden="true"></span>
+            </label>
+            <span id="status-desktop-pill" class="state-badge inactive">Off</span>
+            <button id="status-desktop-retry" type="button" class="button ghost" hidden>Retry</button>
+          </div>
+        </div>
+
+        <div class="home-status-row panel">
+          <div class="home-status-text">
+            <h3>Computer commands</h3>
+            <p>Lets your AI run commands on this computer, the same as you could yourself — including reading and deleting your files.</p>
+          </div>
+          <div class="home-status-controls">
+            <label class="switch">
+              <input type="checkbox" id="status-shell-toggle" aria-label="Computer commands on or off">
+              <span aria-hidden="true"></span>
+            </label>
+            <span id="status-shell-pill" class="state-badge inactive">Off</span>
+          </div>
+        </div>
+      </section>
+
+      <section id="home-browser-setup" class="panel" hidden aria-labelledby="home-browser-setup-title">
+        <h3 id="home-browser-setup-title">Connect the browser add-on by hand</h3>
+        <p>Use this if the Connect button above did not finish the job.</p>
+        <p>Chrome and Edge do not let a program install a browser add-on by itself, so this part is expected to be manual.</p>
+        <ol>
+          <li>Open <code>chrome://extensions</code> in Chrome.</li>
+          <li>Switch on <strong>Developer mode</strong> in the top-right corner.</li>
+          <li>
+            Click <strong>Load unpacked</strong> and choose this folder:
+            <div class="home-path-row" id="extension-folder-path-row">
+              <code id="extension-folder-path">…</code>
+              <button id="copy-extension-path" type="button" class="button ghost compact">Copy</button>
+            </div>
+            <p id="extension-folder-unknown" hidden>Choose the <code>extension</code> folder inside wherever you installed Local Browser Bridge.</p>
+          </li>
+        </ol>
+      </section>
+
+      <section class="home-ai-card panel">
+        <h2>Point your AI here</h2>
+        <p>Give this to your AI assistant so it can use this computer.</p>
+        <button id="copy-ai-instructions" type="button" class="button primary full">Copy instructions for your AI</button>
+        <button id="copy-ai-link" type="button" class="button ghost full">Copy just the link</button>
+        <p class="home-warning">This link works like a password — anyone who has it can act as your AI here. Keep it private.</p>
+      </section>
+
+      <footer class="home-footer">
+        <button id="show-advanced" type="button" class="link-button">Advanced controls</button>
+        <a class="link-button" href="https://github.com/flrngel/local-browser-bridge/blob/main/docs/TROUBLESHOOTING.md" target="_blank" rel="noopener noreferrer">Help</a>
+        <a class="link-button" href="https://github.com/flrngel/local-browser-bridge#uninstall-in-one-command" target="_blank" rel="noopener noreferrer">Disable or uninstall</a>
+      </footer>
+    </div>
+    <!-- HOME:END -->
+
+    <div id="advanced-view" hidden>
     <header class="topbar">
       <div>
+        <button id="show-home" type="button" class="button ghost home-return">Back to Home</button>
         <p class="eyebrow">LOCAL CONTROL SURFACE</p>
         <h1>Browser Bridge</h1>
       </div>
@@ -411,14 +513,15 @@
         </div>
       </section>
     </main>
+    </div>
 
     <div id="toast" role="status" aria-live="assertive" class="toast" hidden></div>
     <dialog id="auth-dialog" class="auth-dialog" aria-labelledby="auth-title">
       <form id="auth-form" class="auth-form">
         <p class="eyebrow">LOCAL AUTHENTICATION</p>
         <h2 id="auth-title">Unlock this dashboard</h2>
-        <p>Paste the master token printed by the server. It is exchanged once for a random, expiring dashboard capability stored only for this exact port origin; the master token is not retained.</p>
-        <label for="auth-token">Bridge token</label>
+        <p>Paste the private key printed by the server (or shown in your install app). It is exchanged once for a temporary access key stored only for this browser tab; the private key itself is not kept.</p>
+        <label for="auth-token">Private key</label>
         <input id="auth-token" type="password" required autocomplete="off" spellcheck="false">
         <p id="auth-error" class="auth-error" role="alert" hidden></p>
         <button class="button primary full" type="submit">Unlock dashboard</button>

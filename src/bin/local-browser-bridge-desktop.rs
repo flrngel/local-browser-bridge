@@ -603,7 +603,17 @@ mod desktop {
                     {
                         self.stop_connected_helper()
                     } else {
-                        self.start_helper()
+                        // Route through the same ensure-and-start path the
+                        // automatic flow uses, not a bare `start_helper()`:
+                        // if the helper was never downloaded (e.g. offline
+                        // during the one automatic attempt), this menu item
+                        // is the user's fix-it button and must actually
+                        // retry the download rather than repeat the same
+                        // "not found" error forever. Non-blocking: the
+                        // download itself runs on the async runtime, so the
+                        // tray never freezes.
+                        self.start_or_prepare_helper();
+                        Ok(())
                     }
                 }
                 MENU_UPDATES => platform::open_target(
@@ -653,6 +663,14 @@ mod desktop {
         /// persist it, so a tray toggle survives a restart exactly like the
         /// dashboard's does. Best-effort: with no server handles yet (the
         /// very first moment after launch) the click is simply ignored.
+        ///
+        /// Both `shellEnabled` and `desktopControlEnabled` are written from
+        /// the live status snapshot, never preserved from whatever the file
+        /// on disk happens to say: settings.json is still read first (only
+        /// to keep `startAtLogin`, which this tray does not track live),
+        /// but a tray shell toggle racing a dashboard desktop-control toggle
+        /// must not let this write regress the desktop-control choice the
+        /// user just made through the other surface.
         fn toggle_shell(&mut self) {
             let (Some(monitor), Some(runtime)) = (self.monitor.as_ref(), self.runtime.as_ref())
             else {
@@ -663,11 +681,16 @@ mod desktop {
                 .as_ref()
                 .is_some_and(|status| status.shell_enabled);
             let new_value = !enabled;
+            let desktop_control_enabled = self
+                .status
+                .as_ref()
+                .is_some_and(|status| status.desktop_control_enabled);
             monitor.set_shell_enabled(new_value);
             runtime.spawn(async move {
                 if let Ok(path) = default_settings_path() {
                     let mut settings = load_settings(&path).await;
                     settings.shell_enabled = new_value;
+                    settings.desktop_control_enabled = desktop_control_enabled;
                     let _ = local_browser_bridge::save_settings(&path, &settings).await;
                 }
             });

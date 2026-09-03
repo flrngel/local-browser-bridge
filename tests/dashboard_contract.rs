@@ -32,6 +32,107 @@ fn dashboard_requires_monotonic_state_and_exact_decoded_frame_images() {
     assert!(app.contains("!element.sensitive && !element.valueRedacted"));
 }
 
+/// Extracts the contents of every `"..."`, `'...'`, and `` `...` `` literal in
+/// `source`, joined by spaces. Used to jargon-check only the text a user can
+/// actually see rendered, not surrounding JavaScript keywords/identifiers.
+fn string_literals(source: &str) -> String {
+    let chars: Vec<char> = source.chars().collect();
+    let mut out = String::new();
+    let mut index = 0;
+    while index < chars.len() {
+        let character = chars[index];
+        if character == '"' || character == '\'' || character == '`' {
+            let quote = character;
+            index += 1;
+            while index < chars.len() {
+                let inner = chars[index];
+                if inner == '\\' {
+                    index += 2;
+                    continue;
+                }
+                if inner == quote {
+                    index += 1;
+                    break;
+                }
+                out.push(inner);
+                index += 1;
+            }
+            out.push(' ');
+        } else {
+            index += 1;
+        }
+    }
+    out
+}
+
+#[test]
+fn home_view_is_default_and_jargon_free_with_required_controls() {
+    let page = fs::read_to_string("public/index.html").unwrap();
+    let app = fs::read_to_string("public/app.js").unwrap();
+
+    // Home is what loads by default; the entire old console is parked in a
+    // hidden "Advanced controls" view instead of being deleted.
+    assert!(page.contains("<div id=\"home-view\">"));
+    assert!(page.contains("id=\"advanced-view\" hidden"));
+
+    // The four required status rows and the "point your AI here" controls exist.
+    assert!(page.contains("id=\"status-app-pill\""));
+    assert!(page.contains("id=\"status-browser-pill\""));
+    assert!(page.contains("id=\"status-browser-action\""));
+    assert!(page.contains("id=\"status-desktop-toggle\""));
+    assert!(page.contains("id=\"status-shell-toggle\""));
+    assert!(page.contains("id=\"copy-ai-instructions\""));
+    assert!(page.contains("id=\"copy-ai-link\""));
+
+    // No developer jargon anywhere in the Home markup or its rendering code.
+    let home_start = page
+        .find("<!-- HOME:START -->")
+        .expect("missing HOME:START marker in public/index.html");
+    let home_end = page
+        .find("<!-- HOME:END -->")
+        .expect("missing HOME:END marker in public/index.html");
+    let home_markup = page[home_start..home_end].to_lowercase();
+
+    let js_start = app
+        .find("// HOME:STRINGS:START")
+        .expect("missing HOME:STRINGS:START marker in public/app.js");
+    let js_end = app
+        .find("// HOME:STRINGS:END")
+        .expect("missing HOME:STRINGS:END marker in public/app.js");
+    // Only the quoted string literals (what a user can actually see rendered
+    // as text) are checked here, not the surrounding code -- otherwise
+    // ordinary keywords/identifiers (e.g. `return`, `bridgeToken`) would
+    // produce false positives against substrings like "turn" or "token".
+    let home_js = string_literals(&app[js_start..js_end]).to_lowercase();
+
+    let banned = [
+        "lease",
+        "loopback",
+        "oopif",
+        "capability",
+        "generation",
+        "turn",
+        "postcondition",
+        "invariant",
+        "semantic ref",
+        "ttl",
+        "cdp",
+        "handshake",
+        "token",
+        "master",
+    ];
+    for word in banned {
+        assert!(
+            !home_markup.contains(word),
+            "banned word `{word}` found in Home markup (public/index.html)"
+        );
+        assert!(
+            !home_js.contains(word),
+            "banned word `{word}` found in Home rendering code (public/app.js)"
+        );
+    }
+}
+
 #[test]
 fn dashboard_describes_native_capture_evidence_and_development_builds_honestly() {
     let app = fs::read_to_string("public/app.js").unwrap();
@@ -244,6 +345,196 @@ fn failed_native_mutation_replaces_prior_success_evidence() {
     assert!(
         output.status.success(),
         "native-action failure harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Regression test for a real bug seen live: the server reports
+/// `desktopControlSetup: { state: "ready", percent: 0 }` whenever nothing is
+/// actually downloading (this is the *only* state macOS ever reports, since
+/// it never downloads a helper at all), and the Screen control row rendered
+/// that as a permanent, fabricated "Getting ready... 0%". This exercises the
+/// real `renderHome` function from `public/app.js` against a fake DOM and
+/// checks every `desktopControlSetup.state` the server can actually emit.
+#[test]
+fn screen_control_status_only_claims_progress_while_actually_downloading() {
+    let script = r#"
+      import fs from "node:fs";
+
+      const source = fs.readFileSync("public/app.js", "utf8");
+      const start = source.indexOf("function renderHome(state) {");
+      const end = source.indexOf("\nui[\"show-advanced\"]", start);
+      if (start < 0 || end < 0) throw new Error("missing renderHome in public/app.js");
+      const renderHomeSource = source.slice(start, end);
+
+      function makeElement() {
+        return { hidden: false, textContent: "", className: "", checked: false, onclick: null };
+      }
+
+      const ids = [
+        "status-app-pill", "status-browser-pill", "status-browser-action", "home-browser-setup",
+        "status-desktop-toggle", "status-desktop-pill", "status-desktop-progress", "status-desktop-retry",
+        "status-shell-toggle", "status-shell-pill", "home-hero-headline", "home-hero-action",
+      ];
+
+      const makeRenderHome = new Function("ui", `
+        let connectAttemptFailed = false;
+        function setStateBadge(element, label, tone) { element.textContent = label; element.className = tone; }
+        function setTextIfChanged(element, value) { element.textContent = value; }
+        function renderExtensionFolderPath() {}
+        function connectExtension() {}
+        function postSettings() {}
+        ${renderHomeSource}
+        return renderHome;
+      `);
+
+      function run(desktopControlSetup) {
+        const ui = {};
+        for (const id of ids) ui[id] = makeElement();
+        const renderHome = makeRenderHome(ui);
+        renderHome({
+          setup: {
+            browserConnected: true,
+            desktopControlEnabled: true,
+            desktopControlConnected: false,
+            ready: false,
+            desktopControlSetup,
+          },
+        });
+        return ui;
+      }
+
+      // The exact live reproduction: server default/idle state, 0%, nothing
+      // downloading, and nothing ever will be on macOS.
+      const idle = run({ state: "ready", percent: 0, message: "" });
+      if (idle["status-desktop-progress"].textContent.includes("%")) {
+        throw new Error(`"ready" state fabricated a percent: ${idle["status-desktop-progress"].textContent}`);
+      }
+      if (idle["status-desktop-progress"].hidden) {
+        throw new Error("\"ready\" state hid the status line; it must show a truthful sentence instead");
+      }
+      if (!idle["status-desktop-retry"].hidden) {
+        throw new Error("\"ready\" (non-failed) state must not show Retry");
+      }
+      if (idle["home-hero-headline"].textContent.toLowerCase().includes("setting up")) {
+        throw new Error(`hero headline still claims setup is in progress: ${idle["home-hero-headline"].textContent}`);
+      }
+
+      // A real download in progress must still show its real, live percent.
+      const downloading = run({ state: "downloading", percent: 42, message: "Downloading the Computer Helper…" });
+      if (!downloading["status-desktop-progress"].textContent.includes("42%")) {
+        throw new Error(`"downloading" state lost its percent: ${downloading["status-desktop-progress"].textContent}`);
+      }
+      if (!downloading["home-hero-headline"].textContent.toLowerCase().includes("setting up")) {
+        throw new Error("\"downloading\" state must still say setup is in progress on the hero headline");
+      }
+
+      // A failed setup must still show its reason and the Retry action.
+      const failed = run({ state: "failed", percent: 0, message: "The download failed." });
+      if (failed["status-desktop-retry"].hidden) {
+        throw new Error("\"failed\" state must show Retry");
+      }
+      if (!failed["status-desktop-progress"].textContent.includes("The download failed.")) {
+        throw new Error(`"failed" state lost its reason: ${failed["status-desktop-progress"].textContent}`);
+      }
+    "#;
+
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run screen-control status harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "screen-control status harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Regression test for a real bug seen live: with no `extension_dir`
+/// configured (true for the plain console binary), `setup.extensionPath` is
+/// `null`, and `renderExtensionFolderPath` correctly set `hidden = true` on
+/// `#extension-folder-path-row` -- but `.home-path-row` in styles.css also
+/// declares `display: flex`, an author-origin rule of equal specificity to
+/// the browser's default `[hidden] { display: none }`, which wins the
+/// cascade over the user-agent default and kept the row (a bare "..." code
+/// chip plus a Copy button that copies nothing) visible regardless of the
+/// `hidden` attribute. This checks both halves: the JS computes `hidden`
+/// correctly for the null case, and the CSS actually has an author-origin
+/// rule that makes `hidden` win for that element.
+#[test]
+fn manual_extension_path_row_is_actually_hidden_when_path_is_unknown() {
+    let css = fs::read_to_string("public/styles.css").unwrap();
+    assert!(
+        css.contains(".home-path-row[hidden] { display: none; }"),
+        "styles.css must force `.home-path-row` to actually disappear when hidden \
+         -- otherwise its own `display: flex` rule (equal specificity, author origin) \
+         always wins over the `hidden` attribute, no matter what public/app.js sets it to"
+    );
+
+    let script = r#"
+      import fs from "node:fs";
+
+      const source = fs.readFileSync("public/app.js", "utf8");
+      const start = source.indexOf("function renderExtensionFolderPath(state) {");
+      const end = source.indexOf("\n\n// Self-contained copy/paste block", start);
+      if (start < 0 || end < 0) throw new Error("missing renderExtensionFolderPath in public/app.js");
+      const fnSource = source.slice(start, end);
+
+      function makeElement() {
+        return { hidden: false, textContent: "" };
+      }
+
+      const makeFn = new Function("ui", `${fnSource}\n return renderExtensionFolderPath;`);
+
+      function run(extensionPath) {
+        const ui = {
+          "extension-folder-path-row": makeElement(),
+          "extension-folder-unknown": makeElement(),
+          "extension-folder-path": makeElement(),
+        };
+        makeFn(ui)({ setup: { extensionPath } });
+        return ui;
+      }
+
+      for (const missing of [null, undefined, ""]) {
+        const ui = run(missing);
+        if (!ui["extension-folder-path-row"].hidden) {
+          throw new Error(`extensionPath ${JSON.stringify(missing)} must hide the path row`);
+        }
+        if (ui["extension-folder-unknown"].hidden) {
+          throw new Error(`extensionPath ${JSON.stringify(missing)} must show the fallback sentence`);
+        }
+      }
+
+      const known = run("/opt/local-browser-bridge/extension");
+      if (known["extension-folder-path-row"].hidden) {
+        throw new Error("a real extensionPath must show the path row");
+      }
+      if (!known["extension-folder-unknown"].hidden) {
+        throw new Error("a real extensionPath must hide the fallback sentence");
+      }
+      if (known["extension-folder-path"].textContent !== "/opt/local-browser-bridge/extension") {
+        throw new Error(`path text was not rendered: ${known["extension-folder-path"].textContent}`);
+      }
+    "#;
+
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run extension-folder-path harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "extension-folder-path harness failed:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

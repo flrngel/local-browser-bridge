@@ -1,6 +1,7 @@
-export const VERSION = "0.12.70";
+export const VERSION = "0.13.0";
 export const PROTOCOL_VERSION = 1;
 export const DEFAULT_PORT = 17_373;
+export const EXTENSION_ID = "gjaniambdhcnffbapkknllilikeoopdg";
 
 const RISK_PATTERNS = [
   ["delete or remove data", /\b(delete|remove|erase|destroy|cancel subscription|close account)\b/i],
