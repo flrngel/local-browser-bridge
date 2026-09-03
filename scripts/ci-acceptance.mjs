@@ -1493,26 +1493,44 @@ async function computerLane(context) {
     }
   };
 
-  const helperEnv = { LBB_TOKEN: bridge.token, LBB_PORT: String(server.port) };
-  const helperCwd = path.join(out, "helper-cwd");
-  mkdirSync(helperCwd, { recursive: true });
-  const helper = processes.spawn("helper", inventory.helper, [], { cwd: helperCwd, env: helperEnv });
-  try {
-    await waitUntil(
-      "helper connection",
-      async () => {
-        if (helper.exited) {
-          throw new Error(`helper exited with ${helper.code}`);
-        }
-        const state = await bridge.state();
-        return state.body?.computerConnected === true;
-      },
-      { timeoutMs: 60_000, intervalMs: 500 },
-    );
-    recorder.pass(lane, "helper.connected", { computerConnected: true });
-  } catch (error) {
-    recorder.fail(lane, "helper.connected", error.message);
-    return;
+  // A desktop-host server auto-starts its own Computer Helper on boot when
+  // desktop control defaults on (see `should_auto_start_helper` in
+  // local-browser-bridge-desktop.rs). Spawning a second one here whenever
+  // that has already happened would just race it for the same WebSocket
+  // session: `hub::attach_with_id` always replaces whichever connection is
+  // currently attached, so the loser's connection drops mid-command with an
+  // "outcome is unknown" error unrelated to whatever this lane is actually
+  // testing - the exact hijack that motivated making the helper
+  // single-instance in the first place. Checking first and reusing whatever
+  // is already live is both correct (it is exactly what a real user's app
+  // does) and faithful to the shipped product's actual behavior; it costs
+  // nothing when nothing is connected yet (the `cli` server kind never
+  // auto-starts one, so this is just one extra state poll).
+  const alreadyConnected = (await bridge.state()).body?.computerConnected === true;
+  if (alreadyConnected) {
+    recorder.pass(lane, "helper.connected", { computerConnected: true, reused: true });
+  } else {
+    const helperEnv = { LBB_TOKEN: bridge.token, LBB_PORT: String(server.port) };
+    const helperCwd = path.join(out, "helper-cwd");
+    mkdirSync(helperCwd, { recursive: true });
+    const helper = processes.spawn("helper", inventory.helper, [], { cwd: helperCwd, env: helperEnv });
+    try {
+      await waitUntil(
+        "helper connection",
+        async () => {
+          if (helper.exited) {
+            throw new Error(`helper exited with ${helper.code}`);
+          }
+          const state = await bridge.state();
+          return state.body?.computerConnected === true;
+        },
+        { timeoutMs: 60_000, intervalMs: 500 },
+      );
+      recorder.pass(lane, "helper.connected", { computerConnected: true });
+    } catch (error) {
+      recorder.fail(lane, "helper.connected", error.message);
+      return;
+    }
   }
 
   const status = await bridge.command("computer.status");
