@@ -21,15 +21,19 @@ Other ways to control it, all requiring a restart to take effect:
 
 | Method | How |
 |---|---|
-| CLI flag | `--no-shell` (force off) or `--enable-shell` (force on), on the console server |
-| Environment variable | `LBB_ENABLE_SHELL=1` (force on; accepts `1/true/yes/on`) |
+| CLI flag | `--no-shell` (force off) or `--enable-shell` (force on), on both the console server and the desktop host |
+| Environment variable | `LBB_ENABLE_SHELL=1` (force on) or `LBB_ENABLE_SHELL=0` (force off); accepts `1/true/yes/on` and `0/false/no/off` |
 | macOS installer | `install-macos.sh -- --enable-shell` bakes it into the LaunchAgent |
 | Windows installer | `install-windows.ps1 -EnableShell` bakes it into the Startup shortcut |
 
-A CLI flag or environment variable always wins for that run, even over a
-`settings.json` that says otherwise; it does not edit the file. See
-[Configuration](CONFIGURATION.md) for exact flag/variable names across all
-three executables.
+Precedence, identical on both binaries: an explicit `--enable-shell`/
+`--no-shell` flag always wins (passing both is a startup error); otherwise
+`LBB_ENABLE_SHELL` wins in **either** direction when set to a recognized
+value, overriding `settings.json` even to turn shell *off* against a
+`shellEnabled: true` file; otherwise `settings.json` decides. An empty
+`LBB_ENABLE_SHELL` counts as unset. None of these ever edit the settings
+file themselves. See [Configuration](CONFIGURATION.md) for exact flag/
+variable names across all three executables.
 
 ## Methods
 

@@ -22,7 +22,7 @@ mod desktop {
     use local_browser_bridge::{
         BridgeServer, BridgeStatusMonitor, BridgeStatusSnapshot, ServerConfig, UpdateState,
         VERSION, default_settings_path, default_token_path, load_or_create_token, load_settings,
-        print_license_report, write_embedded_extension,
+        print_license_report, resolve_shell_enabled, write_embedded_extension,
     };
     use tao::event::{Event, StartCause};
     use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
@@ -57,6 +57,7 @@ mod desktop {
         show_licenses: bool,
         no_update_check: bool,
         enable_shell: bool,
+        no_shell: bool,
         start_helper: bool,
         extension_setup: bool,
         #[cfg(target_os = "windows")]
@@ -184,8 +185,15 @@ mod desktop {
         let mut config = ServerConfig::new(port, token.clone());
         config.call_timeout = Duration::from_secs(15);
         config.check_for_updates = !cli.no_update_check && !update_check_disabled_from_env()?;
-        config.shell_enabled =
-            cli.enable_shell || shell_enabled_from_env()? || settings.shell_enabled;
+        // Precedence (see `resolve_shell_enabled`): an explicit CLI flag
+        // wins; otherwise LBB_ENABLE_SHELL decides in either direction when
+        // set; otherwise the settings file decides (default on).
+        config.shell_enabled = resolve_shell_enabled(
+            cli.enable_shell,
+            cli.no_shell,
+            env::var("LBB_ENABLE_SHELL").ok().as_deref(),
+            settings.shell_enabled,
+        )?;
         config.desktop_control_enabled = settings.desktop_control_enabled;
         config.settings_path = Some(settings_path);
         config.extension_dir = install_root().ok().map(|root| root.join("extension"));
@@ -1057,6 +1065,7 @@ mod desktop {
                 "--licenses" => cli.show_licenses = true,
                 "--no-update-check" => cli.no_update_check = true,
                 "--enable-shell" => cli.enable_shell = true,
+                "--no-shell" => cli.no_shell = true,
                 "--start-helper" => cli.start_helper = true,
                 "--extension-setup" => cli.extension_setup = true,
                 #[cfg(target_os = "windows")]
@@ -1092,10 +1101,15 @@ Options:\n\
   --extension-setup    Open the browser extension setup guide and exit\n\
   --no-update-check    Start without the background release metadata check\n\
   --enable-shell       Grant API clients full current-user native shell access\n\
+  --no-shell           Force shell access off, overriding the settings file\n\
 {windows_only}\
   --licenses           Print project and third-party license notices, then exit\n\
   -V, --version        Print the installed version and exit\n\
-  -h, --help           Print this help"
+  -h, --help           Print this help\n\n\
+Without --enable-shell or --no-shell, LBB_ENABLE_SHELL decides when set to\n\
+1/true/yes/on or 0/false/no/off (empty/unset has no opinion); otherwise\n\
+shell access follows settings.json (default: enabled). Passing both flags\n\
+is an error."
         )
     }
 
@@ -1112,10 +1126,6 @@ Options:\n\
 
     fn update_check_disabled_from_env() -> Result<bool, String> {
         parse_bool_env("LBB_DISABLE_UPDATE_CHECK")
-    }
-
-    fn shell_enabled_from_env() -> Result<bool, String> {
-        parse_bool_env("LBB_ENABLE_SHELL")
     }
 
     fn parse_bool_env(name: &str) -> Result<bool, String> {
@@ -1518,6 +1528,62 @@ Options:\n\
                     .unwrap();
             assert!(cli.enable_shell);
             assert!(cli.start_helper);
+        }
+
+        #[test]
+        fn desktop_cli_parses_no_shell_flag() {
+            let cli = parse_args(["--no-shell".to_owned()].into_iter()).unwrap();
+            assert!(cli.no_shell);
+            assert!(!cli.enable_shell);
+        }
+
+        /// Full precedence table, exercised the same way `run` calls
+        /// `resolve_shell_enabled`: through a real parsed `Cli`.
+        #[test]
+        fn desktop_shell_precedence_matches_documented_rules() {
+            let cli = |args: &[&str]| {
+                parse_args(args.iter().map(|argument| argument.to_string())).unwrap()
+            };
+
+            // Flag beats env, in both directions.
+            let enable = cli(&["--enable-shell"]);
+            assert!(
+                resolve_shell_enabled(enable.enable_shell, enable.no_shell, Some("0"), true)
+                    .unwrap()
+            );
+            let no_shell = cli(&["--no-shell"]);
+            assert!(
+                !resolve_shell_enabled(no_shell.enable_shell, no_shell.no_shell, Some("1"), true)
+                    .unwrap()
+            );
+
+            // Both flags together is an error.
+            let both = cli(&["--enable-shell", "--no-shell"]);
+            assert!(resolve_shell_enabled(both.enable_shell, both.no_shell, None, true).is_err());
+
+            // No flag: env beats settings, in both directions; empty env
+            // means unset and settings decides; a bad env value is an error.
+            let neither = cli(&[]);
+            assert!(
+                resolve_shell_enabled(neither.enable_shell, neither.no_shell, Some("on"), false)
+                    .unwrap()
+            );
+            assert!(
+                !resolve_shell_enabled(neither.enable_shell, neither.no_shell, Some("off"), true)
+                    .unwrap()
+            );
+            assert!(
+                resolve_shell_enabled(neither.enable_shell, neither.no_shell, Some(""), true)
+                    .unwrap()
+            );
+            assert!(
+                !resolve_shell_enabled(neither.enable_shell, neither.no_shell, None, false)
+                    .unwrap()
+            );
+            assert!(
+                resolve_shell_enabled(neither.enable_shell, neither.no_shell, Some("maybe"), true)
+                    .is_err()
+            );
         }
 
         #[test]

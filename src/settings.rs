@@ -160,3 +160,136 @@ async fn write_new_private_file(path: &Path, contents: &[u8]) -> io::Result<()> 
     file.flush().await?;
     file.sync_all().await
 }
+
+/// Three-way parse of a boolean `LBB_*` environment variable: `Ok(None)`
+/// means unset or empty (no opinion either way), `Ok(Some(_))` is an
+/// explicit direction, and `Err` is a non-empty value that is not one of the
+/// recognized spellings. Shared so every such variable accepts the same
+/// spellings and reports the same error wording.
+pub fn parse_tri_state_bool_env(
+    value: Option<&str>,
+    var_name: &str,
+) -> Result<Option<bool>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" => Ok(None),
+        "1" | "true" | "yes" | "on" => Ok(Some(true)),
+        "0" | "false" | "no" | "off" => Ok(Some(false)),
+        _ => Err(format!("{var_name} must be true/false or 1/0")),
+    }
+}
+
+/// The one precedence rule for whether the local shell is enabled, shared
+/// identically by the console (`local-browser-bridge`) and desktop
+/// (`local-browser-bridge-desktop`) binaries:
+///
+/// 1. An explicit CLI flag wins: `--enable-shell` => on, `--no-shell` => off.
+///    Passing both is an error rather than silently picking one.
+/// 2. Otherwise `LBB_ENABLE_SHELL` decides in *either* direction when set to
+///    a recognized value (`1`/`true`/`yes`/`on` => on;
+///    `0`/`false`/`no`/`off` => off). Empty or unset means no opinion; any
+///    other value is an error.
+/// 3. Otherwise `settings.json`'s `shellEnabled` decides (default: on).
+///
+/// `env_value` is the raw `LBB_ENABLE_SHELL` value (typically
+/// `env::var("LBB_ENABLE_SHELL").ok()`), taken as a parameter rather than
+/// read from the environment here so this stays unit-testable without
+/// mutating process-global environment state.
+pub fn resolve_shell_enabled(
+    enable_shell_flag: bool,
+    no_shell_flag: bool,
+    env_value: Option<&str>,
+    settings_shell_enabled: bool,
+) -> Result<bool, String> {
+    if enable_shell_flag && no_shell_flag {
+        return Err("--enable-shell and --no-shell cannot both be set".to_owned());
+    }
+    if enable_shell_flag {
+        return Ok(true);
+    }
+    if no_shell_flag {
+        return Ok(false);
+    }
+    match parse_tri_state_bool_env(env_value, "LBB_ENABLE_SHELL")? {
+        Some(value) => Ok(value),
+        None => Ok(settings_shell_enabled),
+    }
+}
+
+#[cfg(test)]
+mod resolve_shell_enabled_tests {
+    use super::*;
+
+    #[test]
+    fn cli_flag_wins_over_env_and_settings() {
+        assert!(resolve_shell_enabled(true, false, Some("0"), false).unwrap());
+        assert!(!resolve_shell_enabled(false, true, Some("1"), true).unwrap());
+    }
+
+    #[test]
+    fn both_flags_is_an_error() {
+        let error = resolve_shell_enabled(true, true, None, true).unwrap_err();
+        assert!(error.contains("--enable-shell"));
+        assert!(error.contains("--no-shell"));
+    }
+
+    #[test]
+    fn env_wins_over_settings_in_both_directions() {
+        assert!(resolve_shell_enabled(false, false, Some("1"), false).unwrap());
+        assert!(!resolve_shell_enabled(false, false, Some("0"), true).unwrap());
+    }
+
+    #[test]
+    fn every_accepted_env_spelling_is_recognized_in_both_directions() {
+        for on in ["1", "true", "yes", "on", "TRUE", "On"] {
+            assert!(
+                resolve_shell_enabled(false, false, Some(on), false).unwrap(),
+                "{on} should turn shell on"
+            );
+        }
+        for off in ["0", "false", "no", "off", "FALSE", "Off"] {
+            assert!(
+                !resolve_shell_enabled(false, false, Some(off), true).unwrap(),
+                "{off} should turn shell off"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_env_means_unset_and_settings_decides() {
+        assert!(resolve_shell_enabled(false, false, Some(""), true).unwrap());
+        assert!(!resolve_shell_enabled(false, false, Some("  "), false).unwrap());
+        assert!(resolve_shell_enabled(false, false, None, true).unwrap());
+        assert!(!resolve_shell_enabled(false, false, None, false).unwrap());
+    }
+
+    #[test]
+    fn settings_decides_when_no_flag_or_env_opinion() {
+        assert!(resolve_shell_enabled(false, false, None, true).unwrap());
+        assert!(!resolve_shell_enabled(false, false, None, false).unwrap());
+    }
+
+    #[test]
+    fn bad_env_value_is_an_error() {
+        let error = resolve_shell_enabled(false, false, Some("maybe"), true).unwrap_err();
+        assert!(error.contains("LBB_ENABLE_SHELL"));
+    }
+
+    #[test]
+    fn parse_tri_state_bool_env_covers_unset_empty_and_bad_values() {
+        assert_eq!(parse_tri_state_bool_env(None, "X").unwrap(), None);
+        assert_eq!(parse_tri_state_bool_env(Some(""), "X").unwrap(), None);
+        assert_eq!(parse_tri_state_bool_env(Some(" "), "X").unwrap(), None);
+        assert_eq!(
+            parse_tri_state_bool_env(Some("1"), "X").unwrap(),
+            Some(true)
+        );
+        assert_eq!(
+            parse_tri_state_bool_env(Some("off"), "X").unwrap(),
+            Some(false)
+        );
+        assert!(parse_tri_state_bool_env(Some("nope"), "X").is_err());
+    }
+}

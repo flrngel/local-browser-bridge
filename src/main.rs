@@ -5,7 +5,7 @@ use std::time::Duration;
 use local_browser_bridge::{
     BridgeServer, ServerConfig, Settings, UpdateState, VERSION, check_for_update,
     default_settings_path, default_token_path, load_or_create_token, load_settings,
-    print_license_report,
+    print_license_report, resolve_shell_enabled,
 };
 
 #[derive(Default)]
@@ -68,16 +68,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(path) => load_settings(path).await,
         None => Settings::default(),
     };
-    // Precedence: an explicit CLI flag or the legacy env var always wins;
-    // with neither given, the settings file decides (default on), so a
-    // fresh install just works without a second setup step.
-    let shell_enabled = if cli.enable_shell || shell_enabled_from_env()? {
-        true
-    } else if cli.no_shell {
-        false
-    } else {
-        settings.shell_enabled
-    };
+    // Precedence (see `resolve_shell_enabled`): an explicit CLI flag wins;
+    // otherwise LBB_ENABLE_SHELL decides in either direction when set;
+    // otherwise the settings file decides (default on), so a fresh install
+    // just works without a second setup step.
+    let shell_enabled = resolve_shell_enabled(
+        cli.enable_shell,
+        cli.no_shell,
+        env::var("LBB_ENABLE_SHELL").ok().as_deref(),
+        settings.shell_enabled,
+    )?;
 
     let mut config = ServerConfig::new(port, token.clone());
     config.call_timeout = Duration::from_secs(15);
@@ -156,8 +156,10 @@ Options:\n\
   --licenses          Print project and third-party license notices, then exit\n\
   -V, --version       Print the installed version and exit\n\
   -h, --help          Print this help\n\n\
-Without --enable-shell or --no-shell, shell access follows settings.json\n\
-(default: enabled). The update checker never downloads or installs files."
+Without --enable-shell or --no-shell, LBB_ENABLE_SHELL decides when set to\n\
+1/true/yes/on or 0/false/no/off (empty/unset has no opinion); otherwise\n\
+shell access follows settings.json (default: enabled). Passing both flags\n\
+is an error. The update checker never downloads or installs files."
     );
 }
 
@@ -169,17 +171,6 @@ fn update_check_disabled_from_env() -> Result<bool, String> {
         "1" | "true" | "yes" | "on" => Ok(true),
         "0" | "false" | "no" | "off" | "" => Ok(false),
         _ => Err("LBB_DISABLE_UPDATE_CHECK must be true/false or 1/0".to_owned()),
-    }
-}
-
-fn shell_enabled_from_env() -> Result<bool, String> {
-    let Some(value) = env::var("LBB_ENABLE_SHELL").ok() else {
-        return Ok(false);
-    };
-    match value.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Ok(true),
-        "0" | "false" | "no" | "off" | "" => Ok(false),
-        _ => Err("LBB_ENABLE_SHELL must be true/false or 1/0".to_owned()),
     }
 }
 
@@ -225,5 +216,57 @@ mod tests {
                 .show_licenses
         );
         assert!(parse_args(["--unknown".to_owned()].into_iter()).is_err());
+    }
+
+    #[test]
+    fn parses_no_shell_flag() {
+        let cli = parse_args(["--no-shell".to_owned()].into_iter()).unwrap();
+        assert!(cli.no_shell);
+        assert!(!cli.enable_shell);
+    }
+
+    /// Full precedence table, exercised the same way `main` calls
+    /// `resolve_shell_enabled`: through a real parsed `Cli`.
+    #[test]
+    fn shell_precedence_matches_documented_rules() {
+        let cli =
+            |args: &[&str]| parse_args(args.iter().map(|argument| argument.to_string())).unwrap();
+
+        // Flag beats env, in both directions.
+        let enable = cli(&["--enable-shell"]);
+        assert!(
+            resolve_shell_enabled(enable.enable_shell, enable.no_shell, Some("0"), true).unwrap()
+        );
+        let no_shell = cli(&["--no-shell"]);
+        assert!(
+            !resolve_shell_enabled(no_shell.enable_shell, no_shell.no_shell, Some("1"), true)
+                .unwrap()
+        );
+
+        // Both flags together is an error.
+        let both = cli(&["--enable-shell", "--no-shell"]);
+        assert!(resolve_shell_enabled(both.enable_shell, both.no_shell, None, true).is_err());
+
+        // No flag: env beats settings, in both directions; empty env means
+        // unset and settings decides; a bad env value is an error.
+        let neither = cli(&[]);
+        assert!(
+            resolve_shell_enabled(neither.enable_shell, neither.no_shell, Some("on"), false)
+                .unwrap()
+        );
+        assert!(
+            !resolve_shell_enabled(neither.enable_shell, neither.no_shell, Some("off"), true)
+                .unwrap()
+        );
+        assert!(
+            resolve_shell_enabled(neither.enable_shell, neither.no_shell, Some(""), true).unwrap()
+        );
+        assert!(
+            !resolve_shell_enabled(neither.enable_shell, neither.no_shell, None, false).unwrap()
+        );
+        assert!(
+            resolve_shell_enabled(neither.enable_shell, neither.no_shell, Some("maybe"), true)
+                .is_err()
+        );
     }
 }

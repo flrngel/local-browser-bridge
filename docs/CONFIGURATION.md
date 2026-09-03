@@ -8,8 +8,8 @@ here instead of repeating the tables.
 
 | Flag | Effect |
 |---|---|
-| `--enable-shell` | Force shell access on at startup, overriding the settings file |
-| `--no-shell` | Force shell access off at startup, overriding the settings file |
+| `--enable-shell` | Force shell access on at startup, overriding `LBB_ENABLE_SHELL` and the settings file |
+| `--no-shell` | Force shell access off at startup, overriding `LBB_ENABLE_SHELL` and the settings file. Passing both `--enable-shell` and `--no-shell` is an error |
 | `--check-updates` | Check GitHub release metadata once and exit |
 | `--no-update-check` | Start without the one-time background metadata check |
 | `--licenses` | Print project and third-party license notices, then exit |
@@ -21,8 +21,14 @@ here instead of repeating the tables.
 | `LBB_PORT` | `17373` | Loopback HTTP/WebSocket port |
 | `LBB_TOKEN` | none | Explicit bridge token; skips reading/writing the token file |
 | `LBB_TOKEN_PATH` | computed profile path (see below) | Token file location |
-| `LBB_ENABLE_SHELL` | unset | Same effect as `--enable-shell` when set; accepts `1/true/yes/on` |
+| `LBB_ENABLE_SHELL` | unset | Decides shell access when no `--enable-shell`/`--no-shell` flag is given, in **either** direction: `1/true/yes/on` forces it on, `0/false/no/off` forces it off. An empty value is treated as unset (no opinion); anything else is a startup error |
 | `LBB_DISABLE_UPDATE_CHECK` | `false` | Same effect as `--no-update-check`; accepts `1/true/yes/on` |
+
+Shell-access precedence (identical on this binary and the desktop host,
+implemented once in `resolve_shell_enabled`): a CLI flag wins if given;
+otherwise `LBB_ENABLE_SHELL` wins if set to a recognized value; otherwise
+`settings.json`'s `shellEnabled` decides. See [Shell](SHELL.md) for the full
+rationale.
 
 ## `local-browser-bridge-desktop` (tray / menu-bar host)
 

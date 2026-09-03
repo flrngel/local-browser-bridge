@@ -19,7 +19,9 @@ pub mod ws_auth;
 pub use home::home_dir;
 pub use licenses::{PROJECT_LICENSE_TEXT, THIRD_PARTY_LICENSE_TEXT, print_license_report};
 pub use server::{BridgeServer, BridgeStatusMonitor, BridgeStatusSnapshot, ServerConfig};
-pub use settings::{Settings, default_settings_path, load_settings, save_settings};
+pub use settings::{
+    Settings, default_settings_path, load_settings, resolve_shell_enabled, save_settings,
+};
 pub use setup::write_embedded_extension;
 pub use token::{create_token, default_token_path, load_or_create_token, tokens_equal};
 pub use update::{UpdateState, UpdateStatus, check_for_update};

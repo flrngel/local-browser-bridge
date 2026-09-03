@@ -697,12 +697,15 @@ class Cdp {
 //                desktop-host binaries let an explicit env var (or CLI flag)
 //                win over settings.json, so this is reliable regardless of
 //                the compiled-in default.
-//   false     -- force shell OFF. There is no env var equivalent: as of
-//                v0.13.0 LBB_ENABLE_SHELL=0 is a no-op that falls through to
-//                settings.json (see src/main.rs shell_enabled_from_env), and
-//                the Windows desktop host has no --no-shell flag at all. So
-//                "off" is expressed with a private settings.json (selected
-//                via LBB_SETTINGS_PATH) that sets shellEnabled:false.
+//   false     -- force shell OFF via a private settings.json (selected via
+//                LBB_SETTINGS_PATH) that sets shellEnabled:false, proving
+//                the settings-file half of the precedence rule.
+//   "env-off" -- force shell OFF via LBB_ENABLE_SHELL=0, with a settings.json
+//                that sets shellEnabled:true. Proves the exact regression
+//                fixed for v0.13.0: LBB_ENABLE_SHELL=0 now overrides the
+//                settings file instead of being a silent no-op that fell
+//                through to it (see resolve_shell_enabled in
+//                src/settings.rs, used by both binaries).
 //   undefined -- exercise the real out-of-the-box default: no shell flag,
 //                env var, or settings file at all. LBB_SETTINGS_PATH still
 //                points at a per-server path so the run never depends on
@@ -721,6 +724,11 @@ async function startServer(context, { shell, label }) {
   };
   if (shell === true) {
     env.LBB_ENABLE_SHELL = "1";
+  } else if (shell === "env-off") {
+    const settingsPath = path.join(cwd, "settings.json");
+    writeFileSync(settingsPath, JSON.stringify({ version: 1, shellEnabled: true, desktopControlEnabled: true, startAtLogin: false }));
+    env.LBB_SETTINGS_PATH = settingsPath;
+    env.LBB_ENABLE_SHELL = "0";
   } else {
     const settingsPath = path.join(cwd, "settings.json");
     if (shell === false) {
@@ -963,6 +971,32 @@ async function shellDefaultLane(context) {
     }
   } catch (error) {
     recorder.fail(lane, "run.default-enabled", error.message);
+  } finally {
+    if (server) {
+      await context.processes.stop(server.entry);
+    }
+  }
+}
+
+// Runs right after shellDefaultLane, once its short-lived server is gone
+// (same single-instance constraint on Windows). Proves the exact regression
+// fixed for v0.13.0: a settings.json with shellEnabled:true no longer wins
+// when LBB_ENABLE_SHELL=0 is also set -- the env var now overrides the
+// settings file in the off direction too, not just the on direction.
+async function shellEnvOverridesSettingsLane(context) {
+  const { recorder } = context;
+  const lane = "shell";
+  let server = null;
+  try {
+    server = await startServer(context, { shell: "env-off", label: "shell-env-off" });
+    const refused = await server.bridge.command("shell.run", { command: "echo nope" });
+    if (refused.status === 403 && refused.error?.code === "SHELL_DISABLED") {
+      recorder.pass(lane, "run.env-overrides-settings-403", errorSummary(refused));
+    } else {
+      recorder.fail(lane, "run.env-overrides-settings-403", truncate(errorSummary(refused)));
+    }
+  } catch (error) {
+    recorder.fail(lane, "run.env-overrides-settings-403", error.message);
   } finally {
     if (server) {
       await context.processes.stop(server.entry);
@@ -1845,6 +1879,7 @@ async function main() {
         await processes.stop(context.server?.entry);
         await shellDisabledLane(context);
         await shellDefaultLane(context);
+        await shellEnvOverridesSettingsLane(context);
       }
     } catch (error) {
       fatal = error;
