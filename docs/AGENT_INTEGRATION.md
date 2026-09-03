@@ -1,8 +1,55 @@
 # Agent integration
 
-The one page to read before wiring an AI agent to Local Browser Bridge. It
-covers auth, the request/response shape, the observe-act-reobserve loop, and
-every error you need to handle. For the complete route and method list, see
+## Copy-paste block for your AI
+
+Paste the block below into any AI assistant that runs **as a process on
+this same computer** (a local agent, a CLI tool, a desktop app with its own
+model access). It is the same text the dashboard's **Copy for my AI** button
+produces.
+
+```text
+Local Browser Bridge lets an AI assistant see and control a browser tab (and, if turned on, a desktop window and a local shell) on this computer. Only use it if the user asked you to.
+
+Base URL: {BASE}
+That's a normal address, shaped like http://127.0.0.1:<port>/api/v1/fetch/<key>. Every call below is a plain HTTP GET to it -- no headers, no request body.
+
+Add "&callId=<a-unique-id-you-pick>" to every call except status and tabs.list.
+
+List open tabs:
+GET {BASE}/tabs.list
+
+Take control of a tab (tabId is optional; omit it to use the current tab):
+GET {BASE}/browser.control.start?callId=ctl-1&tabId=<id>
+
+Open a page:
+GET {BASE}/page.navigate?callId=nav-1&tabId=<id>&url=<page-url>
+
+Read it (returns a screenshot, the page text, and clickable elements, each with a "ref"):
+GET {BASE}/page.observe?callId=obs-1&tabId=<id>
+
+Click something, using the "ref" and "generation" from that read:
+GET {BASE}/page.click?callId=click-1&tabId=<id>&ref=<ref>&generation=<generation>
+
+This URL is like a password: anyone who has it can control this computer. Keep it private.
+```
+
+`{BASE}` above is the actual Agent Fetch base URL from your dashboard — the
+button that copies this same text into your clipboard fills it in for you.
+
+This only works for an assistant that can reach `127.0.0.1` on this
+computer. A cloud-hosted assistant — ChatGPT or Copilot open as a page in
+your browser, "Microsoft 365 Copilot" in a browser tab, or any assistant
+whose model runs on someone else's server — **cannot** use this, no matter
+how the request is worded: it has no network path to your machine's
+loopback address. If that is what you have, this project is not a fit for
+it yet. It works with an assistant that runs a local process on this
+computer: a local agent or CLI tool, or a desktop app that talks to its own
+model but executes tool calls locally.
+
+The rest of this page is the complete portable contract for a client that
+already reaches this machine: auth, the request/response shape, the
+observe-act-reobserve loop, and every error you need to handle. For the
+complete route and method list, see
 [API reference](API_REFERENCE.md). For the wire-level protocol (WebSocket
 envelopes, connector handshakes), see
 [internals/PROTOCOL.md](internals/PROTOCOL.md) — you only need that if you are
@@ -67,7 +114,7 @@ $ curl -s -i http://127.0.0.1:17373/health
 HTTP/1.1 200 OK
 [response headers omitted]
 
-{"computerConnected":false,"extensionConnected":false,"ok":true,"shellEnabled":true,"version":"0.12.70"}
+{"computerConnected":false,"extensionConnected":false,"ok":true,"shellEnabled":true,"version":"0.13.0"}
 ```
 
 `extensionConnected` and `computerConnected` tell you whether the browser
@@ -178,8 +225,8 @@ postcondition) do and do not prove.
 
 ## Shell
 
-`shell.status` always works; `shell.run` needs the server started with
-`--enable-shell`. Without it:
+`shell.status` always works; `shell.run` needs shell access, which is on by
+default. Without it:
 
 ```json
 {"callId":"...","error":{"code":"SHELL_DISABLED","message":"Local shell access is disabled; restart the server with --enable-shell to grant it"},"ok":false,"taxonomy":{"code":"blocked_by_policy","prose":"Bridge policy forbids this request; do not retry the same action.","recoveryHint":"none","retriable":false}}
@@ -187,6 +234,14 @@ postcondition) do and do not prove.
 
 See [Shell](SHELL.md) — this grants full current-user command execution, not a
 sandbox.
+
+## Change settings from your agent
+
+`POST /api/settings` flips shell access or desktop control the same way the
+dashboard's own switches do, and needs the same dashboard session (not a bare
+bearer token) — see [API reference](API_REFERENCE.md#post-apisettings). Most
+agents should leave this to the human at the dashboard rather than toggle it
+themselves.
 
 ## Error handling checklist
 

@@ -9,6 +9,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 2.0
+$ProgressPreference = "SilentlyContinue"
 $script:OwnerMarker = ".lbb-install-owner"
 $script:OwnerMarkerValue = "local-browser-bridge-install-v1"
 $script:StartupName = "Local Browser Bridge.lnk"
@@ -296,6 +297,21 @@ function Remove-Token {
     }
 }
 
+function Remove-Settings {
+    if ([string]::IsNullOrWhiteSpace($env:USERPROFILE)) { throw "USERPROFILE is unavailable." }
+    $settingsDirectory = Join-Path $env:USERPROFILE ".local-browser-bridge"
+    $settings = Join-Path $settingsDirectory "settings.json"
+    if ([IO.Directory]::Exists($settingsDirectory)) { Assert-OrdinaryDirectory $settingsDirectory }
+    elseif ([IO.File]::Exists($settingsDirectory)) { throw "Refusing a non-directory settings parent: $settingsDirectory" }
+    if ([IO.File]::Exists($settings)) { Remove-OrdinaryFile $settings }
+    elseif ([IO.Directory]::Exists($settings)) { throw "Refusing a non-file settings path: $settings" }
+    if ([IO.Directory]::Exists($settingsDirectory) -and
+        @([IO.Directory]::EnumerateFileSystemEntries($settingsDirectory)).Count -eq 0) {
+        Write-Action "remove empty settings directory: $settingsDirectory"
+        if (-not $DryRun) { [IO.Directory]::Delete($settingsDirectory, $false) }
+    }
+}
+
 function Open-ExtensionsPage {
     $candidates = @(
         (Join-Path ${env:ProgramFiles} "Google\Chrome\Application\chrome.exe"),
@@ -319,12 +335,8 @@ function Finish-BrowserCleanup {
     if ($NoBrowser -or $DryRun -or -not $script:RemovedInstall) { return }
     $opened = Open-ExtensionsPage
     $firstLine = if ($opened) { "The installed browser extensions page is open." } else { "Open chrome://extensions or edge://extensions." }
-    $message = "$firstLine`n`nThe unpacked extension files are gone. If a Local Browser Bridge card remains, click Remove once. Browser profile files were intentionally left untouched."
-    try {
-        Add-Type -AssemblyName PresentationFramework
-        [System.Windows.MessageBox]::Show($message, "Finish Local Browser Bridge Removal") | Out-Null
-    }
-    catch { Write-Output $message }
+    Write-Output "$firstLine"
+    Write-Output "The unpacked extension files are gone. If a Local Browser Bridge card remains, click Remove once. Browser profile files were intentionally left untouched."
 }
 
 function Invoke-SelfTest {
@@ -385,6 +397,7 @@ if ([IO.Directory]::Exists($InstallRoot)) { Assert-InstallEntries $InstallRoot }
 Remove-StartupAndStartMenu $InstallRoot
 Remove-InstallTree $InstallRoot
 Remove-Token
+Remove-Settings
 Finish-BrowserCleanup
 
 if ($DryRun) {

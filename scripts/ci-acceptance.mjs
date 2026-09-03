@@ -692,6 +692,26 @@ class Cdp {
 // Lanes
 // ---------------------------------------------------------------------------
 
+// `shell` selects the server's shell posture:
+//   true      -- force shell ON via LBB_ENABLE_SHELL=1. Both the cli and the
+//                desktop-host binaries let an explicit env var (or CLI flag)
+//                win over settings.json, so this is reliable regardless of
+//                the compiled-in default.
+//   false     -- force shell OFF via a private settings.json (selected via
+//                LBB_SETTINGS_PATH) that sets shellEnabled:false, proving
+//                the settings-file half of the precedence rule.
+//   "env-off" -- force shell OFF via LBB_ENABLE_SHELL=0, with a settings.json
+//                that sets shellEnabled:true. Proves the exact regression
+//                fixed for v0.13.0: LBB_ENABLE_SHELL=0 now overrides the
+//                settings file instead of being a silent no-op that fell
+//                through to it (see resolve_shell_enabled in
+//                src/settings.rs, used by both binaries).
+//   undefined -- exercise the real out-of-the-box default: no shell flag,
+//                env var, or settings file at all. LBB_SETTINGS_PATH still
+//                points at a per-server path so the run never depends on
+//                (or pollutes) whatever settings.json sits at the account's
+//                real default path, but the file itself is left unwritten so
+//                load_settings() falls back to Settings::default().
 async function startServer(context, { shell, label }) {
   const { inventory, processes, token } = context;
   const port = await freePort();
@@ -701,8 +721,30 @@ async function startServer(context, { shell, label }) {
     LBB_TOKEN: token,
     LBB_PORT: String(port),
     LBB_DISABLE_UPDATE_CHECK: "1",
-    LBB_ENABLE_SHELL: shell ? "1" : "0",
+    // Belt and braces alongside the desktop host's own non-interactive-
+    // session detection: this harness runs the freshly built exe straight
+    // out of target/release, so it is never "installed", and the Windows
+    // first-run flow would otherwise offer to install it. That prompt is a
+    // native MessageBoxW that nothing here can answer, so on Windows it
+    // would hang the process forever with the server never bound. The
+    // desktop-host binary only reads this on Windows; it is a harmless
+    // unused env var everywhere else (including the plain CLI server).
+    LBB_NO_INSTALL_PROMPT: "1",
   };
+  if (shell === true) {
+    env.LBB_ENABLE_SHELL = "1";
+  } else if (shell === "env-off") {
+    const settingsPath = path.join(cwd, "settings.json");
+    writeFileSync(settingsPath, JSON.stringify({ version: 1, shellEnabled: true, desktopControlEnabled: true, startAtLogin: false }));
+    env.LBB_SETTINGS_PATH = settingsPath;
+    env.LBB_ENABLE_SHELL = "0";
+  } else {
+    const settingsPath = path.join(cwd, "settings.json");
+    if (shell === false) {
+      writeFileSync(settingsPath, JSON.stringify({ version: 1, shellEnabled: false, desktopControlEnabled: true, startAtLogin: false }));
+    }
+    env.LBB_SETTINGS_PATH = settingsPath;
+  }
   const args = inventory.serverKind === "desktop-host" ? [] : ["--no-update-check"];
   const entry = processes.spawn(`server-${label}`, inventory.server, args, { cwd, env });
   const bridge = new Bridge(port, token);
@@ -912,6 +954,61 @@ async function shellDisabledLane(context) {
   } finally {
     if (disabled) {
       await context.processes.stop(disabled.entry);
+    }
+  }
+}
+
+// Runs right after shellDisabledLane, once its short-lived server is gone
+// (same single-instance constraint on Windows). Proves the other half of the
+// v0.13.0 contract: a server started with no shell flag, env var, or
+// settings file present grants shell access because settings.json's default
+// changed from off to on, so a future regression back to off-by-default
+// fails the suite instead of silently shipping.
+async function shellDefaultLane(context) {
+  const { recorder } = context;
+  const lane = "shell";
+  let server = null;
+  try {
+    server = await startServer(context, { label: "shell-default" });
+    const status = await server.bridge.command("shell.status");
+    const run = await server.bridge.command("shell.run", { command: "echo lbb-shell-default-ok" });
+    const ok = status.status === 200 && status.result?.enabled === true && run.status === 200 && run.result?.exitCode === 0 && /lbb-shell-default-ok/.test(run.result.stdout || "");
+    if (ok) {
+      recorder.pass(lane, "run.default-enabled", { statusEnabled: status.result?.enabled, exitCode: 0, stdout: truncate(run.result.stdout, 80) });
+    } else {
+      recorder.fail(lane, "run.default-enabled", truncate(run.status === 200 ? run.result : errorSummary(run)), { status: status.status === 200 ? status.result : errorSummary(status) });
+    }
+  } catch (error) {
+    recorder.fail(lane, "run.default-enabled", error.message);
+  } finally {
+    if (server) {
+      await context.processes.stop(server.entry);
+    }
+  }
+}
+
+// Runs right after shellDefaultLane, once its short-lived server is gone
+// (same single-instance constraint on Windows). Proves the exact regression
+// fixed for v0.13.0: a settings.json with shellEnabled:true no longer wins
+// when LBB_ENABLE_SHELL=0 is also set -- the env var now overrides the
+// settings file in the off direction too, not just the on direction.
+async function shellEnvOverridesSettingsLane(context) {
+  const { recorder } = context;
+  const lane = "shell";
+  let server = null;
+  try {
+    server = await startServer(context, { shell: "env-off", label: "shell-env-off" });
+    const refused = await server.bridge.command("shell.run", { command: "echo nope" });
+    if (refused.status === 403 && refused.error?.code === "SHELL_DISABLED") {
+      recorder.pass(lane, "run.env-overrides-settings-403", errorSummary(refused));
+    } else {
+      recorder.fail(lane, "run.env-overrides-settings-403", truncate(errorSummary(refused)));
+    }
+  } catch (error) {
+    recorder.fail(lane, "run.env-overrides-settings-403", error.message);
+  } finally {
+    if (server) {
+      await context.processes.stop(server.entry);
     }
   }
 }
@@ -1790,6 +1887,8 @@ async function main() {
       if (lanes.includes("shell")) {
         await processes.stop(context.server?.entry);
         await shellDisabledLane(context);
+        await shellDefaultLane(context);
+        await shellEnvOverridesSettingsLane(context);
       }
     } catch (error) {
       fatal = error;

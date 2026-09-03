@@ -17,25 +17,40 @@ mod desktop {
     use std::thread;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+    #[cfg(target_os = "windows")]
+    use local_browser_bridge::setup;
     use local_browser_bridge::{
-        BridgeServer, BridgeStatusSnapshot, ServerConfig, UpdateState, VERSION, default_token_path,
-        load_or_create_token, print_license_report,
+        BridgeServer, BridgeStatusMonitor, BridgeStatusSnapshot, ServerConfig, UpdateState,
+        VERSION, default_settings_path, default_token_path, load_or_create_token, load_settings,
+        print_license_report, resolve_shell_enabled, write_embedded_extension,
     };
     use tao::event::{Event, StartCause};
     use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
     use tokio::sync::oneshot;
-    use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+    use tray_icon::menu::{IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
     use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
     #[cfg(test)]
     const DEFAULT_PORT: u16 = 17_373;
+    /// Set (to any value) on the child process `relaunch_installed` starts,
+    /// so that process — not the installer process, which exits — knows to
+    /// open the dashboard on its own. Only reached via the explicit
+    /// `--install` command (`run_install_command`): the interactive
+    /// first-run offer (`offer_first_run_install`) installs in the
+    /// background but deliberately never relaunches, so this process keeps
+    /// running (and this env var is never set) whether the user accepts or
+    /// declines. See `relaunch_installed` and `should_open_dashboard`.
+    const JUST_INSTALLED_ENV: &str = "LBB_JUST_INSTALLED";
     const MENU_OPEN_DASHBOARD: &str = "open-dashboard";
     const MENU_EXTENSION_SETUP: &str = "extension-setup";
     const MENU_COPY_TOKEN: &str = "copy-token";
     const MENU_HELPER: &str = "computer-helper";
+    const MENU_SHELL_TOGGLE: &str = "shell-status";
     const MENU_UPDATES: &str = "updates";
     const MENU_LOGS: &str = "logs";
     const MENU_QUIT: &str = "quit";
+    #[cfg(target_os = "windows")]
+    const MENU_UNINSTALL: &str = "uninstall";
     #[cfg(target_os = "windows")]
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -46,14 +61,34 @@ mod desktop {
         show_licenses: bool,
         no_update_check: bool,
         enable_shell: bool,
+        no_shell: bool,
         start_helper: bool,
         extension_setup: bool,
+        #[cfg(target_os = "windows")]
+        install: bool,
+        #[cfg(target_os = "windows")]
+        uninstall: bool,
+        #[cfg(target_os = "windows")]
+        no_install: bool,
     }
 
-    #[derive(Debug)]
+    // No `#[derive(Debug)]`: `ServerReady` carries a `BridgeStatusMonitor` and
+    // a `tokio::runtime::Handle` (so the tray thread can react to live status
+    // without its own runtime), and neither implements `Debug`. Nothing in
+    // this file ever formats an `AppEvent` itself.
+    //
+    // `ServerReady` is intentionally larger than the other variants: it is a
+    // one-shot event (sent exactly once per server start), not a hot-path
+    // message, so boxing its fields would only add an allocation for no
+    // measurable benefit.
+    #[allow(clippy::large_enum_variant)]
     enum AppEvent {
         Menu(MenuEvent),
-        ServerReady(BridgeStatusSnapshot),
+        ServerReady(
+            BridgeStatusSnapshot,
+            BridgeStatusMonitor,
+            tokio::runtime::Handle,
+        ),
         Status(BridgeStatusSnapshot),
         ServerFailed(String),
         ServerStopped,
@@ -82,7 +117,45 @@ mod desktop {
             return Ok(());
         }
 
+        #[cfg(target_os = "windows")]
+        if cli.install {
+            return run_install_command();
+        }
+        #[cfg(target_os = "windows")]
+        if cli.uninstall {
+            return run_uninstall_command();
+        }
+        // Whether the first-run "set up as an app?" prompt is worth showing
+        // at all, decided once, up front, from cheap/instant signals only
+        // (never anything that can block). The prompt itself — the one
+        // call that can sit and wait on a human — is deferred until the
+        // server has already reported ready; see the `ServerReady` handler
+        // in the event loop below and `spawn_install_offer`. This ordering
+        // is the actual fix for a first run on a headless/non-interactive
+        // host never starting the server at all: starting the bridge must
+        // never depend on a human answering a dialog.
+        #[cfg(target_os = "windows")]
+        let mut install_offer_pending = should_prompt_for_install(
+            setup::is_installed().unwrap_or(false),
+            platform::is_interactive_session(),
+            cli.no_install,
+            install_prompt_env_opt_out()?,
+        );
+        #[cfg(not(target_os = "windows"))]
+        let mut install_offer_pending = false;
+        if cli.start_helper {
+            write_desktop_log(
+                "--start-helper is no longer needed: the helper now starts automatically \
+                 when desktop control is enabled",
+            );
+        }
+
         let port = parse_port(env::var("LBB_PORT").ok().as_deref())?;
+        let bootstrap_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let settings_path = default_settings_path()?;
+        let settings = bootstrap_runtime.block_on(load_settings(&settings_path));
         let explicit_token = env::var("LBB_TOKEN")
             .ok()
             .map(|token| token.trim().to_owned())
@@ -94,13 +167,11 @@ mod desktop {
                     Some(path) => PathBuf::from(path),
                     None => default_token_path()?,
                 };
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()?;
-                let token = runtime.block_on(load_or_create_token(&path))?;
+                let token = bootstrap_runtime.block_on(load_or_create_token(&path))?;
                 (token, Some(path))
             }
         };
+        drop(bootstrap_runtime);
 
         if cli.extension_setup {
             finish_extension_setup()?;
@@ -129,11 +200,27 @@ mod desktop {
         let mut config = ServerConfig::new(port, token.clone());
         config.call_timeout = Duration::from_secs(15);
         config.check_for_updates = !cli.no_update_check && !update_check_disabled_from_env()?;
-        config.shell_enabled = cli.enable_shell || shell_enabled_from_env()?;
+        // Precedence (see `resolve_shell_enabled`): an explicit CLI flag
+        // wins; otherwise LBB_ENABLE_SHELL decides in either direction when
+        // set; otherwise the settings file decides (default on).
+        config.shell_enabled = resolve_shell_enabled(
+            cli.enable_shell,
+            cli.no_shell,
+            env::var("LBB_ENABLE_SHELL").ok().as_deref(),
+            settings.shell_enabled,
+        )?;
+        config.desktop_control_enabled = settings.desktop_control_enabled;
+        config.settings_path = Some(settings_path);
+        config.extension_dir = install_root().ok().map(|root| root.join("extension"));
         let mut server = Some(ServerController::start(config, proxy)?);
         let mut ui: Option<DesktopUi> = None;
         let mut quit_requested = false;
-        let mut start_helper = cli.start_helper;
+        // Set only on the relaunched process started by an explicit
+        // `--install` (see `relaunch_installed`); never on the installer
+        // process itself (already exited by this point), and never set at
+        // all by the interactive first-run offer, which does not relaunch.
+        let just_installed = env::var_os(JUST_INSTALLED_ENV).is_some();
+        let mut dashboard_opened = false;
         let _instance = instance;
 
         event_loop.run(move |event, _, control_flow| {
@@ -163,18 +250,45 @@ mod desktop {
                         }
                     }
                 }
-                Event::UserEvent(AppEvent::ServerReady(status))
-                | Event::UserEvent(AppEvent::Status(status)) => {
+                Event::UserEvent(AppEvent::ServerReady(status, monitor, runtime)) => {
+                    if let Some(ui) = ui.as_mut() {
+                        ui.set_server_handles(monitor, runtime);
+                    }
+                    // The server is confirmed healthy: only now is it safe
+                    // to consider the first-run install prompt. It still
+                    // never runs here — this handler is the tao event-loop
+                    // thread, and freezing it would freeze the tray exactly
+                    // like freezing the server thread would. It runs on its
+                    // own detached thread instead (`spawn_install_offer`),
+                    // so a human who never appears can only stall that one
+                    // thread, never the app.
+                    if install_offer_pending {
+                        install_offer_pending = false;
+                        #[cfg(target_os = "windows")]
+                        spawn_install_offer();
+                    }
+                    if should_open_dashboard(
+                        just_installed,
+                        status.extension_connected,
+                        dashboard_opened,
+                    ) {
+                        dashboard_opened = true;
+                        if let Err(error) = open_dashboard(port, &token) {
+                            // Never fails startup: a headless/CI run, or any
+                            // environment with no browser to open, just logs
+                            // this and carries on with the server and tray.
+                            write_desktop_log(&format!(
+                                "Could not open the dashboard automatically: {error}"
+                            ));
+                        }
+                    }
                     if let Some(ui) = ui.as_mut() {
                         ui.apply_status(status);
-                        if start_helper {
-                            if let Err(error) = ui.start_helper() {
-                                ui.apply_error(&format!(
-                                    "Computer Helper could not start: {error}"
-                                ));
-                            }
-                            start_helper = false;
-                        }
+                    }
+                }
+                Event::UserEvent(AppEvent::Status(status)) => {
+                    if let Some(ui) = ui.as_mut() {
+                        ui.apply_status(status);
                     }
                 }
                 Event::UserEvent(AppEvent::ServerFailed(error)) => {
@@ -230,7 +344,11 @@ mod desktop {
                         };
                         let monitor = server.status_monitor();
                         let first = monitor.snapshot().await;
-                        let _ = proxy.send_event(AppEvent::ServerReady(first.clone()));
+                        let _ = proxy.send_event(AppEvent::ServerReady(
+                            first.clone(),
+                            monitor.clone(),
+                            tokio::runtime::Handle::current(),
+                        ));
                         let status_proxy = proxy.clone();
                         let status_task = tokio::spawn(async move {
                             let mut last = first;
@@ -304,6 +422,12 @@ mod desktop {
         helper: MenuItem,
         updates: MenuItem,
         status: Option<BridgeStatusSnapshot>,
+        // Populated once, from `AppEvent::ServerReady`: lets menu clicks and
+        // status-transition reactions call the sync `BridgeStatusMonitor`
+        // setters and spawn background work directly from this (non-Tokio)
+        // tray thread.
+        monitor: Option<BridgeStatusMonitor>,
+        runtime: Option<tokio::runtime::Handle>,
     }
 
     impl DesktopUi {
@@ -318,7 +442,8 @@ mod desktop {
             );
             let computer_status =
                 MenuItem::with_id("computer-status", "Desktop control: Off", false, None);
-            let shell_status = MenuItem::with_id("shell-status", "Shell access: Off", false, None);
+            let shell_status =
+                MenuItem::with_id(MENU_SHELL_TOGGLE, "Shell access: Off", true, None);
             let open_dashboard =
                 MenuItem::with_id(MENU_OPEN_DASHBOARD, "Open Dashboard", false, None);
             let extension_setup = MenuItem::with_id(
@@ -341,7 +466,10 @@ mod desktop {
             let separator_one = PredefinedMenuItem::separator();
             let separator_two = PredefinedMenuItem::separator();
             let separator_three = PredefinedMenuItem::separator();
-            let menu = Menu::with_items(&[
+            #[cfg(target_os = "windows")]
+            let uninstall_item =
+                MenuItem::with_id(MENU_UNINSTALL, "Uninstall Local Browser Bridge", true, None);
+            let mut items: Vec<&dyn IsMenuItem> = vec![
                 &server_status,
                 &browser_status,
                 &computer_status,
@@ -356,8 +484,11 @@ mod desktop {
                 &logs,
                 &about,
                 &separator_three,
-                &quit,
-            ])?;
+            ];
+            #[cfg(target_os = "windows")]
+            items.push(&uninstall_item);
+            items.push(&quit);
+            let menu = Menu::with_items(&items)?;
             let tray = TrayIconBuilder::new()
                 .with_id("local-browser-bridge")
                 .with_menu(Box::new(menu))
@@ -379,10 +510,36 @@ mod desktop {
                 helper,
                 updates,
                 status: None,
+                monitor: None,
+                runtime: None,
             })
         }
 
+        /// Called once, when the server first reports ready: gives the tray
+        /// UI a way to act on live server state (toggle shell access, react
+        /// to a desktop-control change, download/start the helper) without
+        /// its own Tokio runtime.
+        fn set_server_handles(
+            &mut self,
+            monitor: BridgeStatusMonitor,
+            runtime: tokio::runtime::Handle,
+        ) {
+            self.monitor = Some(monitor);
+            self.runtime = Some(runtime);
+        }
+
         fn apply_status(&mut self, status: BridgeStatusSnapshot) {
+            // Captured before `self.status` is overwritten below, so a
+            // desktop-control toggle (from this tray or the web dashboard)
+            // can be told apart from an unrelated status change and acted on
+            // exactly once — never once per poll.
+            let previous_desktop_control_enabled = self
+                .status
+                .as_ref()
+                .map(|previous| previous.desktop_control_enabled);
+            let desktop_control_enabled = status.desktop_control_enabled;
+            let computer_connected = status.computer_connected;
+
             self.server_status.set_text("Server: Running");
             self.browser_status
                 .set_text(if status.browser_control_active {
@@ -437,6 +594,13 @@ mod desktop {
             }
             let _ = self.tray.set_tooltip(Some(tooltip));
             self.status = Some(status);
+
+            let transitioned = previous_desktop_control_enabled != Some(desktop_control_enabled);
+            if transitioned && desktop_control_enabled && !computer_connected {
+                self.start_or_prepare_helper();
+            } else if transitioned && !desktop_control_enabled && computer_connected {
+                let _ = self.stop_connected_helper();
+            }
         }
 
         fn apply_error(&mut self, error: &str) {
@@ -455,10 +619,19 @@ mod desktop {
         }
 
         fn handle_menu(&mut self, id: &str) -> MenuAction {
+            #[cfg(target_os = "windows")]
+            if id == MENU_UNINSTALL {
+                self.perform_uninstall();
+                return MenuAction::Quit;
+            }
             let result = match id {
                 MENU_OPEN_DASHBOARD => open_dashboard(self.port, &self.token),
                 MENU_EXTENSION_SETUP => self.open_extension_setup(),
                 MENU_COPY_TOKEN => platform::copy_text(&self.token),
+                MENU_SHELL_TOGGLE => {
+                    self.toggle_shell();
+                    Ok(())
+                }
                 MENU_HELPER => {
                     if self
                         .status
@@ -467,7 +640,17 @@ mod desktop {
                     {
                         self.stop_connected_helper()
                     } else {
-                        self.start_helper()
+                        // Route through the same ensure-and-start path the
+                        // automatic flow uses, not a bare `start_helper()`:
+                        // if the helper was never downloaded (e.g. offline
+                        // during the one automatic attempt), this menu item
+                        // is the user's fix-it button and must actually
+                        // retry the download rather than repeat the same
+                        // "not found" error forever. Non-blocking: the
+                        // download itself runs on the async runtime, so the
+                        // tray never freezes.
+                        self.start_or_prepare_helper();
+                        Ok(())
                     }
                 }
                 MENU_UPDATES => platform::open_target(
@@ -512,20 +695,262 @@ mod desktop {
             }
             platform::terminate_process(process_id)
         }
+
+        /// Flips shell access and asks the background settings write to
+        /// persist it, so a tray toggle survives a restart exactly like the
+        /// dashboard's does. Best-effort: with no server handles yet (the
+        /// very first moment after launch) the click is simply ignored.
+        ///
+        /// Both `shellEnabled` and `desktopControlEnabled` are written from
+        /// the live status snapshot, never preserved from whatever the file
+        /// on disk happens to say: settings.json is still read first (only
+        /// to keep `startAtLogin`, which this tray does not track live),
+        /// but a tray shell toggle racing a dashboard desktop-control toggle
+        /// must not let this write regress the desktop-control choice the
+        /// user just made through the other surface.
+        fn toggle_shell(&mut self) {
+            let (Some(monitor), Some(runtime)) = (self.monitor.as_ref(), self.runtime.as_ref())
+            else {
+                return;
+            };
+            let enabled = self
+                .status
+                .as_ref()
+                .is_some_and(|status| status.shell_enabled);
+            let new_value = !enabled;
+            let desktop_control_enabled = self
+                .status
+                .as_ref()
+                .is_some_and(|status| status.desktop_control_enabled);
+            monitor.set_shell_enabled(new_value);
+            runtime.spawn(async move {
+                if let Ok(path) = default_settings_path() {
+                    let mut settings = load_settings(&path).await;
+                    settings.shell_enabled = new_value;
+                    settings.desktop_control_enabled = desktop_control_enabled;
+                    let _ = local_browser_bridge::save_settings(&path, &settings).await;
+                }
+            });
+        }
+
+        /// Starts the helper if it is already installed; if it is missing,
+        /// hands off to the platform-specific recovery path (download it on
+        /// Windows, report it as failed and unrecoverable on macOS) instead
+        /// of failing silently.
+        fn start_or_prepare_helper(&mut self) {
+            match self.start_helper() {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    #[cfg(target_os = "windows")]
+                    self.ensure_and_start_helper();
+                    #[cfg(target_os = "macos")]
+                    self.report_helper_missing();
+                }
+                Err(error) => {
+                    write_desktop_log(&format!("Computer Helper could not start: {error}"));
+                }
+            }
+        }
+
+        #[cfg(target_os = "windows")]
+        fn ensure_and_start_helper(&mut self) {
+            let (Some(runtime), Some(monitor)) = (self.runtime.clone(), self.monitor.clone())
+            else {
+                return;
+            };
+            let Ok(root) = install_root() else {
+                return;
+            };
+            runtime.spawn(async move {
+                if let Some(path) = setup::ensure_helper_downloaded(&root, &monitor).await {
+                    let _ = platform::start_helper(&path);
+                }
+            });
+        }
+
+        #[cfg(target_os = "macos")]
+        fn report_helper_missing(&mut self) {
+            let (Some(runtime), Some(monitor)) = (self.runtime.clone(), self.monitor.clone())
+            else {
+                return;
+            };
+            runtime.spawn(async move {
+                monitor
+                    .set_helper_setup(
+                        "failed",
+                        0,
+                        "The Computer Helper was not found inside the app bundle. Reinstall Local Browser Bridge.",
+                    )
+                    .await;
+            });
+        }
+
+        #[cfg(target_os = "windows")]
+        fn perform_uninstall(&mut self) {
+            let _ = self.stop_connected_helper();
+            if let Err(error) = setup::uninstall(&mut |message| write_desktop_log(message)) {
+                write_desktop_log(&format!("Uninstall could not finish: {error}"));
+                platform::show_error(
+                    "Local Browser Bridge could not be fully uninstalled",
+                    &error.to_string(),
+                );
+            } else {
+                write_desktop_log("Uninstalled Local Browser Bridge from the tray menu");
+            }
+        }
     }
 
     fn finish_extension_setup() -> io::Result<()> {
         let install_root = install_root()?;
         let extension = install_root.join("extension");
         if !extension.join("manifest.json").is_file() {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("Extension folder was not found at {}", extension.display()),
-            ));
+            write_embedded_extension(&extension)?;
         }
         platform::copy_text(extension.to_string_lossy().as_ref())?;
         platform::open_path(&extension)?;
         platform::open_extensions_page()
+    }
+
+    /// Spawns the first-run "set up as an app?" flow on its own detached OS
+    /// thread — deliberately not the server thread and not the tao
+    /// event-loop thread that owns the tray, so a human who never appears
+    /// (or a modal nobody can see, e.g. on a headless CI runner) can only
+    /// stall this one thread forever, never the app itself. Called at most
+    /// once per run, and only after `ServerReady` — see the call site.
+    #[cfg(target_os = "windows")]
+    fn spawn_install_offer() {
+        // A failure here is thread creation itself failing, not anything
+        // about the install; either way, no prompt is shown this run and
+        // the app keeps working from wherever it already is, same as a
+        // decline.
+        let _ = thread::Builder::new()
+            .name("local-browser-bridge-install-offer".to_owned())
+            .spawn(offer_first_run_install);
+    }
+
+    /// First-run flow: asks the user (in plain language, naming exactly
+    /// what happens) whether to set this copy up as an app. Runs on a
+    /// detached thread (see `spawn_install_offer`), strictly after the
+    /// server has already reported healthy, so blocking here — on the
+    /// confirmation dialog, or on the install itself — never delays or
+    /// freezes the running bridge.
+    ///
+    /// Deliberately does not relaunch into the installed copy on
+    /// acceptance: this process just keeps running from wherever it
+    /// already is, exactly as it does on a decline. The copy/shortcut/
+    /// registry work still happens now, in the background; a future login
+    /// (via the start-at-login entry this installs) is what actually
+    /// starts from the new location. This avoids a hand-off race between
+    /// this process's live server/single-instance lock and a new process
+    /// trying to claim the same port and lock out from under it.
+    #[cfg(target_os = "windows")]
+    fn offer_first_run_install() {
+        // Belt and braces: `should_prompt_for_install` already checked this
+        // once, before the server started, but re-checking here is free
+        // and guards against anything that could have installed it since.
+        if setup::is_installed().unwrap_or(false) {
+            return;
+        }
+        let accepted = platform::confirm(
+            "Set up Local Browser Bridge?",
+            "Local Browser Bridge can set itself up as an app:\n\n\
+             \u{2022} Installs for your account only — no administrator needed\n\
+             \u{2022} Starts automatically the next time you sign in\n\
+             \u{2022} Adds a Start Menu shortcut and an uninstaller\n\n\
+             Set it up now?",
+        );
+        if !accepted {
+            write_desktop_log(
+                "First-run install was declined; continuing from the current location",
+            );
+            return;
+        }
+        let mut log_lines = Vec::new();
+        match setup::install(&mut |message| log_lines.push(message.to_owned())) {
+            Ok(path) => {
+                for line in &log_lines {
+                    write_desktop_log(line);
+                }
+                write_desktop_log(&format!(
+                    "Installed Local Browser Bridge at {}; this session keeps running from its \
+                     current location, the installed copy takes over starting next login",
+                    path.display()
+                ));
+            }
+            Err(error) => {
+                for line in &log_lines {
+                    write_desktop_log(line);
+                }
+                write_desktop_log(&format!("Install failed: {error}"));
+                platform::show_error(
+                    "Local Browser Bridge could not set itself up",
+                    &format!(
+                        "{error}\n\nLocal Browser Bridge will keep running from its current location."
+                    ),
+                );
+            }
+        }
+    }
+
+    /// `--install`: install unconditionally (no confirmation — the flag
+    /// itself is the user's consent), then launch the installed copy.
+    #[cfg(target_os = "windows")]
+    fn run_install_command() -> Result<(), Box<dyn std::error::Error>> {
+        let mut log_lines = Vec::new();
+        match setup::install(&mut |message| log_lines.push(message.to_owned())) {
+            Ok(path) => {
+                for line in &log_lines {
+                    write_desktop_log(line);
+                }
+                write_desktop_log(&format!(
+                    "Installed Local Browser Bridge at {}",
+                    path.display()
+                ));
+                relaunch_installed(&path)?;
+                Ok(())
+            }
+            Err(error) => {
+                for line in &log_lines {
+                    write_desktop_log(line);
+                }
+                let message = format!("Local Browser Bridge could not be installed: {error}");
+                write_desktop_log(&message);
+                platform::show_error("Install failed", &message);
+                Err(Box::new(error))
+            }
+        }
+    }
+
+    /// `--uninstall`: remove the install and exit, without starting the
+    /// server or tray icon.
+    #[cfg(target_os = "windows")]
+    fn run_uninstall_command() -> Result<(), Box<dyn std::error::Error>> {
+        match setup::uninstall(&mut |message| write_desktop_log(message)) {
+            Ok(()) => {
+                write_desktop_log("Uninstalled Local Browser Bridge via --uninstall");
+                Ok(())
+            }
+            Err(error) => {
+                let message =
+                    format!("Local Browser Bridge could not be fully uninstalled: {error}");
+                write_desktop_log(&message);
+                platform::show_error("Uninstall failed", &message);
+                Err(Box::new(error))
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn relaunch_installed(path: &Path) -> io::Result<()> {
+        use std::os::windows::process::CommandExt as _;
+        let mut command = Command::new(path);
+        command
+            .env(JUST_INSTALLED_ENV, "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW);
+        command.spawn().map(|_| ())
     }
 
     #[derive(Clone, Copy)]
@@ -611,11 +1036,11 @@ mod desktop {
         }
         #[cfg(target_os = "windows")]
         {
-            let exact = root.join(format!(
-                "local-computer-helper-v{VERSION}-windows-x86_64.exe"
-            ));
-            if exact.is_file() {
-                return Ok(exact);
+            for name in setup::helper_candidate_names(VERSION) {
+                let candidate = root.join(name);
+                if candidate.is_file() {
+                    return Ok(candidate);
+                }
             }
         }
         Err(io::Error::new(
@@ -626,6 +1051,65 @@ mod desktop {
 
     fn open_dashboard(port: u16, token: &str) -> io::Result<()> {
         platform::open_target(&format!("http://127.0.0.1:{port}/#token={token}"))
+    }
+
+    /// Decides whether this process should open the dashboard on its own,
+    /// so a user is never left with nothing but a tray icon and no idea
+    /// what to do next. Pure and platform-free (no I/O, no globals) so it
+    /// is covered by a plain unit test on any host.
+    ///
+    /// - `just_installed`: this process is the relaunch of a first-run
+    ///   self-install (see `JUST_INSTALLED_ENV`) — always worth a look.
+    /// - `extension_connected`: the first status snapshot's read of whether
+    ///   the browser extension has paired yet — while it hasn't, this user
+    ///   still has setup to finish.
+    /// - `already_opened`: this process already opened the dashboard once;
+    ///   never again, so a login-start app never spawns a second tab.
+    fn should_open_dashboard(
+        just_installed: bool,
+        extension_connected: bool,
+        already_opened: bool,
+    ) -> bool {
+        if already_opened {
+            return false;
+        }
+        just_installed || !extension_connected
+    }
+
+    /// Whether the first-run "set up as an app?" prompt should be shown at
+    /// all. Pure and platform-free (no I/O, no globals, no Windows API
+    /// calls) so the full truth table is covered by a plain unit test on
+    /// any host, the same way `should_open_dashboard` is; the real Windows
+    /// startup path (`run`, above) computes each input honestly and defers
+    /// entirely to this function rather than inlining its own version of
+    /// the decision. `#[cfg(any(test, target_os = "windows"))]` because the
+    /// only production caller is Windows-only, but the predicate itself —
+    /// and its test — must not be.
+    ///
+    /// - `already_installed`: nothing to offer.
+    /// - `interactive`: best-effort signal that a human could plausibly see
+    ///   and answer a dialog right now. See `platform::is_interactive_session`
+    ///   for how this is computed on Windows, and why it is a heuristic
+    ///   rather than a guarantee.
+    /// - `opt_out_flag`: `--no-install` was passed.
+    /// - `env_opt_out`: `LBB_NO_INSTALL_PROMPT` was set to a truthy value
+    ///   (see `install_prompt_env_opt_out`) — the explicit, unambiguous
+    ///   override for hosts the interactivity heuristic cannot see through,
+    ///   such as the acceptance-test runner.
+    ///
+    /// Every input resolves toward NOT prompting: a skipped prompt costs
+    /// the user one click later ("Finish setup" stays reachable from the
+    /// tray for as long as the app is not installed); a spurious prompt
+    /// with nobody to answer it costs a hung, invisible dialog — and,
+    /// before this was fixed, a server that never started at all.
+    #[cfg(any(test, target_os = "windows"))]
+    fn should_prompt_for_install(
+        already_installed: bool,
+        interactive: bool,
+        opt_out_flag: bool,
+        env_opt_out: bool,
+    ) -> bool {
+        !already_installed && interactive && !opt_out_flag && !env_opt_out
     }
 
     fn logs_dir() -> PathBuf {
@@ -674,8 +1158,15 @@ mod desktop {
                 "--licenses" => cli.show_licenses = true,
                 "--no-update-check" => cli.no_update_check = true,
                 "--enable-shell" => cli.enable_shell = true,
+                "--no-shell" => cli.no_shell = true,
                 "--start-helper" => cli.start_helper = true,
                 "--extension-setup" => cli.extension_setup = true,
+                #[cfg(target_os = "windows")]
+                "--install" => cli.install = true,
+                #[cfg(target_os = "windows")]
+                "--uninstall" => cli.uninstall = true,
+                #[cfg(target_os = "windows")]
+                "--no-install" => cli.no_install = true,
                 _ => {
                     return Err(format!(
                         "Unknown argument: {argument}. Use --help for usage."
@@ -687,6 +1178,21 @@ mod desktop {
     }
 
     fn help_text() -> String {
+        #[cfg(target_os = "windows")]
+        let windows_only = "\
+  --install            Install as an app under this account and exit\n\
+  --uninstall          Remove the app installed under this account and exit\n\
+  --no-install         Skip the one-time \"set up as an app?\" prompt\n\
+";
+        #[cfg(target_os = "windows")]
+        let windows_only_note = "LBB_NO_INSTALL_PROMPT=1 also skips the one-time install prompt \
+(equivalent to --no-install), and is meant for scripted/CI launches. The prompt is\n\
+also skipped automatically on a session with no visible desktop (a Windows\n\
+service, for example) even without either one.\n";
+        #[cfg(not(target_os = "windows"))]
+        let windows_only_note = "";
+        #[cfg(not(target_os = "windows"))]
+        let windows_only = "";
         format!(
             "Local Browser Bridge Desktop {VERSION}\n\n\
 Usage: local-browser-bridge-desktop [OPTIONS]\n\n\
@@ -695,9 +1201,16 @@ Options:\n\
   --extension-setup    Open the browser extension setup guide and exit\n\
   --no-update-check    Start without the background release metadata check\n\
   --enable-shell       Grant API clients full current-user native shell access\n\
+  --no-shell           Force shell access off, overriding the settings file\n\
+{windows_only}\
   --licenses           Print project and third-party license notices, then exit\n\
   -V, --version        Print the installed version and exit\n\
-  -h, --help           Print this help"
+  -h, --help           Print this help\n\n\
+Without --enable-shell or --no-shell, LBB_ENABLE_SHELL decides when set to\n\
+1/true/yes/on or 0/false/no/off (empty/unset has no opinion); otherwise\n\
+shell access follows settings.json (default: enabled). Passing both flags\n\
+is an error.\n\
+{windows_only_note}"
         )
     }
 
@@ -716,8 +1229,14 @@ Options:\n\
         parse_bool_env("LBB_DISABLE_UPDATE_CHECK")
     }
 
-    fn shell_enabled_from_env() -> Result<bool, String> {
-        parse_bool_env("LBB_ENABLE_SHELL")
+    /// The explicit, unambiguous opt-out for the first-run install prompt
+    /// (belt and braces alongside `--no-install` and the interactivity
+    /// heuristic): meant for scripted or CI launches of the desktop-host
+    /// binary, which have no human at all — not even on a visible desktop
+    /// — to answer a dialog. See `should_prompt_for_install`.
+    #[cfg(target_os = "windows")]
+    fn install_prompt_env_opt_out() -> Result<bool, String> {
+        parse_bool_env("LBB_NO_INSTALL_PROMPT")
     }
 
     fn parse_bool_env(name: &str) -> Result<bool, String> {
@@ -998,6 +1517,75 @@ Options:\n\
             };
         }
 
+        /// Shows a Yes/No question dialog and returns whether the user
+        /// chose Yes. Used only for the one-time first-run install prompt.
+        #[cfg(target_os = "windows")]
+        pub fn confirm(title: &str, message: &str) -> bool {
+            const MB_YESNO: u32 = 0x0000_0004;
+            const MB_ICONQUESTION: u32 = 0x0000_0020;
+            const IDYES: i32 = 6;
+            let title = wide(title);
+            let message = wide(message);
+            let result = unsafe {
+                MessageBoxW(
+                    std::ptr::null_mut(),
+                    message.as_ptr(),
+                    title.as_ptr(),
+                    MB_YESNO | MB_ICONQUESTION,
+                )
+            };
+            result == IDYES
+        }
+
+        /// Best-effort signal that a human could plausibly see and answer a
+        /// dialog on this desktop session right now.
+        ///
+        /// A non-interactive Windows session — a service, or a scheduled
+        /// task set to "run whether user is logged on or not" — executes on
+        /// a window station that exists but is not visible on any physical
+        /// or virtual display (typically named `Service-0x0-3e7$`, versus
+        /// the interactive `WinSta0`). `GetProcessWindowStation` returns
+        /// this process's window station; `GetUserObjectInformationW` with
+        /// `UOI_FLAGS` reports whether `WSF_VISIBLE` is set on it. This is
+        /// the same technique .NET's `Environment.UserInteractive` uses, and
+        /// it is deliberately conservative both ways: on any failure to ask
+        /// the question at all, this returns `false` (no prompt) rather than
+        /// `true`, since a missed prompt is cheap and a stuck one is not.
+        ///
+        /// It is a heuristic, not a guarantee: some CI runners execute on a
+        /// window station that reports visible even though no human is
+        /// watching it. That gap is exactly why `--no-install` and
+        /// `LBB_NO_INSTALL_PROMPT` exist as an explicit, unambiguous
+        /// override on top of this check, not instead of it.
+        #[cfg(target_os = "windows")]
+        pub fn is_interactive_session() -> bool {
+            const UOI_FLAGS: u32 = 1;
+            const WSF_VISIBLE: u32 = 0x0001;
+            #[repr(C)]
+            #[derive(Default)]
+            struct UserObjectFlags {
+                inherit: i32,
+                reserved: i32,
+                flags: u32,
+            }
+            unsafe {
+                let station = GetProcessWindowStation();
+                if station.is_null() {
+                    return false;
+                }
+                let mut info = UserObjectFlags::default();
+                let mut needed = 0u32;
+                let ok = GetUserObjectInformationW(
+                    station,
+                    UOI_FLAGS,
+                    std::ptr::addr_of_mut!(info).cast(),
+                    std::mem::size_of::<UserObjectFlags>() as u32,
+                    &mut needed,
+                );
+                ok != 0 && (info.flags & WSF_VISIBLE) != 0
+            }
+        }
+
         #[cfg(target_os = "macos")]
         fn apple_script_string(value: &str) -> String {
             format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
@@ -1083,6 +1671,14 @@ Options:\n\
                 caption: *const u16,
                 kind: u32,
             ) -> i32;
+            fn GetProcessWindowStation() -> *mut std::ffi::c_void;
+            fn GetUserObjectInformationW(
+                object: *mut std::ffi::c_void,
+                index: u32,
+                info: *mut std::ffi::c_void,
+                length: u32,
+                needed: *mut u32,
+            ) -> i32;
         }
     }
 
@@ -1103,10 +1699,120 @@ Options:\n\
         }
 
         #[test]
+        fn desktop_cli_parses_no_shell_flag() {
+            let cli = parse_args(["--no-shell".to_owned()].into_iter()).unwrap();
+            assert!(cli.no_shell);
+            assert!(!cli.enable_shell);
+        }
+
+        /// Full precedence table, exercised the same way `run` calls
+        /// `resolve_shell_enabled`: through a real parsed `Cli`.
+        #[test]
+        fn desktop_shell_precedence_matches_documented_rules() {
+            let cli = |args: &[&str]| {
+                parse_args(args.iter().map(|argument| argument.to_string())).unwrap()
+            };
+
+            // Flag beats env, in both directions.
+            let enable = cli(&["--enable-shell"]);
+            assert!(
+                resolve_shell_enabled(enable.enable_shell, enable.no_shell, Some("0"), true)
+                    .unwrap()
+            );
+            let no_shell = cli(&["--no-shell"]);
+            assert!(
+                !resolve_shell_enabled(no_shell.enable_shell, no_shell.no_shell, Some("1"), true)
+                    .unwrap()
+            );
+
+            // Both flags together is an error.
+            let both = cli(&["--enable-shell", "--no-shell"]);
+            assert!(resolve_shell_enabled(both.enable_shell, both.no_shell, None, true).is_err());
+
+            // No flag: env beats settings, in both directions; empty env
+            // means unset and settings decides; a bad env value is an error.
+            let neither = cli(&[]);
+            assert!(
+                resolve_shell_enabled(neither.enable_shell, neither.no_shell, Some("on"), false)
+                    .unwrap()
+            );
+            assert!(
+                !resolve_shell_enabled(neither.enable_shell, neither.no_shell, Some("off"), true)
+                    .unwrap()
+            );
+            assert!(
+                resolve_shell_enabled(neither.enable_shell, neither.no_shell, Some(""), true)
+                    .unwrap()
+            );
+            assert!(
+                !resolve_shell_enabled(neither.enable_shell, neither.no_shell, None, false)
+                    .unwrap()
+            );
+            assert!(
+                resolve_shell_enabled(neither.enable_shell, neither.no_shell, Some("maybe"), true)
+                    .is_err()
+            );
+        }
+
+        #[test]
         fn desktop_port_validation_matches_the_server() {
             assert_eq!(parse_port(None).unwrap(), DEFAULT_PORT);
             assert_eq!(parse_port(Some("8080")).unwrap(), 8080);
             assert!(parse_port(Some("0")).is_err());
+        }
+
+        #[test]
+        fn should_open_dashboard_covers_first_run_and_setup_incomplete_cases() {
+            // Just installed: open regardless of connection state.
+            assert!(should_open_dashboard(true, true, false));
+            assert!(should_open_dashboard(true, false, false));
+            // Extension not connected yet: this user still has setup to finish.
+            assert!(should_open_dashboard(false, false, false));
+            // Already opened once this run: never a second tab.
+            assert!(!should_open_dashboard(true, true, true));
+            assert!(!should_open_dashboard(true, false, true));
+            assert!(!should_open_dashboard(false, false, true));
+            // Connected and not a first run: stay quiet on a login-start app.
+            assert!(!should_open_dashboard(false, true, false));
+        }
+
+        /// Full truth table for `should_prompt_for_install`: the only case
+        /// that prompts is not-installed, interactive, and neither opt-out
+        /// set. Every other combination — including every single opt-out on
+        /// its own — must stay quiet, matching its documented "when in
+        /// doubt, do not prompt" rule.
+        #[test]
+        fn should_prompt_for_install_only_when_uninstalled_interactive_and_not_opted_out() {
+            // The one case that prompts.
+            assert!(should_prompt_for_install(false, true, false, false));
+
+            // Already installed: never, regardless of anything else — all
+            // 8 combinations of the remaining three inputs.
+            assert!(!should_prompt_for_install(true, false, false, false));
+            assert!(!should_prompt_for_install(true, false, false, true));
+            assert!(!should_prompt_for_install(true, false, true, false));
+            assert!(!should_prompt_for_install(true, false, true, true));
+            assert!(!should_prompt_for_install(true, true, false, false));
+            assert!(!should_prompt_for_install(true, true, false, true));
+            assert!(!should_prompt_for_install(true, true, true, false));
+            assert!(!should_prompt_for_install(true, true, true, true));
+
+            // Not interactive (headless/service/CI session): never, even
+            // when nothing else opted out. This is the exact case that
+            // hung the acceptance suite before this fix.
+            assert!(!should_prompt_for_install(false, false, false, false));
+
+            // --no-install passed: never, regardless of interactivity.
+            assert!(!should_prompt_for_install(false, true, true, false));
+            assert!(!should_prompt_for_install(false, false, true, false));
+
+            // LBB_NO_INSTALL_PROMPT set: never, regardless of interactivity.
+            assert!(!should_prompt_for_install(false, true, false, true));
+            assert!(!should_prompt_for_install(false, false, false, true));
+
+            // Both opt-outs together: still never.
+            assert!(!should_prompt_for_install(false, true, true, true));
+            assert!(!should_prompt_for_install(false, false, true, true));
         }
 
         #[test]

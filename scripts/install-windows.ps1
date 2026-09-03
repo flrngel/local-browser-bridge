@@ -5,6 +5,8 @@ param(
     [switch]$NoStartup,
     [switch]$StartHelper,
     [switch]$EnableShell,
+    [switch]$NoDesktopControl,
+    [switch]$NoShell,
     [switch]$NoLaunch,
     [switch]$Uninstall,
     [switch]$ResetToken,
@@ -13,11 +15,18 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 2.0
+$ProgressPreference = "SilentlyContinue"
 $script:Repository = "flrngel/local-browser-bridge"
 $script:StartupName = "Local Browser Bridge.lnk"
 $script:StartMenuName = "Local Browser Bridge"
 $script:OwnerMarker = ".lbb-install-owner"
 $script:OwnerMarkerValue = "local-browser-bridge-install-v1"
+
+# Desktop control (the computer helper) and shell access are on by default; pass
+# -NoDesktopControl / -NoShell to opt out. -StartHelper and -EnableShell remain accepted
+# no-op aliases so existing documented commands keep working.
+$StartHelper = -not $NoDesktopControl
+$EnableShell = -not $NoShell
 
 function Get-Sha256([string]$Path) {
     $stream = [IO.File]::OpenRead($Path)
@@ -267,6 +276,58 @@ function Test-OwnedShortcut([string]$Path, [string]$Root) {
     catch { return $false }
 }
 
+function Write-SettingsFile([bool]$ShellEnabled, [bool]$DesktopControlEnabled, [bool]$StartAtLogin, [string]$SettingsPath = "") {
+    if ([string]::IsNullOrWhiteSpace($SettingsPath)) {
+        $settingsDirectory = Join-Path $env:USERPROFILE ".local-browser-bridge"
+        $SettingsPath = Join-Path $settingsDirectory "settings.json"
+    }
+    else {
+        $settingsDirectory = [IO.Path]::GetDirectoryName($SettingsPath)
+    }
+    if (-not [IO.Directory]::Exists($settingsDirectory)) { [IO.Directory]::CreateDirectory($settingsDirectory) | Out-Null }
+
+    $existing = $null
+    if ([IO.File]::Exists($SettingsPath)) {
+        try {
+            $text = [IO.File]::ReadAllText($SettingsPath)
+            if (-not [string]::IsNullOrWhiteSpace($text)) { $existing = $text | ConvertFrom-Json -ErrorAction Stop }
+        }
+        catch {
+            # Corrupt or unreadable existing settings: fall through and treat
+            # as absent, so the install still succeeds with this run's
+            # freshly computed defaults instead of failing.
+            $existing = $null
+        }
+    }
+
+    # Merge, do not regenerate: only the field whose opt-out switch was
+    # actually passed this run may change. Every other field - startAtLogin
+    # included, plus any field a newer version of this script does not know
+    # about - is carried forward unchanged from the existing file. This is
+    # what stops a re-install or upgrade from silently re-enabling a
+    # capability the user had previously turned off.
+    $merged = [ordered]@{
+        version               = 1
+        shellEnabled          = $ShellEnabled
+        desktopControlEnabled = $DesktopControlEnabled
+        startAtLogin          = $StartAtLogin
+    }
+    if ($existing -is [Management.Automation.PSCustomObject]) {
+        foreach ($property in $existing.PSObject.Properties) {
+            $merged[$property.Name] = $property.Value
+        }
+        if ($NoShell.IsPresent) { $merged["shellEnabled"] = $ShellEnabled }
+        if ($NoDesktopControl.IsPresent) { $merged["desktopControlEnabled"] = $DesktopControlEnabled }
+        if ($NoStartup.IsPresent) { $merged["startAtLogin"] = $StartAtLogin }
+    }
+
+    $json = (ConvertTo-Json -InputObject $merged -Depth 10 -Compress) + "`n"
+    $tempPath = "$SettingsPath.tmp"
+    [IO.File]::WriteAllText($tempPath, $json, (New-Object Text.UTF8Encoding($false)))
+    if ([IO.File]::Exists($SettingsPath)) { [IO.File]::Delete($SettingsPath) }
+    [IO.File]::Move($tempPath, $SettingsPath)
+}
+
 function Open-ExtensionsPage {
     $candidates = @(
         (Join-Path ${env:ProgramFiles} "Google\Chrome\Application\chrome.exe"),
@@ -296,30 +357,21 @@ function Show-ExtensionSetup([string]$ExtensionRoot, [string]$Token) {
     else {
         "Open chrome://extensions or edge://extensions in your browser."
     }
-    $message = @"
-Finish browser setup now:
-
-1. $browserStep
-2. Turn on Developer mode.
-3. Click Load unpacked.
-4. Paste the extension folder path (already copied) and select it:
-   $ExtensionRoot
-Complete steps 1-4, then choose OK. The installer will copy the bridge token next.
-"@
-    try {
-        $shell = New-Object -ComObject WScript.Shell
-        $null = $shell.Popup($message, 0, "Finish Local Browser Bridge Setup", 64)
-        if ($Token -match '^[A-Za-z0-9_-]{32,}$') {
-            try { $Token | & (Join-Path $env:SystemRoot "System32\clip.exe") }
-            catch { }
-            $null = $shell.Popup("The bridge token is now copied. Open the Local Browser Bridge extension, paste it, and choose Save and connect.`n`nYou can repeat this guide from Start > Local Browser Bridge > Finish Browser Extension Setup.", 0, "Connect Local Browser Bridge", 64)
-        }
-        else {
-            $null = $shell.Popup("The server token is not ready yet. Open Local Browser Bridge from the Start menu, then run Finish Browser Extension Setup again.", 0, "Connect Local Browser Bridge", 48)
-        }
+    Write-Output ""
+    Write-Output "== Finish Local Browser Bridge Setup =="
+    Write-Output "1. $browserStep"
+    Write-Output "2. Turn on Developer mode."
+    Write-Output "3. Click Load unpacked."
+    Write-Output "4. Paste the extension folder path (already copied) and select it:"
+    Write-Output "   $ExtensionRoot"
+    if ($Token -match '^[A-Za-z0-9_-]{32,}$') {
+        try { $Token | & (Join-Path $env:SystemRoot "System32\clip.exe") }
+        catch { }
+        Write-Output "The bridge token is now copied. Open the Local Browser Bridge extension, paste it, and choose Save and connect."
+        Write-Output "You can repeat this guide from Start > Local Browser Bridge > Finish Browser Extension Setup."
     }
-    catch {
-        Write-Output $message
+    else {
+        Write-Output "The server token is not ready yet. Open Local Browser Bridge from the Start menu, then run Finish Browser Extension Setup again."
     }
 }
 
@@ -362,18 +414,23 @@ function Remove-Install {
         }
     }
     Remove-AllowlistedInstall $InstallRoot
+    Write-Output "Removed installed program files: $InstallRoot"
     if ($ResetToken) {
         $token = Join-Path $env:USERPROFILE ".local-browser-bridge\token"
         $tokenDirectory = Split-Path -Parent $token
         if ([IO.Directory]::Exists($tokenDirectory)) { Assert-OrdinaryDirectory $tokenDirectory }
         if ([IO.File]::Exists($token)) { Assert-OrdinaryFile $token; [IO.File]::Delete($token) }
+        Write-Output "Removed the bridge token."
+    }
+    $settings = Join-Path $env:USERPROFILE ".local-browser-bridge\settings.json"
+    if ([IO.File]::Exists($settings)) {
+        Assert-OrdinaryFile $settings
+        [IO.File]::Delete($settings)
+        Write-Output "Removed settings.json."
     }
     $null = Open-ExtensionsPage
-    try {
-        Add-Type -AssemblyName PresentationFramework
-        [System.Windows.MessageBox]::Show("The unpacked extension files are gone. If a Local Browser Bridge card remains, click Remove once. Browser profile files were intentionally left untouched.", "Finish Local Browser Bridge Removal") | Out-Null
-    }
-    catch { }
+    Write-Output "The unpacked extension files are gone. If a Local Browser Bridge card remains in the extensions page, click Remove once."
+    Write-Output "Browser profile files were intentionally left untouched."
     Write-Output "Local Browser Bridge was removed for the current user."
 }
 
@@ -391,10 +448,70 @@ function Invoke-SelfTest {
         try { $null = Get-ManifestMap $bad } catch { $rejected = $true }
         if (-not $rejected) { throw "Malformed manifest self-test failed." }
         Assert-OrdinaryDirectory $scratch
+        Test-SettingsMergeSelfTest $scratch
         Write-Output "Windows one-command installer self-test passed."
     }
     finally {
         if ([IO.Directory]::Exists($scratch)) { [IO.Directory]::Delete($scratch, $true) }
+    }
+}
+
+function Test-SettingsMergeSelfTest([string]$Scratch) {
+    $settingsPath = Join-Path $Scratch "settings.json"
+    $savedNoShell = $NoShell
+    $savedNoDesktopControl = $NoDesktopControl
+    $savedNoStartup = $NoStartup
+    try {
+        # Fresh install (no existing file): full defaults are written.
+        $script:NoShell = $false
+        $script:NoDesktopControl = $false
+        $script:NoStartup = $false
+        Write-SettingsFile -ShellEnabled $true -DesktopControlEnabled $true -StartAtLogin $true -SettingsPath $settingsPath
+        $written = ([IO.File]::ReadAllText($settingsPath) | ConvertFrom-Json)
+        if (-not $written.shellEnabled -or -not $written.desktopControlEnabled -or -not $written.startAtLogin) {
+            throw "Settings self-test failed: fresh install did not write full defaults."
+        }
+
+        # Re-install passing only -NoShell must turn shellEnabled off without
+        # touching desktopControlEnabled or startAtLogin.
+        $script:NoShell = $true
+        $script:NoDesktopControl = $false
+        $script:NoStartup = $false
+        Write-SettingsFile -ShellEnabled $false -DesktopControlEnabled $true -StartAtLogin $true -SettingsPath $settingsPath
+        $merged = ([IO.File]::ReadAllText($settingsPath) | ConvertFrom-Json)
+        if ($merged.shellEnabled) { throw "Settings self-test failed: -NoShell did not disable shellEnabled." }
+        if (-not $merged.desktopControlEnabled) { throw "Settings self-test failed: unrelated -NoShell run clobbered desktopControlEnabled." }
+        if (-not $merged.startAtLogin) { throw "Settings self-test failed: unrelated -NoShell run clobbered startAtLogin." }
+
+        # An unknown field from a newer version of this script must survive
+        # a merge unchanged.
+        $withExtra = '{"version":1,"shellEnabled":false,"desktopControlEnabled":true,"startAtLogin":true,"futureField":"keep-me"}'
+        [IO.File]::WriteAllText($settingsPath, $withExtra, (New-Object Text.UTF8Encoding($false)))
+        $script:NoDesktopControl = $true
+        $script:NoShell = $false
+        $script:NoStartup = $false
+        Write-SettingsFile -ShellEnabled $true -DesktopControlEnabled $false -StartAtLogin $true -SettingsPath $settingsPath
+        $mergedExtra = ([IO.File]::ReadAllText($settingsPath) | ConvertFrom-Json)
+        if ($mergedExtra.desktopControlEnabled) { throw "Settings self-test failed: -NoDesktopControl did not disable desktopControlEnabled." }
+        if ($mergedExtra.shellEnabled) { throw "Settings self-test failed: unrelated -NoDesktopControl run clobbered shellEnabled." }
+        if ($mergedExtra.futureField -ne "keep-me") { throw "Settings self-test failed: unknown field was not preserved through a merge." }
+
+        # A corrupt existing file must fall back to this run's computed
+        # defaults instead of failing the install.
+        [IO.File]::WriteAllText($settingsPath, "{not valid json", (New-Object Text.UTF8Encoding($false)))
+        $script:NoShell = $true
+        $script:NoDesktopControl = $false
+        $script:NoStartup = $false
+        Write-SettingsFile -ShellEnabled $false -DesktopControlEnabled $true -StartAtLogin $true -SettingsPath $settingsPath
+        $recovered = ([IO.File]::ReadAllText($settingsPath) | ConvertFrom-Json)
+        if ($recovered.shellEnabled -or -not $recovered.desktopControlEnabled -or -not $recovered.startAtLogin) {
+            throw "Settings self-test failed: corrupt existing file was not recovered with this run's defaults."
+        }
+    }
+    finally {
+        $script:NoShell = $savedNoShell
+        $script:NoDesktopControl = $savedNoDesktopControl
+        $script:NoStartup = $savedNoStartup
     }
 }
 
@@ -408,8 +525,10 @@ Assert-SafeInstallRoot $InstallRoot
 if ($Uninstall) { Remove-Install; exit 0 }
 if (-not [Environment]::Is64BitOperatingSystem) { throw "64-bit Windows is required." }
 
+Write-Output "Resolving release $Version..."
 $release = Get-Release $Version
 $resolved = $release.Version
+Write-Output "Resolved release v$resolved."
 $serverName = "local-browser-bridge-v$resolved-windows-x86_64.exe"
 $helperName = "local-computer-helper-v$resolved-windows-x86_64.exe"
 $extensionName = "local-browser-bridge-extension-v$resolved.zip"
@@ -419,12 +538,15 @@ $stage = Join-Path ([IO.Path]::GetTempPath()) ("lbb-install-" + [Guid]::NewGuid(
 
 try {
     foreach ($name in $downloadNames) {
+        Write-Output "Downloading $name..."
         $asset = @($release.Assets | Where-Object { $_.name -ceq $name })[0]
         $destination = Join-Path $stage $name
         Invoke-WebRequest -UseBasicParsing -Headers @{ "User-Agent" = "local-browser-bridge-installer" } -Uri $asset.browser_download_url -OutFile $destination
+        Write-Output "Checking $name..."
         $actual = Get-Sha256 $destination
         if (("sha256:" + $actual) -cne [string]$asset.digest) { throw "GitHub digest mismatch for $name" }
     }
+    Write-Output "Checking the release manifest..."
     $manifest = Get-ManifestMap (Join-Path $stage "SHA256SUMS.txt")
     foreach ($name in @($serverName, $helperName, $extensionName)) {
         if (-not $manifest.ContainsKey($name) -or $manifest[$name] -cne (Get-Sha256 (Join-Path $stage $name))) {
@@ -432,12 +554,14 @@ try {
         }
     }
 
+    Write-Output "Extracting the browser extension..."
     $extensionStage = Join-Path $stage "extension"
     Expand-Archive -LiteralPath (Join-Path $stage $extensionName) -DestinationPath $extensionStage
     if (-not [IO.File]::Exists((Join-Path $extensionStage "manifest.json"))) {
         throw "The extension archive does not contain manifest.json at its root."
     }
 
+    Write-Output "Installing Local Browser Bridge to $InstallRoot..."
     $installParent = Split-Path -Parent $InstallRoot
     if (-not [IO.Directory]::Exists($installParent)) { [IO.Directory]::CreateDirectory($installParent) | Out-Null }
     Assert-OrdinaryDirectory $installParent
@@ -458,11 +582,18 @@ try {
     [IO.File]::WriteAllText((Join-Path $InstallRoot $script:OwnerMarker), $script:OwnerMarkerValue + "`n", (New-Object Text.UTF8Encoding($false)))
 
     $desktopPath = Join-Path $InstallRoot $serverName
-    $startupArguments = if ($EnableShell) { "--enable-shell" } else { "" }
+    $startupArguments = if ($EnableShell) {
+        if ($StartHelper) { "--enable-shell --start-helper" } else { "--enable-shell" }
+    }
+    else {
+        if ($StartHelper) { "--start-helper" } else { "" }
+    }
     $launchArguments = @()
     if ($EnableShell) { $launchArguments += "--enable-shell" }
     if ($StartHelper) { $launchArguments += "--start-helper" }
     $launchArgumentText = $launchArguments -join " "
+    Write-Output "Saving settings..."
+    Write-SettingsFile -ShellEnabled $EnableShell -DesktopControlEnabled $StartHelper -StartAtLogin (-not $NoStartup)
     $tokenPath = Join-Path $env:USERPROFILE ".local-browser-bridge\token"
     $uninstallerUrl = "https://raw.githubusercontent.com/$($script:Repository)/v$resolved/scripts/uninstall-windows.ps1"
     $startupDirectory = [Environment]::GetFolderPath("Startup")
@@ -506,12 +637,14 @@ try {
     }
 
     if (-not $NoLaunch) {
+        Write-Output "Starting Local Browser Bridge..."
         if ([string]::IsNullOrWhiteSpace($launchArgumentText)) {
             Start-Process -FilePath $desktopPath
         }
         else {
             Start-Process -FilePath $desktopPath -ArgumentList $launchArgumentText
         }
+        Write-Output "Waiting for the authentication token..."
         $deadline = [DateTime]::UtcNow.AddSeconds(10)
         while (-not [IO.File]::Exists($tokenPath) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
         if ([IO.File]::Exists($tokenPath)) {
@@ -529,12 +662,17 @@ try {
     Write-Output "Finish setup: open Start > Local Browser Bridge > Finish Browser Extension Setup."
     Write-Output "Open later: Start > Local Browser Bridge > Local Browser Bridge."
     if ($EnableShell) {
-        Write-Warning "Full current-user shell access is enabled for authenticated local API clients."
+        Write-Output "Shell access is on by default: authenticated local API clients can run shell commands as you. Add -NoShell to turn it off."
     }
     else {
         Write-Output "Shell access is off. Re-run this installer with -EnableShell only if you intend to grant it."
     }
-    if (-not $StartHelper) { Write-Output "Desktop control remains off. Start it from the tray menu only when you want it." }
+    if ($StartHelper) {
+        Write-Output "Desktop control is on by default: this computer can be observed and controlled through the bridge. Add -NoDesktopControl to turn it off."
+    }
+    else {
+        Write-Output "Desktop control is off. Re-run this installer with -StartHelper only if you intend to grant it."
+    }
 }
 finally {
     if ([IO.Directory]::Exists($stage)) { [IO.Directory]::Delete($stage, $true) }

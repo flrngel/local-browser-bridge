@@ -1,9 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Local Browser Bridge",
-  "version": "0.12.70",
+  "version": "0.13.0",
   "description": "Connects browser tabs to a loopback-only control surface for local browser agents.",
   "minimum_chrome_version": "140",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAy0Vig8iszG7SEBqAzFuel7Qg85FFFroi6M7AviaXn4+5KwOyZsNcGGdbElewvE4J/M0gX+r2Kl6Yc15BHwhTmYa1ARdqAKJogTdQVxZ2Ys3KgcljyQqOjw8w8Bxd6YfRklYR44zUzBy6x8FhC6zoEmATixBR9hKHFEeg1tZgIO8OtMOVYtCHBSXGOZVYFxJuRse8FYB/f9YuCvKB6r8RDImYFTCV2H0OA4/o327CKz6ZqubAJ7SQTaaRNynFuj9bMMmdDF3W/2iT/Y8HJygWVdx5XPxSkfU11YhHCjJ3HohQ6ytRq4awZVOVlv/LWnsDoMC3QZ1CKWAcOkX9zCwYbwIDAQAB",
+  "externally_connectable": {
+    "matches": ["http://127.0.0.1/*", "http://localhost/*"]
+  },
   "permissions": [
     "tabs",
     "scripting",

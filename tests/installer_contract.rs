@@ -243,3 +243,112 @@ fn normal_startup_uses_the_desktop_host_without_a_console_window() {
     assert!(helper.contains("CREATE_SUSPENDED | CREATE_NO_WINDOW"));
     assert!(helper.contains("controllerProcessId"));
 }
+
+#[test]
+fn installers_never_hang_and_turn_on_desktop_control_and_shell_by_default() {
+    let windows_install = source("scripts/install-windows.ps1");
+    let windows_uninstall = source("scripts/uninstall-windows.ps1");
+    let macos_install = source("scripts/install-macos.sh");
+    let macos_uninstall = source("scripts/uninstall-macos.sh");
+
+    // No unbounded native modal can ever run a message loop on the installer's own thread.
+    assert!(!windows_install.contains(".Popup("));
+    assert!(!windows_uninstall.contains("MessageBox]::Show("));
+
+    // Progress is visible immediately; the user is never left staring at a blank console.
+    assert!(windows_install.contains("$ProgressPreference = \"SilentlyContinue\""));
+    assert!(windows_uninstall.contains("$ProgressPreference = \"SilentlyContinue\""));
+    assert!(windows_install.contains("Write-Output \"Downloading $name...\""));
+    assert!(macos_install.contains("Downloading $name..."));
+    assert!(macos_install.contains("Waiting for the authentication token..."));
+
+    // Desktop control and shell access are on by default via opt-out switches;
+    // -StartHelper/-EnableShell (and their macOS equivalents) remain accepted no-op aliases.
+    assert!(windows_install.contains("[switch]$NoDesktopControl"));
+    assert!(windows_install.contains("[switch]$NoShell"));
+    assert!(windows_install.contains("$StartHelper = -not $NoDesktopControl"));
+    assert!(windows_install.contains("$EnableShell = -not $NoShell"));
+    assert!(macos_install.contains("--no-desktop-control) no_desktop_control=1"));
+    assert!(macos_install.contains("--no-shell) no_shell=1"));
+
+    // The Startup shortcut / LaunchAgent now carry both the shell and desktop-control choice.
+    assert!(windows_install.contains("if ($StartHelper) { \"--enable-shell --start-helper\" }"));
+    assert!(macos_install.contains("helper_plist_argument"));
+
+    // Settings persist the effective choice and are cleaned up on uninstall.
+    assert!(windows_install.contains("settings.json"));
+    assert!(windows_uninstall.contains("settings.json"));
+    assert!(macos_install.contains("settings.json"));
+    assert!(macos_uninstall.contains("settings.json"));
+}
+
+#[test]
+fn installer_settings_writer_merges_instead_of_regenerating() {
+    let windows = source("scripts/install-windows.ps1");
+    let macos = source("scripts/install-macos.sh");
+
+    // Regression guard: the old bug computed one combined "was any opt-out
+    // switch passed" flag and, whenever it was true, rewrote every field
+    // from this run's freshly recomputed defaults - so passing only one
+    // opt-out flag on a re-install silently re-enabled whichever other
+    // capability the user had separately turned off before. That combined
+    // flag must be gone.
+    assert!(
+        !windows.contains("$explicitOptOut"),
+        "Windows installer must not regress to a single combined opt-out flag that regenerates every field"
+    );
+    assert!(
+        !macos.contains("explicit_opt_out"),
+        "macOS installer must not regress to a single combined opt-out flag that regenerates every field"
+    );
+
+    // Windows: each known field changes only when its own switch was passed
+    // this run, and every existing field (known or not) is folded in first,
+    // so an untouched field - including one this script does not know about -
+    // survives the merge unchanged.
+    assert!(
+        windows.contains("foreach ($property in $existing.PSObject.Properties)"),
+        "Windows installer must fold every existing settings.json field into the merge, not just the fields it knows about"
+    );
+    assert!(
+        windows.contains("if ($NoShell.IsPresent) { $merged[\"shellEnabled\"] = $ShellEnabled }"),
+        "Windows installer must gate shellEnabled on -NoShell actually being passed this run"
+    );
+    assert!(
+        windows
+            .contains("if ($NoDesktopControl.IsPresent) { $merged[\"desktopControlEnabled\"] = $DesktopControlEnabled }"),
+        "Windows installer must gate desktopControlEnabled on -NoDesktopControl actually being passed this run"
+    );
+    assert!(
+        windows.contains("if ($NoStartup.IsPresent) { $merged[\"startAtLogin\"] = $StartAtLogin }"),
+        "Windows installer must gate startAtLogin on -NoStartup actually being passed this run, same as the other two fields"
+    );
+    // A corrupt or unreadable existing file must fall back to this run's
+    // defaults rather than failing the install.
+    assert!(windows.contains("$existing = $null"));
+
+    // macOS: the same contract, expressed as a byte-for-byte patch of only
+    // the field an opt-out flag targeted; everything else in the document,
+    // known or not, is left untouched.
+    assert!(
+        macos.contains("if ((no_shell)); then")
+            && macos.contains(r#""shellEnabled"[[:space:]]*:[[:space:]]*)(true|false)/\1"#),
+        "macOS installer must patch shellEnabled only when --no-shell was passed this run"
+    );
+    assert!(
+        macos.contains("if ((no_desktop_control)); then")
+            && macos
+                .contains(r#""desktopControlEnabled"[[:space:]]*:[[:space:]]*)(true|false)/\1"#),
+        "macOS installer must patch desktopControlEnabled only when --no-desktop-control was passed this run"
+    );
+    assert!(
+        macos.contains("if ((! startup)); then")
+            && macos.contains(r#""startAtLogin"[[:space:]]*:[[:space:]]*)(true|false)/\1"#),
+        "macOS installer must patch startAtLogin only when --no-startup was passed this run, same as the other two fields"
+    );
+    // The self-test locks in that an unrelated single-flag run does not
+    // clobber a field it did not target, and that an unknown field survives.
+    assert!(macos.contains("clobbered desktopControlEnabled"));
+    assert!(macos.contains("clobbered startAtLogin"));
+    assert!(macos.contains("futureField"));
+}

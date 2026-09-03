@@ -267,10 +267,10 @@ fn health_response_keys_are_documented() {
     let mut keys = Vec::new();
     for line in server[object_start..object_end].lines() {
         let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix('"') {
-            if let Some(end) = rest.find('"') {
-                keys.push(rest[..end].to_owned());
-            }
+        if let Some(rest) = trimmed.strip_prefix('"')
+            && let Some(end) = rest.find('"')
+        {
+            keys.push(rest[..end].to_owned());
         }
     }
     assert_eq!(
@@ -354,6 +354,108 @@ fn health_example_version_matches_cargo_toml() {
              {version} ({needle}); update the pinned example after every version bump"
         );
     }
+}
+
+/// Extracts the array-literal elements of `buildAgentInstructions` in
+/// `public/app.js`: a sequence of comma-separated JS string literals, each
+/// either a plain `"..."` string or a `` `...` `` template literal. Returns
+/// each element's text with any `${base}` interpolation replaced by the
+/// literal token `{BASE}`, so it lines up with the placeholder used in the
+/// markdown copy-paste block.
+fn extract_agent_instructions_lines(source: &str) -> Vec<String> {
+    let marker = "function buildAgentInstructions(state) {";
+    let start = source
+        .find(marker)
+        .unwrap_or_else(|| panic!("could not find `{marker}` in public/app.js"))
+        + marker.len();
+    let body = &source[start..];
+    let return_marker = "return [";
+    let array_start = body
+        .find(return_marker)
+        .map(|offset| offset + return_marker.len())
+        .expect("could not find `return [` in buildAgentInstructions");
+    let body = &body[array_start..];
+    let close = body
+        .find("].join(\"\\n\")")
+        .expect("could not find closing `].join(\"\\n\")` in buildAgentInstructions");
+    let array_body = &body[..close];
+
+    let mut items = Vec::new();
+    let chars: Vec<char> = array_body.chars().collect();
+    let mut index = 0;
+    while index < chars.len() {
+        match chars[index] {
+            '"' => {
+                let mut text = String::new();
+                index += 1;
+                while index < chars.len() && chars[index] != '"' {
+                    if chars[index] == '\\' && index + 1 < chars.len() {
+                        index += 1;
+                        text.push(chars[index]);
+                    } else {
+                        text.push(chars[index]);
+                    }
+                    index += 1;
+                }
+                index += 1; // closing quote
+                items.push(text);
+            }
+            '`' => {
+                let mut text = String::new();
+                index += 1;
+                while index < chars.len() && chars[index] != '`' {
+                    text.push(chars[index]);
+                    index += 1;
+                }
+                index += 1; // closing backtick
+                items.push(text.replace("${base}", "{BASE}"));
+            }
+            _ => index += 1,
+        }
+    }
+    items
+}
+
+/// Extracts the content of the first fenced ```text block that follows the
+/// `## Copy-paste block for your AI` heading in `docs/AGENT_INTEGRATION.md`.
+fn extract_copy_paste_block(source: &str) -> String {
+    let heading = "## Copy-paste block for your AI";
+    let after_heading = &source[source
+        .find(heading)
+        .expect("could not find `## Copy-paste block for your AI` heading")
+        + heading.len()..];
+    let fence_start = after_heading
+        .find("```text\n")
+        .map(|offset| offset + "```text\n".len())
+        .expect("could not find opening ```text fence after the heading");
+    let body = &after_heading[fence_start..];
+    let fence_end = body
+        .find("\n```")
+        .expect("could not find closing ``` fence for the copy-paste block");
+    body[..fence_end].to_owned()
+}
+
+#[test]
+fn dashboard_and_doc_copy_paste_blocks_never_drift_apart() {
+    // The dashboard's "Copy instructions for your AI" button
+    // (buildAgentInstructions in public/app.js) and the copy-paste block at
+    // the top of docs/AGENT_INTEGRATION.md are meant to be the exact same
+    // text, modulo the one runtime value (the Agent Fetch base URL) that the
+    // dashboard fills in and the doc shows as a `{BASE}` placeholder. If a
+    // future edit touches one and not the other, this fails.
+    let app_js = read("public/app.js");
+    let js_lines = extract_agent_instructions_lines(&app_js);
+    let js_block = js_lines.join("\n");
+
+    let agent_integration = read("docs/AGENT_INTEGRATION.md");
+    let doc_block = extract_copy_paste_block(&agent_integration);
+
+    assert_eq!(
+        js_block, doc_block,
+        "public/app.js's buildAgentInstructions() and docs/AGENT_INTEGRATION.md's \
+         copy-paste block have drifted apart; keep them identical (with `{{BASE}}` \
+         standing in for the `${{base}}` runtime value in the JS)"
+    );
 }
 
 #[test]

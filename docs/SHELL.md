@@ -1,25 +1,39 @@
 # Shell
 
-Optional native shell execution on the server host. This grants a connected
-agent **full current-user command authority** — read, launch, modify, or
-delete anything your signed-in account can touch. It is not a sandbox, not
-scoped to a browser tab or app window, and not part of the computer helper.
-Enable it only for an agent you trust with everything your account can do.
+Native shell execution on the server host. This grants a connected agent
+**full current-user command authority** — read, launch, modify, or delete
+anything your signed-in account can touch. It is not a sandbox, not scoped
+to a browser tab or app window, and not part of the computer helper.
 
-## Enable it
+**This is on by default.** Any local program holding your bridge token (or
+Agent Fetch URL) can already run commands as you, right after install, with
+no separate setup step. If that is not what you want, turn it off before you
+connect anything you do not fully trust.
 
-Off by default. Turn it on at server start:
+## Turn it off (or back on)
+
+The normal way, no restart needed: open the dashboard page or the
+tray/menu-bar icon and use the **Shell access** switch. This writes
+`settings.json` immediately — see
+[Configuration](CONFIGURATION.md#settings-file).
+
+Other ways to control it, all requiring a restart to take effect:
 
 | Method | How |
 |---|---|
-| CLI flag | `--enable-shell` (console server or Desktop Host) |
-| Environment variable | `LBB_ENABLE_SHELL=1` (accepts `1/true/yes/on`) |
-| macOS installer | `install-macos.sh -- --enable-shell`, or rerun without it to turn back off |
-| Windows installer | `install-windows.ps1 -EnableShell`, or rerun without it to turn back off |
+| CLI flag | `--no-shell` (force off) or `--enable-shell` (force on), on both the console server and the desktop host |
+| Environment variable | `LBB_ENABLE_SHELL=1` (force on) or `LBB_ENABLE_SHELL=0` (force off); accepts `1/true/yes/on` and `0/false/no/off` |
+| macOS installer | `install-macos.sh -- --enable-shell` bakes it into the LaunchAgent |
+| Windows installer | `install-windows.ps1 -EnableShell` bakes it into the Startup shortcut |
 
-A restart is required for the flag to take effect — there is no runtime
-toggle. See [Configuration](CONFIGURATION.md) for exact flag/variable names
-across all three executables.
+Precedence, identical on both binaries: an explicit `--enable-shell`/
+`--no-shell` flag always wins (passing both is a startup error); otherwise
+`LBB_ENABLE_SHELL` wins in **either** direction when set to a recognized
+value, overriding `settings.json` even to turn shell *off* against a
+`shellEnabled: true` file; otherwise `settings.json` decides. An empty
+`LBB_ENABLE_SHELL` counts as unset. None of these ever edit the settings
+file themselves. See [Configuration](CONFIGURATION.md) for exact flag/
+variable names across all three executables.
 
 ## Methods
 
@@ -80,9 +94,10 @@ itself — `rm -rf` replayed with a *new* `callId` still runs again. See
 
 Some agent tasks (running the project's own test suite, checking a build)
 need real command execution, not simulated browser or window control. Keeping
-it a separate, off-by-default, explicitly granted capability — rather than
-folding it into the computer helper's exact-window model — means enabling
-desktop control never silently grants full shell authority, and vice versa.
+it a separate, independently switchable capability — rather than folding it
+into the computer helper's exact-window model — means turning desktop
+control off never silently revokes shell authority, and vice versa; each has
+its own switch.
 
 There is no per-command prompt, filesystem allowlist, container, or privilege
 reduction. See [Security](../SECURITY.md) for the full trust model.
