@@ -197,6 +197,107 @@ fn helper_binary_reports_the_aligned_version_without_starting_a_daemon() {
     );
 }
 
+/// End-to-end proof of the single-instance fix: a second real helper
+/// process started while a first one is already live for the same user
+/// must exit immediately and cleanly instead of connecting and displacing
+/// the session already in progress (the exact hijack described in the
+/// v0.13.0 regression, where `hub::attach_with_id` always replaces
+/// whichever connection is currently attached).
+///
+/// The first process is pointed at a raw TCP listener that accepts the
+/// connection but never completes the WebSocket handshake, so it stays
+/// alive (and keeps holding its instance lock) for as long as the test
+/// needs, without depending on a real bridge server. The test waits for
+/// the first process's own "Connecting to 127.0.0.1:" line - printed only
+/// after the lock is acquired - as a deterministic synchronization signal
+/// before starting the second, instead of a fixed sleep.
+#[cfg(target_os = "macos")]
+#[test]
+fn helper_second_instance_exits_without_connecting() {
+    use std::io::{BufRead as _, BufReader};
+    use std::net::TcpListener;
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    // Accepts and silently holds open every connection it receives, so
+    // whichever helper process connects to it never completes a handshake
+    // and never exits on its own. Runs until the test process ends.
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            std::mem::forget(stream);
+        }
+    });
+
+    let cwd = tempfile::tempdir().expect("temp directory");
+    // The macOS lock is a fixed loopback port (`SINGLE_INSTANCE_LOCK_PORT`
+    // in `local-computer-helper.rs`), not scoped by cwd or token, so a
+    // shared `cwd` is not what makes these two processes contend for the
+    // same lock - it is used here only to keep both runs' working
+    // directories tidy and out of each other's way.
+    let port_string = port.to_string();
+    let env = [
+        ("LBB_TOKEN", "single-instance-regression-test-token"),
+        ("LBB_PORT", port_string.as_str()),
+    ];
+
+    let mut first = Command::new(env!("CARGO_BIN_EXE_local-computer-helper"))
+        .envs(env)
+        .current_dir(cwd.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    // Wait for the first process to prove (via its own stdout) that it has
+    // acquired the lock and reached the connect attempt, with a bounded
+    // timeout so a genuine regression fails the test instead of hanging it.
+    let stdout = first.stdout.take().unwrap();
+    let (ready_tx, ready_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut lines = BufReader::new(stdout).lines();
+        while let Some(Ok(line)) = lines.next() {
+            if line.contains("Connecting to 127.0.0.1:") {
+                let _ = ready_tx.send(());
+                return;
+            }
+        }
+    });
+    ready_rx
+        .recv_timeout(Duration::from_secs(20))
+        .expect("first helper instance should acquire its lock and start connecting");
+
+    let second = Command::new(env!("CARGO_BIN_EXE_local-computer-helper"))
+        .envs(env)
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+
+    let _ = first.kill();
+    let _ = first.wait();
+
+    assert!(
+        second.status.success(),
+        "a refused second instance should exit cleanly, not with an error: {second:?}"
+    );
+    let second_stderr = String::from_utf8_lossy(&second.stderr);
+    assert!(
+        second_stderr.contains("already running"),
+        "expected the duplicate-instance message, got: {second_stderr}"
+    );
+    let second_stdout = String::from_utf8_lossy(&second.stdout);
+    assert!(
+        !second_stdout.contains("Connecting to"),
+        "the second instance must exit before ever attempting to connect, got stdout: {second_stdout}"
+    );
+    assert!(
+        !second_stdout.contains("Local Computer Helper"),
+        "the second instance must exit before printing the worker banner, got stdout: {second_stdout}"
+    );
+}
+
 #[test]
 fn distributed_binaries_expose_project_and_locked_dependency_licenses() {
     for executable in [

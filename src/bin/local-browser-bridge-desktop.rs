@@ -428,6 +428,11 @@ mod desktop {
         // tray thread.
         monitor: Option<BridgeStatusMonitor>,
         runtime: Option<tokio::runtime::Handle>,
+        // Set the first (and only) time `apply_status` auto-starts the
+        // helper for the boot-default-on case. See `should_auto_start_helper`.
+        // Never consulted for a genuine user-driven transition (tray click,
+        // dashboard toggle), which keeps working every time, not just once.
+        helper_boot_auto_start_attempted: bool,
     }
 
     impl DesktopUi {
@@ -512,6 +517,7 @@ mod desktop {
                 status: None,
                 monitor: None,
                 runtime: None,
+                helper_boot_auto_start_attempted: false,
             })
         }
 
@@ -532,7 +538,11 @@ mod desktop {
             // Captured before `self.status` is overwritten below, so a
             // desktop-control toggle (from this tray or the web dashboard)
             // can be told apart from an unrelated status change and acted on
-            // exactly once — never once per poll.
+            // exactly once — never once per poll. `is_first_status` tells
+            // the boot-default-on case (see `should_auto_start_helper`)
+            // apart from that: `previous_desktop_control_enabled` is `None`
+            // on the very first snapshot, which is not a transition.
+            let is_first_status = self.status.is_none();
             let previous_desktop_control_enabled = self
                 .status
                 .as_ref()
@@ -595,10 +605,20 @@ mod desktop {
             let _ = self.tray.set_tooltip(Some(tooltip));
             self.status = Some(status);
 
-            let transitioned = previous_desktop_control_enabled != Some(desktop_control_enabled);
-            if transitioned && desktop_control_enabled && !computer_connected {
+            let real_transition = !is_first_status
+                && previous_desktop_control_enabled != Some(desktop_control_enabled);
+            if should_auto_start_helper(
+                is_first_status,
+                real_transition,
+                desktop_control_enabled,
+                computer_connected,
+                self.helper_boot_auto_start_attempted,
+            ) {
+                if is_first_status {
+                    self.helper_boot_auto_start_attempted = true;
+                }
                 self.start_or_prepare_helper();
-            } else if transitioned && !desktop_control_enabled && computer_connected {
+            } else if real_transition && !desktop_control_enabled && computer_connected {
                 let _ = self.stop_connected_helper();
             }
         }
@@ -1074,6 +1094,62 @@ mod desktop {
             return false;
         }
         just_installed || !extension_connected
+    }
+
+    /// Decides whether `apply_status` should call `start_or_prepare_helper`
+    /// for this status snapshot. Pure and platform-free, split out of
+    /// `apply_status` specifically so the once-per-boot guard that fixed the
+    /// v0.13.0 auto-start regression has a truth table a unit test can pin
+    /// down directly, rather than only being reachable through a live tray
+    /// event loop.
+    ///
+    /// The regression: with desktop control default-on, `apply_status` used
+    /// to treat the very *first* status snapshot after boot as a
+    /// "transition" (`previous_desktop_control_enabled` starts as `None`,
+    /// and `None != Some(true)` is `true`), and auto-started the helper on
+    /// it unconditionally. That is correct exactly once — desktop control
+    /// defaulting on should still make the helper come up on its own — but
+    /// nothing stopped it from also firing on a genuine user-driven
+    /// transition that happened to land on that same first snapshot, or
+    /// from racing a helper that was already connected (a leftover process,
+    /// or one another actor — the tray, the dashboard, a test harness —
+    /// just started). `hub::attach_with_id` always replaces whichever
+    /// connection is currently attached, so two helpers reaching the server
+    /// silently break whichever command was already in flight.
+    ///
+    /// - `is_first_status`: this is the first snapshot this process has
+    ///   ever seen (`self.status` was `None`), i.e. the boot-default case,
+    ///   not a live transition.
+    /// - `real_transition`: `desktop_control_enabled` actually flipped
+    ///   false→true since the last snapshot (a dashboard or tray toggle) —
+    ///   meaningless, and ignored, when `is_first_status` is true.
+    /// - `desktop_control_enabled` / `computer_connected`: the new
+    ///   snapshot's values.
+    /// - `boot_auto_start_attempted`: this process already made its one
+    ///   boot-time auto-start attempt (see `helper_boot_auto_start_attempted`
+    ///   on `DesktopUi`) — never consulted for `real_transition`, so the
+    ///   user-driven tray action and dashboard toggle keep working exactly
+    ///   as before, every time, not just once per run.
+    ///
+    /// A helper that was started this way and later exits does not cause a
+    /// second attempt: `is_first_status` can only be true once per process,
+    /// and an exit alone does not flip `desktop_control_enabled`, so
+    /// `real_transition` stays false too. That is what keeps this from
+    /// respawning in a loop.
+    fn should_auto_start_helper(
+        is_first_status: bool,
+        real_transition: bool,
+        desktop_control_enabled: bool,
+        computer_connected: bool,
+        boot_auto_start_attempted: bool,
+    ) -> bool {
+        if computer_connected || !desktop_control_enabled {
+            return false;
+        }
+        if is_first_status {
+            return !boot_auto_start_attempted;
+        }
+        real_transition
     }
 
     /// Whether the first-run "set up as an app?" prompt should be shown at
@@ -1774,6 +1850,48 @@ is an error.\n\
             assert!(!should_open_dashboard(false, false, true));
             // Connected and not a first run: stay quiet on a login-start app.
             assert!(!should_open_dashboard(false, true, false));
+        }
+
+        /// Regression test for the v0.13.0 auto-start bug: the very first
+        /// status snapshot after boot (`is_first_status`) must still start
+        /// the helper exactly once when desktop control defaults on, but
+        /// never a second time, never when a helper is already connected,
+        /// and never when desktop control is off.
+        #[test]
+        fn should_auto_start_helper_covers_boot_default_and_repeat_cases() {
+            // Boot default-on, nothing connected yet, never attempted: start.
+            assert!(should_auto_start_helper(true, false, true, false, false));
+            // Same, but this process already made its one boot attempt:
+            // never a second time, even though it still looks like the
+            // first snapshot would (defensive - in practice `is_first_status`
+            // itself can only ever be true once per process).
+            assert!(!should_auto_start_helper(true, false, true, false, true));
+            // Boot snapshot, but a helper is already connected (a leftover
+            // process, or another actor's helper beat this one to it):
+            // never hijack it.
+            assert!(!should_auto_start_helper(true, false, true, true, false));
+            // Boot snapshot, desktop control off: nothing to start.
+            assert!(!should_auto_start_helper(true, false, false, false, false));
+
+            // Not the boot snapshot, no real transition: never auto-start,
+            // regardless of the attempted flag - this is what keeps a
+            // spawned helper that later exits from being respawned in a
+            // loop (an exit alone does not flip desktop_control_enabled,
+            // so `real_transition` stays false).
+            assert!(!should_auto_start_helper(false, false, true, false, false));
+            assert!(!should_auto_start_helper(false, false, true, false, true));
+
+            // A genuine user-driven transition (tray click or dashboard
+            // toggle) starts the helper every time, unrestricted by the
+            // once-per-boot attempted flag - "keep it working as before".
+            assert!(should_auto_start_helper(false, true, true, false, true));
+            assert!(should_auto_start_helper(false, true, true, false, false));
+            // Same transition, but a helper is already connected: never
+            // start a second one.
+            assert!(!should_auto_start_helper(false, true, true, true, false));
+            // Transition to off: not a start case (handled separately by
+            // the stop path in `apply_status`).
+            assert!(!should_auto_start_helper(false, true, false, true, false));
         }
 
         /// Full truth table for `should_prompt_for_install`: the only case
