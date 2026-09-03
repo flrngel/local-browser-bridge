@@ -32,7 +32,7 @@ const DEFAULTS = {
   fullAccess: true,
   allowedHosts: ["localhost", "127.0.0.1"],
   connectionStatus: "not-configured",
-  connectionDetail: "Paste the token printed by the local server.",
+  connectionDetail: "Click Connect on the Local Browser Bridge page to link this extension automatically, or use the Local server section below.",
   pendingApproval: null,
   controllerId: "",
   bridgeSessionId: "",
@@ -896,7 +896,7 @@ async function connectNow() {
   const config = await settings();
   if (!config.token) {
     await clearSocket("not_configured");
-    await setStatus("not-configured", "Paste the token printed by the local server.");
+    await setStatus("not-configured", "Click Connect on the Local Browser Bridge page to link this extension automatically, or use the Local server section below.");
     return;
   }
   if (!config.enabled) {
@@ -5082,6 +5082,70 @@ function assertTrustedPopupSender(sender) {
   }
 }
 
+function assertTrustedPairSender(sender) {
+  if (sender.url !== chrome.runtime.getURL("pair.html")) {
+    throw new Error("TRUSTED_PAIR_REQUIRED: only the pairing confirmation page can perform this action");
+  }
+}
+
+// A pending one-click pairing request lives only in memory, never in
+// chrome.storage: it carries an unconfirmed token that no context should be
+// able to read back before a human approves it on the extension-owned
+// pair.html tab. It expires on its own so an ignored request cannot be
+// approved long after the page that asked for it is gone.
+//
+// externally_connectable match patterns cannot pin a port, so any local page
+// can send lbb.pair, including one sending it repeatedly to try to land in
+// the slot right before a human clicks Connect on a tab that was opened for
+// someone else's request. Each request therefore carries a random id
+// (crypto.getRandomValues, never Math.random or anything else guessable)
+// that is threaded through the confirmation tab's own URL and back through
+// every message pair.html sends. getPending and connect both check that id
+// against whatever is currently pending: a tab whose request was superseded
+// gets rejected by id, it is never silently served whatever now occupies the
+// slot.
+const PAIR_REQUEST_TTL_MS = 2 * 60 * 1000;
+let pendingPairingRequest = null;
+
+function newPairRequestId() {
+  return encodeBase64Url(crypto.getRandomValues(new Uint8Array(16)));
+}
+
+function pendingPairingSnapshot(requestId) {
+  if (!pendingPairingRequest || pendingPairingRequest.expiresAt <= Date.now()) return null;
+  if (pendingPairingRequest.id !== requestId) return null;
+  return { origin: pendingPairingRequest.origin, port: pendingPairingRequest.port };
+}
+
+async function handlePairMessage(message, sender) {
+  assertTrustedPairSender(sender);
+  const requestId = String(message.requestId ?? "");
+  switch (message.action) {
+    case "getPending":
+      return pendingPairingSnapshot(requestId);
+    case "connect": {
+      const pending = pendingPairingRequest;
+      // The id comparison happens before anything else: a tab whose request
+      // expired, or was superseded by a newer lbb.pair message, must never
+      // commit whatever now sits in the slot.
+      if (!pending || pending.id !== requestId || pending.expiresAt <= Date.now()) {
+        if (pending && pending.id === requestId) pendingPairingRequest = null;
+        throw new Error("PAIR_REQUEST_EXPIRED: this connection request is no longer available or was replaced by a newer one");
+      }
+      pendingPairingRequest = null;
+      await updateSecuritySettings({ port: pending.port, token: pending.token }, "connection_settings_changed");
+      return { port: pending.port };
+    }
+    case "cancel":
+      // Only clear the slot if it is still this exact request: a stale
+      // tab's cancel must never discard a request that superseded it.
+      if (pendingPairingRequest?.id === requestId) pendingPairingRequest = null;
+      return { canceled: true };
+    default:
+      throw new Error("Unknown pair action");
+  }
+}
+
 async function clearSavedTokenFromPopup(sender) {
   assertTrustedPopupSender(sender);
   await removeSecuritySettings(["token"], "saved_token_cleared");
@@ -5199,6 +5263,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((error) => sendResponse({ ok: false, error: error.message }));
     return true;
   }
+  if (sender.id === chrome.runtime.id && message?.type === "LBB_PAIR") {
+    handlePairMessage(message, sender)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((error) => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
   if (sender.id !== chrome.runtime.id || message?.type !== "LBB_POPUP") return undefined;
   (async () => {
     switch (message.action) {
@@ -5267,6 +5337,51 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       default: throw new Error("Unknown popup action");
     }
   })().then((result) => sendResponse({ ok: true, result })).catch((error) => sendResponse({ ok: false, error: error.message }));
+  return true;
+});
+
+// Chrome match patterns in "externally_connectable" cannot pin a port, so
+// any local web server on 127.0.0.1/localhost can send this message. This
+// listener therefore never connects on its own: it validates the request,
+// remembers it in memory only, and hands the actual decision to a human on
+// the extension-owned pair.html tab.
+//
+// A newer request always supersedes whatever was pending: the slot is
+// replaced with a fresh random id immediately, so a previous tab's
+// getPending/connect calls start failing the id check right away. Rather
+// than stacking a duplicate confirmation tab, an existing unexpired
+// request's tab (if it is still open) is reused and navigated to the new
+// request's URL instead of opening another one.
+chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
+  (async () => {
+    if (!message || message.type !== "lbb.pair") throw new Error("UNKNOWN_MESSAGE: unsupported pairing request");
+    const port = Number(message.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+      throw new Error("INVALID_PORT: port must be between 1 and 65535");
+    }
+    const token = String(message.token ?? "");
+    decodeBase64Url32(token, "Extension token");
+    const origin = String(sender.origin ?? "");
+    if (origin !== `http://127.0.0.1:${port}` && origin !== `http://localhost:${port}`) {
+      throw new Error("UNTRUSTED_PAIR_ORIGIN: the requesting origin does not match the requested port");
+    }
+    const previous = pendingPairingRequest;
+    const requestId = newPairRequestId();
+    pendingPairingRequest = { id: requestId, origin, port, token, expiresAt: Date.now() + PAIR_REQUEST_TTL_MS, tabId: null };
+    const url = chrome.runtime.getURL(`pair.html?request=${requestId}`);
+    const reusableTab = previous && previous.expiresAt > Date.now() && Number.isInteger(previous.tabId)
+      ? await chrome.tabs.get(previous.tabId).catch(() => null)
+      : null;
+    if (reusableTab) {
+      await chrome.tabs.update(reusableTab.id, { url, active: true });
+      await chrome.windows.update(reusableTab.windowId, { focused: true }).catch(() => {});
+      pendingPairingRequest.tabId = reusableTab.id;
+    } else {
+      const tab = await chrome.tabs.create({ url });
+      pendingPairingRequest.tabId = tab.id;
+    }
+    return { ok: true, pending: true };
+  })().then(sendResponse).catch((error) => sendResponse({ ok: false, error: error.message }));
   return true;
 });
 

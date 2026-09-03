@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Connect Local Browser Bridge</title>
+    <style>
+      :root { color-scheme: dark; font: 15px system-ui, sans-serif; color: #eff6f1; background: #0d110f; }
+      * { box-sizing: border-box; }
+      body { max-width: 480px; margin: 48px auto; padding: 0 20px; }
+      .eyebrow { color: #b8f55d; letter-spacing: .12em; font: 700 10px ui-monospace, monospace; margin: 0; }
+      h1 { margin: 6px 0 16px; font-size: 22px; }
+      p { line-height: 1.5; color: #c9d5cd; }
+      .card { border: 1px solid #2d3832; border-radius: 10px; padding: 16px 18px; margin: 18px 0; background: #121916; }
+      code { color: #b8f55d; font: 13px ui-monospace, monospace; }
+      .row { display: flex; gap: 10px; margin-top: 20px; }
+      button { border: 0; border-radius: 8px; padding: 11px 16px; font-weight: 750; cursor: pointer; }
+      #connect { background: #b8f55d; color: #152007; }
+      #cancel { background: #2b342f; color: #f1f5f2; }
+      button:disabled { cursor: not-allowed; opacity: .5; }
+      #message { margin-top: 16px; padding: 10px 12px; border-radius: 8px; background: #17251a; border: 1px solid #37453d; }
+    </style>
+  </head>
+  <body>
+    <p class="eyebrow">LOCAL BROWSER BRIDGE</p>
+    <h1>Connect this extension?</h1>
+    <div id="request">
+      <p><code id="origin-text">…</code> is asking to connect this extension to the Local Browser Bridge server on port <code id="port-text">…</code>.</p>
+      <div class="card">
+        <p>If you click Connect, this extension will start sending it browser tab and page information, and will accept commands from it to open tabs, read pages, and act on them for you.</p>
+        <p>Only click Connect if you just opened the Local Browser Bridge page yourself and expect this request.</p>
+      </div>
+      <div class="row">
+        <button id="connect" type="button">Connect</button>
+        <button id="cancel" type="button">Cancel</button>
+      </div>
+    </div>
+    <div id="expired" hidden>
+      <p>This connection request has expired, was already used, or was replaced by a newer request.</p>
+      <p>Go back to the Local Browser Bridge page and click Connect again.</p>
+    </div>
+    <p id="message" hidden></p>
+    <script src="pair.js" type="module"></script>
+  </body>
+</html>

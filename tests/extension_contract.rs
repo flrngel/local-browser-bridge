@@ -14,6 +14,8 @@ const EXTENSION_FILES: &[&str] = &[
     "frame-agent.js",
     "lib.js",
     "manifest.json",
+    "pair.html",
+    "pair.js",
     "popup.css",
     "popup.html",
     "popup.js",
@@ -120,10 +122,200 @@ fn manifest_has_only_reviewed_capabilities() {
     ] {
         assert!(!strings(&manifest["permissions"]).contains(forbidden));
     }
-    assert!(manifest.get("externally_connectable").is_none());
+    // Match patterns cannot pin a port, so this is deliberately as narrow as
+    // Chrome allows: any local web server on these two hosts can ask to
+    // pair, but the pairing itself always still goes through a human on
+    // pair.html (see extension_pairing_never_connects_without_a_human below).
+    assert_eq!(
+        strings(&manifest["externally_connectable"]["matches"]),
+        BTreeSet::from_iter(["http://127.0.0.1/*", "http://localhost/*"].map(str::to_owned))
+    );
     assert_eq!(
         manifest["content_security_policy"]["extension_pages"],
         "script-src 'self'; object-src 'none'"
+    );
+}
+
+#[test]
+fn manifest_and_lib_pin_the_same_stable_extension_id() {
+    let manifest = manifest();
+    assert_eq!(
+        manifest["key"],
+        "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAy0Vig8iszG7SEBqAzFuel7Qg85FFFroi6M7AviaXn4+5KwOyZsNcGGdbElewvE4J/M0gX+r2Kl6Yc15BHwhTmYa1ARdqAKJogTdQVxZ2Ys3KgcljyQqOjw8w8Bxd6YfRklYR44zUzBy6x8FhC6zoEmATixBR9hKHFEeg1tZgIO8OtMOVYtCHBSXGOZVYFxJuRse8FYB/f9YuCvKB6r8RDImYFTCV2H0OA4/o327CKz6ZqubAJ7SQTaaRNynFuj9bMMmdDF3W/2iT/Y8HJygWVdx5XPxSkfU11YhHCjJ3HohQ6ytRq4awZVOVlv/LWnsDoMC3QZ1CKWAcOkX9zCwYbwIDAQAB"
+    );
+    let lib = extension_source("lib.js");
+    assert!(lib.contains("export const EXTENSION_ID = \"gjaniambdhcnffbapkknllilikeoopdg\";"));
+}
+
+#[test]
+fn extension_pairing_never_connects_without_a_human() {
+    let background = extension_source("background.js");
+
+    // The external listener only ever validates the request and hands the
+    // decision to a human on pair.html; it must never itself call
+    // updateSecuritySettings or otherwise commit the token.
+    let listener_start = background
+        .find("chrome.runtime.onMessageExternal.addListener(")
+        .unwrap();
+    let listener_end = background[listener_start..]
+        .find("\nchrome.runtime.onInstalled.addListener(")
+        .map(|offset| listener_start + offset)
+        .unwrap_or(background.len());
+    let listener = &background[listener_start..listener_end];
+    assert!(listener.contains("message.type !== \"lbb.pair\""));
+    assert!(listener.contains("sender.origin"));
+    assert!(listener.contains("http://127.0.0.1:${port}"));
+    assert!(listener.contains("http://localhost:${port}"));
+    assert!(listener.contains("decodeBase64Url32(token, \"Extension token\")"));
+    assert!(listener.contains("chrome.tabs.create({ url })"));
+    assert!(listener.contains("chrome.runtime.getURL(`pair.html?request=${requestId}`)"));
+    assert!(listener.contains("pending: true"));
+    assert!(!listener.contains("updateSecuritySettings"));
+
+    // The only path that actually commits the pending token is a message
+    // from the extension-owned pair.html tab, gated the same way trusted
+    // popup actions are.
+    assert!(background.contains("if (sender.url !== chrome.runtime.getURL(\"pair.html\"))"));
+    assert!(background.contains("updateSecuritySettings({ port: pending.port, token: pending.token }, \"connection_settings_changed\")"));
+
+    let pair_html = extension_source("pair.html");
+    assert!(!pair_html.contains("<script>"));
+    assert!(pair_html.contains("<script src=\"pair.js\""));
+}
+
+// Regression coverage for the pairing-hijack finding: externally_connectable
+// match patterns cannot pin a port, so any local page can send lbb.pair,
+// including a malicious one racing to overwrite the pending slot after a
+// legitimate confirmation tab already rendered the real origin. Every
+// request must carry a random, unguessable id all the way from the external
+// listener through the confirmation tab's own URL and back through its
+// getPending/connect calls, and a mismatched id must be rejected before any
+// token is ever committed.
+#[test]
+fn pairing_request_id_is_generated_with_crypto_getrandomvalues() {
+    let background = extension_source("background.js");
+    let start = background.find("function newPairRequestId() {").unwrap();
+    let end = start + background[start..].find("}\n").unwrap() + 1;
+    let body = &background[start..end];
+    assert!(body.contains("crypto.getRandomValues(new Uint8Array(16))"));
+    assert!(!body.contains("Math.random"));
+}
+
+#[test]
+fn pair_js_threads_the_request_id_from_its_own_url_into_every_call() {
+    let pair_js = extension_source("pair.js");
+    assert!(pair_js.contains("new URLSearchParams(location.search).get(\"request\")"));
+    // Every call back to the background carries the id the tab was opened
+    // for, not just the action name: a superseded tab must identify itself
+    // so the background can refuse to serve or act on a different request.
+    let call_start = pair_js.find("function call(action)").unwrap();
+    let call_end = pair_js[call_start..]
+        .find("\n}")
+        .map(|o| call_start + o)
+        .unwrap();
+    let call_body = &pair_js[call_start..call_end];
+    assert!(call_body.contains("action, requestId"));
+}
+
+#[test]
+fn pairing_connect_and_get_pending_reject_a_request_id_that_is_not_the_pending_one() {
+    let script = r#"
+      import fs from "node:fs";
+      function extractFunction(source, name) {
+        const marker = `function ${name}(`;
+        let start = source.indexOf(marker);
+        if (start < 0) throw new Error(`missing ${name}`);
+        if (source.slice(start - 6, start) === "async ") start -= 6;
+        const brace = source.indexOf("{", start);
+        let depth = 0, quote = "", escaped = false, lineComment = false, blockComment = false;
+        for (let index = brace; index < source.length; index += 1) {
+          const character = source[index];
+          const next = source[index + 1] ?? "";
+          if (lineComment) {
+            if (character === "\n") lineComment = false;
+          } else if (blockComment) {
+            if (character === "*" && next === "/") { blockComment = false; index += 1; }
+          } else if (quote) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === quote) quote = "";
+          } else if (character === "/" && next === "/") { lineComment = true; index += 1; }
+          else if (character === "/" && next === "*") { blockComment = true; index += 1; }
+          else if (["\"", "'", "`"].includes(character)) quote = character;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) return source.slice(start, index + 1);
+        }
+        throw new Error(`unterminated ${name}`);
+      }
+      const source = fs.readFileSync("extension/background.js", "utf8");
+      const functions = ["handlePairMessage", "pendingPairingSnapshot", "assertTrustedPairSender", "newPairRequestId"]
+        .map((name) => extractFunction(source, name)).join("\n");
+      const harness = new Function(`
+        let pendingPairingRequest = null;
+        const chrome = { runtime: { getURL: (path) => "chrome-extension://ext/" + path } };
+        const securityCalls = [];
+        async function updateSecuritySettings(updates, reason) { securityCalls.push({ updates, reason }); }
+        ${functions}
+        const trustedSender = { url: chrome.runtime.getURL("pair.html") };
+        return {
+          setPending: (id) => {
+            pendingPairingRequest = { id, origin: "http://127.0.0.1:5391", port: 5391, token: "the-token", expiresAt: Date.now() + 60_000, tabId: 1 };
+          },
+          getPending: (id) => handlePairMessage({ action: "getPending", requestId: id }, trustedSender),
+          connect: (id) => handlePairMessage({ action: "connect", requestId: id }, trustedSender),
+          cancel: (id) => handlePairMessage({ action: "cancel", requestId: id }, trustedSender),
+          isPending: () => pendingPairingRequest !== null,
+          securityCalls: () => securityCalls,
+        };
+      `)();
+      const failures = [];
+      function expect(condition, label) { if (!condition) failures.push(label); }
+
+      // A tab reading with the wrong id (a superseded or forged request)
+      // must see no pending request at all, not the real one's origin/port.
+      harness.setPending("legit-request-1");
+      const staleRead = await harness.getPending("attacker-request");
+      expect(staleRead === null, `getPending with a mismatched id returned ${JSON.stringify(staleRead)} instead of null`);
+      const correctRead = await harness.getPending("legit-request-1");
+      expect(correctRead && correctRead.port === 5391, `getPending with the correct id did not return the pending record: ${JSON.stringify(correctRead)}`);
+
+      // Connect must compare the id before ever calling updateSecuritySettings.
+      harness.setPending("legit-request-2");
+      let hijackError = null;
+      try { await harness.connect("attacker-request"); } catch (error) { hijackError = error.message; }
+      expect(hijackError !== null, "connect with a mismatched id did not throw");
+      expect(harness.securityCalls().length === 0, `connect with a mismatched id called updateSecuritySettings: ${JSON.stringify(harness.securityCalls())}`);
+      expect(harness.isPending(), "connect with a mismatched id must not discard the still-valid pending request");
+
+      const connected = await harness.connect("legit-request-2");
+      expect(connected && connected.port === 5391, `connect with the correct id did not report the pending port: ${JSON.stringify(connected)}`);
+      expect(harness.securityCalls().length === 1, `connect with the correct id must call updateSecuritySettings exactly once, got ${harness.securityCalls().length}`);
+      expect(!harness.isPending(), "a completed connect must clear the pending slot");
+
+      // Cancel from a stale tab must never discard a request that superseded it.
+      harness.setPending("legit-request-3");
+      await harness.cancel("some-other-tabs-id");
+      expect(harness.isPending(), "cancel with a mismatched id discarded a different, still-pending request");
+      await harness.cancel("legit-request-3");
+      expect(!harness.isPending(), "cancel with the correct id did not clear the pending request");
+
+      if (failures.length > 0) {
+        throw new Error("pairing request-id regression failures:\n" + failures.join("\n"));
+      }
+    "#;
+    let output = match Command::new("node")
+        .args(["--input-type=module", "-e", script])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to run pairing request-id harness: {error}"),
+    };
+    assert!(
+        output.status.success(),
+        "pairing request-id regression harness failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 
