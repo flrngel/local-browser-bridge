@@ -202,16 +202,24 @@ fn helper_binary_reports_the_aligned_version_without_starting_a_daemon() {
 /// must exit immediately and cleanly instead of connecting and displacing
 /// the session already in progress (the exact hijack described in the
 /// v0.13.0 regression, where `hub::attach_with_id` always replaces
-/// whichever connection is currently attached).
+/// whichever connection is currently attached). Windows only - see the
+/// comment above `SingleInstance` in `local-computer-helper.rs` for why
+/// macOS has no equivalent lock (LaunchServices already refuses to launch
+/// a second instance of the same app bundle there, so there is no
+/// duplicate-process behavior left to prove on that platform).
 ///
-/// The first process is pointed at a raw TCP listener that accepts the
-/// connection but never completes the WebSocket handshake, so it stays
-/// alive (and keeps holding its instance lock) for as long as the test
-/// needs, without depending on a real bridge server. The test waits for
-/// the first process's own "Connecting to 127.0.0.1:" line - printed only
-/// after the lock is acquired - as a deterministic synchronization signal
-/// before starting the second, instead of a fixed sleep.
-#[cfg(target_os = "macos")]
+/// The Windows helper's top-level process is a supervisor that spawns a
+/// disposable worker child for the real WebSocket session (see
+/// `supervise_worker`); that child's `CreateProcessW` call passes
+/// `inherit_handles: 0`, so the worker's own stdout is never visible
+/// through the supervisor's piped stdout. This test instead waits for the
+/// supervisor's own "Supervising the disposable computer-control worker"
+/// line, printed only after the lock is acquired, as a deterministic
+/// synchronization signal - and the supervisor keeps running (retrying
+/// its worker with backoff) indefinitely regardless of whether a real
+/// bridge server is reachable, so no fake server is needed to keep the
+/// first process alive for the duration of this test.
+#[cfg(target_os = "windows")]
 #[test]
 fn helper_second_instance_exits_without_connecting() {
     use std::io::{BufRead as _, BufReader};
@@ -220,23 +228,15 @@ fn helper_second_instance_exits_without_connecting() {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    // Accepts and silently holds open every connection it receives, so
-    // whichever helper process connects to it never completes a handshake
-    // and never exits on its own. Runs until the test process ends.
-    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let port = listener.local_addr().unwrap().port();
-    std::thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            std::mem::forget(stream);
-        }
-    });
-
-    let cwd = tempfile::tempdir().expect("temp directory");
-    // The macOS lock is a fixed loopback port (`SINGLE_INSTANCE_LOCK_PORT`
-    // in `local-computer-helper.rs`), not scoped by cwd or token, so a
-    // shared `cwd` is not what makes these two processes contend for the
-    // same lock - it is used here only to keep both runs' working
-    // directories tidy and out of each other's way.
+    // An ephemeral port, freed as soon as this listener drops: the helper
+    // never needs a reachable server on it for this test, since the
+    // Windows supervisor stays alive and keeps retrying its worker
+    // regardless of connection failures.
+    let port = TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
     let port_string = port.to_string();
     let env = [
         ("LBB_TOKEN", "single-instance-regression-test-token"),
@@ -245,21 +245,20 @@ fn helper_second_instance_exits_without_connecting() {
 
     let mut first = Command::new(env!("CARGO_BIN_EXE_local-computer-helper"))
         .envs(env)
-        .current_dir(cwd.path())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
 
     // Wait for the first process to prove (via its own stdout) that it has
-    // acquired the lock and reached the connect attempt, with a bounded
-    // timeout so a genuine regression fails the test instead of hanging it.
+    // acquired the lock and started supervising, with a bounded timeout so
+    // a genuine regression fails the test instead of hanging it.
     let stdout = first.stdout.take().unwrap();
     let (ready_tx, ready_rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut lines = BufReader::new(stdout).lines();
         while let Some(Ok(line)) = lines.next() {
-            if line.contains("Connecting to 127.0.0.1:") {
+            if line.contains("Supervising the disposable computer-control worker") {
                 let _ = ready_tx.send(());
                 return;
             }
@@ -267,11 +266,10 @@ fn helper_second_instance_exits_without_connecting() {
     });
     ready_rx
         .recv_timeout(Duration::from_secs(20))
-        .expect("first helper instance should acquire its lock and start connecting");
+        .expect("first helper instance should acquire its lock and start supervising");
 
     let second = Command::new(env!("CARGO_BIN_EXE_local-computer-helper"))
         .envs(env)
-        .current_dir(cwd.path())
         .output()
         .unwrap();
 
@@ -289,12 +287,12 @@ fn helper_second_instance_exits_without_connecting() {
     );
     let second_stdout = String::from_utf8_lossy(&second.stdout);
     assert!(
-        !second_stdout.contains("Connecting to"),
-        "the second instance must exit before ever attempting to connect, got stdout: {second_stdout}"
+        !second_stdout.contains("Supervising the disposable"),
+        "the second instance must exit before ever supervising a worker, got stdout: {second_stdout}"
     );
     assert!(
         !second_stdout.contains("Local Computer Helper"),
-        "the second instance must exit before printing the worker banner, got stdout: {second_stdout}"
+        "the second instance must exit before printing its version banner, got stdout: {second_stdout}"
     );
 }
 

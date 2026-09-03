@@ -187,73 +187,48 @@ struct ProcessInformation {
     thread_id: u32,
 }
 
-// Keeps a second helper instance for the same user from ever connecting and
-// hijacking a session already in progress: without this, a leftover helper
-// from a previous run, a duplicate started by the tray "Start Computer
-// Helper" action, or a test harness spawning its own helper alongside one
-// the desktop host already auto-started, all race for the same WebSocket
-// connection. `hub::attach_with_id` (src/hub.rs) always replaces whichever
-// connection is currently attached, so the loser silently fails whatever
-// command was in flight rather than being refused up front. Acquiring this
-// lock first, and exiting immediately and cleanly when it is already held,
-// closes that hole at the source instead of relying on callers to avoid it.
+// Keeps a second Windows helper instance for the same user from ever
+// connecting and hijacking a session already in progress: without this, a
+// leftover helper from a previous run, a duplicate started by the tray
+// "Start Computer Helper" action, or a test harness spawning its own helper
+// alongside one the desktop host already auto-started, would all race for
+// the same WebSocket connection. `hub::attach_with_id` (src/hub.rs) always
+// replaces whichever connection is currently attached, so the loser
+// silently fails whatever command was in flight rather than being refused
+// up front. Acquiring this lock first, and exiting immediately and cleanly
+// when it is already held, closes that hole at the source instead of
+// relying on callers to avoid it. Mirrors `SingleInstance` in
+// `local-browser-bridge-desktop.rs` (same named-mutex primitive).
 //
-// Mirrors `SingleInstance` in `local-browser-bridge-desktop.rs` (named
-// mutex on Windows) with one deliberate exception: macOS does not use
-// `flock` the way the desktop host does. This binary is held to a hard "no
-// filesystem capability" contract - stated in its own startup banner ("No
-// shell, filesystem, clipboard, process-launch, or telemetry capability is
-// exposed") and enforced by
+// Windows only, deliberately. On Windows the desktop host's auto-start
+// spawns the helper by path (`platform::start_helper` is a plain
+// `Command::new(path).spawn()`), and a stale or independently-started
+// process can otherwise reach the server and displace a live session - that
+// is the actual regression this closes. On macOS the helper ships inside
+// `Local Computer Helper.app`, and macOS LaunchServices already refuses to
+// launch a second instance of the same app bundle (a second launch just
+// activates the one already running), so this class of hijack cannot occur
+// there in the first place. A macOS-side lock was tried and rejected: a
+// file-based lock (`flock`, matching the desktop host) cannot be used at
+// all, because this binary is held to a hard "no filesystem capability"
+// contract - stated in its own startup banner ("No shell, filesystem,
+// clipboard, process-launch, or telemetry capability is exposed") and
+// enforced by
 // `helper_source_has_no_shell_filesystem_or_clipboard_implementation` in
 // `tests/computer_contract.rs`, which fails the build on any use of the std
-// filesystem module in this file - so it cannot open or lock a file at
-// all. Binding an exclusive
-// loopback TCP port instead gives the properties that actually matter here
-// without touching the filesystem: only one process can hold it at a time,
-// the OS releases it immediately if the holder exits or crashes (no
-// stale-lock cleanup to worry about, unlike a named semaphore), and the
-// helper already does unrestricted outbound networking as a WebSocket
-// client, so this adds no new capability. The port is never accepted on -
-// it exists purely as an exclusive resource - and is fixed rather than
-// derived from `LBB_PORT`, matching the Windows mutex's own fixed-name,
-// unscoped-by-port convention. One consequence of using a loopback port
-// instead of a per-user file: unlike the desktop host's own locks (a
-// session-scoped Windows mutex, a file under the user's home directory on
-// macOS), this is host-wide rather than per-user, so two different users
-// concurrently running a helper on the same shared Mac would contend for
-// it. That is an acceptable trade for closing the hijack this fixes, which
-// is about one user's own duplicate helper (a leftover process, a second
-// tray click, a test harness's own spawn).
-#[cfg(target_os = "macos")]
-struct SingleInstance {
-    _listener: std::net::TcpListener,
-}
-
-#[cfg(target_os = "macos")]
-impl SingleInstance {
-    /// Returns `Ok(None)` when another instance already holds the lock.
-    fn acquire() -> std::io::Result<Option<Self>> {
-        Self::acquire_at(SINGLE_INSTANCE_LOCK_PORT)
-    }
-
-    /// Same as `acquire`, but against an explicit port instead of the real
-    /// (fixed) one, so the exclusivity behavior itself is directly
-    /// unit-testable with a port that cannot collide with a real running
-    /// helper on the test host.
-    fn acquire_at(port: u16) -> std::io::Result<Option<Self>> {
-        match std::net::TcpListener::bind(("127.0.0.1", port)) {
-            Ok(listener) => Ok(Some(Self {
-                _listener: listener,
-            })),
-            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => Ok(None),
-            Err(error) => Err(error),
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-const SINGLE_INSTANCE_LOCK_PORT: u16 = 47_211;
-
+// filesystem module in this file. The filesystem-free alternative - binding
+// a fixed loopback port as a mutual-exclusion primitive - trades a rare bug
+// for a worse one: any unrelated program that happens to hold that port
+// would make a legitimate helper refuse to start and report "already
+// running" when it is not, silently breaking desktop control for that user
+// (and, since a bound port is host-wide, for other users on a shared
+// machine too) - exactly the "I installed it and nothing worked" failure
+// this release exists to fix, and worse than the rare duplicate-helper race
+// it would guard against. Combined with the desktop host's own auto-start
+// guard (`(B)`: never auto-start when a helper is already connected, and at
+// most once per process run) and `ci-acceptance.mjs` reusing a live helper
+// instead of spawning a second one (`(C)`), the duplicate-helper path on
+// macOS is already closed without needing a macOS-side lock at all.
 #[cfg(target_os = "windows")]
 struct SingleInstance {
     handle: *mut c_void,
@@ -368,17 +343,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         return Ok(());
     }
-
-    #[cfg(target_os = "macos")]
-    let _instance = match SingleInstance::acquire()? {
-        Some(instance) => instance,
-        None => {
-            eprintln!(
-                "Local Computer Helper is already running for this user; exiting without connecting."
-            );
-            return Ok(());
-        }
-    };
 
     #[cfg(target_os = "windows")]
     let controller_process_id = cli.controller_process_id.unwrap_or_else(std::process::id);
@@ -2287,36 +2251,12 @@ mod tests {
     /// That is exactly the check `main` runs before ever starting a
     /// WebSocket session, so a duplicate helper exits instead of connecting
     /// and displacing the one already in progress. Once the first guard is
-    /// dropped, the lock is free again for a legitimate restart.
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn single_instance_refuses_a_concurrent_second_holder() {
-        // A port distinct from the real `SINGLE_INSTANCE_LOCK_PORT` so this
-        // test can never collide with a real helper instance running on
-        // the test host.
-        const TEST_PORT: u16 = 47_212;
-
-        let first = SingleInstance::acquire_at(TEST_PORT)
-            .expect("first acquire should not error")
-            .expect("first acquire should hold the lock");
-        let second = SingleInstance::acquire_at(TEST_PORT)
-            .expect("second acquire should not error, just refuse");
-        assert!(
-            second.is_none(),
-            "a second holder must be refused while the first is alive"
-        );
-
-        drop(first);
-        let third = SingleInstance::acquire_at(TEST_PORT)
-            .expect("acquire after release should not error")
-            .expect("the lock must be available again once the first holder drops it");
-        drop(third);
-    }
-
-    /// Windows equivalent of `single_instance_refuses_a_concurrent_second_holder`,
-    /// using a mutex name reserved for this test so it can never collide
-    /// with the real helper's `Local\LocalBrowserBridgeComputerHelper-v1`
-    /// lock on a host that happens to have one running.
+    /// dropped, the lock is free again for a legitimate restart. Windows
+    /// only - see the comment above `SingleInstance` for why macOS has no
+    /// equivalent lock. Uses a mutex name reserved for this test so it can
+    /// never collide with the real helper's
+    /// `Local\LocalBrowserBridgeComputerHelper-v1` lock on a host that
+    /// happens to have one running.
     #[cfg(target_os = "windows")]
     #[test]
     fn single_instance_refuses_a_concurrent_second_holder() {
