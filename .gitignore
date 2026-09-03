@@ -6,3 +6,5 @@ dist/
 *.log
 # Evidence bundles cite their rig logs, so those logs must reach the repository.
 !evidence/**/*.log
+# Session tooling state; never part of the project's own history.
+/.claude/
