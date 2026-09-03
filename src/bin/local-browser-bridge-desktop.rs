@@ -32,10 +32,14 @@ mod desktop {
 
     #[cfg(test)]
     const DEFAULT_PORT: u16 = 17_373;
-    /// Set (to any value) on the child process a successful first-run
-    /// self-install relaunches into, so that process — not the installer
-    /// process, which exits — knows to open the dashboard on its own. See
-    /// `relaunch_installed` and `should_open_dashboard`.
+    /// Set (to any value) on the child process `relaunch_installed` starts,
+    /// so that process — not the installer process, which exits — knows to
+    /// open the dashboard on its own. Only reached via the explicit
+    /// `--install` command (`run_install_command`): the interactive
+    /// first-run offer (`offer_first_run_install`) installs in the
+    /// background but deliberately never relaunches, so this process keeps
+    /// running (and this env var is never set) whether the user accepts or
+    /// declines. See `relaunch_installed` and `should_open_dashboard`.
     const JUST_INSTALLED_ENV: &str = "LBB_JUST_INSTALLED";
     const MENU_OPEN_DASHBOARD: &str = "open-dashboard";
     const MENU_EXTENSION_SETUP: &str = "extension-setup";
@@ -121,13 +125,24 @@ mod desktop {
         if cli.uninstall {
             return run_uninstall_command();
         }
+        // Whether the first-run "set up as an app?" prompt is worth showing
+        // at all, decided once, up front, from cheap/instant signals only
+        // (never anything that can block). The prompt itself — the one
+        // call that can sit and wait on a human — is deferred until the
+        // server has already reported ready; see the `ServerReady` handler
+        // in the event loop below and `spawn_install_offer`. This ordering
+        // is the actual fix for a first run on a headless/non-interactive
+        // host never starting the server at all: starting the bridge must
+        // never depend on a human answering a dialog.
         #[cfg(target_os = "windows")]
-        if !cli.no_install
-            && let Some(installed_path) = offer_first_run_install()
-        {
-            relaunch_installed(&installed_path)?;
-            return Ok(());
-        }
+        let mut install_offer_pending = should_prompt_for_install(
+            setup::is_installed().unwrap_or(false),
+            platform::is_interactive_session(),
+            cli.no_install,
+            install_prompt_env_opt_out()?,
+        );
+        #[cfg(not(target_os = "windows"))]
+        let mut install_offer_pending = false;
         if cli.start_helper {
             write_desktop_log(
                 "--start-helper is no longer needed: the helper now starts automatically \
@@ -200,9 +215,10 @@ mod desktop {
         let mut server = Some(ServerController::start(config, proxy)?);
         let mut ui: Option<DesktopUi> = None;
         let mut quit_requested = false;
-        // Set only on the relaunched process of a just-completed first-run
-        // self-install (see `relaunch_installed`); never on the installer
-        // process itself, which already exited by this point.
+        // Set only on the relaunched process started by an explicit
+        // `--install` (see `relaunch_installed`); never on the installer
+        // process itself (already exited by this point), and never set at
+        // all by the interactive first-run offer, which does not relaunch.
         let just_installed = env::var_os(JUST_INSTALLED_ENV).is_some();
         let mut dashboard_opened = false;
         let _instance = instance;
@@ -237,6 +253,19 @@ mod desktop {
                 Event::UserEvent(AppEvent::ServerReady(status, monitor, runtime)) => {
                     if let Some(ui) = ui.as_mut() {
                         ui.set_server_handles(monitor, runtime);
+                    }
+                    // The server is confirmed healthy: only now is it safe
+                    // to consider the first-run install prompt. It still
+                    // never runs here — this handler is the tao event-loop
+                    // thread, and freezing it would freeze the tray exactly
+                    // like freezing the server thread would. It runs on its
+                    // own detached thread instead (`spawn_install_offer`),
+                    // so a human who never appears can only stall that one
+                    // thread, never the app.
+                    if install_offer_pending {
+                        install_offer_pending = false;
+                        #[cfg(target_os = "windows")]
+                        spawn_install_offer();
                     }
                     if should_open_dashboard(
                         just_installed,
@@ -782,16 +811,45 @@ mod desktop {
         platform::open_extensions_page()
     }
 
-    /// First-run flow: if this executable is not already the installed
-    /// copy, asks the user (in plain language, naming exactly what
-    /// happens) whether to set it up as an app. Returns the installed
-    /// executable's path on an accepted, successful install; `None` in
-    /// every other case (already installed, declined, or the install
-    /// itself failed — the caller then just keeps running from here).
+    /// Spawns the first-run "set up as an app?" flow on its own detached OS
+    /// thread — deliberately not the server thread and not the tao
+    /// event-loop thread that owns the tray, so a human who never appears
+    /// (or a modal nobody can see, e.g. on a headless CI runner) can only
+    /// stall this one thread forever, never the app itself. Called at most
+    /// once per run, and only after `ServerReady` — see the call site.
     #[cfg(target_os = "windows")]
-    fn offer_first_run_install() -> Option<PathBuf> {
+    fn spawn_install_offer() {
+        // A failure here is thread creation itself failing, not anything
+        // about the install; either way, no prompt is shown this run and
+        // the app keeps working from wherever it already is, same as a
+        // decline.
+        let _ = thread::Builder::new()
+            .name("local-browser-bridge-install-offer".to_owned())
+            .spawn(offer_first_run_install);
+    }
+
+    /// First-run flow: asks the user (in plain language, naming exactly
+    /// what happens) whether to set this copy up as an app. Runs on a
+    /// detached thread (see `spawn_install_offer`), strictly after the
+    /// server has already reported healthy, so blocking here — on the
+    /// confirmation dialog, or on the install itself — never delays or
+    /// freezes the running bridge.
+    ///
+    /// Deliberately does not relaunch into the installed copy on
+    /// acceptance: this process just keeps running from wherever it
+    /// already is, exactly as it does on a decline. The copy/shortcut/
+    /// registry work still happens now, in the background; a future login
+    /// (via the start-at-login entry this installs) is what actually
+    /// starts from the new location. This avoids a hand-off race between
+    /// this process's live server/single-instance lock and a new process
+    /// trying to claim the same port and lock out from under it.
+    #[cfg(target_os = "windows")]
+    fn offer_first_run_install() {
+        // Belt and braces: `should_prompt_for_install` already checked this
+        // once, before the server started, but re-checking here is free
+        // and guards against anything that could have installed it since.
         if setup::is_installed().unwrap_or(false) {
-            return None;
+            return;
         }
         let accepted = platform::confirm(
             "Set up Local Browser Bridge?",
@@ -805,7 +863,7 @@ mod desktop {
             write_desktop_log(
                 "First-run install was declined; continuing from the current location",
             );
-            return None;
+            return;
         }
         let mut log_lines = Vec::new();
         match setup::install(&mut |message| log_lines.push(message.to_owned())) {
@@ -814,10 +872,10 @@ mod desktop {
                     write_desktop_log(line);
                 }
                 write_desktop_log(&format!(
-                    "Installed Local Browser Bridge at {}",
+                    "Installed Local Browser Bridge at {}; this session keeps running from its \
+                     current location, the installed copy takes over starting next login",
                     path.display()
                 ));
-                Some(path)
             }
             Err(error) => {
                 for line in &log_lines {
@@ -830,7 +888,6 @@ mod desktop {
                         "{error}\n\nLocal Browser Bridge will keep running from its current location."
                     ),
                 );
-                None
             }
         }
     }
@@ -1019,6 +1076,42 @@ mod desktop {
         just_installed || !extension_connected
     }
 
+    /// Whether the first-run "set up as an app?" prompt should be shown at
+    /// all. Pure and platform-free (no I/O, no globals, no Windows API
+    /// calls) so the full truth table is covered by a plain unit test on
+    /// any host, the same way `should_open_dashboard` is; the real Windows
+    /// startup path (`run`, above) computes each input honestly and defers
+    /// entirely to this function rather than inlining its own version of
+    /// the decision. `#[cfg(any(test, target_os = "windows"))]` because the
+    /// only production caller is Windows-only, but the predicate itself —
+    /// and its test — must not be.
+    ///
+    /// - `already_installed`: nothing to offer.
+    /// - `interactive`: best-effort signal that a human could plausibly see
+    ///   and answer a dialog right now. See `platform::is_interactive_session`
+    ///   for how this is computed on Windows, and why it is a heuristic
+    ///   rather than a guarantee.
+    /// - `opt_out_flag`: `--no-install` was passed.
+    /// - `env_opt_out`: `LBB_NO_INSTALL_PROMPT` was set to a truthy value
+    ///   (see `install_prompt_env_opt_out`) — the explicit, unambiguous
+    ///   override for hosts the interactivity heuristic cannot see through,
+    ///   such as the acceptance-test runner.
+    ///
+    /// Every input resolves toward NOT prompting: a skipped prompt costs
+    /// the user one click later ("Finish setup" stays reachable from the
+    /// tray for as long as the app is not installed); a spurious prompt
+    /// with nobody to answer it costs a hung, invisible dialog — and,
+    /// before this was fixed, a server that never started at all.
+    #[cfg(any(test, target_os = "windows"))]
+    fn should_prompt_for_install(
+        already_installed: bool,
+        interactive: bool,
+        opt_out_flag: bool,
+        env_opt_out: bool,
+    ) -> bool {
+        !already_installed && interactive && !opt_out_flag && !env_opt_out
+    }
+
     fn logs_dir() -> PathBuf {
         #[cfg(target_os = "macos")]
         {
@@ -1091,6 +1184,13 @@ mod desktop {
   --uninstall          Remove the app installed under this account and exit\n\
   --no-install         Skip the one-time \"set up as an app?\" prompt\n\
 ";
+        #[cfg(target_os = "windows")]
+        let windows_only_note = "LBB_NO_INSTALL_PROMPT=1 also skips the one-time install prompt \
+(equivalent to --no-install), and is meant for scripted/CI launches. The prompt is\n\
+also skipped automatically on a session with no visible desktop (a Windows\n\
+service, for example) even without either one.\n";
+        #[cfg(not(target_os = "windows"))]
+        let windows_only_note = "";
         #[cfg(not(target_os = "windows"))]
         let windows_only = "";
         format!(
@@ -1109,7 +1209,8 @@ Options:\n\
 Without --enable-shell or --no-shell, LBB_ENABLE_SHELL decides when set to\n\
 1/true/yes/on or 0/false/no/off (empty/unset has no opinion); otherwise\n\
 shell access follows settings.json (default: enabled). Passing both flags\n\
-is an error."
+is an error.\n\
+{windows_only_note}"
         )
     }
 
@@ -1126,6 +1227,16 @@ is an error."
 
     fn update_check_disabled_from_env() -> Result<bool, String> {
         parse_bool_env("LBB_DISABLE_UPDATE_CHECK")
+    }
+
+    /// The explicit, unambiguous opt-out for the first-run install prompt
+    /// (belt and braces alongside `--no-install` and the interactivity
+    /// heuristic): meant for scripted or CI launches of the desktop-host
+    /// binary, which have no human at all — not even on a visible desktop
+    /// — to answer a dialog. See `should_prompt_for_install`.
+    #[cfg(target_os = "windows")]
+    fn install_prompt_env_opt_out() -> Result<bool, String> {
+        parse_bool_env("LBB_NO_INSTALL_PROMPT")
     }
 
     fn parse_bool_env(name: &str) -> Result<bool, String> {
@@ -1426,6 +1537,55 @@ is an error."
             result == IDYES
         }
 
+        /// Best-effort signal that a human could plausibly see and answer a
+        /// dialog on this desktop session right now.
+        ///
+        /// A non-interactive Windows session — a service, or a scheduled
+        /// task set to "run whether user is logged on or not" — executes on
+        /// a window station that exists but is not visible on any physical
+        /// or virtual display (typically named `Service-0x0-3e7$`, versus
+        /// the interactive `WinSta0`). `GetProcessWindowStation` returns
+        /// this process's window station; `GetUserObjectInformationW` with
+        /// `UOI_FLAGS` reports whether `WSF_VISIBLE` is set on it. This is
+        /// the same technique .NET's `Environment.UserInteractive` uses, and
+        /// it is deliberately conservative both ways: on any failure to ask
+        /// the question at all, this returns `false` (no prompt) rather than
+        /// `true`, since a missed prompt is cheap and a stuck one is not.
+        ///
+        /// It is a heuristic, not a guarantee: some CI runners execute on a
+        /// window station that reports visible even though no human is
+        /// watching it. That gap is exactly why `--no-install` and
+        /// `LBB_NO_INSTALL_PROMPT` exist as an explicit, unambiguous
+        /// override on top of this check, not instead of it.
+        #[cfg(target_os = "windows")]
+        pub fn is_interactive_session() -> bool {
+            const UOI_FLAGS: u32 = 1;
+            const WSF_VISIBLE: u32 = 0x0001;
+            #[repr(C)]
+            #[derive(Default)]
+            struct UserObjectFlags {
+                inherit: i32,
+                reserved: i32,
+                flags: u32,
+            }
+            unsafe {
+                let station = GetProcessWindowStation();
+                if station.is_null() {
+                    return false;
+                }
+                let mut info = UserObjectFlags::default();
+                let mut needed = 0u32;
+                let ok = GetUserObjectInformationW(
+                    station,
+                    UOI_FLAGS,
+                    std::ptr::addr_of_mut!(info).cast(),
+                    std::mem::size_of::<UserObjectFlags>() as u32,
+                    &mut needed,
+                );
+                ok != 0 && (info.flags & WSF_VISIBLE) != 0
+            }
+        }
+
         #[cfg(target_os = "macos")]
         fn apple_script_string(value: &str) -> String {
             format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
@@ -1510,6 +1670,14 @@ is an error."
                 text: *const u16,
                 caption: *const u16,
                 kind: u32,
+            ) -> i32;
+            fn GetProcessWindowStation() -> *mut std::ffi::c_void;
+            fn GetUserObjectInformationW(
+                object: *mut std::ffi::c_void,
+                index: u32,
+                info: *mut std::ffi::c_void,
+                length: u32,
+                needed: *mut u32,
             ) -> i32;
         }
     }
@@ -1606,6 +1774,45 @@ is an error."
             assert!(!should_open_dashboard(false, false, true));
             // Connected and not a first run: stay quiet on a login-start app.
             assert!(!should_open_dashboard(false, true, false));
+        }
+
+        /// Full truth table for `should_prompt_for_install`: the only case
+        /// that prompts is not-installed, interactive, and neither opt-out
+        /// set. Every other combination — including every single opt-out on
+        /// its own — must stay quiet, matching its documented "when in
+        /// doubt, do not prompt" rule.
+        #[test]
+        fn should_prompt_for_install_only_when_uninstalled_interactive_and_not_opted_out() {
+            // The one case that prompts.
+            assert!(should_prompt_for_install(false, true, false, false));
+
+            // Already installed: never, regardless of anything else — all
+            // 8 combinations of the remaining three inputs.
+            assert!(!should_prompt_for_install(true, false, false, false));
+            assert!(!should_prompt_for_install(true, false, false, true));
+            assert!(!should_prompt_for_install(true, false, true, false));
+            assert!(!should_prompt_for_install(true, false, true, true));
+            assert!(!should_prompt_for_install(true, true, false, false));
+            assert!(!should_prompt_for_install(true, true, false, true));
+            assert!(!should_prompt_for_install(true, true, true, false));
+            assert!(!should_prompt_for_install(true, true, true, true));
+
+            // Not interactive (headless/service/CI session): never, even
+            // when nothing else opted out. This is the exact case that
+            // hung the acceptance suite before this fix.
+            assert!(!should_prompt_for_install(false, false, false, false));
+
+            // --no-install passed: never, regardless of interactivity.
+            assert!(!should_prompt_for_install(false, true, true, false));
+            assert!(!should_prompt_for_install(false, false, true, false));
+
+            // LBB_NO_INSTALL_PROMPT set: never, regardless of interactivity.
+            assert!(!should_prompt_for_install(false, true, false, true));
+            assert!(!should_prompt_for_install(false, false, false, true));
+
+            // Both opt-outs together: still never.
+            assert!(!should_prompt_for_install(false, true, true, true));
+            assert!(!should_prompt_for_install(false, false, true, true));
         }
 
         #[test]

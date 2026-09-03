@@ -721,6 +721,15 @@ async function startServer(context, { shell, label }) {
     LBB_TOKEN: token,
     LBB_PORT: String(port),
     LBB_DISABLE_UPDATE_CHECK: "1",
+    // Belt and braces alongside the desktop host's own non-interactive-
+    // session detection: this harness runs the freshly built exe straight
+    // out of target/release, so it is never "installed", and the Windows
+    // first-run flow would otherwise offer to install it. That prompt is a
+    // native MessageBoxW that nothing here can answer, so on Windows it
+    // would hang the process forever with the server never bound. The
+    // desktop-host binary only reads this on Windows; it is a harmless
+    // unused env var everywhere else (including the plain CLI server).
+    LBB_NO_INSTALL_PROMPT: "1",
   };
   if (shell === true) {
     env.LBB_ENABLE_SHELL = "1";
